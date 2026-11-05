@@ -1,4 +1,6 @@
 <script lang="ts">
+  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import type { HarnessAccount } from '$shared/types'
@@ -14,6 +16,14 @@
 
   let { groups, selectedId, onselect }: Props = $props()
 
+  /** Harnesses the user folded away. Every group starts open. */
+  const folded = new SvelteSet<string>()
+
+  function toggleGroup(harnessId: string): void {
+    if (folded.has(harnessId)) folded.delete(harnessId)
+    else folded.add(harnessId)
+  }
+
   function isExpired(account: HarnessAccount): boolean {
     return harnessAccountUsageCache.snapshotFor(account.id)?.reauthenticationRequired === true
   }
@@ -22,13 +32,31 @@
 <div class="py-1.5">
   {#each groups as group (group.harnessId)}
     {@const hiddenCount = group.accounts.filter((account) => account.hidden === true).length}
-    <div class="flex items-center justify-between gap-2 px-3.5 pb-1 pt-3">
-      <span class="text-[0.6875rem] font-medium text-muted">{group.harnessName}</span>
-      <span class="text-[0.6875rem] tabular-nums text-dimmed">
+    <button
+      type="button"
+      class="sticky top-0 z-10 flex w-full items-center gap-1.5 border-y bg-surface px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+      aria-expanded={!folded.has(group.harnessId)}
+      title={`${folded.has(group.harnessId) ? 'Unfold' : 'Fold'} the ${group.harnessName} accounts`}
+      onclick={() => toggleGroup(group.harnessId)}
+    >
+      <CioChevronDown
+        size={11}
+        class="shrink-0 text-dimmed transition-transform {folded.has(group.harnessId)
+          ? '-rotate-90'
+          : ''}"
+        aria-hidden="true"
+      />
+      <span class="flex shrink-0 opacity-80" aria-hidden="true">
+        <AgentIcon agentId={group.harnessId} label={group.harnessName} size={12} />
+      </span>
+      <span class="flex-1 truncate text-[0.6875rem] font-medium text-muted"
+        >{group.harnessName}</span
+      >
+      <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed">
         {group.accounts.length}{hiddenCount > 0 ? ` · ${hiddenCount} hidden` : ''}
       </span>
-    </div>
-    {#each group.accounts as account (account.id)}
+    </button>
+    {#each folded.has(group.harnessId) ? [] : group.accounts as account (account.id)}
       <button
         type="button"
         class="block w-full border-l-2 px-3.5 py-2 text-left transition-colors {account.id ===
@@ -40,9 +68,6 @@
         onclick={() => onselect(account)}
       >
         <span class="flex min-w-0 items-center gap-1.5">
-          <span class="flex shrink-0 opacity-70" aria-hidden="true">
-            <AgentIcon agentId={account.harnessId} label={group.harnessName} size={13} />
-          </span>
           <span
             class="truncate text-xs font-semibold {account.hidden
               ? 'text-muted'

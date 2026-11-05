@@ -45,6 +45,7 @@
   let search = $state('')
   let selectedHarnesses = new SvelteSet<string>()
   let hiddenOnly = $state(false)
+  let nearLimitOnly = $state(false)
   let selectedId = $state('')
   let showingDetail = $state(false)
   let hidingAccountId = $state('')
@@ -147,11 +148,19 @@
     return (siblingCounts.get(`${account.harnessId}\u0000${account.providerId}`) ?? 0) > 1
   }
 
+  /** Whether any of this account's windows is at or above 90% used. */
+  function isNearLimit(account: HarnessAccount): boolean {
+    return (harnessAccountUsageCache.snapshotFor(account.id)?.usage?.rateLimits ?? []).some(
+      (window) => (quotaPercent(window) ?? 0) >= 90
+    )
+  }
+
   const filteredRows = $derived.by(() => {
     const query = search.trim().toLocaleLowerCase('en-US')
     return rows.filter((account) => {
       if (harnessFilterActive && !selectedHarnesses.has(account.harnessId)) return false
       if (hiddenOnly && account.hidden !== true) return false
+      if (nearLimitOnly && !isNearLimit(account)) return false
       if (!query) return true
       return [
         account.label,
@@ -179,13 +188,7 @@
   )
 
   /** Accounts with at least one window at or above 90% used. */
-  const nearLimitCount = $derived(
-    rows.filter((account) =>
-      (harnessAccountUsageCache.snapshotFor(account.id)?.usage?.rateLimits ?? []).some(
-        (window) => (quotaPercent(window) ?? 0) >= 90
-      )
-    ).length
-  )
+  const nearLimitCount = $derived(rows.filter((account) => isNearLimit(account)).length)
 
   /** Accounts whose harness sign-in expired, so their quota cannot be read. */
   const needSignInCount = $derived(
@@ -218,15 +221,25 @@
     if (selectedHarnesses.has(harnessId)) selectedHarnesses.delete(harnessId)
     else selectedHarnesses.add(harnessId)
     hiddenOnly = false
+    nearLimitOnly = false
   }
 
-  function clearHarnessFilter(): void {
+  /** Back to every account: the All filter, and what the empty states point at. */
+  function clearFilters(): void {
     selectedHarnesses.clear()
     hiddenOnly = false
+    nearLimitOnly = false
   }
 
   function toggleHiddenFilter(): void {
     hiddenOnly = !hiddenOnly
+    selectedHarnesses.clear()
+    nearLimitOnly = false
+  }
+
+  function toggleNearLimitFilter(): void {
+    nearLimitOnly = !nearLimitOnly
+    hiddenOnly = false
     selectedHarnesses.clear()
   }
 
@@ -376,13 +389,15 @@
   /**
    * Whether this account can be signed in again from here.
    *
-   * An OAuth account has no key to paste, so re-running the harness's own
-   * sign-in is the only way to refresh it. The same action is offered for an
-   * API-key account on a harness that also supports sign-in, so a stale key can
-   * be swapped for a fresh sign-in without disconnecting the account.
+   * Signing in is an OAuth affordance only: an OAuth account has no key to
+   * paste, so re-running the harness's own sign-in is the only way to refresh
+   * it. An API-key account replaces its key instead, and offering it "or sign
+   * in again" only muddies which credential the account actually holds.
    */
   const canSignInAgain = $derived(
-    editCapabilities !== null && (editCapabilities.inAppLogin || editCapabilities.loginHandoff)
+    editIsOauth &&
+      editCapabilities !== null &&
+      (editCapabilities.inAppLogin || editCapabilities.loginHandoff)
   )
 
   /** Human label for the credential method an account's auth entry reports. */
@@ -604,15 +619,31 @@
         <button
           type="button"
           class="flex h-7 items-center gap-1 px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive &&
-          !hiddenOnly
+          !hiddenOnly &&
+          !nearLimitOnly
             ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
-          aria-pressed={!harnessFilterActive && !hiddenOnly}
+          aria-pressed={!harnessFilterActive && !hiddenOnly && !nearLimitOnly}
           title="Show every account"
-          onclick={clearHarnessFilter}
+          onclick={clearFilters}
         >
           All <span class="tabular-nums text-dimmed">{rows.length}</span>
         </button>
+        {#if nearLimitCount > 0}
+          <button
+            type="button"
+            class="flex h-7 items-center gap-1 px-2.5 text-[0.6875rem] font-medium transition-colors {nearLimitOnly
+              ? 'bg-surface text-warning'
+              : 'text-muted hover:text-foreground'}"
+            aria-pressed={nearLimitOnly}
+            title="Show only accounts with a window at 90% or more"
+            onclick={toggleNearLimitFilter}
+          >
+            Near limit <span class="tabular-nums {nearLimitOnly ? '' : 'text-dimmed'}"
+              >{nearLimitCount}</span
+            >
+          </button>
+        {/if}
         {#each filterHarnesses as harness (harness.id)}
           <button
             type="button"
@@ -651,9 +682,6 @@
         class="ml-auto flex flex-wrap items-center gap-x-2 text-[0.6875rem] tabular-nums text-dimmed"
       >
         <span>{rows.length} accounts</span>
-        {#if nearLimitCount > 0}
-          <span class="text-warning">{nearLimitCount} near limit</span>
-        {/if}
         {#if needSignInCount > 0}
           <span class="text-danger">{needSignInCount} need sign-in</span>
         {/if}
@@ -688,17 +716,19 @@
   {:else if filteredRows.length === 0}
     <div class="border border-dashed p-8 text-center">
       <p class="text-xs text-dimmed">
-        {hiddenOnly
-          ? 'Every account is currently visible in account pickers.'
-          : harnessFilterActive
-            ? 'No accounts belong to the selected harnesses.'
-            : 'No accounts match your search.'}
+        {nearLimitOnly
+          ? 'No account has a window at 90% or more.'
+          : hiddenOnly
+            ? 'Every account is currently visible in account pickers.'
+            : harnessFilterActive
+              ? 'No accounts belong to the selected harnesses.'
+              : 'No accounts match your search.'}
       </p>
-      {#if hiddenOnly || harnessFilterActive}
+      {#if hiddenOnly || harnessFilterActive || nearLimitOnly}
         <button
           type="button"
           class="mt-2 text-xs font-medium text-primary hover:underline"
-          onclick={clearHarnessFilter}
+          onclick={clearFilters}
         >
           Show all accounts
         </button>
@@ -706,7 +736,11 @@
     </div>
   {:else}
     <div class="grid gap-3 lg:grid-cols-[21rem_minmax(0,1fr)] lg:items-start">
-      <div class="border bg-surface {showingDetail ? 'hidden lg:block' : ''}">
+      <div
+        class="border bg-surface {showingDetail
+          ? 'hidden lg:block'
+          : ''} lg:max-h-[calc(100vh-12rem)] lg:overflow-y-auto"
+      >
         <HarnessAccountList
           {groups}
           selectedId={selectedAccount?.id ?? ''}
@@ -745,14 +779,17 @@
   {#snippet footer()}
     <button
       type="button"
-      class="h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
+      data-modal-dismiss
+      class="px-3 py-1.5 text-[0.75rem] text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      title="Close without saving"
       onclick={closeEdit}
     >
       Cancel
     </button>
     <button
       type="button"
-      class="h-9 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+      class="bg-primary px-4 py-1.5 text-[0.75rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+      title="Save the account label"
       disabled={saving || editLabel.trim() === ''}
       onclick={() => void saveLabel()}
     >
@@ -762,11 +799,12 @@
 
   {#if editTarget}
     {@const account = editTarget}
-    <div class="space-y-4">
-      <label class="block space-y-1.5">
-        <span class="text-xs font-medium">Label</span>
+    <div class="space-y-5">
+      <div class="space-y-1.5">
+        <label class="block text-xs font-medium" for="account-label">Label</label>
         <!-- svelte-ignore a11y_autofocus -->
         <input
+          id="account-label"
           bind:value={editLabel}
           maxlength="80"
           autocomplete="off"
@@ -776,11 +814,14 @@
             if (event.key === 'Enter') void saveLabel()
           }}
         />
-      </label>
+        <p class="text-[0.625rem] text-dimmed">
+          The name this account carries in every picker that offers it.
+        </p>
+      </div>
 
       <div class="space-y-3 border-t pt-4">
         <div class="flex items-center justify-between gap-2">
-          <span class="text-xs font-medium">Credentials</span>
+          <span class="text-xs font-medium">Credential</span>
           {#if editStatusLoading}
             <CioSpinner size={13} class="animate-spin text-dimmed" aria-hidden="true" />
           {/if}
@@ -830,9 +871,11 @@
                 if (event.key === 'Enter') void replaceApiKey()
               }}
             />
+          </div>
+          <div class="flex justify-end">
             <button
               type="button"
-              class="flex h-9 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+              class="flex h-9 items-center gap-1.5 border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
               disabled={replacingKey || newApiKey.trim() === ''}
               title={`Replace the API key for ${account.label}`}
               onclick={() => void replaceApiKey()}
@@ -848,20 +891,18 @@
           </div>
         {/if}
 
-        {#if canReplaceApiKey && canSignInAgain}
-          <p class="text-center text-[0.625rem] text-dimmed">or</p>
-        {/if}
-
         {#if canSignInAgain}
-          <button
-            type="button"
-            class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay"
-            title={`Sign in to ${providerLabel(account)} again for ${account.label}`}
-            onclick={() => startSignIn(account)}
-          >
-            <CioLogIn size={13} aria-hidden="true" />
-            Sign in again
-          </button>
+          <div class="flex justify-end">
+            <button
+              type="button"
+              class="flex h-9 items-center gap-1.5 border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
+              title={`Sign in to ${providerLabel(account)} again for ${account.label}`}
+              onclick={() => startSignIn(account)}
+            >
+              <CioLogIn size={13} aria-hidden="true" />
+              Sign in again
+            </button>
+          </div>
         {/if}
 
         {#if !editStatusLoading && !canReplaceApiKey && !canSignInAgain}
