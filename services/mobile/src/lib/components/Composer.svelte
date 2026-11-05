@@ -200,22 +200,14 @@
     <span class="toolbar-group">
       {#if error}
         <span class="composer-error" title={error}>{error}</span>
-      {:else}
-        {#if thread?.model}
-          <span class="model-reading" title={`Model: ${thread.model}`}>
-            <VendorMark name={thread.model} size={12} />
-            <span>{thread.model}</span>
-          </span>
-        {/if}
-        {#if thread?.harness}
-          <span class="think-chip" title={`Harness: ${thread.harness}`}>
-            <VendorMark name={thread.harness} size={10} />
-            {thread.harness}
-          </span>
-        {/if}
-        {#if project}
-          <span class="project-reading" title={project.name}>{project.name}</span>
-        {/if}
+      {:else if thread?.model}
+        <!-- The model is the one reading this row owns. The harness is the turn's
+             own attribution, stated once in the answer's foot; the project is the
+             shoe's, stated once under the box. -->
+        <span class="model-reading" title={`Model: ${thread.model}`}>
+          <VendorMark name={thread.model} size={12} />
+          <span>{thread.model}</span>
+        </span>
       {/if}
     </span>
 
@@ -235,29 +227,13 @@
 
 <!-- The shoe: the smallest honest statement of what this box writes into, in the
      app's own strip under the composer. -->
-{#if project || thread?.model || thread?.harness}
+{#if project}
   <div class="composer-shoe">
     <div class="composer-shoe-card">
-      {#if project}
-        <span class="shoe-seg" title={`Writes into ${project.name}`}>
-          <Mark {project} size={14} />
-          <span>{project.name}</span>
-        </span>
-      {/if}
-      {#if thread?.model}
-        {#if project}<span class="shoe-sep" aria-hidden="true"></span>{/if}
-        <span class="shoe-seg" title={`Model: ${thread.model}`}>
-          {#if thread.model}<VendorMark name={thread.model} size={11} />{/if}
-          <span>{thread.model}</span>
-        </span>
-      {/if}
-      {#if thread?.harness}
-        <span class="shoe-sep" aria-hidden="true"></span>
-        <span class="shoe-seg" title={`Harness: ${thread.harness}`}>
-          <VendorMark name={thread.harness} size={11} />
-          <span>{thread.harness}</span>
-        </span>
-      {/if}
+      <span class="shoe-seg" title={`Writes into ${project.name}`}>
+        <Mark {project} size={14} />
+        <span>{project.name}</span>
+      </span>
     </div>
   </div>
 {/if}
