@@ -130,6 +130,22 @@ export class ChatEngineState {
    *  permission request. Rebuilt lazily on first access. */
   chatAttachmentAllowlists = new Map<string, string[]>()
 
+  /**
+   * Absolute POSIX paths each live session created itself, fed from the tool
+   * parts every harness already streams. Auto Review reads this so an agent can
+   * remove its own throwaway file, wherever it wrote it, without a card.
+   * Dropped with the session.
+   */
+  agentCreatedFiles = new Map<string, Set<string>>()
+
+  /**
+   * Creation targets of tool calls seen before they ran, keyed by
+   * `<sessionId>:<callId>`, holding only the targets that did not exist yet.
+   * The check is made while the call is still running, because afterwards the
+   * file exists either way and an overwrite would look like a creation.
+   */
+  pendingToolCreations = new Map<string, string[]>()
+
   pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
 
   completionWaiters = new Map<string, SessionCompletionWaiter>()

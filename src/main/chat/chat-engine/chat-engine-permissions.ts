@@ -1,4 +1,5 @@
 import { resolve } from 'path'
+import { existsSync } from 'fs'
 import { Logger } from '../../system/logger'
 import { PERMISSION_EVENTS_LOG_FILE, dailyLogRelativePath } from '../../system/log-paths'
 import { PermissionPolicy } from '../../permissions/permission-policy'
@@ -18,6 +19,9 @@ import type { PendingPermissionInfo, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { permissionCommands } from './chat-engine-generated-artifacts'
 import { chatSkillPaths } from './chat-engine-pure'
+import { agentCreationTargets } from '../../permissions/agent-created-files'
+import { posixDirname } from '../../../lib/paths'
+import type { AgentPart } from '../../../lib/types'
 import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine permissions: one concern, moved verbatim from the composition root. */
@@ -345,10 +349,14 @@ export class ChatEnginePermissions {
       if (index > 0 && index % 8 === 0) await new Promise<void>((done) => setImmediate(done))
       const entry = pending[index]
       if (!entry || this.host.state.pendingPermissions.get(entry.request.id) !== entry) continue
+      const createdPaths = [
+        ...(this.host.state.agentCreatedFiles.get(entry.session.sessionId) ?? [])
+      ]
       entry.policy = new PermissionPolicy({
         projectRoot: entry.session.projectPath,
         mode: entry.session.permissionLevel ?? 'auto_review',
-        sensitiveFileProtectionEnabled: false
+        sensitiveFileProtectionEnabled: false,
+        ...(createdPaths.length > 0 ? { agentCreatedPaths: createdPaths } : {})
       }).evaluate({ permission: entry.request.permission, paths: entry.request.patterns })
       try {
         await this.replyPermissionRaw(entry, 'once', 'settings:sensitive-files-disabled')
@@ -380,6 +388,65 @@ export class ChatEnginePermissions {
     }
   }
 
+  /**
+   * Remember the files a session creates, from the tool parts every harness
+   * already streams. Auto Review uses the result to let an agent remove its own
+   * throwaway work without a card, so the ledger has to be exact: a target is
+   * only kept when it did not exist yet while the call was running, which is
+   * what separates a creation from an overwrite of the user's own file.
+   *
+   * A harness that never publishes the call's input before it runs simply adds
+   * nothing here, and the ordinary card keeps asking.
+   */
+  trackToolCreations(
+    sessionId: string,
+    part: Extract<AgentPart, { type: 'tool' }>,
+    projectPath: string
+  ): void {
+    const key = `${sessionId}:${part.callID}`
+    const status = part.state.status
+    if (status === 'pending' || status === 'running') {
+      // Snapshots arrive more than once. The first readable one decides.
+      if (this.host.state.pendingToolCreations.has(key)) return
+      const targets = agentCreationTargets(part.tool, part.state.input, projectPath)
+      if (targets.length === 0) return
+      const missing: string[] = []
+      for (const target of targets) {
+        if (existsSync(target)) continue
+        missing.push(target)
+        // A created directory brings its missing parents with it`mkdir -p
+        // a/b/c` creates all three), so removing the tree the agent made stays
+        // the agent's own cleanup.
+        let parent = posixDirname(target)
+        for (let depth = 0; depth < 16 && parent && !existsSync(parent); depth += 1) {
+          missing.push(parent)
+          const next = posixDirname(parent)
+          if (next === parent) break
+          parent = next
+        }
+      }
+      if (missing.length === 0) return
+      this.host.state.pendingToolCreations.set(key, [...new Set(missing)])
+      return
+    }
+    const created = this.host.state.pendingToolCreations.get(key)
+    this.host.state.pendingToolCreations.delete(key)
+    if (status !== 'completed' || created === undefined || created.length === 0) return
+    const existing = this.host.state.agentCreatedFiles.get(sessionId)
+    const paths = existing ?? new Set<string>()
+    for (const path of created) paths.add(path)
+    if (existing === undefined) this.host.state.agentCreatedFiles.set(sessionId, paths)
+  }
+
+  /** Drop the in-flight creation bookkeeping of a session that is going away. */
+  dropSessionCreations(sessionId: string): void {
+    this.host.state.agentCreatedFiles.delete(sessionId)
+    const prefix = `${sessionId}:`
+    for (const key of this.host.state.pendingToolCreations.keys()) {
+      if (key.startsWith(prefix)) this.host.state.pendingToolCreations.delete(key)
+    }
+  }
+
   /** Resolve a permission request per the thread's permission level. */
   async handlePermissionAsked(
     driverId: string,
@@ -403,12 +470,14 @@ export class ChatEnginePermissions {
       (await this.host.storage.getConfig()).bundledPiSensitiveFileProtectionEnabled !== false
     const { allowedPaths, scratchPaths, workspaceRoots, restrictToAllowed } =
       await this.chatPermissionScope(info)
+    const agentCreatedPaths = [...(this.host.state.agentCreatedFiles.get(info.sessionId) ?? [])]
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: restrictToAllowed ? 'auto_review' : level,
       sensitiveFileProtectionEnabled,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
+      ...(agentCreatedPaths.length > 0 ? { agentCreatedPaths } : {}),
       ...(workspaceRoots.length > 0 ? { workspaceRoots } : {}),
       ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
