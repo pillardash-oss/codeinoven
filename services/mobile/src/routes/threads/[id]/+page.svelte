@@ -2,10 +2,12 @@
   import { onMount, tick } from 'svelte'
   import { page } from '$app/state'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import AnswerTurn from '#lib/components/AnswerTurn.svelte'
   import Composer from '#lib/components/Composer.svelte'
   import PanelBar from '#lib/components/PanelBar.svelte'
   import QueuedStrip from '#lib/components/QueuedStrip.svelte'
   import Sheet from '#lib/components/Sheet.svelte'
+  import TurnBubble from '#lib/components/TurnBubble.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge, statusSkin, toneColor } from '#lib/api/status'
   import { arrive } from '#lib/motion'
@@ -120,14 +122,6 @@
       out.push({ key: message.id, kind: 'message', message })
     }
     return out
-  }
-
-  /** Blank lines separate paragraphs; a single newline stays inside its own. */
-  function paragraphs(body: string): string[] {
-    return body
-      .split(/\n{2,}/)
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
   }
 
   async function scrollToEnd(): Promise<void> {
@@ -291,16 +285,24 @@
         {#if row.kind === 'marker'}
           <p class="marker" in:arrive>{row.label}</p>
         {:else if row.message.role === 'user'}
-          <p class="turn-user" in:arrive>{row.message.body}</p>
+          <div in:arrive>
+            <TurnBubble
+              body={row.message.body}
+              at={row.message.createdAt}
+              age={formatAge(row.message.createdAt)}
+            />
+          </div>
         {:else}
-          <article class="turn" in:arrive>
-            <p class="who">Oven</p>
-            <div class="answer">
-              {#each paragraphs(row.message.body) as paragraph, index (index)}
-                <p>{paragraph}</p>
-              {/each}
-            </div>
-          </article>
+          <div in:arrive>
+            <AnswerTurn
+              body={row.message.body}
+              at={row.message.createdAt}
+              age={formatAge(row.message.createdAt)}
+              seq={row.message.seq}
+              model={thread?.model ?? null}
+              harness={thread?.harness ?? null}
+            />
+          </div>
         {/if}
       {/each}
 
@@ -347,11 +349,6 @@
     flex: 1 1 auto;
     height: 100%;
     min-height: 0;
-  }
-
-  /* Assistant prose keeps the author's line breaks without reading raw HTML. */
-  .answer p {
-    white-space: pre-wrap;
   }
 
   .skeleton-block {

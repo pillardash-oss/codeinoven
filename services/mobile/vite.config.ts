@@ -22,10 +22,20 @@ export default defineConfig({
       // the `imports` map below into TypeScript paths, so the editor would not
       // resolve `#lib` without this one entry. The alternative is a deprecated
       // warning, which is better than imports that only the bundler understands.
-      alias: { '#lib': 'src/lib' }
+      //
+      // `#shared` is the workstation's own platform-safe code (`src/lib` at the
+      // repository root), which the desktop renderer reaches as `$shared`. The
+      // phone reuses it rather than keeping a second copy of a rule both clients
+      // obey: a composer that grows on its third line, an age in the app's
+      // canonical ladder, a timestamp in the pinned locale.
+      alias: { '#lib': 'src/lib', '#shared': '../../src/lib' }
     })
   ],
   server: {
+    // The build reads the shared modules outside this package, so the dev server
+    // has to serve them too. Everything above the mobile package is the app's own
+    // source, never a dependency tree.
+    fs: { allow: ['..', '../..'] },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8080',

@@ -45,43 +45,11 @@
   background: var(--color-border);
 }
 
-/* What was asked sits on the right, filled: it is the one voice on the screen
-   that is not the oven's. */
-.turn-user {
-  align-self: flex-end;
-  max-width: 85%;
-  margin: 0;
-  padding: 0.625rem 0.875rem;
-  background: var(--color-primary);
-  color: var(--color-on-primary);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
+/* A turn's own box: the bubble and the answer each own their inside, so the
+   transcript only arranges them. */
 .turn {
   max-width: 100%;
-}
-
-/* Who is speaking, in the same small voice the meta lines use, so the questions
-   and the answers never need a box to tell them apart. */
-.who {
-  margin: 0 0 0.25rem;
-  font-size: 0.6875rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--color-dimmed);
-}
-
-.answer {
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.answer p {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  min-width: 0;
 }
 
 /* The composer slot. It sits on the app's own background so the box reads as one
@@ -114,7 +82,10 @@
   display: block;
   width: 100%;
   min-height: 2.75rem;
-  max-height: 9.5rem;
+  /* The desktop editor's own caps: ten rem at rest, and the app's expanded floor
+     and ceiling once the compose control has grown the field. A phone spends the
+     extra room upward, because the width is already the screen. */
+  max-height: 10rem;
   overflow-y: hidden;
   padding: 0.6875rem 0.75rem;
   border: 0;
@@ -129,6 +100,11 @@
 
 .composer-box textarea::placeholder {
   color: var(--ink-meta);
+}
+
+.composer-box.is-expanded textarea {
+  min-height: 10rem;
+  max-height: min(30rem, 60dvh);
 }
 
 .composer-foot {

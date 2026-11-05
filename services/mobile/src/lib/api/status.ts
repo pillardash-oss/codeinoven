@@ -8,6 +8,7 @@ import CioPause from '@pdslng/cio-icon/CioPause.svelte'
 import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioTools from '@pdslng/cio-icon/CioTools.svelte'
 import CioAttentionThin from '@pdslng/cio-icon/CioAlertCircle.svelte'
+import { formatCompactAge } from '#shared/date-time-format'
 import type { ThreadStatus } from './types'
 
 /**
@@ -123,19 +124,11 @@ export const STATUS_WEIGHT: Readonly<Record<ThreadStatus, number>> = {
 }
 
 /**
- * A phone shows age, never a timestamp. The oldest bucket is weeks because a
- * list on a phone is about relative recency, not an audit trail.
+ * A phone shows age, never a timestamp. The ladder is the workstation's own
+ * (`$shared/date-time-format`), so a thread on the phone and the same thread on
+ * the desktop age in one voice instead of two: `Now`, `5m`, `23h`, `6d`, then
+ * the real day once the age passes a week.
  */
-export function formatAge(epochMs: number, now = Date.now()): string {
-  const seconds = Math.max(0, Math.round((now - epochMs) / 1000))
-  if (seconds < 60) return 'now'
-  const minutes = Math.round(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.round(minutes / 60)
-  if (hours < 24) return `${hours}h`
-  const days = Math.round(hours / 24)
-  if (days < 7) return `${days}d`
-  const weeks = Math.round(days / 7)
-  if (weeks < 52) return `${weeks}w`
-  return `${Math.round(weeks / 52)}y`
+export function formatAge(epochMs: number, now: number = Date.now()): string {
+  return formatCompactAge(epochMs, now)
 }
