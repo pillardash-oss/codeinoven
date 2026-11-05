@@ -392,11 +392,15 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
       binding = { projectPath, acpSessionId: opened.sessionId, commands: [] }
       this.bindings.set(session.id, binding)
     }
+    // An agent that reports a placeholder current model (`default[]`) leaves
+    // model choice to itself; naming that placeholder back to it is a request
+    // it may reject, so it is only sent when it is a real model id.
     const wanted = settings.modelId
-    if (wanted && wanted !== 'default' && wanted !== binding.modelId) {
+    const selectable = wanted && !wanted.startsWith('default') ? wanted : undefined
+    if (selectable && selectable !== binding.modelId) {
       try {
-        await transport.setModel(binding.acpSessionId, wanted)
-        binding.modelId = wanted
+        await transport.setModel(binding.acpSessionId, selectable)
+        binding.modelId = selectable
       } catch (error) {
         Logger.dev('The ACP agent refused the selected model', error)
       }
@@ -551,8 +555,10 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
       await transport.initialize()
       const opened = await transport.newSession()
       try {
-        if (settings.modelId && settings.modelId !== 'default') {
-          await transport.setModel(opened.sessionId, settings.modelId).catch(() => undefined)
+        const selectable =
+          settings.modelId && !settings.modelId.startsWith('default') ? settings.modelId : undefined
+        if (selectable) {
+          await transport.setModel(opened.sessionId, selectable).catch(() => undefined)
         }
         const fold = new AcpTurnFold(
           sessionId,
