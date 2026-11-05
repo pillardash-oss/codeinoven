@@ -8,6 +8,7 @@
   import DisplayIndicator from './DisplayIndicator.svelte'
   import EngineeringIndicator from './EngineeringIndicator.svelte'
   import OrchestrationIndicator from './OrchestrationIndicator.svelte'
+  import PawnIndicator from './PawnIndicator.svelte'
   import type { ThreadIndicator } from './thread-indicator'
 
   interface Props {
@@ -44,6 +45,8 @@
   <EngineeringIndicator label="Engineering thread" />
 {:else if indicator === 'orchestrator'}
   <OrchestrationIndicator label="Orchestrator: dispatched runs in other projects" />
+{:else if indicator === 'pawn'}
+  <PawnIndicator label="Pawn agents: this thread spawned worker threads of its own" />
 {:else}
   <ComputerUseIndicator label="Agent using the computer" />
 {/if}

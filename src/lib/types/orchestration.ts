@@ -14,6 +14,20 @@ export interface OrchestrateCoordinatorPanelProps {
 }
 
 /**
+ * The pawn board's props: the thread that spawned the pawn agents.
+ *
+ * Like the orchestrator board, nothing about a pawn travels through props. A pawn
+ * is a real thread the renderer already holds, so the board is published under
+ * the spawner's ids and reads the rows from thread memory itself.
+ */
+export interface PawnCoordinatorPanelProps {
+  /** Project of the thread that spawned the pawns. */
+  projectId: string
+  /** That thread: the board lists the pawn threads it owns. */
+  threadId: string
+}
+
+/**
  * One thread that has dispatched runs, and how many.
  *
  * This is what a thread row needs to wear the orchestrator mark: the count is

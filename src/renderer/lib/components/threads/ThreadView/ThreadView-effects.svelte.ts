@@ -24,6 +24,8 @@ import {
   ORCHESTRATION_COORDINATOR_COMPONENTS
 } from '$lib/stores/coordinator-dock.svelte'
 import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
+import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
+import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
 import { publishDraftActivity, onRemoteDraftCleared } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
@@ -363,6 +365,39 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       }
     })
 
+    /**
+     * Keep the pawn board docked on the row that spawned the pawns.
+     *
+     * A pawn runs on a thread of its own and is therefore hidden from the thread
+     * list, so this board is the only place its delegated work is listed. It is
+     * published from the row's own thread memory, which means it appears the
+     * moment the pawn exists and survives a reopen without a second read.
+     *
+     * A row already carrying an orchestration board keeps it: one row docks one
+     * coordinator, and the workflow board is the more specific of the two.
+     */
+    $effect(() => {
+      if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
+      const thread = this.root.handleAgentEvent.thread
+      const rowThreadId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+      if (pawnAgentsState.workersOf(rowThreadId).length === 0) return
+      coordinatorDockState.register({
+        projectId: thread.projectId,
+        threadId: rowThreadId,
+        label: 'Pawn agents',
+        icon: CioSubagent,
+        panel: { component: 'pawn', props: { projectId: thread.projectId, threadId: rowThreadId } }
+      })
+      // Docks itself the first time a thread spawns a pawn, unless the user closed
+      // it before; later spawns are no-ops because the tab already exists.
+      if (
+        coordinatorDockState.canAutoOpen(thread.projectId, rowThreadId) &&
+        !contextSidebarState.hasCoordinator(thread.projectId, rowThreadId)
+      ) {
+        contextSidebarState.openCoordinator(thread.projectId, rowThreadId, 'Pawn agents')
+      }
+    })
+
     /** A mount that settles without a coordinator withdraws its row's dock, so a
      *  panel can never outlive the coordination it belonged to. Runs only after
      *  the mount settles, which is what lets the entering view of a thread switch
@@ -378,6 +413,11 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       )
         return
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
+      // A row that owns pawn agents has a coordinator of its own: the pawn board.
+      if (
+        pawnAgentsState.hasWorkers(this.root.currentWorkingTraceAttribution.coordinatorDockThreadId)
+      )
+        return
       // Only the orchestration boards this view publishes. An authored-work board on
       // the same row belongs to the design store and must survive this cleanup.
       coordinatorDockState.withdraw(

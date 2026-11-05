@@ -368,6 +368,42 @@ export function isOrchestrationChildThread(
   )
 }
 
+/**
+ * Whether a thread is a pawn agent, and optionally one spawned by a given
+ * thread.
+ *
+ * A pawn is the app's agent-owned worker thread: it carries its spawner in
+ * `coordinatorThreadId` and no Assignment or Achievement role, which is what
+ * tells it apart from an orchestration worker of those workflows. The user's
+ * threads never carry a coordinator, so this predicate is what every surface
+ * reads when it has to know "this thread owns pawn agents" or "this thread IS a
+ * pawn agent".
+ *
+ * Input lock is part of the identity, not decoration. A pawn refuses user-origin
+ * prompts, and it is the one field an Assignment worker never carries: older
+ * worker rows lost their `assignmentRole`/`assignmentId` (partial writes, a
+ * version before roles existed) while keeping the coordinator, and without the
+ * lock those orphans read as pawns on every board that lists them.
+ */
+export function isPawnWorkerThread(
+  thread: Pick<
+    Thread,
+    | 'coordinatorThreadId'
+    | 'assignmentRole'
+    | 'achievementRole'
+    | 'assignmentId'
+    | 'userInputLocked'
+  >,
+  spawnerThreadId?: string
+): boolean {
+  const spawner = thread.coordinatorThreadId
+  if (spawner === undefined) return false
+  if (spawnerThreadId !== undefined && spawner !== spawnerThreadId) return false
+  if (thread.userInputLocked !== true) return false
+  if (thread.assignmentRole !== undefined || thread.achievementRole !== undefined) return false
+  return thread.assignmentId === undefined
+}
+
 /** A harness is actively producing work for this persisted thread. */
 export function isThreadWorking(thread: Thread): boolean {
   return isThreadExecutionActiveStatus(thread.status)
@@ -442,20 +478,28 @@ export function coordinatorHasActiveDelegates(
   // though its parent is a plain thread without a coordinator role: the parent
   // row must still pulse while that auditor works.
   const isIndependentAuditParent = coordinator.independentAudit === true
-  if (!isOrchestrationCoordinator && !isIndependentAuditParent) {
-    return false
+  if (
+    (isOrchestrationCoordinator || isIndependentAuditParent) &&
+    coordinator.auditState === 'running'
+  ) {
+    return true
   }
-  if (coordinator.auditState === 'running') return true
-  return threads.some(
-    (candidate) =>
-      candidate.id !== coordinator.id &&
-      isThreadWorking(candidate) &&
-      (candidate.coordinatorThreadId === coordinator.id ||
-        coordinator.auditorThreadId === candidate.id ||
-        (coordinator.assignmentId !== undefined &&
-          candidate.assignmentId === coordinator.assignmentId &&
-          isOrchestrationChildThread(candidate)))
-  )
+  // A pawn agent is a thread of its own, so the thread that spawned it has
+  // delegated work running even though its own harness turn is idle between
+  // hand-offs. That is every thread's rule, not only a coordinator's: any thread
+  // can own pawns.
+  return threads.some((candidate) => {
+    if (candidate.id === coordinator.id || !isThreadWorking(candidate)) return false
+    if (isPawnWorkerThread(candidate, coordinator.id)) return true
+    if (!isOrchestrationCoordinator && !isIndependentAuditParent) return false
+    return (
+      candidate.coordinatorThreadId === coordinator.id ||
+      coordinator.auditorThreadId === candidate.id ||
+      (coordinator.assignmentId !== undefined &&
+        candidate.assignmentId === coordinator.assignmentId &&
+        isOrchestrationChildThread(candidate))
+    )
+  })
 }
 
 /**

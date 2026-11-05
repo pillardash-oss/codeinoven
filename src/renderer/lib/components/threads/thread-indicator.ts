@@ -31,6 +31,13 @@ import { isOrchestrationChildThread, type Thread } from '$shared/types'
  * that asked, not about the run, so it appears on every thread kind   a project
  * thread, a chat, an assistant task   and yields the slot to live actions for the
  * same reason the Engineering mark does.
+ *
+ * `pawn` is the durable delegation mark: this thread spawned a pawn agent   a
+ * worker thread of its own that answers only to it (`cio_pawn_agent`). A pawn is
+ * hidden from the thread list and lives on its own thread, so the mark is the one
+ * place the spawner's row says the work it started belongs to it (the pawn board
+ * lists those threads). Like the other durable marks it is a fact about the
+ * thread, not an action in flight, so it never takes the slot from a live one.
  */
 export type ThreadIndicator =
   | 'display'
@@ -46,6 +53,7 @@ export type ThreadIndicator =
   | 'browser-screen'
   | 'engineering'
   | 'orchestrator'
+  | 'pawn'
 
 export interface ThreadIndicatorCandidate {
   indicator: ThreadIndicator

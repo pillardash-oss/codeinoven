@@ -56,6 +56,7 @@ export const PANEL_KEYS = {
   assignmentCoordinator: 'panel:assignment-coordinator',
   achievementCoordinator: 'panel:achievement-coordinator',
   orchestrateCoordinator: 'panel:orchestrate-coordinator',
+  pawnCoordinator: 'panel:pawn-coordinator',
   designCoordinator: 'panel:design-coordinator',
   independentAuditCoordinator: 'panel:independent-audit-coordinator',
   memory: 'panel:memory',

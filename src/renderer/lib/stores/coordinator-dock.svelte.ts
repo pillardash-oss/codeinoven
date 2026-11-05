@@ -5,7 +5,8 @@ import type {
   AssignmentCoordinatorPanelProps,
   DesignCoordinatorPanelProps,
   IndependentAuditCoordinatorPanelProps,
-  OrchestrateCoordinatorPanelProps
+  OrchestrateCoordinatorPanelProps,
+  PawnCoordinatorPanelProps
 } from '$shared/types'
 
 /**
@@ -44,6 +45,10 @@ export type CoordinatorDockPanel =
    *  the machine, model and live status of each one. The props are the initiator's
    *  ids only, because the board loads its own rows from the dispatch ledger. */
   | { component: 'orchestrate'; props: OrchestrateCoordinatorPanelProps }
+  /** The pawn board: every worker thread this thread spawned for itself. A pawn
+   *  is a thread of its own that the user never sees in the list, so this board is
+   *  the only place the spawner's delegated work is listed. */
+  | { component: 'pawn'; props: PawnCoordinatorPanelProps }
   /** The authored-work coordinator: a thread's design or video composition, and the
    *  way back to it after a restart. Published for a thread that opened a session,
    *  whether or not any worker exists, because the work is what the user returns
@@ -71,7 +76,8 @@ export const ORCHESTRATION_COORDINATOR_COMPONENTS: readonly CoordinatorPanelComp
   'assignment',
   'achievement',
   'independent-audit',
-  'orchestrate'
+  'orchestrate',
+  'pawn'
 ]
 
 export interface CoordinatorDockRegistration {

@@ -583,6 +583,14 @@
               {:catch error}
                 {@render panelLoadFailed(PANEL_KEYS.orchestrateCoordinator, 'Orchestrator', error)}
               {/await}
+            {:else if board.panel.component === 'pawn'}
+              {#await loadCachedPanelModule(PANEL_KEYS.pawnCoordinator, () => import('../threads/PawnCoordinatorPanel.svelte'))}
+                {@render panelLoading('Pawn agents')}
+              {:then { default: PawnCoordinatorPanel }}
+                <PawnCoordinatorPanel {...board.panel.props} />
+              {:catch error}
+                {@render panelLoadFailed(PANEL_KEYS.pawnCoordinator, 'Pawn agents', error)}
+              {/await}
             {:else if board.panel.component === 'design'}
               {#await loadCachedPanelModule(PANEL_KEYS.designCoordinator, () => import('../design/DesignCoordinatorPanel.svelte'))}
                 {@render panelLoading('Design')}
