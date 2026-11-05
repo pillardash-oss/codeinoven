@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
-  import { getVendorIconSvg } from './registry'
+  import { getVendorIconSvg } from '$shared/vendor-icons/registry'
 
   interface Props {
     /** Vendor display name (e.g. "OpenAI", "Mistral AI"). */

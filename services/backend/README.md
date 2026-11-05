@@ -12,6 +12,7 @@ internal/logging  slog JSON handler, level from ENVIRONMENT
 internal/auth     argon2id, opaque tokens, id generation, in-memory rate limiter
 internal/mail     Sender interface; the only implementation logs links (development)
 internal/store    every SQL statement, one schema per user
+internal/models   the static model catalog the picker draws
 internal/httpapi  envelopes, middleware, route handlers
 migrations/       embedded SQL: control plane and the per-user store template
 scripts/          db-setup.sh
@@ -73,8 +74,9 @@ Control plane, `public` schema:
 - `ovens` – presence, unique on `(user_id, fingerprint)`
 
 Per-user store, one schema per user named `store_` plus 20 lower case hex
-characters: `projects`, `threads`, `messages`, `prompts`, and that schema's own
-`schema_migrations`. Every content query runs in a transaction that first runs
+characters: `projects`, `threads`, `messages`, `prompts`, `attachments`, and that
+schema's own `schema_migrations`. Every content query runs in a transaction that
+first runs
 
 ```sql
 SET LOCAL search_path TO "<schema>", public
@@ -86,6 +88,16 @@ statements without pgx's statement cache, because a cached plan keyed by SQL tex
 would bind to the wrong schema.
 
 All timestamps are `timestamptz` in the database and epoch milliseconds in JSON.
+
+Composer columns, added by store migration `0004`, are nullable except the switch:
+`threads.thinking`, `threads.permission`, `threads.account`, `threads.oven_id`,
+`threads.context_window`, `threads.usage_reset_at`, and `threads.file_system`
+(`NOT NULL DEFAULT false`); the same six choices on `prompts` so a queued prompt
+states what the phone chose; `messages.input_tokens`, `output_tokens`,
+`duration_ms`, `cost_micros`; and `attachments` (bytes plus name/mime/size,
+`prompt_id` null until a prompt carries the file). The migration is idempotent
+`ALTER TABLE ... ADD COLUMN IF NOT EXISTS` and needs no data migration, because
+`MigrateAllStores` applies it to every existing store on restart.
 
 ## Endpoints implemented
 
@@ -115,11 +127,20 @@ last page), failures are `{"error":{"code","message","details?"}}`.
 | `DELETE` | `/v1/me/devices/{id}` | `204`, revokes the device and its sessions |
 | `GET` | `/v1/projects` | `sort=activity\|name\|created`, `q`, `limit`, `cursor` |
 | `GET` | `/v1/projects/{id}` | one project with thread rollup |
+| `GET` | `/v1/models` | `{items,recent}`: the static catalog, plus up to 5 ids this account used in the last 30 days |
 | `GET` | `/v1/threads` | `project`, `state`, `unread=true`, `q`, `limit`, `cursor` |
 | `GET` | `/v1/threads/{id}` | one thread |
+| `PATCH` | `/v1/threads/{id}` | `{model?,thinking?,permission?,account?,ovenId?,fileSystem?}`; omitted leaves, `null` clears |
 | `GET` | `/v1/threads/{id}/messages` | oldest first, `limit`, `cursor` |
-| `POST` | `/v1/threads/{id}/prompts` | `{body,clientId}`, `202`; `clientId` makes it idempotent |
-| `GET` | `/v1/prompts/{id}` | `{id,threadId,body,state,createdAt,updatedAt,error?}` |
+| `GET` | `/v1/threads/{id}/usage` | `{used,window,leftBeforeCompact,thisTurn,rate,costMicros,since}`, derived from token columns |
+| `POST` | `/v1/threads/{id}/usage/reset` | `usage_reset_at = now()`, `200` with the meter |
+| `POST` | `/v1/threads/{id}/attachments` | `{name,mime,dataBase64}`, `201`, decoded at most 4 MiB |
+| `GET` | `/v1/attachments/{id}` | the bytes with their MIME type and length; no JSON envelope |
+| `DELETE` | `/v1/attachments/{id}` | `204` while no prompt carries it, `409` once one does |
+| `POST` | `/v1/threads/{id}/prompts` | `{body,clientId,attachmentIds?,model?,thinking?,permission?,account?,ovenId?,fileSystem?}`, `202`; omitted choices come from the thread |
+| `GET` | `/v1/prompts/{id}` | the prompt with its composer choices and `attachments` (always a list) |
+| `DELETE` | `/v1/prompts/{id}` | `204` for a still-`queued` prompt, `409` once an Oven claimed it |
+| `POST` | `/v1/prompts/{id}/steer` | the Oven takes this prompt next; state becomes `steering` |
 | `POST` | `/v1/ovens/heartbeat` | `{name,fingerprint,descriptor}`, upserts on the fingerprint |
 | `GET` | `/v1/ovens` | the user's Ovens with `lastHeartbeatAt` |
 | `GET` | `/v1/store/status` | `{kind,schemaVersion,requiredVersion,migratable}` |
@@ -128,10 +149,15 @@ last page), failures are `{"error":{"code","message","details?"}}`.
 bound to the ordering that produced them: replaying a project cursor against a
 different `sort`, or a thread cursor against messages, answers `400 bad_request`.
 
+`PATCH /v1/threads/{id}` is a patch, not a whole thread: an absent key keeps the
+column, an explicit `null` clears it, and a value sets it. `thinking`,
+`permission`, `model` and `ovenId` are validated against the enums, the catalog and
+the caller's Ovens, so an unknown value is `400 bad_request` and an unknown thread
+is `404`.
+
 `state` on `/v1/threads` accepts one exact status (`created`, `planning`,
 `awaiting_approval`, `spec`, `executing`, `working-paused`, `interrupted`,
 `completed`, `failed`) or one of the project rollup groups:
-
 | Group | Statuses |
 | --- | --- |
 | `attention` | created, planning, awaiting_approval, interrupted |
@@ -188,9 +214,14 @@ rate_limited` when either key is exhausted. A restart clears the counters.
 9. **OAuth links accounts by verified email.** A provider email is trusted only
    when the provider marks it verified, which is what allows linking a Google or
    GitHub sign-in to an existing password account.
-10. **Threads and projects are read-only here.** The only content write the
-    backend accepts today is queueing a prompt; messages arrive with the sync
-    endpoints listed below.
+10. **Threads and projects are read-only here**, with one exception: the composer's
+    choices (`PATCH /v1/threads/{id}`) and the usage reset are writable, because
+    the phone owns those chips. Prompts are the only content write besides those,
+    and messages arrive with the sync endpoints listed below.
+11. **Only the attachment upload route allows a 6 MiB body.** A 4 MiB file is
+    about 5.6 MB of base64, so the 1 MiB default would reject every phone photo;
+    every other route keeps that default. `decodeJSON` still caps at 1 MiB, so the
+    upload path carries its own matching decoder.
 
 ## Seeding
 
@@ -200,6 +231,15 @@ that user's content and rewrites it in one transaction. Re-running is safe and
 leaves the same row counts: 6 projects, 126 threads covering all nine statuses
 (some unread, some pinned), and a message trail for every thread with three full
 conversations. It logs the account email and the number of rows written.
+
+Every demo thread carries the composer's choices: a catalog model id and harness,
+a thinking level, a permission, an account label, the File System switch, and a
+`contextWindow` of 128000, so the header and the meter are populated without the
+phone writing anything first. Assistant messages carry deterministic token counts,
+a duration and a cost, so the usage panel shows real numbers after a seed. Thread
+identities are checked against `internal/models` before anything is written, so a
+catalog rename fails the seed instead of leaving threads that name a model nothing
+can run.
 
 Demo projects: `codeinoven` (89 threads, `codeinoven.png`),
 `inside-edge-classroom`, `rallip` (an `ssh` project), `milogs`, `printwyze`,

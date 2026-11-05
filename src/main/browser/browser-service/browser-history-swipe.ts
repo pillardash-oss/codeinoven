@@ -57,6 +57,7 @@ export function historySwipeInstallScript(): string {
       waiters: [],
       queued: [],
       gesture: 0,
+      startedAt: 0,
       reportedAt: 0,
       lastAt: 0,
       horizontal: 0,
@@ -77,6 +78,7 @@ export function historySwipeInstallScript(): string {
     };
     const facts = () => ({
       gesture: state.gesture,
+      startedAt: state.startedAt,
       horizontal: state.horizontal,
       vertical: state.vertical,
       momentum: state.momentum,
@@ -91,6 +93,7 @@ export function historySwipeInstallScript(): string {
     };
     const reset = () => {
       clearTail();
+      state.startedAt = 0;
       state.reportedAt = 0;
       state.lastAt = 0;
       state.horizontal = 0;
@@ -162,6 +165,7 @@ export function historySwipeInstallScript(): string {
         state.lastAt = now;
         if (first) {
           state.gesture += 1;
+          state.startedAt = now;
           state.pageOwns = pageOwnsGesture(path, event.deltaX);
         }
         state.events += 1;
@@ -308,7 +312,11 @@ function applyGestureReport(
   const direction: HistoryDirection | null = classifyHistoryGesture(facts, platform)
   if (!direction) return
   const now = Date.now()
-  if (now < state.cooldownUntil) return
+  // The cooldown is judged from when the gesture began, not from when this
+  // report reached main. One gesture reports as its travel grows, so a stream
+  // that outlasts the cooldown would otherwise walk history a second time.
+  const startedAt = Math.min(facts.startedAt, now)
+  if (startedAt < state.cooldownUntil) return
   state.cooldownUntil = now + NAVIGATION_COOLDOWN_MS
   state.lastGesture = facts.gesture
   navigatePageHistory(contents, direction)

@@ -124,7 +124,8 @@ export class ChatEngineTurnsDispatch {
           : undefined,
         executionScope,
         workspaceScope,
-        thread?.assistantId
+        thread?.assistantId,
+        thread?.scopeBucketId
       )
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({

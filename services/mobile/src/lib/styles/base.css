@@ -44,7 +44,12 @@
   --color-thread-spec: #6d28d9;
   --ink-meta: #5f6672;
 
-  --font:
+  /* The shared appearance table writes both stacks onto the root; these are the
+     values the phone draws before a stored choice has been read. */
+  --font-app:
+    'Oven Box', 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'Symbols Nerd Font Mono',
+    ui-monospace, monospace;
+  --font-mono:
     'Oven Box', 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'Symbols Nerd Font Mono',
     ui-monospace, monospace;
   --font-weight-base: 200;
@@ -113,7 +118,7 @@ body {
   background: var(--color-app);
   overscroll-behavior: none;
   color: var(--color-foreground);
-  font-family: var(--font);
+  font-family: var(--font-app);
   /* The app's base weight is light; chrome earns its weight back one step at a
      time. This single value is most of why the desktop reads calm. */
   font-weight: var(--font-weight-base);
@@ -251,6 +256,15 @@ body {
 .btn.quiet {
   border-color: transparent;
   color: var(--color-muted);
+}
+
+/* A destructive action wears the app's danger ink on the same plate as the
+   primary one, so it is never mistaken for a quiet alternative. */
+.btn.danger {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: var(--color-surface);
+  font-weight: 500;
 }
 
 .btn:disabled {

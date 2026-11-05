@@ -30,6 +30,8 @@ const (
 	// PrefixOAuthCode names a one-time handoff code row, never a token.
 	PrefixOAuthCode = "oac"
 	PrefixPrompt    = "prm"
+	// PrefixAttachment names one file the phone sent with a message.
+	PrefixAttachment = "att"
 )
 
 // NewID returns `<prefix>_<16 base32 characters>` backed by crypto/rand.

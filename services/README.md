@@ -3,10 +3,10 @@
 The hosted side of CodeInOven lives here, in the same repository as the desktop app so one change
 can touch the client and the server that serves it.
 
-| Service | Stack | Development URL | Purpose |
-| --- | --- | --- | --- |
-| `services/backend` | Go, `net/http`, Postgres | http://127.0.0.1:8080 | Identity, devices, per-user content store, prompts |
-| `services/mobile` | SvelteKit SPA, Capacitor 8 | http://127.0.0.1:5174 | The iOS and Android client |
+| Service            | Stack                      | Development URL       | Purpose                                            |
+| ------------------ | -------------------------- | --------------------- | -------------------------------------------------- |
+| `services/backend` | Go, `net/http`, Postgres   | http://127.0.0.1:8080 | Identity, devices, per-user content store, prompts |
+| `services/mobile`  | SvelteKit SPA, Capacitor 8 | http://127.0.0.1:5174 | The iOS and Android client                         |
 
 The desktop app stays a client. It holds no backend code, no Postgres credentials and no provider
 secrets; when it needs something from the server it goes through one typed client module.
@@ -18,13 +18,13 @@ names.
 
 ## Ports and origins
 
-| Thing | Value |
-| --- | --- |
-| Backend | `127.0.0.1:8080` (`HTTP_ADDR`) |
-| Mobile dev server | `127.0.0.1:5174` |
-| Native app origin (iOS) | `capacitor://localhost` |
-| Native app origin (Android) | `http://localhost` |
-| API base for the app | `PUBLIC_API_BASE`, default `http://127.0.0.1:8080` |
+| Thing                       | Value                                              |
+| --------------------------- | -------------------------------------------------- |
+| Backend                     | `127.0.0.1:8080` (`HTTP_ADDR`)                     |
+| Mobile dev server           | `127.0.0.1:5174`                                   |
+| Native app origin (iOS)     | `capacitor://localhost`                            |
+| Native app origin (Android) | `http://localhost`                                 |
+| API base for the app        | `PUBLIC_API_BASE`, default `http://127.0.0.1:8080` |
 
 The mobile dev server proxies `/api/*` to the backend, so the browser build and the native build use
 the same relative paths. The app reads `PUBLIC_API_BASE` and calls `${base}/v1/...`.
@@ -34,10 +34,10 @@ the same relative paths. The app reads `PUBLIC_API_BASE` and calls `${base}/v1/.
 Development has two separate states on purpose, so a phone testing a build can
 never touch the desktop's data or a deployed instance:
 
-| State | Port | Database | Used by |
-| --- | --- | --- | --- |
-| Desktop development | 8080 | `codeinoven_dev` | the desktop app and the browser |
-| Mobile development | 8081 | `codeinoven_mobile_dev` | the emulator and a physical phone |
+| State               | Port | Database                | Used by                           |
+| ------------------- | ---- | ----------------------- | --------------------------------- |
+| Desktop development | 8080 | `codeinoven_dev`        | the desktop app and the browser   |
+| Mobile development  | 8081 | `codeinoven_mobile_dev` | the emulator and a physical phone |
 
 ```sh
 # one time: create both databases
@@ -110,64 +110,112 @@ answers `401` with code `unauthorized` and no detail about which device it belon
 
 ### Health
 
-| Method | Path | Notes |
-| --- | --- | --- |
-| `GET` | `/health` | `{"status":"ok"}`, no database check |
-| `GET` | `/ready` | `200` when Postgres answers, `503` with `{"data":{"database":"down"}}` when it does not |
+| Method | Path      | Notes                                                                                   |
+| ------ | --------- | --------------------------------------------------------------------------------------- |
+| `GET`  | `/health` | `{"status":"ok"}`, no database check                                                    |
+| `GET`  | `/ready`  | `200` when Postgres answers, `503` with `{"data":{"database":"down"}}` when it does not |
 
 ### Identity
 
-| Method | Path | Body | Notes |
-| --- | --- | --- | --- |
-| `POST` | `/v1/auth/email/sign-up` | `{email,password,name,device?}` | `201`, returns `{user,token,device}` |
-| `POST` | `/v1/auth/email/sign-in` | `{email,password,device?}` | returns `{user,token,device}` |
-| `POST` | `/v1/auth/email/verify` | `{token}` | single use, 24 hours |
-| `POST` | `/v1/auth/email/resend` | `{email}` | always `202`, never reveals whether the address exists |
-| `POST` | `/v1/auth/email/reset/request` | `{email}` | always `202` |
-| `POST` | `/v1/auth/email/reset/confirm` | `{token,password}` | revokes every session on use |
-| `GET` | `/v1/auth/{provider}/start` | none | `302` to the provider, or `501` when that provider is not configured |
-| `GET` | `/v1/auth/{provider}/callback` | none | sets the session, then `302` to `mobile` or `desktop` handoff |
-| `POST` | `/v1/auth/sign-out` | none | revokes the current session, `204` |
-| `GET` | `/v1/auth/sessions` | none | the caller's sessions, current one marked |
-| `DELETE` | `/v1/auth/sessions/{id}` | none | revokes one of the caller's sessions, `204` |
+| Method   | Path                           | Body                            | Notes                                                                |
+| -------- | ------------------------------ | ------------------------------- | -------------------------------------------------------------------- |
+| `POST`   | `/v1/auth/email/sign-up`       | `{email,password,name,device?}` | `201`, returns `{user,token,device}`                                 |
+| `POST`   | `/v1/auth/email/sign-in`       | `{email,password,device?}`      | returns `{user,token,device}`                                        |
+| `POST`   | `/v1/auth/email/verify`        | `{token}`                       | single use, 24 hours                                                 |
+| `POST`   | `/v1/auth/email/resend`        | `{email}`                       | always `202`, never reveals whether the address exists               |
+| `POST`   | `/v1/auth/email/reset/request` | `{email}`                       | always `202`                                                         |
+| `POST`   | `/v1/auth/email/reset/confirm` | `{token,password}`              | revokes every session on use                                         |
+| `GET`    | `/v1/auth/{provider}/start`    | none                            | `302` to the provider, or `501` when that provider is not configured |
+| `GET`    | `/v1/auth/{provider}/callback` | none                            | sets the session, then `302` to `mobile` or `desktop` handoff        |
+| `POST`   | `/v1/auth/sign-out`            | none                            | revokes the current session, `204`                                   |
+| `GET`    | `/v1/auth/sessions`            | none                            | the caller's sessions, current one marked                            |
+| `DELETE` | `/v1/auth/sessions/{id}`       | none                            | revokes one of the caller's sessions, `204`                          |
 
 `device` is `{name, platform}` with `platform` one of `desktop`, `ios`, `android`. The backend
 records it and returns the device row, which the client keeps for later revocation.
 
 ### Account
 
-| Method | Path | Notes |
-| --- | --- | --- |
-| `GET` | `/v1/me` | `{id,email,name,avatarUrl,emailVerifiedAt,createdAt,store}` |
-| `PATCH` | `/v1/me` | `{name}` |
-| `GET` | `/v1/me/devices` | every device, current one marked |
-| `DELETE` | `/v1/me/devices/{id}` | revokes that device's sessions, `204` |
+| Method   | Path                  | Notes                                                       |
+| -------- | --------------------- | ----------------------------------------------------------- |
+| `GET`    | `/v1/me`              | `{id,email,name,avatarUrl,emailVerifiedAt,createdAt,store}` |
+| `PATCH`  | `/v1/me`              | `{name}`                                                    |
+| `GET`    | `/v1/me/devices`      | every device, current one marked                            |
+| `DELETE` | `/v1/me/devices/{id}` | revokes that device's sessions, `204`                       |
 
 ### Content
 
 Content lives in the user's own store schema, so every query is scoped by the session's user before
 it runs.
 
-| Method | Path | Notes |
-| --- | --- | --- |
-| `GET` | `/v1/projects` | `sort=activity\|name\|created`, `q`, `limit`, `cursor` |
-| `GET` | `/v1/projects/{id}` | one project with its status counts |
-| `GET` | `/v1/threads` | `project`, `state`, `unread=true`, `q`, `limit`, `cursor` |
-| `GET` | `/v1/threads/{id}` | one thread |
-| `GET` | `/v1/threads/{id}/messages` | oldest first, `limit`, `cursor` |
-| `POST` | `/v1/threads/{id}/prompts` | `{body,clientId}`, queues a prompt for an Oven, `202` |
-| `GET` | `/v1/prompts/{id}` | `{id,threadId,body,state,createdAt,updatedAt,error?}` |
+| Method   | Path                        | Notes                                                                    |
+| -------- | --------------------------- | ------------------------------------------------------------------------ |
+| `GET`    | `/v1/projects`              | `sort=activity\|name\|created`, `q`, `limit`, `cursor`                   |
+| `GET`    | `/v1/projects/{id}`         | one project with its status counts                                       |
+| `GET`    | `/v1/models`                | `{items,recent}`: the catalog plus up to 5 recently used ids              |
+| `GET`    | `/v1/threads`               | `project`, `state`, `unread=true`, `q`, `limit`, `cursor`                |
+| `GET`    | `/v1/threads/{id}`          | one thread                                                               |
+| `PATCH`  | `/v1/threads/{id}`          | the composer's choices; omitted leaves, `null` clears, `200` with thread  |
+| `GET`    | `/v1/threads/{id}/messages` | oldest first, `limit`, `cursor`                                          |
+| `GET`    | `/v1/threads/{id}/usage`    | the context meter, derived from stored token columns                      |
+| `POST`   | `/v1/threads/{id}/usage/reset` | `usage_reset_at = now()`, `200` with `Usage`                           |
+| `POST`   | `/v1/threads/{id}/attachments` | `{name,mime,dataBase64}`, `201` `Attachment`, decoded at most 4 MiB    |
+| `GET`    | `/v1/attachments/{id}`      | the bytes with their own `Content-Type`: never JSON                       |
+| `DELETE` | `/v1/attachments/{id}`      | `204` while no prompt carries it, `409` once one does                     |
+| `POST`   | `/v1/threads/{id}/prompts`  | `{body,clientId?,attachmentIds?,model?,thinking?,permission?,account?,ovenId?,fileSystem?}`, `202` |
+| `GET`    | `/v1/prompts/{id}`          | `{id,threadId,body,state,createdAt,updatedAt,error?,model,thinking,permission,account,ovenId,fileSystem,attachments}` |
+| `DELETE` | `/v1/prompts/{id}`          | takes back a prompt still `queued`, `204`; `409` once an Oven claimed it |
+| `POST`   | `/v1/prompts/{id}/steer`    | the Oven takes this prompt next; state becomes `steering`                |
+
+A prompt is the person's until an Oven claims it. `queued` is the only state a caller may delete or
+steer; past that the service answers `409`, so a held message is never silently rewritten under a
+running turn.
 
 `limit` defaults to 50 and is capped at 200. `cursor` is opaque; a caller echoes `nextCursor` and
 never parses one.
 
+### The composer's choices
+
+The phone's composer is the desktop's, so the choices it makes travel with the thread and with every
+prompt. On `PATCH /v1/threads/{id}` a key that is **absent** leaves the column alone, an explicit
+**`null`** clears it, and a value sets it. `thinking` is one of `minimal`, `low`, `medium`, `high`,
+`xhigh`, `max`, `ultra`; `permission` is `auto_review` or `full_access`; `model` is one of the ids
+`GET /v1/models` lists; `ovenId` names one of this account's Ovens; `account` is at most 120
+characters; `fileSystem` is a boolean. Any other value is `400 bad_request`, and an unknown thread is
+`404`.
+
+`POST /v1/threads/{id}/prompts` accepts the same fields: what it omits is read from the thread row at
+queue time, so the stored prompt always states the full choice the desktop will run. `attachmentIds`
+must be this thread's unattached attachments; an id that is unknown, from another thread, or already
+carried by a prompt is a `400`.
+
+### Attachments and the meter
+
+Files travel as base64 inside JSON, because that is what a WebView can send without a multipart
+encoder. The upload route is the only one with a 6 MiB body limit; every other route keeps 1 MiB. A
+decoded file may weigh at most 4 MiB, its `name` and `mime` must be non-empty, and the download route
+answers with the file itself rather than the JSON envelope.
+
+`Usage` is derived from stored token columns and nothing else:
+
+- `used` – sum of `inputTokens + outputTokens` over this thread's messages created after
+  `usageResetAt`, all of them when it is null.
+- `window` – `contextWindow`; `leftBeforeCompact` is `max(window - used, 0)`.
+- `thisTurn` – the latest assistant message's token counts, `0` when it has none.
+- `rate` – the latest assistant `outputTokens / (durationMs / 1000)`, `0` without it.
+- `costMicros` – the latest assistant message's `costMicros`, `0` without it.
+- `since` – `usageResetAt` in epoch milliseconds, `null` when never reset.
+
+A run that reported nothing leaves those columns null, and the meter reads null as `0` rather than
+guessing.
+
 ### Presence and store
 
-| Method | Path | Notes |
-| --- | --- | --- |
+| Method | Path                  | Notes                                                     |
+| ------ | --------------------- | --------------------------------------------------------- |
 | `POST` | `/v1/ovens/heartbeat` | `{name,fingerprint,descriptor}`, upserts this user's Oven |
-| `GET` | `/v1/ovens` | the user's Ovens with `lastHeartbeatAt` |
-| `GET` | `/v1/store/status` | `{kind,schemaVersion,requiredVersion,migratable}` |
+| `GET`  | `/v1/ovens`           | the user's Ovens with `lastHeartbeatAt`                   |
+| `GET`  | `/v1/store/status`    | `{kind,schemaVersion,requiredVersion,migratable}`         |
 
 ## Payload shapes
 
@@ -241,6 +289,15 @@ interface Thread {
   pinned: boolean
   archived: boolean
   drafting: boolean
+  model: string | null
+  harness: string | null
+  thinking: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null
+  permission: 'auto_review' | 'full_access' | null
+  account: string | null
+  ovenId: string | null
+  fileSystem: boolean
+  contextWindow: number | null
+  usageResetAt: number | null
   lastError: string | null
   messageCount: number
   lastMessagePreview: string | null
@@ -256,11 +313,83 @@ interface Message {
   body: string
   seq: number
   createdAt: number
+  inputTokens: number | null
+  outputTokens: number | null
+  durationMs: number | null
+  costMicros: number | null
+}
+
+interface Attachment {
+  id: string
+  threadId: string
+  promptId: string | null
+  name: string
+  mime: string
+  size: number
+  createdAt: number
+}
+
+interface Prompt {
+  id: string
+  threadId: string
+  body: string
+  state: 'queued' | 'claimed' | 'steering' | 'done' | 'failed'
+  error: string | null
+  createdAt: number
+  updatedAt: number
+  model: string | null
+  thinking: string | null
+  permission: string | null
+  account: string | null
+  ovenId: string | null
+  fileSystem: boolean
+  /** Always a list, never null. */
+  attachments: Attachment[]
+}
+
+interface Model {
+  id: string
+  name: string
+  provider: 'opencode' | 'openai' | 'anthropic' | 'deepseek'
+  providerLabel: string
+  favorite: boolean
+}
+
+interface ModelCatalog {
+  items: Model[]
+  recent: string[]
+}
+
+interface ThreadUsage {
+  used: number
+  window: number
+  leftBeforeCompact: number
+  thisTurn: { input: number; output: number }
+  rate: number
+  costMicros: number
+  since: number | null
 }
 ```
 
 All timestamps are epoch milliseconds, matching the desktop's own types so a mirrored row needs no
 conversion.
+
+### Model catalog
+
+The catalog is static data in the service, grouped by provider and ordered as the picker draws it.
+`id` always starts with the provider slug, so a client resolves its bundled vendor mark from the id
+alone:
+
+| Provider    | Models                                                                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------------- |
+| `opencode`  | `opencode/beam-free`, `opencode/big-pickle`, `opencode/claude-sonnet-5.5`                                 |
+| `openai`    | `openai/gpt-6.1-sol`, `openai/gpt-6-astra`, `openai/gpt-5.6-sol`, `openai/gpt-5.5`                       |
+| `anthropic` | `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-5.5`, `anthropic/claude-haiku-4.5`, `anthropic/opus-5-1m` |
+| `deepseek`  | `deepseek/deepseek-v4.1-flash`, `deepseek/deepseek-v4-pro`                                               |
+
+`openai/gpt-6.1-sol` and `deepseek/deepseek-v4.1-flash` are the favourites. `recent` is up to five ids
+this account's threads used in the last thirty days, most recently active first, and only ids the
+catalog still contains.
 
 ## Environment
 
@@ -269,16 +398,16 @@ lists every variable; a missing OAuth provider pair disables that provider inste
 service, and a missing mail sender logs verification links in development and refuses to start in
 production.
 
-| Variable | Purpose |
-| --- | --- |
-| `HTTP_ADDR` | Listen address, default `127.0.0.1:8080` |
-| `DATABASE_URL` | Postgres connection string |
-| `PUBLIC_BASE_URL` | The backend's own origin, used to build callback and verification links |
-| `APP_ORIGINS` | Comma separated allowed browser origins for CORS |
-| `SESSION_TTL` | Session lifetime, default `720h` |
-| `ENVIRONMENT` | `development` or `production` |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Enables Google sign-in |
-| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Enables GitHub sign-in |
+| Variable                                   | Purpose                                                                 |
+| ------------------------------------------ | ----------------------------------------------------------------------- |
+| `HTTP_ADDR`                                | Listen address, default `127.0.0.1:8080`                                |
+| `DATABASE_URL`                             | Postgres connection string                                              |
+| `PUBLIC_BASE_URL`                          | The backend's own origin, used to build callback and verification links |
+| `APP_ORIGINS`                              | Comma separated allowed browser origins for CORS                        |
+| `SESSION_TTL`                              | Session lifetime, default `720h`                                        |
+| `ENVIRONMENT`                              | `development` or `production`                                           |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Enables Google sign-in                                                  |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | Enables GitHub sign-in                                                  |
 
 ### Provider sign-in and the app handoff
 
@@ -297,9 +426,9 @@ origin already trusted for CORS. Anything else is refused.
 
 Register these callback URLs with each provider:
 
-| Provider | Callback URL |
-| --- | --- |
-| Google (GCP Web application client) | `http://localhost:8081/v1/auth/google/callback` |
+| Provider                             | Callback URL                                    |
+| ------------------------------------ | ----------------------------------------------- |
+| Google (GCP Web application client)  | `http://localhost:8081/v1/auth/google/callback` |
 | GitHub (OAuth App, not a GitHub App) | `http://localhost:8081/v1/auth/github/callback` |
 
 Credentials live in `services/backend/.env.oauth`, which is gitignored and mode

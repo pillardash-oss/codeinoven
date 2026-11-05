@@ -19,8 +19,11 @@
  *  unbounded fetches from a single gesture. */
 const MAX_DROP_URLS = 8
 
-/** Elements whose `src`/`href` names media a dragged selection can carry. */
-const HTML_MEDIA_SELECTORS = ['img[src]', 'video[src]', 'audio[src]', 'source[src]', 'a[href]']
+/** Elements whose `src` names the media a dragged selection carries. */
+const HTML_MEDIA_SELECTORS = ['img[src]', 'video[src]', 'audio[src]', 'source[src]']
+
+/** Fallback for a dragged selection that wraps no media element: it names a link. */
+const HTML_LINK_SELECTORS = ['a[href]']
 
 export interface ComposerDropPayload {
   /** Files the drag handed over as real `File` objects, in browser order. */
@@ -119,23 +122,32 @@ function urisFromList(raw: string): string[] {
 /**
  * Absolute URLs named by the drag's markup, for a drag that carried no list.
  *
+ * Media elements are read first, and a link is only read when they named
+ * nothing: an image dragged out of a page carries the markup `<a href="page">
+ * <img src="image">`, and attaching that page is what fetched an HTML document
+ * and reported it as a failed image. HTML markup describes a page, so it is the
+ * weakest reading of a dropped gesture, never an equal one.
+ *
  * A relative reference is skipped rather than resolved: this document is not the
  * document the markup came from, so resolving it here would name the wrong file.
  */
 function urlsFromHtml(raw: string): string[] {
-  if (raw.trim().length === 0) return []
-  const document = new DOMParser().parseFromString(raw, 'text/html')
-  const found: string[] = []
-  for (const selector of HTML_MEDIA_SELECTORS) {
-    for (const element of Array.from(document.querySelectorAll(selector))) {
-      const value =
-        element.getAttribute('src') ?? element.getAttribute('href') ?? element.textContent ?? ''
-      const trimmed = value.trim()
-      if (trimmed.length === 0 || found.includes(trimmed)) continue
-      found.push(trimmed)
+  const read = (selectors: readonly string[]): string[] => {
+    if (raw.trim().length === 0) return []
+    const document = new DOMParser().parseFromString(raw, 'text/html')
+    const found: string[] = []
+    for (const selector of selectors) {
+      for (const element of Array.from(document.querySelectorAll(selector))) {
+        const value = element.getAttribute('src') ?? element.getAttribute('href') ?? ''
+        const trimmed = value.trim()
+        if (trimmed.length === 0 || found.includes(trimmed)) continue
+        found.push(trimmed)
+      }
     }
+    return found.filter((value) => isAbsoluteWebUrl(value))
   }
-  return found.filter((value) => isAbsoluteWebUrl(value))
+  const media = read(HTML_MEDIA_SELECTORS)
+  return media.length > 0 ? media : read(HTML_LINK_SELECTORS)
 }
 
 /** Whether a string is an absolute http/https URL. */
@@ -154,7 +166,8 @@ function isAbsoluteWebUrl(value: string): boolean {
  * `text/uri-list` is the authority: Chromium fills it with the media's own
  * absolute URL for an image, video or audio drag. The markup is read only when
  * a drag carried no list, and the plain-text reading only when neither named an
- * absolute web URL.
+ * absolute web URL. One dragged thing yields one link: mixing the readings is
+ * what attached a page behind the image the user actually dropped.
  */
 export function dropMediaUrls(dataTransfer: DataTransfer | null): string[] {
   if (!dataTransfer) return []
@@ -166,9 +179,12 @@ export function dropMediaUrls(dataTransfer: DataTransfer | null): string[] {
     }
   }
 
-  const candidates = [...urisFromList(read('text/uri-list')), ...urlsFromHtml(read('text/html'))]
-  const plain = read('text/plain').trim()
-  if (plain.length > 0) candidates.push(plain)
+  let candidates = urisFromList(read('text/uri-list'))
+  if (candidates.length === 0) candidates = urlsFromHtml(read('text/html'))
+  if (candidates.length === 0) {
+    const plain = read('text/plain').trim()
+    if (plain.length > 0) candidates = [plain]
+  }
 
   const urls: string[] = []
   for (const candidate of candidates) {

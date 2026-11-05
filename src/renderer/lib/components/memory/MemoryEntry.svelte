@@ -9,6 +9,7 @@
     MemoryCategory,
     MemoryEntry,
     MemoryPriority,
+    ScopeBucket,
     Thread
   } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -23,6 +24,7 @@
   import ProjectSelect from '../shared/ProjectSelect.svelte'
   import ThreadSelect from '../shared/ThreadSelect.svelte'
   import MemoryToggle from './MemoryToggle.svelte'
+  import ScopeBucketSelect from './ScopeBucketSelect.svelte'
   import MemoryScopeSelect from './MemoryScopeSelect.svelte'
   import type { MemoryScopeOption } from './memory-routing'
 
@@ -36,6 +38,10 @@
     projects?: readonly ScopeProject[]
     /** Threads of the entry's project, offered by the "Thread" picker. */
     threads?: readonly Thread[]
+    /** Feature scopes of the entry's project, offered by the "Scope" picker. */
+    scopeBuckets?: readonly ScopeBucket[]
+    /** Whether the entry's project scopes are still loading. */
+    scopeBucketsLoading?: boolean
     /** Whether the entry's project threads are still loading. */
     threadsLoading?: boolean
     /** Assistants offered by the "One assistant" picker. */
@@ -60,6 +66,8 @@
     projects = [],
     threads = [],
     threadsLoading = false,
+    scopeBuckets = [],
+    scopeBucketsLoading = false,
     assistants = [],
     assistantIconUrls,
     initiallyExpanded,
@@ -84,9 +92,11 @@
   let showProjectPicker = $derived(currentScopeOption?.needsProject ?? false)
   let showThreadPicker = $derived(currentScopeOption?.needsThread ?? false)
   let showAssistantPicker = $derived(currentScopeOption?.needsAssistant ?? false)
-  /** Two place pickers share one row; a single one takes the whole row. */
+  let showScopePicker = $derived(currentScopeOption?.needsScope ?? false)
+  /** Several place pickers share the row two at a time. */
   let pickerColumns = $derived(
-    [showProjectPicker, showThreadPicker, showAssistantPicker].filter(Boolean).length > 1
+    [showProjectPicker, showThreadPicker, showAssistantPicker, showScopePicker].filter(Boolean)
+      .length > 1
       ? 'grid-cols-2'
       : 'grid-cols-1'
   )
@@ -288,7 +298,7 @@
         </div>
       </div>
 
-      {#if showProjectPicker || showThreadPicker || showAssistantPicker}
+      {#if showProjectPicker || showThreadPicker || showAssistantPicker || showScopePicker}
         <div class="grid gap-3 {pickerColumns}">
           {#if showProjectPicker}
             <div>
@@ -324,6 +334,20 @@
               />
             </div>
           {/if}
+          {#if showScopePicker}
+            <div>
+              <span class="mb-1 block text-xs font-medium text-muted">Scope</span>
+              <ScopeBucketSelect
+                buckets={scopeBuckets}
+                value={entry.scopeBucketId ?? null}
+                onValueChange={(nextBucketId) => onUpdate(index, 'scopeBucketId', nextBucketId)}
+                ariaLabel="Select the project scope this memory applies to"
+                title="Select the project scope this memory applies to"
+                loading={scopeBucketsLoading}
+                disabled={!entry.projectId && !projectId}
+              />
+            </div>
+          {/if}
           {#if showAssistantPicker}
             <div>
               <span class="mb-1 block text-xs font-medium text-muted">Assistant</span>
@@ -353,6 +377,11 @@
         {#if showThreadPicker && !entry.threadId}
           <p class="text-[0.6875rem] text-danger" role="alert">
             Choose a thread before saving this entry.
+          </p>
+        {/if}
+        {#if showScopePicker && !entry.scopeBucketId}
+          <p class="text-[0.6875rem] text-danger" role="alert">
+            Choose a scope before saving this entry.
           </p>
         {/if}
       {/if}

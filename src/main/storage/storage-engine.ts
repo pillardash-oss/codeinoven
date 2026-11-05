@@ -109,6 +109,7 @@ const DEFAULT_CONFIG: AppConfig = {
   slashCommandMode: 'app',
   preferredEditor: 'system',
   ideLanguageServers: DEFAULT_IDE_LANGUAGE_SERVERS,
+  ideFormatOnSave: true,
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },
   auxiliaryAgents: {},

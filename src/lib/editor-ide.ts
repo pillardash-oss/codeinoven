@@ -10,6 +10,7 @@ export type IdeAction =
   | 'references'
   | 'hover'
   | 'capabilities'
+  | 'format'
   | 'grep'
 export interface IdeRequest {
   owner: string
@@ -39,6 +40,8 @@ export interface IdeResponse {
   }[]
   locations?: IdeLocation[]
   documentation?: string
+  /** The document re-laid-out by its language server, returned by `format`. */
+  text?: string
   capabilities?: { definition: boolean; references: boolean; hover: boolean }
   truncated?: boolean
 }

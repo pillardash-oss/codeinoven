@@ -77,6 +77,17 @@ export interface ThreadParkReason {
   scopeBucketId: string
 }
 
+/**
+ * The answer to a scope change: the moved thread, or the sentence explaining
+ * why the app refused to move it.
+ *
+ * A refusal travels as data rather than as a rejected invoke, because Electron
+ * logs every rejected `ipcMain.handle` call and refusing a move into a working
+ * worktree thread is user feedback, not an app failure. The renderer toasts the
+ * sentence and nothing reaches a log.
+ */
+export type ThreadScopeMoveResult = { ok: true; thread: Thread } | { ok: false; refusal: string }
+
 export interface Thread {
   id: string
   projectId: string

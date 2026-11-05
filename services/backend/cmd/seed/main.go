@@ -19,6 +19,7 @@ import (
 	"github.com/pillardash-oss/codeinoven/services/backend/internal/auth"
 	"github.com/pillardash-oss/codeinoven/services/backend/internal/config"
 	"github.com/pillardash-oss/codeinoven/services/backend/internal/logging"
+	"github.com/pillardash-oss/codeinoven/services/backend/internal/models"
 	"github.com/pillardash-oss/codeinoven/services/backend/internal/store"
 )
 
@@ -27,6 +28,10 @@ const (
 	demoEmail   = "demo@codeinoven.local"
 	demoName    = "Demo"
 	defaultSeed = "oven-mobile-demo-pass"
+
+	// demoContextWindow is the context the demo models offer, so the composer's
+	// meter draws a real window instead of an empty bar.
+	demoContextWindow = 128_000
 )
 
 func main() {
@@ -42,6 +47,14 @@ func run() error {
 		return err
 	}
 	logger := logging.New(cfg.Environment)
+
+	// The demo thread identities are catalog ids, so a rename in the catalog fails
+	// the seed instead of writing threads that name a model nothing can run.
+	for _, identity := range threadIdentities {
+		if !models.Has(identity.model) {
+			return fmt.Errorf("seed: thread identity %q is not in the model catalog", identity.model)
+		}
+	}
 
 	password := os.Getenv("SEED_PASSWORD")
 	if password == "" {
@@ -63,6 +76,12 @@ func run() error {
 	if err := database.MigrateControl(ctx); err != nil {
 		return err
 	}
+	// The demo store may predate this binary: bring every provisioned store up to
+	// the template before writing columns the seed now needs, exactly as the server
+	// does at startup.
+	if err := database.MigrateAllStores(ctx); err != nil {
+		return err
+	}
 
 	user, err := ensureDemoUser(ctx, database, password)
 	if err != nil {
@@ -78,6 +97,7 @@ func run() error {
 	projects := buildProjects(now)
 	threads := buildThreads(projects, now)
 	writeThreadRollups(threads)
+	stampTurnUsage(threads)
 
 	rows := 0
 	err = database.ReplaceContent(ctx, rec.SchemaName, func(tx pgx.Tx) error {
@@ -106,12 +126,14 @@ func run() error {
 			if _, err := tx.Exec(ctx, `
 				INSERT INTO threads (
 					id, project_id, title, status, read, pinned, archived, drafting,
-					model, harness, last_error, last_message_preview, message_count,
+					model, harness, thinking, permission, account, oven_id, file_system,
+					context_window, last_error, last_message_preview, message_count,
 					last_activity, created_at, updated_at
-				) VALUES ($1,$2,$3,$4,$5,$6,false,false,$7,$8,$9,$10,$11,$12,$13,$12)`,
+				) VALUES ($1,$2,$3,$4,$5,$6,false,false,$7,$8,$9,$10,$11,NULL,$12,$13,$14,$15,$16,$17,$18,$17)`,
 				thread.id, thread.projectID, thread.title, thread.status, thread.read,
-				thread.pinned, thread.model, thread.harness, thread.lastError, thread.preview,
-				len(thread.messages), thread.activity, thread.createdAt,
+				thread.pinned, thread.model, thread.harness, thread.thinking, thread.permission,
+				thread.account, thread.fileSystem, thread.contextWindow, thread.lastError,
+				thread.preview, len(thread.messages), thread.activity, thread.createdAt,
 			); err != nil {
 				return fmt.Errorf("insert thread %s: %w", thread.title, err)
 			}
@@ -119,10 +141,13 @@ func run() error {
 
 			for index, message := range thread.messages {
 				if _, err := tx.Exec(ctx, `
-					INSERT INTO messages (id, thread_id, role, body, seq, created_at)
-					VALUES ($1,$2,$3,$4,$5,$6)`,
+					INSERT INTO messages (
+						id, thread_id, role, body, seq, created_at,
+						input_tokens, output_tokens, duration_ms, cost_micros
+					) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 					auth.NewID(auth.PrefixMessage), thread.id, message.role, message.body,
-					index+1, message.at,
+					index+1, message.at, message.inputTokens, message.outputTokens,
+					message.durationMs, message.costMicros,
 				); err != nil {
 					return fmt.Errorf("insert message %d of %s: %w", index+1, thread.id, err)
 				}
@@ -211,28 +236,38 @@ type seedProject struct {
 	threads    int
 }
 
-// seedMessage is one message row to write.
+// seedMessage is one message row to write. The token counts are only set on
+// assistant turns: a user message consumed nothing, and NULL says that honestly.
 type seedMessage struct {
-	role string
-	body string
-	at   time.Time
+	role         string
+	body         string
+	at           time.Time
+	inputTokens  *int
+	outputTokens *int
+	durationMs   *int
+	costMicros   *int
 }
 
 // seedThread is one thread row plus its messages.
 type seedThread struct {
-	id        string
-	projectID string
-	title     string
-	status    string
-	read      bool
-	pinned    bool
-	model     string
-	harness   string
-	lastError *string
-	preview   *string
-	createdAt time.Time
-	activity  time.Time
-	messages  []seedMessage
+	id            string
+	projectID     string
+	title         string
+	status        string
+	read          bool
+	pinned        bool
+	model         string
+	harness       string
+	thinking      string
+	permission    string
+	account       string
+	fileSystem    bool
+	contextWindow int
+	lastError     *string
+	preview       *string
+	createdAt     time.Time
+	activity      time.Time
+	messages      []seedMessage
 }
 
 // seedIdentity is the harness and model a demo thread runs on.
@@ -244,14 +279,27 @@ type seedIdentity struct {
 // threadIdentities are the pairs a demo thread reports to the mobile composer.
 // They are written as pairs, not as two independent cycles, so every thread
 // shows a combination that actually exists while the list still reads varied.
+//
+// The model ids are the catalog's own, because the phone draws its vendor mark and
+// its label from the id: a demo thread naming a model the catalog does not list
+// would render as a thread the picker cannot describe.
 var threadIdentities = []seedIdentity{
-	{model: "flash", harness: "pi"},
-	{model: "opus", harness: "claude-code"},
-	{model: "gpt-5.6-codex", harness: "codex"},
-	{model: "sonnet", harness: "opencode"},
-	{model: "flash", harness: "pi"},
-	{model: "gemini-3.5-flash", harness: "antigravity"},
+	{model: "openai/gpt-6.1-sol", harness: "codex"},
+	{model: "anthropic/claude-opus-5.5", harness: "claude-code"},
+	{model: "deepseek/deepseek-v4.1-flash", harness: "pi"},
+	{model: "anthropic/claude-sonnet-5.5", harness: "opencode"},
+	{model: "opencode/beam-free", harness: "opencode"},
+	{model: "deepseek/deepseek-v4-pro", harness: "pi"},
 }
+
+// thinkingCycle and permissionCycle vary the composer's chips across the demo
+// threads, so the picker and the header have something honest to show. The
+// accounts are the logins the demo's messages run as.
+var (
+	thinkingCycle   = []string{"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+	permissionCycle = []string{"auto_review", "auto_review", "full_access"}
+	accountCycle    = []string{"demo@codeinoven.local", "ops@rallip.dev"}
+)
 
 // buildProjects returns the six projects the demo account owns.
 func buildProjects(now time.Time) []seedProject {
@@ -343,16 +391,21 @@ func buildThreads(projects []seedProject, now time.Time) []seedThread {
 			}
 
 			thread := seedThread{
-				id:        auth.NewID(auth.PrefixThread),
-				projectID: project.id,
-				title:     threadVerbs[index%len(threadVerbs)] + " " + threadTopics[(index/len(threadVerbs))%len(threadTopics)],
-				status:    statusCycle[index%len(statusCycle)],
-				read:      i%3 == 0,
-				pinned:    i%11 == 5,
-				model:     threadIdentities[index%len(threadIdentities)].model,
-				harness:   threadIdentities[index%len(threadIdentities)].harness,
-				createdAt: created,
-				activity:  activity,
+				id:            auth.NewID(auth.PrefixThread),
+				projectID:     project.id,
+				title:         threadVerbs[index%len(threadVerbs)] + " " + threadTopics[(index/len(threadVerbs))%len(threadTopics)],
+				status:        statusCycle[index%len(statusCycle)],
+				read:          i%3 == 0,
+				pinned:        i%11 == 5,
+				model:         threadIdentities[index%len(threadIdentities)].model,
+				harness:       threadIdentities[index%len(threadIdentities)].harness,
+				thinking:      thinkingCycle[index%len(thinkingCycle)],
+				permission:    permissionCycle[index%len(permissionCycle)],
+				account:       accountCycle[index%len(accountCycle)],
+				fileSystem:    index%4 == 0,
+				contextWindow: demoContextWindow,
+				createdAt:     created,
+				activity:      activity,
 			}
 			if thread.status == "failed" {
 				message := "The Oven lost its connection before the run finished."
@@ -396,6 +449,37 @@ func writeThreadRollups(threads []seedThread) {
 		thread.preview = &preview
 		if last.at.After(thread.activity) {
 			thread.activity = last.at
+		}
+	}
+}
+
+// stampTurnUsage gives every assistant turn the token counts a run would report.
+//
+// The meter, the usage panel and the rate chip are all derived from these columns,
+// so without them a freshly seeded account would show zeros everywhere and nobody
+// could tell a broken meter from an empty one. The numbers are deterministic and
+// grow with the thread, so a reader sees variety while a re-run writes the same
+// rows.
+func stampTurnUsage(threads []seedThread) {
+	for threadIndex := range threads {
+		assistantTurns := 0
+		for messageIndex := range threads[threadIndex].messages {
+			message := &threads[threadIndex].messages[messageIndex]
+			if message.role != "assistant" {
+				continue
+			}
+
+			assistantTurns++
+			input := 1_200 + threadIndex*37 + assistantTurns*640
+			output := 180 + threadIndex*11 + assistantTurns*220
+			duration := 2_400 + assistantTurns*1_800
+			// $3 per million input and $15 per million output, in micros.
+			cost := input*3 + output*15
+
+			message.inputTokens = &input
+			message.outputTokens = &output
+			message.durationMs = &duration
+			message.costMicros = &cost
 		}
 	}
 }

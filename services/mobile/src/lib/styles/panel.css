@@ -6,7 +6,10 @@
 
 .app {
   position: relative;
-  height: 100dvh;
+  /* The keyboard is layout space, not an overlay: the native shell writes its
+     height as `--keyboard-inset`, so the shell shortens by exactly that much and
+     the composer keeps its seat above the keys. */
+  height: calc(100dvh - var(--keyboard-inset, 0px));
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -27,6 +30,70 @@
   align-items: center;
   gap: 0.5rem;
   min-height: 2.75rem;
+}
+
+/* A screen opened from a panel wears its ancestry above the title row: the
+   chevron is one step back, the crumbs name the panels above this one. It is the
+   header's first line rather than a second header, so the whole bar still reads as
+   one block and the title keeps its size. */
+.crumb-row {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  min-height: 2.25rem;
+}
+
+.crumb-back {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  margin-left: -0.125rem;
+  color: var(--color-muted);
+  text-decoration: none;
+  transition: color 120ms ease-out;
+}
+
+.crumb-back:hover {
+  color: var(--color-foreground);
+}
+
+.crumbs {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.crumbs li {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  font-size: 0.75rem;
+}
+
+.crumbs li + li::before {
+  content: '/';
+  padding: 0 0.375rem;
+  color: var(--color-dimmed);
+}
+
+.crumbs a {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-muted);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  transition: color 120ms ease-out;
+}
+
+.crumbs a:hover {
+  color: var(--color-foreground);
 }
 
 /* The title is the only thing in a header that may give way: the controls beside

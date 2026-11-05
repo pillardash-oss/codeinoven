@@ -162,7 +162,8 @@ func (s *Store) ReplaceContent(
 		// Assistants belong to the same replace: an assistant has no natural key
 		// in this schema, so a seed that left them behind doubled every one on
 		// the next run. The list is the whole content, in dependency order.
-		if _, err := tx.Exec(ctx, `TRUNCATE messages, prompts, threads, projects, assistants`); err != nil {
+		if _, err := tx.Exec(ctx,
+			`TRUNCATE attachments, messages, prompts, threads, projects, assistants`); err != nil {
 			return fmt.Errorf("store: truncate content: %w", err)
 		}
 		return write(tx)

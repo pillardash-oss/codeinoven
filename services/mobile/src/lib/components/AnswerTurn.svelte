@@ -3,9 +3,8 @@
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
-  import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
-  import CioHarness from '@pdslng/cio-icon/CioHarness.svelte'
+  import VendorMark from './VendorMark.svelte'
   import { formatDateTime } from '#shared/date-time-format'
   import { drop } from '#lib/motion'
 
@@ -91,14 +90,14 @@
     <span class="turn-attrib">
       {#if harness}
         <span class="tm-harness" title={`Harness: ${harness}`}>
-          <CioHarness size={14} />
+          <VendorMark name={harness} size={14} />
           {harness}
         </span>
         <span class="tm-sep" aria-hidden="true">·</span>
       {/if}
       {#if model}
         <span class="tm-model" title={`Model: ${model}`}>
-          <CioCpu size={11} />
+          <VendorMark name={model} size={11} />
           <span>{model}</span>
         </span>
       {/if}

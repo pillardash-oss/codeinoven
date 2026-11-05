@@ -449,7 +449,6 @@ const UPDATE_THREAD_FIELDS = new Set([
   'titleSource',
   'providerId',
   'workingDirectory',
-  'scopeBucketId',
   'lastActivity',
   'read',
   'assistantGettingStarted',
@@ -465,7 +464,6 @@ export function validateThreadUpdateInput(
     | 'titleSource'
     | 'providerId'
     | 'workingDirectory'
-    | 'scopeBucketId'
     | 'lastActivity'
     | 'read'
     | 'assistantGettingStarted'
@@ -482,7 +480,6 @@ export function validateThreadUpdateInput(
       | 'titleSource'
       | 'providerId'
       | 'workingDirectory'
-      | 'scopeBucketId'
       | 'lastActivity'
       | 'read'
       | 'assistantGettingStarted'
@@ -492,9 +489,6 @@ export function validateThreadUpdateInput(
 
   if (input.title !== undefined) {
     sanitized.title = validateBoundedString(input.title, 'Thread title', 1, 240)
-  }
-  if (input.scopeBucketId !== undefined) {
-    sanitized.scopeBucketId = validateEntityId(input.scopeBucketId, 'Scope bucket ID')
   }
   if (input.titleSource !== undefined) {
     sanitized.titleSource = validateThreadTitleSource(input.titleSource)

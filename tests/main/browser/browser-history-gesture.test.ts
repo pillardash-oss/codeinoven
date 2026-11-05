@@ -8,6 +8,7 @@ import {
 function facts(overrides: Partial<HistoryGestureFacts> = {}): HistoryGestureFacts {
   return {
     gesture: 1,
+    startedAt: 1_700_000_000_000,
     horizontal: -200,
     vertical: 0,
     momentum: false,
@@ -80,5 +81,10 @@ describe('history gesture report reading', () => {
   it('refuses a report that is not an object', () => {
     expect(readHistoryGestureFacts(null)).toBeNull()
     expect(readHistoryGestureFacts('gesture')).toBeNull()
+  })
+
+  it('refuses a report without the time its gesture began', () => {
+    expect(readHistoryGestureFacts({ ...facts(), startedAt: undefined })).toBeNull()
+    expect(readHistoryGestureFacts({ ...facts(), startedAt: 'now' })).toBeNull()
   })
 })

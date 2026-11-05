@@ -1,8 +1,13 @@
 /**
- * The app's font table, and the one place the persisted appearance settings are
- * turned into CSS on a document root.
+ * The app's typography, as a document root sees it.
  *
- * The app window applies them from its config store (`stores/app-config.svelte.ts`),
+ * The table of families, weights and the rule that turns them into CSS lives in
+ * `$shared/app-appearance`, because the phone offers the same three choices and
+ * both clients have to write them the same way. What stays here is the part only
+ * a window can do: the canvas terminals measure the returned mono stack and load
+ * the face before they cache its glyphs.
+ *
+ * The app window applies these from its config store (`stores/app-config.svelte.ts`),
  * and the frameless child documents the app opens over a browser page (the
  * browser permission prompt, the toast overlay) load the app's stylesheet but not
  * its stores. They apply the same three values through here rather than copying
@@ -12,37 +17,23 @@
 
 import { DEFAULT_CONTRAST_LEVEL, type ContrastLevel } from '$shared/types'
 
-import { DEFAULT_APP_FONT_FAMILY, FONT_STACKS, normalizeAppFontFamily } from '$shared/app-fonts'
+import { applyAppearanceTypography, type AppearanceTypography } from '$shared/app-appearance'
+import { DEFAULT_APP_FONT_FAMILY, FONT_STACKS } from '$shared/app-fonts'
 import { syncTerminalFonts } from './terminal/host-registry'
-export { DEFAULT_APP_FONT_FAMILY, FONT_STACKS } from '$shared/app-fonts'
 
-/** Fallbacks for documents drawn before config arrives. */
-export const DEFAULT_APP_FONT_SIZE = 15
-export const DEFAULT_APP_FONT_WEIGHT = 200
+export { DEFAULT_APP_FONT_FAMILY, FONT_STACKS } from '$shared/app-fonts'
+export { DEFAULT_APP_FONT_SIZE, DEFAULT_APP_FONT_WEIGHT } from '$shared/app-appearance'
 
 /** The appearance values a document needs to draw the app's typography. */
-export interface AppTypography {
-  fontFamily?: string
-  appFontSize?: number
-  fontWeight?: number
-}
+export type AppTypography = AppearanceTypography
 
 /**
- * Apply the app's typography to a document root: the font stack as a CSS
- * variable, the base font size on the root element (all rem-based text scales
- * from it), and the base weight.
+ * Apply the app's typography to a document root: the font stacks as css variables,
+ * the base font size on the root element (all rem-based text scales from it), and
+ * the base weight. The canvas terminals follow the mono stack it returns.
  */
 export function applyAppTypography(root: HTMLElement, typography: AppTypography): void {
-  const family = normalizeAppFontFamily(typography.fontFamily)
-  root.style.setProperty('--font-app', FONT_STACKS[family] ?? FONT_STACKS[DEFAULT_APP_FONT_FAMILY])
-  const mono = family === 'system' ? FONT_STACKS[DEFAULT_APP_FONT_FAMILY] : FONT_STACKS[family]
-  root.style.setProperty('--font-mono', mono)
-  syncTerminalFonts(mono)
-  root.style.fontSize = `${typography.appFontSize ?? DEFAULT_APP_FONT_SIZE}px`
-  root.style.setProperty(
-    '--font-weight-base',
-    String(typography.fontWeight ?? DEFAULT_APP_FONT_WEIGHT)
-  )
+  syncTerminalFonts(applyAppearanceTypography(root, typography))
 }
 
 /**

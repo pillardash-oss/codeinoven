@@ -26,12 +26,19 @@ import (
 var (
 	// ErrNotFound means the row does not exist (or is not visible to this user).
 	ErrNotFound = errors.New("store: not found")
+	// ErrConflict means the row exists but its state forbids the change, such as
+	// a prompt an Oven has already claimed.
+	ErrConflict = errors.New("store: conflict")
 	// ErrEmailTaken means another account already uses that address.
 	ErrEmailTaken = errors.New("store: email already registered")
 	// ErrTokenInvalid means a single-use token is unknown, used or expired.
 	ErrTokenInvalid = errors.New("store: token invalid or expired")
 	// ErrChecksumMismatch means a migration file changed after it was applied.
 	ErrChecksumMismatch = errors.New("store: migration checksum mismatch")
+	// ErrAttachmentInvalid means an attachment id a caller named is unknown, belongs
+	// to another thread, or is already carried by a prompt. The request is wrong,
+	// not the resource's state, so the HTTP layer answers 400 rather than 409.
+	ErrAttachmentInvalid = errors.New("store: attachment is not available for this prompt")
 )
 
 // schemaNamePattern is the only shape a store schema name may take. It is

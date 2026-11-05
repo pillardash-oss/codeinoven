@@ -37,26 +37,31 @@ interface AssistOrigin {
  * open is what the app remembers as its last selection, it also made the next
  * start come back to that thread and its panels instead of the work they had
  * actually gone to.
+ *
+ * Resolves true when the thread was opened, false when it could not be read: a
+ * deleted thread has nothing to open, and a caller that offered "Open thread"
+ * tells the user that instead of retrying into silence.
  */
 async function openAssistThread(
   projectId: string,
   threadId: string,
   stillWanted: () => boolean = () => true
-): Promise<void> {
+): Promise<boolean> {
   const project = await invoke('project:get', projectId).catch(() => null)
   // The thread was created optimistically a moment ago, so its row may not be
   // readable on the first attempt. Opening it is how the user watches the run
   // they paid for, so it is worth a few short retries rather than a silent miss.
   for (let attempt = 0; attempt < 12; attempt += 1) {
-    if (!stillWanted()) return
+    if (!stillWanted()) return false
     const thread = await invoke('thread:get', projectId, threadId).catch(() => null)
     if (thread) {
-      if (!stillWanted()) return
+      if (!stillWanted()) return false
       workspaceState.openThread(thread, project)
-      return
+      return true
     }
     await new Promise((done) => setTimeout(done, 150))
   }
+  return false
 }
 
 /**

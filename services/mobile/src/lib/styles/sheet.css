@@ -268,6 +268,16 @@
   color: var(--color-dimmed);
 }
 
+/* One sentence of consequence above the footer: what the decision does, in the
+   user's terms, never a second heading. */
+.sheet-note {
+  margin: 0;
+  padding: 0 0.75rem 0.75rem;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--color-muted);
+}
+
 .sheet-error {
   margin: 0;
   padding: 0.5rem 0.75rem 0;

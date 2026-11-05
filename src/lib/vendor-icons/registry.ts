@@ -102,3 +102,24 @@ export function getVendorIconSvg(name: string | undefined): string | undefined {
   const slug = getVendorSlug(name)
   return slug ? iconsBySlug.get(slug) : undefined
 }
+
+/**
+ * The mark for a model id when no provider name comes with it.
+ *
+ * A phone that reads a thread's `model` holds `gemini-3.5-flash`, not the
+ * provider that bills it, and that id normalizes to `gemini35flash`, which is
+ * nobody's slug. The bundled artwork is looked up by the longest slug the id
+ * begins with, so an id still wears the mark of the company that made it; an id
+ * that matches nothing returns undefined and the caller draws its own glyph.
+ */
+export function getModelVendorIconSvg(model: string | undefined): string | undefined {
+  const direct = getVendorIconSvg(model)
+  if (direct) return direct
+  const key = normalizeVendorName(model ?? '')
+  if (key.length < 4) return undefined
+  let best: string | undefined
+  for (const slug of iconsBySlug.keys()) {
+    if (key.startsWith(slug) && (best === undefined || slug.length > best.length)) best = slug
+  }
+  return best ? iconsBySlug.get(best) : undefined
+}

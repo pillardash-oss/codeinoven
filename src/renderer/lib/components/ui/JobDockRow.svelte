@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBan from '@pdslng/cio-icon/CioBan.svelte'
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   /**
@@ -49,6 +50,8 @@
             <CioSpinner size={13} class="shrink-0 animate-spin text-info" aria-hidden="true" />
           {:else if job.status === 'succeeded'}
             <CioCheckCircle size={13} class="shrink-0 text-success" aria-hidden="true" />
+          {:else if job.status === 'cancelled'}
+            <CioBan size={13} class="shrink-0 text-muted" aria-hidden="true" />
           {:else}
             <CioAttention size={13} class="shrink-0 text-danger" aria-hidden="true" />
           {/if}

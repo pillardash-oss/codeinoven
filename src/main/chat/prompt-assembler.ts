@@ -127,7 +127,8 @@ export class PromptAssembler {
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
     workspaceScope: WorkspaceScopeMode = 'full',
-    assistantId?: string
+    assistantId?: string,
+    scopeBucketId?: string
   ): Promise<BehaviorLayer[]> {
     const layers: BehaviorLayer[] = []
 
@@ -190,7 +191,8 @@ export class PromptAssembler {
       projectId,
       threadId,
       modelKey,
-      assistantId
+      assistantId,
+      scopeBucketId
     )
     layers.push(
       withLayerAccounting({
@@ -243,7 +245,8 @@ export class PromptAssembler {
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
     workspaceScope: WorkspaceScopeMode = 'full',
-    assistantId?: string
+    assistantId?: string,
+    scopeBucketId?: string
   ): Promise<string> {
     return (
       await this.getAssembledPromptWithLayers(
@@ -258,7 +261,8 @@ export class PromptAssembler {
         modelKey,
         executionScope,
         workspaceScope,
-        assistantId
+        assistantId,
+        scopeBucketId
       )
     ).prompt
   }
@@ -284,7 +288,8 @@ export class PromptAssembler {
     modelKey?: string,
     executionScope: BehaviorExecutionScope = 'project-thread',
     workspaceScope: WorkspaceScopeMode = 'full',
-    assistantId?: string
+    assistantId?: string,
+    scopeBucketId?: string
   ): Promise<{ prompt: string; layers: BehaviorLayer[] }> {
     const layers = await this.getLayers(
       projectId,
@@ -297,7 +302,8 @@ export class PromptAssembler {
       modelKey,
       executionScope,
       workspaceScope,
-      assistantId
+      assistantId,
+      scopeBucketId
     )
     const parts = layers
       .filter((layer) => layer.skipInPrompt !== true)

@@ -150,6 +150,10 @@ func errorResponse(err error) (int, errorBody) {
 		return statusForCode(codeConflict), errorBody{Error: detail{
 			Code: codeConflict, Message: "An account with this email already exists.",
 		}}
+	case errors.Is(err, store.ErrConflict):
+		return statusForCode(codeConflict), errorBody{Error: detail{
+			Code: codeConflict, Message: "The resource has already moved on.",
+		}}
 	}
 
 	return statusForCode(codeInternal), errorBody{Error: detail{

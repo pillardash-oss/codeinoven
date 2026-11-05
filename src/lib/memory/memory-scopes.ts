@@ -11,7 +11,8 @@ import type { MemoryAudience, MemoryEntry, MemoryScope } from '../types'
  *   empty set means every audience, which is what the UI calls "Global".
  *   These entries live in their audience's own memory file.
  * - **Located** - exactly one of `MEMORY_LOCATION_SCOPES`, which pins the entry
- *   to one project, one thread, one routine, or one assistant task.
+ *   to one project, one project feature scope, one thread, one routine, or one
+ *   assistant task.
  *
  * Both sides must agree on what a set means, so every rule lives here instead of
  * being re-derived in the engine and the panel.
@@ -31,14 +32,21 @@ export const MEMORY_AUDIENCES: readonly MemoryAudience[] = [
  * every memory file already on disk writes that token, and `assistant` is taken
  * by the audience that means every assistant at once. The product calls the
  * place an assistant; the stored value stays as it was written.
+ *
+ * `scope` is a project's feature scope (a bucket on its Scope board): wider than
+ * one thread, narrower than the whole project. Its entries share the project's
+ * memory file and are filtered by the bucket id they carry, exactly as routine
+ * memory shares the assistant container's file.
  */
-export const MEMORY_LOCATION_SCOPES = ['project', 'thread', 'routine', 'task'] as const
+export const MEMORY_LOCATION_SCOPES = ['project', 'scope', 'thread', 'routine', 'task'] as const
 
 export type MemoryLocationScope = (typeof MEMORY_LOCATION_SCOPES)[number]
 
-/** The location an entry belongs to: its file, plus the routine it targets. */
+/** The location an entry belongs to: its file, plus the scope it targets. */
 export interface MemoryScopeLocation {
   projectId?: string
+  /** The project feature scope a `scope`-scoped entry is pinned to. */
+  scopeBucketId?: string
   threadId?: string
   assistantId?: string
 }
@@ -80,13 +88,13 @@ export function memoryAudienceForContainer(projectId?: string): MemoryAudience {
  *
  * An empty set applies to every audience. A located entry applies only inside
  * the place it names, which is also what keeps a routine's memory out of every
- * other routine's tasks.
+ * other routine's tasks and one feature scope's memory out of every other scope.
  *
  * `thread` covers a conversation in projects, chats, and browser chats, while `task` is the assistant's
  * own thread level.
  */
 export function memoryScopesMatchContext(
-  entry: Pick<MemoryEntry, 'scopes' | 'projectId' | 'threadId' | 'assistantId'>,
+  entry: Pick<MemoryEntry, 'scopes' | 'projectId' | 'scopeBucketId' | 'threadId' | 'assistantId'>,
   context: MemoryContext
 ): boolean {
   const scopes = entry.scopes
@@ -98,6 +106,13 @@ export function memoryScopesMatchContext(
   switch (location) {
     case 'project':
       return context.audience === 'projects' && entry.projectId === context.projectId
+    case 'scope':
+      return (
+        context.audience === 'projects' &&
+        Boolean(context.scopeBucketId) &&
+        entry.projectId === context.projectId &&
+        entry.scopeBucketId === context.scopeBucketId
+      )
     case 'thread':
       return (
         (context.audience === 'projects' ||
@@ -151,6 +166,12 @@ export function memoryLocationForScopes(
     case 'project': {
       if (!context.projectId) throw new Error('This memory needs a project to live in.')
       return { projectId: context.projectId }
+    }
+    case 'scope': {
+      if (!context.projectId || !context.scopeBucketId) {
+        throw new Error('This memory needs a project scope to live in.')
+      }
+      return { projectId: context.projectId, scopeBucketId: context.scopeBucketId }
     }
     case 'thread': {
       if (!context.projectId || !context.threadId) {
@@ -212,7 +233,9 @@ export function readMemoryScopes(input: {
   return known.has(legacy) ? [legacy as MemoryScope] : []
 }
 
-/** The scope vocabulary each audience can propose, used by extraction and its submission guard. */
+/** The scope vocabulary each audience can propose, used by extraction and its submission guard.
+ *  Project feature scopes are user-chosen places with no name the model can
+ *  guess, so a `scope` memory is only ever created by hand in the panel. */
 export const MEMORY_AUDIENCE_SCOPES: Record<MemoryAudience, readonly MemoryScope[]> = {
   projects: ['projects', 'project', 'thread'],
   chat: ['chat', 'thread'],
@@ -238,6 +261,8 @@ export function memoryScopeSummary(scopes: readonly MemoryScope[]): string {
     switch (location) {
       case 'project':
         return 'Specific project'
+      case 'scope':
+        return 'Scope'
       case 'thread':
         return 'Thread'
       case 'routine':

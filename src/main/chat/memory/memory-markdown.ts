@@ -65,6 +65,7 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
     const source = metadata.get('source')
     const modelKeys = parseModelKeysMetadata(metadata.get('modelkeys'))
     const projectId = metadata.get('projectid') || undefined
+    const scopeBucketId = metadata.get('scopebucketid') || undefined
 
     const updatedAt = safeInteger(metadata.get('updatedat'), now)
     entries.push({
@@ -95,6 +96,7 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
       frequency: safeInteger(metadata.get('frequency'), 1),
       lastReinforced: safeInteger(metadata.get('lastreinforced'), now),
       projectId,
+      scopeBucketId,
       threadId: metadata.get('threadid') || undefined,
       // `routineid` is the stored spelling from before the rename; every memory
       // file on disk still carries it, so it is read and then written back as
@@ -123,6 +125,7 @@ export function serializeMemoryMd(entries: MemoryEntry[]): string {
         `lastReinforced: ${entry.lastReinforced}`
       ]
       if (entry.projectId) meta.push(`projectId: ${entry.projectId}`)
+      if (entry.scopeBucketId) meta.push(`scopeBucketId: ${entry.scopeBucketId}`)
       if (entry.threadId) meta.push(`threadId: ${entry.threadId}`)
       if (entry.assistantId) meta.push(`assistantId: ${entry.assistantId}`)
       if (entry.modelKeys?.length) meta.push(`modelKeys: ${JSON.stringify(entry.modelKeys)}`)

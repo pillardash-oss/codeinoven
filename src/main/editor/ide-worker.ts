@@ -551,7 +551,7 @@ const chains = new Map<string, Promise<unknown>>()
  * discards that work outright, and hover, definition and references always wait
  * for the document to be synced but never for each other.
  */
-const DOCUMENT_ACTIONS = new Set(['sync', 'capabilities'])
+const DOCUMENT_ACTIONS = new Set(['sync', 'capabilities', 'format'])
 const INTELLIGENCE_ACTIONS = new Set(['hover', 'definition', 'references'])
 /** Bumped by every close, so work that was already queued cannot resurrect a
  *  document the editor has left. */
@@ -592,6 +592,80 @@ function capabilitiesOf(sessions: Session[]) {
     references: sessions.some((session) => Boolean(session.capabilities.referencesProvider)),
     hover: sessions.some((session) => Boolean(session.capabilities.hoverProvider))
   }
+}
+
+/**
+ * Ask the file's own language server to re-lay-out the document.
+ *
+ * Formatting is the server's job, not the app's: the server already holds the
+ * syntax tree it parsed for navigation and knows the conventions of the language
+ * it covers, so this is the one formatter that stays correct for TypeScript, CSS,
+ * HTML, JSON and Svelte alike. A server that does not advertise formatting is not
+ * an error   the document comes back untouched and the caller saves it as it is.
+ */
+async function formatDocument(
+  entries: { session: Session; selection: Selection }[],
+  uri: string,
+  text: string
+): Promise<IdeResponse> {
+  const provider = entries.find((entry) =>
+    Boolean(entry.session.capabilities.documentFormattingProvider)
+  )
+  if (!provider) return { text }
+  const edits = await provider.session.request(
+    'textDocument/formatting',
+    { textDocument: { uri }, options: { tabSize: 2, insertSpaces: true } },
+    INTELLIGENCE_TIMEOUT_MS
+  )
+  const formatted = applyTextEdits(text, edits)
+  return { text: formatted ?? text }
+}
+
+/**
+ * Apply a language server's edits to a document, bottom-up so every offset stays
+ * valid, and return the new text. Edits that overlap or arrive malformed are
+ * dropped rather than allowed to corrupt the file: a partial format is better
+ * than a scrambled one, and the caller keeps the unformatted text when nothing
+ * applies.
+ */
+function applyTextEdits(text: string, result: unknown): string | null {
+  if (!Array.isArray(result)) return null
+  const lineStarts = [0]
+  for (let index = 0; index < text.length; index++) {
+    if (text.charCodeAt(index) === 10) lineStarts.push(index + 1)
+  }
+  const offsetOf = (position: unknown): number | null => {
+    const line = Number(record(position).line)
+    const character = Number(record(position).character)
+    if (!Number.isInteger(line) || !Number.isInteger(character)) return null
+    if (line < 0 || line >= lineStarts.length || character < 0) return null
+    const start = lineStarts[line]
+    const breakIndex = text.indexOf('\n', start)
+    const end = breakIndex === -1 ? text.length : breakIndex
+    if (start + character > end) return null
+    return start + character
+  }
+  const edits: { from: number; to: number; insert: string }[] = []
+  for (const item of result) {
+    const range = record(record(item).range)
+    const from = offsetOf(range.start)
+    const to = offsetOf(range.end)
+    const insert = record(item).newText
+    if (from === null || to === null || to < from || typeof insert !== 'string') continue
+    edits.push({ from, to, insert })
+  }
+  if (!edits.length) return null
+  edits.sort((left, right) => right.from - left.from || right.to - left.to)
+  let formatted = text
+  let boundary = text.length
+  for (const edit of edits) {
+    // A later edit in this loop starts before the previous one did; overlapping
+    // ranges mean the server's answer is not safe to apply.
+    if (edit.to > boundary) return null
+    formatted = formatted.slice(0, edit.from) + edit.insert + formatted.slice(edit.to)
+    boundary = edit.from
+  }
+  return formatted
 }
 
 /** Keep one server's copy of a document current, in the sync mode it asked for. */
@@ -735,6 +809,7 @@ async function handle(
         false
       )
     }
+  if (request.action === 'format') return formatDocument(entries, uri, text)
   if (!capabilities[request.action]) return { capabilities, locations: [] }
   const params = {
     textDocument: { uri },

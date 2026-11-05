@@ -8,8 +8,7 @@
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { invoke } from '$lib/ipc.svelte'
+  import { moveThreadToScope } from '$lib/stores/thread-scope-move'
   import type { ScopeBucket } from '$shared/types'
 
   interface Props {
@@ -47,23 +46,19 @@
   /** The typed query matches no existing scope, so a "+" appears to create it. */
   let noMatch = $derived(query.trim().length > 0 && buckets.length === 0)
 
-  /** Point one thread at a scope and keep both stores in step. It throws so each
-   *  caller can surface the failure wherever the user still is. */
+  /** Point one thread at a scope and keep both stores in step. A refused move
+   *  is toasted by the helper and reports itself here as a reason. */
   async function applyScopeToThread(
     targetProjectId: string,
     targetThreadId: string,
     bucketId: string
-  ): Promise<void> {
-    const updated = await invoke('thread:update', targetProjectId, targetThreadId, {
-      scopeBucketId: bucketId
-    })
-    workspaceState.updateThread(updated)
-    scopeState.updateThread(updated)
+  ): Promise<boolean> {
+    return (await moveThreadToScope(targetProjectId, targetThreadId, bucketId)) !== null
   }
 
   async function selectBucket(bucket: ScopeBucket): Promise<void> {
     try {
-      await applyScopeToThread(projectId, threadId, bucket.id)
+      if (!(await applyScopeToThread(projectId, threadId, bucket.id))) return
     } catch (error) {
       loadError = error instanceof Error ? error.message : 'Failed to change scope'
       return

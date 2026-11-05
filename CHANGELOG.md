@@ -24,6 +24,22 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **A docked agent handoff whose prompt is never sent now says it was cancelled
+  and can be closed.** Starting an action with an agent in review mode docks a
+  panel that waits for the brief it placed in the thread's composer, and nothing
+  in the app noticed when the user backed out: clearing the composer, deleting
+  the thread, or simply never sending left the panel armed, and its `Open thread`
+  action retried into silence when the thread was gone. The handoff now watches
+  the composer's draft and the thread's deletion, treats a draft that stays
+  empty as abandoned (after a short settle window so a real send still becomes
+  the run it is), and ends the wait at the state it actually reached: the panel
+  reads `Cancelled`, the step it stopped on is no longer a spinner, the close
+  control is available, and a thread that no longer resolves drops the dead
+  `Open thread` action instead of offering it
+  (lib/components/assist/agent-assist-jobs.svelte.ts). The ten minute wait also
+  ends as cancelled rather than as a success that said `Prompt ready` for a
+  prompt that was never there.
+
 - **Hover documentation works again in IDE Mode, from the first hover.** A
   language server loads its project lazily, on the first request that needs it,
   and that first hover measured 11.8 s for svelte-language-server on this

@@ -15,6 +15,7 @@
     const reviewing = job.delivery === 'draft' && !job.started
     const stages = reviewing ? ASSIST_STEPS.slice(0, 4) : ASSIST_STEPS
     const active = stages.findIndex((step) => step.id === job.stage)
+    const cancelled = job.status === 'cancelled'
     return [
       ...stages.map((step, index): JobStepView => ({
         id: step.id,
@@ -26,8 +27,12 @@
               ? 'pending'
               : job.status === 'failed'
                 ? 'failed'
-                : 'active',
-        ...(index === active && job.detail && job.detail !== step.label
+                : // Nothing is in flight once the user backed out, so the step
+                  // the job stopped on reads as unattempted, never as a spinner.
+                  cancelled
+                  ? 'pending'
+                  : 'active',
+        ...(index === active && job.detail && job.detail !== step.label && !cancelled
           ? { detail: job.detail }
           : {})
       })),
@@ -36,8 +41,14 @@
   })
   function openThread(): void {
     if (job.threadId)
-      void openAssistThread(job.projectId, job.threadId).catch((error: unknown) =>
-        reportError(error, 'Could not open the agent thread.')
+      void openAssistThread(job.projectId, job.threadId).then(
+        (opened) => {
+          // A thread that cannot be read any more is the handoff the user threw
+          // away: say the operation was cancelled instead of waiting on a prompt
+          // that has nowhere to be sent.
+          if (!opened) agentAssistJobs.threadUnavailable(job.id)
+        },
+        (error: unknown) => reportError(error, 'Could not open the agent thread.')
       )
   }
 </script>
@@ -50,20 +61,24 @@
     ? job.detail || 'Preparing'
     : job.status === 'failed'
       ? 'Failed'
-      : job.delivery === 'draft'
-        ? 'Prompt ready'
-        : 'Agent finished'}
+      : job.status === 'cancelled'
+        ? 'Cancelled'
+        : job.delivery === 'draft'
+          ? 'Prompt ready'
+          : 'Agent finished'}
   {steps}
   error={job.error}
   note={job.status === 'running'
     ? job.awaitingSend
       ? 'Edit and send the prompt in the thread. This panel follows the run from there.'
       : 'You can keep working. Progress continues here and in the thread.'
-    : job.status === 'failed' && !job.threadId
-      ? 'The handoff stopped before a thread was ready. Start a new assistance request to try again.'
-      : job.delivery === 'draft'
-        ? 'The configured prompt is ready for you to edit and send.'
-        : 'Open the thread for the full result and any requested answers.'}
+    : job.status === 'cancelled'
+      ? job.detail || 'The operation was cancelled.'
+      : job.status === 'failed' && !job.threadId
+        ? 'The handoff stopped before a thread was ready. Start a new assistance request to try again.'
+        : job.delivery === 'draft'
+          ? 'The configured prompt is ready for you to edit and send.'
+          : 'Open the thread for the full result and any requested answers.'}
   minimized={job.minimized}
   onMinimize={() => agentAssistJobs.minimize(job.id)}
   onClose={() => agentAssistJobs.close(job.id)}
