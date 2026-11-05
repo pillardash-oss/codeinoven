@@ -1,9 +1,6 @@
 import type { ProviderCatalog, ProviderModel } from '../../../lib/types'
 import { acpArray, acpRecord, acpString, type AcpNewSessionResult } from './acp-protocol'
 
-/** Provider id every ACP agent's models are published under. */
-export const ACP_PROVIDER_ID = 'acp'
-
 /** A mode the agent exposes, kept so the driver can name it in diagnostics. */
 export interface AcpModeSummary {
   id: string
@@ -20,7 +17,8 @@ export interface AcpModeSummary {
  */
 export function acpProviderCatalog(
   result: AcpNewSessionResult,
-  agentName: string
+  agentName: string,
+  providerId: string
 ): ProviderCatalog[] {
   const reported = acpArray(acpRecord(result.models)?.['availableModels'])
   const models: ProviderModel[] = []
@@ -30,7 +28,7 @@ export function acpProviderCatalog(
     if (!modelId) continue
     models.push({
       id: modelId,
-      providerId: ACP_PROVIDER_ID,
+      providerId,
       name: acpString(record?.['name']) ?? modelId,
       reasoning: false,
       attachment: false,
@@ -40,7 +38,7 @@ export function acpProviderCatalog(
   if (models.length === 0) {
     models.push({
       id: 'default',
-      providerId: ACP_PROVIDER_ID,
+      providerId,
       name: 'Agent default',
       reasoning: false,
       attachment: false,
@@ -49,7 +47,7 @@ export function acpProviderCatalog(
   }
   return [
     {
-      id: ACP_PROVIDER_ID,
+      id: providerId,
       name: agentName,
       harnessId: 'acp',
       models,

@@ -1,6 +1,6 @@
 import { buildProcessEnvironmentAsync } from '../cli-environment'
 import { AcpClient } from './acp-client'
-import type { AcpAgentConfig } from './acp-config'
+import type { AcpAgent } from '../../../lib/acp'
 import {
   acpRecord,
   acpString,
@@ -14,8 +14,8 @@ import {
 export const ACP_PROTOCOL_VERSION = 1
 
 export interface AcpTransportHandlers {
-  /** The configured agent, read at spawn time so a settings change applies to the next turn. */
-  resolveConfig: () => Promise<AcpAgentConfig | null>
+  /** The configured agent, read at spawn time so an edit applies to the next turn. */
+  resolveConfig: () => Promise<AcpAgent | null>
   /** One agent notification (`session/update` and friends). */
   notification: (method: string, params: unknown) => void
   /** One agent request (`session/request_permission`, `fs/*`, `terminal/*`). */
@@ -144,9 +144,7 @@ export class AcpTransport {
   private async handshake(): Promise<AcpInitializeResult> {
     const config = await this.handlers.resolveConfig()
     if (!config) {
-      throw new Error(
-        'No ACP agent is configured. Add the command that starts your harness in ACP mode in Harnesses.'
-      )
+      throw new Error('This ACP agent is no longer configured. Add it again in Harnesses.')
     }
     const client = new AcpClient({
       command: config.command,
@@ -194,7 +192,7 @@ export class AcpTransport {
     }
   }
 
-  private async spawnEnvironment(config: AcpAgentConfig): Promise<NodeJS.ProcessEnv> {
+  private async spawnEnvironment(config: AcpAgent): Promise<NodeJS.ProcessEnv> {
     const env = await buildProcessEnvironmentAsync()
     for (const [key, value] of Object.entries(config.env)) env[key] = value
     return env

@@ -43,6 +43,8 @@ import { runPiLogin, listPiProviderAuthInfo } from './pi-login'
 import { BrowserWindow } from 'electron'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from '../system/logger'
+import { findAcpAgent, isAcpAgentId } from '../drivers/acp/acp-agents-store'
+import { acpAgentAuthStatus } from './acp-agent-auth'
 
 /** Shared headless store for harnesses whose credentials live in files (Pi). */
 const fileBackedAuth = new PiAuthConfigService(undefined, piAuthFileIo)
@@ -1359,6 +1361,13 @@ export class ProviderAccountOrchestrator {
    * (OpenCode V2's `auth switch`; V1 has none).
    */
   async capabilities(harnessId: string): Promise<HarnessAuthCapabilities | null> {
+    // An ACP agent owns its own sign-in: the app asks it, over the protocol,
+    // which methods it accepts. There is no login command to hand to a terminal
+    // and no provider file to read, so only `status` is advertised here and the
+    // sign-in itself runs through the ACP channel.
+    if (isAcpAgentId(harnessId)) {
+      return { ...READ_AND_HANDOFF_ONLY, loginHandoff: false }
+    }
     const definition = await this.resolveDefinitionOrUndefined(harnessId)
     if (!definition) return null
     const multipleAccounts = harnessSupportsMultipleAccounts(harnessId)
@@ -1514,11 +1523,46 @@ export class ProviderAccountOrchestrator {
     }
   }
 
+  /**
+   * Status for a user-added ACP agent, read from the agent itself.
+   *
+   * An ACP agent hands CodeInOven a session or refuses one, and that refusal is
+   * the whole answer: when it needs a sign-in it says so, and the methods it
+   * declared in `initialize` are what the user then picks from. Providers stay
+   * inside the agent, so the accounts list names the agent once instead of
+   * inventing rows the app cannot act on.
+   */
+  private async acpStatus(harnessId: string, projectPath?: string): Promise<HarnessAuthStatus> {
+    const agent = await findAcpAgent(harnessId)
+    if (!agent) {
+      return {
+        state: 'error',
+        accounts: [],
+        detail: 'This ACP agent is no longer configured. Add it again in Harnesses.'
+      }
+    }
+    const status = await acpAgentAuthStatus(agent, projectPath)
+    if (status.state !== 'authenticated') {
+      return {
+        state: status.state,
+        accounts: [],
+        ...(status.detail ? { detail: status.detail } : {})
+      }
+    }
+    return {
+      state: 'authenticated',
+      accounts: [
+        { id: agent.id, providerId: agent.id, label: agent.name, method: 'agent', active: true }
+      ]
+    }
+  }
+
   async getStatus(
     harnessId: string,
     projectPath?: string,
     environment: NodeJS.ProcessEnv = {}
   ): Promise<HarnessAuthStatus> {
+    if (isAcpAgentId(harnessId)) return this.acpStatus(harnessId, projectPath)
     return this.enqueueStatus(async () => {
       const definition = await this.resolveDefinition(harnessId)
       if (definition.readStatus) {
@@ -1561,6 +1605,11 @@ export class ProviderAccountOrchestrator {
     /** Account whose credential home this login writes into, when main resolved one. */
     accountId?: string
   ): Promise<HarnessLoginHandoff> {
+    if (isAcpAgentId(harnessId)) {
+      throw new Error(
+        'This ACP agent signs in through its own protocol. Use the sign-in methods it offers instead of a terminal command.'
+      )
+    }
     const definition = await this.resolveDefinition(harnessId)
     const loginOptions: HarnessLoginOptions = { ...options }
     // Antigravity signs in through an interactive CLI session, which is also

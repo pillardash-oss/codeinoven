@@ -21,7 +21,7 @@ import { CodexDriver } from '../../drivers/codex-driver'
 import { ClineDriver } from '../../drivers/cline-driver'
 import { AntigravityDriver } from '../../drivers/antigravity-driver'
 import { MuseDriver } from '../../drivers/muse-driver'
-import { AcpDriver } from '../../drivers/acp-driver'
+import { AcpDriver, configuredAcpAgents } from '../../drivers/acp-driver'
 import { PiDriver } from '../../drivers/pi-driver'
 import { OvenChat } from '../../ovens/oven-chat'
 import { CheckpointManager } from '../../storage/checkpoint-manager'
@@ -307,15 +307,18 @@ export function wireChatEngine(
       cline: () =>
         new ClineDriver(storage, engine.state.baseUrlProviders, engine.state.secretVault),
       antigravity: () => new AntigravityDriver(storage),
-      muse: () => new MuseDriver(storage),
-      // One generic transport for every ACP-speaking agent, including harnesses
-      // that ship no dedicated driver here.
-      acp: () => new AcpDriver(storage, app.getVersion())
+      muse: () => new MuseDriver(storage)
     }
     for (const harness of listHarnesses()) {
       const create = driverFactories[harness.id]
       if (create) engine.drivers.set(harness.id, create())
     }
+    // ACP agents are the user's own records, so their drivers are built from
+    // what they saved rather than from the harness registry.
+    for (const agent of configuredAcpAgents()) {
+      engine.drivers.set(agent.id, new AcpDriver(storage, agent, app.getVersion()))
+    }
+    engine.state.acpDriverFactory = (agent) => new AcpDriver(storage, agent, app.getVersion())
     // Remember which OpenCode transport the map was built for, so a runtime
     // install/upgrade can swap it without rebuilding the whole map.
     engine.state.openCodeDriverIsV2 = isOpenCodeV2Installed()

@@ -680,6 +680,9 @@ export class ChatEngine {
   refreshOpenCodeHarness(): void {
     return this.units['providers-catalog'].refreshOpenCodeHarness()
   }
+  async refreshAcpHarnesses(): Promise<void> {
+    return this.units['providers-catalog'].refreshAcpHarnesses()
+  }
   async restartHarnessRuntime(
     harnessId: string,
     options: { force?: boolean } = {}

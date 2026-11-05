@@ -6,7 +6,9 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
@@ -22,6 +24,7 @@
   import { displayShortcutLabel } from '$lib/shortcut-display'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
+  import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
@@ -45,12 +48,13 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
+  import AcpAgentsRail from './AcpAgentsRail.svelte'
+  import AcpAgentEditor from './AcpAgentEditor.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
   import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
   import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
 
   import OpenCodeV2CatalogPanel from './OpenCodeV2CatalogPanel.svelte'
-  import AcpAgentPanel from './AcpAgentPanel.svelte'
 
   /** How often the "last checked" relative label re-renders. */
   const RELATIVE_TIME_TICK_MS = 20_000
@@ -92,26 +96,27 @@
   let copiedPathId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
-  /** The harness rail on screen: dedicated drivers, or ACP agents the user added. */
-  const activeRail = $derived<'native' | 'acp'>(activeTab === 'acp' ? 'acp' : 'native')
-  const railProviders = $derived(
-    providerStore.providers.filter((provider) => (provider.transport ?? 'native') === activeRail)
-  )
-  let nativeCount = $derived(
+  /**
+   * The dedicated-driver rows. Agents the user added over ACP are their own
+   * records, so that rail renders from the ACP store rather than the registry:
+   * nothing there is installed, updated or managed by the app.
+   */
+  const nativeProviders = $derived(
     providerStore.providers.filter((provider) => (provider.transport ?? 'native') === 'native')
+  )
+  let nativeCount = $derived(nativeProviders.length)
+  let acpCount = $derived(acpAgentsStore.agents.length)
+  let allCount = $derived(nativeCount)
+  let updatesCount = $derived(
+    nativeProviders.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id))
       .length
   )
-  let acpCount = $derived(
-    providerStore.providers.filter((provider) => (provider.transport ?? 'native') === 'acp').length
+  let issuesCount = $derived(
+    nativeProviders.filter((provider) => provider.status === 'error').length
   )
-  let allCount = $derived(railProviders.length)
-  let updatesCount = $derived(
-    railProviders.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id)).length
-  )
-  let issuesCount = $derived(railProviders.filter((provider) => provider.status === 'error').length)
 
   let filteredProviders = $derived.by(() => {
-    let list = railProviders
+    let list = nativeProviders
     if (statusFilter === 'updates') {
       list = list.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id))
     } else if (statusFilter === 'issues') {
@@ -141,9 +146,6 @@
 
   /** True when a harness row has a Settings or Details panel to disclose. */
   function hasDisclosure(provider: ProviderConnectionInfo): boolean {
-    // The ACP harness has no install page: its command is configured inside the
-    // panel, so the row must open even before anything is configured.
-    if (provider.id === 'acp') return true
     return (
       (provider.status === 'available' && provider.integration === 'ready') ||
       provider.status === 'error'
@@ -515,6 +517,7 @@
       loadManifests,
       loadAutoUpdatePrefs,
       () => baseUrlProviderStore.load(),
+      () => acpAgentsStore.load(),
       () => providerStore.checkAll(),
       checkAllAuth,
       () => harnessLifecycleStore.checkAll()
@@ -690,366 +693,396 @@
         </div>
       </div>
 
-      <div
-        class="flex shrink-0 items-center gap-0.5 border bg-elevated p-0.5"
-        role="tablist"
-        aria-label="Filter harnesses by status"
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={statusFilter === 'all'}
-          title="Show all harnesses"
-          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
-          'all'
-            ? 'bg-surface text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          onclick={() => (statusFilter = 'all')}
+      {#if activeTab === 'native'}
+        <div
+          class="flex shrink-0 items-center gap-0.5 border bg-elevated p-0.5"
+          role="tablist"
+          aria-label="Filter harnesses by status"
         >
-          All
-          <span
-            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
-            >{allCount}</span
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'all'}
+            title="Show all harnesses"
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+            'all'
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            onclick={() => (statusFilter = 'all')}
           >
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={statusFilter === 'updates'}
-          title="Show harnesses with an update available"
-          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
-          'updates'
-            ? 'bg-surface text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          onclick={() => (statusFilter = 'updates')}
-        >
-          {#if updatesCount > 0}
-            <span class="h-1.5 w-1.5 shrink-0 bg-warning" aria-hidden="true"></span>
-          {/if}
-          Updates
-          <span
-            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
-            >{updatesCount}</span
+            All
+            <span
+              class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+              >{allCount}</span
+            >
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'updates'}
+            title="Show harnesses with an update available"
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+            'updates'
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            onclick={() => (statusFilter = 'updates')}
           >
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={statusFilter === 'issues'}
-          title="Show harnesses that need attention"
-          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
-          'issues'
-            ? 'bg-surface text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          onclick={() => (statusFilter = 'issues')}
-        >
-          {#if issuesCount > 0}
-            <span class="h-1.5 w-1.5 shrink-0 bg-danger" aria-hidden="true"></span>
-          {/if}
-          Issues
-          <span
-            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
-            >{issuesCount}</span
+            {#if updatesCount > 0}
+              <span class="h-1.5 w-1.5 shrink-0 bg-warning" aria-hidden="true"></span>
+            {/if}
+            Updates
+            <span
+              class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+              >{updatesCount}</span
+            >
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'issues'}
+            title="Show harnesses that need attention"
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+            'issues'
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            onclick={() => (statusFilter = 'issues')}
           >
-        </button>
-      </div>
+            {#if issuesCount > 0}
+              <span class="h-1.5 w-1.5 shrink-0 bg-danger" aria-hidden="true"></span>
+            {/if}
+            Issues
+            <span
+              class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+              >{issuesCount}</span
+            >
+          </button>
+        </div>
+      {/if}
 
       <div class="ml-auto flex flex-col items-end gap-0.5">
-        <button
-          class="flex shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-          title="Re-check all harnesses"
-          onclick={() => void recheckAll()}
-          disabled={providerStore.checkingCount > 0}
-        >
-          <CioRefresh size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
-          Check all
-        </button>
+        <div class="flex items-center gap-2">
+          {#if activeTab === 'acp'}
+            <button
+              type="button"
+              class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+              title="Add an ACP agent"
+              onclick={() => acpAgentsStore.openNew()}
+            >
+              <CioPlus size={12} />
+              Add agent
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="flex shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+            title="Re-check all harnesses"
+            onclick={() => void recheckAll()}
+            disabled={providerStore.checkingCount > 0}
+          >
+            <CioRefresh size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
+            Check all
+          </button>
+        </div>
         <span class="text-[0.625rem] text-dimmed">{lastCheckedLabel}</span>
       </div>
     </div>
 
-    <div class="@container space-y-3">
-      {#each filteredProviders as provider (provider.id)}
-        {@const badge = badgeFor(provider)}
-        {@const expanded = expandedSettings[provider.id] === true}
-        <SettingsEntry {expanded}>
-          <div
-            class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_auto_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
-          >
-            <div class="flex min-w-0 items-center gap-3">
-              <div
-                class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
-              >
-                <AgentIcon agentId={provider.id} label={provider.name} size={20} />
+    {#if activeTab === 'acp'}
+      <AcpAgentsRail query={searchQuery} />
+      {#if acpAgentsStore.editing !== null}
+        {#key acpAgentsStore.editing}
+          <AcpAgentEditor agent={acpAgentsStore.editTarget} />
+        {/key}
+      {/if}
+    {:else}
+      <div class="@container space-y-3">
+        {#each filteredProviders as provider (provider.id)}
+          {@const badge = badgeFor(provider)}
+          {@const expanded = expandedSettings[provider.id] === true}
+          <SettingsEntry {expanded}>
+            <div
+              class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_auto_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
+            >
+              <div class="flex min-w-0 items-center gap-3">
+                <div
+                  class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
+                >
+                  <AgentIcon agentId={provider.id} label={provider.name} size={20} />
+                </div>
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-medium">{provider.name}</p>
+                  {#if provider.version}
+                    <p class="truncate font-mono text-[0.625rem] text-dimmed">{provider.version}</p>
+                  {/if}
+                </div>
               </div>
-              <div class="min-w-0">
-                <p class="truncate text-sm font-medium">{provider.name}</p>
-                {#if provider.version}
-                  <p class="truncate font-mono text-[0.625rem] text-dimmed">{provider.version}</p>
+
+              <div class="min-w-0 shrink-0">
+                {#key provider.status}
+                  <SettingsStatusBadge label={badge.label} classes={badge.classes}>
+                    <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
+                  </SettingsStatusBadge>
+                {/key}
+              </div>
+
+              <div class="col-span-2 min-w-0 @5xl:col-span-1">
+                <p
+                  class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
+                  title={provider.executionTarget?.kind === 'wsl'
+                    ? 'WSL path'
+                    : provider.executionTarget?.kind === 'bundled'
+                      ? 'Source'
+                      : 'Path'}
+                >
+                  {provider.executionTarget?.kind === 'wsl'
+                    ? `WSL path · ${provider.executionTarget.distribution}`
+                    : provider.executionTarget?.kind === 'bundled'
+                      ? 'Source'
+                      : 'Path'}
+                </p>
+                <div class="mt-0.5 flex items-center gap-1.5">
+                  {#if provider.executionTarget?.kind === 'bundled'}
+                    <span class="min-w-0 truncate text-xs text-muted">
+                      Bundled with CodeInOven
+                    </span>
+                  {:else}
+                    <span
+                      class="min-w-0 truncate font-mono text-xs text-muted"
+                      title={provider.resolvedPath}
+                    >
+                      {provider.resolvedPath ??
+                        (provider.status === 'not_found' ? 'Not found on PATH' : 'Not available')}
+                    </span>
+                    {#if provider.resolvedPath}
+                      <button
+                        type="button"
+                        class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                        title="Copy path"
+                        aria-label="Copy {provider.name} path"
+                        onclick={() => void copyPath(provider)}
+                      >
+                        {#if copiedPathId === provider.id}
+                          <CioCheck size={11} class="text-success" />
+                        {:else}
+                          <CioCopy size={11} />
+                        {/if}
+                      </button>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
+
+              <div class="col-span-2 min-w-0 @5xl:col-span-1">
+                {#if provider.status === 'error'}
+                  <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                    Issue
+                  </p>
+                  <p class="mt-0.5 truncate text-xs text-danger" title={provider.detail}>
+                    {provider.detail ?? 'Needs attention'}
+                  </p>
+                {:else if provider.status === 'available'}
+                  <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                    Providers
+                  </p>
+                  <p class="mt-0.5 truncate text-xs text-muted" title={providerSummary(provider)}>
+                    {providerSummary(provider)}
+                  </p>
+                {:else}
+                  <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                    Providers
+                  </p>
+                  <p class="mt-0.5 text-xs text-dimmed"></p>
                 {/if}
               </div>
-            </div>
 
-            <div class="min-w-0 shrink-0">
-              {#key provider.status}
-                <SettingsStatusBadge label={badge.label} classes={badge.classes}>
-                  <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
-                </SettingsStatusBadge>
-              {/key}
-            </div>
-
-            <div class="col-span-2 min-w-0 @5xl:col-span-1">
-              <p
-                class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
-                title={provider.executionTarget?.kind === 'wsl'
-                  ? 'WSL path'
-                  : provider.executionTarget?.kind === 'bundled'
-                    ? 'Source'
-                    : 'Path'}
+              <div
+                class="col-span-2 flex flex-wrap items-center justify-end gap-2 @5xl:col-span-1 @5xl:flex-nowrap"
               >
-                {provider.executionTarget?.kind === 'wsl'
-                  ? `WSL path · ${provider.executionTarget.distribution}`
-                  : provider.executionTarget?.kind === 'bundled'
-                    ? 'Source'
-                    : 'Path'}
-              </p>
-              <div class="mt-0.5 flex items-center gap-1.5">
-                {#if provider.executionTarget?.kind === 'bundled'}
-                  <span class="min-w-0 truncate text-xs text-muted"> Bundled with CodeInOven </span>
-                {:else}
-                  <span
-                    class="min-w-0 truncate font-mono text-xs text-muted"
-                    title={provider.resolvedPath}
+                {#if provider.status === 'error'}
+                  <button
+                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                    title="Re-check {provider.name}"
+                    onclick={() => void checkOne(provider.id)}
                   >
-                    {provider.resolvedPath ??
-                      (provider.status === 'not_found' ? 'Not found on PATH' : 'Not available')}
-                  </span>
-                  {#if provider.resolvedPath}
+                    <CioRefresh size={13} />
+                    Retry
+                  </button>
+                  <button
+                    class="shrink-0 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    title="{expanded ? 'Hide' : 'Show'} error details for {provider.name}"
+                    aria-expanded={expanded}
+                    onclick={() => toggleSettings(provider.id)}
+                  >
+                    View details
+                  </button>
+                {:else}
+                  {#if provider.status === 'not_found'}
                     <button
-                      type="button"
-                      class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Copy path"
-                      aria-label="Copy {provider.name} path"
-                      onclick={() => void copyPath(provider)}
+                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+                      title="Install {provider.name} in the embedded terminal"
+                      disabled={harnessLifecycleStore.isRunning(provider.id)}
+                      onclick={() =>
+                        void harnessLifecycleStore.startInstall(provider.id, provider.name)}
                     >
-                      {#if copiedPathId === provider.id}
-                        <CioCheck size={11} class="text-success" />
+                      {#if harnessLifecycleStore.isRunning(provider.id)}
+                        <CioSpinner size={13} class="animate-spin" />
                       {:else}
-                        <CioCopy size={11} />
+                        <CioDownload size={13} />
                       {/if}
+                      Install
+                    </button>
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Open the {provider.name} install page for your operating system"
+                      onclick={() => void openInstallPage(provider)}
+                    >
+                      Docs
+                    </button>
+                  {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+                      title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
+                        provider.id
+                      )?.latestVersion}"
+                      disabled={harnessLifecycleStore.isRunning(provider.id)}
+                      onclick={() =>
+                        void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
+                    >
+                      {#if harnessLifecycleStore.isRunning(provider.id)}
+                        <CioSpinner size={13} class="animate-spin" />
+                      {:else}
+                        <CioDownload size={13} />
+                      {/if}
+                      Update
                     </button>
                   {/if}
+                  <button
+                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+                    title={canAddProvider(provider)
+                      ? provider.transport === 'acp'
+                        ? `Sign in to ${provider.name} with a method the agent declares`
+                        : `Add a provider to ${provider.name}`
+                      : 'Install the harness first, then re-check to add providers'}
+                    disabled={!canAddProvider(provider)}
+                    onclick={() => providerConnectFlow.open(provider.id)}
+                  >
+                    {#if provider.transport === 'acp'}
+                      <CioKey size={13} /> Sign in
+                    {:else}
+                      <CioPlug size={13} /> Manage providers
+                    {/if}
+                  </button>
+                {/if}
+
+                <ThreadDropdown
+                  items={menuItemsFor(provider)}
+                  title="{provider.name} actions"
+                  ariaLabel="{provider.name} actions"
+                />
+
+                {#if hasDisclosure(provider)}
+                  <SettingsDisclosure
+                    {expanded}
+                    title={`${expanded ? 'Hide' : 'Show'} ${provider.name} ${provider.status === 'error' ? 'details' : 'settings'}`}
+                    onclick={() => toggleSettings(provider.id)}
+                  />
                 {/if}
               </div>
             </div>
 
-            <div class="col-span-2 min-w-0 @5xl:col-span-1">
-              {#if provider.status === 'error'}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Issue</p>
-                <p class="mt-0.5 truncate text-xs text-danger" title={provider.detail}>
-                  {provider.detail ?? 'Needs attention'}
-                </p>
-              {:else if provider.status === 'available'}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
-                  Providers
-                </p>
-                <p class="mt-0.5 truncate text-xs text-muted" title={providerSummary(provider)}>
-                  {providerSummary(provider)}
-                </p>
-              {:else}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
-                  Providers
-                </p>
-                <p class="mt-0.5 text-xs text-dimmed"></p>
-              {/if}
-            </div>
+            {#if expanded}
+              <div
+                class="mt-3 space-y-2.5 border-t border-border pt-3"
+                transition:slide={{ duration: 150 }}
+              >
+                {#if provider.status === 'error'}
+                  <p class="text-xs font-semibold text-foreground">Details</p>
+                  <pre
+                    class="overflow-auto border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
+                      >{provider.detail ?? 'No additional detail available.'}</code
+                    ></pre>
+                {:else}
+                  <p class="text-xs font-semibold text-foreground">Settings</p>
+                  {#if manifestFor(provider.id)}
+                    {@const entry = manifestFor(provider.id)!}
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="text-xs font-medium text-foreground">
+                          Harness loads AGENTS.md natively
+                        </p>
+                        <p
+                          class="mt-0.5 truncate text-[0.625rem] text-dimmed"
+                          title="When on, {provider.name} reads the project's AGENTS.md itself. {APP_NAME} uses its application Agent behavior prompt for Engineering work."
+                        >
+                          Harness capability · {manifestSourceLabel(entry)}
+                        </p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-2">
+                        {#if entry.confirmed}
+                          <button
+                            type="button"
+                            class="px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                            title="Clear the confirmed value and fall back to the declared manifest"
+                            disabled={manifestSaving[provider.id]}
+                            onclick={() => void resetManifestBehavior(provider.id, 'loadsAgentsMd')}
+                          >
+                            Reset
+                          </button>
+                        {/if}
+                        <Switch
+                          checked={entry.effective}
+                          disabled={manifestSaving[provider.id]}
+                          onchange={(value) =>
+                            void confirmManifestBehavior(provider.id, 'loadsAgentsMd', value)}
+                          aria-label={`${provider.name} loads AGENTS.md natively`}
+                          title={`Set whether ${provider.name} loads AGENTS.md natively (confirmed override)`}
+                        />
+                      </div>
+                    </div>
+                  {/if}
 
-            <div
-              class="col-span-2 flex flex-wrap items-center justify-end gap-2 @5xl:col-span-1 @5xl:flex-nowrap"
-            >
-              {#if provider.status === 'error'}
-                <button
-                  class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                  title="Re-check {provider.name}"
-                  onclick={() => void checkOne(provider.id)}
-                >
-                  <CioRefresh size={13} />
-                  Retry
-                </button>
-                <button
-                  class="shrink-0 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                  title="{expanded ? 'Hide' : 'Show'} error details for {provider.name}"
-                  aria-expanded={expanded}
-                  onclick={() => toggleSettings(provider.id)}
-                >
-                  View details
-                </button>
-              {:else}
-                {#if provider.status === 'not_found'}
-                  <button
-                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
-                    title="Install {provider.name} in the embedded terminal"
-                    disabled={harnessLifecycleStore.isRunning(provider.id)}
-                    onclick={() =>
-                      void harnessLifecycleStore.startInstall(provider.id, provider.name)}
-                  >
-                    {#if harnessLifecycleStore.isRunning(provider.id)}
-                      <CioSpinner size={13} class="animate-spin" />
-                    {:else}
-                      <CioDownload size={13} />
-                    {/if}
-                    Install
-                  </button>
-                  <button
-                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Open the {provider.name} install page for your operating system"
-                    onclick={() => void openInstallPage(provider)}
-                  >
-                    Docs
-                  </button>
-                {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
-                  <button
-                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
-                    title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
-                      provider.id
-                    )?.latestVersion}"
-                    disabled={harnessLifecycleStore.isRunning(provider.id)}
-                    onclick={() =>
-                      void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
-                  >
-                    {#if harnessLifecycleStore.isRunning(provider.id)}
-                      <CioSpinner size={13} class="animate-spin" />
-                    {:else}
-                      <CioDownload size={13} />
-                    {/if}
-                    Update
-                  </button>
-                {/if}
-                <button
-                  class="flex shrink-0 items-center gap-1.5 whitespace-nowrap bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-                  title={canAddProvider(provider)
-                    ? `Add a provider to ${provider.name}`
-                    : 'Install the harness first, then re-check to add providers'}
-                  disabled={!canAddProvider(provider)}
-                  onclick={() => providerConnectFlow.open(provider.id)}
-                >
-                  <CioPlug size={13} /> Manage providers
-                </button>
-              {/if}
-
-              <ThreadDropdown
-                items={menuItemsFor(provider)}
-                title="{provider.name} actions"
-                ariaLabel="{provider.name} actions"
-              />
-
-              {#if hasDisclosure(provider)}
-                <SettingsDisclosure
-                  {expanded}
-                  title={`${expanded ? 'Hide' : 'Show'} ${provider.name} ${provider.status === 'error' ? 'details' : 'settings'}`}
-                  onclick={() => toggleSettings(provider.id)}
-                />
-              {/if}
-            </div>
-          </div>
-
-          {#if expanded}
-            <div
-              class="mt-3 space-y-2.5 border-t border-border pt-3"
-              transition:slide={{ duration: 150 }}
-            >
-              {#if provider.id === 'acp'}
-                <AcpAgentPanel />
-              {/if}
-              {#if provider.status === 'error'}
-                <p class="text-xs font-semibold text-foreground">Details</p>
-                <pre
-                  class="overflow-auto border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
-                    >{provider.detail ?? 'No additional detail available.'}</code
-                  ></pre>
-              {:else}
-                <p class="text-xs font-semibold text-foreground">Settings</p>
-                {#if manifestFor(provider.id)}
-                  {@const entry = manifestFor(provider.id)!}
                   <div class="flex items-center justify-between gap-3">
                     <div class="min-w-0">
                       <p class="text-xs font-medium text-foreground">
-                        Harness loads AGENTS.md natively
+                        Update automatically on launch
                       </p>
                       <p
                         class="mt-0.5 truncate text-[0.625rem] text-dimmed"
-                        title="When on, {provider.name} reads the project's AGENTS.md itself. {APP_NAME} uses its application Agent behavior prompt for Engineering work."
+                        title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
                       >
-                        Harness capability · {manifestSourceLabel(entry)}
+                        Updates in the background when {APP_NAME} opens
                       </p>
                     </div>
                     <div class="flex shrink-0 items-center gap-2">
-                      {#if entry.confirmed}
-                        <button
-                          type="button"
-                          class="px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                          title="Clear the confirmed value and fall back to the declared manifest"
-                          disabled={manifestSaving[provider.id]}
-                          onclick={() => void resetManifestBehavior(provider.id, 'loadsAgentsMd')}
-                        >
-                          Reset
-                        </button>
-                      {/if}
                       <Switch
-                        checked={entry.effective}
-                        disabled={manifestSaving[provider.id]}
-                        onchange={(value) =>
-                          void confirmManifestBehavior(provider.id, 'loadsAgentsMd', value)}
-                        aria-label={`${provider.name} loads AGENTS.md natively`}
-                        title={`Set whether ${provider.name} loads AGENTS.md natively (confirmed override)`}
+                        checked={autoUpdatePrefs[provider.id] === true}
+                        disabled={autoUpdateSaving[provider.id]}
+                        onchange={(value) => void setAutoUpdatePref(provider.id, value)}
+                        aria-label={`Update ${provider.name} automatically on launch`}
+                        title={`Set whether ${provider.name} updates automatically on launch`}
                       />
                     </div>
                   </div>
+                  {#if isOpenCodeV2Row(provider)}
+                    <div class="border-t border-border pt-2.5">
+                      <OpenCodeV2CatalogPanel harnessName={provider.name} />
+                    </div>
+                  {/if}
                 {/if}
-
-                <div class="flex items-center justify-between gap-3">
-                  <div class="min-w-0">
-                    <p class="text-xs font-medium text-foreground">
-                      Update automatically on launch
-                    </p>
-                    <p
-                      class="mt-0.5 truncate text-[0.625rem] text-dimmed"
-                      title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
-                    >
-                      Updates in the background when {APP_NAME} opens
-                    </p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
-                    <Switch
-                      checked={autoUpdatePrefs[provider.id] === true}
-                      disabled={autoUpdateSaving[provider.id]}
-                      onchange={(value) => void setAutoUpdatePref(provider.id, value)}
-                      aria-label={`Update ${provider.name} automatically on launch`}
-                      title={`Set whether ${provider.name} updates automatically on launch`}
-                    />
-                  </div>
-                </div>
-                {#if isOpenCodeV2Row(provider)}
-                  <div class="border-t border-border pt-2.5">
-                    <OpenCodeV2CatalogPanel harnessName={provider.name} />
-                  </div>
-                {/if}
-              {/if}
-            </div>
-          {/if}
-        </SettingsEntry>
-      {:else}
-        <div class="border border-dashed p-6 text-center text-xs text-dimmed">
-          {#if searchQuery || statusFilter !== 'all'}
-            No agents match the current filter.
-          {:else if activeRail === 'acp'}
-            No ACP agents added yet.
-          {:else}
-            No harnesses detected yet.
-          {/if}
-        </div>
-      {/each}
-    </div>
+              </div>
+            {/if}
+          </SettingsEntry>
+        {:else}
+          <div class="border border-dashed p-6 text-center text-xs text-dimmed">
+            {#if searchQuery || statusFilter !== 'all'}
+              No harnesses match the current filter.
+            {:else}
+              No harnesses detected yet.
+            {/if}
+          </div>
+        {/each}
+      </div>
+    {/if}
   {:else if activeTab === 'accounts'}
     <HarnessAccountsPanel providers={providerStore.providers} />
   {:else if activeTab === 'auxiliary'}

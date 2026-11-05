@@ -29,13 +29,10 @@ import {
 } from './driver.interface'
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
-import {
-  acpAgentConfigService,
-  currentAcpAgentConfig,
-  type AcpAgentConfigService
-} from './acp/acp-config'
+import type { AcpAgent } from '../../lib/acp'
+import { acpAgentStore, currentAcpAgents, type AcpAgentStore } from './acp/acp-agents-store'
 import { AcpTransport } from './acp/acp-transport'
-import { ACP_PROVIDER_ID, acpProviderCatalog } from './acp/acp-catalog'
+import { acpProviderCatalog } from './acp/acp-catalog'
 import { AcpTurnFold } from './acp/acp-session'
 import { NO_PROMPT_CAPABILITIES, acpPromptBlocks } from './acp/acp-content'
 import { AcpPermissionRegistry } from './acp/acp-permissions'
@@ -79,8 +76,8 @@ interface AcpActiveTurn {
  * what lets a harness we ship no dedicated driver for still work.
  */
 export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
-  readonly id = 'acp'
-  readonly name = HARNESS_NAME
+  readonly id: string
+  readonly name: string
   readonly capabilities: HarnessCapabilities = {
     // One long-lived agent process per project hosts every session in it.
     runtimeTopology: { kind: 'shared_daemon', scope: 'application' },
@@ -99,7 +96,7 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     subagents: false
   }
 
-  private readonly configService: AcpAgentConfigService
+  private readonly store: AcpAgentStore
   private readonly transports = new Map<string, AcpTransport>()
   private readonly bindings = new Map<string, AcpSessionBinding>()
   private readonly activeTurns = new Map<string, AcpActiveTurn>()
@@ -109,10 +106,13 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
 
   constructor(
     storage: StorageEngine,
+    private agent: AcpAgent,
     private readonly clientVersion?: string
   ) {
     super(storage)
-    this.configService = acpAgentConfigService(storage)
+    this.id = agent.id
+    this.name = agent.name
+    this.store = acpAgentStore(storage)
   }
 
   // ---------------------------------------------------------------- transport
@@ -121,7 +121,7 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     const existing = this.transports.get(projectPath)
     if (existing) return existing
     const transport = new AcpTransport(projectPath, {
-      resolveConfig: () => this.configService.load(),
+      resolveConfig: () => this.store.get(this.id),
       notification: (method, params) => this.handleNotification(method, params),
       request: (method, params) => this.handleAgentRequest(method, params),
       exit: (info) => this.handleAgentExit(projectPath, info),
@@ -200,9 +200,11 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
     void projectPath
-    const status = await this.configService.status()
-    if (!status.configured) throw new Error(status.detail ?? 'No ACP agent is configured')
-    if (!status.resolvedPath) throw new Error(status.detail ?? `${status.command} was not found`)
+    const agent = await this.store.get(this.id)
+    if (!agent) throw new Error(`${this.name} is no longer configured. Add it again in Harnesses.`)
+    const resolved = await this.store.statuses()
+    const status = resolved.find((entry) => entry.id === this.id)
+    if (status?.detail) throw new Error(status.detail)
   }
 
   /** ACP never spawns a per-turn CLI process; `sendPrompt` owns the transport. */
@@ -225,31 +227,31 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   async listProviders(projectPath: string): Promise<ProviderCatalog[]> {
     const cached = this.catalogs.get(projectPath)
     if (cached) return cached
-    const config = await this.configService.load()
-    if (!config) {
+    const agent = await this.store.get(this.id)
+    if (!agent) {
       return [
         {
-          id: ACP_PROVIDER_ID,
-          name: HARNESS_NAME,
+          id: this.id,
+          name: this.name,
           harnessId: this.id,
           models: [],
           catalogStatus: 'unavailable',
-          catalogMessage: 'No ACP agent is configured. Add its command in Harnesses.'
+          catalogMessage: 'This ACP agent is no longer configured.'
         }
       ]
     }
     try {
       const transport = this.transportFor(projectPath)
       const opened = await transport.newSession()
-      const catalogs = acpProviderCatalog(opened, config.name)
+      const catalogs = acpProviderCatalog(opened, agent.name, agent.id)
       this.catalogs.set(projectPath, catalogs)
       await this.discardSession(transport, opened.sessionId)
       return catalogs
     } catch (error) {
       return [
         {
-          id: ACP_PROVIDER_ID,
-          name: config.name,
+          id: this.id,
+          name: agent.name,
           harnessId: this.id,
           models: [],
           catalogStatus: 'unavailable',
@@ -584,7 +586,7 @@ function acpTokens(usage: Record<string, unknown>): AgentMessage['tokens'] {
   }
 }
 
-/** Name of the configured agent, for surfaces that need a display label. */
-export function acpAgentDisplayName(): string {
-  return currentAcpAgentConfig()?.name ?? HARNESS_NAME
+/** Every configured agent, so the engine can build one driver per agent. */
+export function configuredAcpAgents(): AcpAgent[] {
+  return currentAcpAgents()
 }

@@ -22,10 +22,58 @@ import { CHATS_CWD_DIR } from '../../../lib/project-artifacts'
 import { PROVIDER_CATALOG_TTL_MS } from './chat-engine-constants'
 import { filterInstalledProviderCatalogs } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
+import {
+  currentAcpAgents,
+  ensureAcpAgentsLoaded,
+  isAcpAgentId
+} from '../../drivers/acp/acp-agents-store'
 
 /** ChatEngine providers-catalog: one concern, moved verbatim from the composition root. */
 export class ChatEngineProvidersCatalog {
+  /** Signature of the agent record each ACP driver was built from. */
+  private readonly acpDriverSignatures = new Map<string, string>()
+
   constructor(private readonly host: ChatEngine) {}
+
+  /**
+   * Rebuild the ACP drivers from the agents the user saved.
+   *
+   * Adding, editing or removing an ACP agent changes which harnesses exist, and
+   * those drivers are not in the harness registry's factory table: they are
+   * created here, per record, so the model picker and the next turn see exactly
+   * what the Harnesses page shows.
+   */
+  async refreshAcpHarnesses(): Promise<void> {
+    await ensureAcpAgentsLoaded()
+    const agents = currentAcpAgents()
+    const wanted = new Set(agents.map((agent) => agent.id))
+    for (const [id, driver] of [...this.host.drivers]) {
+      if (!isAcpAgentId(id) || wanted.has(id)) continue
+      driver.dispose()
+      this.host.drivers.delete(id)
+      this.acpDriverSignatures.delete(id)
+    }
+    const create = this.host.state.acpDriverFactory
+    if (!create) return
+    for (const agent of agents) {
+      const signature = `${agent.name}|${agent.command}|${agent.args.join(' ')}`
+      const existing = this.host.drivers.get(agent.id)
+      if (existing && this.acpDriverSignatures.get(agent.id) === signature) continue
+      if (existing) {
+        // Keep a running turn alive: its driver is swapped on the next refresh.
+        if (existing.hasActiveTurn && this.host.units['providers-harness'].harnessHasActiveTurn(agent.id)) {
+          continue
+        }
+        existing.dispose()
+      }
+      const driver = create(agent)
+      driver.setProcessObserver?.(this.host.state.agentProcesses)
+      driver.onEvent((event) => this.host.handleDriverEvent(driver.id, event, driver))
+      this.host.drivers.set(agent.id, driver)
+      this.acpDriverSignatures.set(agent.id, signature)
+    }
+    await this.invalidateProviderCatalogs()
+  }
 
   // ─── Public API (IPC surface) ─────────────────────────────────────────────
 

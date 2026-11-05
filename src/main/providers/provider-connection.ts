@@ -20,7 +20,7 @@ import {
   type HarnessRuntime
 } from '../drivers/harness-runtime'
 import { resolveExecutablePathAsync } from '../drivers/cli-environment'
-import { currentAcpAgentConfig, ensureAcpAgentConfigLoaded } from '../drivers/acp/acp-config'
+import { currentAcpAgents, findAcpAgent, isAcpAgentId } from '../drivers/acp/acp-agents-store'
 
 /** Reopening Settings inside this window reuses the last completed probe pass. */
 const PROBE_CACHE_TTL_MS = 60_000
@@ -48,6 +48,8 @@ export class ProviderConnectionService {
   private probeQueueTail: Promise<void> = Promise.resolve()
   /** Last settled (non-probing) result per harness, for change detection. */
   private lastSettled = new Map<string, ProviderConnectionInfo>()
+  /** Rows for the ACP agents the user added; empty until one exists. */
+  private acpRows = new Map<string, ProviderConnectionInfo>()
   /** Fired when a probe changes a harness's install state (status/version). */
   private readonly onStatusesChanged?: () => void
 
@@ -74,14 +76,77 @@ export class ProviderConnectionService {
   }
 
   getAll(): ProviderConnectionInfo[] {
-    return Array.from(this.statuses.values())
+    this.syncAcpRows()
+    return [...this.statuses.values(), ...this.acpRows.values()]
+  }
+
+  /**
+   * Reconcile the ACP agent rows with the store.
+   *
+   * ACP agents are the user's, so the row list is derived from what they saved
+   * rather than from the harness registry: an agent they removed must lose its
+   * row, and one they just added must appear before the next full probe.
+   */
+  private syncAcpRows(): void {
+    for (const agent of currentAcpAgents()) {
+      const existing = this.acpRows.get(agent.id)
+      if (existing?.name === agent.name && existing.command === agent.command) continue
+      this.acpRows.set(agent.id, {
+        id: agent.id,
+        name: agent.name,
+        command: agent.command,
+        integration: 'ready',
+        supportsCustomProviders: false,
+        supportsManualCompaction: false,
+        transport: 'acp',
+        status: existing?.status ?? 'idle',
+        ...(existing?.resolvedPath ? { resolvedPath: existing.resolvedPath } : {})
+      })
+    }
+    const known = new Set(currentAcpAgents().map((agent) => agent.id))
+    for (const id of [...this.acpRows.keys()]) {
+      if (!known.has(id)) this.acpRows.delete(id)
+    }
+  }
+
+  /** Probe one ACP agent's command. No version arg: the app never installed it. */
+  private async probeAcpAgent(id: string): Promise<ProviderConnectionInfo> {
+    this.syncAcpRows()
+    const agent = await findAcpAgent(id)
+    const row = this.acpRows.get(id) ?? {
+      id,
+      name: id,
+      command: id,
+      integration: 'ready' as const,
+      supportsCustomProviders: false,
+      supportsManualCompaction: false,
+      transport: 'acp' as const,
+      status: 'error' as const,
+      detail: 'This ACP agent is no longer configured.'
+    }
+    if (!agent) return { ...row, status: 'error', detail: 'This ACP agent is no longer configured.' }
+    const resolvedPath = await resolveExecutablePathAsync(agent.command)
+    const result: ProviderConnectionInfo = resolvedPath
+      ? { ...row, name: agent.name, command: agent.command, status: 'available', resolvedPath }
+      : {
+          ...row,
+          name: agent.name,
+          command: agent.command,
+          status: 'error',
+          resolvedPath: undefined,
+          detail: `"${agent.command}" was not found on PATH.`
+        }
+    this.acpRows.set(id, result)
+    this.broadcast()
+    this.noteSettled(result)
+    return result
   }
 
   async checkOne(id: string): Promise<ProviderConnectionInfo> {
     const active = this.checkOneInFlight.get(id)
     if (active) return active
 
-    const check = this.runCheckOne(id)
+    const check = isAcpAgentId(id) ? this.probeAcpAgent(id) : this.runCheckOne(id)
     this.checkOneInFlight.set(id, check)
     try {
       return await check
@@ -157,6 +222,10 @@ export class ProviderConnectionService {
       if (index < harnesses.length - 1) await this.yieldToMainLoop()
     }
 
+    for (const agent of currentAcpAgents()) {
+      await this.enqueueProbe(() => this.probeAcpAgent(agent.id))
+    }
+
     this.lastCheckedAt = Date.now()
     return this.getAll()
   }
@@ -198,7 +267,6 @@ export class ProviderConnectionService {
     def: HarnessDescriptor,
     runtimes: Map<string, HarnessRuntime | null>
   ): Promise<ProviderConnectionInfo> {
-    if (def.id === 'acp') return this.probeAcpAgent(def)
     const base: ProviderConnectionInfo = {
       id: def.id,
       name: def.name,
@@ -295,51 +363,6 @@ export class ProviderConnectionService {
       resolvedPath: resolved.resolvedPath,
       executionTarget: resolved.target,
       detail: failures[0] ?? `"${def.command}" did not answer its version probe.`
-    }
-  }
-
-  /**
-   * Probe the user's own ACP agent.
-   *
-   * The harness has no fixed binary: what exists on this machine is whatever
-   * command the user saved, so a configured, resolvable command is the install
-   * and the reported `activeCommand` is the binary the app will actually drive.
-   */
-  private async probeAcpAgent(def: HarnessDescriptor): Promise<ProviderConnectionInfo> {
-    const base: ProviderConnectionInfo = {
-      id: def.id,
-      name: def.name,
-      command: def.command,
-      integration: def.integration,
-      supportsCustomProviders: def.supportsCustomProviders,
-      supportsManualCompaction: harnessSupportsManualCompaction(def.id),
-      transport: def.transport ?? 'native',
-      status: 'idle'
-    }
-    const config = (await ensureAcpAgentConfigLoaded()) ?? currentAcpAgentConfig()
-    if (!config) {
-      return {
-        ...base,
-        status: 'not_found',
-        detail:
-          'No ACP agent is configured yet. Add the command that starts your harness in ACP mode.'
-      }
-    }
-    const resolvedPath = await resolveExecutablePathAsync(config.command)
-    if (!resolvedPath) {
-      return {
-        ...base,
-        status: 'error',
-        command: config.command,
-        detail: `"${config.command}" was not found on PATH.`
-      }
-    }
-    return {
-      ...base,
-      name: config.name,
-      status: 'available',
-      resolvedPath,
-      ...(config.command === def.command ? {} : { activeCommand: config.command })
     }
   }
 

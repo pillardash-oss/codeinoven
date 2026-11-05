@@ -15,6 +15,7 @@ import { EngineeringLifecycleEngine } from '../../../lib/engines/engineering-lif
 import { OvenChat } from '../../ovens/oven-chat'
 import { MemoryService } from '../memory-service'
 import { PromptAssembler } from '../prompt-assembler'
+import type { AcpAgent } from '../../../lib/acp'
 import type { HarnessDriver, PreparedUtilityRuntime } from '../../drivers/driver.interface'
 import { HarnessUsageRepo } from '../../database/repositories/harness-usage-repo'
 import { AssistantRepo } from '../../database/repositories/assistant-repo'
@@ -98,6 +99,13 @@ export class ChatEngineState {
   readonly openUsage = new OpenUsageClient()
 
   readonly customProviderUsage = new CustomProviderUsageClient()
+
+  /**
+   * Builds the driver for one configured ACP agent. ACP agents are the user's
+   * own records, so their drivers are created on demand instead of coming from
+   * the harness registry's factory table.
+   */
+  acpDriverFactory: ((agent: AcpAgent) => HarnessDriver) | null = null
 
   /** Which OpenCode transport `drivers.get('opencode')` currently holds. */
   openCodeDriverIsV2 = false

@@ -1,54 +1,121 @@
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
-import type { AcpAgentSettings } from '../../lib/acp'
+import type { AcpAgent, AcpAgentAuthStatus, AcpAgentSettings } from '../../lib/acp'
 import type { StorageEngine } from '../storage/storage-engine'
-import {
-  KNOWN_ACP_AGENTS,
-  acpAgentConfigService,
-  normalizeAcpAgentConfig
-} from '../drivers/acp/acp-config'
+import { KNOWN_ACP_AGENTS, acpAgentStore, isAcpAgentId } from '../drivers/acp/acp-agents-store'
+import { acpAgentAuthStatus, authenticateAcpAgent } from './acp-agent-auth'
+
+export interface AcpAgentIpcOptions {
+  /** Called after any change, so drivers, catalogs and the harness list agree. */
+  onAgentsChanged?: () => void | Promise<void>
+}
 
 /**
- * Harnesses counterpart for the generic ACP harness: read the configured agent,
- * save a new command, and report whether it resolves on this machine.
+ * CRUD for the ACP agents the user adds in Harnesses.
  *
- * The row is part of the Harnesses page because the ACP harness has no install
- * page of its own: what exists on this machine is exactly what the user saved.
+ * These are user-owned records, not installs: the app never downloads or
+ * launches anything until the user's own command is saved, and removing an
+ * agent removes only the record.
  */
-export function registerAcpAgentIpc(storage: StorageEngine): void {
-  const configs = acpAgentConfigService(storage)
+export function registerAcpAgentIpc(
+  storage: StorageEngine,
+  options: AcpAgentIpcOptions = {}
+): void {
+  const store = acpAgentStore(storage)
 
   const settings = async (): Promise<AcpAgentSettings> => ({
-    status: await configs.status(),
+    agents: await store.statuses(),
     knownAgents: KNOWN_ACP_AGENTS.map((agent) => ({ ...agent, args: [...agent.args] }))
   })
 
-  ipcMain.handle('acpAgent:get', () => settings())
+  ipcMain.handle('acpAgents:list', () => settings())
 
-  ipcMain.handle('acpAgent:save', async (_event, input: unknown) => {
-    const record = input as Record<string, unknown> | null
-    if (!record || typeof record !== 'object')
-      throw new TypeError('An ACP agent config is required')
-    const args = Array.isArray(record['args'])
-      ? record['args'].filter((arg): arg is string => typeof arg === 'string')
-      : undefined
-    const env: Record<string, string> | undefined =
-      record['env'] && typeof record['env'] === 'object' && !Array.isArray(record['env'])
-        ? Object.fromEntries(
-            Object.entries(record['env'] as Record<string, unknown>).filter(
-              (entry): entry is [string, string] => typeof entry[1] === 'string'
-            )
-          )
-        : undefined
-    const config = normalizeAcpAgentConfig(
-      {
-        ...(typeof record['name'] === 'string' ? { name: record['name'] } : {}),
-        ...(typeof record['command'] === 'string' ? { command: record['command'] } : {}),
-        ...(args ? { args } : {}),
-        ...(env ? { env } : {})
-      },
-      await configs.load()
-    )
-    await configs.save(config)
+  ipcMain.handle('acpAgents:save', async (_event, input: unknown) => {
+    const record = readInput(input)
+    await store.save(record)
+    await options.onAgentsChanged?.()
     return settings()
   })
+
+  ipcMain.handle('acpAgents:remove', async (_event, id: unknown) => {
+    if (typeof id !== 'string' || !isAcpAgentId(id))
+      throw new TypeError('An ACP agent id is required')
+    await store.remove(id)
+    await options.onAgentsChanged?.()
+    return settings()
+  })
+
+  /**
+   * Sign-in state of one agent, asked of the agent.
+   *
+   * These two channels are the ACP sign-in surface: the agent declares its
+   * methods and runs the one the user picks, so no provider list of our own is
+   * involved and no command is ever guessed on the user's behalf.
+   */
+  ipcMain.handle(
+    'acpAgents:authStatus',
+    async (_event, id: unknown, projectPath?: unknown): Promise<AcpAgentAuthStatus> => {
+      const agent = await requireAgent(store, id)
+      return acpAgentAuthStatus(
+        agent,
+        typeof projectPath === 'string' && projectPath.length > 0 ? projectPath : undefined
+      )
+    }
+  )
+
+  ipcMain.handle(
+    'acpAgents:authenticate',
+    async (_event, id: unknown, methodId: unknown, projectPath?: unknown) => {
+      const agent = await requireAgent(store, id)
+      if (typeof methodId !== 'string' || methodId.trim().length === 0) {
+        throw new TypeError('A sign-in method id is required')
+      }
+      return authenticateAcpAgent(
+        agent.id,
+        methodId.trim(),
+        typeof projectPath === 'string' && projectPath.length > 0 ? projectPath : undefined
+      )
+    }
+  )
+}
+
+/** Resolve one configured agent, refusing an id the store does not own. */
+async function requireAgent(
+  store: ReturnType<typeof acpAgentStore>,
+  id: unknown
+): Promise<AcpAgent> {
+  if (typeof id !== 'string' || !isAcpAgentId(id))
+    throw new TypeError('An ACP agent id is required')
+  const agent = await store.get(id)
+  if (!agent) throw new Error('This ACP agent is no longer configured. Add it again in Harnesses.')
+  return agent
+}
+
+/** Narrow one renderer submission without trusting its shape. */
+function readInput(input: unknown): {
+  id?: string
+  name: string
+  command: string
+  args: string[]
+  icon?: string | null
+  iconDark?: string | null
+} {
+  if (typeof input !== 'object' || input === null) throw new TypeError('An ACP agent is required')
+  const record = input as Record<string, unknown>
+  const name = typeof record['name'] === 'string' ? record['name'] : ''
+  const command = typeof record['command'] === 'string' ? record['command'] : ''
+  const args = Array.isArray(record['args'])
+    ? record['args'].filter((arg): arg is string => typeof arg === 'string')
+    : []
+  const id =
+    typeof record['id'] === 'string' && isAcpAgentId(record['id']) ? record['id'] : undefined
+  const icon = record['icon']
+  const iconDark = record['iconDark']
+  return {
+    ...(id ? { id } : {}),
+    name,
+    command,
+    args,
+    ...(typeof icon === 'string' || icon === null ? { icon } : {}),
+    ...(typeof iconDark === 'string' || iconDark === null ? { iconDark } : {})
+  }
 }
