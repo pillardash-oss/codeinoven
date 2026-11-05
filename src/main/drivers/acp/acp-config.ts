@@ -27,13 +27,16 @@ const MAX_ENV_ENTRIES = 32
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u
 
 /**
- * Harnesses known to expose ACP. Only a hint for the settings form: the field
- * accepts any command, which is the point of a generic ACP harness.
+ * Harnesses verified to expose ACP, offered as starting points in the settings
+ * form. Only commands that actually start an ACP server belong here; the fields
+ * accept any command, which is the point of a generic ACP harness.
  */
 export const KNOWN_ACP_AGENTS: readonly { name: string; command: string; args: string[] }[] = [
   { name: 'Cline', command: 'cline', args: ['--acp'] },
-  { name: 'Cursor agent', command: 'cursor-agent', args: ['acp'] },
-  { name: 'Zed external agent', command: 'agent', args: ['acp'] }
+  // Cursor Agent ships ACP as a hidden `acp` subcommand (verified with
+  // cursor-agent 2026.09.10: initialize, session/new with its model list, and
+  // tool permissions all round-trip).
+  { name: 'Cursor agent', command: 'cursor-agent', args: ['acp'] }
 ]
 
 /** Normalize and validate a config patch. Throws on anything the app cannot launch. */
