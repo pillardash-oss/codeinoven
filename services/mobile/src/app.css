@@ -9,5 +9,6 @@
 @import './lib/styles/list.css';
 @import './lib/styles/dock.css';
 @import './lib/styles/conversation.css';
+@import './lib/styles/composer.css';
 @import './lib/styles/sheet.css';
 @import './lib/styles/settings.css';

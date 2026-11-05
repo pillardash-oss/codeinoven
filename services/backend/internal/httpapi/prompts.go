@@ -1,19 +1,46 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/pillardash-oss/codeinoven/services/backend/internal/auth"
+	"github.com/pillardash-oss/codeinoven/services/backend/internal/store"
 )
 
 // maxPromptBytes bounds a prompt body well under the 1 MiB request limit.
 const maxPromptBytes = 100_000
 
+// maxAttachmentIDBytes bounds one attachment id, like every other id here.
+const maxAttachmentIDBytes = 200
+
 // createPromptRequest is the POST /v1/threads/{id}/prompts body.
+//
+// The composer fields are optional: what the caller omits is read from the thread
+// row, so the stored prompt always states the full choice the desktop will run.
 type createPromptRequest struct {
-	Body     string `json:"body"`
-	ClientID string `json:"clientId"`
+	Body          string           `json:"body"`
+	ClientID      string           `json:"clientId"`
+	AttachmentIDs []string         `json:"attachmentIds"`
+	Model         optional[string] `json:"model"`
+	Thinking      optional[string] `json:"thinking"`
+	Permission    optional[string] `json:"permission"`
+	Account       optional[string] `json:"account"`
+	OvenID        optional[string] `json:"ovenId"`
+	FileSystem    optional[bool]   `json:"fileSystem"`
+}
+
+// patch returns the composer fields of the request as the store's patch shape.
+func (req createPromptRequest) patch() store.ThreadPatch {
+	return store.ThreadPatch{
+		Model:      field(req.Model),
+		Thinking:   field(req.Thinking),
+		Permission: field(req.Permission),
+		Account:    field(req.Account),
+		OvenID:     field(req.OvenID),
+		FileSystem: field(req.FileSystem),
+	}
 }
 
 // handleCreatePrompt queues a prompt for an Oven and answers 202.
@@ -52,15 +79,50 @@ func (s *Server) handleCreatePrompt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	attachmentIDs := make([]string, 0, len(req.AttachmentIDs))
+	for _, raw := range req.AttachmentIDs {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			writeError(w, s.log, badRequest("attachmentIds must not contain an empty id"))
+			return
+		}
+		if len(id) > maxAttachmentIDBytes {
+			writeError(w, s.log, badRequest("attachmentIds must be at most 200 characters each"))
+			return
+		}
+		attachmentIDs = append(attachmentIDs, id)
+	}
+
+	patch := req.patch()
+	if err := s.validateChoices(r.Context(), authCtx, patch); err != nil {
+		writeError(w, s.log, err)
+		return
+	}
+
 	prompt, created, err := s.store.EnqueuePrompt(
-		r.Context(), authCtx.Store.SchemaName, auth.NewID(auth.PrefixPrompt), threadID, body, clientID,
+		r.Context(), authCtx.Store.SchemaName, store.PromptInput{
+			ID:            auth.NewID(auth.PrefixPrompt),
+			ThreadID:      threadID,
+			Body:          body,
+			ClientID:      clientID,
+			AttachmentIDs: attachmentIDs,
+			Choices:       patch,
+		},
 	)
 	if err != nil {
+		// An attachment id that is unknown, another thread's, or already carried by
+		// a prompt makes the request wrong, so it is a 400 rather than a conflict.
+		if errors.Is(err, store.ErrAttachmentInvalid) {
+			writeError(w, s.log, badRequest(
+				"attachmentIds must be this thread's unattached attachments"))
+			return
+		}
 		writeError(w, s.log, err)
 		return
 	}
 	if created {
-		s.log.Info("prompt queued", "prompt", prompt.ID, "thread", threadID, "user", authCtx.User.ID)
+		s.log.Info("prompt queued", "prompt", prompt.ID, "thread", threadID,
+			"attachments", len(prompt.Attachments), "user", authCtx.User.ID)
 	}
 	writeData(w, http.StatusAccepted, prompt)
 }

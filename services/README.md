@@ -152,11 +152,18 @@ it runs.
 | -------- | --------------------------- | ------------------------------------------------------------------------ |
 | `GET`    | `/v1/projects`              | `sort=activity\|name\|created`, `q`, `limit`, `cursor`                   |
 | `GET`    | `/v1/projects/{id}`         | one project with its status counts                                       |
+| `GET`    | `/v1/models`                | `{items,recent}`: the catalog plus up to 5 recently used ids              |
 | `GET`    | `/v1/threads`               | `project`, `state`, `unread=true`, `q`, `limit`, `cursor`                |
 | `GET`    | `/v1/threads/{id}`          | one thread                                                               |
+| `PATCH`  | `/v1/threads/{id}`          | the composer's choices; omitted leaves, `null` clears, `200` with thread  |
 | `GET`    | `/v1/threads/{id}/messages` | oldest first, `limit`, `cursor`                                          |
-| `POST`   | `/v1/threads/{id}/prompts`  | `{body,clientId}`, queues a prompt for an Oven, `202`                    |
-| `GET`    | `/v1/prompts/{id}`          | `{id,threadId,body,state,createdAt,updatedAt,error?}`                    |
+| `GET`    | `/v1/threads/{id}/usage`    | the context meter, derived from stored token columns                      |
+| `POST`   | `/v1/threads/{id}/usage/reset` | `usage_reset_at = now()`, `200` with `Usage`                           |
+| `POST`   | `/v1/threads/{id}/attachments` | `{name,mime,dataBase64}`, `201` `Attachment`, decoded at most 4 MiB    |
+| `GET`    | `/v1/attachments/{id}`      | the bytes with their own `Content-Type`: never JSON                       |
+| `DELETE` | `/v1/attachments/{id}`      | `204` while no prompt carries it, `409` once one does                     |
+| `POST`   | `/v1/threads/{id}/prompts`  | `{body,clientId?,attachmentIds?,model?,thinking?,permission?,account?,ovenId?,fileSystem?}`, `202` |
+| `GET`    | `/v1/prompts/{id}`          | `{id,threadId,body,state,createdAt,updatedAt,error?,model,thinking,permission,account,ovenId,fileSystem,attachments}` |
 | `DELETE` | `/v1/prompts/{id}`          | takes back a prompt still `queued`, `204`; `409` once an Oven claimed it |
 | `POST`   | `/v1/prompts/{id}/steer`    | the Oven takes this prompt next; state becomes `steering`                |
 
@@ -166,6 +173,41 @@ running turn.
 
 `limit` defaults to 50 and is capped at 200. `cursor` is opaque; a caller echoes `nextCursor` and
 never parses one.
+
+### The composer's choices
+
+The phone's composer is the desktop's, so the choices it makes travel with the thread and with every
+prompt. On `PATCH /v1/threads/{id}` a key that is **absent** leaves the column alone, an explicit
+**`null`** clears it, and a value sets it. `thinking` is one of `minimal`, `low`, `medium`, `high`,
+`xhigh`, `max`, `ultra`; `permission` is `auto_review` or `full_access`; `model` is one of the ids
+`GET /v1/models` lists; `ovenId` names one of this account's Ovens; `account` is at most 120
+characters; `fileSystem` is a boolean. Any other value is `400 bad_request`, and an unknown thread is
+`404`.
+
+`POST /v1/threads/{id}/prompts` accepts the same fields: what it omits is read from the thread row at
+queue time, so the stored prompt always states the full choice the desktop will run. `attachmentIds`
+must be this thread's unattached attachments; an id that is unknown, from another thread, or already
+carried by a prompt is a `400`.
+
+### Attachments and the meter
+
+Files travel as base64 inside JSON, because that is what a WebView can send without a multipart
+encoder. The upload route is the only one with a 6 MiB body limit; every other route keeps 1 MiB. A
+decoded file may weigh at most 4 MiB, its `name` and `mime` must be non-empty, and the download route
+answers with the file itself rather than the JSON envelope.
+
+`Usage` is derived from stored token columns and nothing else:
+
+- `used` – sum of `inputTokens + outputTokens` over this thread's messages created after
+  `usageResetAt`, all of them when it is null.
+- `window` – `contextWindow`; `leftBeforeCompact` is `max(window - used, 0)`.
+- `thisTurn` – the latest assistant message's token counts, `0` when it has none.
+- `rate` – the latest assistant `outputTokens / (durationMs / 1000)`, `0` without it.
+- `costMicros` – the latest assistant message's `costMicros`, `0` without it.
+- `since` – `usageResetAt` in epoch milliseconds, `null` when never reset.
+
+A run that reported nothing leaves those columns null, and the meter reads null as `0` rather than
+guessing.
 
 ### Presence and store
 
@@ -247,6 +289,15 @@ interface Thread {
   pinned: boolean
   archived: boolean
   drafting: boolean
+  model: string | null
+  harness: string | null
+  thinking: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | null
+  permission: 'auto_review' | 'full_access' | null
+  account: string | null
+  ovenId: string | null
+  fileSystem: boolean
+  contextWindow: number | null
+  usageResetAt: number | null
   lastError: string | null
   messageCount: number
   lastMessagePreview: string | null
@@ -262,11 +313,83 @@ interface Message {
   body: string
   seq: number
   createdAt: number
+  inputTokens: number | null
+  outputTokens: number | null
+  durationMs: number | null
+  costMicros: number | null
+}
+
+interface Attachment {
+  id: string
+  threadId: string
+  promptId: string | null
+  name: string
+  mime: string
+  size: number
+  createdAt: number
+}
+
+interface Prompt {
+  id: string
+  threadId: string
+  body: string
+  state: 'queued' | 'claimed' | 'steering' | 'done' | 'failed'
+  error: string | null
+  createdAt: number
+  updatedAt: number
+  model: string | null
+  thinking: string | null
+  permission: string | null
+  account: string | null
+  ovenId: string | null
+  fileSystem: boolean
+  /** Always a list, never null. */
+  attachments: Attachment[]
+}
+
+interface Model {
+  id: string
+  name: string
+  provider: 'opencode' | 'openai' | 'anthropic' | 'deepseek'
+  providerLabel: string
+  favorite: boolean
+}
+
+interface ModelCatalog {
+  items: Model[]
+  recent: string[]
+}
+
+interface ThreadUsage {
+  used: number
+  window: number
+  leftBeforeCompact: number
+  thisTurn: { input: number; output: number }
+  rate: number
+  costMicros: number
+  since: number | null
 }
 ```
 
 All timestamps are epoch milliseconds, matching the desktop's own types so a mirrored row needs no
 conversion.
+
+### Model catalog
+
+The catalog is static data in the service, grouped by provider and ordered as the picker draws it.
+`id` always starts with the provider slug, so a client resolves its bundled vendor mark from the id
+alone:
+
+| Provider    | Models                                                                                                   |
+| ----------- | -------------------------------------------------------------------------------------------------------- |
+| `opencode`  | `opencode/beam-free`, `opencode/big-pickle`, `opencode/claude-sonnet-5.5`                                 |
+| `openai`    | `openai/gpt-6.1-sol`, `openai/gpt-6-astra`, `openai/gpt-5.6-sol`, `openai/gpt-5.5`                       |
+| `anthropic` | `anthropic/claude-opus-5.5`, `anthropic/claude-sonnet-5.5`, `anthropic/claude-haiku-4.5`, `anthropic/opus-5-1m` |
+| `deepseek`  | `deepseek/deepseek-v4.1-flash`, `deepseek/deepseek-v4-pro`                                               |
+
+`openai/gpt-6.1-sol` and `deepseek/deepseek-v4.1-flash` are the favourites. `recent` is up to five ids
+this account's threads used in the last thirty days, most recently active first, and only ids the
+catalog still contains.
 
 ## Environment
 

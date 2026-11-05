@@ -35,6 +35,10 @@ var (
 	ErrTokenInvalid = errors.New("store: token invalid or expired")
 	// ErrChecksumMismatch means a migration file changed after it was applied.
 	ErrChecksumMismatch = errors.New("store: migration checksum mismatch")
+	// ErrAttachmentInvalid means an attachment id a caller named is unknown, belongs
+	// to another thread, or is already carried by a prompt. The request is wrong,
+	// not the resource's state, so the HTTP layer answers 400 rather than 409.
+	ErrAttachmentInvalid = errors.New("store: attachment is not available for this prompt")
 )
 
 // schemaNamePattern is the only shape a store schema name may take. It is

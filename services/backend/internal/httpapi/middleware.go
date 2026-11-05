@@ -126,14 +126,44 @@ func withCORS(next http.Handler, allowed map[string]bool) http.Handler {
 	})
 }
 
-// withBodyLimit caps every request body at 1 MiB.
+// withBodyLimit caps request bodies: 1 MiB everywhere, and 6 MiB for the one
+// route that carries a file.
 func withBodyLimit(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+			r.Body = http.MaxBytesReader(w, r.Body, bodyLimitFor(r))
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// maxAttachmentBodyBytes is the upload limit: 4 MiB of file arrives as base64,
+// which is about 5.6 MiB, plus the JSON around it.
+const maxAttachmentBodyBytes = 6 << 20
+
+// bodyLimitFor picks the limit for one request.
+//
+// Every other route keeps the 1 MiB default, because nothing else the contract
+// defines needs more, and a phone photo cannot be sent otherwise: a 4 MiB picture
+// is 5.6 MB of base64 before it is even a request body.
+func bodyLimitFor(r *http.Request) int64 {
+	if r.Method == http.MethodPost && isAttachmentUploadPath(r.URL.Path) {
+		return maxAttachmentBodyBytes
+	}
+	return maxBodyBytes
+}
+
+// isAttachmentUploadPath reports whether path is POST /v1/threads/{id}/attachments.
+// It is matched here rather than through the mux because the body limit has to be
+// in place before routing runs.
+func isAttachmentUploadPath(path string) bool {
+	const prefix = "/v1/threads/"
+	const suffix = "/attachments"
+	if !strings.HasPrefix(path, prefix) || !strings.HasSuffix(path, suffix) {
+		return false
+	}
+	inside := strings.TrimSuffix(strings.TrimPrefix(path, prefix), suffix)
+	return inside != "" && !strings.Contains(inside, "/")
 }
 
 // originSet builds the CORS allow list: APP_ORIGINS plus the Capacitor and dev

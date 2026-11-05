@@ -1,16 +1,21 @@
 import type {
   AccountUser,
   Assistant,
+  Attachment,
   AuthResult,
   Device,
   Message,
+  ModelCatalog,
   Oven,
   Page,
+  PermissionLevel,
   Project,
   Prompt,
   Session,
   Thread,
-  ThreadStatus
+  ThreadStatus,
+  ThreadUsage,
+  ThinkingLevel
 } from './types'
 
 /**
@@ -192,6 +197,32 @@ export interface ProjectQuery {
   cursor?: string | null
 }
 
+/** The composer choices one message is written with. The service echoes them on
+ *  the prompt so the desktop that picks it up runs exactly what was chosen. */
+export interface PromptChoices {
+  model?: string | null
+  thinking?: ThinkingLevel | null
+  permission?: PermissionLevel | null
+  account?: string | null
+  ovenId?: string | null
+  fileSystem?: boolean
+}
+
+/** A partial write to a thread: omitted fields stand, an explicit null clears. */
+export type ThreadPatch = PromptChoices
+
+export interface SendPromptInput extends PromptChoices {
+  body: string
+  clientId: string
+  attachmentIds?: string[]
+}
+
+export interface UploadAttachmentInput {
+  name: string
+  mime: string
+  dataBase64: string
+}
+
 export const api = {
   health: () => data<{ status: string }>('/health'),
 
@@ -241,10 +272,29 @@ export const api = {
   createThread: (input: { projectId: string; title: string }) =>
     data<Thread>('/v1/threads', { method: 'POST', body: input }),
 
+  /** The composer writes its own choices back to the thread, so the next message
+   *  and the next phone that opens it start from the same place. */
+  updateThread: (id: string, input: ThreadPatch) =>
+    data<Thread>(`/v1/threads/${id}`, { method: 'PATCH', body: input }),
+
+  /** The models this account may run, with the ones it used most recently. */
+  models: () => data<ModelCatalog>('/v1/models'),
+
+  /** What the thread's context has used, as the service stored it. */
+  usage: (threadId: string) => data<ThreadUsage>(`/v1/threads/${threadId}/usage`),
+
+  resetUsage: (threadId: string) =>
+    data<ThreadUsage>(`/v1/threads/${threadId}/usage/reset`, { method: 'POST' }),
+
+  uploadAttachment: (threadId: string, input: UploadAttachmentInput) =>
+    data<Attachment>(`/v1/threads/${threadId}/attachments`, { method: 'POST', body: input }),
+
+  deleteAttachment: (id: string) => data<void>(`/v1/attachments/${id}`, { method: 'DELETE' }),
+
   messages: (threadId: string, input: { limit?: number; cursor?: string | null } = {}) =>
     page<Message>(`/v1/threads/${threadId}/messages${query(input)}`),
 
-  sendPrompt: (threadId: string, input: { body: string; clientId: string }) =>
+  sendPrompt: (threadId: string, input: SendPromptInput) =>
     data<Prompt>(`/v1/threads/${threadId}/prompts`, { method: 'POST', body: input }),
 
   /** Where the prompt the phone sent has got to: queued, claimed, done, failed. */

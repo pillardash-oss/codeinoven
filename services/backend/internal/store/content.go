@@ -277,37 +277,60 @@ func (s *Store) ProjectByID(ctx context.Context, schemaName, projectID string) (
 
 // threadColumns is the scan order for Thread.
 const threadColumns = `t.id, t.project_id, t.title, t.status, t.read, t.pinned, t.archived,
-	t.drafting, t.model, t.harness, t.last_error, t.message_count, t.last_message_preview,
+	t.drafting, t.model, t.harness, t.thinking, t.permission, t.account, t.oven_id,
+	t.file_system, t.context_window, t.usage_reset_at,
+	t.last_error, t.message_count, t.last_message_preview,
 	t.last_activity, t.created_at, t.updated_at,
 	(EXTRACT(EPOCH FROM t.last_activity) * 1000)::bigint AS activity_ms`
 
 func scanThread(row pgx.Row) (Thread, error) {
 	var (
-		thread    Thread
-		model     *string
-		harness   *string
-		lastError *string
-		preview   *string
-		activity  time.Time
-		created   time.Time
-		updated   time.Time
+		thread        Thread
+		model         *string
+		harness       *string
+		thinking      *string
+		permission    *string
+		account       *string
+		ovenID        *string
+		contextWindow *int
+		usageResetAt  *time.Time
+		lastError     *string
+		preview       *string
+		activity      time.Time
+		created       time.Time
+		updated       time.Time
 	)
 	err := row.Scan(
 		&thread.ID, &thread.ProjectID, &thread.Title, &thread.Status, &thread.Read,
-		&thread.Pinned, &thread.Archived, &thread.Drafting, &model, &harness, &lastError,
-		&thread.MessageCount, &preview, &activity, &created, &updated, &thread.ActivityMillis,
+		&thread.Pinned, &thread.Archived, &thread.Drafting, &model, &harness, &thinking,
+		&permission, &account, &ovenID, &thread.FileSystem, &contextWindow, &usageResetAt,
+		&lastError, &thread.MessageCount, &preview, &activity, &created, &updated,
+		&thread.ActivityMillis,
 	)
 	if err != nil {
 		return Thread{}, mapNoRows(err)
 	}
 	thread.Model = model
 	thread.Harness = harness
+	thread.Thinking = thinking
+	thread.Permission = permission
+	thread.Account = account
+	thread.OvenID = ovenID
+	thread.ContextWindow = contextWindow
+	thread.UsageResetAt = asMillis(usageResetAt)
 	thread.LastError = lastError
 	thread.LastMessagePreview = preview
 	thread.LastActivity = FromTime(activity)
 	thread.CreatedAt = FromTime(created)
 	thread.UpdatedAt = FromTime(updated)
 	return thread, nil
+}
+
+// threadByID reads one thread inside an already open transaction, so a write and
+// the row it answers with see the same state.
+func threadByID(ctx context.Context, tx pgx.Tx, threadID string) (Thread, error) {
+	return scanThread(tx.QueryRow(ctx,
+		`SELECT `+threadColumns+` FROM threads t WHERE t.id = $1`, threadID))
 }
 
 // ListThreads returns one page of threads plus whether another page exists.
@@ -399,8 +422,7 @@ func (s *Store) CreateThread(
 			return err
 		}
 		var err error
-		thread, err = scanThread(tx.QueryRow(ctx,
-			`SELECT `+threadColumns+` FROM threads t WHERE t.id = $1`, threadID))
+		thread, err = threadByID(ctx, tx, threadID)
 		return err
 	})
 	if err != nil {
@@ -414,8 +436,7 @@ func (s *Store) ThreadByID(ctx context.Context, schemaName, threadID string) (Th
 	var thread Thread
 	err := s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
 		var err error
-		thread, err = scanThread(tx.QueryRow(ctx,
-			`SELECT `+threadColumns+` FROM threads t WHERE t.id = $1`, threadID))
+		thread, err = threadByID(ctx, tx, threadID)
 		return err
 	})
 	if err != nil {
@@ -442,7 +463,8 @@ func (s *Store) ListMessages(
 		cursorID = &id
 	}
 
-	query := `SELECT m.id, m.thread_id, m.role, m.body, m.seq, m.created_at
+	query := `SELECT m.id, m.thread_id, m.role, m.body, m.seq, m.created_at,
+		m.input_tokens, m.output_tokens, m.duration_ms, m.cost_micros
 		FROM messages m
 		WHERE m.thread_id = $1
 		  AND ($2::boolean IS NOT TRUE OR (m.seq, m.id) > ($3::bigint, $4::text))
@@ -460,14 +482,22 @@ func (s *Store) ListMessages(
 
 		for rows.Next() {
 			var (
-				message Message
-				created time.Time
+				message  Message
+				created  time.Time
+				input    *int
+				output   *int
+				duration *int
+				cost     *int
 			)
 			if err := rows.Scan(&message.ID, &message.ThreadID, &message.Role, &message.Body,
-				&message.Seq, &created); err != nil {
+				&message.Seq, &created, &input, &output, &duration, &cost); err != nil {
 				return fmt.Errorf("store: scan message: %w", err)
 			}
 			message.CreatedAt = FromTime(created)
+			message.InputTokens = input
+			message.OutputTokens = output
+			message.DurationMs = duration
+			message.CostMicros = cost
 			out = append(out, message)
 		}
 		if err := rows.Err(); err != nil {
@@ -487,100 +517,51 @@ func (s *Store) ListMessages(
 }
 
 // promptColumns is the scan order for Prompt.
-const promptColumns = `id, thread_id, body, state, error, created_at, updated_at`
+const promptColumns = `id, thread_id, body, state, error, created_at, updated_at,
+	model, thinking, permission, account, oven_id, file_system`
 
 func scanPrompt(row pgx.Row) (Prompt, error) {
 	var (
-		prompt    Prompt
-		lastError *string
-		created   time.Time
-		updated   time.Time
+		prompt     Prompt
+		lastError  *string
+		created    time.Time
+		updated    time.Time
+		model      *string
+		thinking   *string
+		permission *string
+		account    *string
+		ovenID     *string
 	)
+	prompt.Attachments = make([]Attachment, 0, 2)
 	if err := row.Scan(&prompt.ID, &prompt.ThreadID, &prompt.Body, &prompt.State,
-		&lastError, &created, &updated); err != nil {
+		&lastError, &created, &updated, &model, &thinking, &permission, &account, &ovenID,
+		&prompt.FileSystem); err != nil {
 		return Prompt{}, mapNoRows(err)
 	}
 	prompt.Error = lastError
 	prompt.CreatedAt = FromTime(created)
 	prompt.UpdatedAt = FromTime(updated)
+	prompt.Model = model
+	prompt.Thinking = thinking
+	prompt.Permission = permission
+	prompt.Account = account
+	prompt.OvenID = ovenID
 	return prompt, nil
 }
 
-// EnqueuePrompt stores a prompt for an Oven to pick up. A non-empty clientID
-// makes the call idempotent: the existing prompt is returned with created false.
-func (s *Store) EnqueuePrompt(
-	ctx context.Context, schemaName, promptID, threadID, body, clientID string,
-) (Prompt, bool, error) {
-	var (
-		prompt  Prompt
-		created bool
-	)
-
-	err := s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
-		var exists bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM threads WHERE id = $1)`, threadID).
-			Scan(&exists); err != nil {
-			return fmt.Errorf("store: check thread: %w", err)
-		}
-		if !exists {
-			return ErrNotFound
-		}
-
-		if clientID != "" {
-			existing, err := scanPrompt(tx.QueryRow(ctx,
-				`SELECT `+promptColumns+` FROM prompts WHERE thread_id = $1 AND client_id = $2`,
-				threadID, clientID))
-			if err == nil {
-				prompt = existing
-				created = false
-				return nil
-			}
-			if !errors.Is(err, ErrNotFound) {
-				return err
-			}
-		}
-
-		var err error
-		var client any
-		if clientID != "" {
-			client = clientID
-		}
-		prompt, err = scanPrompt(tx.QueryRow(ctx, `
-			INSERT INTO prompts (id, thread_id, body, state, client_id)
-			VALUES ($1, $2, $3, 'queued', $4)
-			RETURNING `+promptColumns,
-			promptID, threadID, body, client))
-		if err != nil {
-			// A concurrent insert with the same client id wins the race; return it.
-			if isUniqueViolation(err) && clientID != "" {
-				prompt, err = scanPrompt(tx.QueryRow(ctx,
-					`SELECT `+promptColumns+` FROM prompts WHERE thread_id = $1 AND client_id = $2`,
-					threadID, clientID))
-				if err != nil {
-					return err
-				}
-				created = false
-				return nil
-			}
-			return fmt.Errorf("store: enqueue prompt: %w", err)
-		}
-		created = true
-		return nil
-	})
-	if err != nil {
-		return Prompt{}, false, err
-	}
-	return prompt, created, nil
-}
-
-// PromptByID returns one prompt.
+// PromptByID returns one prompt with its attachments.
+//
+// EnqueuePrompt, which shares the composer columns, lives in content-composer.go.
 func (s *Store) PromptByID(ctx context.Context, schemaName, promptID string) (Prompt, error) {
 	var prompt Prompt
 	err := s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
 		var err error
 		prompt, err = scanPrompt(tx.QueryRow(ctx,
 			`SELECT `+promptColumns+` FROM prompts WHERE id = $1`, promptID))
-		return err
+		if err != nil {
+			return err
+		}
+		return loadPromptAttachments(ctx, tx, &prompt)
 	})
 	if err != nil {
 		return Prompt{}, err
@@ -642,7 +623,7 @@ func (s *Store) SteerPrompt(
 			}
 			return fmt.Errorf("store: steer prompt: %w", err)
 		}
-		return nil
+		return loadPromptAttachments(ctx, tx, &prompt)
 	})
 	if err != nil {
 		return Prompt{}, err

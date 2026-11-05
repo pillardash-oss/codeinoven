@@ -143,6 +143,12 @@ type Project struct {
 
 // Thread is one conversation. Model and Harness are the identity the thread
 // runs on and are nullable: an unstarted thread has no run to name.
+//
+// The composer's choices are the phone's, mirrored here so a thread opened on
+// either side states the same model, thinking level, permission, account, Oven
+// and File System switch. They are nullable because a thread mirrored before the
+// composer existed has no choice to report, and an absent value is a truer
+// answer than a guessed default.
 type Thread struct {
 	ID                 string  `json:"id"`
 	ProjectID          string  `json:"projectId"`
@@ -154,6 +160,13 @@ type Thread struct {
 	Drafting           bool    `json:"drafting"`
 	Model              *string `json:"model"`
 	Harness            *string `json:"harness"`
+	Thinking           *string `json:"thinking"`
+	Permission         *string `json:"permission"`
+	Account            *string `json:"account"`
+	OvenID             *string `json:"ovenId"`
+	FileSystem         bool    `json:"fileSystem"`
+	ContextWindow      *int    `json:"contextWindow"`
+	UsageResetAt       *Millis `json:"usageResetAt"`
 	LastError          *string `json:"lastError"`
 	MessageCount       int     `json:"messageCount"`
 	LastMessagePreview *string `json:"lastMessagePreview"`
@@ -166,25 +179,77 @@ type Thread struct {
 	ActivityMillis int64 `json:"-"`
 }
 
-// Message is one stored turn.
+// Message is one stored turn. The token counts are what the run reported: nil
+// means it reported nothing, which the meter reads as 0 rather than as a fact.
 type Message struct {
-	ID        string `json:"id"`
-	ThreadID  string `json:"threadId"`
-	Role      string `json:"role"`
-	Body      string `json:"body"`
-	Seq       int    `json:"seq"`
-	CreatedAt Millis `json:"createdAt"`
+	ID           string `json:"id"`
+	ThreadID     string `json:"threadId"`
+	Role         string `json:"role"`
+	Body         string `json:"body"`
+	Seq          int    `json:"seq"`
+	CreatedAt    Millis `json:"createdAt"`
+	InputTokens  *int   `json:"inputTokens"`
+	OutputTokens *int   `json:"outputTokens"`
+	DurationMs   *int   `json:"durationMs"`
+	CostMicros   *int   `json:"costMicros"`
 }
 
 // Prompt is one queued instruction for an Oven.
+//
+// The composer fields state the choice the prompt was written with, not the
+// thread's current defaults: the desktop picking it up runs it as the phone sent
+// it, even if the thread was changed afterwards for the next message.
+// Attachments is always a list, never null, so a client can iterate it blindly.
 type Prompt struct {
+	ID          string       `json:"id"`
+	ThreadID    string       `json:"threadId"`
+	Body        string       `json:"body"`
+	State       string       `json:"state"`
+	CreatedAt   Millis       `json:"createdAt"`
+	UpdatedAt   Millis       `json:"updatedAt"`
+	Error       *string      `json:"error,omitempty"`
+	Model       *string      `json:"model"`
+	Thinking    *string      `json:"thinking"`
+	Permission  *string      `json:"permission"`
+	Account     *string      `json:"account"`
+	OvenID      *string      `json:"ovenId"`
+	FileSystem  bool         `json:"fileSystem"`
+	Attachments []Attachment `json:"attachments"`
+}
+
+// Attachment is one file the phone sent with a message. The bytes are not part of
+// the payload: a client fetches them from GET /v1/attachments/{id}.
+//
+// PromptID is nil until the attachment is bound to a queued prompt, which is what
+// lets the composer delete an upload the person removed before sending.
+type Attachment struct {
 	ID        string  `json:"id"`
 	ThreadID  string  `json:"threadId"`
-	Body      string  `json:"body"`
-	State     string  `json:"state"`
+	PromptID  *string `json:"promptId"`
+	Name      string  `json:"name"`
+	Mime      string  `json:"mime"`
+	Size      int     `json:"size"`
 	CreatedAt Millis  `json:"createdAt"`
-	UpdatedAt Millis  `json:"updatedAt"`
-	Error     *string `json:"error,omitempty"`
+}
+
+// UsageTurn is what the latest assistant turn consumed.
+type UsageTurn struct {
+	Input  int `json:"input"`
+	Output int `json:"output"`
+}
+
+// Usage is the context meter's payload, derived from stored token columns only.
+//
+// Nothing here is estimated: a thread whose runs reported no tokens reads as 0,
+// and Since is the reset the person asked for, or nil when they never reset.
+type Usage struct {
+	Used              int       `json:"used"`
+	Window            int       `json:"window"`
+	LeftBeforeCompact int       `json:"leftBeforeCompact"`
+	ThisTurn          UsageTurn `json:"thisTurn"`
+	Rate              float64   `json:"rate"`
+	CostMicros        int       `json:"costMicros"`
+	Since             *Millis   `json:"since"`
 }
 
 // Cursor identifies the last row of a page. Its meaning depends on Sort.

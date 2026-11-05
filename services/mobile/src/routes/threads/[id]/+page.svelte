@@ -12,7 +12,7 @@
   import { formatAge, statusSkin, toneColor } from '#lib/api/status'
   import { arrive } from '#lib/motion'
   import { rememberProject } from '#lib/project-recency'
-  import type { Message, Project, Prompt, Thread } from '#lib/api/types'
+  import type { Message, Project, Prompt, Thread, ThreadUsage } from '#lib/api/types'
 
   /**
    * One thread, read on a phone. The screen has three parts and no fourth: what
@@ -35,6 +35,9 @@
   /** The thread's project, so the composer can name where a message is written. */
   let project = $state<Project | null>(null)
   let messages = $state<Message[]>([])
+  /** The thread's context reading, which the composer's shoe states. */
+  let usage = $state<ThreadUsage | null>(null)
+  let usagePhase = $state<'idle' | 'loading' | 'ready' | 'error'>('idle')
   /** The prompts this phone sent that the service has not finished answering. */
   let queued = $state<Prompt[]>([])
   /** What the composer holds. The page owns it, so a held message taken back for
@@ -147,6 +150,17 @@
       .catch(() => (project = null))
   }
 
+  async function loadUsage(): Promise<void> {
+    if (threadId.length === 0) return
+    usagePhase = 'loading'
+    try {
+      usage = await api.usage(threadId)
+      usagePhase = 'ready'
+    } catch {
+      usagePhase = 'error'
+    }
+  }
+
   async function load(): Promise<void> {
     if (threadId.length === 0) {
       loading = false
@@ -158,7 +172,8 @@
     try {
       const [nextThread, transcript] = await Promise.all([
         api.thread(threadId),
-        api.messages(threadId, { limit: MESSAGE_LIMIT })
+        api.messages(threadId, { limit: MESSAGE_LIMIT }),
+        loadUsage()
       ])
       thread = nextThread
       messages = transcript.items
@@ -215,6 +230,8 @@
         const transcript = await api.messages(threadId, { limit: MESSAGE_LIMIT })
         messages = transcript.items
         thread = await api.thread(threadId)
+        // The answer is what changes the meter, so the reading is taken with it.
+        await loadUsage()
         queued = queued.filter((prompt) => !settled.some((done) => done.id === prompt.id))
         await scrollToEnd()
       } else {
@@ -248,6 +265,12 @@
 
   function handlePromptSteered(prompt: Prompt): void {
     queued = queued.map((held) => (held.id === prompt.id ? prompt : held))
+  }
+
+  /** The composer writes its own choices to the thread, so the page reads the
+   *  service's answer rather than guessing what changed. */
+  function handleThreadChange(next: Thread): void {
+    thread = next
   }
 
   /* ---- Drawer ---- */
@@ -347,11 +370,18 @@
       <Composer
         {threadId}
         {thread}
-        {project}
         working={queued.length > 0}
         bind:draft
         focusSeq={draftArrivals}
         onqueued={handleQueued}
+        onthreadchange={handleThreadChange}
+        {usage}
+        {usagePhase}
+        onreloadusage={() => void loadUsage()}
+        onusagechange={(next) => {
+          usage = next
+          usagePhase = 'ready'
+        }}
       />
     {/if}
   </div>
