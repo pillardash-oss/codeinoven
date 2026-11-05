@@ -36,7 +36,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * without a bump reaches fresh installs only and silently skips every database
  * already on disk.
  */
-export const DATABASE_SCHEMA_VERSION = 7
+export const DATABASE_SCHEMA_VERSION = 8
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────

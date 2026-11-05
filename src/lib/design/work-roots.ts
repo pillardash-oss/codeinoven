@@ -98,6 +98,13 @@ export function workFolderNote(
   roots: readonly string[],
   root: string
 ): string {
+  // A video in the app's scratch tree is a delivery, which is where it belongs:
+  // it is exported and rendered inline, and it never goes on the board, so there
+  // is nothing here to correct. Telling the model to move it onto the board is
+  // how a clip the user watches once came to leave a video editor behind.
+  if (kind === 'video' && isAgentScratchDirectory(directory)) {
+    return `This folder is the app's scratch tree, which is where a clip delivered into the conversation belongs: it is served so it can be watched, exported once and rendered inline with the artifact capability, and it is not a composition the board lists. A film the user will keep and edit is a different deliverable: write it as \`${root}/<name>/\` and it appears on the board.`
+  }
   const slash = directory.lastIndexOf('/')
   const parent = slash === -1 ? '' : directory.slice(0, slash)
   if (parent !== '' && roots.includes(parent)) return ''
@@ -173,6 +180,30 @@ export function authoredWorkKindOf(directory: string, roots: WorkRoots): Authore
     if (directory === root || directory.startsWith(`${root}/`)) return kind
   }
   return null
+}
+
+/**
+ * The trees the app reserves for a task's own scratch, where authored work never lives.
+ *
+ * These two paths are not settings: every prompt in the app names them for
+ * non-source output, and both the design and the video playbooks say in as many
+ * words that work written there is work the user cannot find. So a folder inside
+ * them is never a session's home, whatever a capability happened to preview.
+ */
+const AGENT_SCRATCH_ROOTS = ['.cio/work', '.cio/tmp'] as const
+
+/**
+ * Whether a project-relative folder sits in the app's scratch space.
+ *
+ * The classifier a capability needs before it offers a folder as authored work:
+ * a preview of scratch is a delivery being served, not an engagement with a
+ * board the user can edit. Read from the path rather than from who previewed it,
+ * because both capabilities can serve a scratch folder and neither may turn one
+ * into a session.
+ */
+export function isAgentScratchDirectory(directory: string): boolean {
+  const collapsed = directory.trim().replace(/[\\]+/gu, '/').replace(/^\.\//u, '')
+  return AGENT_SCRATCH_ROOTS.some((root) => collapsed === root || collapsed.startsWith(`${root}/`))
 }
 
 /** A folder segment safe to paste into URLs on every supported platform. */

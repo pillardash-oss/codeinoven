@@ -9,7 +9,11 @@ import { realpathSync } from 'node:fs'
 import { DESIGN_EXPORT_FORMATS } from '../../lib/design/design-export'
 import { DESIGN_REVIEW_RUBRIC } from '../../lib/design/design-review'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import { DEFAULT_WORK_ROOTS, workRootForKind } from '../../lib/design/work-roots'
+import {
+  DEFAULT_WORK_ROOTS,
+  isAgentScratchDirectory,
+  workRootForKind
+} from '../../lib/design/work-roots'
 import type {
   AuthoredWorkKind,
   DesignCheckpointResult,
@@ -869,6 +873,13 @@ export class DesignService {
    * did design or video work even when the folder is gone. A thread works on one
    * folder at a time, so a later preview re-points the row instead of adding a
    * second one.
+   *
+   * A composition previewed out of the app's scratch tree is the exception: that
+   * folder is a delivery the agent is about to export and render inline, not a
+   * composition the user can open and edit, and a session recorded for it would
+   * leave the thread holding a video board over work nobody is editing. It is
+   * served either way, because a delivery is watched before it is exported; what
+   * it does not do is put the thread in an editing session.
    */
   recordPreview(input: {
     projectId: string
@@ -877,6 +888,7 @@ export class DesignService {
     entry: string | null
     kind: AuthoredWorkKind
   }): void {
+    if (input.kind === 'video' && isAgentScratchDirectory(input.directory)) return
     this.designs.upsert(input)
     // The capability previews inside a session the tag already opened, but the
     // mirror is unconditional so the row's marker never depends on which of the

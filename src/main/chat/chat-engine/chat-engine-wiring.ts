@@ -204,12 +204,18 @@ export function wireChatEngine(
       )
       return results
     })
-    // An agent can enter a design or a video session without the user typing the
-    // tag for it, by picking up the capability itself, and the session that opens
-    // is the same session: the memo the tag sets is set here, and the thread's row
-    // is written, which is what docks the coordinator board while the work is
-    // being made and what keeps the thread's later turns carrying the session's
-    // contract instead of leaving each turn to rediscover the tool mid-flight.
+    // An agent can enter a design session without the user typing the tag for it,
+    // by picking up the capability itself, and the session that opens is the same
+    // session: the memo the tag sets is set here, and the thread's row is written,
+    // which is what docks the coordinator board while the work is being made and
+    // what keeps the thread's later turns carrying the session's contract instead
+    // of leaving each turn to rediscover the tool mid-flight.
+    //
+    // A video is recorded by its work instead, on the first preview of a
+    // composition that lives where compositions live, because the video capability
+    // is also what makes the throwaway clip a conversation is handed: that clip is
+    // delivered inline and never edited, and recording the activation as a session
+    // left those threads holding a video editor over a film nobody opens.
     engine.state.utilityOrchestration.setAuthoredWorkSessionRecorder(
       ({ projectId, threadId, kind }) => {
         if (kind === 'design') engine.state.cioDesignThreads.set(threadId, true)
