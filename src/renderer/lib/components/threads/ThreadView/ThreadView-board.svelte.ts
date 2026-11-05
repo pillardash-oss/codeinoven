@@ -15,7 +15,6 @@ import { ThreadViewEditVideoNote } from './ThreadView-edit-video-note.svelte'
 import { ThreadViewStudioTemporaryChatContext } from './ThreadView-studio-temporary-chat-context.svelte'
 import { ThreadViewComposerScope } from './ThreadView-composer-scope.svelte'
 import { ThreadViewUnmirroredTraceStartTime } from './ThreadView-unmirrored-trace-start-time.svelte'
-import { ThreadViewEngineeringStageActions } from './ThreadView-engineering-stage-actions.svelte'
 import { ThreadViewProjectSuggestedPrompts } from './ThreadView-project-suggested-prompts.svelte'
 import { ThreadViewStudioReloadNonce } from './ThreadView-studio-reload-nonce.svelte'
 import { ThreadViewExpandedMessageBodies } from './ThreadView-expanded-message-bodies.svelte'
@@ -49,7 +48,6 @@ export class ThreadView extends BoardState<ThreadViewSurfaceProps> {
   readonly studioTemporaryChatContext = new ThreadViewStudioTemporaryChatContext(this)
   readonly composerScope = new ThreadViewComposerScope(this)
   readonly unmirroredTraceStartTime = new ThreadViewUnmirroredTraceStartTime(this)
-  readonly engineeringStageActions = new ThreadViewEngineeringStageActions(this)
   readonly projectSuggestedPrompts = new ThreadViewProjectSuggestedPrompts(this)
   readonly studioReloadNonce = new ThreadViewStudioReloadNonce(this)
   readonly expandedMessageBodies = new ThreadViewExpandedMessageBodies(this)

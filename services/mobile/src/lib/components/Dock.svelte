@@ -3,9 +3,9 @@
   import { page } from '$app/state'
   import CioChat from '@pdslng/cio-icon/CioChat.svelte'
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
-  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import { readWorkView, workViewHref } from '#lib/work-view'
+  import AssistantIcon from './AssistantIcon.svelte'
 
   /**
    * The dock is navigation, and the project and the threads it contains are one
@@ -63,7 +63,7 @@
     aria-label={onAssistant ? undefined : 'Assistant'}
     title={onAssistant ? undefined : 'Assistant'}
   >
-    <CioSparkles size={18} />
+    <AssistantIcon size={18} />
     {#if onAssistant}<span>Assistant</span>{/if}
   </a>
 </nav>

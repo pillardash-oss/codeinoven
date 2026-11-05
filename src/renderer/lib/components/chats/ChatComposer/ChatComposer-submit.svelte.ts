@@ -762,9 +762,6 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     getHistoryMessages: () => this.root.props.historyMessages,
     onHistoryNavigateStart: () => this.root.props.onHistoryNavigateStart?.(),
     onValueChange: (next) => this.root.props.onValueChange?.(next),
-    getShowEngineeringMode: () => this.root.props.showEngineeringMode,
-    openEngineeringToolbox: () =>
-      void this.root.captureComposerRoot.engineeringToolbox?.openAndFocus(),
     getWorking: () => this.root.props.working,
     hasStop: () => Boolean(this.root.props.onStop),
     confirmStop: this.confirmStop,

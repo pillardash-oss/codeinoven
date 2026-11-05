@@ -15,6 +15,7 @@ import { EngineeringLifecycleEngine } from '../../../lib/engines/engineering-lif
 import { OvenChat } from '../../ovens/oven-chat'
 import { MemoryService } from '../memory-service'
 import { PromptAssembler } from '../prompt-assembler'
+import type { AcpAgent } from '../../../lib/acp'
 import type { HarnessDriver, PreparedUtilityRuntime } from '../../drivers/driver.interface'
 import { HarnessUsageRepo } from '../../database/repositories/harness-usage-repo'
 import { AssistantRepo } from '../../database/repositories/assistant-repo'
@@ -99,6 +100,13 @@ export class ChatEngineState {
 
   readonly customProviderUsage = new CustomProviderUsageClient()
 
+  /**
+   * Builds the driver for one configured ACP agent. ACP agents are the user's
+   * own records, so their drivers are created on demand instead of coming from
+   * the harness registry's factory table.
+   */
+  acpDriverFactory: ((agent: AcpAgent) => HarnessDriver) | null = null
+
   /** Which OpenCode transport `drivers.get('opencode')` currently holds. */
   openCodeDriverIsV2 = false
 
@@ -129,6 +137,22 @@ export class ChatEngineState {
    *  the thread is deleted, avoiding a full message-record scan on every
    *  permission request. Rebuilt lazily on first access. */
   chatAttachmentAllowlists = new Map<string, string[]>()
+
+  /**
+   * Absolute POSIX paths each live session created itself, fed from the tool
+   * parts every harness already streams. Auto Review reads this so an agent can
+   * remove its own throwaway file, wherever it wrote it, without a card.
+   * Dropped with the session.
+   */
+  agentCreatedFiles = new Map<string, Set<string>>()
+
+  /**
+   * Creation targets of tool calls seen before they ran, keyed by
+   * `<sessionId>:<callId>`, holding only the targets that did not exist yet.
+   * The check is made while the call is still running, because afterwards the
+   * file exists either way and an overwrite would look like a creation.
+   */
+  pendingToolCreations = new Map<string, string[]>()
 
   pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
 

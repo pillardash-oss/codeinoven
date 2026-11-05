@@ -14,35 +14,26 @@
     CIO_PROMPT_TEMPLATE_TAGS,
     PR_REVIEW_PROMPT_TAGS,
     type CioPromptId,
-    type CioPromptMode,
     type CioPromptSetting
   } from '$shared/cio-prompts'
   import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import Modal from '../ui/Modal.svelte'
 
-  interface ModeFilter {
-    id: 'all' | CioPromptMode
+  interface BehaviorTab {
+    id: CioPromptId
     label: string
   }
 
-  const modeFilters: ModeFilter[] = [
-    { id: 'all', label: 'All modes' },
-    { id: 'chat', label: 'Chat' },
-    { id: 'file-system-chat', label: 'File system' },
-    { id: 'temporary-chat', label: 'Temporary' },
-    { id: 'assistant', label: 'Assistant' },
-    { id: 'brainstorm', label: 'Brainstorm' },
-    { id: 'engineer', label: 'Engineer' },
-    { id: 'assignment', label: 'Assignment' },
-    { id: 'achievement', label: 'Achievement' },
-    { id: 'audit', label: 'Audit' },
-    { id: 'review', label: 'PR Review' }
+  /** Behavior is the only editable layer: work ethics, and the PR review brief. */
+  const behaviorTabs: BehaviorTab[] = [
+    { id: 'work-ethics', label: 'Work ethics' },
+    { id: 'pr-review', label: 'PR Review' }
   ]
 
   let prompts = $state<CioPromptSetting[]>([])
   let loading = $state(true)
   let error = $state('')
-  let mode = $state<ModeFilter['id']>('all')
+  let tab = $state<CioPromptId>('work-ethics')
   let query = $state('')
   let expandedId = $state<CioPromptId | null>(null)
   let editingId = $state<CioPromptId | null>(null)
@@ -54,7 +45,7 @@
   const normalizedQuery = $derived(query.trim().toLowerCase())
   const filteredPrompts = $derived(
     prompts.filter((prompt) => {
-      if (mode !== 'all' && !prompt.modes.includes(mode)) return false
+      if (prompt.id !== tab) return false
       if (!normalizedQuery) return true
       return [prompt.title, prompt.description, prompt.group, prompt.filename, ...prompt.modes]
         .join(' ')
@@ -74,7 +65,8 @@
     try {
       prompts = await invoke('cioPrompts:list')
     } catch (loadError) {
-      error = loadError instanceof Error ? loadError.message : 'CIO prompts could not be loaded.'
+      error =
+        loadError instanceof Error ? loadError.message : 'Behavior prompts could not be loaded.'
     } finally {
       loading = false
     }
@@ -112,7 +104,8 @@
       expandedId = id
       savedId = id
     } catch (saveError) {
-      error = saveError instanceof Error ? saveError.message : 'The CIO prompt could not be saved.'
+      error =
+        saveError instanceof Error ? saveError.message : 'The behavior prompt could not be saved.'
     } finally {
       savingId = null
     }
@@ -133,7 +126,7 @@
       savedId = id
     } catch (resetError) {
       error =
-        resetError instanceof Error ? resetError.message : 'The CIO prompt could not be reset.'
+        resetError instanceof Error ? resetError.message : 'The behavior prompt could not be reset.'
     } finally {
       savingId = null
     }
@@ -147,10 +140,10 @@
 <div class="p-6 pb-24">
   <div class="mb-6 flex items-start justify-between gap-6">
     <div>
-      <h1 class="text-xl font-bold tracking-tight">CIO Prompts</h1>
+      <h1 class="text-xl font-bold tracking-tight">Behavior</h1>
       <p class="mt-0.5 max-w-2xl text-[0.6875rem] leading-relaxed text-muted">
-        Inspect and customize the instructions sent by the application. Defaults track every app
-        update; only customized sections create files in the config directory.
+        Work ethics and the PR review brief are the only standing instructions you can customize.
+        Every Engineering lifecycle stage is an application-owned tool the agent calls on its own.
       </p>
     </div>
     <div class="shrink-0 border bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-muted">
@@ -190,7 +183,7 @@
     </div>
   </section>
 
-  <div class="mb-5 space-y-3" aria-label="CIO prompt filters">
+  <div class="mb-5 space-y-3" aria-label="Behavior prompt filters">
     <div class="relative">
       <CioSearch
         class="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-dimmed"
@@ -199,24 +192,24 @@
       <input
         class="h-9 w-full border bg-surface pl-9 pr-3 text-sm text-foreground outline-none focus:border-primary"
         type="search"
-        placeholder="Filter by prompt, section, file, or mode"
-        aria-label="Filter CIO prompts"
+        placeholder="Filter behavior instructions"
+        aria-label="Filter behavior instructions"
         bind:value={query}
       />
     </div>
     <div class="flex flex-wrap gap-1.5">
-      {#each modeFilters as filter (filter.id)}
+      {#each behaviorTabs as behaviorTab (behaviorTab.id)}
         <button
           type="button"
           class="h-8 border px-2.5 text-xs font-medium transition-colors"
-          class:bg-primary={mode === filter.id}
-          class:text-on-primary={mode === filter.id}
-          class:bg-surface={mode !== filter.id}
-          class:text-muted={mode !== filter.id}
-          aria-pressed={mode === filter.id}
-          onclick={() => (mode = filter.id)}
+          class:bg-primary={tab === behaviorTab.id}
+          class:text-on-primary={tab === behaviorTab.id}
+          class:bg-surface={tab !== behaviorTab.id}
+          class:text-muted={tab !== behaviorTab.id}
+          aria-pressed={tab === behaviorTab.id}
+          onclick={() => (tab = behaviorTab.id)}
         >
-          {filter.label}
+          {behaviorTab.label}
         </button>
       {/each}
     </div>
@@ -230,12 +223,12 @@
 
   {#if loading}
     <div class="flex items-center justify-center gap-2 border bg-surface py-14 text-sm text-muted">
-      <CioSpinner size={16} class="animate-spin" /> Loading CIO prompts…
+      <CioSpinner size={16} class="animate-spin" /> Loading behavior instructions…
     </div>
   {:else if filteredPrompts.length === 0}
     <div class="border bg-surface px-5 py-10 text-center">
       <p class="text-sm font-medium text-foreground">No prompts match this filter</p>
-      <p class="mt-1 text-xs text-muted">Choose another mode or clear the search text.</p>
+      <p class="mt-1 text-xs text-muted">Choose another tab or clear the search text.</p>
     </div>
   {:else}
     <div class="space-y-6">
@@ -372,7 +365,7 @@
   {/if}
 </div>
 
-<Modal open={resetId !== null} title="Reset CIO prompt?" onClose={() => (resetId = null)}>
+<Modal open={resetId !== null} title="Reset behavior prompt?" onClose={() => (resetId = null)}>
   <p class="text-sm leading-relaxed text-muted">
     This deletes the custom prompt file and restores the application default. Future app updates
     will automatically supply the latest default.

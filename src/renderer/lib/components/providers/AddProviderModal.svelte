@@ -8,6 +8,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { providerStore } from '$lib/stores/providers.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { findFirstTextField, findPanelPrimaryAction } from '$lib/modal-primary-action.svelte'
@@ -93,15 +94,25 @@
   let apiKey = $state('')
   let storingKey = $state(false)
 
+  /**
+   * An ACP agent is a harness like any other here: it gets the same connect tab,
+   * the same custom base URL tab and the same footer. Only the sign-in itself
+   * differs, because the agent declares it over the protocol.
+   */
+  let isAcpHarness = $derived(harness.transport === 'acp')
+
   let customProviders = $derived(
     baseUrlProviderStore.providers.filter((provider) => provider.harnessId === harness.id)
   )
   let customCount = $derived(customProviders.length)
 
+  // An ACP agent signs in over its own protocol rather than through a login
+  // command, but the panel is the same panel: it still offers a provider list, a
+  // connected list, and one action for both.
   let canSignIn = $derived(
     authStatus !== null &&
-      authStatus.capabilities !== null &&
-      authStatus.capabilities.loginHandoff !== false
+      (isAcpHarness ||
+        (authStatus.capabilities !== null && authStatus.capabilities.loginHandoff !== false))
   )
 
   /**
@@ -117,7 +128,21 @@
    */
   let apiKeyEntry = $derived(authStatus?.capabilities?.apiKeyEntry === true)
 
-  let canAddCustom = $derived(harness.supportsCustomProviders && harness.integration === 'ready')
+  let canAddCustom = $derived(
+    harness.integration === 'ready' && (harness.supportsCustomProviders || isAcpHarness)
+  )
+
+  /** Whether this harness already holds a provider, from the last status read. */
+  let hasConnectedProviders = $derived(
+    (authStatus?.accounts ?? []).some((account) => account.active !== false)
+  )
+
+  /**
+   * The idle screen with nothing connected: the connect action moves into the
+   * body and the footer stays empty, so the first provider is the one thing the
+   * screen offers.
+   */
+  let emptyConnectState = $derived(!hasConnectedProviders && step === 'idle')
 
   /** Only OpenCode exposes a config-file mechanism to hide providers:
    *  V1's `disabled_providers`, V2's `experimental.policies` provider.use deny. */
@@ -249,9 +274,48 @@
     return true
   }
 
+  /**
+   * Read an ACP agent's sign-in state and the methods it accepts.
+   *
+   * The methods become this panel's provider list, so a harness the user added
+   * over ACP is connected with the exact component a native harness uses.
+   */
+  async function loadAcpAuth(): Promise<void> {
+    const status = await invoke('acpAgents:authStatus', harness.id)
+    authStatus = {
+      capabilities: {
+        status: true,
+        loginHandoff: true,
+        logout: false,
+        accountActivation: false,
+        multipleAccounts: false,
+        pickerLogin: false,
+        apiKeyEntry: false,
+        inAppLogin: false
+      },
+      state: status.state === 'unknown' ? 'unknown' : status.state,
+      accounts:
+        status.state === 'authenticated'
+          ? [{ id: harness.id, providerId: harness.id, label: harness.name, method: 'agent' }]
+          : [],
+      ...(status.detail ? { detail: status.detail } : {})
+    }
+    offered = status.methods.map((method) => ({
+      id: method.id,
+      name: method.name,
+      modelCount: 0,
+      authenticated: status.state === 'authenticated',
+      ...(method.description ? { detail: method.description } : {})
+    }))
+  }
+
   async function checkAuth(): Promise<void> {
     checkingAuth = true
     try {
+      if (isAcpHarness) {
+        await loadAcpAuth()
+        return
+      }
       authStatus = await invoke('providerAccounts:getAuthStatus', harness.id)
       knownAccounts = await invoke('providerAccounts:list', harness.id)
     } catch (authError) {
@@ -447,6 +511,35 @@
     actionError = ''
     actionWarning = ''
     notice = ''
+    if (isAcpHarness) {
+      if (!provider) {
+        openPicker()
+        return
+      }
+      // The agent runs the method it declared; there is no command to hand to a
+      // terminal and no key for the app to store.
+      storingKey = true
+      try {
+        const status = await invoke('acpAgents:authenticate', harness.id, provider.id)
+        await loadAcpAuth()
+        // A successful sign-in changes the models the agent reports, so the
+        // picker's cached (refused) catalog has to be dropped and re-probed now.
+        providerCatalog.invalidateAll()
+        void providerStore.checkOne(harness.id).catch(() => undefined)
+        step = 'idle'
+        selectedProvider = null
+        actionWarning =
+          status.state === 'authenticated'
+            ? ''
+            : `${provider.name} finished, but ${harness.name} still refuses a session.`
+      } catch (authError) {
+        actionError =
+          authError instanceof Error ? authError.message : `${provider.name} could not run.`
+      } finally {
+        storingKey = false
+      }
+      return
+    }
     try {
       const providerId =
         provider?.id ??
@@ -593,7 +686,7 @@
 -->
 <DockableModal
   open
-  title={`Add provider   ${harness.name}`}
+  title={isAcpHarness ? `Sign in to ${harness.name}` : `Add provider   ${harness.name}`}
   minimized={oauth.docked}
   closable={!signingIn}
   onMinimize={() => (oauth.docked = true)}
@@ -654,6 +747,7 @@
       {canSignIn}
       {pickerLogin}
       {apiKeyEntry}
+      emptyState={emptyConnectState}
       {storingKey}
       oauthLoginId={oauth.loginId}
       {selectedProvider}
@@ -714,6 +808,9 @@
       bind:apiKey
       {apiKeyEntry}
       {pickerLogin}
+      {canSignIn}
+      {storingKey}
+      oauthLoginId={oauth.loginId}
       {hiddenIds}
       {supportsHide}
       {togglingHide}
@@ -724,6 +821,7 @@
       onSaveAuthenticatedAccount={() => void saveAuthenticatedAccount()}
       onBackToList={backToList}
       onConnectWithKey={() => void connectWithKey()}
+      onStartConnect={(provider) => void startConnect(provider)}
       onLoginExit={(exitCode, output) => void handleLoginExit(exitCode, output)}
       onRequestDisconnect={(account) => (disconnectTarget = account)}
       onToggleHidden={(providerId, hidden) => void toggleHidden(providerId, hidden)}

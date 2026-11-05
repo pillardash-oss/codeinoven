@@ -326,12 +326,26 @@ export class ChatEngineAssignmentRun {
             report,
             apiString(body.operationId, 'operationId')
           )
-          if (!result.idempotent && result.task?.owner === 'worker') {
-            await this.host.units['audit'].promptCoordinatorForAudit(
-              result.assignment,
-              result.task.id,
-              report
-            )
+          if (
+            result.task?.owner === 'worker' &&
+            (result.task.status === 'reported' || result.task.status === 'attention')
+          ) {
+            // The report is already durable, so waking the coordinator is best
+            // effort: a coordinator that is mid-turn must never turn a worker's
+            // accepted report into a failed request. The wake is attempted on a
+            // repeated report too, because the coordinator-snapshot claim is what
+            // prevents a second prompt, not the operation id: a wake that could
+            // not be delivered once still has to reach the coordinator on the
+            // worker's retry.
+            await this.host.units['audit']
+              .promptCoordinatorForAudit(result.assignment, result.task.id, report)
+              .catch((error: unknown) => {
+                Logger.error('Assignment coordinator wake after a worker report failed', {
+                  assignmentId: result.assignment.id,
+                  taskId: result.task?.id,
+                  error: error instanceof Error ? error.message : String(error)
+                })
+              })
           }
           writeAssignmentApiResponse(response, 200, result)
           return

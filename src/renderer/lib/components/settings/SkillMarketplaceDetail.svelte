@@ -14,6 +14,7 @@
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import { invoke } from '$lib/ipc.svelte'
   import { openInBrowser } from '$lib/open-in-browser'
   import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
@@ -93,8 +94,7 @@
 
     for (const provider of cachedProviders) {
       if (!provider.harnessId) continue
-      harnessNames[provider.harnessId] =
-        getAgentIcon(provider.harnessId)?.name ?? provider.harnessId
+      harnessNames[provider.harnessId] = agentDisplayName(provider.harnessId)
     }
 
     for (const provider of providerStore.providers) {

@@ -138,8 +138,6 @@ export class ThreadViewState extends BoardUnit<ThreadView> {
 
   unsubscribeRemoteEvents: (() => void) | null = $state(null)
 
-  unsubscribeLifecycleInheritance: (() => void) | null = $state(null)
-
   // ─── Message queue & steer  ───────────────────────────────────────────────
 
   /** Shortcut label for the steer combo   macOS shows ⌘⇧, others Ctrl+Shift+. */

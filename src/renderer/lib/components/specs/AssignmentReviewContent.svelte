@@ -593,9 +593,9 @@
       class="scroll-mt-5 space-y-3"
       aria-label={phase.title}
     >
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div class="min-w-0 flex-1">
-          <div class="flex items-center gap-1.5">
+      <div class="space-y-1">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="flex min-w-0 flex-1 items-center gap-1.5">
             <EditableMarkdown
               {readOnly}
               class={compact
@@ -627,61 +627,61 @@
               >
             {/if}
           </div>
-          <EditableMarkdown
-            {readOnly}
-            class="mt-1 text-sm leading-7 text-muted outline-none focus:bg-surface focus:text-foreground"
-            text={phase.description}
-            fallback="No phase description."
-            ariaLabel={`Description for ${phase.title}`}
-            onChange={(value) => updatePhaseText(phase.id, 'description', value)}
-          />
-          {@render AnnotationBubbles(`phase:${phase.id}`)}
-        </div>
-        {#if !readOnly}
-          <div class="flex items-center gap-1.5">
-            <ModelPicker
-              {providers}
-              {projectId}
-              harnessId={selectedPhaseModel.harnessId}
-              providerId={selectedPhaseModel.providerId}
-              modelId={selectedPhaseModel.modelId}
-              accountId={selectedPhaseModel.accountId}
-              {favoriteModels}
-              {recentModels}
-              {onRemoveRecent}
-              side="bottom"
-              variant="action"
-              label="Phase model"
-              onSelect={(providerId, modelId, harnessId, accountId) =>
-                updatePhaseModel(phase.id, providerId, modelId, harnessId, accountId)}
-              {onToggleFavorite}
-              {onReorderFavorite}
-              thinkingLevel={selectedPhaseModel.thinkingLevel}
-              runtimeSettings={selectedPhaseModel}
-              onSelectRuntime={(runtime) =>
-                queuePhaseSelection(phase.id, { ...selectedPhaseModel, ...runtime })}
-              onSelectThinking={(level) =>
-                updatePhaseModel(
-                  phase.id,
-                  selectedPhaseModel.providerId,
-                  selectedPhaseModel.modelId,
-                  selectedPhaseModel.harnessId,
-                  selectedPhaseModel.accountId,
-                  level
-                )}
-            />
-            {#if projectId}
-              <WorkerScopePicker
+          {#if !readOnly}
+            <div class="flex items-center gap-1.5">
+              <ModelPicker
+                {providers}
                 {projectId}
-                inheritBucketId={phaseInherit.bucketId}
-                inheritFallbackName={phaseInherit.fallbackName}
-                inheritHint={phaseInherit.hint}
-                value={phase.workerScope ?? { mode: 'inherit' }}
-                onSelect={(choice) => updatePhaseScope(phase.id, choice)}
+                harnessId={selectedPhaseModel.harnessId}
+                providerId={selectedPhaseModel.providerId}
+                modelId={selectedPhaseModel.modelId}
+                accountId={selectedPhaseModel.accountId}
+                {favoriteModels}
+                {recentModels}
+                {onRemoveRecent}
+                side="bottom"
+                variant="action"
+                label="Phase model"
+                onSelect={(providerId, modelId, harnessId, accountId) =>
+                  updatePhaseModel(phase.id, providerId, modelId, harnessId, accountId)}
+                {onToggleFavorite}
+                {onReorderFavorite}
+                thinkingLevel={selectedPhaseModel.thinkingLevel}
+                runtimeSettings={selectedPhaseModel}
+                onSelectRuntime={(runtime) =>
+                  queuePhaseSelection(phase.id, { ...selectedPhaseModel, ...runtime })}
+                onSelectThinking={(level) =>
+                  updatePhaseModel(
+                    phase.id,
+                    selectedPhaseModel.providerId,
+                    selectedPhaseModel.modelId,
+                    selectedPhaseModel.harnessId,
+                    selectedPhaseModel.accountId,
+                    level
+                  )}
               />
-            {/if}
-          </div>
-        {/if}
+              {#if projectId}
+                <WorkerScopePicker
+                  {projectId}
+                  inheritBucketId={phaseInherit.bucketId}
+                  inheritFallbackName={phaseInherit.fallbackName}
+                  inheritHint={phaseInherit.hint}
+                  value={phase.workerScope ?? { mode: 'inherit' }}
+                  onSelect={(choice) => updatePhaseScope(phase.id, choice)}
+                />
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <EditableMarkdown
+          {readOnly}
+          class="text-sm leading-7 text-muted outline-none focus:bg-surface focus:text-foreground"
+          text={phase.description}
+          fallback="No phase description."
+          ariaLabel={`Description for ${phase.title}`}
+          onChange={(value) => updatePhaseText(phase.id, 'description', value)}
+        />
+        {@render AnnotationBubbles(`phase:${phase.id}`)}
       </div>
 
       <div class="space-y-3">

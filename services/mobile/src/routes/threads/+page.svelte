@@ -1,19 +1,20 @@
 <script lang="ts">
-  import { goto, invalidateAll } from '$app/navigation'
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import { invalidateAll } from '$app/navigation'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import PanelBar from '#lib/components/PanelBar.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
   import TitleMenu from '#lib/components/TitleMenu.svelte'
+  import { fold } from '#lib/motion'
   import type { PageData } from './$types'
 
   /**
-   * The thread panel: every thread of the project in scope, newest and most
-   * urgent first, grouped only by which ones are pinned. Projects is the other
-   * reading of this same list and the header's title switches between them, so
-   * this screen never grows a second list.
+   * The work list read as threads: every thread across every project, pinned
+   * first and then newest and most urgent, each row carrying its project's mark
+   * because no heading above it names the project. Projects is the other reading
+   * of this same list, and the header's title switches between them, so this
+   * screen never grows a second list.
    *
-   * A long project is drawn as it is scrolled, because a hundred and twenty rows
+   * A long list is drawn as it is scrolled, because a hundred and twenty rows
    * laid out at once is a stall on a phone, not a list.
    */
 
@@ -25,29 +26,25 @@
   let query = $state('')
   let shown = $state(PAGE)
 
-  function focusOnMount(node: HTMLInputElement): void {
-    node.focus()
-  }
-
-  let scope = $derived(data.projects.find((project) => project.id === data.project) ?? null)
-
   let filtered = $derived(
     query.trim()
       ? data.threads.filter((thread) => {
           const needle = query.trim().toLowerCase()
+          const project = data.projects.find((candidate) => candidate.id === thread.projectId)
           return (
             thread.title.toLowerCase().includes(needle) ||
-            (scope?.name ?? '').toLowerCase().includes(needle)
+            (project?.name ?? '').toLowerCase().includes(needle)
           )
         })
       : data.threads
   )
 
-  let pinned = $derived(filtered.filter((thread) => thread.pinned))
-  let recent = $derived(filtered.filter((thread) => !thread.pinned))
-
   function projectOf(id: string) {
     return data.projects.find((project) => project.id === id) ?? null
+  }
+
+  function focusOnMount(node: HTMLInputElement): void {
+    node.focus()
   }
 
   function toggleSearch(): void {
@@ -78,31 +75,11 @@
   }
 </script>
 
-<PanelBar
-  title="Threads"
-  subtitle={scope ? `${data.threads.length} threads in ${scope.name}` : null}
->
+<PanelBar title="Threads">
   {#snippet titleControl()}
-    <TitleMenu
-      view="threads"
-      title="Threads"
-      count={scope ? null : data.threads.length}
-      threads={data.threads.length}
-      projects={data.projects.length}
-    />
+    <TitleMenu view="threads" title="Threads" />
   {/snippet}
   {#snippet actions()}
-    {#if scope}
-      <button
-        class="icon-btn"
-        type="button"
-        aria-label="Show threads from every project"
-        title="Show threads from every project"
-        onclick={() => void goto('/threads')}
-      >
-        <CioClose size={20} />
-      </button>
-    {/if}
     <button
       class="icon-btn"
       type="button"
@@ -117,7 +94,7 @@
 </PanelBar>
 
 {#if searchOpen}
-  <div class="search-row">
+  <div class="search-row" transition:fold>
     <input
       {@attach focusOnMount}
       value={query}
@@ -137,24 +114,10 @@
       <button class="btn" type="button" onclick={reload}>Retry</button>
     </div>
   {:else if filtered.length === 0}
-    <p class="empty">
-      {query ? 'No thread matches that name' : 'No threads in this project yet.'}
-    </p>
+    <p class="empty">{query ? 'No thread matches that name' : 'No threads yet.'}</p>
   {:else}
-    {#if pinned.length > 0}
-      <p class="section-label">Pinned</p>
-      {#each pinned as thread (thread.id)}
-        <ThreadRow {thread} project={projectOf(thread.projectId)} />
-      {/each}
-    {/if}
-
-    <p class="section-label">{pinned.length > 0 ? 'Recent' : 'All threads'}</p>
-    {#each recent.slice(0, Math.max(0, shown - pinned.length)) as thread (thread.id)}
+    {#each filtered.slice(0, shown) as thread (thread.id)}
       <ThreadRow {thread} project={projectOf(thread.projectId)} />
     {/each}
-
-    {#if filtered.length > shown}
-      <p class="list-foot">Showing {shown} of {filtered.length}</p>
-    {/if}
   {/if}
 </div>

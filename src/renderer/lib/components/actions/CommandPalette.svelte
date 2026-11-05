@@ -16,7 +16,7 @@
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import MultiSelectPicker from '$lib/components/shared/MultiSelectPicker.svelte'
   import type { MultiSelectOption } from '$lib/components/shared/multi-select-option'
@@ -193,7 +193,7 @@
 
   /** Human-readable harness name for an agent icon tooltip. */
   function harnessLabel(id: string): string {
-    return getAgentIcon(id)?.name ?? id
+    return agentDisplayName(id)
   }
 </script>
 

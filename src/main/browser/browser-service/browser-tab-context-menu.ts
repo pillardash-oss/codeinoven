@@ -31,6 +31,9 @@ export function showBrowserTabContextMenu(
       append('Edit tab', { action: 'edit' })
       append(input.pinned ? 'Unpin tab' : 'Pin tab', { action: 'togglePin' })
     }
+    // The id is what an agent is pointed at, so it is reachable from the tab it
+    // names: copy it here and hand it to a thread without going through the app.
+    append('Copy tab ID', { action: 'copyTabId' })
     append(
       input.bookmarked ? 'Remove bookmark' : 'Bookmark tab',
       { action: 'toggleBookmark' },

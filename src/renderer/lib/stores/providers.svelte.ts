@@ -46,14 +46,15 @@ class ProviderStore {
       for (const provider of incoming) {
         this.previousStatuses.set(provider.id, provider.status)
       }
-      // Merge: keep local checking states intact, sync everything else.
-      const incomingById = new Map(incoming.map((provider) => [provider.id, provider]))
-      this.providers =
-        this.providers.length === 0
-          ? incoming
-          : this.providers.map((local) =>
-              this.pendingIds.has(local.id) ? local : (incomingById.get(local.id) ?? local)
-            )
+      // The broadcast is the authoritative set of rows: an ACP agent the user
+      // just added arrives here first, and one they removed leaves here. Driving
+      // the merge from `incoming` instead of from the local list is what makes
+      // those two cases land, while a row with a local check in flight keeps its
+      // own spinner state.
+      const localById = new Map(this.providers.map((provider) => [provider.id, provider]))
+      this.providers = incoming.map((remote) =>
+        this.pendingIds.has(remote.id) ? (localById.get(remote.id) ?? remote) : remote
+      )
     })
 
     try {
@@ -141,7 +142,12 @@ class ProviderStore {
    */
   get baseUrlHarnesses(): ProviderConnectionInfo[] {
     return this.providers.filter(
-      (provider) => provider.supportsCustomProviders && provider.integration === 'ready'
+      (provider) =>
+        provider.integration === 'ready' &&
+        provider.enabled !== false &&
+        // ACP agents own their endpoint; they still belong in this list because
+        // a custom provider can be scoped to the harness the user added.
+        (provider.supportsCustomProviders || provider.transport === 'acp')
     )
   }
 
@@ -169,7 +175,14 @@ class ProviderStore {
       await new Promise((resolve) => setTimeout(resolve, remaining))
     }
     const resultsById = new Map(results.map((result) => [result.id, result]))
-    this.providers = this.providers.map((p) => resultsById.get(p.id) ?? p)
+    const merged = this.providers.map((p) => resultsById.get(p.id) ?? p)
+    // A check can also report a row this window has never seen (a harness the
+    // user just added), so anything new is appended rather than dropped.
+    const known = new Set(merged.map((provider) => provider.id))
+    for (const result of results) {
+      if (!known.has(result.id)) merged.push(result)
+    }
+    this.providers = merged
     for (const r of results) this.pendingIds.delete(r.id)
   }
 }

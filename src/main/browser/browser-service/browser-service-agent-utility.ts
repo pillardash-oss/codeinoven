@@ -69,6 +69,7 @@ export interface AgentUtilityHost {
   readonly agentPointFrom: BrowserService['agentPointFrom']
   readonly agentSelector: BrowserService['agentSelector']
   readonly agentSignedNumber: BrowserService['agentSignedNumber']
+  readonly agentTabClaims: BrowserService['agentTabClaims']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentTargetChanged: BrowserService['agentTargetChanged']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
@@ -76,6 +77,7 @@ export interface AgentUtilityHost {
   readonly closeUnreferencedAgentTabs: BrowserService['closeUnreferencedAgentTabs']
   readonly captureScreenshot: BrowserService['captureScreenshot']
   readonly clickAgentTarget: BrowserService['clickAgentTarget']
+  readonly conversationBoxFor: BrowserService['conversationBoxFor']
   readonly conversationScope: BrowserService['conversationScope']
   readonly ensureTab: BrowserService['ensureTab']
   readonly isRelaxed: BrowserService['isRelaxed']
@@ -144,7 +146,6 @@ export class BrowserServiceAgentUtility {
     const projectId = validateProjectId(context.projectId)
     const threadId = validateThreadId(context.threadId)
     const contextKey = browserContextKey(projectId, threadId)
-    const scope = this.host.conversationScope(projectId, threadId)
     if (operation === 'open') {
       const url = validateBrowserUrl(this.host.requiredInputString(input, 'url'))
       const attention = validateAttention(input['attention'])
@@ -155,7 +156,12 @@ export class BrowserServiceAgentUtility {
       const existing = this.host.agentTabIds.get(contextKey) ?? null
       const reused = existing !== null && this.host.tabs.has(existing)
       const tabId = reused && existing ? existing : `browser:agent:${crypto.randomUUID()}`
-      const tab = this.host.ensureTab(tabId, projectId, threadId, this.host.boxOfExistingTab(tabId))
+      const tab = this.host.ensureTab(
+        tabId,
+        projectId,
+        threadId,
+        this.host.conversationBoxFor(projectId, threadId) ?? this.host.boxOfExistingTab(tabId)
+      )
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
       // or not the user ends up looking at it.
@@ -167,6 +173,7 @@ export class BrowserServiceAgentUtility {
       }
       this.host.load(tabId, url)
       this.host.agentTabIds.set(contextKey, tabId)
+      this.publishAgentClaims()
       this.host.closeUnreferencedAgentTabs(contextKey)
       // An opportunistic reveal is skipped once the user has shown twice that
       // they leave agent-opened tabs straight away.
@@ -186,12 +193,12 @@ export class BrowserServiceAgentUtility {
         attention: reveal ? 'focus' : 'background',
         relaxed,
         page: this.host.stateFor(tabId, tab),
-        ...this.host.threadBrowserHint(scope, tabId, contextKey)
+        ...this.host.threadBrowserHint(projectId, threadId, tabId, contextKey)
       }
     }
 
     const page = validateUtilityPage(input['page'])
-    const target = this.host.utilityTarget({ scope, threadId, contextKey, page })
+    const target = this.host.utilityTarget({ projectId, threadId, contextKey, page })
     if (!target) {
       // The conversation's browser holding a page this process has not mounted, or
       // a browser conversation's bound page that is not in memory right now, is
@@ -206,6 +213,9 @@ export class BrowserServiceAgentUtility {
               : 'Open a browser page before using this operation'
       )
     }
+    // The strip names the thread behind a tab from this, so it is published the
+    // moment an agent takes one, not when the tab's page happens to change.
+    this.publishAgentClaims()
     const { tabId, tab, attached } = target
     if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
@@ -235,7 +245,7 @@ export class BrowserServiceAgentUtility {
           ...this.host.utilityTabContext(tabId, tab),
           page: attached ? 'user' : 'agent',
           cancelled: true,
-          ...this.host.threadBrowserHint(scope, tabId, contextKey)
+          ...this.host.threadBrowserHint(projectId, threadId, tabId, contextKey)
         }
       }
       reviewedTarget = reviewed.target
@@ -257,7 +267,7 @@ export class BrowserServiceAgentUtility {
       // apart from the page the user is reading.
       page: attached ? ('user' as const) : ('agent' as const),
       ...this.movedPageHint(contextKey, tabId),
-      ...this.host.threadBrowserHint(scope, tabId, contextKey)
+      ...this.host.threadBrowserHint(projectId, threadId, tabId, contextKey)
     }
     if (operation === 'viewport') {
       const viewport = validateViewportRequest(
@@ -498,6 +508,15 @@ export class BrowserServiceAgentUtility {
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
   }
 
+  /** Tell the renderer which tabs agents are on, so a tab can name its thread. */
+  private publishAgentClaims(): void {
+    sendToRenderer(
+      liveWindowContents(this.host.window),
+      'browser:agentTabClaimsChanged',
+      this.host.agentTabClaims()
+    )
+  }
+
   /** Route a browser action through the ledger and confirm consequential effects. */
   /**
    * Type the way a hand would: focus the field, then send the text as keystrokes.
@@ -564,10 +583,11 @@ export class BrowserServiceAgentUtility {
   /**
    * Say so when the page moved between two calls.
    *
-   * `page "strip"` is defined as whatever the strip shows now, so the user opening
-   * another tab legitimately moves it. The one thing that must never happen is a model
-   * typing into a different site without being told, which is why the tab this call did
-   * not want is named in its result instead of silently replacing the last one.
+   * A conversation's page is the tab the user handed it, so the user pointing that
+   * conversation's strip at another tab legitimately moves it. The one thing that must
+   * never happen is a model typing into a different site without being told, which is
+   * why the tab this call did not want is named in its result instead of silently
+   * replacing the last one.
    */
   private movedPageHint(
     contextKey: string,
@@ -580,7 +600,7 @@ export class BrowserServiceAgentUtility {
         fromTabId: previous.tabId,
         fromUrl: previous.url,
         detail:
-          'The page this call worked on is not the one the previous call worked on, because page "strip" follows the tab the user is on. Read the page before acting again, or open a page of your own with "open" and use page "agent" to keep one across the user\u2019s tab switches.'
+          'The page this call worked on is not the one the previous call worked on: the user pointed this conversation at another tab. Read the page before acting again, or open a page of your own with "open" and use page "agent" to keep one of your own.'
       }
     }
   }

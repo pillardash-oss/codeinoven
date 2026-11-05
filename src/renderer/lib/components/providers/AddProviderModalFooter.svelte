@@ -1,12 +1,11 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioKey from '@pdslng/cio-icon/CioKey.svelte'
-  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
-  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { OfferedProvider } from '$shared/types'
   import type { AddTab, ConnectStep } from './add-provider-modal-helpers'
+  import AddProviderConnectAction from './AddProviderConnectAction.svelte'
 
   interface Props {
     tab: AddTab
@@ -14,6 +13,11 @@
     canSignIn: boolean
     pickerLogin: boolean
     apiKeyEntry: boolean
+    /**
+     * Nothing is connected yet, so the connect action lives in the empty state
+     * instead of here: the footer only carries it once a provider exists.
+     */
+    emptyState: boolean
     storingKey: boolean
     oauthLoginId: string | null
     selectedProvider: OfferedProvider | null
@@ -32,6 +36,7 @@
     canSignIn,
     pickerLogin,
     apiKeyEntry,
+    emptyState,
     storingKey,
     oauthLoginId,
     selectedProvider,
@@ -73,51 +78,7 @@
       >
         <CioClose size={13} /> Cancel connection
       </button>
-    {:else if canSignIn}
-      {#if apiKeyEntry}
-        <button
-          class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          type="button"
-          title={step === 'picking' && selectedProvider
-            ? `Store the API key for ${selectedProvider.name}`
-            : 'Select a provider first'}
-          disabled={storingKey ||
-            oauthLoginId !== null ||
-            (step === 'picking' && !selectedProvider)}
-          onclick={() => (step === 'idle' ? onOpenPicker() : onConnectWithKey())}
-        >
-          {#if storingKey}
-            <CioSpinner size={13} class="animate-spin" />
-          {:else if step === 'idle'}
-            <CioSearch size={13} /> Search providers
-          {:else}
-            <CioKey size={13} /> Connect provider
-          {/if}
-        </button>
-      {:else}
-        <button
-          class="flex h-9 items-center justify-center gap-1.5 bg-primary px-4 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-          type="button"
-          disabled={!pickerLogin && step === 'picking' && !selectedProvider}
-          onclick={() =>
-            pickerLogin
-              ? onStartConnect(null)
-              : step === 'idle'
-                ? onOpenPicker()
-                : selectedProvider
-                  ? onStartConnect(selectedProvider)
-                  : null}
-        >
-          {#if !pickerLogin && step === 'picking' && selectedProvider}
-            <CioPlug size={13} /> Connect with {selectedProvider.name}
-          {:else if !pickerLogin && step === 'picking'}
-            <CioSearch size={13} /> Search providers
-          {:else}
-            <CioKey size={13} /> Connect provider
-          {/if}
-        </button>
-      {/if}
-    {:else}
+    {:else if !canSignIn}
       <button
         class="flex h-9 items-center gap-1.5 bg-elevated px-4 text-xs font-medium text-dimmed"
         type="button"
@@ -126,6 +87,18 @@
       >
         <CioKey size={13} /> Connect provider
       </button>
+    {:else if !emptyState}
+      <AddProviderConnectAction
+        {step}
+        {apiKeyEntry}
+        {pickerLogin}
+        {storingKey}
+        {oauthLoginId}
+        {selectedProvider}
+        {onOpenPicker}
+        {onStartConnect}
+        {onConnectWithKey}
+      />
     {/if}
   </div>
 </div>

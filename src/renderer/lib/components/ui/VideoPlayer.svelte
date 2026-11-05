@@ -8,8 +8,13 @@
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import type { Snippet } from 'svelte'
+  import { onDestroy } from 'svelte'
   import SeekBar from './SeekBar.svelte'
   import { SvelteMap } from 'svelte/reactivity'
+  import {
+    mediaPlayheadState,
+    type MediaPlayheadCheckpoint
+  } from '$lib/stores/media-playhead.svelte'
   import { preloadNearViewport } from './preload-near-viewport'
 
   /**
@@ -27,6 +32,14 @@
   const measuredRatios = new SvelteMap<string, number>()
   /** What an unmeasured video reserves: the shape nearly every recording has. */
   const FALLBACK_RATIO = 16 / 9
+  /**
+   * The tallest a picture taller than it is wide is drawn in the conversation.
+   *
+   * A portrait recording has no width to fill: filling the column would make it
+   * taller than the window. It is capped at this height (in `rem`, so it follows
+   * the reader's font size setting) and takes only the width that height needs.
+   */
+  const INLINE_MAX_HEIGHT_REM = 24
 
   /** The part of a painted-frame report this player reads. */
   interface PaintedFrame {
@@ -78,6 +91,16 @@
     src: string
     /** The file's name, which names every control here. */
     label: string
+    /**
+     * The media's own url, when it is not the url the element loads.
+     *
+     * A local file is resolved to a streaming url part way through a mount, so
+     * the element's source is not a stable name for the recording. The same
+     * recording is drawn by two players (the conversation and the viewer), and
+     * the frame one leaves for the other is filed under this key, which is the
+     * url both of them know it by.
+     */
+    sourceKey?: string
     /**
      * Where playback starts, in seconds.
      *
@@ -142,6 +165,7 @@
   let {
     src,
     label,
+    sourceKey,
     startAt,
     onExpand,
     onError,
@@ -157,6 +181,18 @@
   }: Props = $props()
 
   let video = $state<HTMLVideoElement | null>(null)
+  /**
+   * The second this element should land on once it can seek.
+   *
+   * The element's metadata can arrive more than once, because a local file's
+   * source is swapped to a streaming url mid-mount and because a read that failed
+   * is repaired in place. Each of those reloads the element and resets its clock,
+   * so a position applied only on the first `loadedmetadata` is lost on the
+   * second, and the recording jumps back to where it was handed over. The value
+   * here is the newest second this player knows about, so a reload restores the
+   * reader's own place instead of the hand-over one.
+   */
+  let lastKnownSeconds: number | null = null
   /** Intrinsic width/height, as soon as this element's metadata reports it. */
   let measuredRatio = $state<number | null>(null)
   let playing = $state(false)
@@ -181,6 +217,82 @@
 
   /** The box the picture reserves, so metadata can land without moving it. */
   const ratio = $derived(measuredRatio ?? measuredRatios.get(src) ?? FALLBACK_RATIO)
+
+  /**
+   * The width an inline figure takes, at the recording's own shape.
+   *
+   * A recording wider than it is tall fills the conversation column, so no black
+   * edge ever frames it. A recording taller than it is wide has no width to fill,
+   * so it is capped at a readable height and takes only the width that height
+   * needs, which is what makes it sit at the column's left edge as a picture
+   * rather than float inside a band of black it does not fill.
+   */
+  const inlineFigureStyle = $derived.by(() => {
+    if (fit === 'fill' || ratio >= 1) return undefined
+    return `width: calc(${INLINE_MAX_HEIGHT_REM}rem * ${ratio}); max-width: 100%`
+  })
+
+  /**
+   * The box the picture reserves.
+   *
+   * It is always the recording's own shape and never a clamped one: clamping the
+   * height of an aspect-ratio box leaves a box of a different shape than the
+   * picture it holds, and the leftover is exactly the black bar the reader sees.
+   * The height is therefore whatever the width implies.
+   */
+  const inlineBoxStyle = $derived(
+    fit === 'fill' ? undefined : `aspect-ratio: ${ratio}; width: 100%`
+  )
+
+  /** The recording this player is drawing, which both of its surfaces agree on. */
+  const playheadKey = $derived(sourceKey ?? src)
+
+  /**
+   * Leave this player's frame for the surface that draws the same recording.
+   *
+   * Only the fullscreen surface publishes. It is the one the reader is looking at
+   * while the conversation's own player sits paused behind it, so its clock is
+   * the authority for as long as it is open, and the player left behind takes the
+   * frame up when that surface goes away.
+   */
+  function publishPlayhead(): void {
+    if (fit !== 'fill') return
+    const element = video
+    if (!element || !Number.isFinite(element.duration) || element.duration <= 0) return
+    mediaPlayheadState.handBack(playheadKey, element.currentTime, !element.paused && !element.ended)
+  }
+
+  onDestroy(() => {
+    clearTimeout(seekTimer)
+    publishPlayhead()
+  })
+
+  /**
+   * Take up the frame the fullscreen surface was closed on.
+   *
+   * The checkpoint is applied once per record, so the reader's own presses stay
+   * authoritative afterwards. Playback is only continued when this player was
+   * already in use: a recording mounted for the first time and merely carrying an
+   * old frame must not start playing in a conversation the reader is scrolling.
+   */
+  let adoptedCheckpoint: MediaPlayheadCheckpoint | null = null
+  $effect(() => {
+    if (fit === 'fill') return
+    const checkpoint = mediaPlayheadState.checkpoint(playheadKey)
+    const element = video
+    const known = duration
+    if (!checkpoint || !element || known <= 0 || adoptedCheckpoint === checkpoint) return
+    adoptedCheckpoint = checkpoint
+    const target = Math.min(checkpoint.seconds, Math.max(0, known - 0.05))
+    // A whole second of drift is worth a seek; a frame or two is not, and the
+    // element's own clock is the better authority when the two nearly agree.
+    if (Math.abs(target - element.currentTime) > 1) {
+      element.currentTime = target
+      currentTime = target
+      lastKnownSeconds = target
+    }
+    if (checkpoint.playing && started && element.paused) void element.play().catch(() => {})
+  })
 
   /** `m:ss.cc`: hundredths, so moving one frame is visible in the readout. */
   function timecode(seconds: number): string {
@@ -354,6 +466,7 @@
     started = false
     duration = 0
     currentTime = 0
+    lastKnownSeconds = 0
     video?.load()
   }
 
@@ -383,8 +496,8 @@
        box reserved at its own shape, so the frame that measures it does not also
        move the document under the reader. -->
   <div
-    class={['relative w-full overflow-hidden bg-black', fit === 'fill' ? 'h-full' : 'max-h-96']}
-    style={fit === 'fill' ? undefined : `aspect-ratio: ${ratio}`}
+    class={['relative w-full overflow-hidden bg-black', fit === 'fill' && 'h-full']}
+    style={inlineBoxStyle}
   >
     <video
       bind:this={video}
@@ -402,12 +515,17 @@
           measuredRatios.set(src, measuredRatio)
         }
         duration = element.duration
-        // A caller that opened this from an inline player hands over the frame it
-        // had reached; playback resumes there rather than at the beginning.
-        if (startAt && startAt > 0 && startAt < element.duration) {
-          element.currentTime = startAt
-          currentTime = startAt
+        // The frame to land on: the second this player already knows (its own, on
+        // a reload, or the hand-over one on the first metadata), so a source that
+        // was repaired in place does not throw the reader back to where the
+        // recording was opened.
+        const resume = lastKnownSeconds ?? (startAt !== undefined && startAt > 0 ? startAt : null)
+        if (resume !== null && resume > 0 && resume < element.duration) {
+          element.currentTime = resume
+          currentTime = resume
+          onTime?.(resume)
         }
+        lastKnownSeconds = resume
         if (autoPlay) void element.play().catch(() => {})
       }}
       ondurationchange={(event) => {
@@ -417,22 +535,30 @@
       ontimeupdate={(event) => {
         if (scrubbing) return
         currentTime = event.currentTarget.currentTime
+        lastKnownSeconds = currentTime
         onTime?.(currentTime)
       }}
       onseeked={(event) => {
         settleSeek()
         if (scrubbing) return
         currentTime = event.currentTarget.currentTime
+        lastKnownSeconds = currentTime
         onTime?.(currentTime)
       }}
       onplay={() => {
         playing = true
         started = true
       }}
-      onpause={() => (playing = false)}
+      onpause={() => {
+        playing = false
+        // A pause is where the reader leaves the recording, so it is the frame the
+        // conversation's own player takes up as soon as this surface closes.
+        if (!scrubbing) publishPlayhead()
+      }}
       onended={() => {
         playing = false
         currentTime = duration
+        publishPlayhead()
       }}
       onerror={(event) => {
         seekInFlight = false
@@ -505,6 +631,7 @@
     fit === 'fill' ? 'flex h-full w-full flex-col' : 'w-full',
     layout
   ]}
+  style={inlineFigureStyle}
 >
   <!-- The picture answers a press with play/pause and a double press with the big
        view, which is what every player does; the controls carry the same actions

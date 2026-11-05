@@ -17,17 +17,24 @@ import type { StorageEngine } from '../storage/storage-engine'
 export function registerCustomVendorIpc(storage: StorageEngine): void {
   const icons = new CustomVendorService(storage)
   ipcMain.handle('customVendors:listIcons', () => icons.list())
-  ipcMain.handle('customVendors:saveIcon', async (_, rawId: unknown, image: unknown) => {
-    const id = validateEntityId(rawId, 'Custom vendor provider ID', 256)
-    const { BaseUrlProviderService } = await import('./base-url-provider-service')
-    const providers = await new BaseUrlProviderService(storage).listProviders()
-    if (!providers.some((provider) => provider.id === id)) {
-      throw new Error('Custom vendor provider not found')
+  ipcMain.handle(
+    'customVendors:saveIcon',
+    async (_, rawId: unknown, image: unknown, variant?: unknown) => {
+      const id = validateEntityId(rawId, 'Custom vendor provider ID', 256)
+      const theme = variant === 'dark' ? 'dark' : 'light'
+      const { BaseUrlProviderService } = await import('./base-url-provider-service')
+      const providers = await new BaseUrlProviderService(storage).listProviders()
+      if (!providers.some((provider) => provider.id === id)) {
+        throw new Error('Custom vendor provider not found')
+      }
+      const set = await icons.save(id, image, theme)
+      for (const window of BrowserWindow.getAllWindows()) {
+        sendToRenderer(window.webContents, 'customVendors:iconChanged', {
+          providerId: id,
+          icons: set
+        })
+      }
+      return set
     }
-    const icon = await icons.save(id, image)
-    for (const window of BrowserWindow.getAllWindows()) {
-      sendToRenderer(window.webContents, 'customVendors:iconChanged', { providerId: id, icon })
-    }
-    return icon
-  })
+  )
 }

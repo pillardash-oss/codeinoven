@@ -10,7 +10,12 @@ import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { listHarnesses } from '../../agents/harness-registry'
 import { buildProcessEnvironmentAsync } from '../../drivers/cli-environment'
-import { isHarnessCommandAvailableAsync } from '../../drivers/harness-runtime'
+import { isHarnessAvailableAsync } from '../../drivers/harness-runtime'
+import {
+  acpHarnessDescriptors,
+  currentAcpAgents,
+  ensureAcpAgentsLoaded
+} from '../../drivers/acp/acp-agents-store'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { SHARED_GLOBAL_SKILL_PATH, harnessGlobalSkillPath } from '../../../lib/native-skill-paths'
@@ -154,7 +159,13 @@ export async function filterInstalledProviderCatalogs(
   const env = await buildProcessEnvironmentAsync()
   const installed = new Set<string>()
   for (const harness of listHarnesses()) {
-    if (await isHarnessCommandAvailableAsync(harness.command, env)) installed.add(harness.id)
+    if (await isHarnessAvailableAsync(harness.id, harness.command, env)) installed.add(harness.id)
+  }
+  // ACP agents are the user's own records, not registry entries, and their
+  // catalogs must survive exactly like a native harness's catalog does.
+  await ensureAcpAgentsLoaded()
+  for (const agent of acpHarnessDescriptors(currentAcpAgents())) {
+    if (await isHarnessAvailableAsync(agent.id, agent.command, env)) installed.add(agent.id)
   }
   return catalogs.filter((catalog) => installed.has(catalog.harnessId))
 }

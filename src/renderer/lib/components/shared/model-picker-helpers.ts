@@ -1,6 +1,7 @@
 import CioClock from '@pdslng/cio-icon/CioClock.svelte'
 import CioStar from '@pdslng/cio-icon/CioStar.svelte'
 import { getAgentIcon } from '$lib/agent-icons/registry'
+import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
 import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'
 import { visionModels } from '$lib/stores/vision-models.svelte'
@@ -200,7 +201,7 @@ export function searchWords(value: string): string[] {
 }
 
 export function harnessName(harnessId: string): string {
-  return getAgentIcon(harnessId)?.name ?? harnessId
+  return agentDisplayName(harnessId)
 }
 
 /** Canonical registry rank of a harness; unknown ids sort last. */

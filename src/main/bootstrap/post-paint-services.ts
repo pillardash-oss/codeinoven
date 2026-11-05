@@ -48,6 +48,7 @@ import { ThreadRepo } from '../database/repositories/thread-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { acpAgentStore } from '../drivers/acp/acp-agents-store'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
 import { BrowserAgentCursorAppearance } from '../browser/browser-service/browser-agent-cursor-appearance'
@@ -1110,6 +1111,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       void state.chatEngine?.invalidateProviderCatalogs()
       state.chatEngine?.refreshOpenCodeHarness()
     })
+    // ACP agents are the user's own records: their list has to be in memory
+    // before the first harness probe and before the model picker asks for a
+    // catalog, because neither reads the harness registry for them. The drivers
+    // are then built from that list, once it has actually loaded: the chat
+    // engine is wired earlier in startup, when the store is still empty, so a
+    // boot with existing agents would otherwise have no ACP driver at all and
+    // publish no models for them.
+    void acpAgentStore(storage)
+      .list()
+      .then(() => state.chatEngine?.refreshAcpHarnesses())
+      .catch(() => undefined)
     state.openCodeV2Service = new OpenCodeV2Service()
     state.harnessUpdateService = new HarnessUpdateService(state.providerConnection)
     state.harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
@@ -1176,6 +1188,21 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     registerProviderAccountIpc(storage, undefined, (accountId) =>
       state.chatEngine!.removeHarnessAccount(accountId)
     )
+    const { registerAcpAgentIpc } = await import('../providers/acp-agent-ipc')
+    registerAcpAgentIpc(storage, {
+      onAgentsChanged: async () => {
+        // Only the cheap derivations are awaited: the drivers have to exist
+        // before the answer returns so the picker and the next turn see the
+        // agent. A probe pass spawns one process per harness and used to hold
+        // the save response for seconds, which is what made Save look stuck.
+        await state.chatEngine?.refreshAcpHarnesses()
+        await state.chatEngine?.invalidateProviderCatalogs()
+        void state.providerConnection?.checkAll(true).catch(() => undefined)
+      },
+      ensureDrivers: async () => {
+        await state.chatEngine?.refreshAcpHarnesses()
+      }
+    })
     registerBaseUrlProviderIpc(storage)
     // Local servers never touch the provider registry: a custom base-URL
     // provider is the user's to create, and starting or stopping a server here

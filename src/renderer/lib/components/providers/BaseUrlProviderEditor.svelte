@@ -9,11 +9,11 @@
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
-  import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { MAX_CUSTOM_VENDOR_ICON_BYTES } from '$shared/custom-vendor-icon'
   import { toast } from 'svelte-sonner'
   import { SvelteSet } from 'svelte/reactivity'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import IconUploadField from '../ui/IconUploadField.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -159,6 +159,15 @@
    * Owns the panel's remembered placement, shared with the dock row below so a
    * minimized editor reopens on the edge the user left it on.
    */
+  /** Image formats a vendor mark may use. */
+  const SOFTWARE_ICON_TYPES = [
+    'image/svg+xml',
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+    'image/gif'
+  ] as const
+
   const PANEL_STORAGE_KEY = `${APP_SLUG}.baseUrlProviderPanel.v1`
 
   /**
@@ -171,45 +180,24 @@
    * nothing typed is lost by collapsing it.
    */
   let docked = $state(false)
+  /** Draft artwork per theme; `undefined` means "keep what is saved". */
   let iconDataUrl = $state<string | undefined>()
+  let iconDarkDataUrl = $state<string | undefined>()
+  const ICON_VARIANTS = [
+    { key: 'light', label: 'Light mode' },
+    { key: 'dark', label: 'Dark mode' }
+  ] as const
+  type IconVariant = (typeof ICON_VARIANTS)[number]['key']
+  let iconTab = $state<IconVariant>('light')
   let readingIcon = $state(false)
   let submitting = $state(false)
   let iconUploadDisabled = $derived(readingIcon || baseUrlProviderStore.saving || submitting)
-  let iconPreview = $derived(iconDataUrl ?? customVendorIcons.get(provider?.id))
-
-  async function chooseIcon(event: Event): Promise<void> {
-    const input = event.currentTarget
-    if (!(input instanceof HTMLInputElement)) return
-    const file = input.files?.[0]
-    input.value = ''
-    if (!file) return
-    readingIcon = true
-    try {
-      if (!isCustomVendorIconType(file.type) || file.size > MAX_CUSTOM_VENDOR_ICON_BYTES) {
-        throw new Error('Choose an SVG, PNG, JPEG, WebP or GIF of at most 256 KiB.')
-      }
-      const data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () =>
-          typeof reader.result === 'string'
-            ? resolve(reader.result)
-            : reject(new Error('Cannot read image.'))
-        reader.onerror = () => reject(new Error('Cannot read image.'))
-        reader.readAsDataURL(file)
-      })
-      const image = new Image()
-      image.src = data
-      await image.decode()
-      if (image.naturalWidth > 2048 || image.naturalHeight > 2048) {
-        throw new Error('Choose an icon no larger than 2048 × 2048.')
-      }
-      iconDataUrl = data
-    } catch (error) {
-      reportError(error, 'Failed to read vendor icon.')
-    } finally {
-      readingIcon = false
-    }
-  }
+  /** Draft first, then the saved artwork for the theme, never a bare monogram. */
+  let iconPreview = $derived(
+    iconTab === 'dark'
+      ? (iconDarkDataUrl ?? customVendorIcons.get(provider?.id, 'dark'))
+      : (iconDataUrl ?? customVendorIcons.get(provider?.id, 'light'))
+  )
 
   /**
    * The app's modal focus rule: the first field the user would type into, else
@@ -235,13 +223,15 @@
    * back to the live provider store so the section is never blank.
    */
   let availableHarnesses = $derived.by(() => {
-    const fromProp = harnesses.filter(
-      (harness) => harness.supportsCustomProviders && harness.integration === 'ready'
-    )
+    // An ACP agent is offered here even though the app does not declare custom
+    // providers for it: the agent brings its own endpoint handling, so a custom
+    // base URL is still the user's to scope to it.
+    const acceptsCustom = (harness: ProviderConnectionInfo): boolean =>
+      harness.integration === 'ready' &&
+      (harness.supportsCustomProviders || harness.transport === 'acp')
+    const fromProp = harnesses.filter(acceptsCustom)
     if (fromProp.length > 0) return fromProp
-    return providerStore.providers.filter(
-      (provider) => provider.supportsCustomProviders && provider.integration === 'ready'
-    )
+    return providerStore.providers.filter(acceptsCustom)
   })
 
   /** Every persisted record sharing this provider's id   one per linked
@@ -661,7 +651,8 @@
       }
 
       if (!saved) throw new Error('No harness selected to save.')
-      if (iconDataUrl) await customVendorIcons.save(saved.id, iconDataUrl)
+      if (iconDataUrl) await customVendorIcons.save(saved.id, iconDataUrl, 'light')
+      if (iconDarkDataUrl) await customVendorIcons.save(saved.id, iconDarkDataUrl, 'dark')
       toast.success(wasEditing ? 'Provider updated.' : 'Provider created.')
       onSaved(saved)
     } catch (saveError) {
@@ -865,11 +856,6 @@
 
   <form id="base-url-provider-form" class="space-y-4" onsubmit={save}>
     <fieldset class="space-y-1.5 text-xs font-medium">
-      <legend>Harnesses</legend>
-      <p class="text-[0.6875rem] font-normal text-dimmed">
-        Select every harness that should offer this provider. Saving applies your changes to all of
-        them.
-      </p>
       <HarnessToggleGroup
         options={availableHarnesses.map((harness) => ({ id: harness.id, name: harness.name }))}
         value={draft.harnessIds}
@@ -920,32 +906,49 @@
       </div>
     </div>
 
-    <label
-      class={[
-        'flex items-center gap-3 border bg-surface p-3 transition-colors duration-150 focus-within:border-primary focus-within:bg-elevated',
-        iconUploadDisabled
-          ? 'cursor-default opacity-60'
-          : 'cursor-pointer hover:border-primary/40 hover:bg-elevated'
-      ]}
-    >
-      <span
-        class="flex h-12 w-12 shrink-0 items-center justify-center border border-border bg-elevated"
+    <div class="space-y-1.5">
+      <div
+        class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+        role="tablist"
+        aria-label="Vendor icon theme"
       >
-        <VendorIcon name="CodeInOven" imageSrc={iconPreview} size={iconPreview ? 40 : 32} />
-      </span>
-      <span class="min-w-0 flex-1 space-y-1 text-xs font-medium">
-        <span>Vendor icon</span>
-        <input
-          type="file"
-          accept="image/svg+xml,image/png,image/jpeg,image/webp,image/gif"
-          class="block w-full cursor-pointer text-xs text-dimmed file:cursor-pointer disabled:cursor-default disabled:file:cursor-default"
-          disabled={iconUploadDisabled}
-          onchange={(event) => void chooseIcon(event)}
-        />
-        <span class="block text-dimmed">SVG or image, up to 256 KiB. Saved with this provider.</span
-        >
-      </span>
-    </label>
+        {#each ICON_VARIANTS as variant (variant.key)}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={iconTab === variant.key}
+            class="px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {iconTab ===
+            variant.key
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            title={`Edit the ${variant.label.toLowerCase()} vendor icon`}
+            onclick={() => (iconTab = variant.key)}
+          >
+            {variant.label}
+          </button>
+        {/each}
+      </div>
+      <IconUploadField
+        label={iconTab === 'dark' ? 'Dark mode' : 'Light mode'}
+        id={provider?.id}
+        accept={SOFTWARE_ICON_TYPES}
+        maxBytes={MAX_CUSTOM_VENDOR_ICON_BYTES}
+        value={iconPreview}
+        disabled={iconUploadDisabled}
+        hint="SVG or image, up to 256 KiB. The theme without its own image uses the other one."
+        onselect={(data) => {
+          if (iconTab === 'dark') iconDarkDataUrl = data
+          else iconDataUrl = data
+        }}
+        onclear={() => {
+          if (!provider?.id) return
+          void customVendorIcons.save(provider.id, null, iconTab)
+          if (iconTab === 'dark') iconDarkDataUrl = undefined
+          else iconDataUrl = undefined
+        }}
+        onreading={(reading) => (readingIcon = reading)}
+      />
+    </div>
 
     <label class="block space-y-1 text-xs font-medium">
       <span>Display name</span>

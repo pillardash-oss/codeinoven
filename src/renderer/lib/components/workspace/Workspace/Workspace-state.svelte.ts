@@ -129,7 +129,8 @@ export class WorkspaceState extends BoardUnit<Workspace> {
    * effect re-run on its own write.
    */
   reportedThreadBrowserPage: {
-    scope: string
+    projectId: string
+    threadId: string
     tabId: string
     boxId: string | null
     url: string

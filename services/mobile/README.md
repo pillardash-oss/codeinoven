@@ -10,15 +10,15 @@ weight 200, 2px corners, hairline rules, and the handcrafted icon set from
 
 ## What the app does
 
-| Screen | Read and write |
-| --- | --- |
-| Sign-in | Google and GitHub through the system browser, email and password as the fallback |
-| Threads | Every thread of the project in scope, pinned first, each row carrying its project's mark |
-| Projects | A sheet from the dock that scopes the thread list to one project |
-| Chats | The chats panel; this service does not carry chats yet, and the screen says so |
-| New thread | A name and a project, created through `POST /v1/threads`, then opened |
+| Screen       | Read and write                                                                           |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| Sign-in      | Google and GitHub through the system browser, email and password as the fallback         |
+| Threads      | Every thread across every project, pinned first, each row carrying its project's mark    |
+| Projects     | One foldable strip per project; opening a strip reads its threads in place               |
+| Chats        | The chats panel; this service does not carry chats yet, and the screen says so           |
+| New thread   | A name and a project, created through `POST /v1/threads`, then opened                    |
 | Conversation | One thread's transcript, the composer that queues a prompt, and a drawer of thread facts |
-| Settings | The account, this device, the device list with revocation, appearance, and sign out |
+| Settings     | The account, this device, the device list with revocation, appearance, and sign out      |
 
 Deliberately absent, because the desktop keeps them: a terminal, a file tree, the
 spec studio, diff review, design and video work, multi-Oven orchestration, model

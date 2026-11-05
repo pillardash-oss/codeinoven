@@ -268,7 +268,7 @@ export class ThreadForkService {
     // destination scope inside `createThread`, so a stale parent directory
     // can never override the authoritative root.
     // A fork of an Engineering thread must open with the same switches lit:
-    // carry the parent's stage selection (and Auto Pilot), and   for a parked
+    // carry the parent's stage selection, and   for a parked
     // source with every switch off   its permanent started marker, so the
     // fork's Toolbox mirrors the parent's instead of arriving neutral.
     if (
@@ -278,7 +278,6 @@ export class ThreadForkService {
       try {
         this.lifecycle.inherit(destinationProjectId, forked.id, {
           stages: sourceLifecycle.selectedStages ?? [],
-          autopilot: sourceLifecycle.autopilot === true,
           startedAt: sourceLifecycle.startedAt
         })
       } catch {

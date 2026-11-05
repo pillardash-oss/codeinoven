@@ -918,7 +918,7 @@
                   placeholder={board.props.assistantMode &&
                   board.props.assistantName &&
                   !board.props.assistantKnowledgeComplete
-                    ? `Tell $assistantName={board.props.assistantName} what you want it to do…`
+                    ? `Tell ${board.props.assistantName} what you want it to do…`
                     : board.abortRun.assistantSetupThread && board.props.assistantKnowledgeComplete
                       ? 'Change its behavior, its times, or a connection…'
                       : board.submitBrainstormDecision.activePlanningEntry === 'brainstorm'
@@ -930,9 +930,9 @@
                             : board.harnessUsage.specFormulating
                               ? 'Formulating specification…'
                               : board.buildSpecActionPrompt.delegatedWorkBusy
-                                ? `$delegatedActivityLabel={board.switchProject.delegatedActivityLabel}   message the Sr. Engineer`
+                                ? `${board.switchProject.delegatedActivityLabel} · message the Sr. Engineer`
                                 : board.switchProject.busy
-                                  ? `${APP_NAME} is working   type to queue a message`
+                                  ? `${APP_NAME} is working · type to queue a message`
                                   : (board.props.composerPlaceholder ?? 'Send a message...')}
                   disabled={board.harnessUsage.specFormulating}
                   working={board.switchProject.busy}
@@ -940,17 +940,12 @@
                   autofocus
                   showEngineeringMode={!board.props.chatMode &&
                     !board.currentWorkingTraceAttribution.orchestrationChild}
-                  engineeringLifecycle={board.editVideoNote.pendingLifecycleDisplay}
-                  engineeringActive={board.submitBrainstormDecision.engineeringOn}
-                  onEngineeringLifecycleSelect={board.switchProject.selectEngineeringLifecycle}
                   independentAuditAvailable={board.currentWorkingTraceAttribution
                     .independentAuditAvailable}
                   independentAuditEnabled={board.currentWorkingTraceAttribution
                     .independentAuditDisplayEnabled}
                   onIndependentAuditToggle={board.currentWorkingTraceAttribution
                     .toggleIndependentAudit}
-                  engineeringToolboxHidden={board.currentWorkingTraceAttribution
-                    .independentAuditDisplayEnabled}
                   showChatModes={board.props.chatMode}
                   settings={board.loadOlderMessages.settings}
                   onSettingsChange={board.contextUsage.updateSettings}

@@ -13,6 +13,18 @@ export interface ProviderConnectionInfo {
   supportsCustomProviders: boolean
   /** Whether this harness supports manual context compaction (harness manifest). */
   supportsManualCompaction?: boolean
+  /**
+   * How the app drives this harness: a dedicated native driver, or the generic
+   * Agent Client Protocol transport a user points at their own agent command.
+   * The Harnesses page groups its rows by this value.
+   */
+  transport: 'native' | 'acp'
+  /**
+   * Whether the user currently offers this harness. Only the user's own ACP
+   * agents can be parked: a disabled agent keeps its row (so it can be turned
+   * back on) but is absent from every list that offers a harness to use.
+   */
+  enabled?: boolean
   status: ProviderConnectionStatus
   /** Absolute path to the resolved binary, when found. */
   resolvedPath?: string
@@ -140,6 +152,14 @@ export interface HarnessAccount {
   /** Marks the user's preferred account for this harness+provider. When unset,
    *  the earliest created account acts as the default. */
   isDefault?: boolean
+  /**
+   * Left out of the lists that offer an account to use, while staying connected.
+   *
+   * Hiding is not disconnecting: the credentials stay in place and a thread that
+   * already runs on this account keeps using it. Only the pickers that offer a
+   * new account choice stop listing it.
+   */
+  hidden?: boolean
   createdAt: number
   updatedAt: number
 }

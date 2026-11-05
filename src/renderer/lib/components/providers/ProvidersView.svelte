@@ -3,11 +3,12 @@
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
-  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
@@ -23,6 +24,7 @@
   import { displayShortcutLabel } from '$lib/shortcut-display'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
+  import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { providerStore } from '$lib/stores/providers.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
@@ -91,27 +93,42 @@
   /** Harness id whose resolved path was just copied   drives the Copy → Check icon swap. */
   let copiedPathId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
+  /** ACP agent awaiting removal; the record is deleted, nothing is uninstalled. */
+  let acpRemoveTarget = $state<ProviderConnectionInfo | null>(null)
+  let acpRemoving = $state(false)
+  let acpRemoveError = $state('')
 
-  let allCount = $derived(providerStore.providers.length)
+  /**
+   * The rows one rail shows. Native harnesses come from the registry, ACP agents
+   * from the records the user added, and both arrive as the same
+   * `ProviderConnectionInfo` row: an agent differs only in that the app can never
+   * install or update it, so every other column renders identically.
+   */
+  const railProviders = $derived(
+    providerStore.providers.filter(
+      (provider) => (provider.transport ?? 'native') === (activeTab === 'acp' ? 'acp' : 'native')
+    )
+  )
+  const nativeProviders = $derived(
+    providerStore.providers.filter((provider) => (provider.transport ?? 'native') === 'native')
+  )
+  let nativeCount = $derived(nativeProviders.length)
+  let acpCount = $derived(
+    providerStore.providers.filter((provider) => (provider.transport ?? 'native') === 'acp').length
+  )
+  /** Agents in the user's own store, which answers before the probe pass does. */
+  let agentCount = $derived(acpAgentsStore.agents.length)
+  let allCount = $derived(nativeCount)
   let updatesCount = $derived(
-    providerStore.providers.filter((provider) =>
-      harnessLifecycleStore.updateAvailableFor(provider.id)
-    ).length
+    nativeProviders.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id))
+      .length
   )
   let issuesCount = $derived(
-    providerStore.providers.filter((provider) => provider.status === 'error').length
-  )
-  let readyCount = $derived(
-    providerStore.providers.filter(
-      (provider) =>
-        provider.status === 'available' &&
-        provider.integration === 'ready' &&
-        !harnessLifecycleStore.updateAvailableFor(provider.id)
-    ).length
+    nativeProviders.filter((provider) => provider.status === 'error').length
   )
 
   let filteredProviders = $derived.by(() => {
-    let list = providerStore.providers
+    let list = railProviders
     if (statusFilter === 'updates') {
       list = list.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id))
     } else if (statusFilter === 'issues') {
@@ -134,6 +151,23 @@
       ? 'Not checked yet'
       : `Last checked: ${formatCompactAge(lastCheckedAt, now)}`
   )
+
+  /** Park or restore one ACP agent without opening its editor. */
+  async function toggleAcpAgent(provider: ProviderConnectionInfo, enabled: boolean): Promise<void> {
+    const agent = acpAgentsStore.get(provider.id)
+    if (!agent) return
+    try {
+      await acpAgentsStore.save({
+        id: agent.id,
+        name: agent.name,
+        command: agent.command,
+        args: agent.args,
+        enabled
+      })
+    } catch (error) {
+      reportError(error, 'The agent could not be updated.')
+    }
+  }
 
   function toggleSettings(harnessId: string): void {
     expandedSettings[harnessId] = !expandedSettings[harnessId]
@@ -168,6 +202,13 @@
 
   /** Single, mutually-exclusive status badge per harness row. */
   function badgeFor(provider: ProviderConnectionInfo): BadgeInfo {
+    if (provider.enabled === false) {
+      return {
+        Icon: CioCircle,
+        label: 'Disabled',
+        classes: 'border-border bg-raised text-dimmed'
+      }
+    }
     if (provider.status === 'error') {
       return {
         Icon: CioAttention,
@@ -190,11 +231,13 @@
       return {
         Icon: CioCheckCircle,
         label:
-          provider.executionTarget?.kind === 'wsl'
-            ? `Ready · WSL ${provider.executionTarget.distribution}`
-            : provider.executionTarget?.kind === 'bundled'
-              ? 'Ready · Bundled'
-              : 'Ready · Native',
+          provider.transport === 'acp'
+            ? 'Ready · ACP'
+            : provider.executionTarget?.kind === 'wsl'
+              ? `Ready · WSL ${provider.executionTarget.distribution}`
+              : provider.executionTarget?.kind === 'bundled'
+                ? 'Ready · Bundled'
+                : 'Ready · Native',
         classes: 'border-success/30 bg-success/10 text-success'
       }
     }
@@ -237,6 +280,34 @@
         onClick: () => void checkOne(provider.id)
       }
     ]
+    // An ACP agent is a record the user owns, not an install: everything about it
+    // belongs in this menu, and the only action the row keeps outside is the
+    // provider itself.
+    if (provider.transport === 'acp') {
+      items.push(
+        { label: `divider-${provider.id}`, divider: true },
+        {
+          label: 'Edit agent',
+          icon: CioPencil,
+          onClick: () => acpAgentsStore.openEdit(provider.id)
+        },
+        {
+          label: provider.enabled === false ? 'Enable agent' : 'Disable agent',
+          icon: provider.enabled === false ? CioCheckCircle : CioCircle,
+          onClick: () => void toggleAcpAgent(provider, provider.enabled === false)
+        },
+        {
+          label: 'Remove agent',
+          icon: CioTrash,
+          danger: true,
+          onClick: () => {
+            acpRemoveError = ''
+            acpRemoveTarget = provider
+          }
+        }
+      )
+      return items
+    }
     if (canRestartHarness(provider) || canUninstallHarness(provider)) {
       items.push({ label: `divider-${provider.id}`, divider: true })
     }
@@ -412,6 +483,29 @@
     restartTarget = null
   }
 
+  /** Remove one ACP agent's record. Removal is never silent. */
+  async function confirmAcpRemove(): Promise<void> {
+    const target = acpRemoveTarget
+    if (!target || acpRemoving) return
+    acpRemoving = true
+    acpRemoveError = ''
+    try {
+      await acpAgentsStore.remove(target.id)
+      acpRemoveTarget = null
+    } catch (error) {
+      acpRemoveError =
+        error instanceof Error ? error.message : `${target.name} could not be removed.`
+    } finally {
+      acpRemoving = false
+    }
+  }
+
+  function cancelAcpRemove(): void {
+    if (acpRemoving) return
+    acpRemoveTarget = null
+    acpRemoveError = ''
+  }
+
   function customCountFor(harnessId: string): number {
     return baseUrlProviderStore.providers.filter(
       (provider) => provider.harnessId === harnessId && provider.enabled
@@ -484,7 +578,7 @@
   }
   /** Intercept the global ⌘K/Ctrl+K (normally the command palette) to focus search while this tab is active. */
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (activeTab !== 'harnesses') return
+    if (activeTab !== 'native' && activeTab !== 'acp') return
     if (keymapState.matches('nav-command-palette', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -512,6 +606,7 @@
       loadManifests,
       loadAutoUpdatePrefs,
       () => baseUrlProviderStore.load(),
+      () => acpAgentsStore.load(),
       () => providerStore.checkAll(),
       checkAllAuth,
       () => harnessLifecycleStore.checkAll()
@@ -553,74 +648,104 @@
     </div>
   </div>
 
-  <div
-    class="mb-4 flex w-max items-center gap-0.5 border bg-elevated p-0.5"
-    role="tablist"
-    aria-label="Harness settings tabs"
-  >
-    <button
-      type="button"
-      class="px-3 py-1.5 text-xs font-medium transition-colors {activeTab === 'harnesses'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      role="tab"
-      aria-selected={activeTab === 'harnesses'}
-      title="Show connected harnesses"
-      onclick={() => (settingsUiState.harnessesTab = 'harnesses')}
+  <div class="mb-4 flex flex-wrap items-center gap-3">
+    <div
+      class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+      role="tablist"
+      aria-label="Harness rails"
     >
-      Harnesses
-    </button>
-    <button
-      type="button"
-      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
-      'accounts'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      role="tab"
-      aria-selected={activeTab === 'accounts'}
-      title="Manage harness accounts"
-      onclick={() => (settingsUiState.harnessesTab = 'accounts')}
-    >
-      Accounts
-    </button>
-    <button
-      type="button"
-      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
-      'auxiliary'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      role="tab"
-      aria-selected={activeTab === 'auxiliary'}
-      title="Assign the model each harness uses for background work"
-      onclick={() => (settingsUiState.harnessesTab = 'auxiliary')}
-    >
-      Auxiliary Agents
-    </button>
-    <button
-      type="button"
-      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
-      'custom'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      role="tab"
-      aria-selected={activeTab === 'custom'}
-      title="Manage custom base URL providers"
-      onclick={() => (settingsUiState.harnessesTab = 'custom')}
-    >
-      Base URL providers
-      {#if baseUrlProviderStore.providers.length > 0}
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'native'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'native'}
+        title="Harnesses CodeInOven drives with its own drivers"
+        onclick={() => (settingsUiState.harnessesTab = 'native')}
+      >
+        Native
         <span
           class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+          >{nativeCount}</span
         >
-          {baseUrlProviderStore.providers.length}
-        </span>
-      {/if}
-    </button>
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'acp'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'acp'}
+        title="Agents you connected over the Agent Client Protocol"
+        onclick={() => (settingsUiState.harnessesTab = 'acp')}
+      >
+        ACP
+        <span
+          class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+          >{acpCount}</span
+        >
+      </button>
+    </div>
+    <div
+      class="ml-auto flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+      role="tablist"
+      aria-label="Harness settings tabs"
+    >
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'accounts'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'accounts'}
+        title="Manage harness accounts"
+        onclick={() => (settingsUiState.harnessesTab = 'accounts')}
+      >
+        Accounts
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'auxiliary'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'auxiliary'}
+        title="Assign the model each harness uses for background work"
+        onclick={() => (settingsUiState.harnessesTab = 'auxiliary')}
+      >
+        Auxiliary Agents
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'custom'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'custom'}
+        title="Manage custom base URL providers"
+        onclick={() => (settingsUiState.harnessesTab = 'custom')}
+      >
+        Base URL providers
+        {#if baseUrlProviderStore.providers.length > 0}
+          <span
+            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+          >
+            {baseUrlProviderStore.providers.length}
+          </span>
+        {/if}
+      </button>
+    </div>
   </div>
 
-  {#if activeTab === 'harnesses'}
+  {#if activeTab === 'native' || activeTab === 'acp'}
     <div class="mb-4 flex flex-wrap items-center gap-2">
-      <div class="relative min-w-[200px] flex-1">
+      <div class="relative w-56 shrink-0">
         <CioSearch
           size={14}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
@@ -657,389 +782,425 @@
         </div>
       </div>
 
-      <div
-        class="flex shrink-0 items-center gap-0.5 border bg-elevated p-0.5"
-        role="tablist"
-        aria-label="Filter harnesses by status"
-      >
-        <button
-          type="button"
-          role="tab"
-          aria-selected={statusFilter === 'all'}
-          title="Show all harnesses"
-          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
-          'all'
-            ? 'bg-surface text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          onclick={() => (statusFilter = 'all')}
+      {#if activeTab === 'native'}
+        <div
+          class="flex shrink-0 items-center gap-0.5 border bg-elevated p-0.5"
+          role="tablist"
+          aria-label="Filter harnesses by status"
         >
-          All
-          <span
-            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
-            >{allCount}</span
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'all'}
+            title="Show all harnesses"
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+            'all'
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            onclick={() => (statusFilter = 'all')}
           >
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={statusFilter === 'updates'}
-          title="Show harnesses with an update available"
-          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
-          'updates'
-            ? 'bg-surface text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          onclick={() => (statusFilter = 'updates')}
-        >
-          {#if updatesCount > 0}
-            <span class="h-1.5 w-1.5 shrink-0 bg-warning" aria-hidden="true"></span>
-          {/if}
-          Updates
-          <span
-            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
-            >{updatesCount}</span
+            All
+            <span
+              class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+              >{allCount}</span
+            >
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'updates'}
+            title="Show harnesses with an update available"
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+            'updates'
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            onclick={() => (statusFilter = 'updates')}
           >
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={statusFilter === 'issues'}
-          title="Show harnesses that need attention"
-          class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
-          'issues'
-            ? 'bg-surface text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          onclick={() => (statusFilter = 'issues')}
-        >
-          {#if issuesCount > 0}
-            <span class="h-1.5 w-1.5 shrink-0 bg-danger" aria-hidden="true"></span>
-          {/if}
-          Issues
-          <span
-            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
-            >{issuesCount}</span
+            {#if updatesCount > 0}
+              <span class="h-1.5 w-1.5 shrink-0 bg-warning" aria-hidden="true"></span>
+            {/if}
+            Updates
+            <span
+              class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+              >{updatesCount}</span
+            >
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={statusFilter === 'issues'}
+            title="Show harnesses that need attention"
+            class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium transition-colors {statusFilter ===
+            'issues'
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            onclick={() => (statusFilter = 'issues')}
           >
-        </button>
-      </div>
+            {#if issuesCount > 0}
+              <span class="h-1.5 w-1.5 shrink-0 bg-danger" aria-hidden="true"></span>
+            {/if}
+            Issues
+            <span
+              class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+              >{issuesCount}</span
+            >
+          </button>
+        </div>
+      {/if}
 
-      <button
-        class="flex shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-        title="Re-check all harnesses"
-        onclick={() => void recheckAll()}
-        disabled={providerStore.checkingCount > 0}
-      >
-        <CioRefresh size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
-        Check all
-      </button>
+      <div class="ml-auto flex flex-col items-end gap-0.5">
+        <div class="flex items-center gap-2">
+          {#if activeTab === 'acp'}
+            <button
+              type="button"
+              class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
+              title="Add an ACP agent"
+              onclick={() => acpAgentsStore.openNew()}
+            >
+              <CioPlus size={12} />
+              Add agent
+            </button>
+          {/if}
+          <button
+            type="button"
+            class="flex shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+            title="Re-check all harnesses"
+            onclick={() => void recheckAll()}
+            disabled={providerStore.checkingCount > 0}
+          >
+            <CioRefresh size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
+            Check all
+          </button>
+        </div>
+        <span class="text-[0.625rem] text-dimmed">{lastCheckedLabel}</span>
+      </div>
     </div>
 
-    <div class="@container space-y-3">
-      {#each filteredProviders as provider (provider.id)}
-        {@const badge = badgeFor(provider)}
-        {@const expanded = expandedSettings[provider.id] === true}
-        <SettingsEntry {expanded}>
-          <div
-            class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_auto_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
-          >
-            <div class="flex min-w-0 items-center gap-3">
-              <div
-                class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
-              >
-                <AgentIcon agentId={provider.id} label={provider.name} size={20} />
+    {#if activeTab === 'acp' && acpAgentsStore.settings !== null && agentCount === 0}
+      <div class="border border-dashed p-6 text-center">
+        <CioPlug size={17} class="mx-auto mb-1.5 text-dimmed" aria-hidden="true" />
+        <p class="text-sm font-medium text-foreground">No ACP agents yet</p>
+        <p class="mx-auto mt-1 max-w-96 text-xs leading-relaxed text-muted">
+          An ACP agent is any harness you already have that speaks the Agent Client Protocol. You
+          add one with the command that starts it, and its models join the picker.
+        </p>
+        <button
+          type="button"
+          class="mt-2.5 flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary mx-auto transition-colors hover:bg-primary-hover"
+          title="Add an ACP agent"
+          onclick={() => acpAgentsStore.openNew()}
+        >
+          <CioPlus size={12} /> Add agent
+        </button>
+      </div>
+    {:else}
+      <div class="@container space-y-3">
+        {#each filteredProviders as provider (provider.id)}
+          {@const badge = badgeFor(provider)}
+          {@const expanded = expandedSettings[provider.id] === true}
+          <SettingsEntry {expanded}>
+            <div
+              class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 @5xl:grid-cols-[minmax(8rem,12rem)_auto_minmax(8rem,1fr)_minmax(6rem,11rem)_auto] @5xl:gap-3"
+            >
+              <div class="flex min-w-0 items-center gap-3">
+                <div
+                  class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
+                >
+                  <AgentIcon agentId={provider.id} label={provider.name} size={20} />
+                </div>
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-medium">{provider.name}</p>
+                  {#if provider.version}
+                    <p class="truncate font-mono text-[0.625rem] text-dimmed">{provider.version}</p>
+                  {/if}
+                </div>
               </div>
-              <div class="min-w-0">
-                <p class="truncate text-sm font-medium">{provider.name}</p>
-                {#if provider.version}
-                  <p class="truncate font-mono text-[0.625rem] text-dimmed">{provider.version}</p>
+
+              <div class="min-w-0 shrink-0">
+                {#key provider.status}
+                  <SettingsStatusBadge label={badge.label} classes={badge.classes}>
+                    <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
+                  </SettingsStatusBadge>
+                {/key}
+              </div>
+
+              <div class="col-span-2 min-w-0 @5xl:col-span-1">
+                <p
+                  class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
+                  title={provider.executionTarget?.kind === 'wsl'
+                    ? 'WSL path'
+                    : provider.executionTarget?.kind === 'bundled'
+                      ? 'Source'
+                      : 'Path'}
+                >
+                  {provider.executionTarget?.kind === 'wsl'
+                    ? `WSL path · ${provider.executionTarget.distribution}`
+                    : provider.executionTarget?.kind === 'bundled'
+                      ? 'Source'
+                      : 'Path'}
+                </p>
+                <div class="mt-0.5 flex items-center gap-1.5">
+                  {#if provider.executionTarget?.kind === 'bundled'}
+                    <span class="min-w-0 truncate text-xs text-muted">
+                      Bundled with CodeInOven
+                    </span>
+                  {:else}
+                    <span
+                      class="min-w-0 truncate font-mono text-xs text-muted"
+                      title={provider.resolvedPath}
+                    >
+                      {provider.resolvedPath ??
+                        (provider.status === 'not_found' ? 'Not found on PATH' : 'Not available')}
+                    </span>
+                    {#if provider.resolvedPath}
+                      <button
+                        type="button"
+                        class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                        title="Copy path"
+                        aria-label="Copy {provider.name} path"
+                        onclick={() => void copyPath(provider)}
+                      >
+                        {#if copiedPathId === provider.id}
+                          <CioCheck size={11} class="text-success" />
+                        {:else}
+                          <CioCopy size={11} />
+                        {/if}
+                      </button>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
+
+              <div class="col-span-2 min-w-0 @5xl:col-span-1">
+                {#if provider.status === 'error'}
+                  <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                    Issue
+                  </p>
+                  <p class="mt-0.5 truncate text-xs text-danger" title={provider.detail}>
+                    {provider.detail ?? 'Needs attention'}
+                  </p>
+                {:else if provider.status === 'available'}
+                  <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                    Providers
+                  </p>
+                  <p class="mt-0.5 truncate text-xs text-muted" title={providerSummary(provider)}>
+                    {providerSummary(provider)}
+                  </p>
+                {:else}
+                  <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+                    Providers
+                  </p>
+                  <p class="mt-0.5 text-xs text-dimmed"></p>
+                {/if}
+              </div>
+
+              <div
+                class="col-span-2 flex flex-wrap items-center justify-end gap-2 @5xl:col-span-1 @5xl:flex-nowrap"
+              >
+                {#if provider.status === 'error'}
+                  <button
+                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                    title="Re-check {provider.name}"
+                    onclick={() => void checkOne(provider.id)}
+                  >
+                    <CioRefresh size={13} />
+                    Retry
+                  </button>
+                  <button
+                    class="shrink-0 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                    title="{expanded ? 'Hide' : 'Show'} error details for {provider.name}"
+                    aria-expanded={expanded}
+                    onclick={() => toggleSettings(provider.id)}
+                  >
+                    View details
+                  </button>
+                {:else}
+                  {#if provider.transport === 'acp'}
+                    <!-- Nothing to install or update: the agent is a command the
+                         user already had, so the row keeps only its providers. -->
+                  {:else if provider.status === 'not_found'}
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+                      title="Install {provider.name} in the embedded terminal"
+                      disabled={harnessLifecycleStore.isRunning(provider.id)}
+                      onclick={() =>
+                        void harnessLifecycleStore.startInstall(provider.id, provider.name)}
+                    >
+                      {#if harnessLifecycleStore.isRunning(provider.id)}
+                        <CioSpinner size={13} class="animate-spin" />
+                      {:else}
+                        <CioDownload size={13} />
+                      {/if}
+                      Install
+                    </button>
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                      title="Open the {provider.name} install page for your operating system"
+                      onclick={() => void openInstallPage(provider)}
+                    >
+                      Docs
+                    </button>
+                  {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+                      title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
+                        provider.id
+                      )?.latestVersion}"
+                      disabled={harnessLifecycleStore.isRunning(provider.id)}
+                      onclick={() =>
+                        void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
+                    >
+                      {#if harnessLifecycleStore.isRunning(provider.id)}
+                        <CioSpinner size={13} class="animate-spin" />
+                      {:else}
+                        <CioDownload size={13} />
+                      {/if}
+                      Update
+                    </button>
+                  {/if}
+                  <button
+                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
+                    title={canAddProvider(provider)
+                      ? provider.transport === 'acp'
+                        ? `Manage the providers ${provider.name} signs in to`
+                        : `Add a provider to ${provider.name}`
+                      : 'Install the harness first, then re-check to add providers'}
+                    disabled={!canAddProvider(provider)}
+                    onclick={() => providerConnectFlow.open(provider.id)}
+                  >
+                    <CioPlug size={13} /> Manage providers
+                  </button>
+                {/if}
+
+                <ThreadDropdown
+                  items={menuItemsFor(provider)}
+                  title="{provider.name} actions"
+                  ariaLabel="{provider.name} actions"
+                />
+
+                {#if hasDisclosure(provider)}
+                  <SettingsDisclosure
+                    {expanded}
+                    title={`${expanded ? 'Hide' : 'Show'} ${provider.name} ${provider.status === 'error' ? 'details' : 'settings'}`}
+                    onclick={() => toggleSettings(provider.id)}
+                  />
                 {/if}
               </div>
             </div>
 
-            <div class="min-w-0 shrink-0">
-              {#key provider.status}
-                <SettingsStatusBadge label={badge.label} classes={badge.classes}>
-                  <badge.Icon size={12} class="shrink-0 {badge.spin ? 'animate-spin' : ''}" />
-                </SettingsStatusBadge>
-              {/key}
-            </div>
-
-            <div class="col-span-2 min-w-0 @5xl:col-span-1">
-              <p
-                class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed"
-                title={provider.executionTarget?.kind === 'wsl'
-                  ? 'WSL path'
-                  : provider.executionTarget?.kind === 'bundled'
-                    ? 'Source'
-                    : 'Path'}
+            {#if expanded}
+              <div
+                class="mt-3 space-y-2.5 border-t border-border pt-3"
+                transition:slide={{ duration: 150 }}
               >
-                {provider.executionTarget?.kind === 'wsl'
-                  ? `WSL path · ${provider.executionTarget.distribution}`
-                  : provider.executionTarget?.kind === 'bundled'
-                    ? 'Source'
-                    : 'Path'}
-              </p>
-              <div class="mt-0.5 flex items-center gap-1.5">
-                {#if provider.executionTarget?.kind === 'bundled'}
-                  <span class="min-w-0 truncate text-xs text-muted"> Bundled with CodeInOven </span>
+                {#if provider.status === 'error'}
+                  <p class="text-xs font-semibold text-foreground">Details</p>
+                  <pre
+                    class="overflow-auto border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
+                      >{provider.detail ?? 'No additional detail available.'}</code
+                    ></pre>
                 {:else}
-                  <span
-                    class="min-w-0 truncate font-mono text-xs text-muted"
-                    title={provider.resolvedPath}
-                  >
-                    {provider.resolvedPath ??
-                      (provider.status === 'not_found' ? 'Not found on PATH' : 'Not available')}
-                  </span>
-                  {#if provider.resolvedPath}
-                    <button
-                      type="button"
-                      class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                      title="Copy path"
-                      aria-label="Copy {provider.name} path"
-                      onclick={() => void copyPath(provider)}
-                    >
-                      {#if copiedPathId === provider.id}
-                        <CioCheck size={11} class="text-success" />
-                      {:else}
-                        <CioCopy size={11} />
-                      {/if}
-                    </button>
+                  <p class="text-xs font-semibold text-foreground">Settings</p>
+                  {#if provider.transport === 'acp'}
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="text-xs font-medium text-foreground">Enabled</p>
+                        <p class="mt-0.5 truncate text-[0.625rem] text-dimmed">
+                          Parking keeps the agent's settings and leaves every harness list
+                        </p>
+                      </div>
+                      <Switch
+                        checked={provider.enabled !== false}
+                        onchange={(value) => void toggleAcpAgent(provider, value)}
+                        aria-label={`Offer ${provider.name} as a harness`}
+                        title={`Turn off to park ${provider.name} without deleting it`}
+                      />
+                    </div>
+                  {/if}
+                  {#if manifestFor(provider.id)}
+                    {@const entry = manifestFor(provider.id)!}
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="text-xs font-medium text-foreground">
+                          Harness loads AGENTS.md natively
+                        </p>
+                        <p
+                          class="mt-0.5 truncate text-[0.625rem] text-dimmed"
+                          title="When on, {provider.name} reads the project's AGENTS.md itself. {APP_NAME} uses its application Agent behavior prompt for Engineering work."
+                        >
+                          Harness capability · {manifestSourceLabel(entry)}
+                        </p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-2">
+                        {#if entry.confirmed}
+                          <button
+                            type="button"
+                            class="px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+                            title="Clear the confirmed value and fall back to the declared manifest"
+                            disabled={manifestSaving[provider.id]}
+                            onclick={() => void resetManifestBehavior(provider.id, 'loadsAgentsMd')}
+                          >
+                            Reset
+                          </button>
+                        {/if}
+                        <Switch
+                          checked={entry.effective}
+                          disabled={manifestSaving[provider.id]}
+                          onchange={(value) =>
+                            void confirmManifestBehavior(provider.id, 'loadsAgentsMd', value)}
+                          aria-label={`${provider.name} loads AGENTS.md natively`}
+                          title={`Set whether ${provider.name} loads AGENTS.md natively (confirmed override)`}
+                        />
+                      </div>
+                    </div>
+                  {/if}
+
+                  {#if provider.transport !== 'acp'}
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="min-w-0">
+                        <p class="text-xs font-medium text-foreground">
+                          Update automatically on launch
+                        </p>
+                        <p
+                          class="mt-0.5 truncate text-[0.625rem] text-dimmed"
+                          title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
+                        >
+                          Updates in the background when {APP_NAME} opens
+                        </p>
+                      </div>
+                      <div class="flex shrink-0 items-center gap-2">
+                        <Switch
+                          checked={autoUpdatePrefs[provider.id] === true}
+                          disabled={autoUpdateSaving[provider.id]}
+                          onchange={(value) => void setAutoUpdatePref(provider.id, value)}
+                          aria-label={`Update ${provider.name} automatically on launch`}
+                          title={`Set whether ${provider.name} updates automatically on launch`}
+                        />
+                      </div>
+                    </div>
+                  {/if}
+                  {#if isOpenCodeV2Row(provider)}
+                    <div class="border-t border-border pt-2.5">
+                      <OpenCodeV2CatalogPanel harnessName={provider.name} />
+                    </div>
                   {/if}
                 {/if}
               </div>
-            </div>
-
-            <div class="col-span-2 min-w-0 @5xl:col-span-1">
-              {#if provider.status === 'error'}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Issue</p>
-                <p class="mt-0.5 truncate text-xs text-danger" title={provider.detail}>
-                  {provider.detail ?? 'Needs attention'}
-                </p>
-              {:else if provider.status === 'available'}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
-                  Providers
-                </p>
-                <p class="mt-0.5 truncate text-xs text-muted" title={providerSummary(provider)}>
-                  {providerSummary(provider)}
-                </p>
-              {:else}
-                <p class="text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
-                  Providers
-                </p>
-                <p class="mt-0.5 text-xs text-dimmed"></p>
-              {/if}
-            </div>
-
-            <div
-              class="col-span-2 flex flex-wrap items-center justify-end gap-2 @5xl:col-span-1 @5xl:flex-nowrap"
-            >
-              {#if provider.status === 'error'}
-                <button
-                  class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                  title="Re-check {provider.name}"
-                  onclick={() => void checkOne(provider.id)}
-                >
-                  <CioRefresh size={13} />
-                  Retry
-                </button>
-                <button
-                  class="shrink-0 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                  title="{expanded ? 'Hide' : 'Show'} error details for {provider.name}"
-                  aria-expanded={expanded}
-                  onclick={() => toggleSettings(provider.id)}
-                >
-                  View details
-                </button>
-              {:else}
-                {#if provider.status === 'not_found'}
-                  <button
-                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
-                    title="Install {provider.name} in the embedded terminal"
-                    disabled={harnessLifecycleStore.isRunning(provider.id)}
-                    onclick={() =>
-                      void harnessLifecycleStore.startInstall(provider.id, provider.name)}
-                  >
-                    {#if harnessLifecycleStore.isRunning(provider.id)}
-                      <CioSpinner size={13} class="animate-spin" />
-                    {:else}
-                      <CioDownload size={13} />
-                    {/if}
-                    Install
-                  </button>
-                  <button
-                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border px-2.5 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                    title="Open the {provider.name} install page for your operating system"
-                    onclick={() => void openInstallPage(provider)}
-                  >
-                    Docs
-                  </button>
-                {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
-                  <button
-                    class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
-                    title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
-                      provider.id
-                    )?.latestVersion}"
-                    disabled={harnessLifecycleStore.isRunning(provider.id)}
-                    onclick={() =>
-                      void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
-                  >
-                    {#if harnessLifecycleStore.isRunning(provider.id)}
-                      <CioSpinner size={13} class="animate-spin" />
-                    {:else}
-                      <CioDownload size={13} />
-                    {/if}
-                    Update
-                  </button>
-                {/if}
-                <button
-                  class="flex shrink-0 items-center gap-1.5 whitespace-nowrap bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-                  title={canAddProvider(provider)
-                    ? `Add a provider to ${provider.name}`
-                    : 'Install the harness first, then re-check to add providers'}
-                  disabled={!canAddProvider(provider)}
-                  onclick={() => providerConnectFlow.open(provider.id)}
-                >
-                  <CioPlug size={13} /> Manage providers
-                </button>
-              {/if}
-
-              <ThreadDropdown
-                items={menuItemsFor(provider)}
-                title="{provider.name} actions"
-                ariaLabel="{provider.name} actions"
-              />
-
-              {#if hasDisclosure(provider)}
-                <SettingsDisclosure
-                  {expanded}
-                  title={`${expanded ? 'Hide' : 'Show'} ${provider.name} ${provider.status === 'error' ? 'details' : 'settings'}`}
-                  onclick={() => toggleSettings(provider.id)}
-                />
-              {/if}
-            </div>
+            {/if}
+          </SettingsEntry>
+        {:else}
+          <div class="border border-dashed p-6 text-center text-xs text-dimmed">
+            {#if searchQuery || statusFilter !== 'all'}
+              No harnesses match the current filter.
+            {:else if activeTab === 'acp'}
+              No ACP agents detected yet.
+            {:else}
+              No harnesses detected yet.
+            {/if}
           </div>
-
-          {#if expanded}
-            <div
-              class="mt-3 space-y-2.5 border-t border-border pt-3"
-              transition:slide={{ duration: 150 }}
-            >
-              {#if provider.status === 'error'}
-                <p class="text-xs font-semibold text-foreground">Details</p>
-                <pre
-                  class="overflow-auto border border-border bg-raised p-2.5 font-mono text-[0.6875rem] leading-relaxed whitespace-pre-wrap text-muted"><code
-                    >{provider.detail ?? 'No additional detail available.'}</code
-                  ></pre>
-              {:else}
-                <p class="text-xs font-semibold text-foreground">Settings</p>
-                {#if manifestFor(provider.id)}
-                  {@const entry = manifestFor(provider.id)!}
-                  <div class="flex items-center justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="text-xs font-medium text-foreground">
-                        Harness loads AGENTS.md natively
-                      </p>
-                      <p
-                        class="mt-0.5 truncate text-[0.625rem] text-dimmed"
-                        title="When on, {provider.name} reads the project's AGENTS.md itself. {APP_NAME} uses its application Agent behavior prompt for Engineering work."
-                      >
-                        Harness capability · {manifestSourceLabel(entry)}
-                      </p>
-                    </div>
-                    <div class="flex shrink-0 items-center gap-2">
-                      {#if entry.confirmed}
-                        <button
-                          type="button"
-                          class="px-2 py-1 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-                          title="Clear the confirmed value and fall back to the declared manifest"
-                          disabled={manifestSaving[provider.id]}
-                          onclick={() => void resetManifestBehavior(provider.id, 'loadsAgentsMd')}
-                        >
-                          Reset
-                        </button>
-                      {/if}
-                      <Switch
-                        checked={entry.effective}
-                        disabled={manifestSaving[provider.id]}
-                        onchange={(value) =>
-                          void confirmManifestBehavior(provider.id, 'loadsAgentsMd', value)}
-                        aria-label={`${provider.name} loads AGENTS.md natively`}
-                        title={`Set whether ${provider.name} loads AGENTS.md natively (confirmed override)`}
-                      />
-                    </div>
-                  </div>
-                {/if}
-
-                <div class="flex items-center justify-between gap-3">
-                  <div class="min-w-0">
-                    <p class="text-xs font-medium text-foreground">
-                      Update automatically on launch
-                    </p>
-                    <p
-                      class="mt-0.5 truncate text-[0.625rem] text-dimmed"
-                      title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
-                    >
-                      Updates in the background when {APP_NAME} opens
-                    </p>
-                  </div>
-                  <div class="flex shrink-0 items-center gap-2">
-                    <Switch
-                      checked={autoUpdatePrefs[provider.id] === true}
-                      disabled={autoUpdateSaving[provider.id]}
-                      onchange={(value) => void setAutoUpdatePref(provider.id, value)}
-                      aria-label={`Update ${provider.name} automatically on launch`}
-                      title={`Set whether ${provider.name} updates automatically on launch`}
-                    />
-                  </div>
-                </div>
-                {#if isOpenCodeV2Row(provider)}
-                  <div class="border-t border-border pt-2.5">
-                    <OpenCodeV2CatalogPanel harnessName={provider.name} />
-                  </div>
-                {/if}
-              {/if}
-            </div>
-          {/if}
-        </SettingsEntry>
-      {:else}
-        <div class="border border-dashed p-6 text-center text-xs text-dimmed">
-          {#if searchQuery || statusFilter !== 'all'}
-            No harnesses match the current filter.
-          {:else}
-            No harnesses detected yet.
-          {/if}
-        </div>
-      {/each}
-    </div>
-
-    <div class="mt-6 border border-dashed p-4 text-center">
-      <CioPlug size={18} class="mx-auto mb-1 text-dimmed" />
-      <p class="text-xs text-dimmed">
-        Harnesses are detected from your system PATH and Windows Subsystem for Linux distributions,
-        then verified with a version probe. Install the CLI tool and click Check.
-      </p>
-    </div>
-
-    <div
-      class="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-[0.6875rem]"
-    >
-      <div class="flex flex-wrap items-center gap-4">
-        <span class="flex items-center gap-1.5 text-success">
-          <CioCheckCircle size={12} />
-          {readyCount} ready
-        </span>
-        <span class="flex items-center gap-1.5 text-warning">
-          <CioDownload size={12} />
-          {updatesCount} update{updatesCount === 1 ? '' : 's'}
-        </span>
-        <span class="flex items-center gap-1.5 text-danger">
-          <CioAttention size={12} />
-          {issuesCount} issue{issuesCount === 1 ? '' : 's'}
-        </span>
+        {/each}
       </div>
-      <span class="flex items-center gap-1.5 text-dimmed">
-        <CioClock size={12} />
-        {lastCheckedLabel}
-      </span>
-    </div>
+    {/if}
   {:else if activeTab === 'accounts'}
     <HarnessAccountsPanel providers={providerStore.providers} />
   {:else if activeTab === 'auxiliary'}
@@ -1051,6 +1212,27 @@
     <BaseUrlProvidersPanel providers={providerStore.providers} />
   {/if}
 </div>
+
+{#if acpRemoveTarget}
+  <ConfirmDialog
+    open
+    title={`Remove ${acpRemoveTarget.name}?`}
+    confirmLabel="Remove agent"
+    variant="danger"
+    busy={acpRemoving}
+    onCancel={cancelAcpRemove}
+    onConfirm={confirmAcpRemove}
+  >
+    <p>
+      {acpRemoveTarget.name} stops appearing in the harness list, and any thread pinned to it must pick
+      another harness. Nothing is uninstalled from your machine, and {APP_NAME} keeps the rest of your
+      data.
+    </p>
+    {#if acpRemoveError}
+      <p class="text-xs text-danger">{acpRemoveError}</p>
+    {/if}
+  </ConfirmDialog>
+{/if}
 
 {#if restartTarget}
   <ConfirmDialog

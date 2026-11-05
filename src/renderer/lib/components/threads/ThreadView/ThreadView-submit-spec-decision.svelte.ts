@@ -58,14 +58,33 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     )
   })
 
+  /**
+   * The thread every Assignment call is keyed on.
+   *
+   * A worker thread presents its coordinator's Assignment, and the studio that
+   * edits task models and worker scope can be opened from that worker. The
+   * loaded document already names the coordinator it belongs to, so the mounted
+   * thread's own id is the wrong key there: the engine answers "Assignment not
+   * found" to a lookup done on a worker. Resolve from the document, and fall
+   * back to this view only before anything has been loaded.
+   */
+  assignmentOwner(): { projectId: string; threadId: string } {
+    const active = this.assignment
+    return {
+      projectId: active?.projectId ?? this.root.handleAgentEvent.thread.projectId,
+      threadId: active?.coordinatorThreadId ?? this.root.handleAgentEvent.thread.id
+    }
+  }
+
   async saveAssignment(content: AssignmentPlanContent): Promise<boolean> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
+      const owner = this.assignmentOwner()
       this.assignment = await invoke(
         'assignment:saveDraft',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        owner.projectId,
+        owner.threadId,
         content,
         {
           source: 'manual',
@@ -193,10 +212,11 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
+      const owner = this.assignmentOwner()
       this.assignment = await invoke(
         'assignment:updateUnlinkedWorkerModel',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        owner.projectId,
+        owner.threadId,
         taskId,
         selection
       )
@@ -212,10 +232,11 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
+      const owner = this.assignmentOwner()
       this.assignment = await invoke(
         'assignment:updateUnlinkedWorkerScope',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        owner.projectId,
+        owner.threadId,
         taskId,
         scope
       )
@@ -236,10 +257,11 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
+      const owner = this.assignmentOwner()
       this.assignment = await invoke(
         'assignment:updateWorkerScope',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        owner.projectId,
+        owner.threadId,
         scope
       )
     } catch (error) {
@@ -255,11 +277,12 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentError = ''
     try {
       await this.root.sources.assignmentSeniorSettingsPersistence
+      const owner = this.assignmentOwner()
       if (!this.assignment || JSON.stringify(this.assignment.content) !== JSON.stringify(content)) {
         this.assignment = await invoke(
           'assignment:saveDraft',
-          this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id,
+          owner.projectId,
+          owner.threadId,
           content,
           {
             source: 'manual',
@@ -284,15 +307,8 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
           )
         ).state
       }
-      this.assignment = await invoke(
-        'agent:startAssignment',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id
-      )
-      if (
-        this.root.handleAgentEvent.engineeringLifecycle?.autopilot &&
-        this.root.handleAgentEvent.engineeringLifecycle.activeStage === 'assignment'
-      ) {
+      this.assignment = await invoke('agent:startAssignment', owner.projectId, owner.threadId)
+      if (this.root.handleAgentEvent.engineeringLifecycle?.activeStage === 'assignment') {
         this.root.handleAgentEvent.engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           this.root.handleAgentEvent.thread.projectId,
@@ -308,17 +324,14 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
       )
       this.selectedAssignmentVersion = this.assignment.version
       this.root.studioTemporaryChatContext.specReadyToolVisible = false
-      this.root.loadOlderMessages.settings = this.root.handleAgentEvent.engineeringLifecycle
-        ?.autopilot
-        ? {
-            ...this.root.loadOlderMessages.settings,
-            assignmentMode: true,
-            loopMode: true
-          }
-        : {
-            ...this.root.loadOlderMessages.settings,
-            assignmentMode: false
-          }
+      this.root.loadOlderMessages.settings = {
+        ...this.root.loadOlderMessages.settings,
+        assignmentMode: hasSelectedStage(
+          this.root.handleAgentEvent.engineeringLifecycle,
+          'assignment'
+        ),
+        loopMode: hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'achievement')
+      }
       this.root.sources.commitSettings(this.root.loadOlderMessages.settings)
     } catch (error) {
       this.assignmentError =
@@ -648,8 +661,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
         const lifecycleSpecApproval =
           (this.root.handleAgentEvent.engineeringLifecycle?.activeStage === 'spec' ||
             this.root.handleAgentEvent.engineeringLifecycle?.humanGate === 'spec_approval') &&
-          (hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'spec') ||
-            this.root.handleAgentEvent.engineeringLifecycle?.autopilot)
+          hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'spec')
         if (lifecycleSpecApproval) {
           if (
             this.root.handleAgentEvent.engineeringLifecycle?.humanGate === 'spec_approval' &&
@@ -690,10 +702,6 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
             this.root.handleAgentEvent.thread.id,
             'spec'
           )
-          if (this.root.handleAgentEvent.engineeringLifecycle.autopilot) {
-            await this.generateAssignmentDraft()
-            return
-          }
           const nextEngineeringSettings = this.root.harnessUsage.settingsForEngineeringState(
             this.root.handleAgentEvent.engineeringLifecycle
           )

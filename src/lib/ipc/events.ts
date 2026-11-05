@@ -1,3 +1,4 @@
+import type { CustomVendorIconSet } from '../custom-vendor-icon'
 import type { VideoEditorGesture } from '../video/edit'
 import type { IdeProgress } from '../editor-ide'
 import type {
@@ -28,6 +29,7 @@ import type {
   BrowserInspectorEvent,
   BrowserOpenRequestContext,
   BrowserPageKey,
+  BrowserAgentTabClaim,
   BrowserPageState,
   BrowserPanelShortcutAction,
   BrowserPermissionRequest,
@@ -75,7 +77,9 @@ export const IPC_EVENT_CONTRACT = {
     id: string,
     archived: boolean
   ],
-  'customVendors:iconChanged': [] as unknown as [payload: { providerId: string; icon: string }],
+  'customVendors:iconChanged': [] as unknown as [
+    payload: { providerId: string; icons: CustomVendorIconSet }
+  ],
   'design:historyChanged': [] as unknown as [projectId: string, directory: string],
   'design:relocated': [] as unknown as [
     projectId: string,
@@ -309,6 +313,12 @@ export const IPC_EVENT_CONTRACT = {
   'window:historyBack': [] as [],
   /** Emitted when the user presses the mouse's forward side button. */
   'window:historyForward': [] as [],
+  /**
+   * The user asked for Settings from a native menu (the application menu, or the
+   * menu bar icon's context menu on a platform without one). The renderer owns
+   * the navigation, so main only names what to open.
+   */
+  'window:openSettings': [] as [],
   'updater:status': [] as unknown as [status: UpdaterStatus],
   /**
    * What a pending update install is still waiting on: working sessions first,
@@ -391,6 +401,8 @@ export const IPC_EVENT_CONTRACT = {
    */
   'computerUse:activity': [] as unknown as [activity: ComputerUseActivity],
   'browser:state': [] as unknown as [state: BrowserPageState],
+  /** The set of browser tabs agents are working on changed. */
+  'browser:agentTabClaimsChanged': [] as unknown as [claims: BrowserAgentTabClaim[]],
   /** Live provider connection health/status snapshot. */
   'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
   /** DevTools open state changed for a browser tab (open/closed). */

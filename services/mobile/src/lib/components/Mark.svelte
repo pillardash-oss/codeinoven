@@ -1,57 +1,36 @@
 <script lang="ts">
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import { customSvgDataUrl, markInitials } from '#lib/marks'
   import type { Project } from '#lib/api/types'
 
   /**
-   * A project's mark. The desktop lets a user paste an SVG or pick an accent
-   * colour, and both survive the trip through the service, so the phone draws
-   * the same identity rather than a generic folder for every project.
+   * A project's mark, the way the desktop draws it: the stored SVG tinted with
+   * the project's own colour, its initials on a wash of that colour, or the
+   * folder glyph when the project declares neither.
    */
   interface Props {
     project: Pick<Project, 'name' | 'customSvg' | 'color'>
     size?: number
-    /** 'plain' drops the tinted plate, for a mark that carries its own field. */
-    plain?: boolean
   }
 
-  let { project, size = 28, plain = false }: Props = $props()
+  let { project, size = 28 }: Props = $props()
 
-  let initials = $derived(
-    project.name
-      .split(/[\s-_]+/)
-      .filter(Boolean)
-      .slice(0, 2)
-      .map((part) => part[0]?.toUpperCase() ?? '')
-      .join('')
-  )
-
-  let customIcon = $derived(
-    project.customSvg
-      ? `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(project.customSvg)))}`
-      : null
-  )
-
-  let tint = $derived(
-    project.color
-      ? {
-          background: `color-mix(in srgb, ${project.color} 16%, transparent)`,
-          color: project.color
-        }
-      : null
+  let initials = $derived(markInitials(project.name))
+  let svg = $derived(
+    project.customSvg && project.color ? customSvgDataUrl(project.customSvg, project.color) : null
   )
 </script>
 
 <span
-  class={['mark', { plain }]}
+  class={['mark', { plain: svg !== null }]}
   style:width="{size}px"
   style:height="{size}px"
-  style:font-size="{Math.round(size * 0.36)}px"
-  style:background={plain ? undefined : tint?.background}
-  style:color={tint?.color}
+  style:--tint={project.color ?? undefined}
+  style:font-size="{Math.round(size * 0.34)}px"
   aria-hidden="true"
 >
-  {#if customIcon}
-    <img src={customIcon} alt="" width={size} height={size} />
+  {#if svg}
+    <img src={svg} alt="" width={size} height={size} />
   {:else if project.color}
     {initials}
   {:else}

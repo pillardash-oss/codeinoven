@@ -36,7 +36,6 @@ export function validateEngineeringLifecycleSelection(
 
 export function validateEngineeringLifecycleSelectionInput(value: unknown): {
   stages: EngineeringLifecycleStage[]
-  autopilot: boolean
 } {
   if (typeof value !== 'object' || value === null) {
     throw new TypeError('Engineering lifecycle selection must be an object')
@@ -50,7 +49,7 @@ export function validateEngineeringLifecycleSelectionInput(value: unknown): {
           (stage, index, all): stage is EngineeringLifecycleStage => all.indexOf(stage) === index
         )
     : []
-  return { stages, autopilot: record.autopilot === true }
+  return { stages }
 }
 
 export function validateEngineeringLifecycleDecision(value: unknown): EngineeringLifecycleDecision {

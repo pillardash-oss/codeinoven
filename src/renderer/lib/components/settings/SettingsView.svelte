@@ -292,7 +292,7 @@
         : activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
-      settingsUiState.harnessesTab = 'harnesses'
+      settingsUiState.harnessesTab = 'native'
     }
   })
 
@@ -844,14 +844,8 @@
             </h3>
             <div class="flex items-center justify-between gap-4">
               <div>
-                <p class="text-sm font-medium">System notifications</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  Alert when an agent finishes, needs attention, or encounters an error
-                </p>
-                <p class="mt-1 text-[0.6875rem] text-dimmed">
-                  On macOS, the first test requests permission. Native delivery requires a signed
-                  app.
-                </p>
+                
+                
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
                     <CioCheckCircle size={13} />
@@ -910,12 +904,9 @@
               </button>
             </div>
 
-            <div class="mt-4 border-t pt-4">
+            <div class="mt-4 pt-4">
               <p class="text-sm font-medium">In-app notification sounds</p>
-              <p class="mt-0.5 text-xs leading-relaxed text-dimmed">
-                A softer alert with the in-app toast, played only when that toast actually appears
-                while the app is in front. The off-app alert for the same event is unchanged.
-              </p>
+              
               <div class="mt-3 space-y-3">
                 <div class="flex items-center justify-between gap-4">
                   <div>
@@ -949,15 +940,16 @@
             </div>
           </div>
 
-          <!-- Browser -->
-          <!-- Power -->
-          <div id="settings-block-general-power" class="border bg-surface p-4">
+          <!-- Recovery -->
+          <div id="settings-block-general-recovery" class="border bg-surface p-4">
             <h3
               class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
             >
-              Power
+              Work Behaviour
             </h3>
-            <div class="flex items-center justify-between gap-4">
+            
+            <div class="space-y-4">
+              <div class="flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Keep device on while work is in progress</p>
                 <p class="text-xs leading-relaxed text-dimmed">
@@ -972,16 +964,6 @@
                 disabled={!settingsReady}
               />
             </div>
-          </div>
-
-          <!-- Recovery -->
-          <div id="settings-block-general-recovery" class="border bg-surface p-4">
-            <h3
-              class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
-            >
-              Recovery
-            </h3>
-            <div class="space-y-4">
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Resume work on restart</p>
@@ -1585,7 +1567,7 @@
     {:else if section === 'ovens'}
       <OvensSettings
         onOpenHarnessSettings={() => {
-          settingsUiState.harnessesTab = 'harnesses'
+          settingsUiState.harnessesTab = 'native'
           onNavigateSection('harnesses')
         }}
       />

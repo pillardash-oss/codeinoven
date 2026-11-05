@@ -8,7 +8,7 @@
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import AuthoredWorkMarks from '$lib/components/threads/AuthoredWorkMarks.svelte'
   import ThreadFollowUpMark from '$lib/components/threads/ThreadFollowUpMark.svelte'
   import ThreadNoteMark from '$lib/components/threads/ThreadNoteMark.svelte'
@@ -301,7 +301,7 @@
   }
 
   function harnessName(id: string): string {
-    return getAgentIcon(id)?.name ?? id
+    return agentDisplayName(id)
   }
 
   /** Harness icons shown on the full row's footer line before the `+n` chip. */

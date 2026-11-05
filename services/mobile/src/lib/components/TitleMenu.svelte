@@ -4,30 +4,29 @@
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
   import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
+  import { drop } from '#lib/motion'
   import { rememberWorkView, workViewHref, type WorkView } from '#lib/work-view'
 
   /**
    * The list's own title, and the only control that switches the list between
-   * threads and projects. It is the title rather than a separate picker: the
-   * design draws the count, the caret and the menu here, and a phone has no room
-   * for a second row that says the same thing.
+   * threads and projects. It is the title rather than a separate picker because
+   * a phone has no room for a second row that says the same thing. It names the
+   * view and nothing else: how many projects or threads exist is not something
+   * this row needs to tell anyone.
    */
   interface Props {
     view: WorkView
     title: string
-    count: number | null
-    threads: number | null
-    projects: number | null
   }
 
-  let { view, title, count, threads, projects }: Props = $props()
+  let { view, title }: Props = $props()
 
   let open = $state(false)
 
-  let items = $derived([
-    { view: 'projects' as const, label: 'Projects', total: projects },
-    { view: 'threads' as const, label: 'Threads', total: threads }
-  ])
+  const items = [
+    { view: 'projects' as const, label: 'Projects' },
+    { view: 'threads' as const, label: 'Threads' }
+  ]
 
   function choose(next: WorkView): void {
     open = false
@@ -57,15 +56,12 @@
     title="Switch between threads and projects"
     onclick={() => (open = !open)}
   >
-    <h1>
-      {title}
-      {#if count !== null}<span class="count">{count}</span>{/if}
-    </h1>
+    <h1>{title}</h1>
     <CioChevronDown size={16} />
   </button>
 
   {#if open}
-    <div class="title-menu" role="menu" aria-label="Threads or projects">
+    <div class="title-menu" role="menu" aria-label="Threads or projects" transition:drop>
       {#each items as item (item.view)}
         <button
           class="title-menu-item"
@@ -80,7 +76,6 @@
             <CioThreads size={17} />
           {/if}
           <span>{item.label}</span>
-          {#if item.total !== null}<span class="n">{item.total}</span>{/if}
           {#if item.view === view}<CioCheck size={14} class="tick" />{/if}
         </button>
       {/each}

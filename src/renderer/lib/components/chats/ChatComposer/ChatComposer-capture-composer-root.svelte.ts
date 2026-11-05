@@ -3,6 +3,7 @@ import { toast } from 'svelte-sonner'
 import type { Attachment } from 'svelte/attachments'
 import { registerComposerFocusTarget } from '$lib/focus/composer-focus-registry'
 import { posixBasename } from '$shared/paths'
+import { composerHasThirdLine, composerShowsExpandControl } from '$shared/composer-expand'
 import { showToastWarning } from '$lib/stores/app-errors.svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { fileUrlToPath } from '$lib/mime'
@@ -13,7 +14,6 @@ import { type ComposerReadingSurface } from '../chat-composer-slash.svelte'
 import { createComposerExpansion } from '../chat-composer-expand.svelte'
 import { isImageAttachment } from '../chat-composer-attachments'
 import { type ComposerAssistantTag } from '../composer-mentions'
-import EngineeringToolbox from '../EngineeringToolbox.svelte'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { APP_NAME } from '$shared/brand'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
@@ -99,8 +99,6 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
   ])
 
   lastCaretSupportsCommands: boolean | null = $state(null)
-
-  engineeringToolbox: EngineeringToolbox | undefined = $state(undefined)
 
   /** The shoe instance, so the `/scope` slash action can open its picker. */
   shoeComponent: ComposerShoe | undefined = $state(undefined)
@@ -317,14 +315,16 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
       const style = getComputedStyle(editor)
       const contentHeight =
         editor.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom)
-      this.hasThirdEditorLine = contentHeight > parseFloat(style.lineHeight) * 2 + 1
+      this.hasThirdEditorLine = composerHasThirdLine(contentHeight, parseFloat(style.lineHeight))
     })
     observer.observe(editor)
     return () => observer.disconnect()
   }
 
   /** Keep collapse available even after the expanded editor is cleared. */
-  showExpandControl = $derived(this.hasThirdEditorLine || this.expansion.maximized)
+  showExpandControl = $derived(
+    composerShowsExpandControl(this.hasThirdEditorLine, this.expansion.maximized)
+  )
 
   /** Focus the composer editor and place the caret at the end, in place. */
   focusComposerAtEnd(): void {

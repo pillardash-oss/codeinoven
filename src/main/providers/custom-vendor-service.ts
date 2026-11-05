@@ -1,38 +1,70 @@
 import { Buffer } from 'node:buffer'
-import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '../../lib/custom-vendor-icon'
+import {
+  MAX_CUSTOM_VENDOR_ICON_BYTES,
+  isCustomVendorIconType,
+  type CustomVendorIconSet,
+  type CustomVendorIconVariant
+} from '../../lib/custom-vendor-icon'
 import type { StorageEngine } from '../storage/storage-engine'
 
 interface CustomVendor {
   providerId: string
-  icon: string
+  /** Light-theme artwork. The only variant before dark artwork existed. */
+  icon?: string
+  /** Dark-theme artwork; falls back to `icon` wherever it is used. */
+  iconDark?: string
 }
 
 /** Artwork is app-owned, independent of harness-native config and source files. */
 export class CustomVendorService {
   constructor(private readonly storage: StorageEngine) {}
 
-  async list(): Promise<Record<string, string>> {
-    const icons: Record<string, string> = {}
+  async list(): Promise<Record<string, CustomVendorIconSet>> {
+    const icons: Record<string, CustomVendorIconSet> = {}
     for (const file of await this.storage.list('custom-vendors')) {
       if (!/^[a-zA-Z0-9._%-]+\.json$/u.test(file)) continue
       const vendor = await this.storage.read<CustomVendor>(`custom-vendors/${file}`)
-      if (vendor && typeof vendor.providerId === 'string' && typeof vendor.icon === 'string') {
-        icons[vendor.providerId] = validateCustomVendorIcon(vendor.icon)
-      }
+      if (!vendor || typeof vendor.providerId !== 'string') continue
+      const set: CustomVendorIconSet = {}
+      if (typeof vendor.icon === 'string') set.light = validateCustomVendorIcon(vendor.icon)
+      if (typeof vendor.iconDark === 'string') set.dark = validateCustomVendorIcon(vendor.iconDark)
+      if (set.light || set.dark) icons[vendor.providerId] = set
     }
     return icons
   }
 
-  async save(providerId: string, icon: unknown): Promise<string> {
+  /**
+   * Save or clear one theme's artwork.
+   *
+   * `null` clears that variant while keeping the other, so a user can drop dark
+   * artwork and fall back to the light image instead of losing both.
+   */
+  async save(
+    providerId: string,
+    icon: unknown,
+    variant: CustomVendorIconVariant = 'light'
+  ): Promise<CustomVendorIconSet> {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,255}$/u.test(providerId)) {
       throw new TypeError('Invalid custom vendor provider ID')
     }
-    const validated = validateCustomVendorIcon(icon)
-    await this.storage.write(`custom-vendors/${encodeURIComponent(providerId)}.json`, {
+    const path = `custom-vendors/${encodeURIComponent(providerId)}.json`
+    const existing = await this.storage.read<CustomVendor>(path).catch(() => null)
+    const set: CustomVendorIconSet = {
+      ...(existing?.icon ? { light: existing.icon } : {}),
+      ...(existing?.iconDark ? { dark: existing.iconDark } : {})
+    }
+    if (icon === null) delete set[variant]
+    else set[variant] = validateCustomVendorIcon(icon)
+    if (!set.light && !set.dark) {
+      await this.storage.remove(path).catch(() => undefined)
+      return {}
+    }
+    await this.storage.write(path, {
       providerId,
-      icon: validated
+      ...(set.light ? { icon: set.light } : {}),
+      ...(set.dark ? { iconDark: set.dark } : {})
     } satisfies CustomVendor)
-    return validated
+    return set
   }
 }
 

@@ -4,6 +4,7 @@
   import { page } from '$app/state'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { api, ApiError } from '#lib/api/client'
+  import { orderProjects, readProjectRanking, rememberProject } from '#lib/project-recency'
   import type { Project } from '#lib/api/types'
   import Mark from './Mark.svelte'
   import Sheet from './Sheet.svelte'
@@ -13,6 +14,10 @@
    * which project it belongs to, and what it is called. The desktop picks the
    * work up from there, which is why this sheet is a title and a project rather
    * than a second composer.
+   *
+   * The project list is offered in the order this phone worked: the project
+   * opened last stands first and is already chosen, so starting a thread in the
+   * project you were just reading is one tap, not a search.
    */
   interface Props {
     open: boolean
@@ -40,8 +45,11 @@
     loading = true
     error = null
     try {
-      const result = await api.projects({ sort: 'activity', limit: 100 })
-      projects = result.items
+      const [result, ranking] = await Promise.all([
+        api.projects({ sort: 'activity', limit: 100 }),
+        readProjectRanking()
+      ])
+      projects = orderProjects(result.items, ranking)
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : 'Projects could not be loaded right now.'
     } finally {
@@ -57,6 +65,7 @@
     try {
       const thread = await api.createThread({ projectId: chosen, title: body })
       title = ''
+      void rememberProject(chosen)
       onclose()
       await goto(`/threads/${thread.id}`)
     } catch (cause) {

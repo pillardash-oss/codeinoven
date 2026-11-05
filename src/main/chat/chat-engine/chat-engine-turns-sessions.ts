@@ -499,6 +499,7 @@ export class ChatEngineTurnsSessions {
     this.host.state.visualDeliverableNudges.delete(sessionId)
     this.host.state.artifactRenderedSessions.delete(sessionId)
     this.host.state.todoReconcileAttempts.delete(sessionId)
+    this.host.units['permissions'].dropSessionCreations(sessionId)
     this.host.state.sessionNativeHistory.delete(sessionId)
     this.host.state.parkedSessionReplay.delete(sessionId)
     this.clearSessionWatchdog(sessionId)

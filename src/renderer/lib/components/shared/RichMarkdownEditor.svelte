@@ -934,10 +934,12 @@
     <!-- The placeholder sits at the writing line's first column. A host that
          draws its own marker in a gutter next to the field   the composer's
          console prompt   moves this over by setting `--editor-gutter` on an
-         ancestor, so the two never overlap. -->
+         ancestor, so the two never overlap. It stays on one clipped line: a
+         long unbreakable token or a second wrapped line would otherwise paint
+         past the field's edge, over the toolbar beneath it. -->
     <span
       aria-hidden="true"
-      class="pointer-events-none absolute top-3 left-[var(--editor-gutter,0.875rem)] text-sm leading-5 text-dimmed"
+      class="pointer-events-none absolute top-3 right-3 left-[var(--editor-gutter,0.875rem)] truncate text-sm leading-5 text-dimmed"
     >
       {placeholder}
     </span>

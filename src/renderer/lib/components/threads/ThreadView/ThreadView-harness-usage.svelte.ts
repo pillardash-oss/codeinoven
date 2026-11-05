@@ -40,14 +40,14 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
   pendingGuardedSend = $state<GuardedSendPayload | null>(null)
 
   settingsForEngineeringState(state: EngineeringLifecycleState | null): ThreadSettings {
-    if (!state || (state.selectedStages.length === 0 && !state.autopilot)) {
+    if (!state || state.selectedStages.length === 0) {
       return { ...this.root.loadOlderMessages.settings, assignmentMode: false, loopMode: false }
     }
-    const { selectedStages, autopilot } = state
+    const { selectedStages } = state
     return {
       ...this.root.loadOlderMessages.settings,
-      assignmentMode: autopilot || selectedStages.includes('assignment'),
-      loopMode: autopilot || selectedStages.includes('achievement')
+      assignmentMode: selectedStages.includes('assignment'),
+      loopMode: selectedStages.includes('achievement')
     }
   }
 
@@ -64,7 +64,7 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
   }
 
   async confirmLifecycleReplacement(): Promise<void> {
-    const replacement = this.pendingLifecycleSelection ?? { stages: [], autopilot: false }
+    const replacement = this.pendingLifecycleSelection ?? { stages: [] }
     this.root.handleAgentEvent.engineeringLifecycle = await invoke(
       'engineeringLifecycle:cancel',
       this.root.handleAgentEvent.thread.projectId,
@@ -79,7 +79,7 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.thread.projectId,
       this.root.handleAgentEvent.thread.id
     )
-    if (replacement.stages.length > 0 || replacement.autopilot) {
+    if (replacement.stages.length > 0) {
       await this.applyLifecycleSelection(replacement)
     } else {
       this.root.contextUsage.updateSettings(
@@ -558,10 +558,7 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
       this.prdVersions = this.prdVersions.map((candidate) =>
         candidate.version === finalized.version ? finalized : candidate
       )
-      if (
-        hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'prd') &&
-        !this.root.handleAgentEvent.engineeringLifecycle?.autopilot
-      ) {
+      if (hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'prd')) {
         this.root.handleAgentEvent.engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           this.root.handleAgentEvent.thread.projectId,
@@ -571,30 +568,6 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
         this.root.contextUsage.updateSettings(
           this.settingsForEngineeringState(this.root.handleAgentEvent.engineeringLifecycle)
         )
-      } else if (this.root.handleAgentEvent.engineeringLifecycle?.autopilot) {
-        this.root.handleAgentEvent.engineeringLifecycle = await invoke(
-          'engineeringLifecycle:complete',
-          this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id,
-          'prd'
-        )
-        this.root.contextUsage.updateSettings(
-          this.settingsForEngineeringState(this.root.handleAgentEvent.engineeringLifecycle)
-        )
-        this.specFormulating = true
-        const generatedSpec = await invoke(
-          'agent:ensureInitialSpec',
-          this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id
-        )
-        await this.setActiveSpec(generatedSpec)
-        this.root.handleAgentEvent.engineeringLifecycle = await invoke(
-          'engineeringLifecycle:get',
-          this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id
-        )
-        this.studioDocument = 'spec'
-        this.root.submitSpecDecision.showSpecStudio = true
       }
     } catch (error) {
       this.prdError = error instanceof Error ? error.message : 'The PRD could not be finalized.'
@@ -613,15 +586,12 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
     this.prdError = ''
     try {
       let lifecycle = this.root.handleAgentEvent.engineeringLifecycle
-      if (lifecycle && !lifecycle.autopilot && !hasSelectedStage(lifecycle, 'spec')) {
+      if (lifecycle && !hasSelectedStage(lifecycle, 'spec')) {
         lifecycle = await invoke(
           'engineeringLifecycle:select',
           this.root.handleAgentEvent.thread.projectId,
           this.root.handleAgentEvent.thread.id,
-          {
-            stages: [...(lifecycle.selectedStages ?? []), 'spec'],
-            autopilot: false
-          }
+          { stages: [...(lifecycle.selectedStages ?? []), 'spec'] }
         )
       }
       if (lifecycle && lifecycle.activeStage === undefined && lifecycle.humanGate === undefined) {
@@ -736,7 +706,6 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
     await this.root.submitBrainstormDecision.submitBrainstormDecision('finalize', draft, '')
     if (
       this.root.handleAgentEvent.engineeringLifecycle &&
-      !this.root.handleAgentEvent.engineeringLifecycle.autopilot &&
       this.root.handleAgentEvent.engineeringLifecycle.activeStage === undefined &&
       this.root.handleAgentEvent.engineeringLifecycle.humanGate === undefined
     ) {
@@ -749,8 +718,7 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
             stages: [
               ...(this.root.handleAgentEvent.engineeringLifecycle.selectedStages ?? []),
               requestedStage
-            ],
-            autopilot: false
+            ]
           }
         )
       }

@@ -10,8 +10,7 @@
 </script>
 
 <!-- Shares the thread row's indicator slot, so it is sized to the same 14px box
-     and carries the Engineering Toolbox mark in the spec status colour   the
-     same icon and tone the composer's Toolbox shows while Engineering is on. -->
+     and carries the Engineering stage mark in the spec status colour. -->
 <span
   class="flex h-3.5 w-3.5 shrink-0 items-center justify-center"
   role="status"

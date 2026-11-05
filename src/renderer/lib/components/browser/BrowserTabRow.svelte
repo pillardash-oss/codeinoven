@@ -9,8 +9,11 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { feature } from '$lib/feature-registry'
   import { invoke } from '$lib/ipc.svelte'
+  import { copyText } from '$lib/copy-text'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { browserAgentClaims } from '$lib/stores/browser-agent-claims.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import { browserBookmarks } from '$lib/stores/browser-bookmarks.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { harnessName } from '$lib/components/shared/model-picker-helpers'
@@ -110,6 +113,22 @@
         modelId: thread.settings?.modelId
       })?.name ?? providerId
     return { harnessId, providerId, providerName }
+  })
+  /** The thread whose agent is working on this tab, when one is.
+   *
+   *  A tab that is a conversation's work names that conversation under the page
+   *  title, so the user can tell whose agent holds it without opening the panel. The
+   *  mark is the thread's own identity: its project's icon, exactly as the thread row
+   *  draws it. */
+  const agentThread = $derived.by(() => {
+    const claim = browserAgentClaims.claimFor(tab.id)
+    if (!claim) return null
+    const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === claim.threadId)
+    return {
+      title: thread?.title ?? 'Agent',
+      iconUrl:
+        scopeState.projects.find((candidate) => candidate.id === claim.projectId)?.iconUrl ?? null
+    }
   })
   const groups = $derived(globalBrowser.groups)
   /** The group this row's tab is filed under, when it has one. */
@@ -271,6 +290,9 @@
             case 'duplicate':
               globalBrowser.duplicateTab(tab.id)
               return
+            case 'copyTabId':
+              void copyText(tab.id, 'Tab ID copied')
+              return
             case 'newBefore':
               globalBrowser.createTab('', tab.groupId, tab.boxId, {
                 tabId: tab.id,
@@ -405,6 +427,17 @@
       >
         {label}
       </span>
+      {#if agentThread}
+        <span
+          class="flex min-w-0 items-center gap-1"
+          title={`Agent working here in ${agentThread.title}`}
+        >
+          {#if agentThread.iconUrl}
+            <img src={agentThread.iconUrl} alt="" class="h-2.5 w-2.5 shrink-0 object-contain" />
+          {/if}
+          <span class="truncate text-[0.625rem] text-muted">{agentThread.title}</span>
+        </span>
+      {/if}
       {#if agentModel}
         <span
           role="img"

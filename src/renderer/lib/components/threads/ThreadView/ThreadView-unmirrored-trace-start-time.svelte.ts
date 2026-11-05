@@ -616,12 +616,10 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
   async openAssignmentInEditor(content: AssignmentPlanContent): Promise<void> {
     this.root.submitSpecDecision.assignmentError = ''
     try {
-      await invoke(
-        'assignment:openInEditor',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
-        content
-      )
+      // The Assignment belongs to its coordinator, which a worker thread's view
+      // presents; key the call on the document's owner, never the mounted thread.
+      const owner = this.root.submitSpecDecision.assignmentOwner()
+      await invoke('assignment:openInEditor', owner.projectId, owner.threadId, content)
     } catch (error) {
       this.root.submitSpecDecision.assignmentError =
         error instanceof Error ? error.message : 'The assignment could not be opened.'

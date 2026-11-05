@@ -696,6 +696,17 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
   }
 
   async openSpecStudio(): Promise<void> {
+    // A tool call has started the stage but its document does not exist yet. The
+    // studio opens on its pending state and says the agent is still working,
+    // rather than asking main for a document that is not there and showing an
+    // error.
+    if (!this.root.submitBrainstormDecision.spec && this.root.sources.generationInFlight !== null) {
+      workspaceState.specAgentSidebarOpen = false
+      this.root.harnessUsage.studioDocument =
+        this.root.sources.generationInFlight === 'assignment' ? 'assignment' : 'spec'
+      this.root.submitSpecDecision.showSpecStudio = true
+      return
+    }
     // The workspace already holds the active specification, with its versions and
     // its validation: opening is a visibility change, not a fetch. Asking main for
     // the same document again put two round trips in front of the first paint of a

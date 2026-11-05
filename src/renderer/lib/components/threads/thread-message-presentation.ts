@@ -14,6 +14,7 @@ import { assistantAccentColor } from '$lib/assistant-icons'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
+import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
 import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
 import { resolveModelProvider, catalogModelEntry } from '$shared/provider-identity'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
@@ -41,12 +42,26 @@ import type {
  * is a pure function of a message plus the data needed to describe it.
  */
 
-/** Extract display text only; transport instructions never enter `parts`. */
+/**
+ * Extract display text only; transport instructions never enter `parts`.
+ *
+ * Parts are unique by id, and a body never repeats itself: two consecutive text
+ * parts carrying the exact same words are one answer the transcript folded
+ * twice (a live part plus the same part arriving again with its stored
+ * snapshot), so the second is dropped rather than printed twice.
+ */
 export function rawMessageText(msg: AgentMessage): string {
-  return msg.parts
-    .filter((p): p is Extract<AgentPart, { type: 'text' }> => p.type === 'text')
-    .map((p) => p.text)
-    .join('\n')
+  const seen = new Set<string>()
+  const lines: string[] = []
+  let previous: string | null = null
+  for (const part of msg.parts) {
+    if (part.type !== 'text' || seen.has(part.id)) continue
+    seen.add(part.id)
+    if (part.text === previous) continue
+    previous = part.text
+    lines.push(part.text)
+  }
+  return lines.join('\n')
 }
 
 export function explicitMessagePresentation(msg: AgentMessage): UserMessagePresentation | null {
@@ -350,8 +365,7 @@ export function resolveMessageHarnessId(msg: AgentMessage, fallbackHarnessId: st
 
 /** Display name for the harness that produced a message. */
 export function messageHarnessName(msg: AgentMessage, fallbackHarnessId: string): string {
-  const id = resolveMessageHarnessId(msg, fallbackHarnessId)
-  return getAgentIcon(id)?.name ?? id
+  return agentDisplayName(resolveMessageHarnessId(msg, fallbackHarnessId))
 }
 
 /**
@@ -368,7 +382,8 @@ export function harnessDisplayName(harnessId: string): string {
   if (harnessId === 'cline') return 'Cline'
   if (harnessId === 'pi') return 'Pi'
   if (harnessId === 'antigravity') return 'Antigravity'
-  return harnessId
+  if (harnessId.startsWith('acp-')) return agentDisplayName(harnessId)
+  return getAgentIcon(harnessId)?.name ?? harnessId
 }
 
 export interface MessageTokenRateSource {

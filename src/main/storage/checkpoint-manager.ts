@@ -57,9 +57,14 @@ export { MAX_CHECKPOINT_FAILURE_LENGTH }
  * user asked for.
  */
 const APP_CLOSED_TURN_MESSAGE = `${APP_NAME} closed before this turn finished.`
+/** Wording for a turn the user deliberately stopped from the Stop control. */
+const USER_STOPPED_TURN_MESSAGE = `${APP_NAME} stopped this turn at your request.`
 
 /** Row bound for one thread's checkpoint list (the read used to cap at 10 000). */
 const CHECKPOINT_LIST_MAX_ROWS = 10_000
+
+/** Bound on the paths one completion re-reads to keep its own writes on the card. */
+const MAX_EVIDENCE_RESCUES = 100
 
 /**
  * How recently a turn must have stopped short for the next dispatch of its
@@ -106,6 +111,13 @@ export interface TurnCheckpoint {
  */
 export interface TurnCompletionOptions {
   changeSources?: ReadonlyMap<string, FileChangeSource[]>
+  /**
+   * Paths the turn's own tools demonstrably wrote, independent of the live
+   * session map. The durable transcript is the one record that survives a
+   * re-registered session, so completion rescues a path from it even when the
+   * final snapshot diff and the live evidence map both lost the file.
+   */
+  evidencedPaths?: ReadonlySet<string>
   /** Paths this thread's precise file tools touched during the turn. */
   precisePaths?: ReadonlySet<string>
   /** Paths another running turn's file tools wrote, path → claimed ms. A precise
@@ -427,6 +439,38 @@ export class CheckpointManager {
         if (excludedPaths?.has(inherited.path) ?? false) continue
         changes.push(inherited)
       }
+      // A path this turn's own tools wrote is this turn's work even when the
+      // final snapshot diff does not list it. The whole-project diff comes from
+      // two cached walks, and a file a tool just wrote can be missing from it
+      // while another turn keeps the project contested; the turn then lost its
+      // only real change and the card recorded nothing at all. Re-read each such
+      // path and keep the change only when its content really differs from the
+      // turn's own baseline, so a no-op write is never invented as a change.
+      const rescued = new Set(changes.map((change) => change.path))
+      const evidencedPaths = new Set<string>([
+        ...(options.changeSources?.keys() ?? []),
+        ...(options.evidencedPaths ?? [])
+      ])
+      if (Object.keys(checkpoint.before.files).length > 0) {
+        let rescueCount = 0
+        for (const path of evidencedPaths) {
+          if (rescueCount >= MAX_EVIDENCE_RESCUES) break
+          if (rescued.has(path)) continue
+          if (excludedPaths?.has(path) ?? false) continue
+          if (changedPaths && !changedPaths.has(path)) continue
+          const beforeFile = checkpoint.before.files[path]
+          const current = await tracker.capturePath(projectPath, path).catch(() => null)
+          if (!current) continue
+          if (beforeFile) {
+            if (beforeFile.hash === current.hash) continue
+            changes.push({ path, kind: 'modified', before: beforeFile, after: current })
+          } else {
+            changes.push({ path, kind: 'created', after: current })
+          }
+          rescued.add(path)
+          rescueCount += 1
+        }
+      }
       // A turn whose real diff was entirely filtered away is the one case where
       // the file-changes card silently shows nothing. Record why, bounded, so a
       // missing card can be explained from the log instead of a reproduction.
@@ -463,7 +507,10 @@ export class CheckpointManager {
           // change goes missing.
           evidenced,
           claimants: [...claimants].slice(0, 3),
-          sample: allChanges.slice(0, 3).map((change) => change.path)
+          sample: allChanges.slice(0, 3).map((change) => change.path),
+          // The paths the turn proved it wrote. Non-empty here with `evidenced`
+          // at zero means completion was looking at the wrong diff.
+          evidencedPaths: [...evidencedPaths].slice(0, 5)
         })
       }
       const lineStats = await calculateLineStats(tracker, changes)
@@ -520,7 +567,10 @@ export class CheckpointManager {
         ...(stopReason ? { stopReason } : {}),
         ...(completionFailure ? { failure: completionFailure } : {})
       }
-      await this.save(updated)
+      // A turn that filtered its whole project-wide diff away keeps both
+      // snapshot maps. Trimming them to an empty change list is what left one
+      // real two-file turn with nothing to explain or heal.
+      await this.save(updated, changes.length === 0 && allChanges.length > 0)
       await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
         projectId,
         threadId
@@ -758,6 +808,71 @@ export class CheckpointManager {
         status: 'interrupted',
         stopReason: 'crash',
         failure: boundCheckpointFailure(`${interruption} Change capture failed: ${detail}`)
+      }
+      await this.save(updated)
+      await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+        projectId,
+        threadId
+      ])
+      return updated
+    }
+  }
+
+  /**
+   * Finalize the active turn as a deliberate user stop.
+   *
+   * A Stop is exactly the case where the harness may never report a terminal
+   * settle: the abort tears the session down, and a turn this process adopted
+   * from a departed instance has no harness here at all. Without this the
+   * `active_turns` ledger row and its `active` checkpoint outlive the stop, and
+   * every surface that reads the ledger keeps claiming work that no process is
+   * doing   the thread says working while the thread, its workers and its
+   * Assignment are all stopped. Distinct from `markActiveInterrupted`, which
+   * words a crash: this one is expected, so the file-changes card stays neutral.
+   */
+  async markActiveUserStopped(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
+    // A Stop is an interaction path, so the ledger probe reads on the
+    // maintenance worker like every other read this file makes on the turn path.
+    const rows = await this.queryRows<{ turn_id: string | null }>(
+      'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      [projectId, threadId],
+      1
+    )
+    const active = rows[0]
+    if (!active?.turn_id) return null
+    const checkpoint = await this.get(projectId, threadId, active.turn_id)
+    if (!checkpoint || checkpoint.status !== 'active') {
+      // The turn already settled but its ledger row survived; a stop still has
+      // to release the row, because the row is what other surfaces read.
+      if (checkpoint) {
+        await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+          projectId,
+          threadId
+        ])
+      }
+      return checkpoint
+    }
+    try {
+      return await this.completeTurn(
+        projectId,
+        threadId,
+        checkpoint.id,
+        checkpoint.before.projectRoot,
+        'interrupted',
+        USER_STOPPED_TURN_MESSAGE,
+        undefined,
+        {},
+        'user-stop'
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const updated: TurnCheckpoint = {
+        ...checkpoint,
+        status: 'interrupted',
+        stopReason: 'user-stop',
+        failure: boundCheckpointFailure(
+          `${USER_STOPPED_TURN_MESSAGE} Change capture failed: ${detail}`
+        )
       }
       await this.save(updated)
       await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
@@ -1409,8 +1524,8 @@ export class CheckpointManager {
     return updated
   }
 
-  private async save(checkpoint: TurnCheckpoint): Promise<void> {
-    const stored = this.compactCheckpoint(checkpoint)
+  private async save(checkpoint: TurnCheckpoint, keepProjectMaps = false): Promise<void> {
+    const stored = this.compactCheckpoint(checkpoint, keepProjectMaps)
     await this.writeRow(
       'INSERT OR REPLACE INTO turn_checkpoints(turn_id, project_id, thread_id, data, created_at) VALUES(?, ?, ?, ?, ?)',
       [stored.id, stored.projectId, stored.threadId, JSON.stringify(stored), stored.createdAt]
@@ -1423,10 +1538,13 @@ export class CheckpointManager {
    * row size (each entry is a tracked repo file), so a finished checkpoint only
    * retains what rollback, summaries, diffs, and blob pruning actually need.
    * Unfiltered empty checkpoints keep their maps for legacy recovery. A
-   * filtered empty checkpoint has proved that it owns no paths, so retaining
-   * two full project maps would waste storage on every read-only turn.
+   * filtered empty checkpoint normally drops them, because retaining two full
+   * project maps on every read-only turn would waste storage, but a turn whose
+   * whole project-wide diff was filtered away passes `keepProjectMaps`: that is
+   * the one state where the maps are the only evidence of what went missing.
    */
-  private compactCheckpoint(checkpoint: TurnCheckpoint): TurnCheckpoint {
+  private compactCheckpoint(checkpoint: TurnCheckpoint, keepProjectMaps = false): TurnCheckpoint {
+    if (keepProjectMaps) return checkpoint
     if (checkpoint.changes.length === 0 && checkpoint.changeFilterApplied !== true) {
       return checkpoint
     }

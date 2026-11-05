@@ -734,14 +734,16 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
     })
 
     /**
-     * Tell main which page a conversation's thread browser is on.
+     * Tell main which page a conversation's thread browser is assigned.
      *
      * A thread browser is the browser a conversation shares with its agent, so this
-     * is what lets the agent's browser capability reach the page the user is
-     * reading, in whatever box the user put it, instead of only pages it opened
-     * itself. It is reported for the conversation on screen, which is the one whose
-     * strip is in use, and the report never moves that strip: only the app writes
-     * this, so no agent operation can switch the tab or the box under the user.
+     * is what lets the agent's browser capability reach the page the user handed
+     * that conversation, in whatever box the user put it, instead of only pages it
+     * opened itself. It is reported for the conversation on screen, and it is filed
+     * per conversation: browsing in one thread of a project never reassigns another
+     * thread's page, which is what lets several agents work on one strip at once.
+     * Only the app writes this, so no agent operation can switch the tab or the box
+     * under the user.
      */
     $effect(() => {
       const projectId = contextSidebarState.dockedProjectId
@@ -750,16 +752,17 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
       if (!projectId || !threadId) return
       const scope = contextSidebarState.browserScopeIdFor(projectId, threadId)
       const reported = this.root.state.reportedThreadBrowserPage
+      const sameConversation = reported?.projectId === projectId && reported.threadId === threadId
       if (!page || contextSidebarState.browserScopeIdFor(page.projectId, page.threadId) !== scope) {
         // The strip on screen holds no page for this conversation, so the page main
         // remembers for it is one nothing shows any more.
-        if (reported?.scope !== scope) return
+        if (!sameConversation) return
         this.root.state.reportedThreadBrowserPage = null
-        void invoke('browser:unbindThreadBrowserPage', scope).catch(() => {})
+        void invoke('browser:unbindThreadBrowserPage', projectId, threadId).catch(() => {})
         return
       }
       if (
-        reported?.scope === scope &&
+        sameConversation &&
         reported.tabId === page.tabId &&
         reported.boxId === page.boxId &&
         reported.url === page.url
@@ -767,12 +770,13 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
         return
       }
       this.root.state.reportedThreadBrowserPage = {
-        scope,
+        projectId,
+        threadId,
         tabId: page.tabId,
         boxId: page.boxId,
         url: page.url
       }
-      void invoke('browser:bindThreadBrowserPage', scope, page).catch(() => {})
+      void invoke('browser:bindThreadBrowserPage', projectId, threadId, page).catch(() => {})
     })
 
     $effect(() => {

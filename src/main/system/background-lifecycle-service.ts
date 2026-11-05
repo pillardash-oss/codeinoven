@@ -106,6 +106,10 @@ export interface BackgroundLifecycleDeps {
   storage: StorageEngine
   /** Create the window, or show and focus the existing one. */
   openWindow: () => void
+  /** Show the Settings page in the window, opening it when the app is parked. */
+  openSettings: () => void
+  /** Open a second instance beside this one, sharing the same data. */
+  newInstance: () => void
   /** Destroy the current window. Its renderer process goes with it. */
   destroyWindow: () => void
   /** Run the real quit (sets `quitConfirmed` and calls `app.quit()`). */
@@ -680,9 +684,11 @@ export class BackgroundLifecycleService {
   private buildContextMenu(): Menu {
     return Menu.buildFromTemplate([
       { label: `Open ${APP_NAME}`, click: () => this.deps.openWindow() },
+      { label: 'Settings…', click: () => this.deps.openSettings() },
       { type: 'separator' },
       this.updateMenuItem(),
       { type: 'separator' },
+      { label: 'New Instance', click: () => this.deps.newInstance() },
       forceRestartMenuItem(() => this.deps.quitApp()),
       { label: `Quit ${APP_NAME}`, click: () => this.deps.quitApp() }
     ])
@@ -710,16 +716,17 @@ export class BackgroundLifecycleService {
       case 'waiting':
         return { label: 'Restarting to Update…', enabled: false }
       default:
-        return { label: 'Check for Updates', click: () => this.runTrayUpdate() }
+        return { label: 'Check for Updates', click: () => this.requestUpdateCheck() }
     }
   }
 
   /**
-   * The user asked for an update from the menu bar. Show the check in the menu
-   * immediately so the click has visible feedback, then let the updater drive the
-   * rest: download, then a silent install that relaunches windowless.
+   * The user asked for an update from the menu bar or the application menu. Show
+   * the check in the menu immediately so the click has visible feedback, then let
+   * the updater drive the rest: download, then a silent install that relaunches
+   * windowless.
    */
-  private runTrayUpdate(): void {
+  requestUpdateCheck(): void {
     const updater = this.updater
     if (!updater) return
     this.trayCheckRequested = true

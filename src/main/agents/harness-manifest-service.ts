@@ -5,6 +5,7 @@ import type {
   HarnessManifestEntry
 } from '../../lib/types'
 import { harnessLoadsAgentsMd, listHarnesses } from './harness-registry'
+import { currentAcpAgents } from '../drivers/acp/acp-agents-store'
 import type { HarnessManifestBehavior } from './harness-registry'
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -138,12 +139,22 @@ export class HarnessManifestService {
     await this.persist()
   }
 
-  /** Effective behavior views for every known harness (Settings surface). */
+  /**
+   * Effective behavior views for every known harness (Settings surface).
+   *
+   * The ACP agents the user added are harnesses too, and their rows disclose the
+   * same behaviors, so they are listed alongside the registry: a confirmation
+   * made on an agent row has to come back on the next read or the switch would
+   * appear to reset itself.
+   */
   async list(): Promise<HarnessManifestEntry[]> {
     await this.load()
     const entries: HarnessManifestEntry[] = []
-    for (const harness of listHarnesses()) {
-      const harnessId = harness.id
+    const harnessIds = [
+      ...listHarnesses().map((harness) => harness.id),
+      ...currentAcpAgents().map((agent) => agent.id)
+    ]
+    for (const harnessId of harnessIds) {
       const declared = harnessLoadsAgentsMd(harnessId)
       const confirmed = this.state.confirmed[harnessId]?.['loadsAgentsMd']
       entries.push({

@@ -11,7 +11,6 @@ import { isCuaDaemonTransportFailure } from '../cua-bridge-service'
 import { designGroupBriefing } from '../../design/design-group-service'
 import { designSessionBriefing } from '../cio-design-prompt'
 import { videoSessionBriefing } from '../cio-video-prompt'
-import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -33,6 +32,7 @@ import {
   APP_CONTROL_CATALOG_TOOL_NAME
 } from '../../../lib/app-control-tools'
 import {
+  CREATE_ACHIEVEMENT_TOOL_NAME,
   CREATE_ASSIGNMENT_TOOL_NAME,
   CREATE_BRAINSTORM_TOOL_NAME,
   CREATE_PRD_TOOL_NAME,
@@ -195,6 +195,8 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.engineering(state, input, 'spec')
       case CREATE_ASSIGNMENT_TOOL_NAME:
         return (state, input) => this.engineering(state, input, 'assignment')
+      case CREATE_ACHIEVEMENT_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'achievement')
       case PAWN_AGENT_TOOL_NAME:
         return (state, input) => this.pawn(state, input)
       case EXT_SIMULATION_TOOL_NAME:
@@ -805,27 +807,31 @@ export class UtilityOrchestrationServiceOrchestration {
   /**
    * Tell the app that this turn entered an authored-work session.
    *
-   * Only the two app-owned authored-work capabilities count as entering one:
-   * picking up any other utility is neither a design nor a composition. Reported
-   * on the real activation and not on the already-active no-op, because the
-   * first activation is the moment the agent entered the session. Best-effort,
-   * because the record is how the user watches the work rather than the work
-   * itself, and a failed write must never fail the activation that was asked
-   * for.
+   * Only the app-owned authored-work capabilities count as entering one: picking
+   * up any other utility is neither a design nor a composition. Reported on the
+   * real activation and not on the already-active no-op, because the first
+   * activation is the moment the agent entered the session. Best-effort, because
+   * the record is how the user watches the work rather than the work itself, and
+   * a failed write must never fail the activation that was asked for.
+   *
+   * A video is the one exception, because picking the capability up is not the
+   * same act for it. A design capability is only ever used to make a design, so
+   * activating it is entering that session. The video capability also makes every
+   * throwaway clip a conversation is handed, and that work is delivered inline as
+   * an artifact rather than edited: an activation recorded as a session would dock
+   * a video editor over a film nobody is going to open, and keep it there for the
+   * rest of the thread's life. The session is therefore recorded by the work
+   * itself, on the first preview of a composition that lives where compositions
+   * live (see `recordPreview`), which is the same fact for a thread the agent
+   * started and one the user opened with the tag.
    */
   noteAuthoredWorkSession(state: TurnState, utilityId: string): void {
-    const kind: AuthoredWorkKind | null =
-      utilityId === APP_DESIGN_UTILITY_ID
-        ? 'design'
-        : utilityId === APP_VIDEO_UTILITY_ID
-          ? 'video'
-          : null
-    if (!kind) return
+    if (utilityId !== APP_DESIGN_UTILITY_ID) return
     try {
       this.host.authoredWorkSessionRecorder?.({
         projectId: state.request.projectId,
         threadId: state.request.threadId,
-        kind
+        kind: 'design'
       })
     } catch (error) {
       Logger.error('Authored-work session record failed:', error)

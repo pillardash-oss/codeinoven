@@ -1138,6 +1138,16 @@ minimize with the browser, terminal and pull request reader, and the panel's
 sections become that strip's tabs. It is read-only where the app must own the
 value and editable where the user must.
 
+The strip in reading order is **All**, **Behaviour**, **Connections**, **Agents**,
+**Issues**, then the three sections that only earn a tab when they hold something:
+**Schedule** (only when a cadence is agreed and scheduling is switched on),
+**Wakes** (only when a thread of this assistant is armed) and **Reporting** (only
+once a channel or a priority is agreed). A quiet assistant therefore shows five
+tabs, and Issues stays next to the sections it reports on instead of being pushed
+to the far end. A hidden section keeps its row on **All**, so the state is still
+stated and the row still opens it: the body renders and no strip tab reads as
+active, rather than the panel snapping back to **All**.
+
 - **All** — pause or resume the assistant, plus one summary row per tab with
   the state in one line and a way into that tab. An amber icon marks each section
   that still needs setup. Above the rows sit **Last run**, **Last success**,

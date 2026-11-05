@@ -1,4 +1,4 @@
-import { Menu, type BrowserWindow, type MenuItemConstructorOptions } from 'electron'
+import type { BrowserWindow } from 'electron'
 
 interface KeyboardShortcutInput {
   type: string
@@ -39,38 +39,6 @@ function isToggleDevToolsShortcut(input: KeyboardShortcutInput): boolean {
     (input.control && input.shift && isInspectKey) ||
     (input.meta && input.alt && isInspectKey)
   )
-}
-
-/**
- * Hide the application menu in production where the platform allows it. macOS
- * keeps only its required application, edit, and window menus.
- */
-export function installProductionApplicationMenu(appName: string): void {
-  if (process.platform !== 'darwin') {
-    Menu.setApplicationMenu(null)
-    return
-  }
-
-  const template: MenuItemConstructorOptions[] = [
-    {
-      label: appName,
-      submenu: [
-        { role: 'about' },
-        { type: 'separator' },
-        { role: 'services' },
-        { type: 'separator' },
-        { role: 'hide' },
-        { role: 'hideOthers' },
-        { role: 'unhide' },
-        { type: 'separator' },
-        { role: 'quit' }
-      ]
-    },
-    { role: 'editMenu' },
-    { role: 'windowMenu' }
-  ]
-
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
 }
 
 /** Keep reload disabled while exposing a menu-independent DevTools shortcut. */

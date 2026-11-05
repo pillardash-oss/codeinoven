@@ -243,7 +243,9 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
         {#if checkpoint.failure}
           <div class="px-3 py-2.5">
             <CardNotice
-              tone={checkpoint.stopReason === 'app-closed' ? 'default' : 'danger'}
+              tone={checkpoint.stopReason === 'app-closed' || checkpoint.stopReason === 'user-stop'
+                ? 'default'
+                : 'danger'}
               class="text-[0.6875rem]"
             >
               {checkpoint.failure}

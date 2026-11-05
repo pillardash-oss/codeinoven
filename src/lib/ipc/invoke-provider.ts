@@ -60,6 +60,8 @@ import type {
   VisionModelRecord
 } from '../types'
 import type { WorkerNameSettings } from '../assignment/worker-names'
+import type { AcpAgentAuthStatus, AcpAgentInput, AcpAgentSettings } from '../acp'
+import type { CustomVendorIconSet, CustomVendorIconVariant } from '../custom-vendor-icon'
 import type { CioPromptId, CioPromptSetting } from '../cio-prompts'
 import type { Contract } from './contract-helpers'
 
@@ -117,6 +119,14 @@ export const invokeProviderContract = {
   'providers:check': {} as Contract<[providerId: string], ProviderConnectionInfo>,
   'providers:checkAll': {} as Contract<[force?: boolean], ProviderConnectionInfo[]>,
   'providers:getStatus': {} as Contract<[], ProviderConnectionInfo[]>,
+  'acpAgents:list': {} as Contract<[], AcpAgentSettings>,
+  'acpAgents:save': {} as Contract<[input: AcpAgentInput], AcpAgentSettings>,
+  'acpAgents:remove': {} as Contract<[id: string], AcpAgentSettings>,
+  'acpAgents:authStatus': {} as Contract<[id: string, projectPath?: string], AcpAgentAuthStatus>,
+  'acpAgents:authenticate': {} as Contract<
+    [id: string, methodId: string, projectPath?: string],
+    AcpAgentAuthStatus
+  >,
   'harnessUpdates:check': {} as Contract<[harnessId: string], HarnessUpdateStatus>,
   'harnessUpdates:checkAll': {} as Contract<[force?: boolean], HarnessUpdateStatus[]>,
   'harnessUpdates:handoff': {} as Contract<[harnessId: string], HarnessUpdateHandoff>,
@@ -161,6 +171,12 @@ export const invokeProviderContract = {
   >,
   'providerAccounts:cancelPending': {} as Contract<[pendingAccountId: string], void>,
   'providerAccounts:rename': {} as Contract<[accountId: string, label: string], HarnessAccount>,
+  /** Hide an account from the pickers that offer one, or restore it. The
+   *  account stays connected either way. */
+  'providerAccounts:setAccountHidden': {} as Contract<
+    [accountId: string, hidden: boolean],
+    HarnessAccount
+  >,
   /** Mark an account as its harness's default for the account's provider.
    *  Returns the harness's full account list so callers can refresh caches. */
   'providerAccounts:setDefault': {} as Contract<[accountId: string], HarnessAccount[]>,
@@ -190,8 +206,11 @@ export const invokeProviderContract = {
     [harnessId: string, providerId: string, hidden: boolean],
     string[]
   >,
-  'customVendors:listIcons': {} as Contract<[], Record<string, string>>,
-  'customVendors:saveIcon': {} as Contract<[providerId: string, image: string], string>,
+  'customVendors:listIcons': {} as Contract<[], Record<string, CustomVendorIconSet>>,
+  'customVendors:saveIcon': {} as Contract<
+    [providerId: string, image: string | null, variant?: CustomVendorIconVariant],
+    CustomVendorIconSet
+  >,
   'baseUrlProviders:list': {} as Contract<[], BaseUrlProvider[]>,
   'baseUrlProviders:create': {} as Contract<[input: BaseUrlProviderCreateRequest], BaseUrlProvider>,
   'baseUrlProviders:update': {} as Contract<

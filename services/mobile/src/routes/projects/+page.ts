@@ -3,10 +3,10 @@ import { api } from '#lib/api/client'
 import { rememberWorkView } from '#lib/work-view'
 
 /**
- * The other reading of the work list: every project with what is happening in
- * it. It loads through the router like the thread list, so switching the
- * header's title is a new read rather than a state the screen has to keep in
- * step by hand.
+ * The work list read as projects. Every project arrives with its threads in the
+ * same read, because a strip unfolds what it already holds instead of fetching a
+ * second page when it is opened. The strips are drawn in the order the service
+ * ranks them, by activity.
  */
 export const load: PageLoad = async ({ parent }) => {
   await parent()
@@ -17,11 +17,11 @@ export const load: PageLoad = async ({ parent }) => {
       api.projects({ sort: 'activity', limit: 100 }),
       api.threads({ limit: 200 })
     ])
-    return { projects: projectPage.items, threadCount: threadPage.items.length, error: null }
+    return { projects: projectPage.items, threads: threadPage.items, error: null }
   } catch (cause) {
     return {
       projects: [],
-      threadCount: 0,
+      threads: [],
       error: cause instanceof Error ? cause.message : 'Projects could not be loaded.'
     }
   }

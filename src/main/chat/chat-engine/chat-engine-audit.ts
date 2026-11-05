@@ -25,7 +25,7 @@ import { workflowActionPresentation } from '../../../lib/workflow-action-present
 import { ensureFeatureSlug, requireLocalProject } from '../../../lib/project-artifacts'
 import type { AssignmentAuditRepairManifest } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
-import { formatOpenAnnotations } from './chat-engine-prompts'
+import { ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT, formatOpenAnnotations } from './chat-engine-prompts'
 import { isRecord } from './chat-engine-generated-artifacts'
 import { auditRequiresRework } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
@@ -136,6 +136,7 @@ export class ChatEngineAudit {
         `Worker ${task?.workerName ?? task?.threadId ?? taskId} reported task “${task?.title ?? taskId}”.`,
         'Inspect the worker thread, project changes, audit-checklist.md, baseline.txt, and check.txt. Correctly audit every checklist item.',
         'Call the review-task API with pass, rework, or fail. If it passes, assign every newly ready task returned by the API. If you mark it fail, re-dispatch it immediately with assign-task so a fresh worker retries it   a failed task is not terminal.',
+        this.host.units['assignment'].coordinatorWaitingInstruction(),
         this.host.units['assignment-run'].assignmentApiInstructions(
           this.host.units['assignment-run'].assignmentApiCapability({
             role: 'coordinator',
@@ -870,9 +871,7 @@ export class ChatEngineAudit {
           achievement
             ? 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.'
             : 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then request a fresh audit when ready.',
-          ...(achievement
-            ? [await this.host.units['turns-dispatch'].cioPrompt('achievement-implementation')]
-            : []),
+          ...(achievement ? [ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT] : []),
           ...(report.brainstormId && report.brainstormVersion
             ? [
                 `Implementation contract: ${await this.host.units['media-artifacts'].artifactRef(projectId, coordinatorThreadId, join('versions', `${report.brainstormId}-v${report.brainstormVersion}-brainstorm.md`))}. Use this finalized Brainstorm for the corrections.`

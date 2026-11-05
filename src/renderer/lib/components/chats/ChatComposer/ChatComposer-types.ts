@@ -17,8 +17,6 @@ import type {
   AgentModelSelection,
   AttachmentStorageScope,
   UsageEfficiencyKpis,
-  EngineeringLifecycleSelectionInput,
-  EngineeringLifecycleState,
   HarnessAccount
 } from '$shared/types'
 
@@ -131,11 +129,6 @@ export interface Props {
   onRelocateItem?: ComposerRelocationRequest
   /** False on the Chats tab   plain chats never surface the engineer toggle. */
   showEngineeringMode?: boolean
-  engineeringLifecycle?: EngineeringLifecycleState | null
-  /** Overrides the settings-derived Engineering activity for the toolbox
-   *  icon so staged (send-deferred) selections light or dim it live. */
-  engineeringActive?: boolean
-  onEngineeringLifecycleSelect?: (input: EngineeringLifecycleSelectionInput) => void | Promise<void>
   /** True on the Chats tab   surfaces the chat-only Engineering and File System toggles. */
   showChatModes?: boolean
   /** Independent (spec-less) audit: the thread has work and the audit was never initialized. */
@@ -144,9 +137,6 @@ export interface Props {
   independentAuditEnabled?: boolean
   /** Called when the user toggles the independent audit switch. */
   onIndependentAuditToggle?: (enabled: boolean) => void | Promise<void>
-  /** Engineering toolbox is hidden (Independent Audit staged or enabled
-   *  the two controls are mutually exclusive before a send commits either). */
-  engineeringToolboxHidden?: boolean
   /** Hides the permission level selector and forces auto review   chats are
    *  for questions and research, so they always run with auto permissions. */
   hidePermissionSelector?: boolean
@@ -245,11 +235,9 @@ export type ChatComposerSurfaceProps = {
       | 'initialThreadReferences'
       | 'references'
       | 'showEngineeringMode'
-      | 'engineeringLifecycle'
       | 'showChatModes'
       | 'independentAuditAvailable'
       | 'independentAuditEnabled'
-      | 'engineeringToolboxHidden'
       | 'hidePermissionSelector'
       | 'readOnlyMode'
       | 'allowAttachments'
@@ -285,11 +273,9 @@ export type ChatComposerSurfaceProps = {
   | 'initialThreadReferences'
   | 'references'
   | 'showEngineeringMode'
-  | 'engineeringLifecycle'
   | 'showChatModes'
   | 'independentAuditAvailable'
   | 'independentAuditEnabled'
-  | 'engineeringToolboxHidden'
   | 'hidePermissionSelector'
   | 'readOnlyMode'
   | 'allowAttachments'

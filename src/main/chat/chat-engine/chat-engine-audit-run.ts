@@ -19,6 +19,9 @@ import { rawErrorDetail, rawErrorMessage } from './chat-engine-errors'
 import {
   ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
   AUDIT_ALLOWED_TOOLS,
+  AUDIT_GENERATION_SYSTEM_PROMPT,
+  AUDIT_REPAIR_SYSTEM_PROMPT,
+  INDEPENDENT_AUDIT_SYSTEM_PROMPT,
   formatOpenAnnotations
 } from './chat-engine-prompts'
 import {
@@ -201,10 +204,7 @@ export class ChatEngineAuditRun {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.host.units['turns-dispatch'].cioPrompt('independent-audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [INDEPENDENT_AUDIT_SYSTEM_PROMPT, utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -700,11 +700,9 @@ export class ChatEngineAuditRun {
       )
       try {
         const auditSystemPrompt = repairing
-          ? await this.host.units['turns-dispatch'].cioPrompt('audit-repair')
+          ? AUDIT_REPAIR_SYSTEM_PROMPT
           : [
-              await this.host.units['turns-dispatch'].cioPrompt(
-                spec ? 'audit-report' : 'independent-audit-report'
-              ),
+              spec ? AUDIT_GENERATION_SYSTEM_PROMPT : INDEPENDENT_AUDIT_SYSTEM_PROMPT,
               ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
               utilityInstructions
             ]
@@ -1017,7 +1015,7 @@ export class ChatEngineAuditRun {
           text: prompt,
           attachments: [],
           systemPrompt: [
-            await this.host.units['turns-dispatch'].cioPrompt('audit-report'),
+            AUDIT_GENERATION_SYSTEM_PROMPT,
             ...(!spec
               ? [
                   'For this audit, the supplied finalized Brainstorm replaces the approved specification as the implementation contract. Apply all audit checks to that document.'
@@ -1204,10 +1202,7 @@ export class ChatEngineAuditRun {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.host.units['turns-dispatch'].cioPrompt('audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [AUDIT_GENERATION_SYSTEM_PROMPT, utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,

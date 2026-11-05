@@ -20,6 +20,11 @@ import {
 import { isRemoteOvenId, LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
 import { ASSISTANT_SPACE_ID } from '../../lib/types/project'
+import {
+  acpHarnessDescriptors,
+  ensureAcpAgentsLoaded,
+  currentAcpAgents
+} from '../drivers/acp/acp-agents-store'
 import { listHarnesses } from '../agents/harness-registry'
 import { Logger } from '../system/logger'
 import { ORCHESTRATION_STATUS_TOOL_NAME } from '../../lib/orchestration-tools'
@@ -272,7 +277,12 @@ async function readTargets(
         installedVersion: item.installedVersion
       }))
     })),
-    harnesses: listHarnesses().map((harness) => ({ id: harness.id, name: harness.name })),
+    harnesses: [
+      ...listHarnesses().map((harness) => ({ id: harness.id, name: harness.name })),
+      // ACP agents are harnesses too: an agent dispatching work must be able to
+      // pick one the user added, not only the ones shipped here.
+      ...acpHarnessDescriptors(await acpAgentsList())
+    ],
     models: catalogsForHarness.map((catalog) => ({
       harnessId: catalog.harnessId,
       providerId: catalog.id,
@@ -353,7 +363,10 @@ async function dispatchWork(
   const ovenPath = optionalString(input, 'ovenPath')
   const accountId = optionalString(input, 'accountId')
 
-  const harness = listHarnesses().find((candidate) => candidate.id === harnessId)
+  const acpAgents = await acpAgentsList()
+  const harness =
+    listHarnesses().find((candidate) => candidate.id === harnessId) ??
+    acpHarnessDescriptors(acpAgents).find((candidate) => candidate.id === harnessId)
   if (!harness) throw new Error(`Unknown harness "${harnessId}". Read cio_orchestrate_targets.`)
 
   const [catalogs, accounts, state, requestingThread] = await Promise.all([
@@ -619,4 +632,10 @@ export function buildOrchestrationReportPrompt(
     `Read that thread with ${ORCHESTRATION_STATUS_TOOL_NAME} (threadId ${dispatch.runThreadId}) and report its result to the user.`,
     'Do not dispatch anything new, and do not start the work again.'
   ].join(' ')
+}
+
+/** The user's ACP agents, loaded so a dispatch target list is complete. */
+async function acpAgentsList(): Promise<ReturnType<typeof currentAcpAgents>> {
+  await ensureAcpAgentsLoaded()
+  return currentAcpAgents()
 }

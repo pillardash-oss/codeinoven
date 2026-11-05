@@ -1,7 +1,7 @@
 import { MEMORY_EXTRACTION_LIMITS } from '../memory-service'
 import { QUESTION_ANSWER_MESSAGE_PREFIX } from '../../../lib/question-answers'
 import { isTodoToolPart } from '../../../lib/agent-todos'
-import { patternActionPhrase } from '../../../lib/tool-action-label'
+import { patternActionPhrase, resolveToolCall } from '../../../lib/tool-action-label'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import type { TitleAttemptAccounting } from '../../drivers/persistent-cli-driver'
 import type {
@@ -117,8 +117,10 @@ export function truncateToolResult(text: string): string {
  * reason to trust (see formatConversationTranscript).
  */
 export function describeToolPart(part: Extract<AgentPart, { type: 'tool' }>): string {
-  const action = patternActionPhrase(part.tool) ?? `used a tool (${part.tool})`
-  const subject = summarizeToolInput(part.state.input ?? {})
+  // A meta-tool call is described by the tool it reached, not by the wrapper.
+  const call = resolveToolCall(part.tool, part.state.input ?? {})
+  const action = patternActionPhrase(call.tool) ?? `used a tool (${call.tool})`
+  const subject = summarizeToolInput(call.input)
   const line = subject ? `${action}: ${subject}` : action
   if (part.state.status === 'error' || part.state.error) {
     const error = part.state.error ? `   ${truncateToolResult(part.state.error)}` : ''

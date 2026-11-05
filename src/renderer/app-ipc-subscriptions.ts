@@ -27,6 +27,7 @@ import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+import { browserAgentClaims } from '$lib/stores/browser-agent-claims.svelte'
 import { followUpsState } from '$lib/stores/follow-ups.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
 import { updateBlockers } from '$lib/stores/update-blockers.svelte'
@@ -61,6 +62,8 @@ export interface AppIpcSubscriptionDeps {
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
   handleNewTerminalShortcut: () => void
+  /** A native menu asked for Settings; the shell owns the navigation. */
+  openSettings: () => void
   goBack: () => Promise<void>
   goForward: () => Promise<void>
   handleOpenedPaths: (paths: OpenedPath[]) => Promise<void>
@@ -391,6 +394,9 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   const unsubscribeHistoryForward = subscribeGuarded('window:historyForward', () => {
     void deps.goForward()
   })
+  const unsubscribeOpenSettings = subscribeGuarded('window:openSettings', () => {
+    deps.openSettings()
+  })
   // OS hand-offs that arrive after mount; the queue drain below covers the
   // paths that were already waiting when the renderer started.
   const unsubscribeOpenedPaths = subscribeGuarded('openWith:paths', (paths: OpenedPath[]) => {
@@ -421,6 +427,8 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // Load which threads carry a user note so sidebar rows and the right-dock
   // indicator can react; the store keeps itself in sync via `note:changed`.
   threadNotesState.init()
+  // Which tabs agents are on, so a tab row can name the thread using it.
+  browserAgentClaims.init()
   // Load which threads have an agent-scheduled wake so their rows can show it;
   // the store keeps itself in sync via `followUps:changed`.
   followUpsState.init()
@@ -444,6 +452,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeNewTerminalShortcut()
     unsubscribeHistoryBack()
     unsubscribeHistoryForward()
+    unsubscribeOpenSettings()
     unsubscribeOpenedPaths()
     updaterState.destroy()
     updateBlockers.destroy()

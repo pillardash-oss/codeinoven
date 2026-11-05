@@ -287,6 +287,18 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
 
   assignmentGenerationTraceStartedAt = $state<number | undefined>()
 
+  /**
+   * The Engineering artifact a tool started that is still being generated, or
+   * null when nothing is in flight. A tool call can take minutes before its
+   * document exists, which is exactly the window where the studio has nothing
+   * to show yet even though the agent is already working.
+   */
+  generationInFlight = $derived.by((): 'spec' | 'assignment' | null => {
+    if (this.specGenerationTraceActive) return 'spec'
+    if (this.assignmentGenerationTraceActive) return 'assignment'
+    return null
+  })
+
   specTracePartStart(part: AgentPart): number | undefined {
     if (part.type === 'reasoning') return part.time?.start
     if (part.type === 'tool') return part.state.time?.start

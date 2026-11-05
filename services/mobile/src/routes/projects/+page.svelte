@@ -1,95 +1,126 @@
 <script lang="ts">
+  import { SvelteSet } from 'svelte/reactivity'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import PanelBar from '#lib/components/PanelBar.svelte'
   import Mark from '#lib/components/Mark.svelte'
+  import ThreadRow from '#lib/components/ThreadRow.svelte'
   import TitleMenu from '#lib/components/TitleMenu.svelte'
+  import { fold } from '#lib/motion'
   import { toneColor } from '#lib/api/status'
-  import { arrive } from '#lib/motion'
-  import type { Project } from '#lib/api/types'
+  import type { Project, Thread } from '#lib/api/types'
   import type { PageData } from './$types'
 
   /**
-   * The work list read as projects: what each one is called, how many threads it
-   * holds, and what those threads are doing. Choosing a project opens its threads
-   * in the other reading of this same list, which is the phone's whole scope
-   * mechanism, so nothing here duplicates the thread list.
+   * The work list read as projects, drawn the way the design draws the desktop
+   * sidebar on a phone: one foldable strip per project, its identity and the
+   * states that exist right now, and the project's threads inside it when it is
+   * open. The strip is the whole control, so reading a project never leaves this
+   * list.
    */
-  interface ClusterEntry {
+  interface StatusEntry {
     count: number
     label: string
-    tone: string
-    toneName: string
+    tone: 'working' | 'needs' | 'spec'
+    color: string
   }
 
   let { data }: { data: PageData } = $props()
 
+  /** Which strips are open. Every project starts folded, as the desktop draws it. */
+  let open = $state(new SvelteSet<string>())
+
+  let grouped = $derived.by(() => {
+    const groups = new Map<string, Thread[]>()
+    for (const thread of data.threads) {
+      const held = groups.get(thread.projectId)
+      if (held) held.push(thread)
+      else groups.set(thread.projectId, [thread])
+    }
+    return groups
+  })
+
+  function threadsOf(projectId: string): Thread[] {
+    return grouped.get(projectId) ?? []
+  }
+
+  function toggle(projectId: string): void {
+    if (open.has(projectId)) open.delete(projectId)
+    else open.add(projectId)
+  }
+
+  function panelId(projectId: string): string {
+    return `project-threads-${projectId}`
+  }
+
   /** Only what is actually happening: a project with nothing open shows no dots. */
-  function cluster(project: Project): ClusterEntry[] {
+  function statuses(project: Project): StatusEntry[] {
     const counts = project.statusCounts
-    const entries: ClusterEntry[] = [
+    const entries: StatusEntry[] = [
       {
         count: counts.attention,
         label: 'need attention',
-        tone: toneColor('attention'),
-        toneName: 'attention'
+        tone: 'needs',
+        color: toneColor('attention')
       },
-      { count: counts.spec, label: 'have a spec ready', tone: toneColor('spec'), toneName: 'spec' },
-      { count: counts.working, label: 'working', tone: toneColor('working'), toneName: 'working' }
+      { count: counts.spec, label: 'have a spec ready', tone: 'spec', color: toneColor('spec') },
+      { count: counts.working, label: 'working', tone: 'working', color: toneColor('working') }
     ]
     return entries.filter((entry) => entry.count > 0)
   }
-
-  function threadsLabel(count: number): string {
-    return count === 1 ? '1 thread' : `${count} threads`
-  }
 </script>
 
-<PanelBar
-  title="Projects"
-  subtitle={data.projects.length === 1 ? '1 project' : `${data.projects.length} projects`}
->
+<PanelBar title="Projects">
   {#snippet titleControl()}
-    <TitleMenu
-      view="projects"
-      title="Projects"
-      count={data.projects.length}
-      threads={data.threadCount}
-      projects={data.projects.length}
-    />
+    <TitleMenu view="projects" title="Projects" />
   {/snippet}
 </PanelBar>
 
 <div class="list">
   {#if data.error}
     <p class="empty">{data.error}</p>
+  {:else if data.projects.length === 0}
+    <p class="empty">No projects yet.</p>
   {:else}
-    <a class="project-strip" href="/threads" in:arrive>
-      <span class="strip-glyph"><CioThreads size={17} /></span>
-      <span class="strip-cell">
-        <span class="strip-name">All threads</span>
-        <span class="strip-meta">{threadsLabel(data.threadCount)}</span>
-      </span>
-      <span class="strip-more"><CioChevronDown size={15} class="strip-caret" /></span>
-    </a>
-
     {#each data.projects as project (project.id)}
-      <a class="project-strip" href="/threads?project={project.id}" in:arrive>
-        <Mark {project} size={28} />
-        <span class="strip-cell">
-          <span class="strip-name">{project.name}</span>
-          <span class="strip-meta">{threadsLabel(project.threadCount)}</span>
-        </span>
-        <span class="strip-state">
-          {#each cluster(project) as entry (entry.toneName)}
-            <span class="strip-pip" style:color={entry.tone}>
-              <i class="dot" style:background={entry.tone} aria-hidden="true"></i>{entry.count}
-              <span class="sr-only">{entry.label}</span>
+      <section class="strip" data-open={open.has(project.id)}>
+        <div class="strip-head">
+          <button
+            class="strip-toggle"
+            type="button"
+            aria-expanded={open.has(project.id)}
+            aria-controls={panelId(project.id)}
+            onclick={() => toggle(project.id)}
+          >
+            <span class="strip-id">
+              <CioChevronDown class="strip-caret" size={14} />
+              <Mark {project} size={28} />
+              <span class="strip-name">{project.name}</span>
             </span>
-          {/each}
-        </span>
-        <span class="strip-more"><CioChevronDown size={15} class="strip-caret" /></span>
-      </a>
+            {#if statuses(project).length > 0}
+              <span class="strip-state">
+                {#each statuses(project) as entry (entry.tone)}
+                  <span style:color={entry.color}>
+                    <i class="dot" data-tone={entry.tone}></i>{entry.count}
+                    <span class="sr-only">{entry.label}</span>
+                  </span>
+                {/each}
+              </span>
+            {/if}
+          </button>
+        </div>
+
+        {#if open.has(project.id)}
+          <div class="strip-body" id={panelId(project.id)} transition:fold>
+            {#if threadsOf(project.id).length === 0}
+              <p class="project-empty">No threads yet</p>
+            {:else}
+              {#each threadsOf(project.id) as thread (thread.id)}
+                <ThreadRow {thread} variant="strip" />
+              {/each}
+            {/if}
+          </div>
+        {/if}
+      </section>
     {/each}
   {/if}
 </div>

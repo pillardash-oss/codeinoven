@@ -4,6 +4,7 @@ import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { harnessGlobalSkillPath, SHARED_GLOBAL_SKILL_PATH } from '../../lib/native-skill-paths'
 import type { UtilityDefinitionInput } from '../../lib/types'
+import { currentAcpAgents } from '../drivers/acp/acp-agents-store'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
@@ -49,7 +50,9 @@ export function isWellKnownSkillSource(source: string): boolean {
 
 /** Harnesses the machine can drive right now, by id. */
 export function knownHarnessIds(): Set<string> {
-  return new Set(listHarnesses().map((harness) => harness.id))
+  const ids = new Set(listHarnesses().map((harness) => harness.id))
+  for (const agent of currentAcpAgents()) ids.add(agent.id)
+  return ids
 }
 
 export type MarketSkillScope = 'global' | 'projects' | 'harnesses'

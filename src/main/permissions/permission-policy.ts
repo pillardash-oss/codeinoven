@@ -1,6 +1,7 @@
 import { basename, isAbsolute, relative, resolve, sep } from 'path'
 import { toPosixPath } from '../../lib/paths'
 import { tmpdir } from 'os'
+import { deletionTargets } from './agent-created-files'
 
 export type PermissionRisk = 'low' | 'medium' | 'high' | 'critical'
 export type PermissionPolicyMode = 'auto_review' | 'full_access'
@@ -71,6 +72,12 @@ export interface PermissionPolicyOptions {
    *  (deletes included) and shell commands the policy can prove stay inside.
    *  Anything that cannot be proven confined still asks. */
   scratchPaths?: readonly string[]
+  /** Absolute paths this session created itself, in POSIX form. Removing one
+   *  of them is the agent clearing away its own throwaway work, wherever it
+   *  put it, so it never needs a card. An overwrite never counts: the chat
+   *  engine only records a path when the call genuinely brought the file into
+   *  existence. */
+  agentCreatedPaths?: readonly string[]
   /** Absolute directories this session owns outright: an assistant task's own
    *  `assistant-cwd/<assistantId ?? threadId>` root, or a chat's own
    *  `chats-cwd/<threadId>` / `browser-cwd/<threadId>` workspace. The
@@ -224,6 +231,7 @@ export class PermissionPolicy {
   private readonly protectedPathPatterns: readonly string[]
   private readonly allowedPaths: readonly string[]
   private readonly scratchPaths: readonly string[]
+  private readonly agentCreatedPaths: ReadonlySet<string>
   private readonly workspaceRoots: readonly string[]
   private readonly restrictToAllowed: boolean
   private readonly now: () => number
@@ -237,6 +245,9 @@ export class PermissionPolicy {
     ]
     this.allowedPaths = (options.allowedPaths ?? []).map((path) => resolve(path))
     this.scratchPaths = (options.scratchPaths ?? []).map((path) => resolve(path))
+    this.agentCreatedPaths = new Set(
+      (options.agentCreatedPaths ?? []).map((path) => toPosixPath(resolve(path)))
+    )
     this.workspaceRoots = (options.workspaceRoots ?? []).map((path) => resolve(path))
     this.restrictToAllowed = options.restrictToAllowed === true
     this.now = options.now ?? Date.now
@@ -264,7 +275,9 @@ export class PermissionPolicy {
       // assistant using a `.env` or a `credentials/` folder it created is not
       // reaching anyone else's secret. Only targets that leave that workspace
       // still need the user's approval.
-      const outsideWorkspace = paths.filter((path) => !this.isWorkspacePath(path))
+      const outsideWorkspace = paths.filter(
+        (path) => !this.isWorkspacePath(path) && !this.isAgentCreatedPath(path)
+      )
       if (paths.length > 0 && outsideWorkspace.length === 0) {
         return this.createDecision(
           'auto_review',
@@ -322,6 +335,19 @@ export class PermissionPolicy {
         'auto_review',
         true,
         "Auto-approved: the operation stays inside this thread's scratch folder.",
+        risk,
+        scope
+      )
+    }
+
+    // An agent's own throwaway files are its to remove. This runs before the
+    // destructive rules below because those rules exist to protect work the
+    // session does not own, and a file the session just created is not that.
+    if (this.isAgentCreatedCleanup(permission, paths, commands)) {
+      return this.createDecision(
+        'auto_review',
+        true,
+        'Auto-approved: the agent is removing a file this session created itself.',
         risk,
         scope
       )
@@ -456,6 +482,36 @@ export class PermissionPolicy {
       ? resolve(normalized)
       : resolve(this.projectRoot, normalized)
     return this.workspaceRoots.some((root) => isWithinDirectory(root, resolvedPath))
+  }
+
+  /** Whether a path is one this session created itself.
+   *
+   *  Only an exact match qualifies. Deleting a directory the session created
+   *  one of its files inside is a broader removal than the session made, so it
+   *  keeps its card. */
+  private isAgentCreatedPath(path: string): boolean {
+    if (this.agentCreatedPaths.size === 0) return false
+    const normalized = toPosixPath(
+      isAbsolute(path) ? resolve(path) : resolve(this.projectRoot, path)
+    )
+    return this.agentCreatedPaths.has(normalized)
+  }
+
+  /** Whether the request removes nothing but files this session created. A
+   *  readable delete command names its targets; a delete permission names them
+   *  directly. Anything unreadable is not proven, so the card still asks. */
+  private isAgentCreatedCleanup(
+    permission: string,
+    paths: readonly string[],
+    commands: readonly string[]
+  ): boolean {
+    if (this.agentCreatedPaths.size === 0) return false
+    const targets = deletionTargets(permission, paths, commands, this.projectRoot)
+    if (targets === undefined || targets.length === 0) return false
+    // Every target the request names has to be the session's own creation, so a
+    // request that also points anywhere else keeps its card.
+    if (!paths.every((path) => this.isAgentCreatedPath(path))) return false
+    return targets.every((target) => this.agentCreatedPaths.has(target))
   }
 
   private isScratchRoot(resolvedPath: string): boolean {

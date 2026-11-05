@@ -417,10 +417,7 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
         ...(lifecycle.activeStage === 'brainstorm' ? { completedStage: 'brainstorm' } : {}),
         terminal: true
       })
-      ctx.engineeringLifecycleEngine.select(safeProjectId, safeThreadId, {
-        stages: [],
-        autopilot: false
-      })
+      ctx.engineeringLifecycleEngine.select(safeProjectId, safeThreadId, { stages: [] })
       await threadManager.updateThread(safeProjectId, safeThreadId, {
         implementationBrainstorm: { id: finalized.id, version: finalized.version }
       })

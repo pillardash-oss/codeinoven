@@ -241,5 +241,8 @@ export const api = {
     page<Message>(`/v1/threads/${threadId}/messages${query(input)}`),
 
   sendPrompt: (threadId: string, input: { body: string; clientId: string }) =>
-    data<Prompt>(`/v1/threads/${threadId}/prompts`, { method: 'POST', body: input })
+    data<Prompt>(`/v1/threads/${threadId}/prompts`, { method: 'POST', body: input }),
+
+  /** Where the prompt the phone sent has got to: queued, claimed, done, failed. */
+  prompt: (id: string) => data<Prompt>(`/v1/prompts/${id}`)
 }

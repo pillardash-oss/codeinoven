@@ -26,7 +26,6 @@
   import RichMarkdownEditor from '../shared/RichMarkdownEditor.svelte'
   import CardNotice from '../shared/CardNotice.svelte'
   import VoiceInputButton from '../speech/VoiceInputButton.svelte'
-  import EngineeringToolbox from './EngineeringToolbox.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ComposerShoe from './ComposerShoe.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -77,14 +76,10 @@
     onEditReference,
     onRelocateItem,
     showEngineeringMode = true,
-    engineeringLifecycle = null,
-    engineeringActive,
-    onEngineeringLifecycleSelect,
     showChatModes = false,
     independentAuditAvailable = false,
     independentAuditEnabled = false,
     onIndependentAuditToggle,
-    engineeringToolboxHidden = false,
     hidePermissionSelector = false,
     readOnlyMode = false,
     allowAttachments = false,
@@ -160,14 +155,10 @@
     onEditReference,
     onRelocateItem,
     showEngineeringMode,
-    engineeringLifecycle,
-    engineeringActive,
-    onEngineeringLifecycleSelect,
     showChatModes,
     independentAuditAvailable,
     independentAuditEnabled,
     onIndependentAuditToggle,
-    engineeringToolboxHidden,
     hidePermissionSelector,
     readOnlyMode,
     allowAttachments,
@@ -485,20 +476,6 @@
         void board.handleDropData.pickAttachment()
       }}
     />
-
-    {#if board.props.showEngineeringMode && board.props.onEngineeringLifecycleSelect && !board.props.engineeringToolboxHidden}
-      <EngineeringToolbox
-        bind:this={board.captureComposerRoot.engineeringToolbox}
-        lifecycleState={board.props.engineeringLifecycle}
-        active={board.props.engineeringActive === true}
-        disabled={board.props.readOnlyMode}
-        onselect={board.props.onEngineeringLifecycleSelect}
-        onclose={() => {
-          if (board.submit.richEditor?.caretBookmark()) board.submit.focusComposerAtSavedCaret()
-          else board.captureComposerRoot.focusComposerAtStart()
-        }}
-      />
-    {/if}
 
     <div
       class={`flex min-w-0 shrink items-center ${

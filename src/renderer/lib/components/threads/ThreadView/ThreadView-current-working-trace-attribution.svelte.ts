@@ -17,7 +17,7 @@ import {
   normalizeFastInference,
   supportsFastInference
 } from '$shared/fast-inference'
-import { getAgentIcon } from '$lib/agent-icons/registry'
+import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
 import { invoke } from '$lib/ipc.svelte'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
 import {
@@ -561,13 +561,11 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     )
   }
 
-  /** Toggle the independent audit. Enabling is permanent once the first run
-   *  starts, and excludes engineering modes for this thread's lifetime. */
-  /** Toggle the Independent Audit. Turning it on stages the choice: the
-   *  Engineering Toolbox disappears and the audit coordinator docks into the
-   *  sidebar right away. Turning it off discards the staging (or disables a
-   *  committed audit that has not started its first run), which brings the
-   *  Toolbox back. Clicking "Run audit" in the coordinator commits. */
+  /** Toggle the Independent Audit. Turning it on stages the choice: the audit
+   *  coordinator docks into the sidebar right away, and engineering stages are
+   *  excluded for this thread's lifetime once the first run starts. Turning it
+   *  off discards the staging (or disables a committed audit that has not
+   *  started its first run). Clicking "Run audit" in the coordinator commits. */
   async toggleIndependentAudit(enabled: boolean): Promise<void> {
     if (this.independentAuditInitialized) return
     if (enabled) {
@@ -770,9 +768,7 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
       providerName: provider?.name ?? null,
       providerId: provider?.id ?? null,
       harnessId: selection.harnessId || null,
-      harnessName: selection.harnessId
-        ? (getAgentIcon(selection.harnessId)?.name ?? selection.harnessId)
-        : null,
+      harnessName: selection.harnessId ? agentDisplayName(selection.harnessId) : null,
       accountLabel:
         this.harnessAccounts.find(
           (account) =>

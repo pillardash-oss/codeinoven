@@ -18,7 +18,6 @@
 .bar {
   position: relative;
   flex: none;
-  border-bottom: 1px solid var(--color-border);
   background: var(--color-app);
   padding: 0.5rem 0.5rem 0.625rem 0.5rem;
 }
@@ -284,15 +283,9 @@
   color: var(--color-muted);
 }
 
-.title-menu-item .n {
-  margin-left: auto;
-  font-size: 0.75rem;
-  color: var(--ink-meta);
-  font-variant-numeric: tabular-nums;
-}
-
 .title-menu-item .tick {
   flex: none;
+  margin-left: auto;
   width: 0.875rem;
   height: 0.875rem;
   color: var(--color-accent);

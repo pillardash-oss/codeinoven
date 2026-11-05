@@ -1,13 +1,13 @@
-import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, nativeTheme, shell } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
-import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
+import { APP_ID, APP_NAME, WEBSITE_URL, brandUserAgent } from '../lib/brand'
 import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
-import { installForceRestartMenu } from './system/force-restart'
+import { installApplicationMenu } from './system/app-menu'
 import { usageAnalytics } from './system/usage-analytics'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
@@ -18,10 +18,7 @@ import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import { registerFilePreviewScheme } from './editor/file-preview-protocol'
 import { WindowStateService } from './system/window-state'
 import { setNotificationService } from './chat/thread-events'
-import {
-  installProductionApplicationMenu,
-  lockDownProductionWindow
-} from './system/production-housekeeping'
+import { lockDownProductionWindow } from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
 import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
@@ -37,6 +34,8 @@ import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
 import { registerAppControlHandlers } from './app-control/app-control-ipc'
+import { spawnNewInstance } from './system/new-instance'
+import { MAX_INSTANCE_SLOTS } from './system/instance-slots'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
 import { sendToRenderer } from './ipc/renderer-delivery'
 import {
@@ -536,6 +535,8 @@ const backgroundLifecycle = new BackgroundLifecycleService({
   state,
   storage,
   openWindow: () => openMainWindow(),
+  openSettings: () => revealWindowAndSend('window:openSettings'),
+  newInstance: openNewInstance,
   destroyWindow: () => {
     const window = state.mainWindow
     if (window && !window.isDestroyed()) window.destroy()
@@ -1005,6 +1006,98 @@ function openThreadFromNotification(payload: ThreadClickedPayload): void {
   revealAndSend()
 }
 
+/**
+ * Reveal the app window and send it one event, creating the window when the app
+ * is parked in the menu bar. Menu actions share this: a native menu item must
+ * work whether or not a window happens to be open.
+ */
+function revealWindowAndSend(event: 'window:openSettings'): void {
+  // A quit is already in progress   never spawn a window mid-shutdown.
+  if (state.quitCleanupStarted) return
+  const window =
+    state.mainWindow && !state.mainWindow.isDestroyed() ? state.mainWindow : createWindow()
+
+  const reveal = (): void => {
+    if (window.isDestroyed()) return
+    if (window.isMinimized()) window.restore()
+    if (!window.isVisible()) window.show()
+    window.focus()
+    sendToRenderer(window.webContents, event)
+  }
+
+  if (window.webContents.isLoading()) {
+    window.webContents.once('did-finish-load', reveal)
+    return
+  }
+  reveal()
+}
+
+/**
+ * "Check for Updates" from the application menu.
+ *
+ * The menu bar icon already owns the whole check-download-install cycle, so the
+ * menu routes through it instead of running a second one. A build that cannot
+ * update itself (development, or a platform outside the packaged feed) says so
+ * rather than leaving a click with no visible outcome.
+ */
+function checkForUpdatesFromMenu(): void {
+  const updater = state.updaterService
+  if (!updater) return
+  if (!updater.status.canAutoUpdate) {
+    void explainUpdatesUnavailable()
+    return
+  }
+  const lifecycle = state.backgroundLifecycle
+  if (lifecycle) {
+    lifecycle.requestUpdateCheck()
+    return
+  }
+  void updater.updateInBackground().catch((error: unknown) => {
+    Logger.error('Update check from the application menu failed', error)
+  })
+}
+
+/** Tell the user this build updates by hand, and offer the download page. */
+async function explainUpdatesUnavailable(): Promise<void> {
+  try {
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Check for Updates',
+      message: `${APP_NAME} does not update itself in this build`,
+      detail: 'Download the latest release from the website to update this copy.',
+      buttons: ['OK', 'Open download page'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    })
+    if (response === 1) await shell.openExternal(`${WEBSITE_URL}/downloads`)
+  } catch (error: unknown) {
+    Logger.error('Could not explain the update state', error)
+  }
+}
+
+/** Open a second instance beside this one, sharing the same data. */
+function openNewInstance(): void {
+  const outcome = spawnNewInstance()
+  if (outcome.ok) return
+  const detail =
+    outcome.reason === 'limit'
+      ? `The maximum of ${MAX_INSTANCE_SLOTS} extra instances is already running. Close one and try again.`
+      : (outcome.detail ?? 'The new instance could not be started.')
+  void dialog
+    .showMessageBox({
+      type: 'warning',
+      title: 'New Instance',
+      message: `A second ${APP_NAME} could not be opened`,
+      detail,
+      buttons: ['OK'],
+      noLink: true
+    })
+    .catch((error: unknown) => {
+      Logger.error('Could not report the failed new instance', error)
+    })
+}
+
 let startupRecoveryTimer: ReturnType<typeof setTimeout> | null = null
 
 void app
@@ -1111,10 +1204,14 @@ void app
       })
     }
 
-    if (isProduction) {
-      installProductionApplicationMenu(APP_NAME)
-    }
-    installForceRestartMenu(quitAppDirectly)
+    installApplicationMenu({
+      appName: APP_NAME,
+      production: isProduction,
+      quitApp: quitAppDirectly,
+      checkForUpdates: checkForUpdatesFromMenu,
+      openSettings: () => revealWindowAndSend('window:openSettings'),
+      newInstance: openNewInstance
+    })
 
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([

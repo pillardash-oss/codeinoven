@@ -34,3 +34,17 @@ export function arrive(node: Element): TransitionConfig {
     css: (t) => `opacity: ${t}; transform: translateY(${(1 - t) * 0.25}rem)`
   }
 }
+
+/**
+ * A menu hanging from the control that opened it. It grows from its own top edge
+ * downward, so the eye follows the same line the button already sits on, and it
+ * leaves the same way instead of blinking out.
+ */
+export function drop(node: Element): TransitionConfig {
+  return {
+    duration: slowed() ? 0 : FOLD_MS,
+    easing: cubicOut,
+    css: (t) =>
+      `opacity: ${t}; transform-origin: top left; transform: translateY(${(1 - t) * -0.375}rem) scale(${0.96 + 0.04 * t})`
+  }
+}
