@@ -57,6 +57,8 @@ export { MAX_CHECKPOINT_FAILURE_LENGTH }
  * user asked for.
  */
 const APP_CLOSED_TURN_MESSAGE = `${APP_NAME} closed before this turn finished.`
+/** Wording for a turn the user deliberately stopped from the Stop control. */
+const USER_STOPPED_TURN_MESSAGE = `${APP_NAME} stopped this turn at your request.`
 
 /** Row bound for one thread's checkpoint list (the read used to cap at 10 000). */
 const CHECKPOINT_LIST_MAX_ROWS = 10_000
@@ -806,6 +808,68 @@ export class CheckpointManager {
         status: 'interrupted',
         stopReason: 'crash',
         failure: boundCheckpointFailure(`${interruption} Change capture failed: ${detail}`)
+      }
+      await this.save(updated)
+      await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+        projectId,
+        threadId
+      ])
+      return updated
+    }
+  }
+
+  /**
+   * Finalize the active turn as a deliberate user stop.
+   *
+   * A Stop is exactly the case where the harness may never report a terminal
+   * settle: the abort tears the session down, and a turn this process adopted
+   * from a departed instance has no harness here at all. Without this the
+   * `active_turns` ledger row and its `active` checkpoint outlive the stop, and
+   * every surface that reads the ledger keeps claiming work that no process is
+   * doing   the thread says working while the thread, its workers and its
+   * Assignment are all stopped. Distinct from `markActiveInterrupted`, which
+   * words a crash: this one is expected, so the file-changes card stays neutral.
+   */
+  async markActiveUserStopped(projectId: string, threadId: string): Promise<TurnCheckpoint | null> {
+    const active = this.db.get<{ turn_id: string | null }>(
+      'SELECT turn_id FROM active_turns WHERE project_id = ? AND thread_id = ?',
+      projectId,
+      threadId
+    )
+    if (!active?.turn_id) return null
+    const checkpoint = await this.get(projectId, threadId, active.turn_id)
+    if (!checkpoint || checkpoint.status !== 'active') {
+      // The turn already settled but its ledger row survived; a stop still has
+      // to release the row, because the row is what other surfaces read.
+      if (checkpoint) {
+        await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [
+          projectId,
+          threadId
+        ])
+      }
+      return checkpoint
+    }
+    try {
+      return await this.completeTurn(
+        projectId,
+        threadId,
+        checkpoint.id,
+        checkpoint.before.projectRoot,
+        'interrupted',
+        USER_STOPPED_TURN_MESSAGE,
+        undefined,
+        {},
+        'user-stop'
+      )
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      const updated: TurnCheckpoint = {
+        ...checkpoint,
+        status: 'interrupted',
+        stopReason: 'user-stop',
+        failure: boundCheckpointFailure(
+          `${USER_STOPPED_TURN_MESSAGE} Change capture failed: ${detail}`
+        )
       }
       await this.save(updated)
       await this.writeRow('DELETE FROM active_turns WHERE project_id = ? AND thread_id = ?', [

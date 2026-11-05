@@ -326,6 +326,13 @@ export class ChatEngineTurnsDispatch {
       markNotificationAborting(projectId, threadId)
       this.host.units['thread-lifecycle'].releaseParkedThreadGates(projectId, threadId)
       await this.host.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+      // A thread stopped before its session was bound has no idle finalization
+      // to release its ledger row either, so the stop settles it here too.
+      if (options.reason !== 'transfer') {
+        await this.host.checkpointManager
+          .markActiveUserStopped(projectId, threadId)
+          .catch((error) => Logger.dev('Stopped turn settle failed:', error))
+      }
       clearNotificationAborting(projectId, threadId)
       return
     }
@@ -417,6 +424,18 @@ export class ChatEngineTurnsDispatch {
       threadId,
       thread.sessionId
     )
+    // The ledger row and its `active` checkpoint are the shared answer to "is
+    // this still running", and the idle finalization that settles them belongs
+    // to the harness session a stop is tearing down. A stop is exactly when
+    // that report may never arrive   and a turn adopted from a departed
+    // instance has no harness here at all   so the stop settles it itself.
+    // Otherwise the row outlives the run: thread, workers and Assignment all
+    // stopped, while every surface reading the ledger still claims live work.
+    if (options.reason !== 'transfer') {
+      await this.host.checkpointManager
+        .markActiveUserStopped(projectId, threadId)
+        .catch((error) => Logger.dev('Stopped turn settle failed:', error))
+    }
     await this.host.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
     if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
       await this.host.storage.drainRaw(turnStreamPath(projectId, threadId))

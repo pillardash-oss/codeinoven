@@ -34,7 +34,7 @@ export type TurnCheckpointStatus = 'active' | 'completed' | 'failed' | 'interrup
  *
  * Absent on turns interrupted before this was recorded.
  */
-export type TurnCheckpointStopReason = 'app-closed' | 'crash'
+export type TurnCheckpointStopReason = 'app-closed' | 'user-stop' | 'crash'
 
 /** Recorded tool evidence. Content hashes in the checkpoint independently verify the diff. */
 export interface FileChangeSource {
