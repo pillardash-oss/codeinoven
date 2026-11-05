@@ -1113,8 +1113,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     })
     // ACP agents are the user's own records: their list has to be in memory
     // before the first harness probe and before the model picker asks for a
-    // catalog, because neither reads the harness registry for them.
-    void acpAgentStore(storage).list()
+    // catalog, because neither reads the harness registry for them. The drivers
+    // are then built from that list, once it has actually loaded: the chat
+    // engine is wired earlier in startup, when the store is still empty, so a
+    // boot with existing agents would otherwise have no ACP driver at all and
+    // publish no models for them.
+    void acpAgentStore(storage)
+      .list()
+      .then(() => state.chatEngine?.refreshAcpHarnesses())
+      .catch(() => undefined)
     state.openCodeV2Service = new OpenCodeV2Service()
     state.harnessUpdateService = new HarnessUpdateService(state.providerConnection)
     state.harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
