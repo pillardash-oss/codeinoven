@@ -1,5 +1,5 @@
 import { latestWorkingTraceParts, mergeWorkingParts } from '$lib/working-trace-parts'
-import { SvelteSet } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -16,6 +16,7 @@ import type {
   TurnStreamCompletedTurn
 } from '$shared/types'
 import {
+  buildTraceSegmentLayout,
   buildTranscriptIndex,
   getTurnFinalText,
   getTurnWorkingParts,
@@ -25,8 +26,10 @@ import {
   isTurnTransparentUserMessage,
   lastTurnStartIndex,
   pendingTurnAnchorIndex,
+  splitTurnTraceParts,
   streamWorkingPartsForTurn,
   turnEndsOnQuestion,
+  type TraceSegmentLayout,
   type TranscriptIndex
 } from '../thread-turn-parts'
 import type { ThreadView } from './ThreadView-board.svelte'
@@ -62,6 +65,40 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
       this.root.abortRun.checkpoints
     )
   )
+
+  /**
+   * Where each slice of every turn's working trace mounts. A turn the reader
+   * answered is cut at that answer, so the resumed work renders under the
+   * answer card instead of inside the trace above it.
+   */
+  traceSegmentLayout = $derived(
+    buildTraceSegmentLayout(
+      this.root.buildSpecActionPrompt.structureMessages,
+      this.isTransparentTurnMessage
+    )
+  )
+
+  traceSegmentsByMount = $derived.by(() => {
+    const byMount = new SvelteMap<string, TraceSegmentLayout[]>()
+    for (const segment of this.traceSegmentLayout) {
+      if (segment.mountIndex === null) continue
+      const key = `${segment.mountIndex}:${segment.placement}`
+      const list = byMount.get(key)
+      if (list) list.push(segment)
+      else byMount.set(key, [segment])
+    }
+    return byMount
+  })
+
+  /** Trace slices that render above the message at `index`. */
+  segmentsAbove(index: number): TraceSegmentLayout[] {
+    return this.traceSegmentsByMount.get(`${index}:before`) ?? []
+  }
+
+  /** Trace slices that render below the message at `index`. */
+  segmentsBelow(index: number): TraceSegmentLayout[] {
+    return this.traceSegmentsByMount.get(`${index}:after`) ?? []
+  }
 
   /**
    * A user message transparent to the turn span the live parts are read with: an
@@ -665,6 +702,30 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     const built = this.buildTurnTrace(startIndex, closingTextId, holdsClosingText, false)
     byStart[startIndex] = built
     return built
+  }
+
+  /**
+   * The working-trace entries of one slice of a turn.
+   *
+   * The turn's trace is assembled once (and cached while it is settled), then
+   * cut where the reader answered the agent, so the reader sees the work that
+   * led to the question, the answer, and the work it unblocked, in that order.
+   */
+  segmentTraceParts(
+    segment: TraceSegmentLayout,
+    live: boolean,
+    closingTextId: string | null,
+    holdsClosingText: boolean
+  ): AgentPart[] {
+    const parts = this.turnTraceParts(segment.turnStart, live, closingTextId, holdsClosingText)
+    if (segment.boundaries.length === 0) return parts
+    const slices = splitTurnTraceParts(
+      this.root.buildSpecActionPrompt.structureMessages,
+      parts,
+      segment.boundaries,
+      this.transcriptIndex
+    )
+    return slices[segment.segmentIndex] ?? []
   }
 
   /** Poll the durable stream once: only what the log touched since the last

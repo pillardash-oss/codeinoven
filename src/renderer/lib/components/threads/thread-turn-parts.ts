@@ -874,6 +874,147 @@ export function getTurnWorkingParts(
 }
 
 /**
+ * One slice of a turn's working trace, ending where the reader answered.
+ *
+ * A question answer resumes the turn that asked, so the answer is transparent
+ * to turn grouping and the whole turn keeps one span. The trace itself must
+ * still follow the order the run was lived in: work before the answer, the
+ * answer, then the work the answer unblocked. Each slice carries the answer
+ * record that opened it, and the message the slice renders beside.
+ */
+export interface TraceSegmentLayout {
+  /** Index of the turn's first assistant message. */
+  turnStart: number
+  /** The answer record that opened this slice, or null for the first slice. */
+  answerIndex: number | null
+  /** Message the slice renders beside, or null when the turn has mirrored no
+   *  assistant message after its answer yet. */
+  mountIndex: number | null
+  /** Whether the slice renders above or below the message at `mountIndex`. */
+  placement: 'before' | 'after'
+  /** Every answer record inside the turn, oldest first. */
+  boundaries: readonly number[]
+  /** Ordinal of this slice within its turn. */
+  segmentIndex: number
+}
+
+/**
+ * Cut every turn at the answer records the reader sent while it was running.
+ *
+ * The first slice mounts on the turn's opening assistant message, exactly where
+ * a turn without answers renders its trace. A later slice mounts on the first
+ * assistant message that follows its answer, so the resumed work reads under
+ * the answer card; while that row has not been mirrored yet the slice renders
+ * under the answer record itself.
+ */
+export function buildTraceSegmentLayout(
+  messages: readonly AgentMessage[],
+  isTransparent: TurnTransparency = persistedTurnTransparency
+): TraceSegmentLayout[] {
+  const layout: TraceSegmentLayout[] = []
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]
+    if (!message || message.inlineArtifact || message.role !== 'assistant') continue
+    if (!isTurnStartIndex(messages, index)) continue
+    const turnEnd = turnSpanEndIndex(messages, index, isTransparent)
+    const boundaries: number[] = []
+    for (let cursor = index + 1; cursor <= turnEnd; cursor++) {
+      const candidate = messages[cursor]
+      if (candidate?.role === 'user' && isQuestionAnswerRecord(candidate)) boundaries.push(cursor)
+    }
+    if (boundaries.length === 0) {
+      layout.push({
+        turnStart: index,
+        answerIndex: null,
+        mountIndex: index,
+        placement: 'before',
+        boundaries,
+        segmentIndex: 0
+      })
+      continue
+    }
+    for (let segment = 0; segment <= boundaries.length; segment++) {
+      const answerIndex = segment === 0 ? null : boundaries[segment - 1]!
+      let mountIndex: number | null = null
+      let placement: TraceSegmentLayout['placement'] = 'before'
+      if (segment === 0) {
+        mountIndex = index
+      } else {
+        for (let cursor = answerIndex! + 1; cursor <= turnEnd; cursor++) {
+          const candidate = messages[cursor]
+          if (candidate?.role === 'assistant' && !candidate.inlineArtifact) {
+            mountIndex = cursor
+            break
+          }
+        }
+        // The answer card is already on screen; work that never mirrored an
+        // assistant row reads directly under it rather than waiting for one.
+        if (mountIndex === null) {
+          mountIndex = answerIndex
+          placement = 'after'
+        }
+      }
+      layout.push({
+        turnStart: index,
+        answerIndex,
+        mountIndex,
+        placement,
+        boundaries,
+        segmentIndex: segment
+      })
+    }
+  }
+  return layout
+}
+
+/** The wall-clock start a trace part reported, when it reported one. */
+function partStartTime(part: AgentPart): number | undefined {
+  if (part.type === 'tool') return part.state.time?.start
+  if (part.type === 'reasoning') return part.time?.start
+  if (part.type === 'subagent') return part.activity.time?.start
+  return undefined
+}
+
+/**
+ * Split one turn's assembled trace at the answer records that interrupt it.
+ *
+ * A mirrored part names the message it belongs to, which places every entry the
+ * transcript knows about exactly. Entries that only exist in the durable stream
+ * log are placed by their own wall clock against the answer, and an entry with
+ * no clock (a text part) keeps the slice of the entry before it, because the
+ * assembled list is already in stream order.
+ */
+export function splitTurnTraceParts(
+  messages: readonly AgentMessage[],
+  parts: readonly AgentPart[],
+  boundaries: readonly number[],
+  index: TranscriptIndex
+): AgentPart[][] {
+  const slices: AgentPart[][] = Array.from({ length: boundaries.length + 1 }, () => [])
+  let segment = 0
+  for (const part of parts) {
+    const carriedAt = index.partIndexById.get(part.id)
+    const startedAt = partStartTime(part)
+    while (segment < boundaries.length) {
+      const boundaryIndex = boundaries[segment]!
+      const answeredAt = messages[boundaryIndex]?.createdAt
+      let afterBoundary: boolean | null = null
+      if (carriedAt !== undefined) {
+        afterBoundary =
+          carriedAt > boundaryIndex ||
+          (startedAt !== undefined && answeredAt !== undefined && startedAt > answeredAt)
+      } else if (startedAt !== undefined && answeredAt !== undefined) {
+        afterBoundary = startedAt > answeredAt
+      }
+      if (afterBoundary !== true) break
+      segment += 1
+    }
+    slices[segment]!.push(part)
+  }
+  return slices
+}
+
+/**
  * True once the turn starting at `startMsgIndex` produced a completed
  * assistant message: the only state in which the working trace may fold.
  */
