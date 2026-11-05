@@ -20,7 +20,6 @@
     ProviderAccountAuthStatus,
     ProviderConnectionInfo
   } from '$shared/types'
-  import { quotaPercent } from '$lib/format/usage'
   import Modal from '../ui/Modal.svelte'
   import ProviderSignInPanel from './ProviderSignInPanel.svelte'
   import HarnessAccountList from './accounts/HarnessAccountList.svelte'
@@ -45,7 +44,6 @@
   let search = $state('')
   let selectedHarnesses = new SvelteSet<string>()
   let hiddenOnly = $state(false)
-  let nearLimitOnly = $state(false)
   let selectedId = $state('')
   let showingDetail = $state(false)
   let hidingAccountId = $state('')
@@ -148,29 +146,11 @@
     return (siblingCounts.get(`${account.harnessId}\u0000${account.providerId}`) ?? 0) > 1
   }
 
-  /**
-   * Whether an account is close to running out, measured on the window that
-   * lasts longest: a 5-hour session at 95% resets within the hour, while the
-   * weekly or monthly allowance at 80% is what actually runs out first in the
-   * user's day. Reaching 100% is at the limit, which also reports here.
-   */
-  const NEAR_LIMIT_PERCENT = 80
-
-  function isNearLimit(account: HarnessAccount): boolean {
-    const windows = harnessAccountUsageCache.snapshotFor(account.id)?.usage?.rateLimits ?? []
-    if (windows.length === 0) return false
-    const longest = windows.reduce((widest, window) =>
-      (window.windowMinutes ?? 0) > (widest.windowMinutes ?? 0) ? window : widest
-    )
-    return (quotaPercent(longest) ?? 0) >= NEAR_LIMIT_PERCENT
-  }
-
   const filteredRows = $derived.by(() => {
     const query = search.trim().toLocaleLowerCase('en-US')
     return rows.filter((account) => {
       if (harnessFilterActive && !selectedHarnesses.has(account.harnessId)) return false
       if (hiddenOnly && account.hidden !== true) return false
-      if (nearLimitOnly && !isNearLimit(account)) return false
       if (!query) return true
       return [
         account.label,
@@ -198,8 +178,6 @@
   )
 
   /** Accounts with at least one window at or above 90% used. */
-  const nearLimitCount = $derived(rows.filter((account) => isNearLimit(account)).length)
-
   /** Accounts whose harness sign-in expired, so their quota cannot be read. */
   const needSignInCount = $derived(
     rows.filter(
@@ -231,25 +209,16 @@
     if (selectedHarnesses.has(harnessId)) selectedHarnesses.delete(harnessId)
     else selectedHarnesses.add(harnessId)
     hiddenOnly = false
-    nearLimitOnly = false
   }
 
   /** Back to every account: the All filter, and what the empty states point at. */
   function clearFilters(): void {
     selectedHarnesses.clear()
     hiddenOnly = false
-    nearLimitOnly = false
   }
 
   function toggleHiddenFilter(): void {
     hiddenOnly = !hiddenOnly
-    selectedHarnesses.clear()
-    nearLimitOnly = false
-  }
-
-  function toggleNearLimitFilter(): void {
-    nearLimitOnly = !nearLimitOnly
-    hiddenOnly = false
     selectedHarnesses.clear()
   }
 
@@ -630,30 +599,15 @@
           type="button"
           class="flex h-7 items-center gap-1 px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive &&
           !hiddenOnly &&
-          !nearLimitOnly
+          !hiddenOnly
             ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
-          aria-pressed={!harnessFilterActive && !hiddenOnly && !nearLimitOnly}
+          aria-pressed={!harnessFilterActive && !hiddenOnly}
           title="Show every account"
           onclick={clearFilters}
         >
           All <span class="tabular-nums text-dimmed">{rows.length}</span>
         </button>
-        {#if nearLimitCount > 0}
-          <button
-            type="button"
-            class="flex h-7 items-center gap-1 px-2.5 text-[0.6875rem] font-medium transition-colors {nearLimitOnly
-              ? 'bg-surface text-warning'
-              : 'text-muted hover:text-foreground'}"
-            aria-pressed={nearLimitOnly}
-            title="Show only accounts with a window at 90% or more"
-            onclick={toggleNearLimitFilter}
-          >
-            Near limit <span class="tabular-nums {nearLimitOnly ? '' : 'text-dimmed'}"
-              >{nearLimitCount}</span
-            >
-          </button>
-        {/if}
         {#each filterHarnesses as harness (harness.id)}
           <button
             type="button"
@@ -726,15 +680,13 @@
   {:else if filteredRows.length === 0}
     <div class="border border-dashed p-8 text-center">
       <p class="text-xs text-dimmed">
-        {nearLimitOnly
-          ? 'No account has a window at 90% or more.'
-          : hiddenOnly
-            ? 'Every account is currently visible in account pickers.'
-            : harnessFilterActive
-              ? 'No accounts belong to the selected harnesses.'
-              : 'No accounts match your search.'}
+        {hiddenOnly
+          ? 'Every account is currently visible in account pickers.'
+          : harnessFilterActive
+            ? 'No accounts belong to the selected harnesses.'
+            : 'No accounts match your search.'}
       </p>
-      {#if hiddenOnly || harnessFilterActive || nearLimitOnly}
+      {#if hiddenOnly || harnessFilterActive}
         <button
           type="button"
           class="mt-2 text-xs font-medium text-primary hover:underline"
