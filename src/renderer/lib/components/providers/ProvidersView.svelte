@@ -1197,6 +1197,8 @@
           <div class="border border-dashed p-6 text-center text-xs text-dimmed">
             {#if searchQuery || statusFilter !== 'all'}
               No harnesses match the current filter.
+            {:else if activeTab === 'acp'}
+              No ACP agents detected yet.
             {:else}
               No harnesses detected yet.
             {/if}
