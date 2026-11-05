@@ -17,12 +17,7 @@
 
 import { DEFAULT_CONTRAST_LEVEL, type ContrastLevel } from '$shared/types'
 
-import {
-  applyAppearanceTypography,
-  DEFAULT_APP_FONT_SIZE,
-  DEFAULT_APP_FONT_WEIGHT,
-  type AppearanceTypography
-} from '$shared/app-appearance'
+import { applyAppearanceTypography, type AppearanceTypography } from '$shared/app-appearance'
 import { DEFAULT_APP_FONT_FAMILY, FONT_STACKS } from '$shared/app-fonts'
 import { syncTerminalFonts } from './terminal/host-registry'
 
