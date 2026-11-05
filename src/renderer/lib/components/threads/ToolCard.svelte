@@ -134,7 +134,6 @@
    *  arguments, so the glyph, the label and the row's subject all read here. */
   const call = $derived(resolveToolCall(part.tool, part.state.input))
 
-  const inputPreview = $derived(formatInput(call.input))
   /** The tool-kind glyph: washed out with the row, brighter on hover. */
   const kindIconClass = 'shrink-0 text-dimmed transition-colors group-hover/tool:text-muted'
   const toolKind = $derived.by(() => {
@@ -195,7 +194,8 @@
    */
   const titleIsSubject = $derived(
     !!part.state.title?.trim() &&
-      !toolTitleLabelsCall(part.state.title, part.tool, part.state.input)
+      (part.state.titleIsSubject === true ||
+        !toolTitleLabelsCall(part.state.title, part.tool, part.state.input))
   )
 
   /**
@@ -212,6 +212,7 @@
         tool: part.tool,
         input: part.state.input,
         title: part.state.title,
+        titleIsSubject: part.state.titleIsSubject,
         output: part.state.output,
         codeMode: part.codeMode
       })
@@ -224,6 +225,18 @@
       toolKind === 'code' ? 'Code mode' : undefined,
       part.tool
     )
+  )
+
+  /**
+   * The row's subject: the call's own first argument, or the harness title when
+   * that title is what names the thing the call acted on.
+   *
+   * An agent protocol client titles a call with its subject and sends no
+   * arguments at all (Cursor titles a shell call with the command itself), so a
+   * row that dropped the title showed the action and lost what it acted on.
+   */
+  const inputPreview = $derived(
+    formatInput(call.input) || (titleIsSubject ? `: ${part.state.title?.trim() ?? ''}` : '')
   )
 
   /** True when the row's label describes the action rather than repeating the

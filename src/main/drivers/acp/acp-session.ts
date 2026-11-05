@@ -196,6 +196,9 @@ export class AcpTurnFold {
     const outputText = acpToolContentText(update.content)
     const status: AgentToolState['status'] = acpToolStatus(update.status ?? undefined)
     const tool = acpToolName(update.kind ?? undefined, title)
+    // Only a kind names the action. Without one the title's own words are all the
+    // row has, so it stays the label instead of being demoted to the subject.
+    const kindNamesAction = !!update.kind && update.kind !== 'other'
     const label = toolActionLabel({ tool })
     const now = Date.now()
     const part: ToolPart = existing ?? {
@@ -209,6 +212,7 @@ export class AcpTurnFold {
         status: 'pending',
         input,
         ...(reportedTitle ? { title: reportedTitle } : {}),
+        ...(reportedTitle && kindNamesAction ? { titleIsSubject: true } : {}),
         time: { start: now }
       }
     }
@@ -221,6 +225,7 @@ export class AcpTurnFold {
       status,
       input,
       ...(reportedTitle ? { title: reportedTitle } : {}),
+      ...(reportedTitle && kindNamesAction ? { titleIsSubject: true } : {}),
       ...(outputText.length > 0 && status === 'completed' ? { output: outputText } : {}),
       ...(finished ? { time: { start: part.state.time?.start ?? now, end: now } } : {})
     }

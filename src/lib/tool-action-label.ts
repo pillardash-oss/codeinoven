@@ -116,7 +116,12 @@ const NAMED_TOOL_PHRASES: Record<string, string> = {
   toolsearch: 'Searched for a tool',
   accessmcpresource: 'Read an MCP resource',
   loadmcpdocumentation: 'Read the MCP docs',
-  planmoderespond: 'Answered in plan mode'
+  planmoderespond: 'Answered in plan mode',
+  // The agent protocol's own kinds, whose names are not actions in any language.
+  think: 'Reasoned about the task',
+  switchmode: 'Switched mode',
+  delete: 'Deleted a file',
+  move: 'Moved a file'
 }
 
 /**
@@ -487,6 +492,8 @@ export interface ToolActionLabelSource {
   input?: Record<string, unknown>
   /** Label the harness or the model already attached to the call. */
   title?: string
+  /** True when that title names the call's subject rather than its action. */
+  titleIsSubject?: boolean
   /** The result the call produced, when the name of the skill it loaded is
    *  only recoverable from that result. */
   output?: string
@@ -515,6 +522,7 @@ export function toolActionLabel(source: ToolActionLabelSource): string | undefin
   const title = source.title?.trim()
   if (
     title &&
+    source.titleIsSubject !== true &&
     !toolTitleRestatesInput(title, input) &&
     !toolTitleRepeatsToolName(title, tool) &&
     !toolTitleRepeatsToolName(title, source.tool)
@@ -591,6 +599,7 @@ export function toolActionLabelForPart(
     tool: part.tool,
     input: part.state.input,
     title: part.state.title,
+    titleIsSubject: part.state.titleIsSubject,
     output: part.state.output,
     codeMode: part.codeMode
   })
