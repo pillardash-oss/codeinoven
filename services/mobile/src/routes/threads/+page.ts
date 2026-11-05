@@ -1,5 +1,6 @@
 import type { PageLoad } from './$types'
 import { api } from '#lib/api/client'
+import { rememberProject } from '#lib/project-recency'
 import { rememberWorkView } from '#lib/work-view'
 
 /**

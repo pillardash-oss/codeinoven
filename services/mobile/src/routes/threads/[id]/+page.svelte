@@ -9,6 +9,7 @@
   import { api, ApiError } from '#lib/api/client'
   import { formatAge, statusSkin, toneColor } from '#lib/api/status'
   import { arrive } from '#lib/motion'
+  import { rememberProject } from '#lib/project-recency'
   import type { Message, Project, Prompt, Thread } from '#lib/api/types'
 
   /**
@@ -162,6 +163,8 @@
       ])
       thread = nextThread
       messages = transcript.items
+      // Reading a thread is working on its project: it leads the next chooser.
+      void rememberProject(nextThread.projectId)
       loadProject(nextThread.projectId)
     } catch (cause) {
       error = failure(cause)
