@@ -293,12 +293,17 @@
 <style>
   /* The brand and the form are one centred column: on a tall phone it sits in
      the middle of the screen, and on a short one the column scrolls instead of
-     clipping its top. */
+     clipping its top. The column is capped and centred, so a tablet or a wide
+     window reads as the same form rather than as a 1200px wide field; the cap
+     sits on the column, and every plate inside it still fills the column. */
   .auth-page {
     display: flex;
     flex-direction: column;
     justify-content: center;
     flex: 1 1 auto;
+    width: 100%;
+    max-width: 26rem;
+    margin-inline: auto;
     height: 100%;
     min-height: 0;
     overflow-y: auto;
