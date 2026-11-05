@@ -28,10 +28,6 @@
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
   import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
-
-  // Agent names label every transcript row and status line, so they are read
-  // once here instead of only when the Harnesses page or the editor opens.
-  void acpAgentsStore.load()
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
@@ -43,6 +39,10 @@
   import { guideState } from '$lib/guide/guide-state.svelte'
   import { createApp } from './App/App-board.svelte'
   const board = createApp()
+
+  // Agent names label every transcript row and status line, so they are read
+  // once here instead of only when the Harnesses page or the editor opens.
+  void acpAgentsStore.load()
 </script>
 
 <div class="flex h-screen flex-col bg-app">
