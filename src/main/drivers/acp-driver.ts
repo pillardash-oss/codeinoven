@@ -33,6 +33,7 @@ import type { AcpAgent } from '../../lib/acp'
 import { acpAgentStore, currentAcpAgents, type AcpAgentStore } from './acp/acp-agents-store'
 import { AcpTransport } from './acp/acp-transport'
 import { acpProviderCatalog } from './acp/acp-catalog'
+import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { AcpTurnFold } from './acp/acp-session'
 import { NO_PROMPT_CAPABILITIES, acpPromptBlocks } from './acp/acp-content'
 import { AcpPermissionRegistry } from './acp/acp-permissions'
@@ -48,8 +49,6 @@ import {
 const HARNESS_NAME = 'ACP agent'
 const TURN_TIMEOUT_MS = 60 * 60 * 1000
 const AUXILIARY_TIMEOUT_MS = 90_000
-const TITLE_PROMPT_PREFIX =
-  'Reply with a title of at most eight words for the conversation below, and nothing else.'
 
 /** One CodeInOven session's binding to the ACP session that holds its context. */
 interface AcpSessionBinding {
@@ -516,13 +515,16 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   // -------------------------------------------------------- auxiliary runs
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
+    // One shared title path for every harness: the prompt caps the message and
+    // the sanitizer strips labels and quotes. Using a private prompt here meant
+    // an ACP title could reach the row with a "Title:" prefix, and cutting it at
+    // 120 characters stored the truncation instead of letting the row truncate.
     const answer = await this.oneShot(
       projectPath,
-      `${TITLE_PROMPT_PREFIX}\n\n${options.message}`,
+      buildTitlePrompt(options.message),
       options.settings
     )
-    const title = answer?.split(/\r?\n/u)[0]?.trim()
-    return title && title.length > 0 ? title.slice(0, 120) : null
+    return answer ? sanitizeGeneratedTitle(answer) : null
   }
 
   async gradeTurn(): Promise<number | null> {
