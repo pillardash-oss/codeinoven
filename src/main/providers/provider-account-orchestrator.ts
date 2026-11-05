@@ -1444,6 +1444,11 @@ export class ProviderAccountOrchestrator {
     providerId: string,
     environment: NodeJS.ProcessEnv = {}
   ): Promise<string> {
+    if (isAcpAgentId(harnessId)) {
+      throw new Error(
+        'An ACP agent signs in through its own protocol. Use the methods it declares in Harnesses.'
+      )
+    }
     this.requireDefinition(harnessId)
     if (harnessId !== 'pi') {
       throw new Error(`${harnessId} does not support in-app sign-in.`)
@@ -1800,6 +1805,21 @@ export class ProviderAccountOrchestrator {
    * The others are small enough to enumerate from their own configuration.
    */
   async listOffered(harnessId: string): Promise<OfferedProvider[]> {
+    if (isAcpAgentId(harnessId)) {
+      // An ACP agent owns its providers, models and credentials: the honest
+      // offered list is the agent itself, with whatever its own probe said.
+      const agent = await findAcpAgent(harnessId)
+      if (!agent) return []
+      const status = await this.acpStatus(harnessId)
+      return [
+        {
+          id: agent.id,
+          name: agent.name,
+          modelCount: 0,
+          authenticated: status.state === 'authenticated'
+        }
+      ]
+    }
     const definition = this.requireDefinition(harnessId)
     switch (definition.id) {
       case 'opencode': {
