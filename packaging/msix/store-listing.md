@@ -103,7 +103,7 @@ Stages are switches on a thread. Enable any combination and the workspace runs t
 - Spec: an implementation contract you approve before any code is written.
 - Assignment: a reviewable task graph, with worker threads that can each run in their own git worktree.
 - Achievement: implement, audit and rework in a loop until the goal passes or fails hard.
-- Auto Pilot: the whole chain with nobody answering gates.
+- Every stage is a tool the agent turns on from your request.
 
 An audit pass reports independently of the agent that wrote the code.
 
@@ -170,7 +170,7 @@ appear in the description above.
 ```
 Drives Pi, Codex CLI, Claude Code, OpenCode, Cline, Antigravity and Muse Code, detected on your machine
 Pi ships inside the app, so a fresh install runs without extra setup
-Lifecycle stages for Brainstorm, PRD, Spec, Assignment, Achievement and Auto Pilot
+Lifecycle stages for Brainstorm, PRD, Spec, Assignment and Achievement, chosen by asking
 Working trace: reasoning, tool calls, file reads, diffs and checkpoints stay visible
 Permission requests answered in place, per thread
 Terminal attached to the active scope root, docked or fullscreen

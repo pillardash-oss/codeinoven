@@ -178,7 +178,7 @@ export async function inheritEngineeringLifecycle(
     // currently showing as on; it is intent the user expects to travel even
     // though it was never committed to the lifecycle row.
     const staged = loadLifecycleIntent(projectId, sourceThreadId)
-    const stagedActive = staged !== null && (staged.autopilot === true || staged.stages.length > 0)
+    const stagedActive = staged !== null && staged.stages.length > 0
     const sourceIsEngineering =
       sourceThread.engineering === true ||
       sourceLifecycle?.startedAt !== undefined ||

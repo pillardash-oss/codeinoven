@@ -13,7 +13,6 @@ import { type ComposerReadingSurface } from '../chat-composer-slash.svelte'
 import { createComposerExpansion } from '../chat-composer-expand.svelte'
 import { isImageAttachment } from '../chat-composer-attachments'
 import { type ComposerAssistantTag } from '../composer-mentions'
-import EngineeringToolbox from '../EngineeringToolbox.svelte'
 import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { APP_NAME } from '$shared/brand'
 import { getVendorIconSvg } from '$lib/vendor-icons/registry'
@@ -99,8 +98,6 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
   ])
 
   lastCaretSupportsCommands: boolean | null = $state(null)
-
-  engineeringToolbox: EngineeringToolbox | undefined = $state(undefined)
 
   /** The shoe instance, so the `/scope` slash action can open its picker. */
   shoeComponent: ComposerShoe | undefined = $state(undefined)

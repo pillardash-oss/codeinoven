@@ -24,7 +24,10 @@ import {
   BRAINSTORM_GENERATION_TIMEOUT_MS,
   assertHarnessRequestCapabilities
 } from './chat-engine-constants'
-import { BRAINSTORM_RESEARCH_ALLOWED_TOOLS } from './chat-engine-prompts'
+import {
+  BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
+  PRD_DOCUMENT_SYSTEM_PROMPT
+} from './chat-engine-prompts'
 import { parseGeneratedJson } from './chat-engine-generated-artifacts'
 import { pendingPrdTurnPath } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
@@ -178,7 +181,7 @@ export class ChatEnginePrd {
       'ephemeral'
     )
     const systemPrompt = [
-      await this.host.units['turns-dispatch'].cioPrompt('prd-document'),
+      PRD_DOCUMENT_SYSTEM_PROMPT,
       `Submit the complete PRD through ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}. Do not generate a specification or implementation.`,
       behaviorPrompt
     ].join('\n\n')

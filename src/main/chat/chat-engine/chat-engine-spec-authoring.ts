@@ -28,6 +28,7 @@ import {
 import {
   ASSIGNMENT_GENERATION_INSTRUCTION,
   PROMPT_READ_ONLY_TOOLS,
+  SPEC_GENERATION_SYSTEM_PROMPT,
   SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
   engineeringArtifactBoundaryInstruction
 } from './chat-engine-prompts'
@@ -82,7 +83,7 @@ export class ChatEngineSpecAuthoring {
       settings
     )
     const generationSystemPrompt = [
-      await this.host.units['turns-dispatch'].cioPrompt('engineering-spec'),
+      SPEC_GENERATION_SYSTEM_PROMPT,
       artifactBoundary,
       memoryPrompt,
       specMemoryPrompt,
@@ -91,7 +92,7 @@ export class ChatEngineSpecAuthoring {
       .filter(Boolean)
       .join('\n\n')
     const fallbackSystemPrompt = [
-      await this.host.units['turns-dispatch'].cioPrompt('engineering-spec'),
+      SPEC_GENERATION_SYSTEM_PROMPT,
       SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
       artifactBoundary,
       memoryPrompt,

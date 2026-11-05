@@ -35,13 +35,19 @@ import {
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
   gateCuaDriverBehaviorPrompt
 } from '../../../lib/agent-behavior'
-import type { CioPromptId } from '../../../lib/cio-prompts'
+import { ASSISTANT_BEHAVIOR_PROMPT } from '../../../lib/assistant-behavior-prompt'
 import { isUsageResetWaitIssue } from '../../../lib/provider-issue'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { attributionModeFor } from './chat-engine-constants'
-import { MERMAID_OUTPUT_INSTRUCTION, formatOpenAnnotations } from './chat-engine-prompts'
+import {
+  MERMAID_OUTPUT_INSTRUCTION,
+  formatOpenAnnotations,
+  SPEC_GENERATION_SYSTEM_PROMPT,
+  SPEC_IMPLEMENT_SYSTEM_PROMPT,
+  ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT
+} from './chat-engine-prompts'
 import { formatAttachedImageDescriptions, isImagePromptAttachment } from './chat-engine-images'
 import { turnStreamPath } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
@@ -55,10 +61,6 @@ export class ChatEngineTurnsDispatch {
     return resolvedId.startsWith(legacyHarnessAccountId(harnessId))
       ? this.host.drivers.get(harnessId)
       : this.host.state.accountDrivers.get(resolvedId)
-  }
-
-  cioPrompt(id: CioPromptId): Promise<string> {
-    return this.host.storage.getCioPrompt(id)
   }
 
   async getBehaviorPrompt(
@@ -81,9 +83,7 @@ export class ChatEngineTurnsDispatch {
       // An assistant task does not inherit the engineering work-ethics prompt:
       // the assistant is its own class and the app owns its standing behavior.
       const behaviorPrompt =
-        executionScope === 'assistant'
-          ? await this.cioPrompt('assistant')
-          : config.agentBehaviorPrompt
+        executionScope === 'assistant' ? ASSISTANT_BEHAVIOR_PROMPT : config.agentBehaviorPrompt
       // Trimmed modes get a compact scope guard instead of the full workspace
       // block; pure inbox chat and image description (no project scope) omit it.
       const workspaceScope: WorkspaceScopeMode =
@@ -113,8 +113,8 @@ export class ChatEngineTurnsDispatch {
           : null,
         '',
         {
-          SPEC_BRAINSTORM_SYSTEM_PROMPT: await this.cioPrompt('engineering-spec'),
-          SPEC_IMPLEMENT_SYSTEM_PROMPT: await this.cioPrompt('engineering-implementation'),
+          SPEC_BRAINSTORM_SYSTEM_PROMPT: SPEC_GENERATION_SYSTEM_PROMPT,
+          SPEC_IMPLEMENT_SYSTEM_PROMPT,
           MERMAID_OUTPUT_INSTRUCTION
         },
         mode,
@@ -436,7 +436,7 @@ export class ChatEngineTurnsDispatch {
       `Achievement audit ${iteration} found required corrections.`,
       'Act as the primary implementation agent. Address every actionable finding against the approved specification.',
       'Inspect the cited evidence, implement the corrections, run all relevant scoped checks, and report concrete verification evidence. Do not stop at recommendations.',
-      await this.cioPrompt('achievement-implementation'),
+      ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
       `Audit report: ${auditPath}`,
       `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
     ].join('\n\n')

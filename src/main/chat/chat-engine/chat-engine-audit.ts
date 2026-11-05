@@ -25,7 +25,7 @@ import { workflowActionPresentation } from '../../../lib/workflow-action-present
 import { ensureFeatureSlug, requireLocalProject } from '../../../lib/project-artifacts'
 import type { AssignmentAuditRepairManifest } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
-import { formatOpenAnnotations } from './chat-engine-prompts'
+import { ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT, formatOpenAnnotations } from './chat-engine-prompts'
 import { isRecord } from './chat-engine-generated-artifacts'
 import { auditRequiresRework } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
@@ -870,9 +870,7 @@ export class ChatEngineAudit {
           achievement
             ? 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.'
             : 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then request a fresh audit when ready.',
-          ...(achievement
-            ? [await this.host.units['turns-dispatch'].cioPrompt('achievement-implementation')]
-            : []),
+          ...(achievement ? [ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT] : []),
           ...(report.brainstormId && report.brainstormVersion
             ? [
                 `Implementation contract: ${await this.host.units['media-artifacts'].artifactRef(projectId, coordinatorThreadId, join('versions', `${report.brainstormId}-v${report.brainstormVersion}-brainstorm.md`))}. Use this finalized Brainstorm for the corrections.`

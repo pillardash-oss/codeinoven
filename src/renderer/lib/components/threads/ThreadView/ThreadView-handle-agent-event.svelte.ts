@@ -562,12 +562,6 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
           await invoke('engineeringLifecycle:start', this.thread.projectId, this.thread.id)
         ).state
       }
-      if (this.engineeringLifecycle?.autopilot === true) {
-        // Autopilot has nobody to answer, so it keeps the forced background
-        // decomposition instead of opening an interview.
-        await this.root.submitSpecDecision.generateAssignmentDraft(msg)
-        return
-      }
       // Fall through on purpose: an Assignment-stage message is the Assignment
       // interview. The Sr. Engineer either submits the task graph or asks the
       // questions the thread and the message together cannot settle.
@@ -596,7 +590,6 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     if (
       this.engineeringLifecycle &&
       this.engineeringLifecycle.activeStage === undefined &&
-      !this.engineeringLifecycle.autopilot &&
       !hasSelectedStage(this.engineeringLifecycle, 'brainstorm') &&
       !hasSelectedStage(this.engineeringLifecycle, 'assignment') &&
       !hasSelectedStage(this.engineeringLifecycle, 'achievement') &&

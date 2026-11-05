@@ -293,7 +293,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
-            `For a requested Brainstorm, PRD, spec or Assignment, discover the matching cio_create_* schema through cio:gateway and invoke it. Ask once whether the user wants independently promptable Assignment workers or inline sub-agents when that preference is unknown.`
+            `Brainstorm, PRD, Spec, Assignment and Achievement are artifact tools you turn on yourself: discover the matching cio_create_* schema through cio:gateway and invoke it in the same turn the user asks for it. Read the request by outcome: brainstorm or explore a direction -> cio_create_brainstorm; product requirements or PRD -> cio_create_prd; spec or implementation plan -> cio_create_spec; split into tasks, break it down, assign workers/agents or spread it across agents -> cio_create_assignment; keep going until a goal is reached, take it all the way or "do this until it works" -> cio_create_achievement. Never ask the user to enable a stage when their request already maps to one, and ask once whether they want independently promptable Assignment workers or inline sub-agents when that preference is unknown.`
           ]
         : []),
       ...(sessionToolsAskRequired

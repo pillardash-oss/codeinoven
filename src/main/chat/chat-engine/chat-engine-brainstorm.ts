@@ -314,7 +314,6 @@ export class ChatEngineBrainstorm {
       }
       if (lifecycle?.activeStage === 'brainstorm') {
         this.host.state.engineeringLifecycleEngine.completeStage(projectId, threadId, 'brainstorm')
-        if (lifecycle.autopilot) this.host.state.prdEngine.ensureWorkflow(projectId, threadId)
         // The Brainstorm stage is done: park the thread on the user for review
         // under the engineering-specific `spec` status, never the generic
         // needs-attention one.

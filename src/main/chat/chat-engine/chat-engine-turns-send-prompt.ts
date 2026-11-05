@@ -82,6 +82,12 @@ import {
 } from './chat-engine-constants'
 import {
   CHAT_WORKSPACE_TOOLS,
+  ASSIGNMENT_DISCUSSION_SYSTEM_PROMPT,
+  BRAINSTORM_DISCUSSION_SYSTEM_PROMPT,
+  CHAT_SYSTEM_PROMPT,
+  FILE_SYSTEM_CHAT_SYSTEM_PROMPT,
+  PRD_DISCUSSION_SYSTEM_PROMPT,
+  SPEC_GENERATION_SYSTEM_PROMPT,
   chatGatewayAllowedTools,
   ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION,
   IMAGE_DESCRIPTOR_SYSTEM_NOTE,
@@ -646,7 +652,6 @@ export class ChatEngineTurnsSendPrompt {
       specAction === undefined &&
       (lifecycleForMode?.activeStage === 'assignment' ||
         lifecycleForMode?.humanGate === 'assignment_approval') &&
-      lifecycleForMode.autopilot !== true &&
       (ownedAssignment === null || ownedAssignment.status === 'draft')
     if (
       planningSpecTurn &&
@@ -1148,9 +1153,7 @@ export class ChatEngineTurnsSendPrompt {
     const brainstormingTurn = planningSpecTurn
     const chatSystemPrompt = isChatThread
       ? [
-          await this.host.units['turns-dispatch'].cioPrompt(
-            chatFileSystemEnabled ? 'file-system-chat' : 'chat'
-          ),
+          chatFileSystemEnabled ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT,
           chatFileSystemEnabled
             ? `This chat owns the dedicated workspace ${chatWorkspaceRoot}. Work inside it, including image generation, scripts, and generated files, is already authorized and requires no permission question.`
             : chatFilesystemBoundaryInstruction(chatWorkspaceRoot)
@@ -1160,7 +1163,7 @@ export class ChatEngineTurnsSendPrompt {
       : ''
     const brainstormDiscussionPrompt = brainstormingTurn
       ? [
-          await this.host.units['turns-dispatch'].cioPrompt('brainstorm-discussion'),
+          BRAINSTORM_DISCUSSION_SYSTEM_PROMPT,
           activeBrainstormSession
             ? await this.host.units['brainstorm-review'].brainstormAlignmentContext(
                 projectId,
@@ -1172,21 +1175,19 @@ export class ChatEngineTurnsSendPrompt {
           .filter(Boolean)
           .join('\n\n')
       : ''
-    const engineeringSpecPrompt = brainstormingTurn
-      ? await this.host.units['turns-dispatch'].cioPrompt('engineering-spec')
-      : ''
+    const engineeringSpecPrompt = brainstormingTurn ? SPEC_GENERATION_SYSTEM_PROMPT : ''
     // This turn is never schema-enforced, because the agent must stay free to ask
     // product questions instead of submitting. The shape therefore travels in the
     // prompt, exactly as it does for drivers without structured output.
     const prdDiscussionPrompt = prdDiscussionTurn
       ? [
-          await this.host.units['turns-dispatch'].cioPrompt('prd-discussion'),
+          PRD_DISCUSSION_SYSTEM_PROMPT,
           `The ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME} contract in this conversation is one JSON object matching this schema and nothing else: ${JSON.stringify(PRD_DOCUMENT_JSON_SCHEMA)}`
         ].join('\n\n')
       : ''
     const assignmentDiscussionPrompt = assignmentDiscussionTurn
       ? [
-          await this.host.units['turns-dispatch'].cioPrompt('assignment-discussion'),
+          ASSIGNMENT_DISCUSSION_SYSTEM_PROMPT,
           `The ${ASSIGNMENT_PLAN_TOOL_NAME} contract in this conversation is one JSON object matching this schema and nothing else: ${JSON.stringify(ASSIGNMENT_PLAN_SCHEMA)}`
         ].join('\n\n')
       : ''

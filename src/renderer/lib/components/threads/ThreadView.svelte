@@ -169,36 +169,6 @@
       })
     }
 
-    // Orchestration child threads (workers, auditors) are driven by their
-    // coordinator   they can never enable engineering mode themselves, so the
-    // stage toggles and Auto Pilot are not offered to them.
-    if (!board.props.chatMode && !board.currentWorkingTraceAttribution.orchestrationChild) {
-      // Engineering is a set of lifecycle stages, not one switch: expose every
-      // stage as its own toggle so "turn engineering on/off" is never ambiguous.
-      // Each action stages the selection exactly like the Engineering Toolbox
-      // intent only, applied when the next message is sent.
-      const lifecycle = board.switchProject.effectiveLifecycleSelection
-      for (const stage of board.engineeringStageActions.engineeringStageActions) {
-        const enabled = lifecycle.autopilot || lifecycle.stages.includes(stage.stage)
-        actions.push({
-          id: board.switchProject.actionId(`mode:stage:${stage.stage}`),
-          title: enabled ? `Turn off ${stage.label}` : `Turn on ${stage.label}`,
-          description: stage.description,
-          category: 'mode',
-          source: board.state.applicationActionSource,
-          keywords: stage.keywords
-        })
-      }
-      actions.push({
-        id: 'mode:autopilot',
-        title: lifecycle.autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot',
-        description: 'Run every Engineering stage on full autonomy, reworking until complete.',
-        category: 'mode',
-        source: board.state.applicationActionSource,
-        keywords: ['autopilot', 'auto', 'pilot', 'autonomy', 'engineering']
-      })
-    }
-
     // Chat mode only surfaces permission levels once File System is enabled:
     // chats run with auto permission review until the user opts into files.
     if (!board.props.chatMode || board.loadOlderMessages.settings.fileSystemMode === true) {
@@ -517,8 +487,7 @@
     }
     board.submitSpecDecision.assignment = activeAssignment
     if (
-      board.handleAgentEvent.engineeringLifecycle?.autopilot &&
-      board.handleAgentEvent.engineeringLifecycle.activeStage === 'achievement' &&
+      board.handleAgentEvent.engineeringLifecycle?.activeStage === 'achievement' &&
       activeAssignment?.auditCycle?.status === 'completed'
     ) {
       board.handleAgentEvent.engineeringLifecycle = await invoke(
@@ -624,8 +593,7 @@
       workflowThread?.status !== 'failed' &&
       !board.state.planningResumeRequested &&
       (!board.handleAgentEvent.engineeringLifecycle ||
-        (board.handleAgentEvent.engineeringLifecycle.selectedStages.length === 0 &&
-          !board.handleAgentEvent.engineeringLifecycle.autopilot))
+        board.handleAgentEvent.engineeringLifecycle.selectedStages.length === 0)
     ) {
       const resume =
         workflow?.stage === 'skipped'

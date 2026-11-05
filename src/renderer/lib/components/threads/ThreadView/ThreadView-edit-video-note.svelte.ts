@@ -73,18 +73,16 @@ export class ThreadViewEditVideoNote extends BoardUnit<ThreadView> {
     const pending = this.root.harnessUsage.pendingLifecycleSelection
     const base = this.root.handleAgentEvent.engineeringLifecycle
     if (!pending) return base
-    const autopilot = pending.autopilot === true
-    const selectedStages = autopilot ? [] : normalizeLifecycleStages(pending.stages)
-    // When the staged selection turns everything off, the toolbox must read as
-    // off too   a stale `startedAt` marker from a previous run would keep the
-    // icon lit after the user toggled the modes off.
-    const cleared = !autopilot && selectedStages.length === 0
+    const selectedStages = normalizeLifecycleStages(pending.stages)
+    // When the staged selection turns everything off, the presentation must read
+    // as off too   a stale `startedAt` marker from a previous run would keep it
+    // lit after every mode was turned off.
+    const cleared = selectedStages.length === 0
     return {
       projectId: base?.projectId ?? this.root.handleAgentEvent.thread.projectId,
       threadId: base?.threadId ?? this.root.handleAgentEvent.thread.id,
-      selection: representativeLifecycleSelection(selectedStages, autopilot),
+      selection: representativeLifecycleSelection(selectedStages),
       selectedStages,
-      autopilot,
       completedStages: base?.completedStages ?? [],
       ...(base?.activeStage ? { activeStage: base.activeStage } : {}),
       ...(base?.humanGate ? { humanGate: base.humanGate } : {}),

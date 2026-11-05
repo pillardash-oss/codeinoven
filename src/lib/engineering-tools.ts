@@ -29,17 +29,20 @@ export const CREATE_PRD_TOOL_NAME = 'cio_create_prd'
 export const CREATE_SPEC_TOOL_NAME = 'cio_create_spec'
 /** Create the thread's Assignment task graph for the user to sign off. */
 export const CREATE_ASSIGNMENT_TOOL_NAME = 'cio_create_assignment'
+/** Turn on Achievement: implement, audit and rework until the goal is verified. */
+export const CREATE_ACHIEVEMENT_TOOL_NAME = 'cio_create_achievement'
 
 /** Every engineering artifact tool name, for gate checks and the Pi extension. */
 export const ENGINEERING_TOOL_NAMES: readonly string[] = [
   CREATE_BRAINSTORM_TOOL_NAME,
   CREATE_PRD_TOOL_NAME,
   CREATE_SPEC_TOOL_NAME,
-  CREATE_ASSIGNMENT_TOOL_NAME
+  CREATE_ASSIGNMENT_TOOL_NAME,
+  CREATE_ACHIEVEMENT_TOOL_NAME
 ]
 
-/** The operation each tool maps to, one per artifact. */
-export type EngineeringToolOperation = 'brainstorm' | 'prd' | 'spec' | 'assignment'
+/** The operation each tool maps to, one per lifecycle stage. */
+export type EngineeringToolOperation = 'brainstorm' | 'prd' | 'spec' | 'assignment' | 'achievement'
 
 /** Whether a gateway tool name belongs to the engineering artifact family. */
 export function isEngineeringTool(name: string): boolean {
@@ -57,6 +60,8 @@ export function engineeringToolOperation(name: string): EngineeringToolOperation
       return 'spec'
     case CREATE_ASSIGNMENT_TOOL_NAME:
       return 'assignment'
+    case CREATE_ACHIEVEMENT_TOOL_NAME:
+      return 'achievement'
     default:
       return null
   }
@@ -118,5 +123,13 @@ export const ENGINEERING_TOOLS: GatewayToolDefinition[] = [
     outputSchema: ENGINEERING_RESULT_SCHEMA,
     route: '/engineering/assignment',
     sentWhen: 'A project thread where the user asks to split work across workers, tasks or agents'
+  },
+  {
+    name: CREATE_ACHIEVEMENT_TOOL_NAME,
+    description: `Turn on Achievement for ${APP_NAME}: the thread implements, audits and reworks autonomously until the approved goal is verified, without asking the user to approve steps. Reach for it when the user asks to keep going until something is achieved or a goal is reached ("do this until it works", "take it all the way", "keep going until complete"), rather than when they ask for a single artifact. It requires an approved specification, because the independent audit judges the result against that contract; when no approved specification exists the tool says so and the specification tool runs first. Nothing is signed off on the user's behalf.`,
+    inputSchema: INSTRUCTIONS_INPUT_SCHEMA,
+    outputSchema: ENGINEERING_RESULT_SCHEMA,
+    route: '/engineering/achievement',
+    sentWhen: 'A project thread where the user asks to continue until a goal is reached'
   }
 ]

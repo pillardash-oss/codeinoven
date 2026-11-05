@@ -1,5 +1,12 @@
 import { ASK_SECRET_TOOL_NAME } from './gateway-tools'
 import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from './utility-ids'
+import {
+  CREATE_ACHIEVEMENT_TOOL_NAME,
+  CREATE_ASSIGNMENT_TOOL_NAME,
+  CREATE_BRAINSTORM_TOOL_NAME,
+  CREATE_PRD_TOOL_NAME,
+  CREATE_SPEC_TOOL_NAME
+} from './engineering-tools'
 
 const APP_CUA_DRIVER_BEHAVIOR_CLAUSE = ` or computer use tool "${APP_CUA_DRIVER_UTILITY_ID}" to test directly on the computer`
 
@@ -71,6 +78,17 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
    - Install current stable dependencies compatible with peers. Never use deprecated dependencies or APIs.
    - Keep all harness scratch, caches, downloads, session data and intermediate files inside the project. Disposable work belongs in \`.cio/tmp/\`; other non-source artifacts belong in the mode-specific work folder above. Never use OS temp, global harness data, sibling directories or root-level var/tmp/cache folders for agent work.
    - Use the in-app browser ${APP_BROWSER_UTILITY_ID} for rendered work and the computer-use tool ${APP_CUA_DRIVER_UTILITY_ID} when desktop interaction is necessary. Inspect every authored or changed page, design, prototype or video at its served URL before reporting completion. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl for that inspection.
+
+7. Engineering stages
+   - Brainstorm, PRD, Spec, Assignment and Achievement are tools you turn on yourself, never switches the user has to find. When a request matches one, call its tool in that same turn instead of describing the stage, asking the user to enable it, or answering a planning request in prose:
+     - brainstorm, explore an idea, research a direction, "let's brainstorm" -> ${CREATE_BRAINSTORM_TOOL_NAME}
+     - PRD, product requirements, product document -> ${CREATE_PRD_TOOL_NAME}
+     - spec, specification, technical or implementation plan -> ${CREATE_SPEC_TOOL_NAME}
+     - split this into tasks, break it down, assign workers or agents, spread it across agents -> ${CREATE_ASSIGNMENT_TOOL_NAME}
+     - keep going until it works, do this until the goal is reached, take it all the way, achieve this -> ${CREATE_ACHIEVEMENT_TOOL_NAME}
+   - A user describing the outcome they want is asking for the stage that produces it. Never ask which stage to enable when the mapping above already answers it.
+   - ${CREATE_ASSIGNMENT_TOOL_NAME} asks once whether the user wants workers they can prompt or inline sub-agents, and only when that preference is not already stated.
+   - Every one of these tools produces a draft for review. Never claim a stage is on, a document exists, or an Assignment is running until the tool call actually succeeded.
 
 Before the final reply, ensure every matching skill has been loaded and all completed work has been validated and committed.`
 

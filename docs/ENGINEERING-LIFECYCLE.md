@@ -1,21 +1,21 @@
 # Engineering lifecycle
 
-The Engineering Toolbox stores a set of independent stage switches per project thread and an optional **Auto Pilot** flag. Any combination of `brainstorm`, `prd`, `spec`, `assignment`, and `achievement` can be enabled at once; the lifecycle runs the enabled stages in canonical order (`brainstorm → prd → spec → assignment → achievement`), skipping stages that are not enabled. Selecting a stage does not mark it as started. The first start sets `started_at`; that timestamp is permanent and keeps the Toolbox filled after completion, cancellation, failure, reload, or restart.
+A project thread stores a set of independent Engineering stage selections: `brainstorm`, `prd`, `spec`, `assignment`, and `achievement`. The agent turns a stage on by calling that stage's tool when the user's request matches it (see _Engineering artifact tools_ below); there is no switch, button, or Auto Pilot mode to find. Each tool selects its stage and starts it on an idle lifecycle, and the lifecycle runs the enabled stages in canonical order (`brainstorm → prd → spec → assignment → achievement`), skipping stages that are not enabled. Selecting a stage does not mark it as started. The first start sets `started_at`; that timestamp is permanent and keeps the thread marked as Engineering after completion, cancellation, failure, reload, or restart.
 
 ## Circle completion (implementation mode)
 
 Manual (non-Auto-Pilot) mode is **circular**, not chained. When a stage's circle completes (Brainstorm is finalized, PRD is finalized, Spec is approved and implemented, an Assignment is approved and run, an Achievement goal is audited to done), the engine:
 
-- marks the stage complete and **turns that stage's switch OFF** (removes it from the selection),
+- marks the stage complete and **turns that stage off** (removes it from the selection),
 - clears `active_stage`, so the thread drops to **implementation mode**.
 
-It does **not** auto-advance to the next selected stage in manual mode. The remaining stages keep their switches ON but stay parked. The only way to start the next stage is a **designated button**: the Brainstorm/PRD Studio "Next step" menu (Generate PRD / Generate Spec), the Spec Studio "Review / Implement" buttons, the assignment "Generate assignment" action, or the audit "Start audit" actions. `Auto Pilot` and a manual run that includes `achievement` keep the chained behavior so the audit/rework loop can drive the pipeline forward.
+It does **not** auto-advance to the next selected stage. The remaining stages stay selected but parked. The next stage starts when the agent calls its tool, or from a **designated button** in the open studio: the Brainstorm/PRD Studio "Next step" menu (Generate PRD / Generate Spec), the Spec Studio "Review / Implement" buttons, the assignment "Generate assignment" action, or the audit "Start audit" actions. A run that includes `achievement` keeps the chained behavior so the audit/rework loop can drive the pipeline forward.
 
 A plain chat message sent while the lifecycle is parked is answered normally in implementation mode. The model is instructed not to re-enter brainstorming, generate a new specification, or reformulate problem statements unless one of those designated buttons is used; if the user asks it to implement/advance from a plain message, it points them at the Engineering Studio buttons (or to forking a branch and disabling Engineering mode instead).
 
 ## Stage behavior
 
-Dependencies cascade when a switch is enabled: **Achievement implies Spec**, so enabling it leaves the Spec switch on. **Assignment stands alone** and never turns Spec on see _Assignment sources_ below. Achievement is a loop mode and never enables Assignment. Turning on PRD or Spec never turns on Brainstorm instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when the switch is toggled. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
+Dependencies cascade when a stage is enabled: **Achievement implies Spec**, so enabling it leaves Spec enabled. **Assignment stands alone** and never turns Spec on see _Assignment sources_ below. Achievement is a loop mode and never enables Assignment. Enabling PRD or Spec never enables Brainstorm instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when a stage is turned on. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
 
 Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Achievement requires an approved Spec; Assignment does not.
 
@@ -37,7 +37,7 @@ The Assignment stage is conversational, exactly like the Brainstorm and PRD stag
 - **Submits** when the source already holds a task graph: concrete deliverables, the files or areas each one touches, ownership, dependencies, and how every task is verified. The submission persists the draft, or replaces the unsigned draft the same turn is re-deriving, and it always advances the Assignment-approval gate.
 - **Interviews** when it does not: the Sr. Engineer asks only the unresolved task-graph questions through the question tool and ends the turn on them, keeping every question as a card in the conversation. The answers resume the same logical turn and the interview repeats until the source is sufficient. A partial, speculative, or invented graph is never submitted to look complete.
 
-The interview owns both the active Assignment stage and its `assignment_approval` gate, so the unsigned draft under review can still be reworked by talking to the Sr. Engineer. Two paths deliberately bypass the interview: **Auto Pilot**, which has nobody to answer and keeps the forced background decomposition, and the explicit **Generate assignment** action, which is the user asking for the graph now.
+The interview owns both the active Assignment stage and its `assignment_approval` gate, so the unsigned draft under review can still be reworked by talking to the Sr. Engineer. The explicit **Generate assignment** action bypasses the interview, because it is the user asking for the graph now.
 
 Once the Assignment is signed, its thread stops being a planning turn altogether. The Sr. Engineer coordinates the workers there, so plain messages are an ordinary coordinator conversation (and each worker thread stays independently chat-able) instead of reopening the specification pipeline.
 
@@ -45,12 +45,15 @@ Once the Assignment is signed, its thread stops being a planning turn altogether
 
 A thread that never entered Engineering has no Studio buttons in front of the agent, so before these tools existed a message like "create an assignment for this" could only be answered by the coordinator spawning its own inline sub-agents, which is not the mechanism the user asked for.
 
-The agent now reaches the artifacts through four real callable tools instead of the app watching the wording of a message. They live in `src/lib/engineering-tools.ts` and travel on the same utility gateway every other app-owned tool uses, so the Pi extension, the generated MCP server and the main-process bridge stay in step from that one catalog.
+The agent reaches every stage through a real callable tool instead of the app watching the wording of a message or asking the user to find a switch. Each lifecycle stage owns exactly one tool. They live in `src/lib/engineering-tools.ts` and travel on the same utility gateway every other app-owned tool uses, so the Pi extension, the generated MCP server and the main-process bridge stay in step from that one catalog.
 
-- `cio_create_brainstorm` creates the thread's durable Brainstorm draft.
-- `cio_create_prd` creates the product requirements document.
-- `cio_create_spec` enters the Engineering spec stage and generates the specification draft.
-- `cio_create_assignment` creates the Assignment task graph for the user to sign off.
+- `cio_create_brainstorm` turns Brainstorm on and creates the thread's durable Brainstorm draft.
+- `cio_create_prd` turns PRD on and creates the product requirements document.
+- `cio_create_spec` turns Spec on and generates the specification draft.
+- `cio_create_assignment` turns Assignment on and creates the task graph for the user to sign off.
+- `cio_create_achievement` turns Achievement on so the thread implements, audits and reworks until the approved specification is verified. It requires an approved specification, because the independent audit judges the result against that contract.
+
+The behavior prompt and the gateway instructions carry the same reading of a request, so the agent does not have to interrogate the user about which stage they mean: brainstorming or exploring a direction calls `cio_create_brainstorm`, product requirements or a PRD calls `cio_create_prd`, a spec or implementation plan calls `cio_create_spec`, splitting the work into tasks or across agents calls `cio_create_assignment`, and "keep going until this works" or "until the goal is reached" calls `cio_create_achievement`.
 
 Each tool runs the same machinery the Studio buttons use: an isolated generation session that persists a reviewable draft and broadcasts the matching `ready` event. Nothing is approved, implemented or signed off on the user's behalf, so the existing review surface keeps owning that decision.
 
@@ -103,7 +106,7 @@ Provisioning happens in the app rather than the engine. The engine calls an `Ass
 
 `AssignmentTask.workerScopeBucketId` records the scope a dispatched worker actually runs in. A retried task passes it back to the provisioner, so a replacement worker reuses the checkout holding the failed attempt's commits instead of leaking a second worktree for the same task. Changing the choice clears it, and the engine refuses both to change a scope once a worker thread exists and to fail a dispatch quietly: if the scope can no longer be created or found, the dispatch fails with `scope_unavailable` and the task stays `ready` rather than starting a worker in the wrong directory. The auditor always inherits the Assignment scope.
 
-Agent-generated task graphs cannot set a worker scope, at any level. Only the human choice made on the review surface does, so Autopilot, which has no sign-off, always inherits. A rework draft adopts the model's new task graph but keeps every scope choice the user already made, at all three levels, because where a worker runs is not the model's to change.
+Agent-generated task graphs cannot set a worker scope, at any level. Only the human choice made on the review surface does, so an agent-generated graph always inherits. A rework draft adopts the model's new task graph but keeps every scope choice the user already made, at all three levels, because where a worker runs is not the model's to change.
 
 ### Reopening a finished worker
 
@@ -111,15 +114,11 @@ A direct message to a worker thread is work, not a dead end. When a worker that 
 
 After a Brainstorm session, the studio offers a **Next step** menu instead of a single "Prepare spec" action: Prototype Lo-Fi, Prototype Hi-Fi, Generate PRD, or Generate Spec. Prototype steps steer the Sr. Engineer to extend the Brainstorm; PRD and Spec steps finalize the Brainstorm and produce the requested document. Likewise, after a PRD finalizes, the PRD Studio offers a **Next step** menu to Generate Spec.
 
-### Auto Pilot
-
-Auto Pilot replaces the old "Run all" toggle. It is a full-autonomy mode: the lifecycle runs `brainstorm → prd → spec → assignment → achievement` and keeps the achievement audit/rework loop active until the goal passes or reaches a hard terminal failure. Auto Pilot generates only what the pipeline needs the Brainstorm may be skipped, the message is used as input (alignment questions are still allowed), a Spec is generated, worker tasks are assigned to the re-used workers from the last run or the agent defaults, and the run proceeds without waiting for human intervention. Auto Pilot therefore always takes the spec-backed source above.
-
 ## Stage behavior (original single-run notes)
 
 Completing a stage advances to the next enabled stage; when no further stage is enabled the run terminates. Run all remains selected while work is active or awaiting a human decision. Completed stages are persisted before the next stage starts. Resume tokens are bounded, single-use, and safe to replay: a repeated consumed token returns the current state without repeating work.
 
-> Note: the automatic-advance described here applies to Auto Pilot and achievement-loop runs. Manual multi-select runs stop at circle completion (see _Circle completion_ above).
+> Note: the automatic-advance described here applies to achievement-loop runs. Every other run stops at circle completion (see _Circle completion_ above).
 
 Human gates cover LoFi selection when HiFi is offered, Brainstorm finalization, PRD finalization, Spec approval, Assignment approval, and acknowledged terminal failures. A hard failure retains the failed stage and selection behind a single-use retry token; Retry re-enters that same stage, while Stop uses the normal confirmation flow. Replacing or stopping an active run requires confirmation. Existing documents and prototype artifacts are preserved after cancellation. Resuming a decision gate for a manual run re-enters the gate's owning stage so the follow-up `completeStage` can finish the circle.
 

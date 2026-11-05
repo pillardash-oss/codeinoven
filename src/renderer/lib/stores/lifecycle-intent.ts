@@ -29,7 +29,7 @@ function storageKey(projectId: string, threadId: string): string {
 /** Validate an unknown parsed value as a selection input; null when invalid. */
 function sanitize(value: unknown): EngineeringLifecycleSelectionInput | null {
   if (typeof value !== 'object' || value === null) return null
-  const candidate = value as { stages?: unknown; autopilot?: unknown }
+  const candidate = value as { stages?: unknown }
   if (!Array.isArray(candidate.stages)) return null
   const stages: EngineeringLifecycleStage[] = []
   for (const stage of candidate.stages) {
@@ -38,7 +38,7 @@ function sanitize(value: unknown): EngineeringLifecycleSelectionInput | null {
       stages.push(stage as EngineeringLifecycleStage)
     }
   }
-  return { stages, autopilot: candidate.autopilot === true }
+  return { stages }
 }
 
 /** Load the staged selection for a thread, or null when none is staged. */
@@ -94,7 +94,7 @@ function rememberProjectSelection(
 ): void {
   if (typeof window === 'undefined') return
   try {
-    if (input.autopilot !== true && input.stages.length === 0) {
+    if (input.stages.length === 0) {
       window.localStorage.removeItem(projectStorageKey(projectId))
       return
     }

@@ -52,7 +52,7 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
   ): Promise<ReturnType<typeof engineeringLifecycleEngine.select>> {
     const previous = engineeringLifecycleEngine.get(projectId, threadId)
     const next = engineeringLifecycleEngine.select(projectId, threadId, selectionInput)
-    if (next.autopilot || next.selectedStages.length > 0) {
+    if (next.selectedStages.length > 0) {
       await threadManager.updateThread(projectId, threadId, { engineering: true })
     }
     if ((previous?.selection ?? 'none') === 'none' && next.selection !== 'none') {
@@ -80,7 +80,7 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
       const selectionInput = validateEngineeringLifecycleSelectionInput(input)
       // The independent audit owns the workflow: engineering modes stay locked
       // out of a thread for its lifetime once the audit switch was turned on.
-      if (selectionInput.autopilot === true || selectionInput.stages.length > 0) {
+      if (selectionInput.stages.length > 0) {
         const auditThread = await threadManager.getThread(ids.projectId, ids.threadId)
         if (auditThread?.independentAudit === true) {
           throw new Error(
@@ -125,14 +125,11 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
       // override", an empty selection means "the user turned every switch off".
       const hasOverride = selection !== undefined && selection !== null
       const staged = hasOverride ? validateEngineeringLifecycleSelectionInput(selection) : null
-      const stagedActive = staged !== null && (staged.autopilot || staged.stages.length > 0)
+      const stagedActive = staged !== null && staged.stages.length > 0
       const sourceLifecycle = engineeringLifecycleEngine.get(source.projectId, source.threadId)
       const persistedSelection: EngineeringLifecycleSelectionInput | null =
         sourceLifecycle && sourceLifecycle.selection !== 'none'
-          ? {
-              stages: sourceLifecycle.selectedStages ?? [],
-              autopilot: sourceLifecycle.autopilot === true
-            }
+          ? { stages: sourceLifecycle.selectedStages ?? [] }
           : null
       const sourceIsEngineering =
         sourceThread.engineering === true ||
@@ -141,8 +138,7 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
         stagedActive
       if (!sourceIsEngineering) return null
       const effective = staged ?? persistedSelection
-      const hasActiveSelection =
-        effective !== null && (effective.autopilot || effective.stages.length > 0)
+      const hasActiveSelection = effective !== null && effective.stages.length > 0
       // A source that hands over nothing (no switch on and no run ever started)
       // carries no Engineering state to copy. Marking the destination anyway is
       // what produced threads the rail read as Engineering while every switch
@@ -154,7 +150,6 @@ export function registerEngineeringLifecycleHandlers(ctx: IpcHandlerContext): vo
       // stays filled exactly as the source's does.
       engineeringLifecycleEngine.inherit(destination.projectId, destination.threadId, {
         stages: effective?.stages ?? [],
-        autopilot: effective?.autopilot === true,
         startedAt: hasActiveSelection ? undefined : sourceLifecycle?.startedAt
       })
       // The durable Engineering marker rides the thread row, so the sidebar

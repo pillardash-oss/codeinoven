@@ -216,9 +216,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     id: 'cio-prompts',
     section: 'cio-prompts',
     group: 'agents',
-    title: 'CIO Prompts',
-    description: 'Prompts CodeInOven injects into agent sessions.',
-    keywords: ['prompts', 'instructions'],
+    title: 'Behavior',
+    description: 'The work ethics and PR review instructions CodeInOven sends into agent sessions.',
+    keywords: ['behavior', 'work ethics', 'pr review', 'instructions'],
     icon: CioMessage
   },
   {

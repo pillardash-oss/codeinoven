@@ -289,10 +289,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
         this.root.handleAgentEvent.thread.projectId,
         this.root.handleAgentEvent.thread.id
       )
-      if (
-        this.root.handleAgentEvent.engineeringLifecycle?.autopilot &&
-        this.root.handleAgentEvent.engineeringLifecycle.activeStage === 'assignment'
-      ) {
+      if (this.root.handleAgentEvent.engineeringLifecycle?.activeStage === 'assignment') {
         this.root.handleAgentEvent.engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           this.root.handleAgentEvent.thread.projectId,
@@ -308,17 +305,14 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
       )
       this.selectedAssignmentVersion = this.assignment.version
       this.root.studioTemporaryChatContext.specReadyToolVisible = false
-      this.root.loadOlderMessages.settings = this.root.handleAgentEvent.engineeringLifecycle
-        ?.autopilot
-        ? {
-            ...this.root.loadOlderMessages.settings,
-            assignmentMode: true,
-            loopMode: true
-          }
-        : {
-            ...this.root.loadOlderMessages.settings,
-            assignmentMode: false
-          }
+      this.root.loadOlderMessages.settings = {
+        ...this.root.loadOlderMessages.settings,
+        assignmentMode: hasSelectedStage(
+          this.root.handleAgentEvent.engineeringLifecycle,
+          'assignment'
+        ),
+        loopMode: hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'achievement')
+      }
       this.root.sources.commitSettings(this.root.loadOlderMessages.settings)
     } catch (error) {
       this.assignmentError =
@@ -648,8 +642,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
         const lifecycleSpecApproval =
           (this.root.handleAgentEvent.engineeringLifecycle?.activeStage === 'spec' ||
             this.root.handleAgentEvent.engineeringLifecycle?.humanGate === 'spec_approval') &&
-          (hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'spec') ||
-            this.root.handleAgentEvent.engineeringLifecycle?.autopilot)
+          hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'spec')
         if (lifecycleSpecApproval) {
           if (
             this.root.handleAgentEvent.engineeringLifecycle?.humanGate === 'spec_approval' &&
@@ -690,10 +683,6 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
             this.root.handleAgentEvent.thread.id,
             'spec'
           )
-          if (this.root.handleAgentEvent.engineeringLifecycle.autopilot) {
-            await this.generateAssignmentDraft()
-            return
-          }
           const nextEngineeringSettings = this.root.harnessUsage.settingsForEngineeringState(
             this.root.handleAgentEvent.engineeringLifecycle
           )

@@ -940,17 +940,12 @@
                   autofocus
                   showEngineeringMode={!board.props.chatMode &&
                     !board.currentWorkingTraceAttribution.orchestrationChild}
-                  engineeringLifecycle={board.editVideoNote.pendingLifecycleDisplay}
-                  engineeringActive={board.submitBrainstormDecision.engineeringOn}
-                  onEngineeringLifecycleSelect={board.switchProject.selectEngineeringLifecycle}
                   independentAuditAvailable={board.currentWorkingTraceAttribution
                     .independentAuditAvailable}
                   independentAuditEnabled={board.currentWorkingTraceAttribution
                     .independentAuditDisplayEnabled}
                   onIndependentAuditToggle={board.currentWorkingTraceAttribution
                     .toggleIndependentAudit}
-                  engineeringToolboxHidden={board.currentWorkingTraceAttribution
-                    .independentAuditDisplayEnabled}
                   showChatModes={board.props.chatMode}
                   settings={board.loadOlderMessages.settings}
                   onSettingsChange={board.contextUsage.updateSettings}

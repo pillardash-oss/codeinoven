@@ -41,6 +41,7 @@ import { formatConversationTranscript } from './chat-engine-message-text'
 import { COORDINATOR_HANDOFF_QUEUE_DIR, MAX_COORDINATOR_HANDOFFS } from './chat-engine-constants'
 import {
   CONVERSATION_ASSIGNMENT_INSTRUCTION,
+  EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
   PROMPT_READ_ONLY_TOOLS,
   engineeringArtifactBoundaryInstruction,
   formatOpenAnnotations
@@ -987,7 +988,7 @@ export class ChatEngineAssignment {
       await ensureFeatureSlug(this.host.database, projectId, coordinatorThreadId)
     )
     const assignmentSystemPrompt = [
-      await this.host.units['turns-dispatch'].cioPrompt('assignment-plan'),
+      EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
       engineeringArtifactBoundaryInstruction(artifactDirectory)
     ].join('\n\n')
     // The specification branch reads the persisted spec by path; the

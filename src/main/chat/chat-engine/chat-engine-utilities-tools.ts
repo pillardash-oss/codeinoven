@@ -14,7 +14,10 @@ import type {
   EngineeringToolContext,
   ScopeToolExecutor
 } from '../../utilities/utility-orchestration-service'
-import type { EngineeringToolOperation } from '../../../lib/engineering-tools'
+import {
+  CREATE_SPEC_TOOL_NAME,
+  type EngineeringToolOperation
+} from '../../../lib/engineering-tools'
 import type {
   AgentMessage,
   AgentPart,
@@ -364,6 +367,26 @@ export class ChatEngineUtilitiesTools {
     return false
   }
 
+  /**
+   * Turn on the lifecycle stage an engineering tool maps to, so the app treats
+   * the thread as that stage from its next turn on. An idle lifecycle is started
+   * immediately; a thread already running a stage or waiting on a decision gate
+   * is left exactly as it is.
+   */
+  private enableEngineeringStage(
+    projectId: string,
+    threadId: string,
+    stage: 'brainstorm' | 'prd' | 'spec' | 'assignment' | 'achievement'
+  ): void {
+    const engine = this.host.state.engineeringLifecycleEngine
+    const current = engine.get(projectId, threadId)
+    if (current?.activeStage || current?.humanGate) return
+    const stages = [...(current?.selectedStages ?? [])]
+    if (!stages.includes(stage)) stages.push(stage)
+    engine.select(projectId, threadId, { stages })
+    if (!engine.get(projectId, threadId)?.activeStage) engine.start(projectId, threadId, stage)
+  }
+
   async runEngineeringTool(
     operation: EngineeringToolOperation,
     input: Record<string, unknown>,
@@ -381,6 +404,7 @@ export class ChatEngineUtilitiesTools {
     switch (operation) {
       case 'brainstorm': {
         this.host.state.brainstormEngine.ensureWorkflow(projectId, threadId)
+        this.enableEngineeringStage(projectId, threadId, 'brainstorm')
         const document = await this.host.units['brainstorm'].createBrainstormSessionReport(
           projectId,
           threadId,
@@ -415,6 +439,7 @@ export class ChatEngineUtilitiesTools {
         if (workflow.stage !== 'drafting') {
           throw new Error('The PRD workflow is not ready for a new draft.')
         }
+        this.enableEngineeringStage(projectId, threadId, 'prd')
         const document = await this.host.generatePrd(
           projectId,
           threadId,
@@ -449,13 +474,7 @@ export class ChatEngineUtilitiesTools {
             message: `The active specification v${active.version} already exists.`
           }
         }
-        if (!this.host.units['turns'].engineeringLifecycleActive(projectId, threadId)) {
-          this.host.state.engineeringLifecycleEngine.select(projectId, threadId, {
-            stages: ['spec'],
-            autopilot: false
-          })
-          this.host.state.engineeringLifecycleEngine.start(projectId, threadId, 'spec')
-        }
+        this.enableEngineeringStage(projectId, threadId, 'spec')
         const spec = await this.host.ensureInitialSpec(projectId, threadId)
         return {
           artifact: 'spec',
@@ -474,6 +493,7 @@ export class ChatEngineUtilitiesTools {
             message: `This thread already has an Assignment with status ${active.status}.`
           }
         }
+        this.enableEngineeringStage(projectId, threadId, 'assignment')
         // Assignment generation is gated on the mode flag, which a plain thread
         // does not carry. The gate stops an ordinary turn from silently raising a
         // board; this call is the agent acting on the user's request, so the flag
@@ -497,6 +517,39 @@ export class ChatEngineUtilitiesTools {
           id: assignment.id,
           version: assignment.version,
           message: `The Assignment draft v${assignment.version} is ready for review and sign-off.`
+        }
+      }
+      case 'achievement': {
+        const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, threadId)
+        if (!activeSpec || activeSpec.status !== 'approved') {
+          throw new Error(
+            'Achievement audits against an approved specification. Create the specification with ' +
+              `${CREATE_SPEC_TOOL_NAME}, get it approved, then call this tool again.`
+          )
+        }
+        if (
+          this.host.state.engineeringLifecycleEngine.get(projectId, threadId)?.activeStage ===
+          'achievement'
+        ) {
+          return {
+            artifact: 'achievement',
+            message: 'Achievement is already running for this thread.'
+          }
+        }
+        this.enableEngineeringStage(projectId, threadId, 'achievement')
+        // Achievement owns the audit/rework loop, so the thread keeps running in
+        // loop mode until the goal is verified.
+        await this.host.threadManager.updateSettings(projectId, threadId, {
+          ...settings,
+          assignmentMode: true,
+          loopMode: true
+        })
+        return {
+          artifact: 'achievement',
+          specId: activeSpec.id,
+          specVersion: activeSpec.version,
+          message:
+            'Achievement is enabled. The thread implements, audits and reworks until the approved specification is verified.'
         }
       }
     }

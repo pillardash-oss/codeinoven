@@ -56,7 +56,7 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
   engineeringOn = $derived.by(() => {
     const pending = this.root.harnessUsage.pendingLifecycleSelection
     if (pending) {
-      return pending.autopilot === true || normalizeLifecycleStages(pending.stages).length > 0
+      return normalizeLifecycleStages(pending.stages).length > 0
     }
     const lifecycle = this.root.handleAgentEvent.engineeringLifecycle
     return (

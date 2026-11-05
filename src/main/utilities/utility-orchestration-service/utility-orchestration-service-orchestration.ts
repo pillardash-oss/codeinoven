@@ -33,6 +33,7 @@ import {
   APP_CONTROL_CATALOG_TOOL_NAME
 } from '../../../lib/app-control-tools'
 import {
+  CREATE_ACHIEVEMENT_TOOL_NAME,
   CREATE_ASSIGNMENT_TOOL_NAME,
   CREATE_BRAINSTORM_TOOL_NAME,
   CREATE_PRD_TOOL_NAME,
@@ -195,6 +196,8 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.engineering(state, input, 'spec')
       case CREATE_ASSIGNMENT_TOOL_NAME:
         return (state, input) => this.engineering(state, input, 'assignment')
+      case CREATE_ACHIEVEMENT_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'achievement')
       case PAWN_AGENT_TOOL_NAME:
         return (state, input) => this.pawn(state, input)
       case EXT_SIMULATION_TOOL_NAME:

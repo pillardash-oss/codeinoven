@@ -19,14 +19,12 @@ Website: [codeinoven.com](https://codeinoven.com) · [Download](https://codeinov
 <table>
   <tr>
     <td width="50%"><img src="docs/media/start-screen.png" alt="Start Screen"></td>
-    <td width="50%"><img src="docs/media/engineering-toolbox.png" alt="Engineering Toolbox: pick the stages to run, from Brainstorm to Auto Pilot"></td>
     <td width="50%"><img src="docs/media/scopes-board.png" alt="Scopes board: threads organized into Pinned, Todo, Working, Spec, Issue, Unread, and Done columns across project scopes"></td>
   </tr>
 </table>
 <table>
   <tr>
     <td width="50%"><sub>Start Screen</sub></td>
-    <td width="50%"><sub>Engineering Toolbox</sub></td>
     <td width="50%"><sub>Scopes board</sub></td>
   </tr>
 </table>
@@ -51,7 +49,7 @@ CodeInOven is the workspace around the agent, not another agent. Five things it 
 
 ## The engineering lifecycle
 
-Stages are switches on a thread, in the Engineering Toolbox. Enable any combination and the engine runs them in canonical order, skipping the ones you left off. A stage that finishes turns its own switch off and parks the rest, so in a manual run the next stage only starts when you press its button. Auto Pilot, and a manual run that includes Achievement, keep chaining instead, because the audit and rework loop has to drive the pipeline forward.
+Every stage is a tool the agent turns on from your own words. Say "let's brainstorm", "generate a PRD", "split this across agents", or "keep going until it works" and the matching stage starts, in canonical order, with the prompts, tools and review surface that stage owns. A run that includes Achievement keeps chaining, because the audit and rework loop has to drive the pipeline forward.
 
 ```mermaid
 flowchart LR
@@ -59,7 +57,6 @@ flowchart LR
   C --> R["Independent audit"]
   R -->|"rework"| C
   R -->|"pass"| D["Done"]
-  AP["Auto Pilot"] -.->|"runs the chain with no human gates"| B
 ```
 
 | Stage       | What it produces                                                                         |
@@ -69,7 +66,6 @@ flowchart LR
 | Spec        | An implementation-ready contract you approve before any code is written                  |
 | Assignment  | A reviewable task graph, with worker threads that can each run in their own worktree     |
 | Achievement | Spec, implement, audit, and rework in a loop until the goal passes or fails hard         |
-| Auto Pilot  | The whole chain with nobody answering gates                                              |
 
 Audit is a pass rather than a switch. It can run against a Spec, or against the conversation itself when there is no Spec, and it reports independently of the agent that wrote the code.
 
@@ -192,7 +188,7 @@ Download an x64 Windows ffmpeg build from [gyan.dev](https://www.gyan.dev/ffmpeg
 | Document                                                                         | Covers                                                                             |
 | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | [`docs/APP-BIBLE.md`](docs/APP-BIBLE.md)                                         | Product philosophy, design system, engineering standards. This one wins conflicts. |
-| [`docs/ENGINEERING-LIFECYCLE.md`](docs/ENGINEERING-LIFECYCLE.md)                 | Stage order, human gates, Assignment workers, Auto Pilot, recovery                 |
+| [`docs/ENGINEERING-LIFECYCLE.md`](docs/ENGINEERING-LIFECYCLE.md)                 | Stage order, human gates, stage tools, Assignment workers, recovery                |
 | [`docs/ASSISTANT-VIEW.md`](docs/ASSISTANT-VIEW.md)                               | Assistants, tasks, scheduled runs, missed runs, hand-off                           |
 | [`docs/GIT-WORKTREES.md`](docs/GIT-WORKTREES.md)                                 | Scope-owned worktrees, setup, health, destructive lifecycle                        |
 | [`docs/EMBEDDED_BROWSER_ARCHITECTURE.md`](docs/EMBEDDED_BROWSER_ARCHITECTURE.md) | Inner browser, its trust boundaries, and its lifecycle                             |
