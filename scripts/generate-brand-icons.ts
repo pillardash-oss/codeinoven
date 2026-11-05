@@ -49,6 +49,7 @@ const vendorSlugs = [
   'claude',
   'cohere',
   'copilot',
+  'cursor',
   'deepmind',
   'deepseek',
   'doubao',

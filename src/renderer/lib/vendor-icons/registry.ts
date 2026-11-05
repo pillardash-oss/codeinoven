@@ -37,6 +37,11 @@ const vendorAliases: Record<string, string> = {
   cloudflareworkersai: 'cloudflare',
   chatgpt: 'openai',
   codeinoven: 'cio',
+  // Cursor ships its mark, its CLI and `cursor-agent acp` under one brand, so
+  // the company, the CLI and the agent names all land on the same icon.
+  anysphere: 'cursor',
+  cursoragent: 'cursor',
+  cursorcli: 'cursor',
 
   openai: 'codex',
   githubcopilot: 'githubcopilot',

@@ -36,6 +36,12 @@ export function harnessMarkForCommand(command: string): AgentIconEntry | undefin
 }
 
 /**
+ * Vendor slug the app's own mark is registered under, and the answer when an
+ * agent's command belongs to no bundled vendor.
+ */
+export const APP_VENDOR_SLUG = 'codeinoven'
+
+/**
  * Vendor slug whose bundled brand icon an agent should preview in the editor.
  *
  * The command comes first (an agent pointed at `cline` is Cline), then the
@@ -56,5 +62,5 @@ export function vendorIconSlugFor(command: string, name: string): string {
     const slug = getVendorSlug(candidate)
     if (slug && getVendorIconSvg(candidate)) return slug
   }
-  return 'codeinoven'
+  return APP_VENDOR_SLUG
 }
