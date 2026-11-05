@@ -5,6 +5,7 @@
   import { Capacitor } from '@capacitor/core'
   import { Browser } from '@capacitor/browser'
   import BrandMark from '#lib/components/BrandMark.svelte'
+  import ProviderMark from '#lib/components/ProviderMark.svelte'
   import { api, getApiBase, ApiError } from '#lib/api/client'
   import { session } from '#lib/stores/session.svelte'
 
@@ -35,6 +36,11 @@
    * browser the same code arrives as a query parameter on this route.
    */
   let providers = $state<Record<string, boolean>>({})
+  /** Until the server answers, a provider button is shown disabled rather than
+   *  missing, so the screen does not jump once the answer lands. */
+  let providersLoaded = $state(false)
+  let showGoogle = $derived(!providersLoaded || providers.google === true)
+  let showGithub = $derived(!providersLoaded || providers.github === true)
   let message = $derived(localError ?? session.error)
   let actionLabel = $derived(actionText(mode, session.busy))
 
@@ -127,7 +133,15 @@
       // An unreachable service already explains itself on submit; the provider
       // buttons stay hidden rather than offering a flow that cannot start.
       providers = {}
+    } finally {
+      providersLoaded = true
     }
+  }
+
+  /** The reason a provider button is not pressable yet, or what it will do. */
+  function providerTitle(name: 'Google' | 'GitHub', available: boolean): string {
+    if (!providersLoaded) return `Checking whether ${name} sign-in is available`
+    return available ? `Sign in with ${name}` : `${name} sign-in is not configured on this server`
   }
 
   async function startProvider(provider: 'google' | 'github'): Promise<void> {
@@ -165,83 +179,88 @@
     <p class="brand-line">The desktop's work, in your pocket.</p>
   </div>
 
-  <div class="providers">
-    <button
-      class="btn provider"
-      type="button"
-      disabled={session.busy || providers.google !== true}
-      title={providers.google === true
-        ? 'Sign in with Google'
-        : 'Google sign-in is not configured on this server'}
-      onclick={() => startProvider('google')}
-    >
-      Continue with Google
-    </button>
-    <button
-      class="btn provider"
-      type="button"
-      disabled={session.busy || providers.github !== true}
-      title={providers.github === true
-        ? 'Sign in with GitHub'
-        : 'GitHub sign-in is not configured on this server'}
-      onclick={() => startProvider('github')}
-    >
-      Continue with GitHub
-    </button>
-    <p class="provider-note">Either one creates the account if it does not exist yet.</p>
-  </div>
+  {#if showGoogle || showGithub}
+    <div class="providers">
+      {#if showGoogle}
+        <button
+          class="btn provider"
+          type="button"
+          disabled={session.busy || !providersLoaded || providers.google !== true}
+          title={providerTitle('Google', providers.google === true)}
+          onclick={() => startProvider('google')}
+        >
+          <ProviderMark provider="google" />
+          <span class="provider-label">Continue with Google</span>
+        </button>
+      {/if}
+      {#if showGithub}
+        <button
+          class="btn provider"
+          type="button"
+          disabled={session.busy || !providersLoaded || providers.github !== true}
+          title={providerTitle('GitHub', providers.github === true)}
+          onclick={() => startProvider('github')}
+        >
+          <ProviderMark provider="github" />
+          <span class="provider-label">Continue with GitHub</span>
+        </button>
+      {/if}
+      <p class="provider-note">New accounts are created on first sign in.</p>
+    </div>
 
-  <p class="or"><span>or with email</span></p>
+    <p class="or"><span>or with email</span></p>
+  {/if}
 
   <form class="card auth" onsubmit={onSubmit} aria-busy={session.busy} novalidate>
-    {#if mode === 'create'}
+    <div class="fields">
+      {#if mode === 'create'}
+        <label class="field">
+          <span>Name</span>
+          <input
+            bind:value={name}
+            onkeydown={onKeydown}
+            type="text"
+            autocomplete="name"
+            autocapitalize="words"
+            spellcheck="false"
+            placeholder="Ada Lovelace"
+          />
+        </label>
+      {/if}
+
       <label class="field">
-        <span>Name</span>
+        <span>Email</span>
         <input
-          bind:value={name}
+          {@attach focusOnMount}
+          bind:value={email}
           onkeydown={onKeydown}
-          type="text"
-          autocomplete="name"
-          autocapitalize="words"
+          type="email"
+          inputmode="email"
+          autocomplete="email"
+          autocapitalize="none"
           spellcheck="false"
-          placeholder="Ada Lovelace"
+          placeholder="you@example.com"
         />
       </label>
-    {/if}
 
-    <label class="field">
-      <span>Email</span>
-      <input
-        {@attach focusOnMount}
-        bind:value={email}
-        onkeydown={onKeydown}
-        type="email"
-        inputmode="email"
-        autocomplete="email"
-        autocapitalize="none"
-        spellcheck="false"
-        placeholder="you@example.com"
-      />
-    </label>
+      <label class="field">
+        <span>Password</span>
+        <input
+          bind:value={password}
+          onkeydown={onKeydown}
+          type="password"
+          autocomplete={mode === 'create' ? 'new-password' : 'current-password'}
+          minlength={mode === 'create' ? MIN_PASSWORD : undefined}
+        />
+        {#if mode === 'create'}
+          <span class="hint">At least {MIN_PASSWORD} characters.</span>
+        {/if}
+      </label>
 
-    <label class="field">
-      <span>Password</span>
-      <input
-        bind:value={password}
-        onkeydown={onKeydown}
-        type="password"
-        autocomplete={mode === 'create' ? 'new-password' : 'current-password'}
-        minlength={mode === 'create' ? MIN_PASSWORD : undefined}
-      />
-    </label>
-
-    {#if mode === 'create'}
-      <p class="hint">At least {MIN_PASSWORD} characters.</p>
-    {/if}
-
-    {#if message}
-      <p class="note" role="status">{message}</p>
-    {/if}
+      {#if message}
+        <p class="note" role="status">{message}</p>
+      {/if}
+    </div>
 
     <div class="card-foot">
       <button class="btn quiet" type="button" onclick={toggleMode}>
@@ -283,12 +302,29 @@
     gap: 0.5rem;
   }
 
+  /* A provider is a plate with its vendor's mark on the left and the label on
+     the line's own centre, so the two marks never look one-sided. The third
+     column is empty and equal to the first, which is what centres the label. */
   .btn.provider {
-    justify-content: center;
-    min-height: 2.75rem;
+    display: grid;
+    grid-template-columns: 1.125rem minmax(0, 1fr) 1.125rem;
+    align-items: center;
+    gap: 0.625rem;
+    min-height: 3rem;
+    padding: 0 0.875rem;
     border: 1px solid var(--color-border-strong);
     background: var(--color-surface);
+    font-size: 0.875rem;
     font-weight: 400;
+  }
+
+  .btn.provider .provider-label {
+    grid-column: 2;
+    min-width: 0;
+    overflow: hidden;
+    text-align: center;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .btn.provider:disabled {
@@ -306,7 +342,7 @@
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    margin: -0.75rem 0;
+    margin: -0.5rem 0;
     font-size: 0.75rem;
     color: var(--ink-meta);
   }
@@ -338,14 +374,25 @@
     color: var(--color-muted);
   }
 
-  /* The card is the form, so the first field needs the head's breathing room. */
-  .card.auth {
-    padding-top: 0.75rem;
+  /* The card is the form, so its fields are inset from the border the way the
+     new-thread sheet insets its own, and the foot below carries the two
+     controls. */
+  .card.auth .fields {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    padding: 0.875rem;
   }
 
-  .hint {
-    margin: -0.25rem 0.75rem 0.75rem;
+  /* The rule under a field belongs to the field, not to the next label. */
+  .card.auth .hint {
+    margin: 0;
     font-size: 0.75rem;
     color: var(--ink-meta);
+  }
+
+  .card.auth .note {
+    padding: 0;
+    color: var(--color-danger);
   }
 </style>
