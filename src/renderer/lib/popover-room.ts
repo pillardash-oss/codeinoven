@@ -1,6 +1,5 @@
 /**
- * Room for popovers that open upward: the composer menus, the mention list, the
- * Engineering Toolbox.
+ * Room for popovers that open upward: the composer menus and the mention list.
  *
  * An upward-opening popover is clipped by the nearest ancestor that hides vertical
  * overflow   a dock column, a thread surface   and, in the worst case, by the top of
