@@ -5,6 +5,7 @@
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
@@ -55,6 +56,8 @@
 
   /** Multi-select harness filter; empty selection means "all harnesses". */
   let selectedHarnesses = new SvelteSet<string>()
+  /** Free-text filter over a provider's name, endpoint, models and harnesses. */
+  let searchQuery = $state('')
 
   /** Providers sharing an id are the same logical provider linked across
    *  harnesses   collapse them into one row backed by every member record. */
@@ -74,14 +77,37 @@
     )
   })
 
-  /** A group is shown when any of its linked harnesses match the active filter. */
-  let filteredGroups = $derived(
-    selectedHarnesses.size === 0
-      ? groupedProviders
-      : groupedProviders.filter((group) =>
-          group.some((provider) => selectedHarnesses.has(provider.harnessId))
-        )
-  )
+  /**
+   * A group is shown when any of its linked harnesses match the active filter and
+   * its text matches the search: the row names a provider by its own name, so the
+   * endpoint, the model ids and the harnesses it serves are all things a user
+   * types to find it again.
+   */
+  let filteredGroups = $derived.by(() => {
+    const harnessMatch =
+      selectedHarnesses.size === 0
+        ? groupedProviders
+        : groupedProviders.filter((group) =>
+            group.some((provider) => selectedHarnesses.has(provider.harnessId))
+          )
+    const query = searchQuery.trim().toLowerCase()
+    if (!query) return harnessMatch
+    return harnessMatch.filter((group) =>
+      group.some(
+        (provider) =>
+          [
+            provider.name,
+            provider.baseURL,
+            ...provider.models.flatMap((model) => [model.id, model.name])
+          ]
+            .join('\n')
+            .toLowerCase()
+            .includes(query) || providerName(provider.harnessId).toLowerCase().includes(query)
+      )
+    )
+  })
+
+  let searchActive = $derived(searchQuery.trim().length > 0)
 
   let harnessFilterActive = $derived(selectedHarnesses.size > 0)
 
@@ -178,8 +204,32 @@
   {/if}
 
   <div>
-    <div class="mb-2 flex items-center justify-between">
-      <div>
+    <div class="mb-2 flex items-center justify-between gap-3">
+      <div class="min-w-0 flex-1">
+        <div class="relative mb-2 w-56 max-w-full">
+          <CioSearch
+            size={14}
+            class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
+          />
+          <input
+            bind:value={searchQuery}
+            type="text"
+            placeholder="Search providers…"
+            aria-label="Search base URL providers"
+            class="h-8 w-full border bg-elevated pl-8 pr-8 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
+          />
+          {#if searchActive}
+            <button
+              type="button"
+              class="absolute right-2 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center text-dimmed transition-colors hover:bg-surface hover:text-foreground"
+              aria-label="Clear provider search"
+              title="Clear provider search"
+              onclick={() => (searchQuery = '')}
+            >
+              <CioClose size={12} />
+            </button>
+          {/if}
+        </div>
         {#if filterHarnesses.length > 1}
           <div
             class="mb-2 flex flex-wrap items-center gap-1"
@@ -267,12 +317,19 @@
     {:else if filteredGroups.length === 0}
       <div class="border border-dashed p-5 text-center">
         <CioFilter size={17} class="mx-auto mb-1.5 text-dimmed" />
-        <p class="text-xs text-muted">No providers match the selected harnesses.</p>
+        <p class="text-xs text-muted">
+          {searchActive
+            ? 'No providers match your search.'
+            : 'No providers match the selected harnesses.'}
+        </p>
         <button
           class="mt-2 text-xs font-medium text-primary hover:underline"
-          onclick={clearHarnessFilter}
+          onclick={() => {
+            if (searchActive) searchQuery = ''
+            else clearHarnessFilter()
+          }}
         >
-          Show all providers
+          {searchActive ? 'Clear search' : 'Show all providers'}
         </button>
       </div>
     {:else}
