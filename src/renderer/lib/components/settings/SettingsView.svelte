@@ -292,7 +292,7 @@
         : activeLabel
     return () => {
       settingsUiState.activeTabLabel = null
-      settingsUiState.harnessesTab = 'harnesses'
+      settingsUiState.harnessesTab = 'native'
     }
   })
 
@@ -1585,7 +1585,7 @@
     {:else if section === 'ovens'}
       <OvensSettings
         onOpenHarnessSettings={() => {
-          settingsUiState.harnessesTab = 'harnesses'
+          settingsUiState.harnessesTab = 'native'
           onNavigateSection('harnesses')
         }}
       />

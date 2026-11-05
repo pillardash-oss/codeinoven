@@ -13,6 +13,12 @@ export interface ProviderConnectionInfo {
   supportsCustomProviders: boolean
   /** Whether this harness supports manual context compaction (harness manifest). */
   supportsManualCompaction?: boolean
+  /**
+   * How the app drives this harness: a dedicated native driver, or the generic
+   * Agent Client Protocol transport a user points at their own agent command.
+   * The Harnesses page groups its rows by this value.
+   */
+  transport: 'native' | 'acp'
   status: ProviderConnectionStatus
   /** Absolute path to the resolved binary, when found. */
   resolvedPath?: string

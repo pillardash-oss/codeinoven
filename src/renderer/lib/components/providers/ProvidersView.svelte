@@ -3,7 +3,6 @@
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
-  import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
@@ -93,26 +92,26 @@
   let copiedPathId = $state<string | null>(null)
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
-  let allCount = $derived(providerStore.providers.length)
+  /** The harness rail on screen: dedicated drivers, or ACP agents the user added. */
+  const activeRail = $derived<'native' | 'acp'>(activeTab === 'acp' ? 'acp' : 'native')
+  const railProviders = $derived(
+    providerStore.providers.filter((provider) => (provider.transport ?? 'native') === activeRail)
+  )
+  let nativeCount = $derived(
+    providerStore.providers.filter((provider) => (provider.transport ?? 'native') === 'native')
+      .length
+  )
+  let acpCount = $derived(
+    providerStore.providers.filter((provider) => (provider.transport ?? 'native') === 'acp').length
+  )
+  let allCount = $derived(railProviders.length)
   let updatesCount = $derived(
-    providerStore.providers.filter((provider) =>
-      harnessLifecycleStore.updateAvailableFor(provider.id)
-    ).length
+    railProviders.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id)).length
   )
-  let issuesCount = $derived(
-    providerStore.providers.filter((provider) => provider.status === 'error').length
-  )
-  let readyCount = $derived(
-    providerStore.providers.filter(
-      (provider) =>
-        provider.status === 'available' &&
-        provider.integration === 'ready' &&
-        !harnessLifecycleStore.updateAvailableFor(provider.id)
-    ).length
-  )
+  let issuesCount = $derived(railProviders.filter((provider) => provider.status === 'error').length)
 
   let filteredProviders = $derived.by(() => {
-    let list = providerStore.providers
+    let list = railProviders
     if (statusFilter === 'updates') {
       list = list.filter((provider) => harnessLifecycleStore.updateAvailableFor(provider.id))
     } else if (statusFilter === 'issues') {
@@ -488,7 +487,7 @@
   }
   /** Intercept the global ⌘K/Ctrl+K (normally the command palette) to focus search while this tab is active. */
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (activeTab !== 'harnesses') return
+    if (activeTab !== 'native' && activeTab !== 'acp') return
     if (keymapState.matches('nav-command-palette', event)) {
       event.preventDefault()
       event.stopPropagation()
@@ -557,74 +556,104 @@
     </div>
   </div>
 
-  <div
-    class="mb-4 flex w-max items-center gap-0.5 border bg-elevated p-0.5"
-    role="tablist"
-    aria-label="Harness settings tabs"
-  >
-    <button
-      type="button"
-      class="px-3 py-1.5 text-xs font-medium transition-colors {activeTab === 'harnesses'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      role="tab"
-      aria-selected={activeTab === 'harnesses'}
-      title="Show connected harnesses"
-      onclick={() => (settingsUiState.harnessesTab = 'harnesses')}
+  <div class="mb-4 flex flex-wrap items-center gap-3">
+    <div
+      class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+      role="tablist"
+      aria-label="Harness rails"
     >
-      Harnesses
-    </button>
-    <button
-      type="button"
-      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
-      'accounts'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      role="tab"
-      aria-selected={activeTab === 'accounts'}
-      title="Manage harness accounts"
-      onclick={() => (settingsUiState.harnessesTab = 'accounts')}
-    >
-      Accounts
-    </button>
-    <button
-      type="button"
-      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
-      'auxiliary'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      role="tab"
-      aria-selected={activeTab === 'auxiliary'}
-      title="Assign the model each harness uses for background work"
-      onclick={() => (settingsUiState.harnessesTab = 'auxiliary')}
-    >
-      Auxiliary Agents
-    </button>
-    <button
-      type="button"
-      class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
-      'custom'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      role="tab"
-      aria-selected={activeTab === 'custom'}
-      title="Manage custom base URL providers"
-      onclick={() => (settingsUiState.harnessesTab = 'custom')}
-    >
-      Base URL providers
-      {#if baseUrlProviderStore.providers.length > 0}
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'native'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'native'}
+        title="Harnesses CodeInOven drives with its own drivers"
+        onclick={() => (settingsUiState.harnessesTab = 'native')}
+      >
+        Native
         <span
           class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+          >{nativeCount}</span
         >
-          {baseUrlProviderStore.providers.length}
-        </span>
-      {/if}
-    </button>
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'acp'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'acp'}
+        title="Agents you connected over the Agent Client Protocol"
+        onclick={() => (settingsUiState.harnessesTab = 'acp')}
+      >
+        ACP
+        <span
+          class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+          >{acpCount}</span
+        >
+      </button>
+    </div>
+    <div
+      class="ml-auto flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+      role="tablist"
+      aria-label="Harness settings tabs"
+    >
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'accounts'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'accounts'}
+        title="Manage harness accounts"
+        onclick={() => (settingsUiState.harnessesTab = 'accounts')}
+      >
+        Accounts
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'auxiliary'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'auxiliary'}
+        title="Assign the model each harness uses for background work"
+        onclick={() => (settingsUiState.harnessesTab = 'auxiliary')}
+      >
+        Auxiliary Agents
+      </button>
+      <button
+        type="button"
+        class="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors {activeTab ===
+        'custom'
+          ? 'bg-surface text-foreground'
+          : 'text-muted hover:text-foreground'}"
+        role="tab"
+        aria-selected={activeTab === 'custom'}
+        title="Manage custom base URL providers"
+        onclick={() => (settingsUiState.harnessesTab = 'custom')}
+      >
+        Base URL providers
+        {#if baseUrlProviderStore.providers.length > 0}
+          <span
+            class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-dimmed"
+          >
+            {baseUrlProviderStore.providers.length}
+          </span>
+        {/if}
+      </button>
+    </div>
   </div>
 
-  {#if activeTab === 'harnesses'}
+  {#if activeTab === 'native' || activeTab === 'acp'}
     <div class="mb-4 flex flex-wrap items-center gap-2">
-      <div class="relative min-w-[200px] flex-1">
+      <div class="relative w-56 shrink-0">
         <CioSearch
           size={14}
           class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
@@ -725,15 +754,18 @@
         </button>
       </div>
 
-      <button
-        class="flex shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-        title="Re-check all harnesses"
-        onclick={() => void recheckAll()}
-        disabled={providerStore.checkingCount > 0}
-      >
-        <CioRefresh size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
-        Check all
-      </button>
+      <div class="ml-auto flex flex-col items-end gap-0.5">
+        <button
+          class="flex shrink-0 items-center gap-1.5 border px-3 py-1.5 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+          title="Re-check all harnesses"
+          onclick={() => void recheckAll()}
+          disabled={providerStore.checkingCount > 0}
+        >
+          <CioRefresh size={12} class={providerStore.checkingCount > 0 ? 'animate-spin' : ''} />
+          Check all
+        </button>
+        <span class="text-[0.625rem] text-dimmed">{lastCheckedLabel}</span>
+      </div>
     </div>
 
     <div class="@container space-y-3">
@@ -1009,43 +1041,14 @@
       {:else}
         <div class="border border-dashed p-6 text-center text-xs text-dimmed">
           {#if searchQuery || statusFilter !== 'all'}
-            No harnesses match the current filter.
+            No agents match the current filter.
+          {:else if activeRail === 'acp'}
+            No ACP agents added yet.
           {:else}
             No harnesses detected yet.
           {/if}
         </div>
       {/each}
-    </div>
-
-    <div class="mt-6 border border-dashed p-4 text-center">
-      <CioPlug size={18} class="mx-auto mb-1 text-dimmed" />
-      <p class="text-xs text-dimmed">
-        Harnesses are detected from your system PATH and Windows Subsystem for Linux distributions,
-        then verified with a version probe. Install the CLI tool and click Check.
-      </p>
-    </div>
-
-    <div
-      class="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3 text-[0.6875rem]"
-    >
-      <div class="flex flex-wrap items-center gap-4">
-        <span class="flex items-center gap-1.5 text-success">
-          <CioCheckCircle size={12} />
-          {readyCount} ready
-        </span>
-        <span class="flex items-center gap-1.5 text-warning">
-          <CioDownload size={12} />
-          {updatesCount} update{updatesCount === 1 ? '' : 's'}
-        </span>
-        <span class="flex items-center gap-1.5 text-danger">
-          <CioAttention size={12} />
-          {issuesCount} issue{issuesCount === 1 ? '' : 's'}
-        </span>
-      </div>
-      <span class="flex items-center gap-1.5 text-dimmed">
-        <CioClock size={12} />
-        {lastCheckedLabel}
-      </span>
     </div>
   {:else if activeTab === 'accounts'}
     <HarnessAccountsPanel providers={providerStore.providers} />

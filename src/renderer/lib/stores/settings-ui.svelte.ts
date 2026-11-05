@@ -1,5 +1,11 @@
-/** Inner tabs the Harnesses settings page splits its content into. */
-export type HarnessesTab = 'harnesses' | 'accounts' | 'auxiliary' | 'custom'
+/**
+ * Inner tabs the Harnesses settings page splits its content into.
+ *
+ * `native` and `acp` are the two harness rails: dedicated drivers on one side,
+ * every agent the user connected over the Agent Client Protocol on the other.
+ * The remaining tabs are page-wide surfaces and sit to the right.
+ */
+export type HarnessesTab = 'native' | 'acp' | 'accounts' | 'auxiliary' | 'custom'
 
 /**
  * Shared settings UI state — lets the app header show which settings
@@ -25,7 +31,7 @@ class SettingsUiState {
    * block be scrolled to. A tab the search cannot reach is a card the search
    * silently fails to find.
    */
-  harnessesTab = $state<HarnessesTab>('harnesses')
+  harnessesTab = $state<HarnessesTab>('native')
 
   /**
    * An Oven another surface asked the Ovens page to reveal.

@@ -39,6 +39,13 @@ export interface HarnessDescriptor {
   commandAliases?: readonly string[]
   versionArgs: string[]
   integration: ProviderConnectionInfo['integration']
+  /**
+   * How the app drives this harness. `native` is a dedicated driver shipped in
+   * this repository; `acp` is the generic Agent Client Protocol transport that
+   * runs whatever command the user configured, so any ACP client can be added
+   * without a driver. Defaults to `native`.
+   */
+  transport?: 'native' | 'acp'
   /** Whether this harness driver can inject custom base-URL providers. */
   supportsCustomProviders: boolean
   /**
@@ -157,6 +164,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     command: 'acp',
     versionArgs: ['--version'],
     integration: 'ready',
+    transport: 'acp',
     supportsCustomProviders: false,
     // Agents read project instructions themselves and expose their own
     // compaction; CodeInOven replays mirrored history instead of resuming.
@@ -167,6 +175,11 @@ const HARNESSES: readonly HarnessDescriptor[] = [
 /** The canonical ordered harness list   the single source of truth. */
 export function listHarnesses(): readonly HarnessDescriptor[] {
   return HARNESSES
+}
+
+/** How the app drives a harness: its own driver, or the generic ACP transport. */
+export function harnessTransport(id: string): 'native' | 'acp' {
+  return findHarness(id)?.transport ?? 'native'
 }
 
 /** Look up a harness descriptor by id. */

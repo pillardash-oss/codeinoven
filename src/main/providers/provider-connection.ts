@@ -61,6 +61,7 @@ export class ProviderConnectionService {
         integration: harness.integration,
         supportsCustomProviders: harness.supportsCustomProviders,
         supportsManualCompaction: harnessSupportsManualCompaction(harness.id),
+        transport: harness.transport ?? 'native',
         status: 'idle'
       })
     }
@@ -101,6 +102,7 @@ export class ProviderConnectionService {
           integration: 'planned',
           supportsCustomProviders: false,
           supportsManualCompaction: false,
+          transport: 'native',
           status: 'error',
           detail: 'Unknown provider'
         }
@@ -204,6 +206,7 @@ export class ProviderConnectionService {
       integration: def.integration,
       supportsCustomProviders: def.supportsCustomProviders,
       supportsManualCompaction: harnessSupportsManualCompaction(def.id),
+      transport: def.transport ?? 'native',
       status: 'idle'
     }
 
@@ -310,6 +313,7 @@ export class ProviderConnectionService {
       integration: def.integration,
       supportsCustomProviders: def.supportsCustomProviders,
       supportsManualCompaction: harnessSupportsManualCompaction(def.id),
+      transport: def.transport ?? 'native',
       status: 'idle'
     }
     const config = (await ensureAcpAgentConfigLoaded()) ?? currentAcpAgentConfig()
