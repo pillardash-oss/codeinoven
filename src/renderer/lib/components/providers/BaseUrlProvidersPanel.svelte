@@ -14,6 +14,8 @@
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import Switch from '../ui/Switch.svelte'
   import Modal from '../ui/Modal.svelte'
   import type { BaseUrlProvider, ProviderConnectionInfo } from '$shared/types'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
@@ -28,6 +30,8 @@
   let editorError = $state('')
   /** The full linked group (one record per harness) queued for deletion. */
   let deleteTarget = $state<BaseUrlProvider[] | null>(null)
+  /** Groups whose enable switch is mid-write, keyed by provider id. */
+  const toggling = $state<Record<string, boolean>>({})
 
   let baseUrlHarnesses = $derived(
     providers.filter(
@@ -122,6 +126,31 @@
 
   /** Removes every harness-linked record in the group. Stops at the first
    *  failure so the error is visible instead of silently partial. */
+  /**
+   * Turn one provider on or off for every harness it is linked to.
+   *
+   * The switch belongs on the row rather than in the editor: enabling a provider
+   * is a one-click decision about whether its models appear in the picker, not a
+   * form to open. A linked provider is one logical provider with one record per
+   * harness, so all of its records move together.
+   */
+  async function toggleProvider(group: BaseUrlProvider[], enabled: boolean): Promise<void> {
+    const providerId = group[0]?.id
+    if (!providerId || toggling[providerId]) return
+    editorError = ''
+    toggling[providerId] = true
+    try {
+      for (const member of group) {
+        await baseUrlProviderStore.update(member.harnessId, member.id, { enabled })
+      }
+    } catch (toggleError) {
+      editorError =
+        toggleError instanceof Error ? toggleError.message : 'The provider could not be updated.'
+    } finally {
+      toggling[providerId] = false
+    }
+  }
+
   async function removeProvider(): Promise<void> {
     if (!deleteTarget) return
     editorError = ''
@@ -217,6 +246,12 @@
       </div>
     </div>
 
+    {#if editorError && deleteTarget === null}
+      <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+        {editorError}
+      </p>
+    {/if}
+
     {#if baseUrlProviderStore.loading && baseUrlProviderStore.providers.length === 0}
       <div class="border border-dashed p-6 text-center">
         <CioSpinner size={17} class="mx-auto animate-spin text-dimmed" />
@@ -241,47 +276,58 @@
         </button>
       </div>
     {:else}
-      <div class="overflow-hidden border bg-surface">
+      <div class="@container space-y-2">
         {#each filteredGroups as group (group[0].id)}
           {@const provider = group[0]}
           <div
-            class="grid grid-cols-[minmax(0,1fr)_minmax(8rem,0.6fr)_auto] items-center gap-3 border-b px-3 py-2.5 last:border-b-0"
+            class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-2 border bg-surface p-4 @5xl:grid-cols-[minmax(0,1fr)_minmax(8rem,0.7fr)_auto] @5xl:gap-3"
           >
-            <div class="min-w-0">
-              <div class="flex items-center gap-2">
-                <p class="truncate text-xs font-semibold">{provider.name}</p>
-                <span
-                  class="border border-border px-1.5 py-0.5 text-[0.625rem] font-medium {provider.enabled
-                    ? 'bg-success/10 text-success'
-                    : 'bg-raised text-dimmed'}"
-                >
-                  {provider.enabled ? 'Enabled' : 'Disabled'}
-                </span>
+            <div class="flex min-w-0 items-center gap-3">
+              <div
+                class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
+              >
+                <VendorIcon name={provider.name} id={provider.id} size={20} />
               </div>
-              <div class="mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5">
-                {#each group as member (member.harnessId)}
-                  <span
-                    class="flex items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] text-dimmed"
-                    title={providerName(member.harnessId)}
-                  >
-                    <AgentIcon
-                      agentId={member.harnessId}
-                      label={providerName(member.harnessId)}
-                      size={14}
-                    />
-                    {providerName(member.harnessId)}
+              <div class="min-w-0">
+                <p class="truncate text-sm font-medium">{provider.name}</p>
+                <div class="mt-0.5 flex flex-wrap items-center gap-x-1 gap-y-0.5">
+                  {#each group as member (member.harnessId)}
+                    <span
+                      class="flex items-center gap-1 border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] text-dimmed"
+                      title={providerName(member.harnessId)}
+                    >
+                      <AgentIcon
+                        agentId={member.harnessId}
+                        label={providerName(member.harnessId)}
+                        size={14}
+                      />
+                      {providerName(member.harnessId)}
+                    </span>
+                  {/each}
+                  <span class="text-[0.625rem] text-dimmed">
+                    · {provider.models.length}
+                    {provider.models.length === 1 ? 'model' : 'models'}
                   </span>
-                {/each}
-                <span class="text-[0.625rem] text-dimmed">
-                  · {provider.models.length}
-                  {provider.models.length === 1 ? 'model' : 'models'}
-                </span>
+                </div>
               </div>
             </div>
-            <p class="truncate font-mono text-[0.625rem] text-dimmed" title={provider.baseURL}>
+
+            <p
+              class="col-span-2 truncate font-mono text-[0.625rem] text-dimmed @5xl:col-span-1"
+              title={provider.baseURL}
+            >
               {provider.baseURL}
             </p>
-            <div class="flex items-center gap-1">
+
+            <div class="col-span-2 flex items-center justify-end gap-2 @5xl:col-span-1">
+              <Switch
+                checked={provider.enabled}
+                disabled={toggling[provider.id] === true}
+                label="Enable"
+                title={`${provider.enabled ? 'Hide' : 'Show'} ${provider.name} models in the picker`}
+                aria-label={`Enable ${provider.name}`}
+                onchange={(value) => void toggleProvider(group, value)}
+              />
               <button
                 class="flex h-7 w-7 items-center justify-center text-muted hover:bg-overlay hover:text-foreground"
                 aria-label="Edit {provider.name}"
