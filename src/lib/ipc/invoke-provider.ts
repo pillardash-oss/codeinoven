@@ -60,6 +60,7 @@ import type {
   VisionModelRecord
 } from '../types'
 import type { WorkerNameSettings } from '../assignment/worker-names'
+import type { AcpAgentConfigInput, AcpAgentSettings } from '../acp'
 import type { CioPromptId, CioPromptSetting } from '../cio-prompts'
 import type { Contract } from './contract-helpers'
 
@@ -117,6 +118,8 @@ export const invokeProviderContract = {
   'providers:check': {} as Contract<[providerId: string], ProviderConnectionInfo>,
   'providers:checkAll': {} as Contract<[force?: boolean], ProviderConnectionInfo[]>,
   'providers:getStatus': {} as Contract<[], ProviderConnectionInfo[]>,
+  'acpAgent:get': {} as Contract<[], AcpAgentSettings>,
+  'acpAgent:save': {} as Contract<[input: AcpAgentConfigInput], AcpAgentSettings>,
   'harnessUpdates:check': {} as Contract<[harnessId: string], HarnessUpdateStatus>,
   'harnessUpdates:checkAll': {} as Contract<[force?: boolean], HarnessUpdateStatus[]>,
   'harnessUpdates:handoff': {} as Contract<[harnessId: string], HarnessUpdateHandoff>,

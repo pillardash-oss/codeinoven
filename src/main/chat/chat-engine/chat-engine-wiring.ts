@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { Logger } from '../../system/logger'
 import { BrainstormAlignmentNotes } from '../brainstorm-alignment-notes'
 import { AssistantAuthoringCheckpoints } from '../assistant-authoring-checkpoints'
@@ -21,6 +21,7 @@ import { CodexDriver } from '../../drivers/codex-driver'
 import { ClineDriver } from '../../drivers/cline-driver'
 import { AntigravityDriver } from '../../drivers/antigravity-driver'
 import { MuseDriver } from '../../drivers/muse-driver'
+import { AcpDriver } from '../../drivers/acp-driver'
 import { PiDriver } from '../../drivers/pi-driver'
 import { OvenChat } from '../../ovens/oven-chat'
 import { CheckpointManager } from '../../storage/checkpoint-manager'
@@ -300,7 +301,10 @@ export function wireChatEngine(
       cline: () =>
         new ClineDriver(storage, engine.state.baseUrlProviders, engine.state.secretVault),
       antigravity: () => new AntigravityDriver(storage),
-      muse: () => new MuseDriver(storage)
+      muse: () => new MuseDriver(storage),
+      // One generic transport for every ACP-speaking agent, including harnesses
+      // that ship no dedicated driver here.
+      acp: () => new AcpDriver(storage, app.getVersion())
     }
     for (const harness of listHarnesses()) {
       const create = driverFactories[harness.id]

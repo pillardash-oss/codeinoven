@@ -145,6 +145,22 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     supportsCustomProviders: false,
     // Muse compacts via a local summary checkpoint for its stateless transport.
     manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
+  },
+  {
+    // Any harness that speaks the Agent Client Protocol. It has no fixed binary:
+    // the user names the command that starts their agent in ACP mode (see
+    // `AcpAgentConfigService`), and this placeholder is what the descriptor
+    // reports until one is configured. Availability is therefore resolved from
+    // the configured command, never from this string.
+    id: 'acp',
+    name: 'ACP agent',
+    command: 'acp',
+    versionArgs: ['--version'],
+    integration: 'ready',
+    supportsCustomProviders: false,
+    // Agents read project instructions themselves and expose their own
+    // compaction; CodeInOven replays mirrored history instead of resuming.
+    manifest: manifest({ loadsAgentsMd: true, manualCompaction: false, multipleAccounts: false })
   }
 ]
 

@@ -19,6 +19,8 @@ import {
   probeHarnessRuntime,
   type HarnessRuntime
 } from '../drivers/harness-runtime'
+import { resolveExecutablePathAsync } from '../drivers/cli-environment'
+import { currentAcpAgentConfig, ensureAcpAgentConfigLoaded } from '../drivers/acp/acp-config'
 
 /** Reopening Settings inside this window reuses the last completed probe pass. */
 const PROBE_CACHE_TTL_MS = 60_000
@@ -194,6 +196,7 @@ export class ProviderConnectionService {
     def: HarnessDescriptor,
     runtimes: Map<string, HarnessRuntime | null>
   ): Promise<ProviderConnectionInfo> {
+    if (def.id === 'acp') return this.probeAcpAgent(def)
     const base: ProviderConnectionInfo = {
       id: def.id,
       name: def.name,
@@ -289,6 +292,50 @@ export class ProviderConnectionService {
       resolvedPath: resolved.resolvedPath,
       executionTarget: resolved.target,
       detail: failures[0] ?? `"${def.command}" did not answer its version probe.`
+    }
+  }
+
+  /**
+   * Probe the user's own ACP agent.
+   *
+   * The harness has no fixed binary: what exists on this machine is whatever
+   * command the user saved, so a configured, resolvable command is the install
+   * and the reported `activeCommand` is the binary the app will actually drive.
+   */
+  private async probeAcpAgent(def: HarnessDescriptor): Promise<ProviderConnectionInfo> {
+    const base: ProviderConnectionInfo = {
+      id: def.id,
+      name: def.name,
+      command: def.command,
+      integration: def.integration,
+      supportsCustomProviders: def.supportsCustomProviders,
+      supportsManualCompaction: harnessSupportsManualCompaction(def.id),
+      status: 'idle'
+    }
+    const config = (await ensureAcpAgentConfigLoaded()) ?? currentAcpAgentConfig()
+    if (!config) {
+      return {
+        ...base,
+        status: 'not_found',
+        detail:
+          'No ACP agent is configured yet. Add the command that starts your harness in ACP mode.'
+      }
+    }
+    const resolvedPath = await resolveExecutablePathAsync(config.command)
+    if (!resolvedPath) {
+      return {
+        ...base,
+        status: 'error',
+        command: config.command,
+        detail: `"${config.command}" was not found on PATH.`
+      }
+    }
+    return {
+      ...base,
+      name: config.name,
+      status: 'available',
+      resolvedPath,
+      ...(config.command === def.command ? {} : { activeCommand: config.command })
     }
   }
 

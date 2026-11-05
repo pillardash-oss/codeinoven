@@ -6,7 +6,7 @@ import {
 } from '../../drivers/opencode-harness-driver'
 import { findHarness } from '../../agents/harness-registry'
 import { buildProcessEnvironmentAsync } from '../../drivers/cli-environment'
-import { isHarnessCommandAvailableAsync } from '../../drivers/harness-runtime'
+import { isHarnessAvailableAsync } from '../../drivers/harness-runtime'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { isCodeInOvenCustomProviderId } from '../../../lib/custom-provider-id'
@@ -249,8 +249,7 @@ export class ChatEngineProvidersCatalog {
     const defaultDrivers: HarnessDriver[] = []
     for (const driver of this.host.drivers.values()) {
       const command = findHarness(driver.id)?.command
-      if (command !== undefined && (await isHarnessCommandAvailableAsync(command, harnessEnv)))
-        defaultDrivers.push(driver)
+      if (await isHarnessAvailableAsync(driver.id, command, harnessEnv)) defaultDrivers.push(driver)
     }
 
     const managedAccounts = (await this.host.state.accountRegistry.list()).filter(

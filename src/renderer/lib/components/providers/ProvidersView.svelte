@@ -51,6 +51,7 @@
   import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
 
   import OpenCodeV2CatalogPanel from './OpenCodeV2CatalogPanel.svelte'
+  import AcpAgentPanel from './AcpAgentPanel.svelte'
 
   /** How often the "last checked" relative label re-renders. */
   const RELATIVE_TIME_TICK_MS = 20_000
@@ -141,6 +142,9 @@
 
   /** True when a harness row has a Settings or Details panel to disclose. */
   function hasDisclosure(provider: ProviderConnectionInfo): boolean {
+    // The ACP harness has no install page: its command is configured inside the
+    // panel, so the row must open even before anything is configured.
+    if (provider.id === 'acp') return true
     return (
       (provider.status === 'available' && provider.integration === 'ready') ||
       provider.status === 'error'
@@ -922,6 +926,9 @@
               class="mt-3 space-y-2.5 border-t border-border pt-3"
               transition:slide={{ duration: 150 }}
             >
+              {#if provider.id === 'acp'}
+                <AcpAgentPanel />
+              {/if}
               {#if provider.status === 'error'}
                 <p class="text-xs font-semibold text-foreground">Details</p>
                 <pre

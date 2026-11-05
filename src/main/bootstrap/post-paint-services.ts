@@ -48,6 +48,7 @@ import { ThreadRepo } from '../database/repositories/thread-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { acpAgentConfigService } from '../drivers/acp/acp-config'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
 import { BrowserAgentCursorAppearance } from '../browser/browser-service/browser-agent-cursor-appearance'
@@ -1110,6 +1111,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       void state.chatEngine?.invalidateProviderCatalogs()
       state.chatEngine?.refreshOpenCodeHarness()
     })
+    // The ACP harness resolves its availability from the command the user saved,
+    // so that config has to be in memory before the first probe and before the
+    // model picker asks for a catalog.
+    void acpAgentConfigService(storage).load()
     state.openCodeV2Service = new OpenCodeV2Service()
     state.harnessUpdateService = new HarnessUpdateService(state.providerConnection)
     state.harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
@@ -1176,6 +1181,8 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     registerProviderAccountIpc(storage, undefined, (accountId) =>
       state.chatEngine!.removeHarnessAccount(accountId)
     )
+    const { registerAcpAgentIpc } = await import('../providers/acp-agent-ipc')
+    registerAcpAgentIpc(storage)
     registerBaseUrlProviderIpc(storage)
     // Local servers never touch the provider registry: a custom base-URL
     // provider is the user's to create, and starting or stopping a server here

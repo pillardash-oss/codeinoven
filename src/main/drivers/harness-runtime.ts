@@ -11,6 +11,7 @@ import {
   resolveExecutablePath
 } from './cli-environment'
 import { spawnInUtilityHost } from './harness-utility-host'
+import { currentAcpAgentConfig, ensureAcpAgentConfigLoaded } from './acp/acp-config'
 import { appResourcesRoot } from '../bootstrap/app-resources'
 import { Logger } from '../system/logger'
 
@@ -119,6 +120,28 @@ export async function isHarnessCommandAvailableAsync(
     (await resolveExecutablePathAsync(command, env)) !== undefined ||
     bundledPiRuntime(command) !== null
   )
+}
+
+/**
+ * Whether a harness can actually run on this machine right now.
+ *
+ * Most harnesses are available when their fixed binary resolves. The ACP
+ * harness has no fixed binary: it is available when the user configured an
+ * agent command and that command resolves, which is what lets any ACP-speaking
+ * harness be used without a dedicated driver.
+ */
+export async function isHarnessAvailableAsync(
+  id: string,
+  command: string | undefined,
+  env?: NodeJS.ProcessEnv
+): Promise<boolean> {
+  if (id === 'acp') {
+    const config = await ensureAcpAgentConfigLoaded()
+    const resolved = config ?? currentAcpAgentConfig()
+    if (!resolved) return false
+    return isHarnessCommandAvailableAsync(resolved.command, env)
+  }
+  return command !== undefined && (await isHarnessCommandAvailableAsync(command, env))
 }
 
 /**
