@@ -1,17 +1,11 @@
 <script lang="ts">
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioEye from '@pdslng/cio-icon/CioEye.svelte'
-  import CioEyeOff from '@pdslng/cio-icon/CioEyeOff.svelte'
-  import CioFilter from '@pdslng/cio-icon/CioFilter.svelte'
   import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioLogIn from '@pdslng/cio-icon/CioLogIn.svelte'
-  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import CioStar from '@pdslng/cio-icon/CioStar.svelte'
   import CioUnplug from '@pdslng/cio-icon/CioUnplug.svelte'
   import { onMount } from 'svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -19,7 +13,6 @@
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { harnessAccountUsageCache } from '$lib/stores/harness-account-usage.svelte'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
-  import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import type {
     HarnessAccount,
@@ -27,12 +20,15 @@
     ProviderAccountAuthStatus,
     ProviderConnectionInfo
   } from '$shared/types'
-  import { bankedResetSummary, creditsLabel } from '$lib/format/usage'
-  import { formatCompactAge, formatDateTimeWithWeekday } from '$shared/date-time-format'
-  import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
-  import HarnessAccountUsageCell from './HarnessAccountUsageCell.svelte'
-  import ProviderSignInPanel from './ProviderSignInPanel.svelte'
+  import { quotaPercent } from '$lib/format/usage'
   import Modal from '../ui/Modal.svelte'
+  import ProviderSignInPanel from './ProviderSignInPanel.svelte'
+  import HarnessAccountList from './accounts/HarnessAccountList.svelte'
+  import HarnessAccountDetail from './accounts/HarnessAccountDetail.svelte'
+  import {
+    groupAccountsByHarness,
+    type AccountGroup
+  } from './accounts/harness-account-presentation'
 
   interface Props {
     providers: ProviderConnectionInfo[]
@@ -47,12 +43,17 @@
   let refreshTotal = $state(0)
   let error = $state('')
   let search = $state('')
+  let selectedHarnesses = new SvelteSet<string>()
+  let hiddenOnly = $state(false)
+  let selectedId = $state('')
+  let showingDetail = $state(false)
+  let hidingAccountId = $state('')
+  let defaultingAccountId = $state('')
+
   let editTarget = $state<HarnessAccount | null>(null)
   let editLabel = $state('')
   let saving = $state(false)
   let disconnectTarget = $state<HarnessAccount | null>(null)
-  /** Account whose hidden flag is being written; keeps the row's action single-shot. */
-  let hidingAccountId = $state('')
   let disconnecting = $state(false)
 
   /**
@@ -94,68 +95,46 @@
       }))
   )
 
-  /** Every row the table shows: authenticated accounts plus custom providers. */
+  /** Every row the page shows: authenticated accounts plus custom providers. */
   const rows = $derived<HarnessAccount[]>([...accounts, ...customProviderRows])
 
-  function isCustomProviderRow(account: HarnessAccount): boolean {
-    return isCodeInOvenCustomProviderId(account.providerId)
+  function harnessFor(harnessId: string): ProviderConnectionInfo | undefined {
+    return providers.find((provider) => provider.id === harnessId)
   }
 
-  type AccountSortKey = 'account'
-
-  /** Quota telemetry column. Not sortable, so the cell snippet identifies it by
-   *  reference instead of a sort key. */
-  const usageColumn: DataTableColumn<HarnessAccount, AccountSortKey> = {
-    key: null,
-    header: 'Usage',
-    width: 'w-[44rem]',
-    cellClass: 'align-middle'
+  function harnessName(harnessId: string): string {
+    return harnessFor(harnessId)?.name ?? harnessId
   }
 
-  const accountColumns: DataTableColumn<HarnessAccount, AccountSortKey>[] = [
-    {
-      key: 'account',
-      header: 'Account',
-      width: 'w-56',
-      cellClass: 'align-middle',
-      sortValue: (account) =>
-        [
-          harnessFor(account.harnessId)?.name ?? account.harnessId,
-          providerLabel(account),
-          account.label
-        ]
-          .join('\u0000')
-          .toLocaleLowerCase('en-US')
-    },
-    usageColumn,
-    {
-      key: null,
-      header: 'Actions',
-      width: 'w-64',
-      cellClass: 'align-middle'
-    }
-  ]
+  function providerLabel(account: HarnessAccount): string {
+    return account.providerName || account.providerId
+  }
 
-  let filterHarnesses = $derived.by(() => {
+  const filterHarnesses = $derived.by(() => {
     const seen: Record<string, true> = {}
-    const harnesses: Array<{ id: string; name: string }> = []
+    const harnesses: Array<{ id: string; name: string; count: number }> = []
     for (const account of rows) {
-      if (seen[account.harnessId]) continue
+      if (seen[account.harnessId]) {
+        const entry = harnesses.find((candidate) => candidate.id === account.harnessId)
+        if (entry) entry.count += 1
+        continue
+      }
       seen[account.harnessId] = true
       harnesses.push({
         id: account.harnessId,
-        name: harnessFor(account.harnessId)?.name ?? account.harnessId
+        name: harnessName(account.harnessId),
+        count: 1
       })
     }
     return harnesses.toSorted((left, right) => left.name.localeCompare(right.name))
   })
 
-  let selectedHarnesses = new SvelteSet<string>()
-  let harnessFilterActive = $derived(selectedHarnesses.size > 0)
+  const hiddenCount = $derived(rows.filter((account) => account.hidden === true).length)
+  const harnessFilterActive = $derived(selectedHarnesses.size > 0)
 
   /** Accounts sharing the same harness+provider; a default only matters when
    *  there is more than one to choose from. */
-  let siblingCounts = $derived.by(() => {
+  const siblingCounts = $derived.by(() => {
     const counts = new SvelteMap<string, number>()
     for (const account of rows) {
       const key = `${account.harnessId}\u0000${account.providerId}`
@@ -168,32 +147,86 @@
     return (siblingCounts.get(`${account.harnessId}\u0000${account.providerId}`) ?? 0) > 1
   }
 
-  let filteredRows = $derived.by(() => {
+  const filteredRows = $derived.by(() => {
     const query = search.trim().toLocaleLowerCase('en-US')
     return rows.filter((account) => {
       if (harnessFilterActive && !selectedHarnesses.has(account.harnessId)) return false
+      if (hiddenOnly && account.hidden !== true) return false
       if (!query) return true
-      const harnessName = harnessFor(account.harnessId)?.name ?? account.harnessId
-      return [account.label, account.providerId, harnessName, account.harnessId].some((value) =>
-        value.toLocaleLowerCase('en-US').includes(query)
-      )
+      return [
+        account.label,
+        account.providerId,
+        account.providerName,
+        harnessName(account.harnessId)
+      ]
+        .join('\u0000')
+        .toLocaleLowerCase('en-US')
+        .includes(query)
     })
   })
 
-  function harnessFor(harnessId: string): ProviderConnectionInfo | undefined {
-    return providers.find((provider) => provider.id === harnessId)
-  }
+  const groups = $derived<AccountGroup[]>(
+    groupAccountsByHarness(filteredRows, (harnessId) => harnessName(harnessId))
+  )
 
-  function providerLabel(account: HarnessAccount): string {
-    return account.providerName || account.providerId
+  /**
+   * The account the detail pane reads. It follows the selection when that row is
+   * still visible and falls back to the first visible account otherwise, so a
+   * filter change or a disconnect can never leave the pane pointing at nothing.
+   */
+  const selectedAccount = $derived(
+    filteredRows.find((account) => account.id === selectedId) ?? filteredRows[0]
+  )
+
+  /** Accounts with at least one window at or above 90% used. */
+  const nearLimitCount = $derived(
+    rows.filter((account) =>
+      (harnessAccountUsageCache.snapshotFor(account.id)?.usage?.rateLimits ?? []).some(
+        (window) => (quotaPercent(window) ?? 0) >= 90
+      )
+    ).length
+  )
+
+  /** Accounts whose harness sign-in expired, so their quota cannot be read. */
+  const needSignInCount = $derived(
+    rows.filter(
+      (account) =>
+        harnessAccountUsageCache.snapshotFor(account.id)?.reauthenticationRequired === true
+    ).length
+  )
+
+  const usageHydrating = $derived(harnessAccountUsageCache.hydrating)
+  const usageProbed = $derived(
+    Math.max(0, harnessAccountUsageCache.probingTotal - harnessAccountUsageCache.probingRemaining)
+  )
+  const usageTotal = $derived(harnessAccountUsageCache.probingTotal)
+  const progressLabel = $derived.by(() => {
+    if (refreshing && usageHydrating) {
+      return `${refreshCompleted}/${refreshTotal} · usage ${usageProbed}/${usageTotal}`
+    }
+    if (refreshing) return `${refreshCompleted}/${refreshTotal}`
+    if (usageHydrating) return `usage ${usageProbed}/${usageTotal}`
+    return ''
+  })
+
+  function selectAccount(account: HarnessAccount): void {
+    selectedId = account.id
+    showingDetail = true
   }
 
   function toggleHarnessFilter(harnessId: string): void {
     if (selectedHarnesses.has(harnessId)) selectedHarnesses.delete(harnessId)
     else selectedHarnesses.add(harnessId)
+    hiddenOnly = false
   }
 
   function clearHarnessFilter(): void {
+    selectedHarnesses.clear()
+    hiddenOnly = false
+  }
+
+  function toggleHiddenFilter(): void {
+    hiddenOnly = !hiddenOnly
     selectedHarnesses.clear()
   }
 
@@ -203,33 +236,24 @@
   }
 
   function accountGroups(seed: HarnessAccount[]): SvelteMap<string, HarnessAccount[]> {
-    const groups = new SvelteMap<string, HarnessAccount[]>()
+    const grouped = new SvelteMap<string, HarnessAccount[]>()
     for (const account of seed) {
-      groups.set(account.harnessId, [...(groups.get(account.harnessId) ?? []), account])
+      grouped.set(account.harnessId, [...(grouped.get(account.harnessId) ?? []), account])
     }
-    return groups
+    return grouped
   }
 
-  function applyAccountGroups(groups: ReadonlyMap<string, HarnessAccount[]>): void {
-    accounts = sortAccounts([...groups.values()].flat())
+  function applyAccountGroups(grouped: ReadonlyMap<string, HarnessAccount[]>): void {
+    accounts = sortAccounts([...grouped.values()].flat())
   }
 
-  /** Usage hydration progress, shown beside the account refresh progress. */
-  let usageHydrating = $derived(harnessAccountUsageCache.hydrating)
-  let usageProbed = $derived(
-    Math.max(0, harnessAccountUsageCache.probingTotal - harnessAccountUsageCache.probingRemaining)
-  )
-  let usageTotal = $derived(harnessAccountUsageCache.probingTotal)
-
-  /** Drop one row in place. Reloading the whole list swaps the table for the
-   *  loading state, which collapses the page height and throws the user's
-   *  scroll position away; removing the single entry leaves the rest untouched. */
+  /** Drop one row in place, leaving the rest and the scroll position untouched. */
   function dropAccount(accountId: string): void {
     accounts = accounts.filter((account) => account.id !== accountId)
     harnessAccountUsageCache.prune(rows.map((account) => account.id))
   }
 
-  /** Swap one row's payload in place, preserving its position and scroll offset. */
+  /** Swap one row's payload in place, preserving its position. */
   function replaceAccount(updated: HarnessAccount): void {
     accounts = accounts.map((account) => (account.id === updated.id ? updated : account))
   }
@@ -252,8 +276,8 @@
     refreshing = true
     error = ''
     refreshCompleted = 0
-    const groups = accountGroups(accounts)
-    const storedHarnesses = new Set(groups.keys())
+    const grouped = accountGroups(accounts)
+    const storedHarnesses = new Set(grouped.keys())
     const harnesses = providers
       .map((provider, index) => ({ provider, index }))
       .toSorted((left, right) => {
@@ -277,9 +301,9 @@
       // keeps work bounded and makes each completed result visible immediately.
       for (const provider of harnesses) {
         try {
-          groups.set(provider.id, await invoke('providerAccounts:list', provider.id, true))
+          grouped.set(provider.id, await invoke('providerAccounts:list', provider.id, true))
           harnessAccountCache.invalidate(provider.id)
-          applyAccountGroups(groups)
+          applyAccountGroups(grouped)
         } catch (refreshError) {
           refreshErrors.push({
             harnessName: provider.name,
@@ -305,20 +329,16 @@
   }
 
   /** Refresh accounts and their quota together: the account list updates as
-   *  probes finish, and usage hydrates in its own bounded batches so the tab
+   *  probes finish, and usage hydrates in its own bounded batches so the page
    *  never blocks on either. */
   async function refreshAll(): Promise<void> {
     harnessAccountUsageCache.schedule(rows, { force: true })
     await refreshAccounts()
-    // A forced account read can surface a newly created account; queue it now
-    // so usage covers every row the table shows.
     harnessAccountUsageCache.schedule(rows)
   }
 
   async function initializeAccounts(): Promise<void> {
     await loadStoredAccounts()
-    // Quota hydrates immediately in small batches: cached snapshots paint first
-    // and each account's live values land as its probe completes.
     harnessAccountUsageCache.schedule(rows)
     await refreshAccounts()
     harnessAccountUsageCache.schedule(rows)
@@ -482,6 +502,8 @@
 
   /** Mark an account as its harness's default for the provider. */
   async function setDefault(account: HarnessAccount): Promise<void> {
+    if (defaultingAccountId) return
+    defaultingAccountId = account.id
     error = ''
     try {
       const updated = await harnessAccountCache.setDefault(account)
@@ -495,6 +517,8 @@
         setDefaultError instanceof Error
           ? setDefaultError.message
           : 'The default account was not saved.'
+    } finally {
+      defaultingAccountId = ''
     }
   }
 
@@ -529,6 +553,7 @@
       harnessAccountCache.invalidate(account.harnessId)
       dropAccount(account.id)
       disconnectTarget = null
+      showingDetail = false
     } catch (disconnectError) {
       error =
         disconnectError instanceof Error
@@ -542,83 +567,102 @@
   onMount(() => void initializeAccounts())
 </script>
 
-<div class="space-y-4">
-  <div class="flex flex-wrap items-center gap-2">
-    <div class="relative min-w-52 flex-1">
-      <CioSearch
-        size={14}
-        class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
-      />
-      <input
-        bind:value={search}
-        type="text"
-        placeholder="Search accounts…"
-        aria-label="Search accounts"
-        class="h-8 w-full border bg-elevated pl-8 pr-3 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
-      />
-    </div>
-    <button
-      type="button"
-      class="flex h-8 items-center gap-1.5 border px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-      title="Refresh accounts and usage"
-      disabled={loading || refreshing}
-      onclick={() => void refreshAll()}
-    >
-      <CioRefresh size={12} class={refreshing ? 'animate-spin' : ''} /> Refresh
-    </button>
-    <span class="min-w-28 text-right text-xs tabular-nums text-dimmed" aria-live="polite">
-      {#if refreshing && usageHydrating}
-        {refreshCompleted}/{refreshTotal} · usage {usageProbed}/{usageTotal}
-      {:else if refreshing}
-        {refreshCompleted}/{refreshTotal}
-      {:else if usageHydrating}
-        usage {usageProbed}/{usageTotal}
-      {/if}
-    </span>
-  </div>
-
-  {#if filterHarnesses.length > 1}
-    <div class="flex flex-wrap items-center gap-1" role="group" aria-label="Filter by harness">
+<div class="space-y-3">
+  <div class="space-y-2">
+    <div class="flex flex-wrap items-center gap-2">
+      <div class="relative min-w-52 flex-1">
+        <CioSearch
+          size={14}
+          class="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed"
+        />
+        <input
+          bind:value={search}
+          type="text"
+          placeholder="Search accounts…"
+          aria-label="Search accounts"
+          class="h-8 w-full border bg-surface pl-8 pr-3 text-xs text-foreground placeholder:text-dimmed focus:border-primary/50 focus:outline-none"
+        />
+      </div>
       <button
         type="button"
-        class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive
-          ? 'border-primary bg-primary text-on-primary'
-          : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-        aria-pressed={!harnessFilterActive}
-        title="Show accounts for all harnesses"
-        onclick={clearHarnessFilter}
+        class="flex h-8 items-center gap-1.5 border bg-surface px-3 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
+        title="Refresh accounts and usage"
+        disabled={loading || refreshing}
+        onclick={() => void refreshAll()}
       >
-        <CioFilter size={11} class="shrink-0" />
-        All
+        <CioRefresh size={12} class={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
+        Refresh
       </button>
-      {#each filterHarnesses as harness (harness.id)}
+    </div>
+
+    <div class="flex flex-wrap items-center gap-2">
+      <div
+        class="flex flex-wrap items-center gap-0.5 border bg-elevated p-0.5"
+        role="group"
+        aria-label="Filter accounts"
+      >
         <button
           type="button"
-          class="flex h-7 items-center gap-1.5 border px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
-            harness.id
-          )
-            ? 'border-primary bg-primary text-on-primary'
-            : 'bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-          aria-pressed={selectedHarnesses.has(harness.id)}
-          title={`Filter accounts by ${harness.name}`}
-          onclick={() => toggleHarnessFilter(harness.id)}
-        >
-          <AgentIcon agentId={harness.id} label={harness.name} size={14} />
-          <span class="truncate">{harness.name}</span>
-        </button>
-      {/each}
-      {#if harnessFilterActive}
-        <button
-          type="button"
-          class="flex h-7 items-center gap-1 border bg-elevated px-2 text-[0.6875rem] font-medium text-muted hover:bg-overlay hover:text-foreground"
-          title="Clear harness filter"
+          class="flex h-7 items-center gap-1 px-2.5 text-[0.6875rem] font-medium transition-colors {!harnessFilterActive &&
+          !hiddenOnly
+            ? 'bg-surface text-foreground'
+            : 'text-muted hover:text-foreground'}"
+          aria-pressed={!harnessFilterActive && !hiddenOnly}
+          title="Show every account"
           onclick={clearHarnessFilter}
         >
-          <CioClose size={11} /> Clear
+          All <span class="tabular-nums text-dimmed">{rows.length}</span>
         </button>
-      {/if}
+        {#each filterHarnesses as harness (harness.id)}
+          <button
+            type="button"
+            class="flex h-7 items-center gap-1.5 px-2.5 text-[0.6875rem] font-medium transition-colors {selectedHarnesses.has(
+              harness.id
+            )
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            aria-pressed={selectedHarnesses.has(harness.id)}
+            title={`Show only ${harness.name} accounts`}
+            onclick={() => toggleHarnessFilter(harness.id)}
+          >
+            <span class="flex shrink-0" aria-hidden="true">
+              <AgentIcon agentId={harness.id} label={harness.name} size={11} />
+            </span>
+            <span class="truncate">{harness.name}</span>
+            <span class="tabular-nums text-dimmed">{harness.count}</span>
+          </button>
+        {/each}
+        {#if hiddenCount > 0}
+          <button
+            type="button"
+            class="flex h-7 items-center gap-1 px-2.5 text-[0.6875rem] font-medium transition-colors {hiddenOnly
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            aria-pressed={hiddenOnly}
+            title="Show only accounts hidden from account pickers"
+            onclick={toggleHiddenFilter}
+          >
+            Hidden <span class="tabular-nums text-dimmed">{hiddenCount}</span>
+          </button>
+        {/if}
+      </div>
+
+      <p
+        class="ml-auto flex flex-wrap items-center gap-x-2 text-[0.6875rem] tabular-nums text-dimmed"
+      >
+        <span>{rows.length} accounts</span>
+        {#if nearLimitCount > 0}
+          <span class="text-warning">{nearLimitCount} near limit</span>
+        {/if}
+        {#if needSignInCount > 0}
+          <span class="text-danger">{needSignInCount} need sign-in</span>
+        {/if}
+        {#if progressLabel}
+          <span>{progressLabel}</span>
+        {/if}
+      </p>
     </div>
-  {/if}
+  </div>
 
   {#if error}
     <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -634,24 +678,23 @@
     <div class="flex h-32 flex-col items-center justify-center gap-2 text-center">
       <CioSpinner size={18} class="animate-spin text-dimmed" />
       <p class="text-xs text-muted">Checking connected providers…</p>
-      <p class="text-xs tabular-nums text-dimmed">
-        {refreshCompleted} of {refreshTotal} checked
-      </p>
+      <p class="text-xs tabular-nums text-dimmed">{refreshCompleted} of {refreshTotal} checked</p>
     </div>
-  {:else if accounts.length === 0}
+  {:else if rows.length === 0}
     <div class="border border-dashed p-8 text-center">
       <CioPerson size={20} class="mx-auto mb-2 text-dimmed" />
       <p class="text-xs text-muted">No accounts have been created yet.</p>
     </div>
   {:else if filteredRows.length === 0}
     <div class="border border-dashed p-8 text-center">
-      <CioFilter size={18} class="mx-auto mb-2 text-dimmed" />
       <p class="text-xs text-dimmed">
-        {harnessFilterActive
-          ? 'No accounts match the selected harnesses.'
-          : 'No accounts match your search.'}
+        {hiddenOnly
+          ? 'Every account is currently visible in account pickers.'
+          : harnessFilterActive
+            ? 'No accounts belong to the selected harnesses.'
+            : 'No accounts match your search.'}
       </p>
-      {#if harnessFilterActive}
+      {#if hiddenOnly || harnessFilterActive}
         <button
           type="button"
           class="mt-2 text-xs font-medium text-primary hover:underline"
@@ -662,143 +705,39 @@
       {/if}
     </div>
   {:else}
-    <DataTable
-      rows={filteredRows}
-      columns={accountColumns}
-      getRowId={(account) => account.id}
-      label="Harness accounts"
-      rowClass="transition-colors hover:bg-elevated/40"
-      clearable
-    >
-      {#snippet cell(
-        account: HarnessAccount,
-        column: DataTableColumn<HarnessAccount, AccountSortKey>
-      )}
-        {@const harness = harnessFor(account.harnessId)}
-        {@const usageSnapshot = harnessAccountUsageCache.snapshotFor(account.id)}
-        {@const accountUsage = usageSnapshot?.usage}
-        {@const hasReportedLimits =
-          !!accountUsage &&
-          (accountUsage.rateLimits.length > 0 ||
-            bankedResetSummary(accountUsage.bankedResets) !== undefined ||
-            creditsLabel(accountUsage) !== undefined)}
-        {#if column.key === 'account'}
-          <div class="flex min-w-0 items-center gap-2.5">
-            <AgentIcon
-              agentId={account.harnessId}
-              label={harness?.name ?? account.harnessId}
-              size={20}
-            />
-            <div class="min-w-0 flex-1 space-y-0.5">
-              <div class="flex min-w-0 items-center gap-1.5">
-                <span class="truncate text-xs font-medium">{account.label}</span>
-                {#if account.isDefault}
-                  <span
-                    class="shrink-0 border border-border bg-raised px-1 text-[0.625rem] font-medium text-muted"
-                    title="Default account for this provider"
-                  >
-                    Default
-                  </span>
-                {/if}
-                {#if account.hidden}
-                  <span
-                    class="shrink-0 border border-border bg-raised px-1 text-[0.625rem] font-medium text-muted"
-                    title="Hidden from account pickers, still connected"
-                  >
-                    Hidden
-                  </span>
-                {/if}
-                {#if isCustomProviderRow(account)}
-                  <span
-                    class="shrink-0 border border-border bg-raised px-1 text-[0.625rem] font-medium text-muted"
-                    title="Custom base URL provider"
-                  >
-                    Custom
-                  </span>
-                {/if}
-              </div>
-              <p
-                class="truncate text-[0.625rem] text-muted"
-                title={`${harness?.name ?? account.harnessId} · ${providerLabel(account)}`}
-              >
-                {harness?.name ?? account.harnessId} · {providerLabel(account)}
-              </p>
-              {#if hasReportedLimits && usageSnapshot && usageSnapshot.fetchedAt > 0}
-                {#if harnessAccountUsageCache.isProbing(account.id) && !usageSnapshot.error}
-                  <p class="truncate text-[0.625rem] text-dimmed">Checking…</p>
-                {:else}
-                  <p
-                    class="truncate text-[0.625rem] text-dimmed"
-                    title={`Last checked ${formatDateTimeWithWeekday(usageSnapshot.fetchedAt)}${usageSnapshot.error ? ` · ${usageSnapshot.error}` : ''}`}
-                  >
-                    Updated {formatCompactAge(usageSnapshot.fetchedAt)}
-                  </p>
-                {/if}
-              {/if}
-            </div>
-          </div>
-        {:else if column === usageColumn}
-          <HarnessAccountUsageCell {account} />
-        {:else if isCustomProviderRow(account)}
-          <span class="text-[0.6875rem] text-dimmed">Edit in Providers</span>
+    <div class="grid gap-3 lg:grid-cols-[21rem_minmax(0,1fr)] lg:items-start">
+      <div class="border bg-surface {showingDetail ? 'hidden lg:block' : ''}">
+        <HarnessAccountList
+          {groups}
+          selectedId={selectedAccount?.id ?? ''}
+          onselect={selectAccount}
+        />
+      </div>
+      <div
+        class="border bg-surface {showingDetail ? '' : 'hidden lg:block'} lg:sticky lg:top-0"
+        aria-live="polite"
+      >
+        {#if selectedAccount}
+          <HarnessAccountDetail
+            account={selectedAccount}
+            harnessName={harnessName(selectedAccount.harnessId)}
+            canMakeDefault={!selectedAccount.isDefault && hasSiblingAccounts(selectedAccount)}
+            hiddenBusy={hidingAccountId === selectedAccount.id}
+            defaultBusy={defaultingAccountId === selectedAccount.id}
+            onBack={() => (showingDetail = false)}
+            onEdit={() => openEdit(selectedAccount)}
+            onDisconnect={() => (disconnectTarget = selectedAccount)}
+            onToggleHidden={() => void toggleHidden(selectedAccount)}
+            onSignIn={() => startSignIn(selectedAccount)}
+            onMakeDefault={() => void setDefault(selectedAccount)}
+          />
         {:else}
-          <div class="flex items-center gap-1">
-            {#if hasSiblingAccounts(account) && !account.isDefault}
-              <button
-                type="button"
-                class="inline-flex shrink-0 items-center gap-1 whitespace-nowrap px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-accent"
-                title={`Set ${account.label} as the default account for ${providerLabel(account)}`}
-                aria-label={`Set ${account.label} as the default account for ${providerLabel(account)}`}
-                onclick={() => void setDefault(account)}
-              >
-                <CioStar size={12} aria-hidden="true" />
-                Make default
-              </button>
-            {/if}
-            <button
-              type="button"
-              class="inline-flex shrink-0 items-center gap-1 px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"
-              title={account.hidden
-                ? `Show ${account.label} in account pickers again`
-                : `Hide ${account.label} from account pickers without disconnecting it`}
-              aria-label={account.hidden
-                ? `Show ${account.label} in account pickers again`
-                : `Hide ${account.label} from account pickers without disconnecting it`}
-              disabled={hidingAccountId === account.id}
-              onclick={() => void toggleHidden(account)}
-            >
-              {#if account.hidden}
-                <CioEye size={12} aria-hidden="true" />
-                Show
-              {:else}
-                <CioEyeOff size={12} aria-hidden="true" />
-                Hide
-              {/if}
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              title={`Edit label for ${account.label}`}
-              aria-label={`Edit label for ${account.label}`}
-              onclick={() => openEdit(account)}
-            >
-              <CioPencil size={12} aria-hidden="true" />
-              Edit
-            </button>
-            <button
-              type="button"
-              class="inline-flex items-center gap-1 px-1.5 py-1 text-[0.6875rem] text-dimmed transition-colors hover:bg-danger/10 hover:text-danger"
-              title={`Disconnect ${account.label}`}
-              aria-label={`Disconnect ${account.label}`}
-              onclick={() => (disconnectTarget = account)}
-            >
-              <CioUnplug size={12} aria-hidden="true" />
-              Disconnect
-            </button>
-          </div>
+          <p class="p-8 text-center text-xs text-dimmed">
+            Select an account to see its quota and credentials.
+          </p>
         {/if}
-      {/snippet}
-    </DataTable>
+      </div>
+    </div>
   {/if}
 </div>
 
@@ -963,7 +902,6 @@
   {/snippet}
 
   <div class="flex gap-2 text-sm text-muted">
-    <CioUnplug size={16} class="mt-0.5 shrink-0 text-danger" />
     <p>
       Disconnect <strong class="text-foreground">{disconnectTarget?.label}</strong>? This logs the
       account out{#if disconnectTarget?.containerKind === 'managed'}
@@ -976,7 +914,7 @@
   {@const signInAccount = signInTarget}
   <ProviderSignInPanel
     harnessId={signInAccount.harnessId}
-    harnessName={harnessFor(signInAccount.harnessId)?.name ?? signInAccount.harnessId}
+    harnessName={harnessName(signInAccount.harnessId)}
     providerId={signInAccount.providerId || undefined}
     providerName={signInAccount.label}
     accountId={signInAccount.id}
