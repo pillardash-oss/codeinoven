@@ -91,6 +91,7 @@ export class ProviderConnectionService {
     for (const agent of currentAcpAgents()) {
       const existing = this.acpRows.get(agent.id)
       if (existing?.name === agent.name && existing.command === agent.command) continue
+      const fresh = existing === undefined || existing.command !== agent.command
       this.acpRows.set(agent.id, {
         id: agent.id,
         name: agent.name,
@@ -102,6 +103,10 @@ export class ProviderConnectionService {
         status: existing?.status ?? 'idle',
         ...(existing?.resolvedPath ? { resolvedPath: existing.resolvedPath } : {})
       })
+      // A new or re-pointed agent is probed right away: every harness picker
+      // gates on availability, and an `idle` row would be invisible there until
+      // the user pressed Check all.
+      if (fresh) void this.checkOne(agent.id).catch(() => undefined)
     }
     const known = new Set(currentAcpAgents().map((agent) => agent.id))
     for (const id of [...this.acpRows.keys()]) {
@@ -124,7 +129,8 @@ export class ProviderConnectionService {
       status: 'error' as const,
       detail: 'This ACP agent is no longer configured.'
     }
-    if (!agent) return { ...row, status: 'error', detail: 'This ACP agent is no longer configured.' }
+    if (!agent)
+      return { ...row, status: 'error', detail: 'This ACP agent is no longer configured.' }
     const resolvedPath = await resolveExecutablePathAsync(agent.command)
     const result: ProviderConnectionInfo = resolvedPath
       ? { ...row, name: agent.name, command: agent.command, status: 'available', resolvedPath }

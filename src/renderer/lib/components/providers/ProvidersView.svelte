@@ -49,7 +49,6 @@
   import Switch from '../ui/Switch.svelte'
   import BaseUrlProvidersPanel from './BaseUrlProvidersPanel.svelte'
   import AcpAgentsRail from './AcpAgentsRail.svelte'
-  import AcpAgentEditor from './AcpAgentEditor.svelte'
   import HarnessAccountsPanel from './HarnessAccountsPanel.svelte'
   import AuxiliaryAgentsPanel from './AuxiliaryAgentsPanel.svelte'
   import TypesafeDecisionsCard from './TypesafeDecisionsCard.svelte'
@@ -789,11 +788,6 @@
 
     {#if activeTab === 'acp'}
       <AcpAgentsRail query={searchQuery} />
-      {#if acpAgentsStore.editing !== null}
-        {#key acpAgentsStore.editing}
-          <AcpAgentEditor agent={acpAgentsStore.editTarget} />
-        {/key}
-      {/if}
     {:else}
       <div class="@container space-y-3">
         {#each filteredProviders as provider (provider.id)}

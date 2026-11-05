@@ -9,11 +9,11 @@
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { customVendorIcons } from '$lib/stores/custom-vendor-icons.svelte'
-  import { MAX_CUSTOM_VENDOR_ICON_BYTES, isCustomVendorIconType } from '$shared/custom-vendor-icon'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { MAX_CUSTOM_VENDOR_ICON_BYTES } from '$shared/custom-vendor-icon'
   import { toast } from 'svelte-sonner'
   import { SvelteSet } from 'svelte/reactivity'
   import { reportError } from '$lib/stores/app-errors.svelte'
+  import IconUploadField from '../ui/IconUploadField.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { copyText, notifyClipboard } from '$lib/copy-text'
   import { baseUrlProviderStore } from '$lib/stores/base-url-providers.svelte'
@@ -159,6 +159,15 @@
    * Owns the panel's remembered placement, shared with the dock row below so a
    * minimized editor reopens on the edge the user left it on.
    */
+  /** Image formats a vendor mark may use. */
+  const SOFTWARE_ICON_TYPES = [
+    'image/svg+xml',
+    'image/png',
+    'image/jpeg',
+    'image/webp',
+    'image/gif'
+  ] as const
+
   const PANEL_STORAGE_KEY = `${APP_SLUG}.baseUrlProviderPanel.v1`
 
   /**
@@ -176,40 +185,6 @@
   let submitting = $state(false)
   let iconUploadDisabled = $derived(readingIcon || baseUrlProviderStore.saving || submitting)
   let iconPreview = $derived(iconDataUrl ?? customVendorIcons.get(provider?.id))
-
-  async function chooseIcon(event: Event): Promise<void> {
-    const input = event.currentTarget
-    if (!(input instanceof HTMLInputElement)) return
-    const file = input.files?.[0]
-    input.value = ''
-    if (!file) return
-    readingIcon = true
-    try {
-      if (!isCustomVendorIconType(file.type) || file.size > MAX_CUSTOM_VENDOR_ICON_BYTES) {
-        throw new Error('Choose an SVG, PNG, JPEG, WebP or GIF of at most 256 KiB.')
-      }
-      const data = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () =>
-          typeof reader.result === 'string'
-            ? resolve(reader.result)
-            : reject(new Error('Cannot read image.'))
-        reader.onerror = () => reject(new Error('Cannot read image.'))
-        reader.readAsDataURL(file)
-      })
-      const image = new Image()
-      image.src = data
-      await image.decode()
-      if (image.naturalWidth > 2048 || image.naturalHeight > 2048) {
-        throw new Error('Choose an icon no larger than 2048 × 2048.')
-      }
-      iconDataUrl = data
-    } catch (error) {
-      reportError(error, 'Failed to read vendor icon.')
-    } finally {
-      readingIcon = false
-    }
-  }
 
   /**
    * The app's modal focus rule: the first field the user would type into, else
@@ -920,32 +895,16 @@
       </div>
     </div>
 
-    <label
-      class={[
-        'flex items-center gap-3 border bg-surface p-3 transition-colors duration-150 focus-within:border-primary focus-within:bg-elevated',
-        iconUploadDisabled
-          ? 'cursor-default opacity-60'
-          : 'cursor-pointer hover:border-primary/40 hover:bg-elevated'
-      ]}
-    >
-      <span
-        class="flex h-12 w-12 shrink-0 items-center justify-center border border-border bg-elevated"
-      >
-        <VendorIcon name="CodeInOven" imageSrc={iconPreview} size={iconPreview ? 40 : 32} />
-      </span>
-      <span class="min-w-0 flex-1 space-y-1 text-xs font-medium">
-        <span>Vendor icon</span>
-        <input
-          type="file"
-          accept="image/svg+xml,image/png,image/jpeg,image/webp,image/gif"
-          class="block w-full cursor-pointer text-xs text-dimmed file:cursor-pointer disabled:cursor-default disabled:file:cursor-default"
-          disabled={iconUploadDisabled}
-          onchange={(event) => void chooseIcon(event)}
-        />
-        <span class="block text-dimmed">SVG or image, up to 256 KiB. Saved with this provider.</span
-        >
-      </span>
-    </label>
+    <IconUploadField
+      label="Vendor icon"
+      accept={SOFTWARE_ICON_TYPES}
+      maxBytes={MAX_CUSTOM_VENDOR_ICON_BYTES}
+      value={iconPreview}
+      disabled={iconUploadDisabled}
+      hint="SVG or image, up to 256 KiB. Saved with this provider."
+      onselect={(data) => (iconDataUrl = data)}
+      onreading={(reading) => (readingIcon = reading)}
+    />
 
     <label class="block space-y-1 text-xs font-medium">
       <span>Display name</span>

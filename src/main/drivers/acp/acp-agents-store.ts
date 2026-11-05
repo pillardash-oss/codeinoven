@@ -258,6 +258,26 @@ export function acpAgentStore(storage: StorageEngine): AcpAgentStore {
   return sharedStore
 }
 
+/**
+ * The configured agents as harness descriptors.
+ *
+ * Every surface that lists harnesses (model picker, custom base-URL provider,
+ * utility scope, orchestration targets) reads one list, and an ACP agent is a
+ * harness like any other from that point of view: it has an id, a name and the
+ * command that starts it. Only install/update surfaces skip them, because the
+ * app never installed them.
+ */
+export function acpHarnessDescriptors(
+  agents: readonly AcpAgent[]
+): { id: string; name: string; command: string }[] {
+  return agents.map((agent) => ({ id: agent.id, name: agent.name, command: agent.command }))
+}
+
+/** Name of one agent by harness id, or null when it is not an ACP agent. */
+export function acpHarnessName(id: string): string | null {
+  return sharedStore?.snapshot().find((agent) => agent.id === id)?.name ?? null
+}
+
 /** Synchronous snapshot of the configured agents, for gates that cannot await. */
 export function currentAcpAgents(): AcpAgent[] {
   return sharedStore?.snapshot() ?? []

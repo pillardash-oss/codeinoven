@@ -141,7 +141,11 @@ class ProviderStore {
    */
   get baseUrlHarnesses(): ProviderConnectionInfo[] {
     return this.providers.filter(
-      (provider) => provider.supportsCustomProviders && provider.integration === 'ready'
+      (provider) =>
+        provider.integration === 'ready' &&
+        // ACP agents own their endpoint; they still belong in this list because
+        // a custom provider can be scoped to the harness the user added.
+        (provider.supportsCustomProviders || provider.transport === 'acp')
     )
   }
 

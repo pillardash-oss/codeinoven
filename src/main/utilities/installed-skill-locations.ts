@@ -7,6 +7,7 @@ import {
   SHARED_GLOBAL_SKILL_PATH,
   SHARED_PROJECT_SKILL_PATH
 } from '../../lib/native-skill-paths'
+import { acpHarnessName } from '../drivers/acp/acp-agents-store'
 import { listHarnesses } from '../agents/harness-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { InstalledSkillLocation } from '../../lib/types'
@@ -36,7 +37,11 @@ async function skillFolderNames(directory: string): Promise<string[]> {
 }
 
 function harnessLabel(harnessId: string): string {
-  return listHarnesses().find((harness) => harness.id === harnessId)?.name ?? harnessId
+  return (
+    listHarnesses().find((harness) => harness.id === harnessId)?.name ??
+    acpHarnessName(harnessId) ??
+    harnessId
+  )
 }
 
 /**

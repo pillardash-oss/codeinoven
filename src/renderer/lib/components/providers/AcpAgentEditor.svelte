@@ -1,6 +1,5 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioImage from '@pdslng/cio-icon/CioImage.svelte'
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { ipcErrorMessage } from '$lib/ipc-errors'
@@ -15,6 +14,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
+  import IconUploadField from '../ui/IconUploadField.svelte'
 
   /** Add or edit the command that starts one ACP agent. It docks so the
    *  command can be tried in a terminal while the draft stays put. */
@@ -31,19 +31,17 @@
     iconDark: string | undefined
   }
 
+  /** The two artworks an agent can carry, one per theme. */
   const ICON_VARIANTS = [
-    { key: 'icon', label: 'Icon' },
-    { key: 'iconDark', label: 'Dark icon' }
+    { key: 'icon', label: 'Light mode' },
+    { key: 'iconDark', label: 'Dark mode' }
   ] as const
 
   type IconVariant = (typeof ICON_VARIANTS)[number]['key']
 
   const PANEL_STORAGE_KEY = `${APP_SLUG}.acpAgentPanel.v1`
-  const ICON_ACCEPT = ACP_AGENT_ICON_TYPES.join(',')
   const FIELD = 'h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary'
   const MONO_FIELD = `${FIELD} font-mono`
-  const UPLOAD = 'flex h-7 items-center border bg-surface px-2 text-[0.6875rem]'
-  const CLEAR = 'flex h-7 items-center px-2 text-[0.6875rem] text-muted'
   const SECONDARY = 'h-9 border bg-elevated px-3 text-xs font-medium hover:bg-overlay'
   const PRIMARY = 'flex h-9 items-center gap-1.5 bg-primary px-4 text-xs text-on-primary'
   const DANGER = 'flex h-9 items-center gap-1.5 px-2 text-xs font-medium text-danger'
@@ -65,25 +63,16 @@
   let draft = $state<Draft>(createDraft(agent))
   let docked = $state(false)
   /** Variant whose file is being read; both uploads wait for it. */
-  let reading = $state<IconVariant | null>(null)
+  let reading = $state(false)
+  let iconTab = $state<IconVariant>('icon')
   let error = $state('')
   let confirmingDelete = $state(false)
   let removing = $state(false)
-  let fileInput: HTMLInputElement | null = null
-
-  /** Attach the hidden picker without `bind:this`, so the click is a call. */
-  function captureFileInput(node: HTMLInputElement): () => void {
-    fileInput = node
-    return () => {
-      if (fileInput === node) fileInput = null
-    }
-  }
-  let pendingVariant = $state<IconVariant>('icon')
 
   const title = $derived(agent ? `Edit ${agent.name}` : 'Add ACP agent')
   const chipStatus = $derived(draft.name.trim() || draft.command.trim() || 'Untitled agent')
   const filled = $derived(draft.name.trim() !== '' && draft.command.trim() !== '')
-  const canSave = $derived(!acpAgentsStore.saving && reading === null && filled)
+  const canSave = $derived(!acpAgentsStore.saving && !reading && filled)
   /** A save or upload failure, else whatever the last read of the agents said. */
   const message = $derived(error || acpAgentsStore.error)
 
@@ -95,58 +84,6 @@
     draft.name = preset.name
     draft.command = preset.command
     draft.args = preset.args.join(' ')
-  }
-
-  function pickIcon(variant: IconVariant): void {
-    if (reading !== null) return
-    pendingVariant = variant
-    error = ''
-    fileInput?.click()
-  }
-
-  function clearIcon(variant: IconVariant): void {
-    draft[variant] = undefined
-  }
-
-  function readAsDataUrl(file: File): Promise<string> {
-    return new Promise<string>((resolve, reject) => {
-      const reader = new FileReader()
-      reader.onload = () =>
-        typeof reader.result === 'string'
-          ? resolve(reader.result)
-          : reject(new Error('That image could not be read.'))
-      reader.onerror = () => reject(new Error('That image could not be read.'))
-      reader.readAsDataURL(file)
-    })
-  }
-
-  /** Same rules as the vendor icon picker: image format, 256 KiB, 2048px edge. */
-  async function chooseIcon(event: Event): Promise<void> {
-    const input = event.currentTarget
-    if (!(input instanceof HTMLInputElement)) return
-    const file = input.files?.[0]
-    input.value = ''
-    if (!file) return
-    const variant = pendingVariant
-    reading = variant
-    error = ''
-    try {
-      if (!ACP_AGENT_ICON_TYPES.includes(file.type) || file.size > MAX_ACP_AGENT_ICON_BYTES) {
-        throw new Error('Choose an SVG, PNG, JPEG, WebP or GIF of at most 256 KiB.')
-      }
-      const data = await readAsDataUrl(file)
-      const image = new Image()
-      image.src = data
-      await image.decode()
-      if (image.naturalWidth > 2048 || image.naturalHeight > 2048) {
-        throw new Error('Choose an icon no larger than 2048 × 2048.')
-      }
-      draft[variant] = data
-    } catch (iconFailure) {
-      error = iconFailure instanceof Error ? iconFailure.message : 'That image could not be read.'
-    } finally {
-      reading = null
-    }
   }
 
   async function save(): Promise<void> {
@@ -282,34 +219,43 @@
     </label>
 
     <div class="space-y-1.5">
-      <p class="text-xs font-medium">Icon</p>
-      {#each ICON_VARIANTS as variant (variant.key)}
-        {@const preview = draft[variant.key]}
-        <div class="flex items-center gap-2 border bg-elevated p-2">
-          <span class="flex h-9 w-9 shrink-0 items-center justify-center border bg-raised">
-            {#if preview}
-              <img src={preview} alt="" class="h-full w-full object-contain" />
-            {:else}
-              <CioImage size={16} class="text-dimmed" />
-            {/if}
-          </span>
-          <span class="min-w-0 flex-1 truncate text-xs font-medium">{variant.label}</span>
-          <button type="button" class={UPLOAD} onclick={() => pickIcon(variant.key)}>
-            {preview ? 'Replace' : 'Upload'}
+      <div
+        class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+        role="tablist"
+        aria-label="Icon theme"
+      >
+        {#each ICON_VARIANTS as variant (variant.key)}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={iconTab === variant.key}
+            class="px-2.5 py-1 text-[0.6875rem] font-medium transition-colors {iconTab ===
+            variant.key
+              ? 'bg-surface text-foreground'
+              : 'text-muted hover:text-foreground'}"
+            title={`Edit the ${variant.label.toLowerCase()} icon`}
+            onclick={() => (iconTab = variant.key)}
+          >
+            {variant.label}
           </button>
-          {#if preview}
-            <button type="button" class={CLEAR} onclick={() => clearIcon(variant.key)}>Clear</button
-            >
-          {/if}
-        </div>
+        {/each}
+      </div>
+      {#each ICON_VARIANTS as variant (variant.key)}
+        {#if iconTab === variant.key}
+          <IconUploadField
+            label={variant.label}
+            accept={ACP_AGENT_ICON_TYPES}
+            maxBytes={MAX_ACP_AGENT_ICON_BYTES}
+            value={draft[variant.key]}
+            disabled={acpAgentsStore.saving}
+            name={draft.name.trim() || 'ACP agent'}
+            hint="SVG or image, up to 256 KiB."
+            onselect={(data) => (draft[variant.key] = data)}
+            onclear={() => (draft[variant.key] = undefined)}
+            onreading={(value) => (reading = value)}
+          />
+        {/if}
       {/each}
-      <input
-        type="file"
-        {@attach captureFileInput}
-        hidden
-        accept={ICON_ACCEPT}
-        onchange={chooseIcon}
-      />
     </div>
 
     {#if message}<p class="text-xs text-danger">{message}</p>{/if}
