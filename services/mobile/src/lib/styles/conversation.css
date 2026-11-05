@@ -379,17 +379,19 @@
 /* The field keeps a gutter on its left, the way the app's editor does: the prompt
    marker lives in it, every wrapped line clears it, and the compose control sits
    under the marker without ever covering the writing. */
+/* The field is one line tall until it is written into: the composer's job is to
+   get out of the transcript's way, exactly as the desktop editor does. */
 .composer-field {
   position: relative;
   display: flex;
   align-items: flex-start;
-  padding: 0.75rem 0.75rem 0.375rem;
+  padding: 0.5rem 0.625rem 0.25rem;
 }
 
 .composer-prompt {
   position: absolute;
-  top: 0.75rem;
-  left: 0.5rem;
+  top: 0.5rem;
+  left: 0.375rem;
   font-weight: 700;
   line-height: 1.25rem;
   color: var(--color-accent-hover);
@@ -410,7 +412,7 @@
   display: block;
   width: 100%;
   min-width: 0;
-  min-height: 2.5rem;
+  min-height: 1.25rem;
   /* The desktop editor's own caps: ten rem at rest, and the expanded floor and
      ceiling once the compose control has grown the field. */
   max-height: 10rem;
@@ -441,8 +443,8 @@
    so the extra room goes where a phone can spend it: upward. */
 .composer-expand {
   position: absolute;
-  top: 2.5rem;
-  left: 0.375rem;
+  top: 1.75rem;
+  left: 0.25rem;
   z-index: 5;
   display: grid;
   place-items: center;
@@ -506,6 +508,66 @@
 .composer-box[data-expanded='true'] .composer-field textarea {
   min-height: 10rem;
   max-height: min(30rem, 60dvh);
+}
+
+/* ---- The shoe ----
+   The smallest honest statement of what this box writes into: the project, the
+   model and the harness, in the app's own strip under the composer. */
+.composer-shoe {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  z-index: 3;
+  padding: 0.25rem 0.25rem 0;
+}
+
+.composer-shoe-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.0625rem;
+  width: max-content;
+  max-width: 100%;
+  padding: 0.0625rem 0.125rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 0.5rem 1.25rem -0.875rem rgba(0, 0, 0, 0.4);
+}
+
+.shoe-seg {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.5rem;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 0 0.1875rem;
+  color: var(--color-muted);
+  font-size: 0.6875rem;
+}
+
+.shoe-seg > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shoe-seg :global(.mark) {
+  flex: none;
+}
+
+/* The project's own name is the one that gives way first, as in the app. */
+.shoe-seg:has(.mark) {
+  flex: 0 1 auto;
+}
+
+.shoe-sep {
+  flex: none;
+  width: 1px;
+  height: 0.75rem;
+  background: var(--color-border);
 }
 
 /* The toolbar is separated by the same dashed rule the app draws under its

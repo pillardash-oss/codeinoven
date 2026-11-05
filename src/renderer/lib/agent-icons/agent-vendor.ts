@@ -1,6 +1,6 @@
 import { getAgentIcon } from './registry'
 import type { AgentIconEntry } from './agent-registry'
-import { getVendorIconSvg, getVendorSlug } from '../vendor-icons/registry'
+import { getVendorIconSvg, getVendorSlug } from '$shared/vendor-icons/registry'
 
 /**
  * Which shipped mark an ACP agent's own command stands for.

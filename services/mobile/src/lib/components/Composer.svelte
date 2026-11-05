@@ -1,10 +1,10 @@
 <script lang="ts">
   import { tick } from 'svelte'
   import CioArrowUp from '@pdslng/cio-icon/CioArrowUp.svelte'
-  import CioCpu from '@pdslng/cio-icon/CioCpu.svelte'
-  import CioHarness from '@pdslng/cio-icon/CioHarness.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
+  import Mark from './Mark.svelte'
+  import VendorMark from './VendorMark.svelte'
   import { composerHasThirdLine, composerShowsExpandControl } from '#shared/composer-expand'
   import { api, ApiError } from '#lib/api/client'
   import type { Project, Prompt, Thread } from '#lib/api/types'
@@ -93,7 +93,13 @@
     box.focus()
     const end = box.value.length
     box.setSelectionRange(end, end)
-    handleInput()
+    // The cap changes with the attribute, so the field is measured once the new
+    // one is on it. Measuring before that keeps the expanded height, which is
+    // exactly what made collapsing shrink the width and nothing else.
+    void tick().then(() => {
+      fit()
+      handleInput()
+    })
   }
 
   /** A draft handed in from elsewhere (an edited held message) is written and
@@ -128,6 +134,7 @@
       draft = ''
       expanded = false
       await tick()
+      fit()
       handleInput()
       onqueued({ prompt, body })
     } catch (cause) {
@@ -196,13 +203,13 @@
       {:else}
         {#if thread?.model}
           <span class="model-reading" title={`Model: ${thread.model}`}>
-            <CioCpu size={12} />
+            <VendorMark name={thread.model} size={12} />
             <span>{thread.model}</span>
           </span>
         {/if}
         {#if thread?.harness}
           <span class="think-chip" title={`Harness: ${thread.harness}`}>
-            <CioHarness size={10} />
+            <VendorMark name={thread.harness} size={10} />
             {thread.harness}
           </span>
         {/if}
@@ -225,3 +232,32 @@
     </button>
   </div>
 </form>
+
+<!-- The shoe: the smallest honest statement of what this box writes into, in the
+     app's own strip under the composer. -->
+{#if project || thread?.model || thread?.harness}
+  <div class="composer-shoe">
+    <div class="composer-shoe-card">
+      {#if project}
+        <span class="shoe-seg" title={`Writes into ${project.name}`}>
+          <Mark {project} size={14} />
+          <span>{project.name}</span>
+        </span>
+      {/if}
+      {#if thread?.model}
+        {#if project}<span class="shoe-sep" aria-hidden="true"></span>{/if}
+        <span class="shoe-seg" title={`Model: ${thread.model}`}>
+          {#if thread.model}<VendorMark name={thread.model} size={11} />{/if}
+          <span>{thread.model}</span>
+        </span>
+      {/if}
+      {#if thread?.harness}
+        <span class="shoe-sep" aria-hidden="true"></span>
+        <span class="shoe-seg" title={`Harness: ${thread.harness}`}>
+          <VendorMark name={thread.harness} size={11} />
+          <span>{thread.harness}</span>
+        </span>
+      {/if}
+    </div>
+  </div>
+{/if}
