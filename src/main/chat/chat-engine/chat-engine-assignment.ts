@@ -65,6 +65,23 @@ export class ChatEngineAssignment {
     coordinatorThreadId: string
   ): Promise<AssignmentPlan> {
     this.host.units['messages'].touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    const assignment = this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (!assignment) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    // An explicit resume re-arms automatic work, but every prompt dispatched here
+    // is internal. Clearing the durable stop latch is what tells the idle
+    // finalizer this run is allowed to continue itself; the automatic recovery
+    // path below never clears it, so a stopped thread still stays stopped.
+    const resumedThreadIds = new Set<string>([
+      coordinatorThreadId,
+      ...assignment.content.tasks.flatMap((task) => (task.threadId ? [task.threadId] : []))
+    ])
+    await Promise.all(
+      [...resumedThreadIds].map((threadId) =>
+        this.host.threadManager.clearStoppedByUser(projectId, threadId)
+      )
+    )
     return this.resumeAssignmentAttentionInternal(projectId, coordinatorThreadId)
   }
 
@@ -506,12 +523,29 @@ export class ChatEngineAssignment {
         this.host.state.stoppedAssignmentSessions.delete(sessionId)
       }
     }
+    // The settings snapshot predates the resume, so it still carries the Stop
+    // latch. Internal prompts persist their settings verbatim, so strip the flag
+    // here as well: a stale copy would restore the latch the resume just cleared.
+    const { stoppedByUserAt: _stoppedByUserAt, ...resumedCoordinatorSettings } =
+      coordinator.settings
     const settings: ThreadSettings = {
-      ...coordinator.settings,
+      ...resumedCoordinatorSettings,
       assignmentMode: false,
       loopMode: assignment.loopModeBeforeStop === true
     }
     await this.host.threadManager.updateSettings(projectId, coordinatorThreadId, settings)
+    // Resuming an Assignment is an explicit user decision, but every prompt this
+    // path dispatches is internal. The settings write above is built from the
+    // pre-resume thread, so clear the durable stop latch after it; otherwise the
+    // resumed run reads as a turn the user had stopped and refuses its own
+    // continuations, dying on its first idle.
+    await Promise.all(
+      resumedThreads.map((thread) =>
+        thread
+          ? this.host.threadManager.clearStoppedByUser(projectId, thread.id)
+          : Promise.resolve()
+      )
+    )
     await this.host.units['assignment-run'].ensureAssignmentApi()
 
     if (['approved', 'running', 'attention'].includes(assignment.status)) {

@@ -230,6 +230,11 @@ export class ChatEngineAssignmentWorkers {
     workerThreadId: string
   ): Promise<AssignmentPlan> {
     this.host.units['messages'].touchUserActivity()
+    // The retry prompt below is internal, so clear the durable stop latch first:
+    // this is the user restarting the run, not an automatic resume of the thread
+    // they stopped. Only the explicit action clears it; the automatic attention
+    // recovery still honours the latch.
+    await this.host.threadManager.clearStoppedByUser(projectId, workerThreadId)
     return this.retryAssignmentWorkerInternal(projectId, coordinatorThreadId, workerThreadId)
   }
 
@@ -275,8 +280,18 @@ export class ChatEngineAssignmentWorkers {
     }
     // Switch reporting on before anything else: the reactivation and the report
     // contract both read it, and the worker's own composer control must agree.
-    const settings = validateThreadSettings({ ...worker.settings, reportToCoordinator: true })
+    // The snapshot predates the resume, so drop the Stop latch it still carries;
+    // internal prompts persist their settings verbatim and would restore it.
+    const { stoppedByUserAt: _stoppedByUserAt, ...resumedWorkerSettings } = worker.settings
+    const settings = validateThreadSettings({
+      ...resumedWorkerSettings,
+      reportToCoordinator: true
+    })
     await this.host.threadManager.updateSettings(projectId, workerThreadId, settings)
+    // The user asked this worker to report, so it is no longer a thread they
+    // stopped. The prompt below is internal, so the durable latch would
+    // otherwise veto the worker's own follow-up work.
+    await this.host.threadManager.clearStoppedByUser(projectId, workerThreadId)
     const reactivated = await this.host.state.assignmentEngine.markWorkerSteered(
       assignment.id,
       workerThreadId
