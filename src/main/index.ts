@@ -918,30 +918,42 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  /**
+   * Walk history for a gesture the window received, on the surface the user is
+   * focused on.
+   *
+   * A browser page, or the browser's own toolbar, owns the gesture while it holds
+   * focus: it walks its own history and takes the input even at a history end.
+   * Only when no browser surface claims it does the app's own location history
+   * move, which is what keeps a swipe over a fullscreen browser page from
+   * navigating the app around it.
+   */
+  const navigateWindowHistory = (direction: 'back' | 'forward'): void => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (state.browserService?.navigateFocusedHistory(direction)) return
+    sendToRenderer(
+      window.webContents,
+      direction === 'back' ? 'window:historyBack' : 'window:historyForward'
+    )
+  }
+
   // Mouse side buttons (back/forward). Windows and Linux deliver them as app
   // commands; the renderer walks its own in-app navigation history because the
   // single-page window has no native browser history to navigate. On macOS no
   // app-command is emitted   the renderer handles the raw buttons directly.
   window.on('app-command', (_event, command) => {
-    if (window.isDestroyed() || window.webContents.isDestroyed()) return
-    if (command === 'browser-backward') {
-      sendToRenderer(window.webContents, 'window:historyBack')
-    } else if (command === 'browser-forward') {
-      sendToRenderer(window.webContents, 'window:historyForward')
-    }
+    if (command === 'browser-backward') navigateWindowHistory('back')
+    else if (command === 'browser-forward') navigateWindowHistory('forward')
   })
 
   // On macOS, Logitech Options can map the mouse's side buttons to native
-  // swipe gestures instead of renderer mouse events. Electron exposes those
-  // gestures on the window; a left swipe goes back and a right swipe goes
-  // forward through the app's navigation history.
+  // swipe gestures instead of renderer mouse events, and a trackpad swipe over a
+  // browser page arrives here rather than as wheel events the page can measure.
+  // Electron exposes those gestures on the window; a left swipe goes back and a
+  // right swipe goes forward.
   window.on('swipe', (_event, direction) => {
-    if (window.isDestroyed() || window.webContents.isDestroyed()) return
-    if (direction === 'left') {
-      sendToRenderer(window.webContents, 'window:historyBack')
-    } else if (direction === 'right') {
-      sendToRenderer(window.webContents, 'window:historyForward')
-    }
+    if (direction === 'left') navigateWindowHistory('back')
+    else if (direction === 'right') navigateWindowHistory('forward')
   })
 
   // Renderer freeze/crash diagnostics. On a slow machine (e.g. M1) the renderer

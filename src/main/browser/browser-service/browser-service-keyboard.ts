@@ -313,7 +313,7 @@ export class BrowserServiceKeyboard {
     return true
   }
 
-  /** Route a mouse history button to the browser only when its active page or
+  /** Route a window history gesture to the browser only when its active page or
    *  toolbar owns focus. The caller falls back to app navigation when this
    *  returns false. A focused browser consumes the input even at a history end. */
   navigateFocusedHistory(direction: 'back' | 'forward'): boolean {
