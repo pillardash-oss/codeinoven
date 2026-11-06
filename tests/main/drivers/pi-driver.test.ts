@@ -353,6 +353,49 @@ describe('PiDriver', () => {
     )
   })
 
+  it('keeps an exhausted overloaded 429 retryable without a reset time', () => {
+    // The OpenCode Go failure of 2026-11-05: a transient upstream 429 that must
+    // never be read as an account window. Pi reports it once its own retries are
+    // exhausted, and the engine needs the short-backoff verdict from here.
+    const error =
+      '429: {"type":"server_error","message":"Upstream request failed: [overloaded], retry shortly"}'
+    const context = sessionContext('s-1', [
+      {
+        id: 'assistant-1',
+        role: 'assistant',
+        parts: [{ type: 'text', id: 'assistant-1:text', messageID: 'assistant-1', text: '' }],
+        createdAt: Date.now(),
+        harnessId: 'pi',
+        error
+      }
+    ])
+    const result = mapPiRecord({ type: 'agent_settled' }, context, {
+      assistantMessageId: null,
+      turnIndex: 1
+    })
+    const status = result?.events?.find((event) => event.type === 'session.status')?.status
+    const issue = status?.state === 'error' ? status.issue : undefined
+    expect(issue?.kind).toBe('provider_unavailable')
+    expect(issue?.retryable).toBe(true)
+    expect(issue?.retryAt).toBeUndefined()
+  })
+
+  it('keeps an overloaded auto_retry_end failure retryable without a reset time', () => {
+    const error =
+      'Error from provider (Console Go): Upstream request failed: [overloaded], retry shortly'
+    const state = { assistantMessageId: null, turnIndex: 1 }
+    const result = mapPiRecord(
+      { type: 'auto_retry_end', success: false, attempt: 3, finalError: error },
+      sessionContext('s-1'),
+      state
+    )
+    const status = result?.events?.find((event) => event.type === 'session.status')?.status
+    const issue = status?.state === 'error' ? status.issue : undefined
+    expect(issue?.kind).toBe('provider_unavailable')
+    expect(issue?.retryable).toBe(true)
+    expect(issue?.retryAt).toBeUndefined()
+  })
+
   it('stays silent on oversized agent_settled errors while recovery claims them', async () => {
     const context = sessionContext('s-1', [
       {
