@@ -632,7 +632,8 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
   async generateIndependentAudit(selected: ThreadSettings): Promise<void> {
     this.root.submitSpecDecision.auditBusy = true
     this.root.buildSpecActionPrompt.auditError = ''
-    this.root.handleAgentEvent.errorMessage = ''
+    this.root.submitSpecDecision.auditFailed = false
+    this.root.submitSpecDecision.auditState = 'running'
     this.auditSettings = selected
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
@@ -688,11 +689,16 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       )
     } catch (error) {
       const rawError = error instanceof Error ? error.message : 'The independent audit failed.'
-      this.root.handleAgentEvent.errorMessage = rawError.replace(
+      // The audit card owns this failure: it carries the error and the model
+      // picker the user needs to change the auditor's account. Pushing it into
+      // the composer's error slot instead put a card over the composer that can
+      // neither explain which audit failed nor offer the fix.
+      this.root.buildSpecActionPrompt.auditError = rawError.replace(
         /^Error invoking remote method '[^']+': Error:\s*/u,
         ''
       )
-      this.root.buildSpecActionPrompt.auditError = this.root.handleAgentEvent.errorMessage
+      this.root.submitSpecDecision.auditFailed = true
+      this.root.submitSpecDecision.auditState = 'offered'
     } finally {
       this.root.submitSpecDecision.auditBusy = false
     }

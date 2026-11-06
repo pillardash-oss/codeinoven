@@ -43,6 +43,12 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
   /** Set by `bind()`: where the audit stands for this thread. */
   auditState = $state<Thread['auditState']>('offered')
 
+  /** An audit run ended in failure. Kept beside `auditError` because a failed
+   *  run is not a persisted audit state: the card has to report the failure with
+   *  its model picker, so the user can change the auditor's account right there
+   *  instead of hunting the auditor thread. */
+  auditFailed = $state(false)
+
   auditBusy = $state(false)
 
   auditReportActionsAvailable = $derived.by(() => {

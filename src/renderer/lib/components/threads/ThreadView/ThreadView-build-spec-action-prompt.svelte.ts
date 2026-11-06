@@ -386,6 +386,15 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
       await this.retryAssignmentAuditFromAuditor(selected)
       return
     }
+    // An independent (spec-less) audit belongs to its own runner. The
+    // implementation audit demands an approved Engineering contract and refuses
+    // exactly the thread the independent switch produced, which is how a Retry on
+    // an independent audit answered "An approved Engineering implementation is
+    // required before audit".
+    if (this.root.currentWorkingTraceAttribution.independentAuditPanelActive) {
+      await this.root.contextUsage.generateIndependentAudit(selected)
+      return
+    }
     await this.root.contextUsage.generateDurableImplementationAudit(selected)
   }
 
@@ -398,7 +407,8 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
   async startFreshIndependentAudit(selected: ThreadSettings): Promise<void> {
     this.root.submitSpecDecision.auditBusy = true
     this.auditError = ''
-    this.root.handleAgentEvent.errorMessage = ''
+    this.root.submitSpecDecision.auditFailed = false
+    this.root.submitSpecDecision.auditState = 'running'
     this.root.contextUsage.auditSettings = selected
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
@@ -423,11 +433,11 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
       )
     } catch (error) {
       const rawError = error instanceof Error ? error.message : 'The new audit could not start.'
-      this.root.handleAgentEvent.errorMessage = rawError.replace(
-        /^Error invoking remote method '[^']+': Error:\s*/u,
-        ''
-      )
-      this.auditError = this.root.handleAgentEvent.errorMessage
+      // Same contract as a first run: the audit card reports the failure so the
+      // model picker beside it can change the auditor's account there.
+      this.auditError = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      this.root.submitSpecDecision.auditFailed = true
+      this.root.submitSpecDecision.auditState = 'offered'
       // The previous auditor is gone and the failed run still created a fresh
       // one, so resolve it instead of leaving a deleted thread on screen.
       this.root.contextUsage.durableAuditThread = await invoke(

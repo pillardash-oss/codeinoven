@@ -645,6 +645,26 @@
             onViewTrace={() => void board.currentWorkingTraceAttribution.openDurableAuditWork()}
             onViewReport={board.contextUsage.openAuditStudio}
           />
+        {:else if board.submitSpecDecision.auditFailed && board.currentWorkingTraceAttribution.independentAuditPanelActive && !board.switchProject.busy && !board.submitBrainstormDecision.failureRetryVisible}
+          <AuditGeneratedCard
+            state="failed"
+            error={board.buildSpecActionPrompt.auditError}
+            settings={board.contextUsage.auditSettings}
+            providers={board.currentWorkingTraceAttribution.providers}
+            projectId={board.handleAgentEvent.thread.projectId}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            busy={board.submitSpecDecision.auditBusy}
+            retryLabel="Retry audit"
+            onRetry={board.buildSpecActionPrompt.startFreshIndependentAudit}
+            onModelChange={board.contextUsage.changeAuditModel}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onViewReport={board.contextUsage.openAuditStudio}
+          />
         {:else if board.buildSpecActionPrompt.assignmentAuditState === 'failed' && board.unmirroredTraceStartTime.assignmentAuditOwner && !board.switchProject.busy && !board.submitBrainstormDecision.achievementAutonomous && !board.submitBrainstormDecision.failureRetryVisible}
           <AuditGeneratedCard
             state="failed"
