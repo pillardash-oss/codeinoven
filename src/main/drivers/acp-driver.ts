@@ -104,6 +104,18 @@ function acpTurnOutcomeError(
   return null
 }
 
+/**
+ * One turn's prompt text: the assembled instructions, then any recap a restored
+ * session needs, then the ask itself.
+ */
+function composeAcpTurnText(
+  systemPrompt: string | undefined,
+  historyRecap: string | undefined,
+  text: string
+): string {
+  return [systemPrompt?.trim(), historyRecap?.trim(), text].filter(Boolean).join('\n\n')
+}
+
 /** The turn currently streaming on one app session. */
 interface AcpActiveTurn {
   sessionId: string
@@ -416,7 +428,16 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
       const binding = await this.bindSession(projectPath, session, opts.settings, transport)
       const capabilities: AcpPromptCapabilities =
         init.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
-      const blocks = await acpPromptBlocks(opts.text, opts.attachments, capabilities)
+      // ACP has no system-prompt field and its sessions outlive this launch, so
+      // the app's assembled instructions ride the turn's first text block, the
+      // same way the codex and antigravity drivers deliver theirs. Without this
+      // the agent never saw the project instructions, the working-scope rules or
+      // the commit contract, which is why work finished without being committed.
+      const blocks = await acpPromptBlocks(
+        composeAcpTurnText(opts.systemPrompt, opts.historyRecap, opts.text),
+        opts.attachments,
+        capabilities
+      )
       const result = await transport.prompt(binding.acpSessionId, blocks, TURN_TIMEOUT_MS)
       await this.settlePrompt(turn, session, result)
     } catch (error) {
