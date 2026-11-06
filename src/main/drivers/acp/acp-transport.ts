@@ -7,6 +7,7 @@ import {
   type AcpAgentCapabilities,
   type AcpContentBlock,
   type AcpInitializeResult,
+  type AcpMcpServer,
   type AcpNewSessionResult
 } from './acp-protocol'
 
@@ -71,12 +72,12 @@ export class AcpTransport {
   }
 
   /** Open a session in the project directory and report what the agent exposes. */
-  async newSession(): Promise<AcpNewSessionResult> {
+  async newSession(mcpServers: readonly AcpMcpServer[] = []): Promise<AcpNewSessionResult> {
     await this.initialize()
     const result = acpRecord(
       await this.requireClient().request('session/new', {
         cwd: this.projectPath,
-        mcpServers: []
+        mcpServers: [...mcpServers]
       })
     )
     const sessionId = acpString(result?.['sessionId'])

@@ -15,6 +15,7 @@ import type {
   PersistentCliSession
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
+import { cliProjectPathHash } from './persistent-cli/persistent-cli-session'
 import {
   PermissionRequestGoneError,
   QuestionRequestGoneError,
@@ -37,16 +38,22 @@ import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generato
 import { AcpTurnFold } from './acp/acp-session'
 import { NO_PROMPT_CAPABILITIES, acpPromptBlocks } from './acp/acp-content'
 import { AcpPermissionRegistry } from './acp/acp-permissions'
+import { utilityKey } from './claude-code/claude-commands'
+import type { UtilityRuntimeOverlay, UtilityRuntimePreparationRequest } from './driver.interface'
 import {
   acpRecord,
   acpSessionIdOf,
   acpString,
+  type AcpMcpServer,
   type AcpPromptCapabilities,
   type AcpRequestPermissionParams,
   type AcpSessionUpdate
 } from './acp/acp-protocol'
 
 const HARNESS_NAME = 'ACP agent'
+/** The gateway hands its turn token to an MCP server through these variables. */
+const GATEWAY_TOKEN_ENV = 'CODEINOVEN_UTILITY_BRIDGE_TOKEN'
+const GATEWAY_TOKEN_FILE_ENV = 'CODEINOVEN_UTILITY_BRIDGE_TOKEN_FILE'
 const TURN_TIMEOUT_MS = 60 * 60 * 1000
 const AUXILIARY_TIMEOUT_MS = 90_000
 
@@ -111,6 +118,10 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   private readonly activeTurns = new Map<string, AcpActiveTurn>()
   private readonly permissions = new AcpPermissionRegistry(HARNESS_NAME)
   private readonly catalogs = new Map<string, ProviderCatalog[]>()
+  /** MCP servers this turn's utilities resolved to, handed to the agent at
+   *  session creation. An ACP agent launches its own MCP servers, so the app's
+   *  gateway reaches it exactly the way a user's MCP utility does. */
+  private readonly mcpServers = new Map<string, AcpMcpServer[]>()
   private closed = false
 
   constructor(
@@ -271,6 +282,80 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Turn this turn's resolved utilities into ACP MCP servers.
+   *
+   * The app gateway is itself a stdio MCP server, so an ACP agent gets the same
+   * `cio_*` tools a CLI harness gets from its launch overlay. Its token is the
+   * only turn-scoped part: the agent spawns the server once per session and
+   * keeps it, so the token is written where the server re-reads it each call
+   * instead of being frozen into the environment of an old turn.
+   */
+  async prepareUtilityRuntime(
+    request: UtilityRuntimePreparationRequest
+  ): Promise<UtilityRuntimeOverlay> {
+    const servers: AcpMcpServer[] = []
+    const keys = new Set<string>()
+    for (const { utility, binding } of request.resolvedUtilities) {
+      if (utility.kind !== 'mcp') continue
+      const baseKey = utilityKey(binding.transportName ?? utility.name)
+      let name = baseKey
+      for (let suffix = 2; keys.has(name); suffix += 1) name = `${baseKey}-${suffix}`
+      keys.add(name)
+      const config = utility.config
+      if (config.transport === 'stdio') {
+        const env = Object.entries(config.environment ?? {}).map(([key, value]) => ({
+          name: key,
+          value
+        }))
+        const token = config.environment?.[GATEWAY_TOKEN_ENV]
+        if (token) {
+          const tokenPath = await this.publishGatewayToken(request.projectPath, token)
+          servers.push({
+            name,
+            command: config.command ?? '',
+            args: [...(config.args ?? [])],
+            env: [
+              ...env.filter((entry) => entry.name !== GATEWAY_TOKEN_ENV),
+              { name: GATEWAY_TOKEN_FILE_ENV, value: tokenPath }
+            ]
+          })
+          continue
+        }
+        servers.push({
+          name,
+          command: config.command ?? '',
+          args: [...(config.args ?? [])],
+          env
+        })
+        continue
+      }
+      if (!config.url) continue
+      servers.push({
+        name,
+        type: config.transport === 'sse' ? 'sse' : 'http',
+        url: config.url,
+        ...(config.headers
+          ? {
+              headers: Object.entries(config.headers).map(([key, value]) => ({
+                name: key,
+                value
+              }))
+            }
+          : {})
+      })
+    }
+    this.mcpServers.set(request.projectPath, servers)
+    return {}
+  }
+
+  /** Write this turn's gateway token where a long-lived MCP server re-reads it. */
+  private async publishGatewayToken(projectPath: string, token: string): Promise<string> {
+    const relativePath = `drivers/${this.id}/gateway/${cliProjectPathHash(projectPath)}.token`
+    await this.storage.writeRaw(relativePath, token)
+    return this.storage.resolve(relativePath)
+  }
+
   async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, opts.sessionId)
     this.appendUserMessage(session, opts)
@@ -419,7 +504,17 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   ): Promise<AcpSessionBinding> {
     let binding = this.bindings.get(session.id)
     if (!binding) {
-      const opened = await transport.newSession()
+      const servers = this.mcpServers.get(projectPath) ?? []
+      let opened: Awaited<ReturnType<AcpTransport['newSession']>>
+      try {
+        opened = await transport.newSession(servers)
+      } catch (error) {
+        if (servers.length === 0) throw error
+        // An agent that cannot parse the server list still has to be usable, and
+        // the tools are the only thing lost, never the conversation.
+        Logger.dev('The ACP agent refused the app MCP servers', error)
+        opened = await transport.newSession()
+      }
       binding = {
         projectPath,
         acpSessionId: opened.sessionId,

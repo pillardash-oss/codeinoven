@@ -69,9 +69,31 @@ export interface AcpInitializeResult {
   agentInfo?: { name: string; title?: string; version?: string }
 }
 
+/**
+ * One MCP server handed to the agent at `session/new`.
+ *
+ * ACP asks the agent to launch stdio servers itself, so the app's own gateway
+ * (a stdio MCP bridge over the turn's loopback endpoint) reaches an ACP agent
+ * the same way a user's MCP utility does. Env and headers travel as name/value
+ * pairs, which is the shape the protocol defines.
+ */
+export type AcpMcpServer =
+  | {
+      name: string
+      command: string
+      args?: string[]
+      env?: { name: string; value: string }[]
+    }
+  | {
+      name: string
+      type: 'http' | 'sse'
+      url: string
+      headers?: { name: string; value: string }[]
+    }
+
 export interface AcpNewSessionParams {
   cwd: string
-  mcpServers: readonly unknown[]
+  mcpServers: readonly AcpMcpServer[]
 }
 
 export interface AcpModelOption {

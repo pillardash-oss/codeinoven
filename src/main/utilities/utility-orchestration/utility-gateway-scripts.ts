@@ -951,8 +951,29 @@ export function buildUtilityGatewayScript(
   const callCapMs = GATEWAY_BRIDGE_CALL_CAP_MS
   const callCapEnv = GATEWAY_BRIDGE_CALL_CAP_ENV
   return String.raw`import readline from 'node:readline'
+import { readFile } from 'node:fs/promises'
 
 const baseUrl = process.env.CODEINOVEN_UTILITY_BRIDGE_URL
+const tokenFile = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN_FILE
+
+/** The turn token, re-read per call when the app keeps it in a file.
+ *
+ * A harness that spawns this server once and keeps it for a whole session (an
+ * ACP agent launches its MCP servers at session creation) would otherwise hold
+ * the token of the turn that created it, and every call after that turn would
+ * be refused. The file is rewritten each turn, so the same server stays live.
+ */
+async function currentToken() {
+  if (tokenFile) {
+    try {
+      const value = (await readFile(tokenFile, 'utf8')).trim()
+      if (value) return value
+    } catch {
+      // Fall through to the token the launch carried.
+    }
+  }
+  return process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
+}
 const token = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
 const configuredCapMs = Number(process.env.${callCapEnv})
 const callCapMs =
@@ -993,6 +1014,7 @@ function resultContent(result) {
 }
 
 async function callUtility(request, controller) {
+  const token = await currentToken()
   if (!baseUrl || !token) throw new Error('Utility bridge environment is unavailable')
   const name = request.params?.name
   const args = request.params?.arguments || {}
