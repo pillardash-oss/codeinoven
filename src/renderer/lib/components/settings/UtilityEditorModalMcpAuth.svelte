@@ -6,6 +6,7 @@
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import Switch from '$lib/components/ui/Switch.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { McpOAuthController } from './utility-editor-modal-mcp-oauth.svelte'
 
   interface Props {
@@ -116,6 +117,37 @@
     if (!oauth.status) return false
     return oauth.status.enabled || state === 'connected' || state === 'expired' || state === 'error'
   })
+
+  /**
+   * Open the authorization page where the user's link routing says.
+   *
+   * The anchor exists so the address can be read and copied too; a plain click
+   * follows the same route as the flow's own browser open instead of navigating
+   * the app window away from the editor.
+   */
+  function openAuthPage(event: MouseEvent): void {
+    const url = oauth.authUrl
+    if (!url) return
+    event.preventDefault()
+    void openInBrowser(url)
+  }
+
+  /**
+   * The authorize button starts the flow, and re-opens its page once it has one.
+   *
+   * A browser that never opened is the one failure this section cannot see, so
+   * the button keeps pointing at the authorization page while the flow waits.
+   */
+  function startOrReopen(): void {
+    // Only a running flow has a page to re-open: an address left over from a
+    // failed attempt belongs to that attempt, and a new click starts a new one.
+    const url = oauth.authUrl
+    if (url && oauth.busy) {
+      void openInBrowser(url)
+      return
+    }
+    void oauth.authorize()
+  }
 </script>
 
 {#if utility === null}
@@ -167,6 +199,21 @@
         <p class="text-[0.6875rem] text-muted" aria-live="polite">{oauth.progress}</p>
       {/if}
 
+      {#if oauth.authUrl}
+        <!-- A real link, so the app's link menu copies it or hands it to any
+           browser: the escape hatch for a browser that never opened. -->
+        <p class="text-[0.6875rem] text-muted">
+          Waiting for the browser to finish. If the page did not open, right-click
+          <a
+            href={oauth.authUrl}
+            data-external-url={oauth.authUrl}
+            title="Right-click to copy this link, or open it in another browser"
+            class="text-foreground underline decoration-dimmed underline-offset-2 hover:decoration-foreground"
+            onclick={openAuthPage}>the authorization page</a
+          > to copy its link or open it somewhere else.
+        </p>
+      {/if}
+
       {#if oauth.error}
         <p class="text-[0.6875rem] text-danger" role="alert">{oauth.error}</p>
       {/if}
@@ -178,6 +225,20 @@
       {/if}
 
       <div class="flex flex-wrap items-center gap-2">
+        {#if oauth.status.secureStorageAvailable}
+          <button
+            type="button"
+            class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
+            data-external-url={oauth.authUrl ?? undefined}
+            title={authorizing
+              ? 'Waiting for the browser. Right-click to copy the sign-in link, or open it in another browser'
+              : 'Open the authorization page and sign this server in'}
+            disabled={!oauth.authUrl && oauth.busy}
+            onclick={startOrReopen}
+          >
+            {authorizing ? 'Waiting for browser…' : 'Authorize in browser'}
+          </button>
+        {/if}
         {#if authorizing}
           <button
             type="button"
@@ -186,15 +247,6 @@
             onclick={() => void oauth.cancel()}
           >
             Cancel
-          </button>
-        {:else if oauth.status.secureStorageAvailable}
-          <button
-            type="button"
-            class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover disabled:opacity-50"
-            disabled={oauth.busy}
-            onclick={() => void oauth.authorize()}
-          >
-            Authorize in browser
           </button>
         {/if}
         {#if canDisconnect}
