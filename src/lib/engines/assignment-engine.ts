@@ -94,6 +94,12 @@ export class AssignmentEngine {
    * inherits the Assignment's scope.
    */
   private workerScopes: AssignmentWorkerScopeProvisioner = inheritOnlyWorkerScopes
+  /**
+   * Installed by the app so a replaced worker can be retired for real: stopped
+   * and unscheduled. Unlinking alone left it parked on a quota retry with
+   * nothing left to report to, and it resumed days later on its own.
+   */
+  private retireWorker: ((projectId: string, threadId: string) => Promise<void>) | null = null
 
   constructor(
     private readonly storage: StorageEngine,
@@ -118,6 +124,27 @@ export class AssignmentEngine {
    */
   setWorkerScopeProvisioner(provisioner: AssignmentWorkerScopeProvisioner | null): void {
     this.workerScopes = provisioner ?? inheritOnlyWorkerScopes
+  }
+
+  /**
+   * Install the app's retirement handler for a worker the Assignment replaced.
+   * Only the app owns sessions, so stopping the thread and clearing its pending
+   * retry cannot happen here. Late-bound for the same reason as the provisioner.
+   */
+  setWorkerRetirementHandler(
+    handler: ((projectId: string, threadId: string) => Promise<void>) | null
+  ): void {
+    this.retireWorker = handler
+  }
+
+  /** Housekeeping only: a failed retirement must never block the reassignment. */
+  private async retireReplacedWorker(projectId: string, threadId: string): Promise<void> {
+    if (!this.retireWorker) return
+    try {
+      await this.retireWorker(projectId, threadId)
+    } catch {
+      // The abandoned thread keeps its old state, which is what happened before.
+    }
   }
 
   /**
@@ -553,7 +580,7 @@ export class AssignmentEngine {
     model: AssignmentModelSelection
   ): Promise<AssignmentPlan> {
     const active = this.requireActive(projectId, coordinatorThreadId)
-    if (!['approved', 'running', 'attention'].includes(active.status)) {
+    if (!['approved', 'running', 'attention', 'stopped', 'failed'].includes(active.status)) {
       throw new AssignmentEngineError(
         'invalid_transition',
         'Worker models can only be updated on an active signed-off Assignment'
@@ -571,6 +598,57 @@ export class AssignmentEngine {
     }
 
     return this.replaceTask(active, { ...task, model: structuredClone(model) }, active.status)
+  }
+
+  /**
+   * Update the model every worker in a signed-off phase will run on.
+   *
+   * A phase is only editable while none of its workers has started: the moment
+   * one task has a thread (or has finished), the phase has been reached and its
+   * remaining tasks keep their own per-task controls instead. A stopped or
+   * failed Assignment still accepts this for phases it never got to, so
+   * retargeting a blocked phase does not require resuming it first.
+   */
+  async updateUnlinkedPhaseModel(
+    projectId: string,
+    coordinatorThreadId: string,
+    phaseId: string,
+    model: AssignmentModelSelection
+  ): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (!['approved', 'running', 'attention', 'stopped', 'failed'].includes(active.status)) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Phase models can only be updated on an active signed-off Assignment'
+      )
+    }
+    const phase = active.content.phases.find((candidate) => candidate.id === phaseId)
+    if (!phase) {
+      throw new AssignmentEngineError('not_found', 'Assignment phase not found')
+    }
+    const reached = active.content.tasks.some(
+      (task) =>
+        task.phaseId === phaseId && (task.threadId !== undefined || task.status === 'completed')
+    )
+    if (reached) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'This phase has already started; change the model on its worker threads instead'
+      )
+    }
+    const updated: AssignmentPlan = {
+      ...active,
+      content: {
+        ...active.content,
+        phases: active.content.phases.map((candidate) =>
+          candidate.id === phaseId
+            ? { ...candidate, defaultModel: structuredClone(model) }
+            : candidate
+        )
+      },
+      updatedAt: this.now()
+    }
+    return this.persistPlan(updated, active.version)
   }
 
   /**
@@ -942,6 +1020,7 @@ export class AssignmentEngine {
     if (staleThreadId && staleThreadId !== active.coordinatorThreadId) {
       this.removeApiCapabilitiesForThread(active.id, staleThreadId)
       await this.threads.unlinkAssignmentThread(active.projectId, staleThreadId)
+      await this.retireReplacedWorker(active.projectId, staleThreadId)
     }
 
     let assignedTask: AssignmentTask

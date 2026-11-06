@@ -83,6 +83,19 @@ export interface UtilityTurnRequest {
    */
   orchestrationSession?: OrchestrationSessionMode
   /**
+   * Whether this turn may delegate real work whether or not the user opened a
+   * session with `@cio-hey`.
+   *
+   * A standing assistant run is the case this exists for: it belongs to no
+   * project, the user never types into its thread, so it can never carry the tag,
+   * and a worker it spawns could only write notes into the assistant's own
+   * workspace instead of touching the project the work belongs to. The grant
+   * opens the workstation tools only, and only for creating work on a machine;
+   * the turn keeps its own permission level, so every action inside a dispatched
+   * thread is gated exactly as that thread would gate it for the user.
+   */
+  delegationReach?: boolean
+  /**
    * Whether this turn may create the thread's engineering artifacts (Brainstorm,
    * PRD, specification, Assignment) through the app-owned artifact tools. Set
    * for a real project thread's user turn, and never for a chat, an assistant

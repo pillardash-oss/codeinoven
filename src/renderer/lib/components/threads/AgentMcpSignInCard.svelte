@@ -40,18 +40,31 @@
   // for the one host this card is about; a server without an icon simply has none.
   if (iconHost) faviconState.ensureResolved([`https://${iconHost}`])
 
+  let working = $state(false)
+  let actionError = $state('')
+  let folded = $state(false)
+  /** The request is settled; the card is on its way out and takes no more clicks. */
+  let settling = $state(false)
+
   // The sign-in runs through the same controller the Utilities page uses, so
   // there is one authorization path in the app and one grant behind it.
-  const oauth = new McpOAuthController({ utility: () => null, onChanged: () => undefined })
+  const oauth = new McpOAuthController({
+    utility: () => null,
+    onChanged: () => undefined,
+    // A grant that exists is the answer this card was asking for, no matter which
+    // surface produced it: the Utilities modal, a previous click, or a flow this
+    // renderer only saw the end of. Settling here is what keeps an already
+    // authorized server from leaving a sign-in prompt up, which is also what made
+    // a second click ask for a flow that was no longer needed.
+    onConnected: (status) => {
+      if (status.state === 'connected') void settleAsSignedIn()
+    }
+  })
   // The controller holds the server it is authorizing, so it is told which one the
   // moment the card appears: signing in is a single click and must not depend on a
   // later read having landed first.
   if (target) void oauth.load(target.utilityId)
   onDestroy(() => oauth.dispose())
-
-  let working = $state(false)
-  let actionError = $state('')
-  let folded = $state(false)
 
   let iconUrl = $derived(iconHost ? faviconState.faviconFor(`https://${iconHost}`) : null)
   // The prompt and the explanation are the question's own body, so the card reads
@@ -60,6 +73,9 @@
   let description = $derived(request.questions[0]?.description ?? '')
   let progress = $derived(oauth.progress)
   let failure = $derived(actionError || oauth.error || '')
+  // A flow can be running without this card having started it, so the waiting
+  // state is the controller's, not this component's own click.
+  let waiting = $derived(working || oauth.status?.state === 'authorizing')
 
   // The request carries its own deadline, so the countdown is the same one the
   // main process runs. Time is an external system, so it is subscribed to rather
@@ -113,16 +129,15 @@
    * else leaves the card up with the reason, so the user can retry or decline.
    */
   async function signIn(): Promise<void> {
-    if (working || !target) return
+    if (waiting || !target) return
     pauseCountdown()
     working = true
     actionError = ''
     try {
+      // A flow another surface already started is joined, not duplicated, so this
+      // resolves with the same grant and settles through `onConnected`.
       await oauth.authorize()
-      if (oauth.status?.state === 'connected') {
-        await onSubmit(request.requestId, MCP_SIGN_IN_COMPLETED_ANSWER)
-        return
-      }
+      if (settling) return
       actionError =
         oauth.error ?? 'The sign-in did not finish. Try again, or continue without this server.'
     } catch (error) {
@@ -131,11 +146,53 @@
     working = false
   }
 
+  /**
+   * Report the grant that exists as this card's answer, exactly once.
+   *
+   * The waiting tool call retries the server with that grant, so a card whose
+   * server is already signed in has nothing left to ask.
+   */
+  async function settleAsSignedIn(): Promise<void> {
+    if (settling) return
+    settling = true
+    working = true
+    actionError = ''
+    try {
+      await onSubmit(request.requestId, MCP_SIGN_IN_COMPLETED_ANSWER)
+    } catch (error) {
+      settling = false
+      working = false
+      actionError = error instanceof Error ? error.message : 'The sign-in could not be reported.'
+    }
+  }
+
   /** Stop a running browser flow; the card stays up for another attempt. */
   async function cancelSignIn(): Promise<void> {
-    if (!working) return
+    if (!waiting) return
     await oauth.cancel()
     working = false
+  }
+
+  /**
+   * Re-open the authorization page of the flow that is already running.
+   *
+   * While the card waits, the sign-in button keeps the page as its address and
+   * stays clickable: a browser that never opened, or the wrong browser, is one
+   * click away from being fixed rather than a flow that has to be restarted.
+   */
+  function reopenAuthPage(): void {
+    const url = oauth.authUrl
+    if (!url) return
+    void openInBrowser(url)
+  }
+
+  /** The sign-in button is the page opener while waiting, and the flow starter before. */
+  function startOrReopen(): void {
+    if (waiting) {
+      reopenAuthPage()
+      return
+    }
+    void signIn()
   }
 
   /**
@@ -187,7 +244,7 @@
     {#snippet controls()}
       <CardCloseButton
         title="Dismiss this sign-in request"
-        disabled={working}
+        disabled={waiting || settling}
         onclick={() => void decline()}
       />
     {/snippet}
@@ -264,7 +321,7 @@
 
   <CardFoot>
     {#snippet left()}
-      {#if working}
+      {#if waiting}
         <!-- Stopping the flow is the falsy action, so it sits where every card's
              falsy action sits. Declining while the browser is open is the same
              decision one step later, so it is not offered beside it. -->
@@ -285,13 +342,16 @@
     {/snippet}
     {#snippet right()}
       <CardButton
-        label={working ? 'Waiting for browser…' : 'Sign in'}
-        title="Open the authorization page and sign this server in"
+        label={waiting ? 'Waiting for browser…' : 'Sign in'}
+        title={waiting
+          ? 'Waiting for the browser. Right-click to copy the sign-in link, or open it in another browser'
+          : 'Open the authorization page and sign this server in'}
         icon={CioLogIn}
         variant="primary"
-        loading={working}
-        disabled={working}
-        onclick={() => void signIn()}
+        loading={waiting}
+        disabled={settling}
+        externalUrl={oauth.authUrl ?? undefined}
+        onclick={startOrReopen}
       />
     {/snippet}
   </CardFoot>

@@ -204,6 +204,28 @@ describe('RendererRecoveryStore', () => {
     })
   })
 
+  it('keeps the design page a comment belongs to across a restart', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    const reference = {
+      id: 'design-marker-1',
+      kind: 'design' as const,
+      label: 'Design element 1',
+      text: 'Design element: div#otp',
+      selector: 'div#otp',
+      tabId: 'browser:agent:one',
+      directory: '.cio/designs/authorize-device',
+      designEntry: 'index.html',
+      designId: '.cio/designs/authorize-device\u0000index.html'
+    }
+
+    store.setPromptReferences('project-1', 'thread-1', [reference])
+    store.flushPersist()
+
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.draftPromptReferences('project-1', 'thread-1')).toEqual([reference])
+  })
+
   it('persists response-selection annotations with the composer draft', () => {
     const storage = new MemoryStorage()
     const store = new RendererRecoveryStore(storage)

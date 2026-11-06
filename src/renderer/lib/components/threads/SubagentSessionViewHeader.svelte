@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import type { AgentToolStatus } from '$shared/types'
@@ -19,6 +20,8 @@
     background: boolean
     providerTaskId?: string
     sessionId?: string
+    /** Opens the thread this worker was spawned from, so the chain is walkable. */
+    onOpenParent: () => void
   }
 
   let {
@@ -33,7 +36,8 @@
     providerId,
     background,
     providerTaskId,
-    sessionId
+    sessionId,
+    onOpenParent
   }: Props = $props()
 </script>
 
@@ -57,6 +61,16 @@
     {/if}
   </div>
   <div class="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.625rem] text-dimmed">
+    <button
+      type="button"
+      class="flex shrink-0 items-center gap-1 border border-border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase transition-colors hover:bg-dimmed/20 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-border"
+      title="Open the thread that spawned this sub-agent"
+      aria-label="Open the parent thread"
+      onclick={onOpenParent}
+    >
+      <CioArrowLeft size={10} />
+      Parent thread
+    </button>
     {#if modelLabel}
       <span class="flex min-w-0 items-center gap-1">
         <VendorIcon name={providerName ?? modelLabel} id={providerId} size={11} />

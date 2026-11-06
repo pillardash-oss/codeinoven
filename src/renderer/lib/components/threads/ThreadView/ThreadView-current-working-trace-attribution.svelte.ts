@@ -236,11 +236,69 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     this.independentAuditEnabled && this.root.submitSpecDecision.auditBusy
   )
 
+  /**
+   * Whether the composer must give way to the coordinated-thread card.
+   *
+   * A locked orchestration child refuses a user-origin turn in the engine, so a
+   * composer shown there only collects a message and answers it with "This
+   * Assignment task is locked. Return to its coordinator to continue" after the
+   * user has typed. A running assignment worker is the exception: its own
+   * conversation can steer the work in progress, and that is the one thing
+   * typing there is for.
+   */
+  inputLockedForComposer = $derived.by(() => {
+    const thread = this.root.handleAgentEvent.thread
+    if (thread.userInputLocked !== true) return false
+    if (thread.assignmentRole === 'coordinator') return false
+    if (thread.assignmentRole === 'worker' && this.root.switchProject.busy) return false
+    return true
+  })
+
+  /** Which coordinated thread the open view is, for the card that replaces the
+   *  composer there. */
+  coordinatedThreadKind = $derived<'worker' | 'auditor' | 'pawn'>(
+    this.root.handleAgentEvent.thread.achievementRole === 'auditor'
+      ? 'auditor'
+      : this.root.handleAgentEvent.thread.assignmentRole === 'worker'
+        ? 'worker'
+        : 'pawn'
+  )
+
   /** The Independent Audit coordinator is the board for a thread that audits
    *  itself, and for the auditor child that thread owns. */
   independentAuditPanelActive = $derived.by(() => {
     if (this.orchestrationChild) return this.coordinatorParentThread?.independentAudit === true
     return this.independentAuditDisplayEnabled
+  })
+
+  /** The open thread is the auditor child an independent-audit coordinator runs. */
+  independentAuditorChild = $derived(
+    this.orchestrationChild &&
+      this.root.handleAgentEvent.thread.achievementRole === 'auditor' &&
+      this.coordinatorParentThread?.independentAudit === true
+  )
+
+  /**
+   * Whether the Assignment audit card belongs on the open thread.
+   *
+   * The card is the Assignment or Achievement auditor's own surface. An
+   * independent (spec-less) audit owns a durable auditor child too, and that
+   * child is not an Assignment auditor: rendering the card there put a second
+   * copy of the same failure beside the thread's own error card, and its Retry
+   * ran the Assignment/Engineering audit, which answered "An approved
+   * Engineering implementation is required before audit" for a thread that has
+   * its own independent auditor. The parent row is what tells the two apart and
+   * it arrives with the thread reconcile, so an auditor whose parent is not
+   * loaded yet is treated as independent and shows no card.
+   */
+  assignmentAuditorCardApplies = $derived.by(() => {
+    const thread = this.root.handleAgentEvent.thread
+    if (thread.assignmentId !== undefined) return true
+    if (thread.achievementRole !== 'auditor') return false
+    return (
+      this.coordinatorParentThread !== null &&
+      this.coordinatorParentThread.independentAudit !== true
+    )
   })
 
   /** The switch only exists once the thread has work and no Engineering mode

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
+import { designElementReference, designPageIdentity } from '$lib/design-element-reference'
 
 const invoke = vi.hoisted(() => vi.fn())
 const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => void>())
@@ -32,6 +33,7 @@ interface SidebarHandle {
   contextSidebarState: {
     sidebarActiveTabId: string | null
     browserTabs: (typeof tab)[]
+    focus: (tabId: string) => void
   }
 }
 
@@ -58,7 +60,8 @@ async function mockSidebar(): Promise<void> {
           if (value === null) activeTabId.delete('active')
           else activeTabId.set('active', value)
         },
-        browserTabs: []
+        browserTabs: [],
+        focus: vi.fn()
       }
     }
   })
@@ -100,17 +103,45 @@ function pageReads(): number {
   return invoke.mock.calls.filter(([channel]) => channel === 'browser:pageState').length
 }
 
-function designReference(id: string) {
+const DESIGN_DIRECTORY = '.cio/designs/authorize-device'
+
+function designReference(
+  id: string,
+  options: {
+    tabId?: string
+    directory?: string
+    designEntry?: string
+    label?: string
+  } = {}
+) {
+  const directory = options.directory ?? DESIGN_DIRECTORY
+  const designEntry = options.designEntry ?? 'index.html'
   return {
     id,
     kind: 'design' as const,
-    label: 'Design element',
+    label: options.label ?? 'Design element',
     text: 'Design element: div#otp\nselector: div#otp',
     selector: 'div#otp',
-    tabId: TAB,
-    directory: '.cio/designs/authorize-device',
-    designEntry: 'index.html'
+    tabId: options.tabId ?? TAB,
+    directory,
+    designEntry,
+    designId: designPageIdentity(directory, designEntry)
   }
+}
+
+/** The design report main publishes when a tab commits to a design page. */
+function reportDesign(
+  tabId: string,
+  options: { directory?: string; entry?: string; origin?: string } = {}
+) {
+  const directory = options.directory ?? DESIGN_DIRECTORY
+  const origin = options.origin ?? 'http://127.0.0.1:52035'
+  const entry = options.entry ?? 'index.html'
+  handlers.get('browser:state')?.({
+    tabId,
+    design: { directory, origin },
+    url: `${origin}/${entry}`
+  })
 }
 
 beforeEach(() => {
@@ -119,6 +150,29 @@ beforeEach(() => {
 })
 
 describe('design pins', () => {
+  it('names the design page a picked element belongs to, not only its tab', () => {
+    const reference = designElementReference(
+      'marker-one',
+      {
+        selector: 'div#otp',
+        tag: 'div',
+        id: 'otp',
+        classes: [],
+        role: null,
+        text: 'Code',
+        html: '<div id="otp"></div>',
+        ancestors: [],
+        frame: null,
+        rect: { x: 10, y: 20, width: 30, height: 40 },
+        viewport: { width: 1512, height: 850 }
+      },
+      { directory: DESIGN_DIRECTORY, origin: 'http://127.0.0.1:52035' },
+      { id: TAB, url: 'http://127.0.0.1:52035/index.html' }
+    )
+
+    expect(reference.designId).toBe(designPageIdentity(DESIGN_DIRECTORY, 'index.html'))
+  })
+
   it('publishes restored comments before the tab design is mirrored', async () => {
     const { browserInspector, responseReferencesState } = await freshSession()
     browserInspector.start()
@@ -134,6 +188,113 @@ describe('design pins', () => {
         selector: 'div#otp'
       }
     ])
+  })
+
+  it('draws a comment written in another tab on the same design page', async () => {
+    const session = await freshSession()
+    const { browserInspector, responseReferencesState, sidebar } = session
+    const threadTab = 'browser:agent:same-design'
+    sidebar.contextSidebarState.browserTabs = [
+      {
+        ...tab,
+        id: threadTab,
+        url: 'http://127.0.0.1:52035/index.html'
+      },
+      { ...tab }
+    ]
+    // The comment was written on the thread's own tab, which the agent opened.
+    responseReferencesState.setForThread(PROJECT, THREAD, [
+      designReference('marker-one', { tabId: threadTab })
+    ])
+    browserInspector.start()
+    invoke.mockClear()
+
+    // The board opens the same screen in its own tab, which has another id.
+    reportDesign(TAB)
+
+    expect(browserInspector.markersFor(TAB)).toEqual([
+      { id: 'marker-one', number: 1, comment: '', selector: 'div#otp' }
+    ])
+    expect(invoke).toHaveBeenCalledWith('browser:inspectMarkers', TAB, [
+      { id: 'marker-one', number: 1, comment: '', selector: 'div#otp' }
+    ])
+  })
+
+  it('keeps a design comment off another project that spells the folder the same', async () => {
+    const session = await freshSession()
+    const { browserInspector, responseReferencesState } = session
+    responseReferencesState.setForThread('project-two', THREAD, [
+      designReference('marker-two', { tabId: 'browser:agent:project-two' })
+    ])
+    browserInspector.start()
+    invoke.mockClear()
+
+    reportDesign(TAB)
+
+    expect(browserInspector.markersFor(TAB)).toEqual([])
+  })
+
+  it('opens the tab already showing the comment design when the recorded tab is gone', async () => {
+    const session = await freshSession()
+    const { browserInspector, responseReferencesState } = session
+    responseReferencesState.setForThread(PROJECT, THREAD, [
+      designReference('marker-one', { tabId: 'browser:agent:closed' })
+    ])
+    browserInspector.start()
+    reportDesign(TAB)
+    invoke.mockClear()
+
+    browserInspector.revealComment(
+      PROJECT,
+      THREAD,
+      designReference('marker-one', { tabId: 'browser:agent:closed' })
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(invoke).toHaveBeenCalledWith('browser:inspectSetArmed', TAB, true, undefined)
+    expect(invoke).toHaveBeenCalledWith('browser:inspectMarkers', TAB, [
+      { id: 'marker-one', number: 1, comment: '', selector: 'div#otp' }
+    ])
+    expect(invoke).not.toHaveBeenCalledWith(
+      'design:open',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    )
+  })
+
+  it('opens the design again when the listed tab is already gone in main', async () => {
+    const session = await freshSession()
+    const { browserInspector, responseReferencesState } = session
+    const reopened = 'browser:screen:reopened'
+    responseReferencesState.setForThread(PROJECT, THREAD, [designReference('marker-one')])
+    browserInspector.start()
+    reportDesign(TAB)
+    invoke.mockClear()
+    invoke.mockImplementation((channel: string, tabId: string) => {
+      if (channel === 'browser:inspectSetArmed' && tabId === TAB) {
+        return Promise.reject(new Error('Browser tab does not exist'))
+      }
+      if (channel === 'design:open') return Promise.resolve({ tabId: reopened })
+      return Promise.resolve(undefined)
+    })
+
+    browserInspector.revealComment(PROJECT, THREAD, designReference('marker-one'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(invoke).toHaveBeenCalledWith(
+      'design:open',
+      PROJECT,
+      THREAD,
+      DESIGN_DIRECTORY,
+      'index.html',
+      true,
+      'design'
+    )
+    expect(invoke).toHaveBeenCalledWith('browser:inspectSetArmed', reopened, true, undefined)
   })
 
   it('reads the page on screen again even though its state was read once', async () => {

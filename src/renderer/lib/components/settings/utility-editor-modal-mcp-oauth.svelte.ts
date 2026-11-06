@@ -17,6 +17,16 @@ import type {
 export interface McpOAuthHost {
   utility: () => UtilityDefinition | null
   onChanged: (utility: UtilityDefinition) => void
+  /**
+   * A grant for the loaded server exists, whoever produced it.
+   *
+   * The status can become authorized without this controller's own `authorize`
+   * call: another surface may have run the flow, or the grant may already be in
+   * the vault when the surface appears. A surface that is asking the user to sign
+   * in uses this to stop asking, instead of leaving a prompt up for a server that
+   * is already authorized.
+   */
+  onConnected?: (status: McpOAuthStatus) => void
 }
 
 /**
@@ -73,6 +83,7 @@ export class McpOAuthController {
       const status = await invoke('utilities:mcpOAuthStatus', utilityId)
       if (this.#utilityId !== utilityId) return
       this.status = status
+      if (status.state === 'connected') this.#host.onConnected?.(status)
       this.clientId = status.clientId ?? ''
       // The vault holds the secret; the field is only ever a fresh value to send.
       this.clientSecret = ''
@@ -99,6 +110,7 @@ export class McpOAuthController {
       const status = await invoke('utilities:authorizeMcpOAuth', utilityId, request)
       if (this.#utilityId !== utilityId) return
       this.status = status
+      if (status.state === 'connected') this.#host.onConnected?.(status)
     } catch (authorizeError) {
       if (this.#utilityId !== utilityId) return
       this.error = ipcErrorMessage(authorizeError, 'The authorization could not be completed.')
@@ -192,6 +204,7 @@ export class McpOAuthController {
         this.progress = null
         this.authUrl = null
         this.error = null
+        this.#host.onConnected?.(payload.status)
         break
       case 'failed':
         this.error = payload.error

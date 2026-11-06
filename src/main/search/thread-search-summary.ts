@@ -19,6 +19,8 @@ const MAX_WINDOW_PARTS = 64
 export interface SearchSummaryThread {
   id: string
   projectId: string
+  /** The assistant a task runs under, when the thread lives in the assistant space. */
+  assistantId?: string
   title: string
   stamp: number
 }

@@ -314,11 +314,19 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
       this.root.submitSpecDecision.assignment?.auditCycle?.reportId !== undefined
   )
 
-  studioAssignment = $derived(
-    this.root.submitSpecDecision.assignmentVersions.find(
-      (candidate) => candidate.version === this.root.submitSpecDecision.selectedAssignmentVersion
-    ) ?? this.root.submitSpecDecision.assignment
-  )
+  /** The plan the studio renders. A same-version write keeps the version and
+   *  only moves `updatedAt`, so the live plan wins whenever it is the version
+   *  under review; any older version still comes from the stored list. */
+  studioAssignment = $derived.by(() => {
+    const decision = this.root.submitSpecDecision
+    const active = decision.assignment
+    if (active && decision.selectedAssignmentVersion === active.version) return active
+    return (
+      decision.assignmentVersions.find(
+        (candidate) => candidate.version === decision.selectedAssignmentVersion
+      ) ?? active
+    )
+  })
 
   /** Current activity label   shows agent status only in Engineering. */
   loopAuditing = $derived(

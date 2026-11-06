@@ -347,6 +347,15 @@ export const invokeEngineeringContract = {
     ],
     AssignmentPlan
   >,
+  'assignment:updateUnlinkedPhaseModel': {} as Contract<
+    [
+      projectId: string,
+      coordinatorThreadId: string,
+      phaseId: string,
+      model: AssignmentModelSelection
+    ],
+    AssignmentPlan
+  >,
   'assignment:updateUnlinkedWorkerScope': {} as Contract<
     [projectId: string, coordinatorThreadId: string, taskId: string, scope: ScopeChoice],
     AssignmentPlan

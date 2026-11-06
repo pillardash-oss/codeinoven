@@ -15,6 +15,7 @@ import type {
   PersistentCliSession
 } from './persistent-cli-driver'
 import { PersistentCliDriver } from './persistent-cli-driver'
+import { cliProjectPathHash } from './persistent-cli/persistent-cli-session'
 import {
   PermissionRequestGoneError,
   QuestionRequestGoneError,
@@ -37,16 +38,22 @@ import { buildTitlePrompt, sanitizeGeneratedTitle } from '../chat/title-generato
 import { AcpTurnFold } from './acp/acp-session'
 import { NO_PROMPT_CAPABILITIES, acpPromptBlocks } from './acp/acp-content'
 import { AcpPermissionRegistry } from './acp/acp-permissions'
+import { utilityKey } from './claude-code/claude-commands'
+import type { UtilityRuntimeOverlay, UtilityRuntimePreparationRequest } from './driver.interface'
 import {
   acpRecord,
   acpSessionIdOf,
   acpString,
+  type AcpMcpServer,
   type AcpPromptCapabilities,
   type AcpRequestPermissionParams,
   type AcpSessionUpdate
 } from './acp/acp-protocol'
 
 const HARNESS_NAME = 'ACP agent'
+/** The gateway hands its turn token to an MCP server through these variables. */
+const GATEWAY_TOKEN_ENV = 'CODEINOVEN_UTILITY_BRIDGE_TOKEN'
+const GATEWAY_TOKEN_FILE_ENV = 'CODEINOVEN_UTILITY_BRIDGE_TOKEN_FILE'
 const TURN_TIMEOUT_MS = 60 * 60 * 1000
 const AUXILIARY_TIMEOUT_MS = 90_000
 
@@ -56,6 +63,8 @@ interface AcpSessionBinding {
   acpSessionId: string
   modelId?: string
   commands: HarnessCommand[]
+  /** What the agent said it accepts in a prompt, from `initialize`. */
+  promptCapabilities: AcpPromptCapabilities
 }
 
 /** The turn currently streaming on one app session. */
@@ -64,6 +73,12 @@ interface AcpActiveTurn {
   messageId: string
   fold: AcpTurnFold
   startedAt: number
+  /** Prompts still open on this turn. A steer opens one, and the turn only
+   *  settles when the last of them answers, so a steer never closes the turn
+   *  that carried it. */
+  pending: number
+  /** Result of the most recently settled prompt, used for usage accounting. */
+  lastResult: unknown
 }
 
 /**
@@ -81,8 +96,10 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     // One long-lived agent process per project hosts every session in it.
     runtimeTopology: { kind: 'shared_daemon', scope: 'application' },
     streaming: true,
-    // ACP has no append-to-active-turn primitive; a steer would start a new prompt.
-    steering: false,
+    // A mid-turn `session/prompt` on the live session is a steer: the agent
+    // abandons its current line of work and answers the new prompt in the same
+    // session, and the answer streams into the turn already on screen.
+    steering: true,
     nativeResume: false,
     messageHistory: 'mirrored',
     interactivePermissions: true,
@@ -101,6 +118,10 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   private readonly activeTurns = new Map<string, AcpActiveTurn>()
   private readonly permissions = new AcpPermissionRegistry(HARNESS_NAME)
   private readonly catalogs = new Map<string, ProviderCatalog[]>()
+  /** MCP servers this turn's utilities resolved to, handed to the agent at
+   *  session creation. An ACP agent launches its own MCP servers, so the app's
+   *  gateway reaches it exactly the way a user's MCP utility does. */
+  private readonly mcpServers = new Map<string, AcpMcpServer[]>()
   private closed = false
 
   constructor(
@@ -261,6 +282,80 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     }
   }
 
+  /**
+   * Turn this turn's resolved utilities into ACP MCP servers.
+   *
+   * The app gateway is itself a stdio MCP server, so an ACP agent gets the same
+   * `cio_*` tools a CLI harness gets from its launch overlay. Its token is the
+   * only turn-scoped part: the agent spawns the server once per session and
+   * keeps it, so the token is written where the server re-reads it each call
+   * instead of being frozen into the environment of an old turn.
+   */
+  async prepareUtilityRuntime(
+    request: UtilityRuntimePreparationRequest
+  ): Promise<UtilityRuntimeOverlay> {
+    const servers: AcpMcpServer[] = []
+    const keys = new Set<string>()
+    for (const { utility, binding } of request.resolvedUtilities) {
+      if (utility.kind !== 'mcp') continue
+      const baseKey = utilityKey(binding.transportName ?? utility.name)
+      let name = baseKey
+      for (let suffix = 2; keys.has(name); suffix += 1) name = `${baseKey}-${suffix}`
+      keys.add(name)
+      const config = utility.config
+      if (config.transport === 'stdio') {
+        const env = Object.entries(config.environment ?? {}).map(([key, value]) => ({
+          name: key,
+          value
+        }))
+        const token = config.environment?.[GATEWAY_TOKEN_ENV]
+        if (token) {
+          const tokenPath = await this.publishGatewayToken(request.projectPath, token)
+          servers.push({
+            name,
+            command: config.command ?? '',
+            args: [...(config.args ?? [])],
+            env: [
+              ...env.filter((entry) => entry.name !== GATEWAY_TOKEN_ENV),
+              { name: GATEWAY_TOKEN_FILE_ENV, value: tokenPath }
+            ]
+          })
+          continue
+        }
+        servers.push({
+          name,
+          command: config.command ?? '',
+          args: [...(config.args ?? [])],
+          env
+        })
+        continue
+      }
+      if (!config.url) continue
+      servers.push({
+        name,
+        type: config.transport === 'sse' ? 'sse' : 'http',
+        url: config.url,
+        ...(config.headers
+          ? {
+              headers: Object.entries(config.headers).map(([key, value]) => ({
+                name: key,
+                value
+              }))
+            }
+          : {})
+      })
+    }
+    this.mcpServers.set(request.projectPath, servers)
+    return {}
+  }
+
+  /** Write this turn's gateway token where a long-lived MCP server re-reads it. */
+  private async publishGatewayToken(projectPath: string, token: string): Promise<string> {
+    const relativePath = `drivers/${this.id}/gateway/${cliProjectPathHash(projectPath)}.token`
+    await this.storage.writeRaw(relativePath, token)
+    return this.storage.resolve(relativePath)
+  }
+
   async sendPrompt(projectPath: string, opts: SendPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, opts.sessionId)
     this.appendUserMessage(session, opts)
@@ -283,7 +378,7 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
         init.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
       const blocks = await acpPromptBlocks(opts.text, opts.attachments, capabilities)
       const result = await transport.prompt(binding.acpSessionId, blocks, TURN_TIMEOUT_MS)
-      await this.completeTurn(turn, session, result)
+      await this.settlePrompt(turn, session, result)
     } catch (error) {
       this.failTurn(turn, session, error)
     }
@@ -320,8 +415,30 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     return []
   }
 
-  async steerPrompt(_projectPath: string, _opts: SteerPromptOptions): Promise<void> {
-    throw new Error('ACP does not support steering an active turn')
+  /**
+   * Send one mid-turn prompt on the live ACP session.
+   *
+   * ACP has no dedicated steer method, but an agent that is mid-turn accepts a
+   * further `session/prompt` on the same session and answers it instead of what
+   * it was doing (verified against cursor-agent: a prompt sent while it counts
+   * stops the count and answers the new text). The turn stays open until every
+   * prompt on it has answered, so the steer's answer lands in the message the
+   * user is already reading rather than in a turn that closed underneath it.
+   */
+  async steerPrompt(projectPath: string, opts: SteerPromptOptions): Promise<void> {
+    const session = await this.requireSession(projectPath, opts.sessionId)
+    const turn = this.activeTurns.get(opts.sessionId)
+    const binding = this.bindings.get(opts.sessionId)
+    if (!turn || !binding) throw new Error('No ACP turn is running for this session')
+    const transport = this.transportFor(binding.projectPath)
+    const blocks = await acpPromptBlocks(opts.text, opts.attachments, binding.promptCapabilities)
+    turn.pending += 1
+    try {
+      const result = await transport.prompt(binding.acpSessionId, blocks, TURN_TIMEOUT_MS)
+      turn.lastResult = result
+    } finally {
+      await this.settlePrompt(turn, session, turn.lastResult)
+    }
   }
 
   async listCommands(): Promise<HarnessCommand[]> {
@@ -387,8 +504,24 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   ): Promise<AcpSessionBinding> {
     let binding = this.bindings.get(session.id)
     if (!binding) {
-      const opened = await transport.newSession()
-      binding = { projectPath, acpSessionId: opened.sessionId, commands: [] }
+      const servers = this.mcpServers.get(projectPath) ?? []
+      let opened: Awaited<ReturnType<AcpTransport['newSession']>>
+      try {
+        opened = await transport.newSession(servers)
+      } catch (error) {
+        if (servers.length === 0) throw error
+        // An agent that cannot parse the server list still has to be usable, and
+        // the tools are the only thing lost, never the conversation.
+        Logger.dev('The ACP agent refused the app MCP servers', error)
+        opened = await transport.newSession()
+      }
+      binding = {
+        projectPath,
+        acpSessionId: opened.sessionId,
+        commands: [],
+        promptCapabilities:
+          transport.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
+      }
       this.bindings.set(session.id, binding)
     }
     // An agent that reports a placeholder current model (`default[]`) leaves
@@ -425,7 +558,14 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
       },
       this.id
     )
-    const turn: AcpActiveTurn = { sessionId: session.id, messageId, fold, startedAt: Date.now() }
+    const turn: AcpActiveTurn = {
+      sessionId: session.id,
+      messageId,
+      fold,
+      startedAt: Date.now(),
+      pending: 1,
+      lastResult: undefined
+    }
     this.activeTurns.set(session.id, turn)
     return turn
   }
@@ -453,6 +593,23 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     }
     this.applyEventToSession(session, event)
     this.emit(event)
+  }
+
+  /**
+   * Record that one prompt on this turn answered, and finish the turn when it
+   * was the last. A steer and the prompt it joined both land here, so whichever
+   * of them answers last is what closes the message.
+   */
+  private async settlePrompt(
+    turn: AcpActiveTurn,
+    session: PersistentCliSession,
+    result: unknown
+  ): Promise<void> {
+    turn.lastResult = result
+    turn.pending = Math.max(0, turn.pending - 1)
+    if (turn.pending > 0) return
+    if (this.activeTurns.get(turn.sessionId) !== turn) return
+    await this.completeTurn(turn, session, result)
   }
 
   private async completeTurn(
@@ -575,7 +732,9 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
           sessionId,
           messageId: `acp:${sessionId}:1:1`,
           fold,
-          startedAt: Date.now()
+          startedAt: Date.now(),
+          pending: 1,
+          lastResult: undefined
         })
         const blocks = await acpPromptBlocks(prompt, [], NO_PROMPT_CAPABILITIES)
         await transport.prompt(opened.sessionId, blocks, AUXILIARY_TIMEOUT_MS)

@@ -326,12 +326,24 @@ export class ThreadEmbeddingIndex {
     }
   }
 
-  /** Rank indexed threads by the best cosine similarity across their windows. */
-  async search(queryVector: Float32Array, limit: number): Promise<IntentThreadMatch[]> {
+  /** Rank indexed threads by the best cosine similarity across their windows.
+   *
+   * `accept` narrows the ranking before it is cut to `limit`, so a family-scoped
+   * search ranks only its own threads instead of spending its result budget on
+   * another family's matches and dropping them afterwards.
+   */
+  async search(
+    queryVector: Float32Array,
+    limit: number,
+    accept?: (threadId: string) => boolean
+  ): Promise<IntentThreadMatch[]> {
     const generation = this.generation
     let matches: IntentThreadMatch[] = []
     for (const records of embeddingBatches(this.records.values())) {
-      const visible = records.filter((record) => !this.parkedIds.has(record.threadId))
+      const visible = records.filter(
+        (record) =>
+          !this.parkedIds.has(record.threadId) && (accept === undefined || accept(record.threadId))
+      )
       const ranked = await backgroundIo<IntentThreadMatch[]>({
         kind: 'index-rank',
         records: visible,
@@ -470,7 +482,7 @@ export class ThreadEmbeddingIndex {
     let cursor = ''
     while (true) {
       const result = await this.db.queryViaWorker(
-        `SELECT t.id, t.project_id, t.title,
+        `SELECT t.id, t.project_id, t.assistant_id, t.title,
             MAX(COALESCE(t.last_activity, 0), COALESCE(t.updated_at, 0)) AS stamp
           FROM threads t WHERE t.project_id != ? AND t.id > ?
             AND EXISTS (
@@ -495,6 +507,7 @@ export class ThreadEmbeddingIndex {
       candidates.push({
         id,
         projectId: typeof row['project_id'] === 'string' ? row['project_id'] : '',
+        ...(typeof row['assistant_id'] === 'string' ? { assistantId: row['assistant_id'] } : {}),
         title: typeof row['title'] === 'string' ? row['title'] : '',
         stamp: typeof row['stamp'] === 'number' ? row['stamp'] : 0
       })

@@ -32,6 +32,7 @@ import { followUpsState } from '$lib/stores/follow-ups.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
 import { updateBlockers } from '$lib/stores/update-blockers.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { openThreadById } from '$lib/threads/open-thread-by-id'
 import {
   DEFAULT_THREAD_TITLE,
   type InstanceRole,
@@ -326,10 +327,22 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     }
   )
   const unsubscribeThreadDeleted = subscribeGuarded('thread:deleted', (projectId, threadId) => {
+    // An auditor is a child of the Sr. Engineer thread it audits, so closing it
+    // (New Audit deletes and recreates it, retry does the same, a manual delete
+    // takes it away) must land on the thread that owns the work. Only the open
+    // thread matters here: a background deletion never moves the user. The
+    // coordinator id is read before the row is removed, because removal drops
+    // the only local copy of it.
+    const deleted =
+      workspaceState.selectedThread?.id === threadId ? workspaceState.selectedThread : null
     scopeState.removeThread(threadId)
     notificationPanelState.dismissForThread(projectId, threadId)
     temporaryChatUnread.clearThread(projectId, threadId)
-    if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+    if (!deleted) return
+    const coordinatorThreadId =
+      deleted.achievementRole === 'auditor' ? deleted.coordinatorThreadId : undefined
+    workspaceState.clearThread()
+    if (coordinatorThreadId) void openThreadById(projectId, coordinatorThreadId)
   })
   // The spotlight's ranking by meaning is computed after its keyword rows land;
   // the open panel takes the merged ranking from here.

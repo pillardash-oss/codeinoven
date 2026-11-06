@@ -9,6 +9,7 @@ import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
 import CioFolderPlus from '@pdslng/cio-icon/CioFolderPlus.svelte'
 import CioHarness from '@pdslng/cio-icon/CioHarness.svelte'
 import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
+import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
 import CioLearn from '@pdslng/cio-icon/CioLearn.svelte'
 import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
 import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
@@ -352,9 +353,10 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
   }
 
   // The search entries are one block at the top of the palette, in family order:
-  // project threads first (only with a local project to search), then the
-  // standalone chats, the assistant tasks/assistants, and the browser's open tabs.
-  // Each opens its own screen with its own sub-container filter.
+  // the unified search over every thread family first, then project threads (only
+  // with a local project to search), the standalone chats, the assistant
+  // tasks/assistants, and the browser's open tabs. Each opens its own screen with
+  // its own sub-container filter.
   const familySearchActions: ActionDefinition[] = [
     {
       id: 'app:chat-search',
@@ -389,6 +391,27 @@ export function buildPaletteContextActions(input: PaletteContextInput): ActionDe
     }
   ]
   actions.unshift(
+    {
+      id: 'app:all-thread-search',
+      title: 'Search all threads',
+      description: 'One search across project threads, standalone chats, and assistant tasks',
+      category: 'thread',
+      source: applicationSource,
+      // The stacked-families mark: this entry is every thread the app holds, not
+      // one family's own glyph.
+      icon: CioLayers,
+      keywords: [
+        'quick open',
+        'find',
+        'everything',
+        'all',
+        'conversation',
+        'messages',
+        'projects',
+        'chats',
+        'assistant'
+      ]
+    } satisfies ActionDefinition,
     ...(hasLocalProjects
       ? [
           {

@@ -175,6 +175,19 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
     }
   )
   ipcMain.handle(
+    'assignment:updateUnlinkedPhaseModel',
+    (_, projectId: unknown, coordinatorThreadId: unknown, phaseId: unknown, model: unknown) => {
+      const safeModel = validateAssignmentModel(model, 'Assignment phase model')
+      if (!safeModel) throw new TypeError('Assignment phase model is required')
+      return assignmentEngine.updateUnlinkedPhaseModel(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(coordinatorThreadId, 'Coordinator thread ID'),
+        validateEntityId(phaseId, 'Assignment phase ID'),
+        safeModel
+      )
+    }
+  )
+  ipcMain.handle(
     'assignment:updateUnlinkedWorkerScope',
     (_, projectId: unknown, coordinatorThreadId: unknown, taskId: unknown, scope: unknown) =>
       assignmentEngine.updateUnlinkedWorkerScope(

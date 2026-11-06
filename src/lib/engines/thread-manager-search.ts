@@ -5,7 +5,8 @@ import {
   threadMatchesSearchScope,
   threadSearchMessageLimit,
   ThreadRepo,
-  type ThreadSearchOptions
+  type ThreadSearchOptions,
+  type ThreadSearchSql
 } from '../../main/database/repositories/thread-repo'
 import { Logger } from '../../main/system/logger'
 import { mergeHybridThreadSearchResults } from '../search/hybrid-merge'
@@ -281,40 +282,67 @@ export class ThreadSearchService {
     // Both halves are read at once and both are bounded: a title row that is
     // ready must never wait for the message ranking behind it in the worker
     // queue, and neither may hold the answer past the interactive deadline.
+    const first = await this.readKeywordHalves(built, raw, INTERACTIVE_SEARCH_DEADLINE_MS)
+    if (first.complete) return { results: first.results, limit: built.limit }
+    if (first.allFailed) {
+      if (first.timedOut) {
+        // Both halves ran out of time. A deadline stops the wait, never the
+        // answer: the two reads are already queued on the worker, so they are
+        // re-issued without a deadline and the rows arrive instead of an empty
+        // list that reads to the user as "nothing matches". Nothing here runs on
+        // the main thread, and the palette's own watchdog has already stopped
+        // claiming to be busy.
+        const late = await this.readKeywordHalves(built, raw)
+        return { results: late.results, limit: built.limit }
+      }
+      return { results: this.threadRepo.search(raw, options, useSearchMeta), limit: built.limit }
+    }
+    // One half answered and the other did not. Use the answer in hand instead
+    // of throwing the reply away for a slower, complete one.
+    return { results: first.results, limit: built.limit }
+  }
+
+  /**
+   * Read both keyword halves and report how much of the answer is usable.
+   *
+   * `deadlineMs` bounds the wait only; the same reads are issued again without
+   * one when the whole answer timed out, which is what keeps a busy worker from
+   * turning a real match into an empty result.
+   */
+  private async readKeywordHalves(
+    built: ThreadSearchSql,
+    raw: string,
+    deadlineMs?: number
+  ): Promise<{
+    results: ThreadSearchResult[]
+    complete: boolean
+    allFailed: boolean
+    timedOut: boolean
+  }> {
+    const options = deadlineMs === undefined ? {} : { deadlineMs }
     const [title, message] = await Promise.all([
-      this.db.queryViaWorker(built.title.sql, built.title.params, built.limit, {
-        deadlineMs: INTERACTIVE_SEARCH_DEADLINE_MS
-      }),
+      this.db.queryViaWorker(built.title.sql, built.title.params, built.limit, options),
       built.fts
         ? this.db.queryViaWorker(
             built.fts.sql,
             built.fts.params,
             threadSearchMessageLimit(built.limit),
-            { deadlineMs: INTERACTIVE_SEARCH_DEADLINE_MS }
+            options
           )
         : Promise.resolve(null)
     ])
-    if (!title.ok && !message?.ok) {
-      // Both halves ran out of time: answer with nothing and let the palette keep
-      // the rows it painted from memory. Neither read is abandoned   each keeps
-      // running on the worker   and the semantic push the panel is waiting for
-      // still arrives once the model answers.
-      if (title.timedOut || message?.timedOut) return { results: [], limit: built.limit }
-      return { results: this.threadRepo.search(raw, options, useSearchMeta), limit: built.limit }
-    }
-    if (!title.ok || (built.fts && !message?.ok)) {
-      // One half answered and the other did not. Use the answer in hand instead
-      // of throwing the reply away for a slower, complete one.
-      const titleRows = title.ok ? (title.rows ?? []) : []
-      const messageRows = message?.ok ? (message.rows ?? []) : []
-      return {
-        results: mergeThreadSearchResults(titleRows, messageRows, raw, built.limit),
-        limit: built.limit
-      }
-    }
+    const results = mergeThreadSearchResults(
+      title.ok ? (title.rows ?? []) : [],
+      message?.ok ? (message.rows ?? []) : [],
+      raw,
+      built.limit
+    )
+    const messageOk = built.fts ? Boolean(message?.ok) : true
     return {
-      results: mergeThreadSearchResults(title.rows ?? [], message?.rows ?? [], raw, built.limit),
-      limit: built.limit
+      results,
+      complete: title.ok && messageOk,
+      allFailed: !title.ok && !messageOk,
+      timedOut: Boolean(title.timedOut || message?.timedOut)
     }
   }
 }

@@ -65,6 +65,23 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
    * the board's constructor, which the component calls during its own setup,
    * so every effect here is owned by the component.
    */
+  /**
+   * Whether this thread delegated work to a nested sub-agent.
+   *
+   * A nested worker has no thread row, so the transcript's own `subagent` parts
+   * are the only record that delegation happened. The board reads the same parts,
+   * which is what keeps the dock and the list from disagreeing about whether a
+   * thread has anything to show. Pawn parts are excluded here because a pawn
+   * already docks the board through its own thread row.
+   */
+  private hasNestedSubagent(projectId: string, threadId: string): boolean {
+    return threadMessages
+      .messages(projectId, threadId)
+      .some((message) =>
+        message.parts.some((part) => part.type === 'subagent' && part.activity.pawn !== true)
+      )
+  }
+
   init(): void {
     // A trace the reader expanded on a settled turn belongs to the visit that
     // expanded it: opening this thread again starts from the fold each turn asks
@@ -246,17 +263,22 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     // A bubble is measured in viewport coordinates, so it has to be re-measured
-    // when the conversation changes width: a sidebar drag or a docked panel moves
-    // every highlight without firing a window resize. A height change is content,
-    // which the publish trigger already covers, and re-measuring on every
-    // streamed frame would force layout for nothing.
+    // when the conversation's own box changes: a sidebar drag or a docked panel
+    // moves every highlight without firing a window resize, and a card taking the
+    // composer's place shortens the reading area under every highlight already on
+    // screen, which left a bubble pinned where its passage used to be rather than
+    // where it now sits. This observes the scroll container itself, whose box only
+    // changes with layout: streamed content grows inside it, which the publish
+    // trigger already covers, so re-measuring every frame is not what this is.
     $effect(() => {
       const element = this.root.loadOlderMessages.scrollEl
       if (!element) return
       let lastWidth = element.clientWidth
+      let lastHeight = element.clientHeight
       const observer = new ResizeObserver(() => {
-        if (element.clientWidth === lastWidth) return
+        if (element.clientWidth === lastWidth && element.clientHeight === lastHeight) return
         lastWidth = element.clientWidth
+        lastHeight = element.clientHeight
         this.root.steerQueuedMessage.scheduleResponseBubbleUpdate()
       })
       observer.observe(element)
@@ -347,21 +369,22 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
       const thread = this.root.handleAgentEvent.thread
       const rowThreadId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
-      if (pawnAgentsState.workersOf(rowThreadId).length === 0) return
+      const pawnCount = pawnAgentsState.workersOf(rowThreadId).length
+      if (pawnCount === 0 && !this.hasNestedSubagent(thread.projectId, rowThreadId)) return
       coordinatorDockState.register({
         projectId: thread.projectId,
         threadId: rowThreadId,
-        label: 'Pawn agents',
+        label: 'Spawned agents',
         icon: CioSubagent,
         panel: { component: 'pawn', props: { projectId: thread.projectId, threadId: rowThreadId } }
       })
-      // Docks itself the first time a thread spawns a pawn, unless the user closed
+      // Docks itself the first time a thread delegates work, unless the user closed
       // it before; later spawns are no-ops because the tab already exists.
       if (
         coordinatorDockState.canAutoOpen(thread.projectId, rowThreadId) &&
         !contextSidebarState.hasCoordinator(thread.projectId, rowThreadId)
       ) {
-        contextSidebarState.openCoordinator(thread.projectId, rowThreadId, 'Pawn agents')
+        contextSidebarState.openCoordinator(thread.projectId, rowThreadId, 'Spawned agents')
       }
     })
 
@@ -380,9 +403,15 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       )
         return
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
-      // A row that owns pawn agents has a coordinator of its own: the pawn board.
+      // A row that delegated work has a coordinator of its own: the spawn board.
       if (
-        pawnAgentsState.hasWorkers(this.root.currentWorkingTraceAttribution.coordinatorDockThreadId)
+        pawnAgentsState.hasWorkers(
+          this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+        ) ||
+        this.hasNestedSubagent(
+          this.root.handleAgentEvent.thread.projectId,
+          this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+        )
       )
         return
       // Only the orchestration boards this view publishes. An authored-work board on

@@ -26,6 +26,15 @@
      */
     size?: 'md' | 'sm' | 'xs'
     disabled?: boolean
+    /**
+     * The web address this button opens, when it is not a link.
+     *
+     * A button has no `href` for the app's link menu to read, so a control that
+     * sends the user to a page declares the address here and right-clicking it
+     * offers exactly what right-clicking a real link offers: copy the address,
+     * open it in a thread browser, or hand it to another browser.
+     */
+    externalUrl?: string
     /** Renders a spinner-sized gap before the label while work is in flight. */
     loading?: boolean
     onclick?: (event: MouseEvent) => void
@@ -39,6 +48,7 @@
     variant = 'secondary',
     size = 'md',
     disabled = false,
+    externalUrl,
     loading = false,
     onclick,
     class: className = ''
@@ -71,6 +81,7 @@
   type="button"
   class="inline-flex shrink-0 items-center gap-1.5 border font-medium whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-40 {sizeClass} {variantClass} {className}"
   {disabled}
+  data-external-url={externalUrl}
   {onclick}
   title={title ?? label}
   aria-label={title ?? label}

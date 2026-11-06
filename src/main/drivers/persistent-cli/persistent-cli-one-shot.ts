@@ -292,10 +292,16 @@ const UNAVAILABLE_CANDIDATE_PATTERN = /^\s*4(?:00|03|04)\b/u
 function rememberUnavailableCandidate(
   host: OneShotHost,
   candidate: TitleModelCandidate,
-  error: string
+  error: string,
+  alwaysProbeKey: string
 ): void {
   if (!UNAVAILABLE_CANDIDATE_PATTERN.test(error)) return
   const candidateKey = auxiliaryCandidateKey(candidate)
+  // The run's fallback model is the one the user's real traffic runs on, so a
+  // raw 4xx answer about it must never retire it: doing that here once left
+  // every title attempt skipped for six hours while the same model kept answering
+  // the thread's own turns.
+  if (candidateKey === alwaysProbeKey) return
   host.quotaBlocks.set(candidateKey, {
     resetAt: Date.now() + AUXILIARY_QUOTA_BLOCK_MAX_MS,
     reason: `the provider rejected this model (${error.slice(0, 120)})`
@@ -344,7 +350,11 @@ export async function runOneShotWithCandidates(
     const candidateKey = auxiliaryCandidateKey(candidate)
     const block = host.quotaBlocks.get(candidateKey)
     if (block) {
-      if (block.resetAt > Date.now()) {
+      // A stored verdict never mutes the run's own fallback model. Auxiliary
+      // work exists to serve the thread the fallback already runs, so skipping
+      // it turns a stale or misread verdict into "titles stopped working" for
+      // the whole block window, with no attempt left to prove otherwise.
+      if (candidateKey !== fallbackKey && block.resetAt > Date.now()) {
         // The account already reported this window as closed (now, or in a
         // previous launch that persisted it): skip it without spawning a harness
         // process, and record the skip so the ledger shows a candidate that was
@@ -398,11 +408,15 @@ export async function runOneShotWithCandidates(
         Logger.dev(
           `${host.driverName} one-shot model ${candidate.providerId}/${candidate.modelId} failed: ${response.error}`
         )
-        rememberUnavailableCandidate(host, candidate, response.error)
+        // A classified account rejection is a fact about the credentials, not
+        // about this model id, so it must be recorded as such instead of falling
+        // through to the stricter model-scoped 4xx heuristic below.
         const retirement = hardFailureBlock(response.error, Date.now())
         if (retirement) {
           if (retirement.scope === 'provider') authFailed = true
           rememberHardFailure(host, attempts, candidate, retirement, fallbackKey)
+        } else {
+          rememberUnavailableCandidate(host, candidate, response.error, fallbackKey)
         }
         accounted.push(buildTitleAttempt(index + 1, candidate, false, response.error, response))
         continue

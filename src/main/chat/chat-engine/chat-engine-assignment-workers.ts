@@ -74,6 +74,17 @@ export class ChatEngineAssignmentWorkers {
     this.host.state.assignmentEngine.setWorkerScopeProvisioner(provisioner)
   }
 
+  /**
+   * Let the Assignment engine end a replaced worker for good. The engine owns
+   * the plan, the app owns sessions and retries, so the handler is installed
+   * here instead of being passed to the engine constructor.
+   */
+  installAssignmentWorkerRetirement(): void {
+    this.host.state.assignmentEngine.setWorkerRetirementHandler((projectId, threadId) =>
+      this.retireReplacedAssignmentWorker(projectId, threadId)
+    )
+  }
+
   /** Resolve and verify that a provider-native child belongs to the requested thread. */
   async resolveChildSessionOwner(
     projectId: string,
@@ -1176,6 +1187,38 @@ export class ChatEngineAssignmentWorkers {
       await this.host.abort(worker.projectId, worker.id)
     }
     await this.host.threadManager.unlinkAssignmentThread(worker.projectId, worker.id)
+  }
+
+  /**
+   * Retire the worker thread an Assignment just replaced.
+   *
+   * Unlinking it only detached it from the task. The thread stayed
+   * `working-paused` with its quota retry still armed, so it came back to life
+   * on the next window reset and continued a turn no task was waiting for, on
+   * an account the user may have already retired. Stopping it and clearing the
+   * scheduled retry is what actually ends that work.
+   */
+  async retireReplacedAssignmentWorker(projectId: string, threadId: string): Promise<void> {
+    const worker = await this.host.threadManager.getThread(projectId, threadId)
+    if (!worker) return
+    if (worker.status === 'planning' || worker.status === 'executing') {
+      try {
+        await this.host.abort(projectId, threadId)
+      } catch (error) {
+        Logger.info('Replaced Assignment worker could not be aborted', {
+          threadId,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+    } else if (worker.status === 'working-paused') {
+      // `interrupted` is the terminal state that also disqualifies it from a
+      // scheduled resume, which only ever admits a `working-paused` thread.
+      await this.host.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+    }
+    if (worker.sessionId) {
+      this.host.state.retryScheduler?.clear(worker.sessionId)
+      updateRetryWakeWindow(worker.sessionId, null)
+    }
   }
 
   /**

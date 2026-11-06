@@ -6,6 +6,7 @@
  * the emitted module is byte-for-byte identical to the original single string.
  */
 import {
+  CIO_AGENT_MESSAGE_TOOL_NAME,
   CIO_AGENT_OUTPUT_TOOL_NAME,
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME,
@@ -18,9 +19,11 @@ import { PAWN_AGENT_TOOL_NAME } from '../../../../lib/pawn-tools'
 export function piCoreToolsSubagentSource(): string {
   return `  // ── Sub-agent spawning ──────────────────────────────────────────────
   // Sub-agents are nested pi sessions ("worker threads") controlled by the
-  // primary agent. They never receive the spawn tool, so they cannot
-  // recurse; their permission requests ride the parent's extension-UI
-  // context so the permission card appears on the primary thread.
+  // primary agent. A worker receives the same spawn tool the primary has, so a
+  // piece of work discovered halfway down can get its own context instead of
+  // being pushed back to one head, and the four-worker ceiling is shared by the
+  // whole chain. Every worker's permission requests ride the root extension-UI
+  // context, so the permission card always appears on the thread the user reads.
   const CIO_SUBAGENT_MARKER = 'cio-subagent:'
   // Workers running at the same time in this one harness process. Each is a
   // full nested session with its own model stream and tool loop, so this caps
@@ -565,8 +568,217 @@ export function piCoreToolsSubagentSource(): string {
     } catch {}
   }
 
-  async function resolveSubAgentModel(parentCtx, reference) {
-    const registry = parentCtx.modelRegistry
+  // ── The delegation channel ──────────────────────────────────────────
+  // Delegation used to be one-way and silent until it was over: a worker
+  // reported once, at the end, and neither the agent that spawned it nor a
+  // sibling could reach it while it worked. These helpers make every worker
+  // addressable in both directions, which is what lets an agent work the way a
+  // person does   asking a worker a question mid-flight, telling two workers
+  // what the other found, correcting a direction without starting over.
+  //
+  // Delivery is a steer, not a queue: a running pi session takes a prompt sent
+  // while streaming into the work in progress, so the worker reads the message
+  // as its next turn instead of after it has already finished the wrong thing.
+  // A message to the primary uses the same display:false custom message the
+  // done notification uses, so it reaches the model without appearing as a
+  // transcript row the user never typed.
+  const CIO_AGENT_MESSAGE_CUSTOM_TYPE = '${CIO_AGENT_MESSAGE_TOOL_NAME}'
+
+  /** How a message reads to the worker or agent receiving it. */
+  function agentMessageFrame(from, fromPurpose, text) {
+    const origin =
+      from === 'primary'
+        ? 'the agent that spawned you'
+        : 'a sibling worker (' + from + (fromPurpose ? ', ' + fromPurpose : '') + ')'
+    return (
+      'Message from ' +
+      origin +
+      ' while you work. Treat it as part of the job you already have: take it into the work in progress and answer only when it asks something you cannot settle yourself.\\n\\n' +
+      text
+    )
+  }
+
+  /** Deliver one message to one recipient, reporting what actually happened. */
+  async function deliverAgentMessage(from, fromPurpose, to, message) {
+    const text = typeof message === 'string' ? message.trim() : ''
+    if (!text) return { to: to, delivered: false, reason: 'The message was empty.' }
+    if (to === from) return { to: to, delivered: false, reason: 'You cannot message yourself.' }
+    if (to === 'primary') {
+      if (!pi || typeof pi.sendMessage !== 'function') {
+        return { to: to, delivered: false, reason: 'The primary agent cannot be reached from here.' }
+      }
+      try {
+        void pi.sendMessage(
+          {
+            customType: CIO_AGENT_MESSAGE_CUSTOM_TYPE,
+            content: agentMessageFrame(from, fromPurpose, text),
+            display: false
+          },
+          { triggerTurn: true, deliverAs: 'steer' }
+        )
+        return { to: to, delivered: true }
+      } catch (error) {
+        return {
+          to: to,
+          delivered: false,
+          reason: error && error.message ? error.message : String(error)
+        }
+      }
+    }
+    const record = subAgents.get(to)
+    if (!record) return { to: to, delivered: false, reason: 'Unknown worker id: ' + to }
+    if (record.status !== 'running') {
+      return {
+        to: to,
+        delivered: false,
+        reason:
+          'That worker already finished (' +
+          record.status +
+          '). Read what it produced with ${CIO_AGENT_OUTPUT_TOOL_NAME} instead of messaging it.'
+      }
+    }
+    try {
+      await record.session.prompt(agentMessageFrame(from, fromPurpose, text), {
+        expandPromptTemplates: false,
+        streamingBehavior: 'steer'
+      })
+      return { to: to, delivered: true }
+    } catch (error) {
+      return {
+        to: to,
+        delivered: false,
+        reason: error && error.message ? error.message : String(error)
+      }
+    }
+  }
+
+  /**
+   * The messaging tool, bound to whoever holds it.
+   *
+   * The primary agent registers it once for itself; every worker session gets
+   * its own copy bound to its own id, which is what makes sibling messages
+   * possible without a registry the model has to maintain.
+   */
+  function createAgentMessageTool(selfId, selfPurpose) {
+    return {
+      name: '${CIO_AGENT_MESSAGE_TOOL_NAME}',
+      label: 'Message a delegated worker',
+      description:
+        'Talk to a delegated worker while it runs, or to the agent that spawned you. A message is delivered into the work in progress as a steer, so it reaches the worker instead of waiting for it to finish, and a worker can answer the agent that spawned it or tell another worker what it found. Use it instead of spawning a second worker to carry a correction, a fact another worker discovered, or a question only the other side can answer. Delivery is reported honestly: a worker that already finished is not messaged, and its result is read with ${CIO_AGENT_OUTPUT_TOOL_NAME} instead.',
+      promptSnippet: 'Message a running worker, or the agent that spawned you, mid-flight',
+      promptGuidelines: [
+        'A correction, an answer or a fact another worker found goes to the worker working on it with ${CIO_AGENT_MESSAGE_TOOL_NAME}; never respawn a worker just to change direction.',
+        'A worker that needs something only the agent that spawned it knows asks with ${CIO_AGENT_MESSAGE_TOOL_NAME} to "primary" and keeps working; it does not stop and wait.',
+        'Two workers on related pieces tell each other what they found with ${CIO_AGENT_MESSAGE_TOOL_NAME} instead of duplicating the other side of the work.'
+      ],
+      parameters: Type.Object({
+        to: Type.String({
+          description:
+            'Who receives it: a worker id (cio-subagent-N), "primary" for the agent that spawned you, or "all" for the primary and every other running worker.'
+        }),
+        message: Type.String({
+          description:
+            'The message itself, written the way you would say it to a colleague: what changed, what you found, or what you need to know.'
+        })
+      }),
+      async execute(_toolCallId, params) {
+        const to = typeof params.to === 'string' ? params.to.trim() : ''
+        if (!to) {
+          return textResult({
+            delivered: false,
+            error: 'Name who the message is for: a worker id, "primary", or "all".'
+          })
+        }
+        const targets =
+          to === 'all'
+            ? [
+                'primary',
+                ...[...subAgents.values()]
+                  .filter(function (record) { return record.agentId !== selfId })
+                  .map(function (record) { return record.agentId })
+              ]
+            : [to]
+        const results = []
+        for (const target of targets) {
+          results.push(await deliverAgentMessage(selfId, selfPurpose, target, params.message))
+        }
+        return textResult({
+          delivered: results.filter(function (result) { return result.delivered }).length,
+          results: results
+        })
+      }
+    }
+  }
+
+  pi.registerTool(createAgentMessageTool('primary', ''))
+
+  // ── Workers that delegate further ───────────────────────────────────
+  // Humans do not delegate in a neat tree: a piece of work discovered halfway
+  // through often deserves its own context, and refusing that just because the
+  // agent doing it is itself a worker pushed the whole job back to one head. A
+  // worker therefore gets the same right, under the same one ceiling: the cap
+  // counts every live worker in the process, so four is still four however deep
+  // the chain runs.
+  //
+  // Two things are deliberately different from the primary's tool. It is always
+  // inline, because a worker has no status or output channel to read a
+  // background worker back from; and it runs the child on the root context, so
+  // the permission card for a destructive action still appears on the thread the
+  // user is reading instead of on a nested session nobody can see.
+  let rootCtx = null
+
+  function createWorkerSpawnTool() {
+    return {
+      name: '${CIO_SPAWN_AGENT_TOOL_NAME}',
+      label: 'Delegate a piece of your work',
+      description:
+        'Hand one self-contained piece of your work to another agent with its own context and take the result inline. Use it when a part of the job deserves a fresh context   a long search, an independent verification, a piece you would otherwise flood your own context with   and keep the rest yourself. The four-worker ceiling is shared with every other worker, so spawn only when the piece really is separate, never to dodge the ceiling or to run the same work twice. A message can reach the worker you spawn only while it runs, and you get its final report back here.',
+      promptSnippet: 'Delegate one separate piece of your work to a worker and get its report back inline',
+      promptGuidelines: [
+        'Scope each worker to the files or area it owns and tell it to verify only those; a project-wide check belongs to the agent that owns the thread.',
+        'A piece you delegate must be separable from the work you keep, or you will duplicate each other.',
+        'You do not commit: list every file you and your workers touched in your final message, and the agent that spawned you commits it.'
+      ],
+      parameters: Type.Object({
+        purpose: Type.String({
+          description: 'Short task category, e.g. explore, implementation, tests, cleanup, documentation.'
+        }),
+        instructions: Type.String({
+          description:
+            'The complete, self-contained task for the worker: the goal, the files or area it owns, how to verify its own work, and what it must report.'
+        }),
+        thinking_level: Type.Optional(
+          Type.Union(CIO_SUBAGENT_THINKING_LEVELS.map(function (level) { return Type.Literal(level) }), {
+            description: 'Thinking-level override. Defaults to your own level.'
+          })
+        )
+      }),
+      async execute(_toolCallId, params, signal, onUpdate) {
+        if (!rootCtx) {
+          return textResult({
+            spawned: false,
+            error: 'No thread is available to run that worker on. Do the piece yourself and report it.'
+          })
+        }
+        const result = await runSubAgent(
+          rootCtx,
+          onUpdate,
+          {
+            purpose: params.purpose,
+            instructions: params.instructions,
+            thinkingLevel: params.thinking_level,
+            background: false
+          },
+          signal ?? undefined
+        )
+        if (result.error) return textResult({ spawned: false, error: result.error })
+        await result.record.promise
+        return textResult(subAgentResult(result.record))
+      }
+    }
+  }
+
+  async function resolveSubAgentModel(parentCtx, reference) {    const registry = parentCtx.modelRegistry
     const slashIndex = reference.indexOf('/')
     if (slashIndex > 0) {
       const found = registry.find(reference.slice(0, slashIndex), reference.slice(slashIndex + 1))
@@ -778,6 +990,9 @@ export function piCoreToolsSubagentSource(): string {
   }
 
   async function runSubAgent(parentCtx, onUpdate, spec, signal) {
+    // The first context a worker is ever spawned from is the one every
+    // permission card is raised on, however deep the chain below it runs.
+    if (!rootCtx) rootCtx = parentCtx
     let runningCount = 0
     for (const record of subAgents.values()) {
       if (record.status === 'running') runningCount += 1
@@ -817,7 +1032,10 @@ export function piCoreToolsSubagentSource(): string {
         sessionManager,
         resolvedModel,
         spec,
-        gatedWorkerTools(parentCtx, touchedFiles)
+        gatedWorkerTools(parentCtx, touchedFiles).concat([
+          createAgentMessageTool(agentId, spec.purpose),
+          createWorkerSpawnTool()
+        ])
       )
       session = created.session
       sharedServices = created.shared
@@ -891,7 +1109,7 @@ export function piCoreToolsSubagentSource(): string {
         // instructions, so the file-report contract (the primary agent is the one
         // that commits) actually reaches the worker instead of only being
         // described in the spawn tool's schema.
-        await session.prompt(workerPrompt(spec), { expandPromptTemplates: false })
+        await session.prompt(workerPrompt(spec, agentId), { expandPromptTemplates: false })
         // A worker the user stopped never resolves as a completion: an aborted
         // child run resolves its prompt, so the status must not be reset here.
         if (record.status !== 'aborted') record.status = 'completed'
@@ -1016,11 +1234,14 @@ export function piCoreToolsSubagentSource(): string {
     }
   }
 
-  function workerPrompt(spec) {
+  function workerPrompt(spec, agentId) {
     return [
       'You are a CodeInOven sub-agent spawned by the primary agent to own one focused piece of work.',
+      'Your worker id is ' + agentId + '.',
       'Purpose: ' + spec.purpose + '.',
       'The user does not chat with you directly: your final message is returned to the primary agent, which reports to the user.',
+      'You are reachable while you work: ${CIO_AGENT_MESSAGE_TOOL_NAME} sends to "primary" or to a sibling worker id, and a message that arrives mid-run is part of the job you already have, not a new one.',
+      'You may delegate one separable piece of your own work with ${CIO_SPAWN_AGENT_TOOL_NAME}; it runs inline and hands its report back to you. Never delegate the whole job, and never to dodge the four-worker ceiling.',
       'Work autonomously and do not ask the user questions. Permission requests for destructive actions are surfaced to the user on the primary thread.',
       'Your final message MUST list every file you created or modified (relative to the project root), including files changed through shell commands   the primary agent is responsible for committing the work and needs this list.',
       '',
@@ -1041,7 +1262,7 @@ export function piCoreToolsSubagentSource(): string {
     name: '${CIO_SPAWN_AGENT_TOOL_NAME}',
     label: 'Spawn a sub-agent',
     description:
-      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default, unless the user explicitly asks you to use sub-agents differently, delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Run several sub-agents concurrently with background:true; each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly; use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. Sub-agents cannot spawn further sub-agents, and they inherit your model and thinking level unless you pass model/thinking_level overrides. At most four sub-agents run at once and anything past that is refused, so queue the rest behind the cap. Only when the work genuinely needs five or more worker runs in flight at the same time and waiting for a free slot would stall it, or when the user explicitly asks for pawns, hand the overflow to a pawn agent (${PAWN_AGENT_TOOL_NAME})   one, not several   instead of splitting the fan-out. When the user asks to split work across workers and wants to prompt or steer those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead: an Assignment gives each worker a thread the user can direct independently, while a sub-agent only reports back to you.',
+      'Spawn a sub-agent worker thread that executes one focused task (explore, implementation, tests, cleanup, documentation, or any custom purpose) and returns only its final result, keeping its transcript out of your context. By default, unless the user explicitly asks you to use sub-agents differently, delegate any task that can run in parallel with your own work to a sub-agent: explore or research a topic while you continue working, hand off long-running work so you can proceed without waiting and without polluting your context, and once your own work is done, spawn a sub-agent to run the checks for the files you touched (lint, typecheck, tests) so the work finishes faster. Every worker you spawn is listed on the spawn board of this thread and can open the thread that spawned it, so delegate in whatever shape the work needs instead of forcing one arrangement. Workers are addressable while they run and may delegate a piece of their own work further: reach one with ${CIO_AGENT_MESSAGE_TOOL_NAME} instead of respawning it to change direction. Run several sub-agents concurrently with background:true; each one automatically steers you a notification with its final output the moment it finishes, so you can keep working and act on results as they land. Omit background to block until the sub-agent finishes and returns its result directly; use that whenever you need the output before proceeding. You must never end your turn while any sub-agent is still running, regardless of outcome; workers report every file they touched because you are responsible for committing approved work. At most four sub-agents run at once and anything past that is refused, so queue the rest behind the cap. Only when the work genuinely needs five or more worker runs in flight at the same time and waiting for a free slot would stall it, or when the user explicitly asks for pawns, hand the overflow to a pawn agent (${PAWN_AGENT_TOOL_NAME})   one, not several   instead of splitting the fan-out. When the user asks to split work across workers and wants to prompt or steer those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead: an Assignment gives each worker a thread the user can direct independently, while a sub-agent only reports back to you.',
     promptSnippet: 'Spawn sub-agent worker threads for focused or parallelizable tasks (explore, implement, tests, cleanup, docs)',
     promptGuidelines: CIO_SUBAGENT_PROMPT_GUIDELINES,
     parameters: Type.Object({

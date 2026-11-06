@@ -22,6 +22,7 @@ import {
 } from '../../utilities/cio-video-prompt'
 import {
   CIO_ORCHESTRATE_CONTINUE_PROMPT,
+  CIO_ORCHESTRATE_DELEGATION_PROMPT,
   CIO_ORCHESTRATE_FULL_ACCESS_PROMPT,
   CIO_ORCHESTRATE_START_PROMPT
 } from '../../orchestration/cio-orchestrate-prompt'
@@ -245,6 +246,14 @@ export class ChatEngineUtilities {
      */
     orchestrationSession: 'off' | 'start' | 'continue' = 'off',
     /**
+     * Whether this turn may dispatch real work without the orchestration tag.
+     * A standing assistant run is the case this exists for: nobody is ever in its
+     * thread to type `${CIO_ORCHESTRATE_TAG}`, so its only route to the project the
+     * work belongs to is a dispatch it makes itself. The grant opens the
+     * workstation tools; it never raises the turn's permission level.
+     */
+    delegationReach = false,
+    /**
      * Whether this turn may create the thread's engineering artifacts (Brainstorm,
      * PRD, specification, Assignment) through the app-owned artifact tools. Set
      * for a real project thread's turn, and left off for a chat, an assistant task
@@ -344,6 +353,7 @@ export class ChatEngineUtilities {
           designSession,
           videoSession,
           orchestrationSession,
+          delegationReach,
           artifactTools,
           ...(brainstormInterview
             ? {
@@ -459,7 +469,9 @@ export class ChatEngineUtilities {
             ? CIO_ORCHESTRATE_CONTINUE_PROMPT
             : settings.permissionLevel === 'full_access'
               ? CIO_ORCHESTRATE_FULL_ACCESS_PROMPT
-              : ''
+              : delegationReach
+                ? CIO_ORCHESTRATE_DELEGATION_PROMPT
+                : ''
       if (useDirectGateway) {
         // Harnesses with persistent extension-backed sessions (Pi) receive the
         // turn-scoped endpoint through a session-keyed handoff so their
@@ -659,6 +671,11 @@ export class ChatEngineUtilities {
       this.host.units['assistant-authoring'].assistantConversation(steeringThread) === 'authoring'
         ? (steeringThread?.assistantId ?? null)
         : null
+    // A steer landing on a standing assistant run keeps the delegation reach the
+    // run started with: the grant is a property of the run, not of the message
+    // that happened to rebuild the gateway, so an update must not drop it.
+    const delegationReach =
+      this.host.units['assistant-authoring'].assistantConversation(steeringThread) === 'run'
     if (this.host.state.utilityTurns.has(sessionId)) {
       // A steer that invokes @cio-utility has to manage utilities for the rest of
       // the turn. A gateway fixes its tool set when the turn starts, and the live
@@ -699,6 +716,7 @@ export class ChatEngineUtilities {
         // user has invoked @cio-utility in this thread, so reuse survives a
         // steer landing after the previous turn's gateway cleanup.
         allowManagement,
+        delegationReach,
         ...(this.host.state.pendingBrainstormTurns.has(sessionId)
           ? {
               saveBrainstormNotes: (markdown: string) =>

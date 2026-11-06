@@ -1,5 +1,9 @@
 import { readFile, writeFile, rename, rm } from 'node:fs/promises'
 import type { Database } from '../database/database'
+import {
+  threadMatchesSearchScope,
+  type ThreadSearchOptions
+} from '../database/repositories/thread-repo'
 import { Logger } from '../system/logger'
 import { paceIndexing } from './indexing-pacing'
 import { GLOBAL_BROWSER_PROJECT_ID, type Thread, type ThreadStatus } from '../../lib/types'
@@ -570,13 +574,40 @@ export class SearchService {
    * spotlight's deferred enrichment, whose keyword rows are already on screen.
    * Warm-ups at boot and on Cmd+K are what keep the wait rare.
    */
-  async searchIntent(query: string, limit: number): Promise<IntentThreadMatch[]> {
+  async searchIntent(
+    query: string,
+    limit: number,
+    options: ThreadSearchOptions = {}
+  ): Promise<IntentThreadMatch[]> {
     const model = this.activeModel()
     if (!this.settings.enabled || !model) return []
     if (this.index.size === 0) return []
     if (!this.canEmbed()) return []
     const trimmed = query.trim()
     if (trimmed.length === 0) return []
+    // The index covers every family at once, so a family- or project-scoped
+    // search ranks inside its own scope instead of losing its result budget to
+    // another family's matches (the corpus is mostly project threads, which is
+    // what starved the chats and assistant screens).
+    const { family, projectId, assistantId } = options
+    const scoped = family !== undefined || projectId !== undefined
+    const accept = scoped
+      ? (threadId: string): boolean => {
+          const candidate = this.index.candidates.get(threadId)
+          // A record without a corpus row is ranked anyway: the hydrated matches
+          // are filtered by the same scope before they are returned, so a
+          // missing candidate must never turn a scoped search into no search.
+          if (!candidate) return true
+          // A corpus row read before the assistant column existed cannot be
+          // narrowed to one assistant, so it is filtered by family alone and the
+          // hydration pass settles the rest.
+          return threadMatchesSearchScope(candidate, {
+            family,
+            projectId,
+            assistantId: candidate.assistantId === undefined ? undefined : assistantId
+          })
+        }
+      : undefined
     const document = `${model.queryPrefix}${trimmed}`
     const controller = new AbortController()
     try {
@@ -584,7 +615,7 @@ export class SearchService {
       const vector = await this.embedOne(runtime, document, controller.signal)
       // A rebuild, disable, or model change may have started during embedding.
       if (!this.settings.enabled || this.settings.activeModelId !== model.id) return []
-      const matches = await this.index.search(vector, Math.max(1, limit))
+      const matches = await this.index.search(vector, Math.max(1, limit), accept)
       return this.settings.enabled && this.settings.activeModelId === model.id ? matches : []
     } catch (error) {
       Logger.dev('Intent search failed; falling back to keyword results.', error)

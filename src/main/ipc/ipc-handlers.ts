@@ -173,7 +173,8 @@ export function registerIpcHandlers(
       ? (query, searchOptions) =>
           options.searchService!.searchIntent(
             query,
-            Math.max(1, Math.min((searchOptions.limit ?? 20) * 3, 200))
+            Math.max(1, Math.min((searchOptions.limit ?? 20) * 3, 200)),
+            searchOptions
           )
       : null
   )

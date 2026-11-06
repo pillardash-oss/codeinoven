@@ -1058,6 +1058,10 @@ export class ChatEngineTurnsSendPrompt {
       designSession,
       videoSession,
       orchestrationSession,
+      // A standing assistant run delegates real work: nobody types into its
+      // thread, so the workstation tools are opened for it here rather than by
+      // a tag, and the dispatched thread carries the project's own gate.
+      assistantTaskTurn,
       // A real project thread may create its engineering artifacts through the
       // artifact tools. A chat, an assistant task, the inbox and an Assignment
       // worker are offered none of those routes.

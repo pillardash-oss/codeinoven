@@ -86,6 +86,16 @@ interface ObservedChallenge {
  */
 export class McpOAuthService {
   private readonly sessions = new Map<string, AuthorizationSession>()
+  /**
+   * The interactive flow already running for a server, by utility id.
+   *
+   * Two surfaces can ask for the same authorization at once (the sign-in card and
+   * the Utilities modal, or a card the user reopened by leaving and returning to
+   * its thread). There is one browser authorization per server, so a second
+   * request joins it and both callers resolve with its result instead of the
+   * second one failing on a flow that is already doing the work.
+   */
+  private readonly authorizing = new Map<string, Promise<McpOAuthStatus>>()
   private readonly challenges = new Map<string, ObservedChallenge>()
   private readonly lastErrors = new Map<string, string>()
 
@@ -143,9 +153,22 @@ export class McpOAuthService {
     utilityId: string,
     request: McpOAuthAuthorizeRequest = {}
   ): Promise<McpOAuthStatus> {
-    if (this.sessions.has(utilityId)) {
-      throw new Error('An authorization for this MCP server is already in progress')
+    const running = this.authorizing.get(utilityId)
+    if (running) return await running
+    const flow = this.runAuthorization(utilityId, request)
+    this.authorizing.set(utilityId, flow)
+    try {
+      return await flow
+    } finally {
+      if (this.authorizing.get(utilityId) === flow) this.authorizing.delete(utilityId)
     }
+  }
+
+  /** The body of one interactive authorization, shared by everyone waiting on it. */
+  private async runAuthorization(
+    utilityId: string,
+    request: McpOAuthAuthorizeRequest
+  ): Promise<McpOAuthStatus> {
     const utility = await this.utility(utilityId)
     if (utility.config.transport === 'stdio') {
       throw new Error('A stdio MCP server is authorized by its own environment, not with OAuth')

@@ -166,6 +166,7 @@ export type ComposerStackSlot =
   | 'foreign-run'
   | 'image-descriptor'
   | 'todo'
+  | 'locked'
 
 export interface BrainstormReviewAnnotationManifest {
   id: string

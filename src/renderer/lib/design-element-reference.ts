@@ -74,6 +74,19 @@ export function designElementDescriptor(
   return lines.join('\n').slice(0, MAX_DESCRIPTOR_LENGTH)
 }
 
+/**
+ * The design page a reference belongs to, named independently of its tab.
+ *
+ * A design page is one folder's one entry, and the same page can be shown in a
+ * thread's own tab, in a tab of its screen from the board, or in a reopened tab
+ * the app had to create. The tab is where the page happened to be shown when the
+ * comment was written; this is which page it was, so a pin can be drawn on that
+ * page wherever it is opened next.
+ */
+export function designPageIdentity(directory: string, entry: string | undefined | null): string {
+  return `${directory}\u0000${entry ?? ''}`
+}
+
 /** `390x844 CSS px (mobile)`, the layout the element was measured inside. */
 export function formatViewport(viewport: BrowserInspectorViewport): string {
   const label = viewportLabel(viewport.width)
@@ -131,6 +144,7 @@ export function designElementReference(
     tabId: tab.id,
     ...(target.frame ? { frame: target.frame } : {}),
     ...(design ? { directory: design.directory } : {}),
-    ...(entry ? { designEntry: entry } : {})
+    ...(entry ? { designEntry: entry } : {}),
+    ...(design ? { designId: designPageIdentity(design.directory, entry) } : {})
   }
 }

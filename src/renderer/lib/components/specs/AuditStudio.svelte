@@ -195,8 +195,10 @@
   const workflowActionsVisible = $derived(actionsAvailable && isLatestVersion)
   /** The auditor's own verdict decides which way out is the expected one: a
    *  report that asks for rework leads with Rework, and only a passing report
-   *  leads with Complete. The inverse button stays available, just quieter. */
-  const reworkLeads = $derived(draft.outcome === 'rework_required')
+   *  leads with Complete. The inverse button stays available, just quieter.
+   *  Once the rework notes field is open, its own submit button is the one
+   *  action that matters, so the toolbar button drops its emphasis. */
+  const reworkLeads = $derived(draft.outcome === 'rework_required' && !reviewOpen)
   const PRIMARY_ACTION_CLASS =
     'bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50'
   const SECONDARY_ACTION_CLASS =

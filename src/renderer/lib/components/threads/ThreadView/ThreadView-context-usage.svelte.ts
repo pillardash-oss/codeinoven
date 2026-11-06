@@ -632,7 +632,8 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
   async generateIndependentAudit(selected: ThreadSettings): Promise<void> {
     this.root.submitSpecDecision.auditBusy = true
     this.root.buildSpecActionPrompt.auditError = ''
-    this.root.handleAgentEvent.errorMessage = ''
+    this.root.submitSpecDecision.auditFailed = false
+    this.root.submitSpecDecision.auditState = 'running'
     this.auditSettings = selected
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
@@ -642,34 +643,34 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         await invoke(
           'thread:setIndependentAudit',
           this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id,
+          this.root.submitSpecDecision.auditWorkflowThreadId(),
           true
         )
         this.root.currentWorkingTraceAttribution.pendingIndependentAudit = null
         clearIndependentAuditIntent(
           this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id
+          this.root.submitSpecDecision.auditWorkflowThreadId()
         )
       }
       this.durableAuditThread = await invoke(
         'agent:ensureIndependentAuditorThread',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         selected
       )
       coordinatorDockState.restore(
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id
+        this.root.submitSpecDecision.auditWorkflowThreadId()
       )
       contextSidebarState.openCoordinator(
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         'Audit coordinator'
       )
       const result = await invoke(
         'agent:generateIndependentAudit',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         {
           settings: selected
         }
@@ -683,16 +684,21 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       this.root.buildSpecActionPrompt.auditVersions = await invoke(
         'audit:listVersions',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         this.auditReport.id
       )
     } catch (error) {
       const rawError = error instanceof Error ? error.message : 'The independent audit failed.'
-      this.root.handleAgentEvent.errorMessage = rawError.replace(
+      // The audit card owns this failure: it carries the error and the model
+      // picker the user needs to change the auditor's account. Pushing it into
+      // the composer's error slot instead put a card over the composer that can
+      // neither explain which audit failed nor offer the fix.
+      this.root.buildSpecActionPrompt.auditError = rawError.replace(
         /^Error invoking remote method '[^']+': Error:\s*/u,
         ''
       )
-      this.root.buildSpecActionPrompt.auditError = this.root.handleAgentEvent.errorMessage
+      this.root.submitSpecDecision.auditFailed = true
+      this.root.submitSpecDecision.auditState = 'offered'
     } finally {
       this.root.submitSpecDecision.auditBusy = false
     }
@@ -720,12 +726,14 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       harnessId: normalized.harnessId,
       providerId: normalized.providerId,
       modelId: normalized.modelId,
+      accountId: normalized.accountId,
       thinkingLevel: normalized.thinkingLevel,
       inferenceMode: normalized.inferenceMode,
       contextWindow: normalized.contextWindow
     }
     rendererRecovery.setAuditModel(
-      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId),
+      normalized.accountId
     )
     if (this.root.unmirroredTraceStartTime.isAssignmentAuditorThread) {
       this.updateSettings({
@@ -758,6 +766,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
             harnessId: this.auditSettings.harnessId,
             providerId: this.auditSettings.providerId,
             modelId: this.auditSettings.modelId,
+            accountId: this.auditSettings.accountId,
             thinkingLevel: this.auditSettings.thinkingLevel,
             inferenceMode: this.auditSettings.inferenceMode,
             contextWindow: this.auditSettings.contextWindow
