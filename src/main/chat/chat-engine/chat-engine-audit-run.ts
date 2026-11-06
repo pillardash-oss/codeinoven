@@ -64,7 +64,16 @@ export class ChatEngineAuditRun {
     )
     const auditorSettings = auditorThread.settings ?? settings
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, auditorThread.id)
+    // The auditor's own account, never the harness default: resolving this
+    // driver without it dispatched every audit on the project's default
+    // account, so an auditor switched to another account kept reporting the
+    // default account's usage limit.
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      auditorThread.id,
+      auditorSettings.accountId
+    )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
     const transcript = buildTranscriptMarkdown(
       await this.host.loadMessages(projectId, coordinatorThreadId),
@@ -480,7 +489,12 @@ export class ChatEngineAuditRun {
     )
     const auditorSettings = auditorThread.settings ?? settings
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, auditorThread.id)
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      auditorThread.id,
+      auditorSettings.accountId
+    )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
     // Durable sessions must remain loadable after the run. OpenCode accepts a
     // JSON-schema request but cannot decode that persisted message later, so
@@ -974,7 +988,12 @@ export class ChatEngineAuditRun {
     )
     const auditorSettings = auditorThread.settings ?? settings
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, auditorThread.id)
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      auditorThread.id,
+      auditorSettings.accountId
+    )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
     const contractPath = await this.host.units['media-artifacts'].artifactRef(
       projectId,
@@ -1164,7 +1183,12 @@ export class ChatEngineAuditRun {
     )
     const auditorSettings = auditorThread.settings ?? settings
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, auditorThread.id)
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      auditorThread.id,
+      auditorSettings.accountId
+    )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
     const specPath = await this.host.units['media-artifacts'].artifactRef(
       projectId,
