@@ -70,6 +70,18 @@ function describeRefusal(error: unknown): string {
 const NATIVE_DOCK_IMAGE_EDGE = 64
 
 /**
+ * How long an unproven host gets to draw a modal's frame.
+ *
+ * A modal paints its own panel in the app window while the host is unproven, so
+ * this is no longer a blank window the user watches: it is how long the native
+ * document has to replace that panel before the modal settles into the app
+ * window for the rest of its life. Long enough for a warm document to draw (it
+ * answers within a frame), short enough that a host that never answers cannot
+ * repaint a dialog the user already dismissed or replace one they are using.
+ */
+const MODAL_UNPROVEN_ACK_MS = 1200
+
+/**
  * Re-encode an oversized icon at the size it is drawn.
  *
  * Canvas is the only thing in the renderer that re-encodes an image without
@@ -751,6 +763,13 @@ export class NativeDockController {
    * answered once has proven it can.
    */
   private ackDeadline(): number {
+    // A modal paints its own panel while its projection is unproven
+    // (`components/ui/Modal.svelte`), so an unproven modal host is given one beat
+    // to prove it can draw rather than the generous window a surface with nothing
+    // else to show is given. Past that it is left to its own document, so a host
+    // that never answers can never repaint a dialog the user already dismissed.
+    if (this.modalOptions && !this.modalOptions.panel && !this.confirmed)
+      return MODAL_UNPROVEN_ACK_MS
     if (this.passive || !this.confirmed) return OVERLAY_ACK_TIMEOUT_MS
     return this.modalOptions?.panel ? 5000 : 2000
   }

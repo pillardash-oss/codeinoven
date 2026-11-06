@@ -15,6 +15,15 @@ export interface AcpAgent {
   args: string[]
   /** Extra environment variables the agent needs. */
   env: Record<string, string>
+  /**
+   * The agent's own update command line, e.g. `cursor-agent update`.
+   *
+   * The app never installs an agent, so it cannot know how one updates itself:
+   * the vendor's documented command is the only authority, and the user supplies
+   * it here. It is handed to the embedded terminal exactly like a harness's own
+   * self-update, never executed by the app.
+   */
+  updateCommand?: string
   /** Icon used on light surfaces. An uploaded image or an SVG/emoji token. */
   icon?: string
   /** Icon used on dark surfaces; falls back to `icon` when unset. */
@@ -36,6 +45,7 @@ export interface AcpAgentInput {
   command: string
   args?: string[]
   env?: Record<string, string>
+  updateCommand?: string | null
   icon?: string | null
   iconDark?: string | null
   enabled?: boolean
@@ -50,6 +60,8 @@ export interface AcpAgentStatus {
   icon?: string
   iconDark?: string
   enabled: boolean
+  /** The agent's own update command line, when one is configured. */
+  updateCommand?: string
   /** Absolute path of the resolved binary, when it exists. */
   resolvedPath?: string
   /** Actionable reason when the configured command cannot be started. */
@@ -61,6 +73,8 @@ export interface AcpKnownAgent {
   name: string
   command: string
   args: string[]
+  /** The vendor's documented self-update command, when it has one. */
+  updateCommand?: string
 }
 
 /** Everything the Harnesses ACP rail needs to render. */

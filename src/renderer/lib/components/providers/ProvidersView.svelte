@@ -95,6 +95,9 @@
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
   /** ACP agent awaiting removal; the record is deleted, nothing is uninstalled. */
   let acpRemoveTarget = $state<ProviderConnectionInfo | null>(null)
+  /** ACP agent awaiting parking; disabling is confirmed like any destructive step. */
+  let acpDisableTarget = $state<ProviderConnectionInfo | null>(null)
+  let acpDisabling = $state(false)
   let acpRemoving = $state(false)
   let acpRemoveError = $state('')
 
@@ -151,6 +154,38 @@
       ? 'Not checked yet'
       : `Last checked: ${formatCompactAge(lastCheckedAt, now)}`
   )
+
+  /**
+   * What the ACP row's Enabled switch reflects.
+   *
+   * The agent record is the truth: main reports it, the editor edits it, and
+   * reading the row's own snapshot would leave the switch stuck after a save.
+   */
+  function acpAgentEnabled(provider: ProviderConnectionInfo): boolean {
+    return acpAgentsStore.get(provider.id)?.enabled ?? provider.enabled !== false
+  }
+
+  /** Ask before parking: a disabled agent leaves every harness list until restored. */
+  function requestAcpDisable(provider: ProviderConnectionInfo): void {
+    acpDisableTarget = provider
+  }
+
+  async function confirmAcpDisable(): Promise<void> {
+    const target = acpDisableTarget
+    if (!target || acpDisabling) return
+    acpDisabling = true
+    try {
+      await toggleAcpAgent(target, false)
+      acpDisableTarget = null
+    } finally {
+      acpDisabling = false
+    }
+  }
+
+  function cancelAcpDisable(): void {
+    if (acpDisabling) return
+    acpDisableTarget = null
+  }
 
   /** Park or restore one ACP agent without opening its editor. */
   async function toggleAcpAgent(provider: ProviderConnectionInfo, enabled: boolean): Promise<void> {
@@ -284,17 +319,23 @@
     // belongs in this menu, and the only action the row keeps outside is the
     // provider itself.
     if (provider.transport === 'acp') {
+      const updateCommand = acpAgentsStore.get(provider.id)?.updateCommand?.trim()
       items.push(
         { label: `divider-${provider.id}`, divider: true },
+        ...(updateCommand
+          ? [
+              {
+                label: 'Update agent',
+                icon: CioDownload,
+                disabled: harnessLifecycleStore.isRunning(provider.id),
+                onClick: () => void harnessLifecycleStore.startUpdate(provider.id, provider.name)
+              }
+            ]
+          : []),
         {
           label: 'Edit agent',
           icon: CioPencil,
           onClick: () => acpAgentsStore.openEdit(provider.id)
-        },
-        {
-          label: provider.enabled === false ? 'Enable agent' : 'Disable agent',
-          icon: provider.enabled === false ? CioCheckCircle : CioCircle,
-          onClick: () => void toggleAcpAgent(provider, provider.enabled === false)
         },
         {
           label: 'Remove agent',
@@ -385,6 +426,16 @@
   function manifestSourceLabel(entry: HarnessManifestEntry): string {
     if (!entry.confirmed) return 'declared in manifest'
     return entry.confirmed.source === 'user' ? 'confirmed by you' : 'confirmed in use'
+  }
+
+  /**
+   * Whether auto-updating this row can actually do something. A native harness
+   * always can; an ACP agent only once an updater is known, so the switch sits
+   * disabled rather than disappearing and leaving the user hunting for it.
+   */
+  function autoUpdateAvailable(provider: ProviderConnectionInfo): boolean {
+    if (provider.transport !== 'acp') return true
+    return Boolean(acpAgentsStore.get(provider.id)?.updateCommand?.trim())
   }
 
   async function loadAutoUpdatePrefs(): Promise<void> {
@@ -1015,9 +1066,29 @@
                     View details
                   </button>
                 {:else}
-                  {#if provider.transport === 'acp'}
-                    <!-- Nothing to install or update: the agent is a command the
-                         user already had, so the row keeps only its providers. -->
+                  {#if harnessLifecycleStore.updateAvailableFor(provider.id)}
+                    <!-- ACP agents reach this branch too: an agent the app can
+                         compare against its vendor's release is updated exactly
+                         like a harness, through its own updater. -->
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+                      title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
+                        provider.id
+                      )?.latestVersion}"
+                      disabled={harnessLifecycleStore.isRunning(provider.id)}
+                      onclick={() =>
+                        void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
+                    >
+                      {#if harnessLifecycleStore.isRunning(provider.id)}
+                        <CioSpinner size={13} class="animate-spin" />
+                      {:else}
+                        <CioDownload size={13} />
+                      {/if}
+                      Update
+                    </button>
+                  {:else if provider.transport === 'acp'}
+                    <!-- The agent is a command the user already had, so the row
+                         offers nothing to install (its update lives in the menu). -->
                   {:else if provider.status === 'not_found'}
                     <button
                       class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
@@ -1039,23 +1110,6 @@
                       onclick={() => void openInstallPage(provider)}
                     >
                       Docs
-                    </button>
-                  {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
-                    <button
-                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
-                      title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
-                        provider.id
-                      )?.latestVersion}"
-                      disabled={harnessLifecycleStore.isRunning(provider.id)}
-                      onclick={() =>
-                        void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
-                    >
-                      {#if harnessLifecycleStore.isRunning(provider.id)}
-                        <CioSpinner size={13} class="animate-spin" />
-                      {:else}
-                        <CioDownload size={13} />
-                      {/if}
-                      Update
                     </button>
                   {/if}
                   <button
@@ -1100,7 +1154,6 @@
                       >{provider.detail ?? 'No additional detail available.'}</code
                     ></pre>
                 {:else}
-                  <p class="text-xs font-semibold text-foreground">Settings</p>
                   {#if provider.transport === 'acp'}
                     <div class="flex items-center justify-between gap-3">
                       <div class="min-w-0">
@@ -1110,8 +1163,10 @@
                         </p>
                       </div>
                       <Switch
-                        checked={provider.enabled !== false}
-                        onchange={(value) => void toggleAcpAgent(provider, value)}
+                        checked={acpAgentEnabled(provider)}
+                        disabled={acpAgentsStore.saving || acpDisabling}
+                        onchange={(value) =>
+                          value ? void toggleAcpAgent(provider, true) : requestAcpDisable(provider)}
                         aria-label={`Offer ${provider.name} as a harness`}
                         title={`Turn off to park ${provider.name} without deleting it`}
                       />
@@ -1155,30 +1210,36 @@
                     </div>
                   {/if}
 
-                  {#if provider.transport !== 'acp'}
-                    <div class="flex items-center justify-between gap-3">
-                      <div class="min-w-0">
-                        <p class="text-xs font-medium text-foreground">
-                          Update automatically on launch
-                        </p>
-                        <p
-                          class="mt-0.5 truncate text-[0.625rem] text-dimmed"
-                          title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
-                        >
-                          Updates in the background when {APP_NAME} opens
-                        </p>
-                      </div>
-                      <div class="flex shrink-0 items-center gap-2">
-                        <Switch
-                          checked={autoUpdatePrefs[provider.id] === true}
-                          disabled={autoUpdateSaving[provider.id]}
-                          onchange={(value) => void setAutoUpdatePref(provider.id, value)}
-                          aria-label={`Update ${provider.name} automatically on launch`}
-                          title={`Set whether ${provider.name} updates automatically on launch`}
-                        />
-                      </div>
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-foreground">
+                        Update automatically on launch
+                      </p>
+                      <p
+                        class="mt-0.5 truncate text-[0.625rem] text-dimmed"
+                        title={autoUpdateAvailable(provider)
+                          ? `When on, ${provider.name} is updated in the background whenever you open ${APP_NAME}.`
+                          : `Add an update command to ${provider.name} to turn this on.`}
+                      >
+                        {autoUpdateAvailable(provider)
+                          ? provider.transport === 'acp'
+                            ? `Runs the agent's updater when ${APP_NAME} opens`
+                            : `Updates in the background when ${APP_NAME} opens`
+                          : 'Needs an update command'}
+                      </p>
                     </div>
-                  {/if}
+                    <div class="flex shrink-0 items-center gap-2">
+                      <Switch
+                        checked={autoUpdatePrefs[provider.id] === true}
+                        disabled={autoUpdateSaving[provider.id] || !autoUpdateAvailable(provider)}
+                        onchange={(value) => void setAutoUpdatePref(provider.id, value)}
+                        aria-label={`Update ${provider.name} automatically on launch`}
+                        title={autoUpdateAvailable(provider)
+                          ? `Set whether ${provider.name} updates automatically on launch`
+                          : `Add an update command to ${provider.name} to turn this on`}
+                      />
+                    </div>
+                  </div>
                   {#if isOpenCodeV2Row(provider)}
                     <div class="border-t border-border pt-2.5">
                       <OpenCodeV2CatalogPanel harnessName={provider.name} />
@@ -1231,6 +1292,25 @@
     {#if acpRemoveError}
       <p class="text-xs text-danger">{acpRemoveError}</p>
     {/if}
+  </ConfirmDialog>
+{/if}
+
+{#if acpDisableTarget}
+  <ConfirmDialog
+    open
+    title={`Disable ${acpDisableTarget.name}?`}
+    confirmLabel="Disable agent"
+    variant="danger"
+    busy={acpDisabling}
+    onCancel={cancelAcpDisable}
+    onConfirm={confirmAcpDisable}
+    note="Its threads must pick another harness until you enable it again."
+  >
+    <p>
+      {acpDisableTarget.name} leaves every harness list and stops being offered to new threads. Nothing
+      is uninstalled, and its record, icon and settings stay exactly as they are, so you can turn it back
+      on at any time.
+    </p>
   </ConfirmDialog>
 {/if}
 

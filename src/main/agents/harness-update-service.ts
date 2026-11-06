@@ -7,6 +7,13 @@ import type {
   ProviderConnectionInfo
 } from '../../lib/types'
 import { findHarness, listHarnesses } from './harness-registry'
+import {
+  currentAcpAgents,
+  ensureAcpAgentsLoaded,
+  findAcpAgent,
+  isAcpAgentId
+} from '../drivers/acp/acp-agents-store'
+import { acpCommandName, acpUpdateCommandFor } from '../drivers/acp/acp-update-recipes'
 import { resolvedOpenCodeCommand } from './opencode-installation'
 import { parseMajorVersion, compareVersions } from '../../lib/version-compare'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -32,7 +39,18 @@ interface GitHubSource {
   kind: 'github'
   repo: string
 }
-type UpdateSource = NpmSource | GitHubSource
+/**
+ * A vendor installer script that embeds the release it installs.
+ *
+ * Some agents publish no registry and no release feed: their installer is
+ * regenerated per release and names the build in its download URL, so the
+ * script itself is the published version. Cursor Agent ships this way.
+ */
+interface InstallerSource {
+  kind: 'installer'
+  url: string
+}
+type UpdateSource = NpmSource | GitHubSource | InstallerSource
 
 /**
  * Where the latest published version of each harness lives. Sources were
@@ -58,6 +76,30 @@ const UPDATE_SOURCES: Record<string, UpdateSource> = {
  * The harness's own self-update command, run by the user inside the embedded
  * terminal   CodeInOven never mutates a harness install on its own.
  */
+/**
+ * Where the latest published version of a well-known ACP agent lives.
+ *
+ * An ACP agent is the user's own binary, so the app has no manifest to read a
+ * version from: the `<agent> --version` that ProviderConnectionService probes and
+ * the vendor's published feed are the only authorities. An agent this table does
+ * not recognize simply has no feed to compare against, so its Update action runs
+ * the updater the user configured without a badge.
+ */
+const ACP_UPDATE_SOURCES: Record<string, UpdateSource> = {
+  cline: { kind: 'npm', package: 'cline' },
+  // cursor-agent publishes no registry entry; the vendor's installer names the
+  // build it downloads, so its URL is the only published-version source. Without
+  // this entry the app could never show that an install was months behind.
+  'cursor-agent': { kind: 'installer', url: 'https://cursor.com/install' }
+}
+
+/** Split an agent's update command line into the argv the terminal runs. */
+export function splitAcpUpdateCommand(line: string): { command: string; args: string[] } {
+  const parts = line.trim().split(/\s+/u).filter(Boolean)
+  const [command = '', ...args] = parts
+  return { command, args }
+}
+
 const UPDATE_ARGS: Record<string, string[]> = {
   opencode: ['upgrade'],
   codex: ['update'],
@@ -88,6 +130,8 @@ function openCodeUpdateHandoff(
 }
 
 const VERSION_PATTERN = /\b(v?\d+\.\d+\.\d+)/u
+/** The release a vendor installer downloads, e.g. `/lab/2026.11.05-86047df/`. */
+const INSTALLER_VERSION_PATTERN = /\/lab\/(\d{4}\.\d{2}\.\d{2}(?:-[0-9a-z]+)?)\//u
 /**
  * Whether a resolved harness binary belongs to the CodeInOven application
  * itself rather than a user install   e.g. `node_modules/.bin/pi.exe` inside
@@ -159,6 +203,16 @@ async function fetchLatest(source: UpdateSource): Promise<string> {
       }
       return body['version']
     }
+    if (source.kind === 'installer') {
+      const response = await fetch(source.url, { signal: controller.signal })
+      if (!response.ok) {
+        throw new Error(`installer script returned HTTP ${response.status}`)
+      }
+      const script = await response.text()
+      const version = script.match(INSTALLER_VERSION_PATTERN)?.[1]
+      if (!version) throw new Error('installer script did not name a release')
+      return version
+    }
     const response = await fetch(`https://api.github.com/repos/${source.repo}/releases/latest`, {
       signal: controller.signal,
       headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'CodeInOven' }
@@ -209,7 +263,15 @@ export class HarnessUpdateService {
 
   /** Last completed per-harness results (never throws). */
   getAll(): HarnessUpdateStatus[] {
-    return listHarnesses().map((harness) => this.results.get(harness.id) ?? idleStatus(harness.id))
+    const native = listHarnesses().map(
+      (harness) => this.results.get(harness.id) ?? idleStatus(harness.id)
+    )
+    // ACP agents are listed beside the harnesses, so their update state travels
+    // with them into the same status map the page reads.
+    const acp = currentAcpAgents().map(
+      (agent) => this.results.get(agent.id) ?? idleStatus(agent.id)
+    )
+    return [...native, ...acp]
   }
 
   async checkAll(force = false): Promise<HarnessUpdateStatus[]> {
@@ -240,16 +302,21 @@ export class HarnessUpdateService {
 
   private async runCheckAll(): Promise<HarnessUpdateStatus[]> {
     const results: HarnessUpdateStatus[] = []
-    const harnesses = listHarnesses()
-    for (const [index, harness] of harnesses.entries()) {
-      results.push(await this.checkOne(harness.id))
-      if (index < harnesses.length - 1) await this.yieldToMainLoop()
+    await ensureAcpAgentsLoaded()
+    const ids = [
+      ...listHarnesses().map((harness) => harness.id),
+      ...currentAcpAgents().map((agent) => agent.id)
+    ]
+    for (const [index, id] of ids.entries()) {
+      results.push(await this.checkOne(id))
+      if (index < ids.length - 1) await this.yieldToMainLoop()
     }
     this.lastCheckedAt = Date.now()
     return results
   }
 
   private async runCheckOne(harnessId: string): Promise<HarnessUpdateStatus> {
+    if (isAcpAgentId(harnessId)) return this.runCheckAcpAgent(harnessId)
     const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
     const base = idleStatus(harnessId)
     if (!provider || provider.status !== 'available') {
@@ -314,6 +381,7 @@ export class HarnessUpdateService {
 
   /** Build, but do not execute, the update handoff for the embedded terminal. */
   async handoff(harnessId: string): Promise<HarnessUpdateHandoff> {
+    if (isAcpAgentId(harnessId)) return this.acpHandoff(harnessId)
     const definition = findHarness(harnessId)
     if (!definition) throw new Error(`Unknown harness: ${harnessId}`)
     const args = UPDATE_ARGS[harnessId]
@@ -356,6 +424,92 @@ export class HarnessUpdateService {
       command: prepared.command,
       args: prepared.args,
       title: `Update ${definition.name}`
+    }
+  }
+
+  /**
+   * Whether an ACP agent is behind the release its vendor publishes.
+   *
+   * Everything here is best-effort by design: a failed lookup, an agent with no
+   * updater and an agent whose feed the app does not know all settle as `idle`,
+   * so a network hiccup never paints a working agent as broken. `idle` still
+   * leaves the agent's Update action available in its own menu.
+   */
+  private async runCheckAcpAgent(harnessId: string): Promise<HarnessUpdateStatus> {
+    const base = idleStatus(harnessId)
+    const agent = await findAcpAgent(harnessId)
+    if (!agent) {
+      return this.settle(harnessId, {
+        ...base,
+        state: 'error',
+        detail: 'This ACP agent is no longer configured.'
+      })
+    }
+    const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
+    if (provider?.status !== 'available') {
+      return this.settle(harnessId, {
+        ...base,
+        state: 'error',
+        detail: 'The agent is not installed   nothing to update.'
+      })
+    }
+    const currentVersion = provider.version ? extractHarnessVersion(provider.version) : undefined
+    const updateCommand = acpUpdateCommandFor(agent)
+    if (!updateCommand) {
+      return this.settle(harnessId, {
+        ...base,
+        currentVersion,
+        state: 'idle',
+        detail: 'No update command is set for this agent.'
+      })
+    }
+    const source = ACP_UPDATE_SOURCES[acpCommandName(agent.command)]
+    if (!source) {
+      return this.settle(harnessId, {
+        ...base,
+        currentVersion,
+        state: 'idle',
+        detail: 'The app does not track a published version for this agent.'
+      })
+    }
+    let latestVersion: string | undefined
+    try {
+      latestVersion = await this.enqueueLookup(() => fetchLatest(source))
+    } catch (error) {
+      Logger.dev(`[harness-update] ${harnessId} lookup failed:`, error)
+      return this.settle(harnessId, { ...base, currentVersion, state: 'idle' })
+    }
+    const latestClean = extractHarnessVersion(latestVersion) ?? latestVersion
+    if (!currentVersion || !latestClean) {
+      return this.settle(harnessId, { ...base, currentVersion, latestVersion, state: 'idle' })
+    }
+    const updateAvailable = compareVersions(latestClean, currentVersion) > 0
+    return this.settle(harnessId, {
+      ...base,
+      currentVersion,
+      latestVersion,
+      state: updateAvailable ? 'update_available' : 'current'
+    })
+  }
+
+  /** Hand the agent's own updater to the embedded terminal. */
+  private async acpHandoff(harnessId: string): Promise<HarnessUpdateHandoff> {
+    const agent = await findAcpAgent(harnessId)
+    if (!agent) throw new Error('This ACP agent is no longer configured.')
+    const line = acpUpdateCommandFor(agent)
+    if (!line) {
+      throw new Error(`${agent.name} has no update command. Set one while editing the agent.`)
+    }
+    const { command, args } = splitAcpUpdateCommand(line)
+    if (command.length === 0) {
+      throw new Error(`${agent.name} has no update command. Set one while editing the agent.`)
+    }
+    const prepared = await prepareHarnessTerminalHandoff(command, args)
+    return {
+      kind: 'terminal',
+      command: prepared.command,
+      args: prepared.args,
+      title: `Update ${agent.name}`
     }
   }
 
