@@ -159,6 +159,16 @@
       })
     }
     element.addEventListener('native-floating-document-change', requestMeasure)
+    /**
+     * The first read happens where the bubble is attached, before the host adopts
+     * it, so the host window is sized correctly on its very first `update`
+     * instead of opening at a one-pixel height and jumping once the deferred
+     * measurement lands. The read is limited to the app's own document: once the
+     * element belongs to the adopted floating document the measurement stays
+     * deferred, which is what keeps the adoption that changes the owning
+     * document out of the bounds effect.
+     */
+    if (element.isConnected && element.ownerDocument === document) sync()
     requestMeasure()
     const releaseDrag = drag(element)
     native.focusContent()
