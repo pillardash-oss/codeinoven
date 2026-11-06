@@ -17,7 +17,8 @@ import {
   classifyProviderIssue,
   isUsageLimitNoticeText,
   isUsageResetWaitIssue,
-  parseUsageResetAt
+  parseUsageResetAt,
+  TRANSIENT_PROVIDER_RETRY_MS
 } from '../../../lib/provider-issue'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
@@ -305,14 +306,17 @@ export class ChatEngineRuntimeConnectivity {
     )
       return true
     // A provider with an explicit retry deadline has declared that the issue
-    // is safe to retry later. Known reset-based issues may also derive their
-    // deadline from account telemetry; everything else stays manual unless it
-    // carries both retryable=true and retryAt.
-    const canDeriveReset =
-      issue.kind === 'quota' || issue.kind === 'rate_limit' || issue.kind === 'provider_unavailable'
+    // is safe to retry later. Account usage windows explain quota/rate-limit
+    // failures only: a provider-load 429 ("overloaded", "server_error") or a
+    // 5xx is not a window. Deriving a reset for one parked a transient failure
+    // weeks out on the account's monthly reset (OpenCode Go, 2026-11-05), so a
+    // retryable transient outage gets the fixed short backoff below instead.
+    const canDeriveReset = issue.kind === 'quota' || issue.kind === 'rate_limit'
+    const transientUnavailable = issue.kind === 'provider_unavailable' && issue.retryable
     if (
       issue.kind !== 'network' &&
       !canDeriveReset &&
+      !transientUnavailable &&
       !(issue.retryable && issue.retryAt !== undefined)
     ) {
       return false
@@ -327,14 +331,19 @@ export class ChatEngineRuntimeConnectivity {
     // waits on and the resume come from it.
     if (!driver && issue.kind !== 'network') return false
     // Allow the failed turn to finish tearing down before admitting a continuation.
-    let retryAt = issue.kind === 'network' ? Date.now() + 3_000 : issue.retryAt
-    if (retryAt === undefined) {
-      if (!driver) return false
-      // Some harnesses surface a usage reset without attaching it to the error
-      // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
-      // its account endpoint)   ask the provider-scoped account telemetry for
-      // the real reset window instead of waiting on the blind fallback cooldown.
-      retryAt = await this.host.units['turns-dispatch'].deriveUsageResetRetryAt(info, driver)
+    let retryAt: number | undefined
+    if (issue.kind === 'network') retryAt = Date.now() + 3_000
+    else if (transientUnavailable) retryAt = Date.now() + TRANSIENT_PROVIDER_RETRY_MS
+    else {
+      retryAt = issue.retryAt
+      if (retryAt === undefined) {
+        if (!driver) return false
+        // Some harnesses surface a usage reset without attaching it to the error
+        // (e.g. Codex reports windows via account/rateLimits/read, OpenCode Go via
+        // its account endpoint)   ask the provider-scoped account telemetry for
+        // the real reset window instead of waiting on the blind fallback cooldown.
+        retryAt = await this.host.units['turns-dispatch'].deriveUsageResetRetryAt(info, driver)
+      }
     }
     const usageResetWait = isUsageResetWaitIssue(issue)
     if (retryAt === undefined && usageResetWait) {
@@ -346,7 +355,12 @@ export class ChatEngineRuntimeConnectivity {
       retryAt = Date.now() + USAGE_RESET_FALLBACK_RETRY_MS
     }
     const resetAt = retryAt
-    if (retryAt !== undefined && issue.kind !== 'network') retryAt += RETRY_FIRE_GRACE_MS
+    // Only a provider window needs the rollover grace: firing exactly on the
+    // reset second races the window rollover. A transient outage already got
+    // its own short backoff and must not be pushed past it.
+    if (retryAt !== undefined && (issue.kind === 'quota' || issue.kind === 'rate_limit')) {
+      retryAt += RETRY_FIRE_GRACE_MS
+    }
     const hasRetryAt = typeof retryAt === 'number' && Number.isFinite(retryAt)
     if (!hasRetryAt && !usageResetWait) return false
     // A deliberate user stop is never overwritten by a new wait. This is the
