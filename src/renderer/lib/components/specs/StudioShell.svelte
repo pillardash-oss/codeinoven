@@ -29,6 +29,10 @@
   import { tick } from 'svelte'
 
   import type { Snippet } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
+
+  import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
+
   import StudioSidebarResizeHandle from './StudioSidebarResizeHandle.svelte'
 
   interface Props {
@@ -89,6 +93,64 @@
     onScrollerMouseUp,
     onSectionKeydown
   }: Props = $props()
+
+  /**
+   * Report the document's own column as the reading column, so the app header's
+   * thread name sits on the text the studio is showing.
+   *
+   * A studio takes the pane the conversation was in, and every document in it is
+   * one padded block: the block's padding is where the reader's text starts, so
+   * the name aligns to that edge and ends where the text ends. The block is
+   * measured rather than assumed, because the pane is not the page: the sections
+   * sidebar takes 13rem of it, the context panel narrows it, and each studio pads
+   * its document differently.
+   *
+   * Every studio loads its document lazily, so the block arrives after the shell
+   * mounts: the child list is watched for it, and the scroller and the block are
+   * both observed so a panel opening beside the studio carries the name with it
+   * frame by frame instead of leaving it behind until the next resize.
+   */
+  const studioReadingColumn: Attachment<HTMLElement> = (node) => {
+    const owner = {}
+    const resize = new ResizeObserver(() => measure())
+    const mutations = new MutationObserver(() => measure())
+    let content: HTMLElement | null = null
+
+    function measure(): void {
+      if (!node.isConnected || node.getClientRects().length === 0) return
+      if (node.getBoundingClientRect().width <= 0) return
+      const first = node.firstElementChild
+      const candidate =
+        first instanceof HTMLElement && first.getClientRects().length > 0 ? first : null
+      if (candidate !== content) {
+        content = candidate
+        resize.disconnect()
+        resize.observe(node)
+        if (content) resize.observe(content)
+      }
+      const column = content ?? node
+      const box = column.getBoundingClientRect()
+      const style = getComputedStyle(column)
+      const left = Number.parseFloat(style.paddingLeft) || 0
+      const right = Number.parseFloat(style.paddingRight) || 0
+      layoutPanelState.setReadingColumn(
+        owner,
+        Math.round(box.left + left),
+        Math.round(Math.max(0, box.width - left - right))
+      )
+    }
+
+    mutations.observe(node, { childList: true })
+    resize.observe(node)
+    window.addEventListener('resize', measure)
+    measure()
+    return () => {
+      mutations.disconnect()
+      resize.disconnect()
+      window.removeEventListener('resize', measure)
+      layoutPanelState.clearReadingColumn(owner)
+    }
+  }
 
   async function scrollToSection(sectionId: SectionId): Promise<void> {
     selectedSection = sectionId
@@ -259,6 +321,7 @@
       class="relative min-h-0 overflow-y-auto scroll-smooth bg-app"
       aria-label={scrollerLabel}
       onmouseup={onScrollerMouseUp}
+      {@attach studioReadingColumn}
     >
       {#if markers}
         {@render markers()}

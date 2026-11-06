@@ -1,6 +1,5 @@
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { engineeringStudioVisible } from '$shared/engineering-generation'
-import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
 import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
 import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
 import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
@@ -185,38 +184,6 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           clearTimeout(this.root.state.contextUsageSettleTimer)
           this.root.state.contextUsageSettleTimer = undefined
         }
-      }
-    })
-
-    /**
-     * Where the studio's pane sits, so the header can centre the thread's name in it.
-     *
-     * A studio replaces the conversation and the context panel can stay open beside
-     * it, so the pane is narrower than the window: measuring this view is the only
-     * way the name lands in the middle of what the user is actually looking at. The
-     * box is watched rather than measured once, because a panel opening or closing
-     * moves it without the window changing.
-     */
-    $effect(() => {
-      if (!this.root.submitSpecDecision.showSpecStudio) {
-        layoutPanelState.clearStudioPane()
-        return
-      }
-      const element = this.root.state.threadViewElement
-      if (!element) return
-      const report = () => {
-        const box = element.getBoundingClientRect()
-        if (box.width <= 0) return
-        layoutPanelState.setStudioPane(Math.round(box.left), Math.round(box.width))
-      }
-      report()
-      const observer = new ResizeObserver(report)
-      observer.observe(element)
-      window.addEventListener('resize', report)
-      return () => {
-        observer.disconnect()
-        window.removeEventListener('resize', report)
-        layoutPanelState.clearStudioPane()
       }
     })
 
