@@ -1010,6 +1010,8 @@
               )}
             onReview={board.submitSpecDecision.reviewAudit}
             onComplete={board.submitSpecDecision.completeAudit}
+            retractAvailable={board.submitSpecDecision.auditRetractAvailable}
+            onRetract={board.submitSpecDecision.retractAudit}
             onOpenInEditor={board.buildSpecActionPrompt.openAuditInEditor}
             onRevealInAppFile={board.buildSpecActionPrompt.revealAuditInAppFile}
           />

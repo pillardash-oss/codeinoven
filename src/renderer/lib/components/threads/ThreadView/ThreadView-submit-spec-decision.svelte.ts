@@ -58,6 +58,19 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     )
   })
 
+  /** The accepted report can be pulled back into review. Accepting a report
+   *  clears the thread's audit state and lands the thread on Done, so a thread
+   *  that still has a report but no audit state is exactly the accepted case. */
+  auditRetractAvailable = $derived.by(() => {
+    const report = this.root.contextUsage.auditReport
+    if (!report || this.auditReportActionsAvailable) return false
+    if (this.assignment) {
+      return this.assignment.auditCycle?.status === 'completed'
+    }
+    const thread = this.root.handleAgentEvent.thread
+    return thread.status === 'completed' && thread.auditState === undefined
+  })
+
   /**
    * The thread every Assignment call is keyed on.
    *
@@ -552,6 +565,36 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     } catch (error) {
       this.root.buildSpecActionPrompt.auditError =
         error instanceof Error ? error.message : 'The feature could not be completed.'
+    } finally {
+      this.auditBusy = false
+    }
+  }
+
+  /** Undo an accepted audit report: the report returns to review on `spec` with
+   *  its audit state restored, so Rework and Complete are offered again. */
+  async retractAudit(): Promise<void> {
+    if (this.auditBusy) return
+    this.auditBusy = true
+    this.root.buildSpecActionPrompt.auditError = ''
+    try {
+      const updatedThread = await invoke(
+        'audit:retract',
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )
+      scopeState.updateThread(updatedThread)
+      this.auditState = updatedThread.auditState
+      if (this.assignment) {
+        this.assignment = await invoke(
+          'assignment:getActive',
+          this.root.handleAgentEvent.thread.projectId,
+          this.auditWorkflowThreadId()
+        ).catch(() => null)
+      }
+      await this.root.submitBrainstormDecision.reconcileReadySpec()
+    } catch (error) {
+      this.root.buildSpecActionPrompt.auditError =
+        error instanceof Error ? error.message : 'The audit report could not be retracted.'
     } finally {
       this.auditBusy = false
     }

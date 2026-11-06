@@ -935,6 +935,30 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
     }
     return threadManager.setAuditState(validProjectId, validThreadId, undefined)
   })
+  ipcMain.handle('audit:retract', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const assignment = assignmentEngine.getActive(validProjectId, validThreadId)
+    if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'completed') {
+      await assignmentEngine.retractAuditCycle(validProjectId, validThreadId)
+    }
+    const report = auditEngine.getActive(validProjectId, validThreadId)
+    if (!report && assignment?.auditCycle?.status !== 'available') {
+      throw new Error('This thread has no accepted audit report to retract')
+    }
+    // The exact inverse of `audit:complete`: the accepted report goes back under
+    // review on `spec`, where Rework and Complete are offered again.
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (thread && thread.status === 'completed') {
+      await threadManager.setStatus(validProjectId, validThreadId, 'spec')
+    }
+    return threadManager.setAuditState(
+      validProjectId,
+      validThreadId,
+      report ? 'report_ready' : 'offered',
+      report ? { id: report.id, version: report.version } : undefined
+    )
+  })
   ipcMain.handle('audit:dismiss', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')

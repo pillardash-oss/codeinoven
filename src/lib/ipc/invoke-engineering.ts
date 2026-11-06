@@ -538,6 +538,7 @@ export const invokeEngineeringContract = {
     AuditReport
   >,
   'audit:complete': {} as Contract<[projectId: string, threadId: string], Thread>,
+  'audit:retract': {} as Contract<[projectId: string, threadId: string], Thread>,
   'audit:dismiss': {} as Contract<[projectId: string, threadId: string], Thread>,
   'audit:restoreOffer': {} as Contract<[projectId: string, threadId: string], AssignmentPlan>,
   'audit:beginRework': {} as Contract<[projectId: string, threadId: string], Thread>,
