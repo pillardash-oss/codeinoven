@@ -594,8 +594,18 @@ export class SearchService {
     const accept = scoped
       ? (threadId: string): boolean => {
           const candidate = this.index.candidates.get(threadId)
-          if (!candidate) return false
-          return threadMatchesSearchScope(candidate, { family, projectId, assistantId })
+          // A record without a corpus row is ranked anyway: the hydrated matches
+          // are filtered by the same scope before they are returned, so a
+          // missing candidate must never turn a scoped search into no search.
+          if (!candidate) return true
+          // A corpus row read before the assistant column existed cannot be
+          // narrowed to one assistant, so it is filtered by family alone and the
+          // hydration pass settles the rest.
+          return threadMatchesSearchScope(candidate, {
+            family,
+            projectId,
+            assistantId: candidate.assistantId === undefined ? undefined : assistantId
+          })
         }
       : undefined
     const document = `${model.queryPrefix}${trimmed}`
