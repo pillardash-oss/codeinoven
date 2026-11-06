@@ -7,6 +7,7 @@ import type {
   CommandPaletteProps,
   PaletteFooterFilter
 } from '$lib/components/actions/CommandPalette.svelte'
+import type { ActionSelection } from '$lib/actions'
 import { CONTENT_FAMILY_ICONS } from '$lib/content-view-icons'
 import { invoke, waitForFeatures } from '$lib/ipc.svelte'
 import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
@@ -83,6 +84,24 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     { openThread: (thread) => void this.openThreadFromSearch(thread) },
     'all'
   )
+
+  /**
+   * The same unified ranking, shown inline on the spotlight home while the user
+   * types there.
+   *
+   * The home prompt has always promised threads, and until now it only listed
+   * actions: a query that named a conversation answered "No matching actions".
+   * Its rows are handed to the palette as leading rows, so the server's ranking
+   * is never re-filtered by the client and a meaning-based hit whose text does
+   * not repeat the query still shows.
+   */
+  homeThreadSearch = new ThreadSearchPaletteController(
+    { openThread: (thread) => void this.openThreadFromSearch(thread) },
+    'all'
+  )
+
+  /** The query the home screen is on, mirrored for its inline thread search. */
+  homeQuery = $state('')
 
   browserTabSearch = new BrowserTabPaletteController({
     openTab: (tabId) => this.openBrowserTabFromSearch(tabId)
@@ -382,10 +401,21 @@ export class AppSpotlightPalette extends BoardUnit<App> {
         return {
           ...shell,
           actions: this.paletteActions,
+          // Thread hits rank above the action list and are never re-filtered: the
+          // search already decided they match.
+          leadingActions: this.homeQuery.trim().length >= 2 ? this.homeThreadSearch.actions : [],
           title: 'Search actions',
           placeholder: 'Search actions, threads, and files…',
-          emptyLabel: 'No matching actions',
-          onSelect: this.root.onKeydown.handlePaletteSelection,
+          emptyLabel:
+            this.homeQuery.trim().length >= 2
+              ? 'No matching actions or threads'
+              : 'No matching actions',
+          statusNote: this.homeThreadSearch.rankingByMeaning ? 'Ranking by meaning…' : '',
+          onQueryChange: (query) => this.handleHomeQuery(query),
+          onSelect: (selection) => void this.selectFromHome(selection),
+          // The home surface decides for itself whether the pick closes the
+          // spotlight, because a thread row needs its target before it does.
+          closeOnSelect: false,
           shortcutLabel: 'Ctrl K'
         }
     }
@@ -597,8 +627,47 @@ export class AppSpotlightPalette extends BoardUnit<App> {
 
   /** Step back to the actions list from a nested spotlight screen. */
   backToSpotlightHome(): void {
+    this.resetHomeSearch()
     this.root.onKeydown.closeSpotlight()
     this.commandPaletteOpen = true
+  }
+
+  /** Feed the home input to the unified thread search, or stand it down. */
+  handleHomeQuery(query: string): void {
+    this.homeQuery = query
+    const searching = query.trim().length >= 2
+    this.homeThreadSearch.setInlineActive(searching)
+    if (searching) this.homeThreadSearch.handleQuery(query)
+  }
+
+  /** Stop the inline home search and drop its rows. */
+  resetHomeSearch(): void {
+    this.homeQuery = ''
+    this.homeThreadSearch.setInlineActive(false)
+  }
+
+  /**
+   * A pick on the home screen: a thread row opens its thread, anything else is an
+   * app action.
+   *
+   * The thread rows come from this screen's inline search, so only it can resolve
+   * the row's target. Opening one closes the whole spotlight, exactly as picking
+   * a row on the dedicated search screen does.
+   */
+  async selectFromHome(selection: ActionSelection): Promise<void> {
+    if (this.homeThreadSearch.ownsAction(selection.action.id)) {
+      // Resolve the row while its target still exists: the controller's own
+      // select closes and resets itself, then the whole spotlight goes with it.
+      this.homeThreadSearch.select(selection)
+      this.root.onKeydown.closeSpotlight()
+      return
+    }
+    this.resetHomeSearch()
+    await this.root.onKeydown.handlePaletteSelection(selection)
+    // A nested screen the action opened (another search, project switch, the new
+    // project flow) keeps the spotlight open; anything else is a navigation or a
+    // command, which closes it the way it always has.
+    if (!this.spotlightScreenId) this.root.onKeydown.closeSpotlight()
   }
 
   /** Preserve the current content view / project sidebar state when opening a
@@ -627,6 +696,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     else if (this.chatSearch.paletteOpen) this.chatSearch.applyIntentResults(payload)
     else if (this.root.onKeydown.assistantSearch.paletteOpen)
       this.root.onKeydown.assistantSearch.applyIntentResults(payload)
+    else this.homeThreadSearch.applyIntentResults(payload)
   }
 
   /** Focus a tab picked in browser search: land on the Browser view and switch

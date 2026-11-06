@@ -118,12 +118,53 @@ export class ThreadSearchPaletteController {
    *  threads. Read once per open, since that is when the user is about to type. */
   private intentAvailable = false
   private rankingTimer: number | null = null
+  /**
+   * The controller is ranking for the spotlight's home input rather than for its
+   * own screen.
+   *
+   * A home query shows thread rows inline, so the answer has to be accepted while
+   * the dedicated screen is closed. Everything else stays the same: one request
+   * counter, one watchdog, one semantic route.
+   */
+  private inlineActive = false
   private readonly targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
 
   constructor(
     private readonly deps: ThreadSearchPaletteDeps,
     private readonly family: ThreadSearchFamily
   ) {}
+
+  /** Whether a query is being answered on either surface. */
+  private get active(): boolean {
+    return this.paletteOpen || this.inlineActive
+  }
+
+  /**
+   * Rank for the home input, or stop.
+   *
+   * Called as the user types on the spotlight home. Turning it off resets the
+   * controller, so rows from a home query can never leak into a screen the user
+   * has since opened (and the reverse).
+   */
+  setInlineActive(active: boolean): void {
+    if (this.inlineActive === active) return
+    this.inlineActive = active
+    if (!active) {
+      this.reset()
+      return
+    }
+    // Same preparation the dedicated screen does on open: the model may have
+    // retired cold, the intent state decides whether the note is honest, and a
+    // row's Oven has to resolve before the first result names one.
+    warmIntentSearch()
+    void this.refreshIntentAvailability()
+    void ovens.ensure()
+  }
+
+  /** Whether this controller produced the row the palette just reported. */
+  ownsAction(id: ActionDefinition['id']): boolean {
+    return this.targets.has(id)
+  }
 
   reset(): void {
     if (this.timer !== null) {
@@ -146,6 +187,7 @@ export class ThreadSearchPaletteController {
 
   openPalette(): void {
     this.reset()
+    this.inlineActive = false
     this.paletteOpen = true
     // The model ranks by meaning and boots cold after its five-minute idle
     // retire; start that boot while the user is still typing. Main no-ops it
@@ -274,7 +316,7 @@ export class ThreadSearchPaletteController {
     this.clearWatchdog()
     this.watchdog = window.setTimeout(() => {
       this.watchdog = null
-      if (request !== this.request || !this.paletteOpen) return
+      if (request !== this.request || !this.active) return
       this.loading = false
     }, SEARCH_WATCHDOG_MS)
   }
@@ -340,7 +382,7 @@ export class ThreadSearchPaletteController {
       this.stopRankingNote()
     }
     this.clearWatchdog()
-    if (request !== this.request || !this.paletteOpen) return
+    if (request !== this.request || !this.active) return
 
     this.lastResults = results
     this.renderedRequest = request
@@ -422,7 +464,7 @@ export class ThreadSearchPaletteController {
     requestId: number
     results: ThreadSearchResult[]
   }): void {
-    if (!this.paletteOpen) return
+    if (!this.active) return
     if (payload.requestId !== this.request) return
     if (payload.query !== this.lastQuery.trim()) return
     if (this.renderedRequest !== payload.requestId) {
@@ -472,7 +514,7 @@ export class ThreadSearchPaletteController {
     }
     if (missing.size === 0) return
     await Promise.all([...missing].map((projectId) => scopeState.cacheBoardForLookup(projectId)))
-    if (request !== this.request || !this.paletteOpen) return
+    if (request !== this.request || !this.active) return
     this.renderRows()
   }
 

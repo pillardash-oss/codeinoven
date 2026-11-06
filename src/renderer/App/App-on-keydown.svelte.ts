@@ -321,6 +321,9 @@ export class AppOnKeydown extends BoardUnit<App> {
   /** Close the whole spotlight, whichever screen is on top. */
   closeSpotlight(): void {
     this.root.spotlightPalette.commandPaletteOpen = false
+    // The home input ranks threads inline; closing the surface stands that down
+    // so a later open never paints rows from the query it was closed on.
+    this.root.spotlightPalette.resetHomeSearch()
     if (this.fileSearch.paletteOpen) this.fileSearch.close()
     if (this.threadSearch.paletteOpen) this.threadSearch.close()
     if (this.root.spotlightPalette.allThreadSearch.paletteOpen)
