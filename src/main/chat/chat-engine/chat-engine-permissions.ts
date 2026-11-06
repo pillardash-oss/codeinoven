@@ -214,6 +214,14 @@ export class ChatEnginePermissions {
         { read: true }
       )
     }
+    // A rejection ends the work the gate was blocking, and the image descriptor
+    // runs its vision call in a disposable session of its own: without this it
+    // would keep streaming, and even retry on another model, after the turn the
+    // user just rejected is already gone.
+    await this.host.units['media-visual'].abortImageDescriptorWork(
+      sessionId,
+      pending.session.threadId
+    )
     await driver.abort(pending.session.projectPath, sessionId)
   }
 

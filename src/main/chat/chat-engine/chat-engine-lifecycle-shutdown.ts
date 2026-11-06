@@ -133,6 +133,8 @@ export class ChatEngineLifecycleShutdown {
     for (const pending of this.host.state.pendingImageDescriptorDecisions.values()) {
       this.host.units['media-visual'].settleImageDescriptorDecision(pending)
     }
+    this.host.state.imageDescriptorSessions.clear()
+    this.host.state.cancelledImageDescriptorSessions.clear()
     for (const waiter of this.host.state.completionWaiters.values()) {
       if (waiter.timer !== undefined) clearTimeout(waiter.timer)
       waiter.reject(new Error(`${APP_NAME} is shutting down`))

@@ -69,6 +69,7 @@ import type {
   ChildSessionInfo,
   AutoAnswerReport,
   HeldSteer,
+  ImageDescriptorSessionRecord,
   PendingImageDescriptorDecision,
   PendingAssignmentTurn,
   PendingMemoryDecision,
@@ -155,6 +156,22 @@ export class ChatEngineState {
   pendingToolCreations = new Map<string, string[]>()
 
   pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
+
+  /**
+   * The disposable vision sessions the image descriptor is running right now,
+   * keyed by their own session id. A stop or a rejected permission cancels the
+   * work through these records, because a descriptor session belongs to no
+   * other unit and would otherwise keep streaming after its turn is gone.
+   */
+  imageDescriptorSessions = new Map<string, ImageDescriptorSessionRecord>()
+
+  /**
+   * Parent sessions whose image-descriptor work was cancelled by a stop or a
+   * rejected permission. The descriptor checks this before every attempt so a
+   * cancelled turn never opens another disposable vision session; each run
+   * drops its own entry as it unwinds.
+   */
+  cancelledImageDescriptorSessions = new Set<string>()
 
   completionWaiters = new Map<string, SessionCompletionWaiter>()
 

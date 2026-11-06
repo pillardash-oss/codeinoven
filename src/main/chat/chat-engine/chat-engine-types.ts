@@ -427,6 +427,28 @@ export interface PendingImageDescriptorDecision {
   timer?: ReturnType<typeof setTimeout>
 }
 
+/**
+ * One live image-descriptor vision session.
+ *
+ * The descriptor runs in a disposable session of its own, so nothing else in
+ * the engine would reach it once the turn that asked for a description is
+ * stopped, rejected, or finishes without answering. Recording it here is what
+ * lets a stop cancel the provider request instead of leaving it streaming (and
+ * billing) in the background after the turn is gone.
+ */
+export interface ImageDescriptorSessionRecord {
+  /** The disposable session the vision call runs in. */
+  sessionId: string
+  /** The session whose turn (or gateway tool call) asked for the description. */
+  parentSessionId: string
+  projectId: string
+  threadId: string
+  projectPath: string
+  driverId: string
+  accountId?: string
+  isolated?: IsolatedSessionHandle
+}
+
 export interface SessionCompletionWaiter {
   active: boolean
   structuredOutput?: unknown
