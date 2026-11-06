@@ -122,6 +122,8 @@
     let measuredWidth = -1
     let measuredHeight = -1
     let observer: ResizeObserver | null = null
+    let measuring = false
+    let active = true
     const sync = (): void => {
       const width = element.offsetWidth
       const height = element.offsetHeight
@@ -137,14 +139,34 @@
       observer.observe(element)
       sync()
     }
-    element.addEventListener('native-floating-document-change', observe)
-    observe()
+    /**
+     * Measure on the task after the one that adopted the element.
+     *
+     * The native host adopts this tree while the bounds effect is flushing, and
+     * adoption is what changes the element's owning document. Reading and
+     * writing the bubble's size inside that effect made the size a dependency
+     * of the effect that had just written it: when the adopted layout differed,
+     * the effect re-ran and adopted again until Svelte stopped it with
+     * `effect_update_depth_exceeded`. A microtask is outside the flush, so the
+     * measurement settles the size once instead of nesting the effect.
+     */
+    const requestMeasure = (): void => {
+      if (!active || measuring) return
+      measuring = true
+      queueMicrotask(() => {
+        measuring = false
+        if (active) observe()
+      })
+    }
+    element.addEventListener('native-floating-document-change', requestMeasure)
+    requestMeasure()
     const releaseDrag = drag(element)
     native.focusContent()
     return () => {
+      active = false
       releaseDrag?.()
       observer?.disconnect()
-      element.removeEventListener('native-floating-document-change', observe)
+      element.removeEventListener('native-floating-document-change', requestMeasure)
     }
   }
 

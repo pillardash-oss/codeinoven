@@ -109,6 +109,9 @@ export interface QueuedResponseReference extends PromptReference {
   /** Design references: the page's entry file inside that design folder, so a
    *  comment whose page was closed reopens on the screen it was made on. */
   designEntry?: string
+  /** Design references: the design page a comment belongs to, independent of the
+   *  tab it was written in, so its pin is drawn wherever that page is opened. */
+  designId?: string
   /** Document annotations: the project-relative path of the document. */
   filePath?: string
   /** Video notes: the second on the composition the note was written at. */
@@ -340,6 +343,7 @@ function isQueuedResponseReference(value: unknown): value is QueuedResponseRefer
   if (value.selector !== undefined && typeof value.selector !== 'string') return false
   if (value.tabId !== undefined && typeof value.tabId !== 'string') return false
   if (value.designEntry !== undefined && typeof value.designEntry !== 'string') return false
+  if (value.designId !== undefined && typeof value.designId !== 'string') return false
   if (value.frame !== undefined && typeof value.frame !== 'string') return false
   if (value.filePath !== undefined && typeof value.filePath !== 'string') return false
   if (value.seconds !== undefined && typeof value.seconds !== 'number') return false

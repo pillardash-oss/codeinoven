@@ -35,6 +35,13 @@ export interface ResponseReferenceAnchor extends PromptReference {
    *  picker used on the folder listing, and on references written before it
    *  existed. */
   designEntry?: string
+  /** Design references: the design page this comment belongs to, independent of
+   *  the tab it was written in. A design can be shown in a thread's own tab, in
+   *  its screen's tab from the board, or in a tab the app reopened, and the pin
+   *  has to be drawn on that page wherever it is opened next. Absent on
+   *  references written before it existed, which fall back to `directory` and
+   *  `designEntry`. */
+  designId?: string
   /** Document annotations: the project-relative path of the document the
    *  passage was annotated in, so a document's preview pins only its own
    *  annotations and the path travels with the prompt. */
@@ -217,6 +224,21 @@ class ResponseReferencesState {
       if (pinned) owners.push(owner)
     }
     return owners
+  }
+
+  /**
+   * Every conversation that currently holds composer references, with its list.
+   *
+   * A browser tab can show a design another conversation wrote comments on (the
+   * same screen opened from a second tab, or the thread's tab moved through the
+   * work), so the pins are answered from every conversation rather than only the
+   * one that owns the tab.
+   */
+  entries(): { projectId: string; threadId: string; references: ResponseReferenceAnchor[] }[] {
+    return this.owners().map((owner) => ({
+      ...owner,
+      references: this.forThread(owner.projectId, owner.threadId)
+    }))
   }
 
   /** Every conversation that currently holds composer references. */
