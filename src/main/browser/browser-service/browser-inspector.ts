@@ -503,14 +503,24 @@ export function inspectorInstallScript(key: string): string {
       return element === doc.documentElement || element === doc.body;
     }
 
+    /**
+     * Whether a rectangle overlaps the visible page.
+     *
+     * viewportRect answers in x/y/width/height, not a DOMRect, so the edges are
+     * derived here instead of read off the rectangle. Reading bottom, right, top
+     * or left from it was always undefined, which made every comparison false:
+     * the boxes and pins were placed and then hidden on every layout, so a
+     * comment written on a design could never show the indicator the reader has
+     * to click to edit it, armed or not.
+     */
     function onScreen(rect) {
       return (
         rect.width > 0 &&
         rect.height > 0 &&
-        rect.bottom > 0 &&
-        rect.right > 0 &&
-        rect.top < innerHeight &&
-        rect.left < innerWidth
+        rect.x + rect.width > 0 &&
+        rect.y + rect.height > 0 &&
+        rect.y < innerHeight &&
+        rect.x < innerWidth
       );
     }
 
