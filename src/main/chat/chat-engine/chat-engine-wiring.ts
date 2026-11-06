@@ -293,6 +293,9 @@ export function wireChatEngine(
     engine.state.assignmentEngine.setAuditCycleListener((plan) => {
       void engine.reannounceAssignmentAudit(plan)
     })
+    // A worker the plan replaces is not reused, so the engine asks the app to
+    // stop it and clear its scheduled retry instead of leaving it paused.
+    engine.units['assignment-workers'].installAssignmentWorkerRetirement()
     // Register available harness drivers. Order follows the harness registry
     // the single source of truth   so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.

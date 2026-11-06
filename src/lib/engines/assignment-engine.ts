@@ -94,6 +94,12 @@ export class AssignmentEngine {
    * inherits the Assignment's scope.
    */
   private workerScopes: AssignmentWorkerScopeProvisioner = inheritOnlyWorkerScopes
+  /**
+   * Installed by the app so a replaced worker can be retired for real: stopped
+   * and unscheduled. Unlinking alone left it parked on a quota retry with
+   * nothing left to report to, and it resumed days later on its own.
+   */
+  private retireWorker: ((projectId: string, threadId: string) => Promise<void>) | null = null
 
   constructor(
     private readonly storage: StorageEngine,
@@ -118,6 +124,27 @@ export class AssignmentEngine {
    */
   setWorkerScopeProvisioner(provisioner: AssignmentWorkerScopeProvisioner | null): void {
     this.workerScopes = provisioner ?? inheritOnlyWorkerScopes
+  }
+
+  /**
+   * Install the app's retirement handler for a worker the Assignment replaced.
+   * Only the app owns sessions, so stopping the thread and clearing its pending
+   * retry cannot happen here. Late-bound for the same reason as the provisioner.
+   */
+  setWorkerRetirementHandler(
+    handler: ((projectId: string, threadId: string) => Promise<void>) | null
+  ): void {
+    this.retireWorker = handler
+  }
+
+  /** Housekeeping only: a failed retirement must never block the reassignment. */
+  private async retireReplacedWorker(projectId: string, threadId: string): Promise<void> {
+    if (!this.retireWorker) return
+    try {
+      await this.retireWorker(projectId, threadId)
+    } catch {
+      // The abandoned thread keeps its old state, which is what happened before.
+    }
   }
 
   /**
@@ -942,6 +969,7 @@ export class AssignmentEngine {
     if (staleThreadId && staleThreadId !== active.coordinatorThreadId) {
       this.removeApiCapabilitiesForThread(active.id, staleThreadId)
       await this.threads.unlinkAssignmentThread(active.projectId, staleThreadId)
+      await this.retireReplacedWorker(active.projectId, staleThreadId)
     }
 
     let assignedTask: AssignmentTask
