@@ -79,6 +79,10 @@
     onRevealInAppFile: (content: AssignmentPlanContent) => CallbackResult
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
+    onPhaseModelChange?: (
+      phaseId: string,
+      selection: AssignmentModelSelection
+    ) => void | Promise<void>
     onTaskModelChange?: (
       taskId: string,
       selection: AssignmentModelSelection
@@ -153,6 +157,7 @@
     onRevealInAppFile,
     onWorkerModelChange,
     onSeniorModelChange,
+    onPhaseModelChange,
     onTaskModelChange,
     onTaskScopeChange,
     onWorkerScopeChange,
@@ -740,6 +745,7 @@
       onChange={updateDraft}
       {onWorkerModelChange}
       {onSeniorModelChange}
+      {onPhaseModelChange}
       {onTaskModelChange}
       {onTaskScopeChange}
       {onWorkerScopeChange}

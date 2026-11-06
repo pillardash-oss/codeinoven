@@ -241,6 +241,29 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     }
   }
 
+  async updateAssignmentPhaseModel(
+    phaseId: string,
+    selection: AssignmentModelSelection
+  ): Promise<void> {
+    this.assignmentBusy = true
+    this.assignmentError = ''
+    try {
+      const owner = this.assignmentOwner()
+      this.assignment = await invoke(
+        'assignment:updateUnlinkedPhaseModel',
+        owner.projectId,
+        owner.threadId,
+        phaseId,
+        selection
+      )
+    } catch (error) {
+      this.assignmentError =
+        error instanceof Error ? error.message : 'The phase model could not be updated.'
+    } finally {
+      this.assignmentBusy = false
+    }
+  }
+
   async updateAssignmentTaskScope(taskId: string, scope: ScopeChoice): Promise<void> {
     this.assignmentBusy = true
     this.assignmentError = ''

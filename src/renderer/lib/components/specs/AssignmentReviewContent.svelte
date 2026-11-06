@@ -35,6 +35,12 @@
     onChange: (content: AssignmentPlanContent) => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
+    /** Retargets a phase whose workers have not started yet, on a signed-off
+     *  Assignment. The phase model only reaches tasks that never picked one. */
+    onPhaseModelChange?: (
+      phaseId: string,
+      selection: AssignmentModelSelection
+    ) => void | Promise<void>
     onTaskModelChange?: (
       taskId: string,
       selection: AssignmentModelSelection
@@ -87,6 +93,7 @@
     onChange,
     onWorkerModelChange,
     onSeniorModelChange,
+    onPhaseModelChange,
     onTaskModelChange,
     onTaskScopeChange,
     onWorkerScopeChange,
@@ -194,12 +201,28 @@
 
   function canUpdateTaskModel(task: AssignmentTask): boolean {
     if (!readOnly) return true
+    // A signed-off task is retargetable until its worker exists, including while
+    // the Assignment is stopped: nothing has been dispatched yet, so there is
+    // nothing to preserve.
     return (
       onTaskModelChange !== undefined &&
       task.owner === 'worker' &&
       !task.threadId &&
-      task.status !== 'completed' &&
-      task.status !== 'stopped'
+      task.status !== 'completed'
+    )
+  }
+
+  /**
+   * A phase is reached the moment one of its workers is dispatched or finished;
+   * from then on the phase model no longer describes pending work, so the
+   * remaining tasks keep their own per-task controls instead.
+   */
+  function canUpdatePhaseModel(phaseId: string): boolean {
+    if (!readOnly) return true
+    if (onPhaseModelChange === undefined) return false
+    return !content.tasks.some(
+      (task) =>
+        task.phaseId === phaseId && (task.threadId !== undefined || task.status === 'completed')
     )
   }
 
@@ -350,11 +373,13 @@
       // Only the topmost phase doubles as the "default phase model" control:
       // changing it reflects from the top to the bottom and seeds the last-used
       // worker model. Deeper phase changes stay local to their own cascade.
-      if (!readOnly) {
-        for (const [phaseId, selection] of phaseEntries) {
-          const index = content.phases.findIndex((phase) => phase.id === phaseId)
-          if (index === 0) onWorkerModelChange?.(selection)
+      for (const [phaseId, selection] of phaseEntries) {
+        if (readOnly) {
+          if (canUpdatePhaseModel(phaseId)) await onPhaseModelChange?.(phaseId, selection)
+          continue
         }
+        const index = content.phases.findIndex((phase) => phase.id === phaseId)
+        if (index === 0) onWorkerModelChange?.(selection)
       }
 
       // Task models are local to the task; worker-task edits never mutate the
@@ -627,7 +652,7 @@
               >
             {/if}
           </div>
-          {#if !readOnly}
+          {#if !readOnly || canUpdatePhaseModel(phase.id)}
             <div class="flex items-center gap-1.5">
               <ModelPicker
                 {providers}
@@ -660,7 +685,7 @@
                     level
                   )}
               />
-              {#if projectId}
+              {#if !readOnly && projectId}
                 <WorkerScopePicker
                   {projectId}
                   inheritBucketId={phaseInherit.bucketId}

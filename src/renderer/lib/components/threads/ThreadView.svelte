@@ -1069,6 +1069,7 @@
             onRevealInAppFile={board.composerScope.revealAssignmentInAppFile}
             onWorkerModelChange={(selection) => board.sources.syncAgentRole('worker', selection)}
             onSeniorModelChange={board.sources.updateAssignmentSeniorModel}
+            onPhaseModelChange={board.submitSpecDecision.updateAssignmentPhaseModel}
             onTaskModelChange={board.submitSpecDecision.updateAssignmentTaskModel}
             onTaskScopeChange={board.submitSpecDecision.updateAssignmentTaskScope}
             onWorkerScopeChange={board.submitSpecDecision.updateAssignmentWorkerScope}

@@ -580,7 +580,7 @@ export class AssignmentEngine {
     model: AssignmentModelSelection
   ): Promise<AssignmentPlan> {
     const active = this.requireActive(projectId, coordinatorThreadId)
-    if (!['approved', 'running', 'attention'].includes(active.status)) {
+    if (!['approved', 'running', 'attention', 'stopped', 'failed'].includes(active.status)) {
       throw new AssignmentEngineError(
         'invalid_transition',
         'Worker models can only be updated on an active signed-off Assignment'
@@ -598,6 +598,57 @@ export class AssignmentEngine {
     }
 
     return this.replaceTask(active, { ...task, model: structuredClone(model) }, active.status)
+  }
+
+  /**
+   * Update the model every worker in a signed-off phase will run on.
+   *
+   * A phase is only editable while none of its workers has started: the moment
+   * one task has a thread (or has finished), the phase has been reached and its
+   * remaining tasks keep their own per-task controls instead. A stopped or
+   * failed Assignment still accepts this for phases it never got to, so
+   * retargeting a blocked phase does not require resuming it first.
+   */
+  async updateUnlinkedPhaseModel(
+    projectId: string,
+    coordinatorThreadId: string,
+    phaseId: string,
+    model: AssignmentModelSelection
+  ): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (!['approved', 'running', 'attention', 'stopped', 'failed'].includes(active.status)) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Phase models can only be updated on an active signed-off Assignment'
+      )
+    }
+    const phase = active.content.phases.find((candidate) => candidate.id === phaseId)
+    if (!phase) {
+      throw new AssignmentEngineError('not_found', 'Assignment phase not found')
+    }
+    const reached = active.content.tasks.some(
+      (task) =>
+        task.phaseId === phaseId && (task.threadId !== undefined || task.status === 'completed')
+    )
+    if (reached) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'This phase has already started; change the model on its worker threads instead'
+      )
+    }
+    const updated: AssignmentPlan = {
+      ...active,
+      content: {
+        ...active.content,
+        phases: active.content.phases.map((candidate) =>
+          candidate.id === phaseId
+            ? { ...candidate, defaultModel: structuredClone(model) }
+            : candidate
+        )
+      },
+      updatedAt: this.now()
+    }
+    return this.persistPlan(updated, active.version)
   }
 
   /**
