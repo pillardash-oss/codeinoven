@@ -922,7 +922,16 @@ export class ThreadManager {
         projectId,
         updated.scopeBucketId
       )
-      if (resolved) updated.workingDirectory = resolved
+      if (resolved) {
+        // The recorded branch names the checkout the thread used to run in, and
+        // a move between scopes can swap that checkout (a managed scope has its
+        // own worktree and branch). A label from the previous scope is never the
+        // destination's branch, so it is dropped here and settled again for the
+        // new root instead of being shown by the row, the composer and the Git
+        // panel until the next run.
+        if (resolved !== existing.workingDirectory) updated.branch = undefined
+        updated.workingDirectory = resolved
+      }
     }
 
     await this.threadRepo.upsertViaWorker(updated)
@@ -979,8 +988,24 @@ export class ThreadManager {
   }
 
   /** Set the git branch associated with this thread. */
-  async setBranch(projectId: string, threadId: string, branch: string): Promise<Thread> {
+  async setBranch(
+    projectId: string,
+    threadId: string,
+    branch: string,
+    expectedWorkingDirectory?: string
+  ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
+
+    // A settle reads the branch from one checkout and writes it later. If the
+    // thread moved scopes in between, that read describes a root it no longer
+    // uses, so it must be dropped instead of relabelling the new scope with the
+    // previous checkout's branch.
+    if (
+      expectedWorkingDirectory !== undefined &&
+      existing.workingDirectory !== expectedWorkingDirectory
+    ) {
+      return existing
+    }
 
     const updated: Thread = {
       ...existing,

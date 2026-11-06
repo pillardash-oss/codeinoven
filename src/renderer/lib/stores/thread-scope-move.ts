@@ -1,9 +1,11 @@
 import { toast } from 'svelte-sonner'
 import { invoke } from '$lib/ipc.svelte'
+import { ovenRootKey } from '$lib/oven-root-target'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { gitState } from '$lib/stores/git.svelte'
 import { scopeSwapRefusal } from '$shared/thread-scope-swap'
-import type { Thread } from '$shared/types'
+import { DEFAULT_SCOPE_BUCKET_ID, type Thread } from '$shared/types'
 
 /** The thread this window already holds, when it has one to judge by. */
 function findThread(projectId: string, threadId: string): Thread | null {
@@ -54,5 +56,20 @@ export async function moveThreadToScope(
 
   scopeState.updateThread(result.thread)
   workspaceState.updateThread(result.thread)
+  // The Git panel is anchored to a checkout (project + scope bucket), not to a
+  // thread, and it only re-anchors when a thread is opened. A moved thread that
+  // is the one on screen would otherwise leave the panel reading the scope it
+  // came from. Moving a background row must never repoint the panel away from
+  // the conversation the user is reading.
+  const movedThread = result.thread
+  const shownBucket =
+    ovenRootKey(movedThread.projectId) ?? movedThread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+  if (
+    workspaceState.selectedThread?.id === movedThread.id &&
+    gitState.activeProjectId === movedThread.projectId &&
+    gitState.activeScopeBucketId !== shownBucket
+  ) {
+    gitState.notifyScopeChanged(movedThread.projectId, shownBucket)
+  }
   return result.thread
 }

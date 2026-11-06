@@ -9,7 +9,18 @@ interface BranchResolver {
 
 /** Persists a thread's settled branch and returns the updated row. */
 interface BranchStore {
-  setBranch(projectId: string, threadId: string, branch: string): Promise<Thread>
+  /**
+   * `expectedWorkingDirectory` is the checkout the branch was read from. A
+   * settle that started before a scope move must never relabel the row it has
+   * since left, so the store refuses the write when the thread now lives
+   * somewhere else.
+   */
+  setBranch(
+    projectId: string,
+    threadId: string,
+    branch: string,
+    expectedWorkingDirectory?: string
+  ): Promise<Thread>
 }
 
 export interface ThreadBranchDeps {
@@ -53,13 +64,22 @@ export function settleThreadBranch(
 ): void {
   const workingDirectory = thread.workingDirectory?.trim()
   if (thread.branch || !workingDirectory) return
-  const key = `${thread.projectId}:${thread.id}`
+  // The checkout is part of the identity of a settle: a move between scopes
+  // reshapes the same thread onto a different root while an earlier settle may
+  // still be in flight, and only the branch read from the current root may
+  // land.
+  const key = `${thread.projectId}:${thread.id}:${workingDirectory}`
   if (pending.has(key)) return
   pending.add(key)
   void (async () => {
     const branch = await resolveBranch(deps.resolver, workingDirectory)
     if (!branch) return
-    const updated = await deps.store.setBranch(thread.projectId, thread.id, branch)
+    const updated = await deps.store.setBranch(
+      thread.projectId,
+      thread.id,
+      branch,
+      workingDirectory
+    )
     deps.onSettled(updated)
   })()
     .catch((error) => {

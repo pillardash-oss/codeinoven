@@ -588,6 +588,11 @@ class ScopeState {
     this.threads.patchAuthoredWorkKind(projectId, threadId, kind, kinds)
   }
 
+  /** Patch one thread's settled branch in place (light broadcast). */
+  patchThreadBranch(projectId: string, threadId: string, branch: string | undefined): void {
+    this.threads.patchBranch(projectId, threadId, branch)
+  }
+
   /** Fold a list of thread snapshots into the scope store in one pass. See
    *  {@link ScopeThreads.mergeThreads} for why a page must not be folded row by
    *  row. */
