@@ -228,6 +228,9 @@ export class AppOnKeydown extends BoardUnit<App> {
       case 'app:thread-search':
         this.threadSearch.openPalette()
         return
+      case 'app:all-thread-search':
+        this.root.spotlightPalette.allThreadSearch.openPalette()
+        return
       case 'app:chat-search':
         this.root.spotlightPalette.chatSearch.openPalette()
         return
@@ -320,6 +323,8 @@ export class AppOnKeydown extends BoardUnit<App> {
     this.root.spotlightPalette.commandPaletteOpen = false
     if (this.fileSearch.paletteOpen) this.fileSearch.close()
     if (this.threadSearch.paletteOpen) this.threadSearch.close()
+    if (this.root.spotlightPalette.allThreadSearch.paletteOpen)
+      this.root.spotlightPalette.allThreadSearch.close()
     if (this.root.spotlightPalette.chatSearch.paletteOpen)
       this.root.spotlightPalette.chatSearch.close()
     if (this.assistantSearch.paletteOpen) this.assistantSearch.close()

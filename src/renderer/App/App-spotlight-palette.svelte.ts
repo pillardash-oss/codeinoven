@@ -1,5 +1,6 @@
 import CioBrowser from '@pdslng/cio-icon/CioBrowser.svelte'
 import CioFind from '@pdslng/cio-icon/CioFind.svelte'
+import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
 import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
 import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
 import type {
@@ -76,6 +77,13 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     'chats'
   )
 
+  /** The unified screen: one query across project threads, chats and assistant
+   *  tasks, in a single ranking. */
+  allThreadSearch = new ThreadSearchPaletteController(
+    { openThread: (thread) => void this.openThreadFromSearch(thread) },
+    'all'
+  )
+
   browserTabSearch = new BrowserTabPaletteController({
     openTab: (tabId) => this.openBrowserTabFromSearch(tabId)
   })
@@ -122,6 +130,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     // longer dirties the derived, and the screen it controls never re-renders.
     // That is what made the spotlight refuse to reopen after a screen hop.
     const files = this.root.onKeydown.fileSearch.paletteOpen
+    const allThreads = this.allThreadSearch.paletteOpen
     const threads = this.root.onKeydown.threadSearch.paletteOpen
     const chats = this.chatSearch.paletteOpen
     const assistants = this.root.onKeydown.assistantSearch.paletteOpen
@@ -129,6 +138,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     const projects = this.projectSwitch.paletteOpen
     const actions = this.commandPaletteOpen
     if (files) return 'files'
+    if (allThreads) return 'all-threads'
     if (threads) return 'threads'
     if (chats) return 'chats'
     if (assistants) return 'assistants'
@@ -243,6 +253,27 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           onBack: this.backToSpotlightHome,
           onQueryChange: (query) => this.root.onKeydown.fileSearch.handleQuery(query),
           onSelect: (selection) => this.root.onKeydown.fileSearch.select(selection),
+          closeOnSelect: false
+        }
+      case 'all-threads':
+        return {
+          ...shell,
+          actions: this.allThreadSearch.actions,
+          title: 'Search all threads',
+          placeholder: 'Search project threads, chats, and assistant tasks…',
+          emptyLabel: this.allThreadSearch.loading
+            ? 'Searching every thread…'
+            : 'Type at least two characters to search every thread',
+          statusNote: this.allThreadSearch.rankingByMeaning ? 'Ranking by meaning…' : '',
+          // The app's own search mark: this screen is the whole corpus, not one
+          // of the families that each carry their view's glyph.
+          headerIcon: CioLayers,
+          headerIconBadge: true,
+          headerIconBadgeClass: 'border-primary/25 bg-primary/10 text-primary',
+          serverFiltered: true,
+          onBack: this.backToSpotlightHome,
+          onQueryChange: (query) => this.allThreadSearch.handleQuery(query),
+          onSelect: (selection) => this.allThreadSearch.select(selection),
           closeOnSelect: false
         }
       case 'threads':
@@ -592,6 +623,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
   }): void {
     if (this.root.onKeydown.threadSearch.paletteOpen)
       this.root.onKeydown.threadSearch.applyIntentResults(payload)
+    else if (this.allThreadSearch.paletteOpen) this.allThreadSearch.applyIntentResults(payload)
     else if (this.chatSearch.paletteOpen) this.chatSearch.applyIntentResults(payload)
     else if (this.root.onKeydown.assistantSearch.paletteOpen)
       this.root.onKeydown.assistantSearch.applyIntentResults(payload)

@@ -21,8 +21,14 @@ import {
 } from '$shared/types'
 import { actionId } from './app-palette-actions'
 
-/** The thread families the spotlight can search in their own screen. */
-export type ThreadSearchFamily = 'projects' | 'chats' | 'assistant'
+/**
+ * The thread families the spotlight can search in their own screen.
+ *
+ * `all` is the unified screen: it searches project threads, standalone chats and
+ * assistant tasks through one query, which is what the unscoped backend search
+ * already covers (every family except the hidden browser container).
+ */
+export type ThreadSearchFamily = 'projects' | 'chats' | 'assistant' | 'all'
 
 /** A picked row is either a thread to open or an assistant to focus. */
 type ThreadSearchTarget = { thread: Thread } | { assistant: Assistant }
@@ -62,8 +68,9 @@ export interface ThreadSearchPaletteDeps {
  * Reactive state machine behind a family-scoped thread search palette: the
  * debounced fan-out search, the row metadata, and opening the picked thread or
  * assistant. One instance serves the Projects screen (filtered by project), the
- * Chats screen (no filter), and the Assistant screen (filtered by assistant, where
- * matching assistant names are surfaced above their tasks).
+ * Chats screen (no filter), the Assistant screen (filtered by assistant, where
+ * matching assistant names are surfaced above their tasks), and the unified
+ * all-threads screen (every family in one ranking, no filter).
  */
 export class ThreadSearchPaletteController {
   paletteOpen = $state(false)
@@ -301,6 +308,7 @@ export class ThreadSearchPaletteController {
 
   /** Whether a known thread belongs to the family and scope this screen searches. */
   private inFamilyScope(thread: Thread): boolean {
+    if (this.family === 'all') return thread.projectId !== GLOBAL_BROWSER_PROJECT_ID
     if (this.family === 'chats') return thread.projectId === INBOX_PROJECT_ID
     if (this.family === 'assistant') {
       if (thread.projectId !== ASSISTANT_SPACE_ID) return false
@@ -390,12 +398,14 @@ export class ThreadSearchPaletteController {
         )
       ).flat()
     }
-    return invoke('threads:search', query, {
-      family: this.family,
-      limit: RESULT_LIMIT,
-      semantic: true,
-      requestId: this.request
-    })
+    // The unified screen leaves `family` out: the backend's unscoped search
+    // spans every family except the hidden browser container, so projects,
+    // chats and assistant tasks come back in one ranking.
+    const options =
+      this.family === 'all'
+        ? { limit: RESULT_LIMIT, semantic: true, requestId: this.request }
+        : { family: this.family, limit: RESULT_LIMIT, semantic: true, requestId: this.request }
+    return invoke('threads:search', query, options)
   }
 
   /**
@@ -479,7 +489,13 @@ export class ThreadSearchPaletteController {
     icon?: Component
   } {
     if (this.family === 'chats') return { label: 'Chats', icon: CioChat }
-    if (this.family === 'assistant') {
+    // A unified screen has no single family, so each row names the container its
+    // own thread lives in: the Chats inbox, the assistant it runs under, or the
+    // project that owns it.
+    if (this.family === 'all' && thread.projectId === INBOX_PROJECT_ID) {
+      return { label: 'Chats', icon: CioChat }
+    }
+    if (this.family === 'assistant' || thread.projectId === ASSISTANT_SPACE_ID) {
       const assistant = assistants.assistantForTask(thread)
       if (assistant) {
         const iconUri = getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null)
