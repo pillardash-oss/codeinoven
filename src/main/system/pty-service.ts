@@ -17,6 +17,8 @@ import { ProjectManager } from '../../lib/engines/project-manager'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironmentAsync } from '../drivers/cli-environment'
+import { currentAcpAgents, ensureAcpAgentsLoaded } from '../drivers/acp/acp-agents-store'
+import { acpCommandName, acpUpdateCommandFor } from '../drivers/acp/acp-update-recipes'
 import { scopeRootProvider, type ScopeRootResolver } from '../workspaces/scope-root-resolver'
 
 export interface PtyRemoteLaunch {
@@ -739,6 +741,24 @@ export class PtyService {
   }
 
   /**
+   * Whether a command may run in its own PTY.
+   *
+   * A fixed list covers the harnesses the app manages, and an ACP agent is the
+   * user's own binary: its launch command and the updater they configured are
+   * allowed because the agent record is the authority for them. Nothing else
+   * joins this set, so a renderer still cannot ask for an arbitrary process.
+   */
+  private async isAllowedHarnessCommand(name: string): Promise<boolean> {
+    if (ALLOWED_COMMANDS.has(name)) return true
+    await ensureAcpAgentsLoaded().catch(() => undefined)
+    return currentAcpAgents().some((agent) => {
+      if (acpCommandName(agent.command) === name) return true
+      const update = acpUpdateCommandFor(agent)
+      return update !== undefined && acpCommandName(update.split(/\s+/u)[0] ?? '') === name
+    })
+  }
+
+  /**
    * Spawn a single command in its own PTY, rooted at the user's home directory.
    * Used for in-UI harness login flows (`opencode auth login --provider …`),
    * harness self-updates (`opencode upgrade`), and documented uninstall
@@ -755,7 +775,7 @@ export class PtyService {
     environment?: Record<string, string>,
     ensureActive: () => void = () => undefined
   ): Promise<{ id: string; pid: number }> {
-    if (!ALLOWED_COMMANDS.has(normalizedCommandName(command))) {
+    if (!(await this.isAllowedHarnessCommand(normalizedCommandName(command)))) {
       throw new Error(`Refusing to start unknown harness command: ${command}`)
     }
 
