@@ -411,6 +411,9 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
     // never shares the bottom edge with the thing it is asking about.
     if (this.root.composerScope.visibleTodo !== null && !this.failureRetryVisible)
       slots.push('todo')
+    // A coordinated thread swaps its composer for the card that explains the
+    // lock, so that card takes the composer's place at the bottom of the stack.
+    if (this.root.currentWorkingTraceAttribution.inputLockedForComposer) slots.push('locked')
     return slots
   })
 

@@ -236,6 +236,34 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     this.independentAuditEnabled && this.root.submitSpecDecision.auditBusy
   )
 
+  /**
+   * Whether the composer must give way to the coordinated-thread card.
+   *
+   * A locked orchestration child refuses a user-origin turn in the engine, so a
+   * composer shown there only collects a message and answers it with "This
+   * Assignment task is locked. Return to its coordinator to continue" after the
+   * user has typed. A running assignment worker is the exception: its own
+   * conversation can steer the work in progress, and that is the one thing
+   * typing there is for.
+   */
+  inputLockedForComposer = $derived.by(() => {
+    const thread = this.root.handleAgentEvent.thread
+    if (thread.userInputLocked !== true) return false
+    if (thread.assignmentRole === 'coordinator') return false
+    if (thread.assignmentRole === 'worker' && this.root.switchProject.busy) return false
+    return true
+  })
+
+  /** Which coordinated thread the open view is, for the card that replaces the
+   *  composer there. */
+  coordinatedThreadKind = $derived<'worker' | 'auditor' | 'pawn'>(
+    this.root.handleAgentEvent.thread.achievementRole === 'auditor'
+      ? 'auditor'
+      : this.root.handleAgentEvent.thread.assignmentRole === 'worker'
+        ? 'worker'
+        : 'pawn'
+  )
+
   /** The Independent Audit coordinator is the board for a thread that audits
    *  itself, and for the auditor child that thread owns. */
   independentAuditPanelActive = $derived.by(() => {

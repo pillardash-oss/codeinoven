@@ -7,6 +7,7 @@
   import { fly, slide } from 'svelte/transition'
   import ChatComposer from '../../chats/ChatComposer.svelte'
   import ForeignRunCard from '../ForeignRunCard.svelte'
+  import LockedOrchestrationCard from '../LockedOrchestrationCard.svelte'
   import CardButton from '../../shared/CardButton.svelte'
   import CardFoot from '../../shared/CardFoot.svelte'
   import CardFrame from '../../shared/CardFrame.svelte'
@@ -891,6 +892,15 @@
               <ForeignRunCard
                 projectId={board.handleAgentEvent.thread.projectId}
                 threadId={board.handleAgentEvent.thread.id}
+              />
+            {:else if board.currentWorkingTraceAttribution.inputLockedForComposer}
+              <LockedOrchestrationCard
+                kind={board.currentWorkingTraceAttribution.coordinatedThreadKind}
+                threadId={board.handleAgentEvent.thread.id}
+                coordinatorTitle={board.currentWorkingTraceAttribution.coordinatorParentThread
+                  ?.title}
+                stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('locked')}
+                onOpenCoordinator={board.currentWorkingTraceAttribution.openCoordinatorParent}
               />
             {:else if board.switchProject.assistantRecapInComposer && board.switchProject.assistantDraft}
               <!-- The recap card takes the composer's place rather than sitting on
