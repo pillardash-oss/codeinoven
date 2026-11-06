@@ -24,6 +24,7 @@
   import BrowserExtensionDropdown from './BrowserExtensionDropdown.svelte'
   import { openThreadBrowserExtensionMenu } from './browser-extension-bar-menus'
   import BrowserFindBar from './BrowserFindBar.svelte'
+  import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
@@ -32,6 +33,7 @@
   import { storeExtensionOfferForPage } from '$lib/stores/browser-extension-store-offer'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
+  import { browserAddressDrawer } from '$lib/stores/browser-address-drawer.svelte'
   import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -183,6 +185,12 @@
   $effect(synchronizePageFrame)
 
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect, surface))
+
+  /** The history drawer this tab's address field has open, which this column
+   *  draws as a row under the toolbar so the live page shrinks to make room for
+   *  it instead of being parked (see `BrowserAddressBar`). */
+  const addressDrawer = $derived(browserAddressDrawer.forTab(tabId))
+
   /**
    * Whether this row is watching a picture the reader can see.
    *
@@ -908,6 +916,33 @@
           {/if}
         </button>
       {/if}
+    </div>
+  {/if}
+  {#if panelVisible && !compositionPlayer && !isBlank && addressDrawer}
+    <!--
+      The address field's history drawer, drawn as a row of this column.
+
+      The page is a native view composited above every DOM node, so a drawer over
+      it could only be seen by parking the page, which blanked the browser for as
+      long as the user was typing an address. As a row it shrinks the content rect
+      instead, and the observers above place the live page under it, exactly as
+      the find bar does.
+
+      Gated on a real page: a blank tab has no native view to park and already
+      draws its own drawer in its empty state (`BrowserBlankTab`), so this row
+      would only duplicate it.
+    -->
+    <div class="shrink-0 border-b border-border bg-surface p-1.5">
+      <div class="max-h-[min(16rem,50vh)] overflow-y-auto">
+        <BrowserHistorySuggestions
+          listId={addressDrawer.listId}
+          suggestions={addressDrawer.entries}
+          highlight={addressDrawer.highlight}
+          compact
+          onHighlight={(index) => addressBar?.highlightSuggestion(index)}
+          onOpen={(entry) => addressBar?.openSuggestion(entry.url)}
+        />
+      </div>
     </div>
   {/if}
   {#if findOpen && panelVisible && !compositionPlayer}
