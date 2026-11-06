@@ -114,7 +114,16 @@ export class ProviderConnectionService {
   private syncAcpRows(): void {
     for (const agent of currentAcpAgents()) {
       const existing = this.acpRows.get(agent.id)
-      if (existing?.name === agent.name && existing.command === agent.command) continue
+      const enabled = agent.enabled !== false
+      // A saved edit must reach the row, including the Enabled switch: a rename,
+      // a re-pointed command and a parked agent all change what the page shows.
+      if (
+        existing?.name === agent.name &&
+        existing.command === agent.command &&
+        existing.enabled === enabled
+      ) {
+        continue
+      }
       const fresh = existing === undefined || existing.command !== agent.command
       this.acpRows.set(agent.id, {
         id: agent.id,
@@ -124,7 +133,7 @@ export class ProviderConnectionService {
         supportsCustomProviders: false,
         supportsManualCompaction: false,
         transport: 'acp',
-        enabled: agent.enabled !== false,
+        enabled,
         status: existing?.status ?? 'idle',
         ...(existing?.resolvedPath ? { resolvedPath: existing.resolvedPath } : {})
       })
@@ -163,6 +172,7 @@ export class ProviderConnectionService {
           ...row,
           name: agent.name,
           command: agent.command,
+          enabled: agent.enabled !== false,
           status: 'available',
           resolvedPath,
           ...(version ? { version } : {})
@@ -171,6 +181,7 @@ export class ProviderConnectionService {
           ...row,
           name: agent.name,
           command: agent.command,
+          enabled: agent.enabled !== false,
           status: 'error',
           resolvedPath: undefined,
           version: undefined,

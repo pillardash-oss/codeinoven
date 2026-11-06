@@ -95,6 +95,9 @@
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
   /** ACP agent awaiting removal; the record is deleted, nothing is uninstalled. */
   let acpRemoveTarget = $state<ProviderConnectionInfo | null>(null)
+  /** ACP agent awaiting parking; disabling is confirmed like any destructive step. */
+  let acpDisableTarget = $state<ProviderConnectionInfo | null>(null)
+  let acpDisabling = $state(false)
   let acpRemoving = $state(false)
   let acpRemoveError = $state('')
 
@@ -151,6 +154,38 @@
       ? 'Not checked yet'
       : `Last checked: ${formatCompactAge(lastCheckedAt, now)}`
   )
+
+  /**
+   * What the ACP row's Enabled switch reflects.
+   *
+   * The agent record is the truth: main reports it, the editor edits it, and
+   * reading the row's own snapshot would leave the switch stuck after a save.
+   */
+  function acpAgentEnabled(provider: ProviderConnectionInfo): boolean {
+    return acpAgentsStore.get(provider.id)?.enabled ?? provider.enabled !== false
+  }
+
+  /** Ask before parking: a disabled agent leaves every harness list until restored. */
+  function requestAcpDisable(provider: ProviderConnectionInfo): void {
+    acpDisableTarget = provider
+  }
+
+  async function confirmAcpDisable(): Promise<void> {
+    const target = acpDisableTarget
+    if (!target || acpDisabling) return
+    acpDisabling = true
+    try {
+      await toggleAcpAgent(target, false)
+      acpDisableTarget = null
+    } finally {
+      acpDisabling = false
+    }
+  }
+
+  function cancelAcpDisable(): void {
+    if (acpDisabling) return
+    acpDisableTarget = null
+  }
 
   /** Park or restore one ACP agent without opening its editor. */
   async function toggleAcpAgent(provider: ProviderConnectionInfo, enabled: boolean): Promise<void> {
@@ -1128,8 +1163,10 @@
                         </p>
                       </div>
                       <Switch
-                        checked={provider.enabled !== false}
-                        onchange={(value) => void toggleAcpAgent(provider, value)}
+                        checked={acpAgentEnabled(provider)}
+                        disabled={acpAgentsStore.saving || acpDisabling}
+                        onchange={(value) =>
+                          value ? void toggleAcpAgent(provider, true) : requestAcpDisable(provider)}
                         aria-label={`Offer ${provider.name} as a harness`}
                         title={`Turn off to park ${provider.name} without deleting it`}
                       />
@@ -1255,6 +1292,25 @@
     {#if acpRemoveError}
       <p class="text-xs text-danger">{acpRemoveError}</p>
     {/if}
+  </ConfirmDialog>
+{/if}
+
+{#if acpDisableTarget}
+  <ConfirmDialog
+    open
+    title={`Disable ${acpDisableTarget.name}?`}
+    confirmLabel="Disable agent"
+    variant="danger"
+    busy={acpDisabling}
+    onCancel={cancelAcpDisable}
+    onConfirm={confirmAcpDisable}
+    note="Its threads must pick another harness until you enable it again."
+  >
+    <p>
+      {acpDisableTarget.name} leaves every harness list and stops being offered to new threads. Nothing
+      is uninstalled, and its record, icon and settings stay exactly as they are, so you can turn it back
+      on at any time.
+    </p>
   </ConfirmDialog>
 {/if}
 
