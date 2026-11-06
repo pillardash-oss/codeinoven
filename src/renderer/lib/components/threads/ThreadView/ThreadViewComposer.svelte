@@ -650,7 +650,7 @@
             onViewTrace={() => void board.currentWorkingTraceAttribution.openDurableAuditWork()}
             onViewReport={board.contextUsage.openAuditStudio}
           />
-        {:else if board.submitSpecDecision.auditFailed && board.currentWorkingTraceAttribution.independentAuditPanelActive && !board.switchProject.busy && !board.submitBrainstormDecision.failureRetryVisible}
+        {:else if board.submitSpecDecision.auditFailed && board.currentWorkingTraceAttribution.independentAuditPanelActive && !board.currentWorkingTraceAttribution.orchestrationChild && !board.switchProject.busy && !board.submitBrainstormDecision.failureRetryVisible}
           <AuditGeneratedCard
             state="failed"
             error={board.buildSpecActionPrompt.auditError}
@@ -693,7 +693,7 @@
               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
             onViewReport={board.contextUsage.openAuditStudio}
           />
-        {:else if board.buildSpecActionPrompt.assignmentAuditState === 'partial' && board.contextUsage.auditReport && !board.switchProject.busy && !board.submitBrainstormDecision.achievementAutonomous && !board.unmirroredTraceStartTime.studioOnlyAuditWorkflow && !board.submitBrainstormDecision.failureRetryVisible}
+        {:else if board.buildSpecActionPrompt.assignmentAuditState === 'partial' && board.contextUsage.auditReport && !board.currentWorkingTraceAttribution.orchestrationChild && !board.switchProject.busy && !board.submitBrainstormDecision.achievementAutonomous && !board.unmirroredTraceStartTime.studioOnlyAuditWorkflow && !board.submitBrainstormDecision.failureRetryVisible}
           <AuditGeneratedCard
             state="partial"
             version={board.contextUsage.auditReport.version}
@@ -706,7 +706,9 @@
             recentModels={rendererRecovery.recentModels}
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
             busy={board.submitSpecDecision.auditBusy}
-            onRetry={board.buildSpecActionPrompt.generateDurableAssignmentAudit}
+            onRetry={board.currentWorkingTraceAttribution.independentAuditPanelActive
+              ? board.contextUsage.generateIndependentAudit
+              : board.buildSpecActionPrompt.generateDurableAssignmentAudit}
             onModelChange={board.contextUsage.changeAuditModel}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
