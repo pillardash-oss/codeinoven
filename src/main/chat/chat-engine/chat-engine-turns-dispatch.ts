@@ -326,6 +326,10 @@ export class ChatEngineTurnsDispatch {
       if (!thread) return
       markNotificationAborting(projectId, threadId)
       this.host.units['thread-lifecycle'].releaseParkedThreadGates(projectId, threadId)
+      // The descriptor may be mid-vision-call for this thread while its first
+      // prompt is still being composed, which is exactly when no session id is
+      // bound yet; cancel by conversation so the Stop reaches it too.
+      await this.host.units['media-visual'].abortThreadImageDescriptorWork(projectId, threadId)
       await this.host.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
       // A thread stopped before its session was bound has no idle finalization
       // to release its ledger row either, so the stop settles it here too.
@@ -373,6 +377,11 @@ export class ChatEngineTurnsDispatch {
     // runs so the thread stops notifying at all. Capture the failure, finish the
     // teardown, then report it so the caller still learns the harness refused.
     let abortFailure: unknown = null
+    // A stop ends every piece of work the thread started, and the image
+    // descriptor's disposable vision session is one of them: aborting only the
+    // thread's own session left the vision call streaming (and billing) until
+    // its inactivity deadline, long after the thread reported itself idle.
+    await this.host.units['media-visual'].abortImageDescriptorWork(thread.sessionId, threadId)
     try {
       await driver.abort(projectPath, thread.sessionId)
     } catch (error) {
