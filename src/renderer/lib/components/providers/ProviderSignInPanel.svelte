@@ -15,7 +15,6 @@
   } from '$shared/types'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
-  import Modal from '../ui/Modal.svelte'
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import ProviderSignInProgress from './ProviderSignInProgress.svelte'
   import { loginFailureDetail } from './add-provider-modal-helpers'
@@ -34,10 +33,14 @@
    *   - `terminal`: the harness's own login command (`claude auth login`,
    *     `codex login`) handed to an embedded terminal.
    *
-   * `in-app` signs in through a dockable panel rather than a modal because its
-   * browser handover has to survive: the authorization page is a native view
-   * painted above every DOM node, so the panel steps aside to a dock chip while
-   * the browser holds the page, exactly as the add-provider panel does.
+   * Both mechanisms sign in through the same dockable panel, never a modal, and
+   * for the same reason the add-provider panel does: a sign-in hands the user off
+   * to a browser. The authorization page is a native view painted above every DOM
+   * node, so the panel steps aside to a dock chip while the browser holds the
+   * page. `in-app` reaches the browser from its own URLs and device codes, and
+   * `terminal` reaches it from the URL or device code its CLI prints, which is
+   * why the terminal must dock too rather than sit in an undismissable modal.
+   * Docking also keeps the terminal mounted and its PTY alive while minimized.
    *
    * Either way the credential is confirmed against the account's own credential
    * home before `onComplete` fires, so a login that never landed is reported here
@@ -245,86 +248,91 @@
   })
 
   const signingIn = $derived(oauth.loginId !== null)
-  const dockStatus = $derived(
-    oauth.deviceCode
+  /** Dock state for the terminal mechanism; the OAuth controller owns its own. */
+  let terminalDocked = $state(false)
+  const docked = $derived(oauth.docked || terminalDocked)
+  const dockBusy = $derived(
+    signingIn || verifying || (mechanism === 'terminal' && handoff === null && error === '')
+  )
+  const dockStatus = $derived.by(() => {
+    if (mechanism === 'terminal') {
+      if (error) return error
+      if (verifying) return 'Confirming sign-in for this account…'
+      if (handoff !== null) return 'Finish signing in in the terminal.'
+      return 'Preparing sign-in…'
+    }
+    return oauth.deviceCode
       ? `Enter ${oauth.deviceCode.userCode} to finish signing in.`
       : oauth.status || 'Finish signing in in the browser.'
-  )
+  })
+
+  function minimizePanel(): void {
+    if (mechanism === 'terminal') terminalDocked = true
+    else oauth.docked = true
+  }
+
+  function restorePanel(): void {
+    terminalDocked = false
+    oauth.docked = false
+  }
 </script>
 
-{#if mechanism === 'in-app'}
-  <DockableModal
-    open
-    {title}
-    minimized={oauth.docked}
-    closable={!signingIn}
-    onMinimize={() => (oauth.docked = true)}
-    onClose={close}
-    {storageKey}
-    dragLabel="Drag to move the sign-in panel"
-    defaultHeight={420}
-  >
-    {#snippet dock()}
-      <DockRow {storageKey} label="Move docked provider sign-in">
-        <div
-          class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl"
-          data-region="provider-sign-in-dock"
+<DockableModal
+  open
+  {title}
+  minimized={docked}
+  closable={!signingIn}
+  onMinimize={minimizePanel}
+  onClose={close}
+  {storageKey}
+  dragLabel="Drag to move the sign-in panel"
+  defaultHeight={mechanism === 'terminal' ? 520 : 420}
+  flushBody={mechanism === 'terminal'}
+>
+  {#snippet dock()}
+    <DockRow {storageKey} label="Move docked provider sign-in">
+      <div
+        class="flex items-center gap-1 border bg-surface p-1.5 shadow-xl"
+        data-region="provider-sign-in-dock"
+      >
+        <button
+          type="button"
+          class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
+          title="Show the sign-in for {targetName}"
+          aria-label="Show the sign-in for {targetName}"
+          onclick={restorePanel}
         >
-          <button
-            type="button"
-            class="flex min-w-0 cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-elevated"
-            title="Show the sign-in for {targetName}"
-            aria-label="Show the sign-in for {targetName}"
-            onclick={() => (oauth.docked = false)}
-          >
+          {#if dockBusy}
             <CioSpinner size={14} class="shrink-0 animate-spin text-info" aria-hidden="true" />
-            <span class="flex min-w-0 flex-col">
-              <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
-                Signing in to {targetName}
-              </span>
-              <span
-                class="max-w-56 truncate text-[0.625rem] leading-tight text-muted"
-                aria-live="polite"
-              >
-                {dockStatus}
-              </span>
+          {/if}
+          <span class="flex min-w-0 flex-col">
+            <span class="text-[0.6875rem] leading-tight font-medium text-foreground">
+              Signing in to {targetName}
             </span>
-          </button>
-          <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
-          <button
-            type="button"
-            class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Cancel the sign-in"
-            title="Cancel the sign-in"
-            onclick={close}
-          >
-            <CioClose size={14} />
-          </button>
-        </div>
-      </DockRow>
-    {/snippet}
+            <span
+              class="max-w-56 truncate text-[0.625rem] leading-tight text-muted"
+              aria-live="polite"
+            >
+              {dockStatus}
+            </span>
+          </span>
+        </button>
+        <span class="h-5 w-px shrink-0 bg-border" aria-hidden="true"></span>
+        <button
+          type="button"
+          class="flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Cancel the sign-in"
+          title="Cancel the sign-in"
+          onclick={close}
+        >
+          <CioClose size={14} />
+        </button>
+      </div>
+    </DockRow>
+  {/snippet}
 
-    {#if oauth.loginId !== null}
-      <ProviderSignInProgress {oauth} />
-    {:else if error}
-      <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-        {error}
-      </p>
-    {:else if verifying}
-      <p class="flex items-center gap-2 text-xs text-muted">
-        <CioSpinner size={13} class="animate-spin" />
-        Confirming sign-in for this account…
-      </p>
-    {:else}
-      <p class="flex items-center gap-2 text-xs text-muted">
-        <CioSpinner size={13} class="animate-spin" />
-        Starting sign-in…
-      </p>
-    {/if}
-  </DockableModal>
-{:else}
-  <Modal open {title} onClose={close}>
-    <div class="h-[28rem] overflow-hidden border border-border bg-app">
+  {#if mechanism === 'terminal'}
+    <div class="flex min-h-0 flex-1 flex-col overflow-hidden bg-app">
       {#if handoff}
         <ProviderLoginTerminal
           {terminalId}
@@ -349,5 +357,21 @@
         </div>
       {/if}
     </div>
-  </Modal>
-{/if}
+  {:else if oauth.loginId !== null}
+    <ProviderSignInProgress {oauth} />
+  {:else if error}
+    <p class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
+      {error}
+    </p>
+  {:else if verifying}
+    <p class="flex items-center gap-2 text-xs text-muted">
+      <CioSpinner size={13} class="animate-spin" />
+      Confirming sign-in for this account…
+    </p>
+  {:else}
+    <p class="flex items-center gap-2 text-xs text-muted">
+      <CioSpinner size={13} class="animate-spin" />
+      Starting sign-in…
+    </p>
+  {/if}
+</DockableModal>
