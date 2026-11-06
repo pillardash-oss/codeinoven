@@ -303,11 +303,6 @@
           onClick: () => acpAgentsStore.openEdit(provider.id)
         },
         {
-          label: provider.enabled === false ? 'Enable agent' : 'Disable agent',
-          icon: provider.enabled === false ? CioCheckCircle : CioCircle,
-          onClick: () => void toggleAcpAgent(provider, provider.enabled === false)
-        },
-        {
           label: 'Remove agent',
           icon: CioTrash,
           danger: true,
@@ -400,8 +395,8 @@
 
   /**
    * Whether auto-updating this row can actually do something. A native harness
-   * always can; an ACP agent only when it has an updater of its own, so the
-   * switch is never offered where it would flip and change nothing.
+   * always can; an ACP agent only once an updater is known, so the switch sits
+   * disabled rather than disappearing and leaving the user hunting for it.
    */
   function autoUpdateAvailable(provider: ProviderConnectionInfo): boolean {
     if (provider.transport !== 'acp') return true
@@ -1178,32 +1173,36 @@
                     </div>
                   {/if}
 
-                  {#if autoUpdateAvailable(provider)}
-                    <div class="flex items-center justify-between gap-3">
-                      <div class="min-w-0">
-                        <p class="text-xs font-medium text-foreground">
-                          Update automatically on launch
-                        </p>
-                        <p
-                          class="mt-0.5 truncate text-[0.625rem] text-dimmed"
-                          title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
-                        >
-                          {provider.transport === 'acp'
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="text-xs font-medium text-foreground">
+                        Update automatically on launch
+                      </p>
+                      <p
+                        class="mt-0.5 truncate text-[0.625rem] text-dimmed"
+                        title={autoUpdateAvailable(provider)
+                          ? `When on, ${provider.name} is updated in the background whenever you open ${APP_NAME}.`
+                          : `Add an update command to ${provider.name} to turn this on.`}
+                      >
+                        {autoUpdateAvailable(provider)
+                          ? provider.transport === 'acp'
                             ? `Runs the agent's updater when ${APP_NAME} opens`
-                            : `Updates in the background when ${APP_NAME} opens`}
-                        </p>
-                      </div>
-                      <div class="flex shrink-0 items-center gap-2">
-                        <Switch
-                          checked={autoUpdatePrefs[provider.id] === true}
-                          disabled={autoUpdateSaving[provider.id]}
-                          onchange={(value) => void setAutoUpdatePref(provider.id, value)}
-                          aria-label={`Update ${provider.name} automatically on launch`}
-                          title={`Set whether ${provider.name} updates automatically on launch`}
-                        />
-                      </div>
+                            : `Updates in the background when ${APP_NAME} opens`
+                          : 'Needs an update command'}
+                      </p>
                     </div>
-                  {/if}
+                    <div class="flex shrink-0 items-center gap-2">
+                      <Switch
+                        checked={autoUpdatePrefs[provider.id] === true}
+                        disabled={autoUpdateSaving[provider.id] || !autoUpdateAvailable(provider)}
+                        onchange={(value) => void setAutoUpdatePref(provider.id, value)}
+                        aria-label={`Update ${provider.name} automatically on launch`}
+                        title={autoUpdateAvailable(provider)
+                          ? `Set whether ${provider.name} updates automatically on launch`
+                          : `Add an update command to ${provider.name} to turn this on`}
+                      />
+                    </div>
+                  </div>
                   {#if isOpenCodeV2Row(provider)}
                     <div class="border-t border-border pt-2.5">
                       <OpenCodeV2CatalogPanel harnessName={provider.name} />

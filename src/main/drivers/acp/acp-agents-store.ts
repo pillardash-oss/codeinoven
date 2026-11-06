@@ -6,6 +6,7 @@ import {
   type AcpAgentInput,
   type AcpAgentStatus
 } from '../../../lib/acp'
+import { acpUpdateCommandFor } from './acp-update-recipes'
 
 /**
  * The ACP agents the user added: names, commands and icons, persisted in app
@@ -268,7 +269,7 @@ export class AcpAgentStore {
         name: agent.name,
         command: agent.command,
         args: [...agent.args],
-        ...(agent.updateCommand ? { updateCommand: agent.updateCommand } : {}),
+        ...(acpUpdateCommandFor(agent) ? { updateCommand: acpUpdateCommandFor(agent) } : {}),
         ...(agent.icon ? { icon: agent.icon } : {}),
         ...(agent.iconDark ? { iconDark: agent.iconDark } : {}),
         enabled: agent.enabled !== false,

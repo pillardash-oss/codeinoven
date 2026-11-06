@@ -13,6 +13,7 @@ import {
   findAcpAgent,
   isAcpAgentId
 } from '../drivers/acp/acp-agents-store'
+import { acpCommandName, acpUpdateCommandFor } from '../drivers/acp/acp-update-recipes'
 import { resolvedOpenCodeCommand } from './opencode-installation'
 import { parseMajorVersion, compareVersions } from '../../lib/version-compare'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -75,12 +76,6 @@ const UPDATE_SOURCES: Record<string, UpdateSource> = {
  */
 const ACP_UPDATE_SOURCES: Record<string, UpdateSource> = {
   cline: { kind: 'npm', package: 'cline' }
-}
-
-/** The bare command an agent launches, for recipe lookup (`/usr/bin/cline` -> `cline`). */
-function acpCommandName(command: string): string {
-  const base = command.split(/[\\/]/u).pop() ?? command
-  return base.replace(/\.(exe|cmd|bat)$/iu, '').toLowerCase()
 }
 
 /** Split an agent's update command line into the argv the terminal runs. */
@@ -432,7 +427,7 @@ export class HarnessUpdateService {
       })
     }
     const currentVersion = provider.version ? extractHarnessVersion(provider.version) : undefined
-    const updateCommand = agent.updateCommand?.trim()
+    const updateCommand = acpUpdateCommandFor(agent)
     if (!updateCommand) {
       return this.settle(harnessId, {
         ...base,
@@ -474,7 +469,7 @@ export class HarnessUpdateService {
   private async acpHandoff(harnessId: string): Promise<HarnessUpdateHandoff> {
     const agent = await findAcpAgent(harnessId)
     if (!agent) throw new Error('This ACP agent is no longer configured.')
-    const line = agent.updateCommand?.trim()
+    const line = acpUpdateCommandFor(agent)
     if (!line) {
       throw new Error(`${agent.name} has no update command. Set one while editing the agent.`)
     }
