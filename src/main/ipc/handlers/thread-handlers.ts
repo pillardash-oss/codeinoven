@@ -349,6 +349,12 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
         const thread = await threadManager.updateThread(validProjectId, validThreadId, {
           scopeBucketId: validBucketId
         })
+        // A move re-derives the thread's compatibility root from the destination
+        // scope, which forgets the branch of the checkout it left (a managed
+        // scope keeps its own worktree branch). Settle the destination's branch
+        // now so every surface reading the row never keeps showing the previous
+        // scope's branch.
+        settleThreadBranch(branchBackfillDeps, thread)
         return { ok: true, thread }
       } catch (error) {
         // A refusal is feedback the renderer toasts, so it travels as data: a

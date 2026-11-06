@@ -591,6 +591,10 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
           (candidate) => candidate.projectId === projectId && candidate.id === threadId
         )
         if (listed) listed.branch = branch
+        // The scope board and its sidebar draw their own list. A scope move
+        // drops the previous checkout's branch before the destination's settles,
+        // so this patch is what puts the new label back on that row.
+        scopeState.patchThreadBranch(projectId, threadId, branch)
       })
     })
 

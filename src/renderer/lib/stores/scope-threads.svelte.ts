@@ -337,6 +337,21 @@ export class ScopeThreads {
   }
 
   /**
+   * Patch one thread's settled branch in place.
+   *
+   * `thread:branchUpdated` is a light event, so a row that was drawn without a
+   * branch (a scope move drops the previous checkout's label before the new one
+   * settles) gains it here without a list rebuild or a transcript reconcile.
+   */
+  patchBranch(projectId: string, threadId: string, branch: string | undefined): void {
+    const thread = this.allScopeThreads.find(
+      (candidate) => candidate.projectId === projectId && candidate.id === threadId
+    )
+    if (thread === undefined) return
+    thread.branch = branch
+  }
+
+  /**
    * The sidebar context a refreshed row hands back, or null when the context
    * already describes that row as it is now.
    *
