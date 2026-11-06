@@ -39,7 +39,18 @@ interface GitHubSource {
   kind: 'github'
   repo: string
 }
-type UpdateSource = NpmSource | GitHubSource
+/**
+ * A vendor installer script that embeds the release it installs.
+ *
+ * Some agents publish no registry and no release feed: their installer is
+ * regenerated per release and names the build in its download URL, so the
+ * script itself is the published version. Cursor Agent ships this way.
+ */
+interface InstallerSource {
+  kind: 'installer'
+  url: string
+}
+type UpdateSource = NpmSource | GitHubSource | InstallerSource
 
 /**
  * Where the latest published version of each harness lives. Sources were
@@ -75,7 +86,11 @@ const UPDATE_SOURCES: Record<string, UpdateSource> = {
  * the updater the user configured without a badge.
  */
 const ACP_UPDATE_SOURCES: Record<string, UpdateSource> = {
-  cline: { kind: 'npm', package: 'cline' }
+  cline: { kind: 'npm', package: 'cline' },
+  // cursor-agent publishes no registry entry; the vendor's installer names the
+  // build it downloads, so its URL is the only published-version source. Without
+  // this entry the app could never show that an install was months behind.
+  'cursor-agent': { kind: 'installer', url: 'https://cursor.com/install' }
 }
 
 /** Split an agent's update command line into the argv the terminal runs. */
@@ -115,6 +130,8 @@ function openCodeUpdateHandoff(
 }
 
 const VERSION_PATTERN = /\b(v?\d+\.\d+\.\d+)/u
+/** The release a vendor installer downloads, e.g. `/lab/2026.11.05-86047df/`. */
+const INSTALLER_VERSION_PATTERN = /\/lab\/(\d{4}\.\d{2}\.\d{2}(?:-[0-9a-z]+)?)\//u
 /**
  * Whether a resolved harness binary belongs to the CodeInOven application
  * itself rather than a user install   e.g. `node_modules/.bin/pi.exe` inside
@@ -185,6 +202,16 @@ async function fetchLatest(source: UpdateSource): Promise<string> {
         throw new Error('npm registry did not report a version')
       }
       return body['version']
+    }
+    if (source.kind === 'installer') {
+      const response = await fetch(source.url, { signal: controller.signal })
+      if (!response.ok) {
+        throw new Error(`installer script returned HTTP ${response.status}`)
+      }
+      const script = await response.text()
+      const version = script.match(INSTALLER_VERSION_PATTERN)?.[1]
+      if (!version) throw new Error('installer script did not name a release')
+      return version
     }
     const response = await fetch(`https://api.github.com/repos/${source.repo}/releases/latest`, {
       signal: controller.signal,
