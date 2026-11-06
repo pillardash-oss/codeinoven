@@ -157,7 +157,7 @@
 
     <!-- Provider status   between messages and composer, always visible. A
          matching bubbled worker error is replaced by the attributed card above. -->
-    {#if board.submitBrainstormDecision.visibleProviderStatus && !board.submitBrainstormDecision.coordinatorErrorMatchesAssignmentWorker}
+    {#if board.submitBrainstormDecision.visibleProviderStatus && !board.submitBrainstormDecision.coordinatorErrorMatchesAssignmentWorker && !board.currentWorkingTraceAttribution.independentAuditorChild}
       <div class="conversation-gutter shrink-0 px-6">
         <div class="mx-auto max-w-3xl">
           <AgentProviderStatusCard
@@ -474,7 +474,27 @@
               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         {/if}
-        {#if board.unmirroredTraceStartTime.isAssignmentAuditorThread && board.currentWorkingTraceAttribution.assignmentAuditorCardApplies}
+        {#if board.currentWorkingTraceAttribution.independentAuditorChild && board.buildSpecActionPrompt.auditorThreadCardState !== undefined}
+          <AuditGeneratedCard
+            state={board.buildSpecActionPrompt.auditorThreadCardState}
+            version={board.contextUsage.auditReport?.version}
+            error={board.buildSpecActionPrompt.auditorThreadCardError}
+            settings={board.loadOlderMessages.settings}
+            providers={board.currentWorkingTraceAttribution.providers}
+            projectId={board.handleAgentEvent.thread.projectId}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            busy={board.submitSpecDecision.auditBusy || board.switchProject.busy}
+            onRetry={board.buildSpecActionPrompt.startFreshIndependentAudit}
+            onModelChange={board.contextUsage.changeAuditModel}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onViewReport={board.contextUsage.openAuditStudio}
+          />
+        {:else if board.unmirroredTraceStartTime.isAssignmentAuditorThread && board.currentWorkingTraceAttribution.assignmentAuditorCardApplies}
           <AuditGeneratedCard
             state={board.buildSpecActionPrompt.assignmentAuditState}
             version={board.buildSpecActionPrompt.assignmentAuditState === 'running'

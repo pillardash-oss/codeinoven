@@ -271,6 +271,13 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     return this.independentAuditDisplayEnabled
   })
 
+  /** The open thread is the auditor child an independent-audit coordinator runs. */
+  independentAuditorChild = $derived(
+    this.orchestrationChild &&
+      this.root.handleAgentEvent.thread.achievementRole === 'auditor' &&
+      this.coordinatorParentThread?.independentAudit === true
+  )
+
   /**
    * Whether the Assignment audit card belongs on the open thread.
    *

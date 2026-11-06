@@ -643,34 +643,34 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         await invoke(
           'thread:setIndependentAudit',
           this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id,
+          this.root.submitSpecDecision.auditWorkflowThreadId(),
           true
         )
         this.root.currentWorkingTraceAttribution.pendingIndependentAudit = null
         clearIndependentAuditIntent(
           this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id
+          this.root.submitSpecDecision.auditWorkflowThreadId()
         )
       }
       this.durableAuditThread = await invoke(
         'agent:ensureIndependentAuditorThread',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         selected
       )
       coordinatorDockState.restore(
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id
+        this.root.submitSpecDecision.auditWorkflowThreadId()
       )
       contextSidebarState.openCoordinator(
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         'Audit coordinator'
       )
       const result = await invoke(
         'agent:generateIndependentAudit',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         {
           settings: selected
         }
@@ -684,7 +684,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       this.root.buildSpecActionPrompt.auditVersions = await invoke(
         'audit:listVersions',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         this.auditReport.id
       )
     } catch (error) {
