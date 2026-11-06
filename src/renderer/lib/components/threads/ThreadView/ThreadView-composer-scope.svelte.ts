@@ -305,13 +305,15 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   studioExitConfirmationOpen = $state(false)
 
   seniorModelForThread(): AssignmentModelSelection {
+    const settings = this.root.loadOlderMessages.settings
     return {
-      harnessId: this.root.loadOlderMessages.settings.harnessId,
-      providerId: this.root.loadOlderMessages.settings.providerId,
-      modelId: this.root.loadOlderMessages.settings.modelId,
-      thinkingLevel: this.root.loadOlderMessages.settings.thinkingLevel,
-      inferenceMode: this.root.loadOlderMessages.settings.inferenceMode,
-      contextWindow: this.root.loadOlderMessages.settings.contextWindow
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      accountId: settings.accountId,
+      thinkingLevel: settings.thinkingLevel,
+      inferenceMode: settings.inferenceMode,
+      contextWindow: settings.contextWindow
     }
   }
 

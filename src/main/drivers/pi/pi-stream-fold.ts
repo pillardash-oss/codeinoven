@@ -826,6 +826,10 @@ export function mapPiRecord(
     const { message } = presentProviderError(finalError)
     const retryAt =
       kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+    // A provider-load failure (429 overloaded, a 5xx) clears on its own too;
+    // the app's retry scheduler owns its short backoff, so mark it retryable
+    // even though it carries no reset time of its own.
+    const retryable = retryAt !== undefined || kind === 'provider_unavailable'
     return {
       events: [
         {
@@ -838,7 +842,7 @@ export function mapPiRecord(
               message,
               rawError: finalError,
               harnessId: 'pi',
-              retryable: retryAt !== undefined,
+              retryable,
               ...(retryAt === undefined ? {} : { retryAt }),
               ...(numberValue(entry['attempt']) ? { attempt: numberValue(entry['attempt']) } : {})
             }
@@ -870,6 +874,9 @@ export function mapPiRecord(
       const { message } = presentProviderError(lastAssistant.error)
       const retryAt =
         kind === 'quota' || kind === 'rate_limit' ? parseUsageResetAt(message) : undefined
+      // Provider-load failures are retryable without a reset time; the app's
+      // retry scheduler assigns their short backoff.
+      const retryable = retryAt !== undefined || kind === 'provider_unavailable'
       return {
         events: [
           {
@@ -882,7 +889,7 @@ export function mapPiRecord(
                 message,
                 rawError: lastAssistant.error,
                 harnessId: 'pi',
-                retryable: retryAt !== undefined,
+                retryable,
                 ...(retryAt === undefined ? {} : { retryAt })
               }
             }

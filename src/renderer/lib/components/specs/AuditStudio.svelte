@@ -81,6 +81,9 @@
     onQuickChatSelection?: (selection: string, documentContext: string) => void
     onReview: (report: AuditReport, notes: string) => Promise<boolean>
     onComplete: () => CallbackResult
+    /** Whether the accepted report can still be pulled back into review. */
+    retractAvailable?: boolean
+    onRetract?: () => CallbackResult
     onOpenInEditor?: (report: AuditReport) => CallbackResult
     onRevealInAppFile?: (report: AuditReport) => CallbackResult
   }
@@ -112,6 +115,8 @@
     onQuickChatSelection,
     onReview,
     onComplete,
+    retractAvailable = false,
+    onRetract,
     onOpenInEditor,
     onRevealInAppFile
   }: Props = $props()
@@ -188,6 +193,14 @@
   const isLatestVersion = $derived(draft.version === latestVersion)
   const reviewStarted = $derived(draft.annotations.length > 0 || reviewOpen)
   const workflowActionsVisible = $derived(actionsAvailable && isLatestVersion)
+  /** The auditor's own verdict decides which way out is the expected one: a
+   *  report that asks for rework leads with Rework, and only a passing report
+   *  leads with Complete. The inverse button stays available, just quieter. */
+  const reworkLeads = $derived(draft.outcome === 'rework_required')
+  const PRIMARY_ACTION_CLASS =
+    'bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50'
+  const SECONDARY_ACTION_CLASS =
+    'border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay disabled:opacity-50'
 
   // Sidebar headings are a projection of the fixed audit sections with open annotation counts.
   const auditEvidence = $derived(auditEvidenceAttribution(draft))
@@ -679,7 +692,7 @@
   {#snippet actions()}
     {#if workflowActionsVisible}
       <button
-        class="border border-border bg-elevated px-3 py-1.5 text-xs font-semibold text-foreground hover:bg-overlay"
+        class={reworkLeads ? PRIMARY_ACTION_CLASS : SECONDARY_ACTION_CLASS}
         disabled={busy || reviewSubmitting}
         title="Send rework notes to the primary agent"
         onclick={() => (reviewOpen = true)}
@@ -688,7 +701,9 @@
       </button>
       {#if !reviewStarted}
         <button
-          class="flex items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-semibold text-on-primary disabled:opacity-50"
+          class="flex items-center gap-1.5 {reworkLeads
+            ? SECONDARY_ACTION_CLASS
+            : PRIMARY_ACTION_CLASS}"
           disabled={busy}
           title="Complete this audit without rework notes"
           onclick={onComplete}
@@ -696,6 +711,15 @@
           Complete <CioCheck size={13} />
         </button>
       {/if}
+    {:else if retractAvailable && onRetract}
+      <button
+        class={SECONDARY_ACTION_CLASS}
+        disabled={busy}
+        title="Retract the accepted audit and put this report back under review"
+        onclick={onRetract}
+      >
+        Retract audit
+      </button>
     {/if}
   {/snippet}
 

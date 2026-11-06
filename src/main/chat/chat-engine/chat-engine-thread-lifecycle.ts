@@ -19,7 +19,11 @@ import {
   type TurnStreamLogRead
 } from '../turn-stream-log'
 import { backgroundIo } from '../../system/background-io'
-import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  isUsageResetWaitIssue,
+  TRANSIENT_PROVIDER_RETRY_MS
+} from '../../../lib/provider-issue'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import {
   PROJECT_DATA_DIRECTORY,
@@ -759,7 +763,11 @@ export class ChatEngineThreadLifecycle {
               projectId: row.project_id,
               threadId: row.id,
               harnessId: thread.sessionHarnessId ?? thread.settings?.harnessId ?? 'unknown',
-              retryAt: Date.now() + USAGE_RESET_FALLBACK_RETRY_MS,
+              retryAt:
+                Date.now() +
+                (kind === 'provider_unavailable'
+                  ? TRANSIENT_PROVIDER_RETRY_MS
+                  : USAGE_RESET_FALLBACK_RETRY_MS),
               issueKind: kind,
               issueMessage: lastError
             })

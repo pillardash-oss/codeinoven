@@ -815,6 +815,11 @@ export class AssignmentEngine {
     return this.auditCycle.complete(projectId, coordinatorThreadId)
   }
 
+  /** Undo an accepted audit, returning the report to review. */
+  async retractAuditCycle(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    return this.auditCycle.retract(projectId, coordinatorThreadId)
+  }
+
   async makeAuditAvailable(
     projectId: string,
     coordinatorThreadId: string
