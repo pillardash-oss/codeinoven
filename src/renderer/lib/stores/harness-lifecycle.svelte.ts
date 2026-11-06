@@ -8,6 +8,7 @@ import type {
 import { invoke } from '$lib/ipc.svelte'
 import { reportError } from './app-errors.svelte'
 import { providerStore } from '$lib/stores/providers.svelte'
+import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
 
 /** Reuse recent update results when Settings remounts or startup checks overlap. */
 const LOCAL_UPDATE_TTL_MS = 5 * 60_000
@@ -196,20 +197,31 @@ class HarnessLifecycleStore {
       if (enabledIds.length === 0) return
 
       await providerStore.init()
+      // The ACP agents carry their own updater, which is what their opt-in runs.
+      await acpAgentsStore.load()
       // Probe installed versions first — update availability compares the
       // freshly detected installed version against the published latest.
       await providerStore.checkAll()
       await this.checkAll()
 
-      this.autoManagedBatch = true
-
       for (const provider of providerStore.providers) {
-        if (enabledIds.includes(provider.id) && this.updateAvailableFor(provider.id)) {
-          // Docked: the panel stays collapsed to its dock chip so a
-          // quiet background update never opens a modal over the workspace.
-          await this.startUpdate(provider.id, provider.name, { docked: true })
-        }
+        if (!enabledIds.includes(provider.id)) continue
+        // A native harness runs only when it is behind its published release. An
+        // ACP agent usually has no feed the app can compare, so its opt-in means
+        // "run my updater on launch": the vendor's updater is a no-op when the
+        // agent is already current.
+        const optedIn =
+          provider.transport === 'acp'
+            ? Boolean(acpAgentsStore.get(provider.id)?.updateCommand?.trim())
+            : this.updateAvailableFor(provider.id) !== undefined
+        if (!optedIn) continue
+        // Docked: the panel stays collapsed to its dock chip so a
+        // quiet background update never opens a modal over the workspace.
+        await this.startUpdate(provider.id, provider.name, { docked: true })
       }
+
+      // Only a batch that actually started something closes itself later.
+      this.autoManagedBatch = this.activeCount > 0
     } catch {
       // Auto-update is best-effort on startup.
     }

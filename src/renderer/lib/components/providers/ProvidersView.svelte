@@ -398,6 +398,16 @@
     return entry.confirmed.source === 'user' ? 'confirmed by you' : 'confirmed in use'
   }
 
+  /**
+   * Whether auto-updating this row can actually do something. A native harness
+   * always can; an ACP agent only when it has an updater of its own, so the
+   * switch is never offered where it would flip and change nothing.
+   */
+  function autoUpdateAvailable(provider: ProviderConnectionInfo): boolean {
+    if (provider.transport !== 'acp') return true
+    return Boolean(acpAgentsStore.get(provider.id)?.updateCommand?.trim())
+  }
+
   async function loadAutoUpdatePrefs(): Promise<void> {
     try {
       autoUpdatePrefs = await invoke('harnessAutoUpdate:list')
@@ -1114,7 +1124,6 @@
                       >{provider.detail ?? 'No additional detail available.'}</code
                     ></pre>
                 {:else}
-                  <p class="text-xs font-semibold text-foreground">Settings</p>
                   {#if provider.transport === 'acp'}
                     <div class="flex items-center justify-between gap-3">
                       <div class="min-w-0">
@@ -1169,7 +1178,7 @@
                     </div>
                   {/if}
 
-                  {#if provider.transport !== 'acp'}
+                  {#if autoUpdateAvailable(provider)}
                     <div class="flex items-center justify-between gap-3">
                       <div class="min-w-0">
                         <p class="text-xs font-medium text-foreground">
@@ -1179,7 +1188,9 @@
                           class="mt-0.5 truncate text-[0.625rem] text-dimmed"
                           title="When on, {provider.name} is updated in the background whenever you open {APP_NAME}."
                         >
-                          Updates in the background when {APP_NAME} opens
+                          {provider.transport === 'acp'
+                            ? `Runs the agent's updater when ${APP_NAME} opens`
+                            : `Updates in the background when ${APP_NAME} opens`}
                         </p>
                       </div>
                       <div class="flex shrink-0 items-center gap-2">
