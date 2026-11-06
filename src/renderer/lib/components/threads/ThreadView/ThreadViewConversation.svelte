@@ -28,6 +28,7 @@
   import SpeechPlaybackButton from '../../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../../speech/speech-controller.svelte'
   import WorkingTrace from '../WorkingTrace.svelte'
+  import TraceActivityLine from '../TraceActivityLine.svelte'
   import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
   import { runReceiptState } from '$lib/stores/run-receipt.svelte'
   import { isBoundAssistantTask } from '$shared/bound-scope'
@@ -1437,6 +1438,13 @@
                  was: it is evidence, never a requirement. -->
           {/await}
         {/if}
+      {/if}
+
+      {#if board.pollStreamParts.conversationBusy}
+        <TraceActivityLine
+          parts={board.pollStreamParts.latestTurnRenderableParts}
+          onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
+        />
       {/if}
 
       {#if board.unmirroredTraceStartTime.brainstormReportRefreshing || board.buildSpecActionPrompt.delegatedWorkBusy || board.composerScope.assignmentFormulating || (board.buildSpecActionPrompt.heldSteerAbsIndex === -1 && !board.buildSpecActionPrompt.pendingLiveTurn && !board.submitBrainstormDecision.activePlanningEntry && !board.harnessUsage.specFormulating && board.switchProject.busy && board.pollStreamParts.latestTurnRenderableParts.length === 0)}
