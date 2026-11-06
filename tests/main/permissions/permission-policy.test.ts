@@ -180,6 +180,51 @@ describe('permission policy', () => {
     ).toBe(false)
   })
 
+  it('never prompts for a destructive command confined to the session workspace', () => {
+    const workspace = resolve('/workspace/assistant-cwd/abc')
+    const policy = new PermissionPolicy({
+      projectRoot: workspace,
+      mode: 'auto_review',
+      workspaceRoots: [workspace]
+    })
+
+    // An assistant staging a site inside its own workspace deletes the staged
+    // tree and rebuilds it in one chain. Redirections and globs in the other
+    // segments do not hide what the delete removes.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          `cd ${workspace}/dispatch/site && rm -rf scratch/testsite && mkdir -p scratch/testsite/build && cp apply/static/*.txt scratch/testsite/static/ && printf '# placeholder\\n' > scratch/testsite/static/robots.txt`
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+  })
+
+  it('still asks when a destructive command can leave the session workspace', () => {
+    const workspace = resolve('/workspace/assistant-cwd/abc')
+    const policy = new PermissionPolicy({
+      projectRoot: workspace,
+      mode: 'auto_review',
+      workspaceRoots: [workspace]
+    })
+
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf /Users/me/Documents'] })
+    ).toMatchObject({ decision: 'ask' })
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['cd /tmp && rm -rf build'] })
+    ).toMatchObject({ decision: 'ask' })
+    // A glob hides its targets.
+    expect(policy.evaluate({ permission: 'bash', commands: ['rm -rf *'] })).toMatchObject({
+      decision: 'ask'
+    })
+    // Wrappers evaluate another command, so nothing is proven.
+    expect(
+      policy.evaluate({ permission: 'bash', commands: [`bash -c 'ls && rm -rf scratch'`] })
+    ).toMatchObject({ decision: 'ask' })
+  })
+
   it('runs every operation in yolo mode under full_access, including home directory paths', () => {
     const policy = new PermissionPolicy({ projectRoot, mode: 'full_access', now: () => 1000 })
 

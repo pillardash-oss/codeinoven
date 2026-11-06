@@ -1,6 +1,7 @@
 import { basename, isAbsolute, relative, resolve, sep } from 'path'
 import { toPosixPath } from '../../lib/paths'
 import { tmpdir } from 'os'
+import { CIO_SCRATCH_DIRECTORY } from '../../lib/cio-cleanup'
 import { deletionTargets } from './agent-created-files'
 
 export type PermissionRisk = 'low' | 'medium' | 'high' | 'critical'
@@ -159,6 +160,11 @@ const HIGH_RISK_TERMS = [
   'config'
 ]
 const DESTRUCTIVE_TERMS = ['delete', 'remove', 'destroy', 'erase', 'wipe']
+/** Command names whose segment removes entries from the file system. */
+const DESTRUCTIVE_SEGMENTS = new Set(['rm', 'rmdir', 'del', 'erase', 'rd', 'remove-item', 'ri'])
+/** Longest shell command the confinement proof will read. Anything longer is
+ *  left to the ordinary card instead of being parsed. */
+const MAX_PROVEN_COMMAND_LENGTH = 8192
 const DESTRUCTIVE_COMMAND_PATTERNS = [
   /(?:^|[;&|]\s*)rm\s+(?=[^\n]*(?:-[a-zA-Z]*[rR][a-zA-Z]*|--recursive)(?:\s|$))/u,
   /(?:^|[;&|]\s*)find\s+[^\n]+\s-delete(?:\s|$)/u,
@@ -358,14 +364,33 @@ export class PermissionPolicy {
       return this.createDecision('ask', false, destructiveReason, risk, scope)
     }
 
-    const destructiveCommand = commands.find((command) =>
+    const destructiveCommands = commands.filter((command) =>
       DESTRUCTIVE_COMMAND_PATTERNS.some((pattern) => pattern.test(command))
     )
-    if (destructiveCommand) {
+    if (destructiveCommands.length > 0) {
+      // The command still runs on the user's machine, but a removal that
+      // provably stays inside the folder this session was handed (its own
+      // workspace, its scratch tree, or a path it created itself) is the
+      // agent clearing away its own work. A compound command with a
+      // redirection or a glob stays readable that way because only the delete
+      // segments are proven; every other segment can reach no further than an
+      // ordinary command already does.
+      const unproven = destructiveCommands.find(
+        (command) => !this.isConfinedDestructiveCommand(command)
+      )
+      if (unproven === undefined) {
+        return this.createDecision(
+          'auto_review',
+          true,
+          "Auto-approved: the command removes only files inside this session's own workspace.",
+          risk,
+          scope
+        )
+      }
       return this.createDecision(
         'ask',
         false,
-        `Recursive or destructive command requires explicit approval: ${destructiveCommand}`,
+        `Recursive or destructive command requires explicit approval: ${unproven}`,
         'critical',
         scope
       )
@@ -512,6 +537,72 @@ export class PermissionPolicy {
     // request that also points anywhere else keeps its card.
     if (!paths.every((path) => this.isAgentCreatedPath(path))) return false
     return targets.every((target) => this.agentCreatedPaths.has(target))
+  }
+
+  /** Whether removing `resolvedPath` only touches work this session owns: a
+   *  path the session created itself, its scratch tree (minus the folders the
+   *  platform owns), or its own workspace root. */
+  private isConfinedDeletionTarget(resolvedPath: string): boolean {
+    if (this.agentCreatedPaths.has(toPosixPath(resolvedPath))) return true
+    if (this.isScratchRoot(resolvedPath)) return true
+    return this.workspaceRoots.some((root) => {
+      if (!isWithinDirectory(root, resolvedPath)) return false
+      return !SCRATCH_RESERVED_DIRECTORIES.some((reserved) =>
+        isWithinDirectory(resolve(root, CIO_SCRATCH_DIRECTORY, reserved), resolvedPath)
+      )
+    })
+  }
+
+  /** Whether a shell command provably removes only files this session owns.
+   *
+   *  Only the segments that actually delete are proven, and each one is
+   *  resolved against the working directory the chain has `cd`ed into so a
+   *  `cd` out of the session's roots rejects. A glob, a variable, a
+   *  substitution, a `~`, or a wrapper that evaluates another command hides
+   *  its targets, so it yields false and the ordinary card still asks. */
+  private isConfinedDestructiveCommand(command: string): boolean {
+    if (!command.trim() || command.length > MAX_PROVEN_COMMAND_LENGTH) return false
+    if (/[$`\n\r{}]/u.test(command)) return false
+    const segments = shellSegments(command)
+    if (!segments) return false
+    let workingDirectory: string | undefined = this.projectRoot
+    let removesSomething = false
+    for (const segment of segments) {
+      const name = basename(segment[0] ?? '').toLowerCase()
+      if (SHELL_INTERPRETERS.has(name) || name === 'bun') return false
+      if (name === 'cd' || name === 'pushd') {
+        const operands = segment.slice(1).filter((token) => !token.startsWith('-'))
+        if (operands.length !== 1 || !isReadableTarget(operands[0]!)) {
+          workingDirectory = undefined
+          continue
+        }
+        const normalized = normalizeNativePath(operands[0]!)
+        workingDirectory = isAbsolute(normalized)
+          ? resolve(normalized)
+          : resolve(workingDirectory ?? this.projectRoot, normalized)
+        continue
+      }
+      const removal = destructiveSegmentRemovals(segment)
+      if (removal === undefined) continue
+      removesSomething = true
+      if (workingDirectory === undefined) return false
+      if (removal === 'working-directory') {
+        // `git clean` acts on the directory it runs in, so that directory
+        // itself has to be one of the session's own roots.
+        if (!this.isConfinedDeletionTarget(workingDirectory)) return false
+        continue
+      }
+      if (removal.length === 0) return false
+      for (const target of removal) {
+        if (!isReadableTarget(target)) return false
+        const normalized = normalizeNativePath(target)
+        const resolvedPath = isAbsolute(normalized)
+          ? resolve(normalized)
+          : resolve(workingDirectory, normalized)
+        if (!this.isConfinedDeletionTarget(resolvedPath)) return false
+      }
+    }
+    return removesSomething
   }
 
   private isScratchRoot(resolvedPath: string): boolean {
@@ -794,6 +885,31 @@ function shellSegments(command: string): string[][] | undefined {
   if (quote !== null) return undefined
   endSegment()
   return segments
+}
+
+function isReadableTarget(operand: string): boolean {
+  return operand.length > 0 && !/[*?[\]~]/u.test(operand)
+}
+
+/** What one chain segment removes: the operands it names, or
+ *  `working-directory` when it removes entries from the directory it runs in
+ *  (`git clean`). Undefined means the segment removes nothing. */
+function destructiveSegmentRemovals(
+  segment: readonly string[]
+): string[] | 'working-directory' | undefined {
+  const name = basename(segment[0] ?? '')
+    .toLowerCase()
+    .replace(/\.(?:exe|cmd|bat|ps1)$/u, '')
+  if (DESTRUCTIVE_SEGMENTS.has(name)) {
+    return segment
+      .slice(1)
+      .filter((token) => !token.startsWith('-') && !/^\/[A-Za-z]$/u.test(token))
+  }
+  if (name === 'find' && segment.includes('-delete')) {
+    return segment.slice(1, segment.indexOf('-delete')).filter((token) => !token.startsWith('-'))
+  }
+  if (name === 'git' && segment[1] === 'clean') return 'working-directory'
+  return undefined
 }
 
 /** Recognize only a literal ls of workspace roots. Descendants are excluded
