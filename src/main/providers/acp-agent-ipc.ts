@@ -110,6 +110,7 @@ function readInput(input: unknown): {
   name: string
   command: string
   args: string[]
+  updateCommand?: string | null
   icon?: string | null
   iconDark?: string | null
   enabled?: boolean
@@ -123,6 +124,7 @@ function readInput(input: unknown): {
     : []
   const id =
     typeof record['id'] === 'string' && isAcpAgentId(record['id']) ? record['id'] : undefined
+  const updateCommand = record['updateCommand']
   const icon = record['icon']
   const iconDark = record['iconDark']
   const enabled = record['enabled']
@@ -132,6 +134,7 @@ function readInput(input: unknown): {
     name,
     command,
     args,
+    ...(typeof updateCommand === 'string' || updateCommand === null ? { updateCommand } : {}),
     ...(typeof icon === 'string' || icon === null ? { icon } : {}),
     ...(typeof iconDark === 'string' || iconDark === null ? { iconDark } : {})
   }

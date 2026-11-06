@@ -284,8 +284,19 @@
     // belongs in this menu, and the only action the row keeps outside is the
     // provider itself.
     if (provider.transport === 'acp') {
+      const updateCommand = acpAgentsStore.get(provider.id)?.updateCommand?.trim()
       items.push(
         { label: `divider-${provider.id}`, divider: true },
+        ...(updateCommand
+          ? [
+              {
+                label: 'Update agent',
+                icon: CioDownload,
+                disabled: harnessLifecycleStore.isRunning(provider.id),
+                onClick: () => void harnessLifecycleStore.startUpdate(provider.id, provider.name)
+              }
+            ]
+          : []),
         {
           label: 'Edit agent',
           icon: CioPencil,
@@ -1015,9 +1026,29 @@
                     View details
                   </button>
                 {:else}
-                  {#if provider.transport === 'acp'}
-                    <!-- Nothing to install or update: the agent is a command the
-                         user already had, so the row keeps only its providers. -->
+                  {#if harnessLifecycleStore.updateAvailableFor(provider.id)}
+                    <!-- ACP agents reach this branch too: an agent the app can
+                         compare against its vendor's release is updated exactly
+                         like a harness, through its own updater. -->
+                    <button
+                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
+                      title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
+                        provider.id
+                      )?.latestVersion}"
+                      disabled={harnessLifecycleStore.isRunning(provider.id)}
+                      onclick={() =>
+                        void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
+                    >
+                      {#if harnessLifecycleStore.isRunning(provider.id)}
+                        <CioSpinner size={13} class="animate-spin" />
+                      {:else}
+                        <CioDownload size={13} />
+                      {/if}
+                      Update
+                    </button>
+                  {:else if provider.transport === 'acp'}
+                    <!-- The agent is a command the user already had, so the row
+                         offers nothing to install (its update lives in the menu). -->
                   {:else if provider.status === 'not_found'}
                     <button
                       class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
@@ -1039,23 +1070,6 @@
                       onclick={() => void openInstallPage(provider)}
                     >
                       Docs
-                    </button>
-                  {:else if harnessLifecycleStore.updateAvailableFor(provider.id)}
-                    <button
-                      class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
-                      title="Update {provider.name} to {harnessLifecycleStore.updateAvailableFor(
-                        provider.id
-                      )?.latestVersion}"
-                      disabled={harnessLifecycleStore.isRunning(provider.id)}
-                      onclick={() =>
-                        void harnessLifecycleStore.startUpdate(provider.id, provider.name)}
-                    >
-                      {#if harnessLifecycleStore.isRunning(provider.id)}
-                        <CioSpinner size={13} class="animate-spin" />
-                      {:else}
-                        <CioDownload size={13} />
-                      {/if}
-                      Update
                     </button>
                   {/if}
                   <button

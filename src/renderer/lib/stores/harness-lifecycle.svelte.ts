@@ -269,9 +269,15 @@ class HarnessLifecycleStore {
     // resident process still runs the previous build, so ask for a restart now:
     // main skips it while a thread is using the harness and applies it as soon
     // as the harness goes quiet.
+    // An ACP agent is spawned per turn and keeps no resident transport, so it has
+    // nothing to restart after its own updater ran.
+    const transport = providerStore.providers.find(
+      (provider) => provider.id === harnessId
+    )?.transport
     if (
       !finished?.cancelled &&
       exitCode === 0 &&
+      transport !== 'acp' &&
       (finished?.kind === 'update' || finished?.kind === 'install')
     ) {
       await this.restartHarness(harnessId)

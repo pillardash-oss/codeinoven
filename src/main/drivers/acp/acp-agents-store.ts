@@ -26,16 +26,28 @@ const MAX_COMMAND_LENGTH = 512
 const MAX_ARG_COUNT = 32
 const MAX_ARG_LENGTH = 2048
 const MAX_ENV_ENTRIES = 32
+const MAX_UPDATE_COMMAND_LENGTH = 512
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/u
 const DATA_URL = /^data:image\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+$/u
 
 /** Harnesses verified to expose ACP, offered as starting points in the editor. */
-export const KNOWN_ACP_AGENTS: readonly { name: string; command: string; args: string[] }[] = [
-  { name: 'Cline', command: 'cline', args: ['--acp'] },
+export const KNOWN_ACP_AGENTS: readonly {
+  name: string
+  command: string
+  args: string[]
+  updateCommand?: string
+}[] = [
+  // Verified with cline 3.0.61: `--update` is the CLI's own update flag.
+  { name: 'Cline', command: 'cline', args: ['--acp'], updateCommand: 'cline --update' },
   // Cursor Agent ships ACP as a hidden `acp` subcommand (verified with
   // cursor-agent 2026.09.10: initialize, session/new with its model list, and
-  // tool permissions all round-trip).
-  { name: 'Cursor agent', command: 'cursor-agent', args: ['acp'] }
+  // tool permissions all round-trip), and its CLI carries an `update` command.
+  {
+    name: 'Cursor agent',
+    command: 'cursor-agent',
+    args: ['acp'],
+    updateCommand: 'cursor-agent update'
+  }
 ]
 
 interface StoredAgents {
@@ -138,6 +150,16 @@ export function normalizeAcpAgent(
     env[key] = value
   }
 
+  const rawUpdate =
+    input.updateCommand === undefined ? existing?.updateCommand : input.updateCommand
+  const updateCommand = rawUpdate?.trim() ?? ''
+  if (updateCommand.length > MAX_UPDATE_COMMAND_LENGTH) {
+    throw new Error('The update command is too long')
+  }
+  if (updateCommand.includes('\0')) {
+    throw new Error('The update command contains an invalid character')
+  }
+
   const enabled = input.enabled ?? existing?.enabled ?? true
   const icon = input.icon === undefined ? existing?.icon : validateIcon(input.icon, 'The icon')
   const iconDark =
@@ -151,6 +173,7 @@ export function normalizeAcpAgent(
     command,
     args,
     env,
+    ...(updateCommand.length > 0 ? { updateCommand } : {}),
     ...(icon ? { icon } : {}),
     ...(iconDark ? { iconDark } : {}),
     enabled,
@@ -245,6 +268,7 @@ export class AcpAgentStore {
         name: agent.name,
         command: agent.command,
         args: [...agent.args],
+        ...(agent.updateCommand ? { updateCommand: agent.updateCommand } : {}),
         ...(agent.icon ? { icon: agent.icon } : {}),
         ...(agent.iconDark ? { iconDark: agent.iconDark } : {}),
         enabled: agent.enabled !== false,

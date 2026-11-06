@@ -30,6 +30,7 @@
     name: string
     command: string
     args: string
+    updateCommand: string
     icon: string | undefined
     iconDark: string | undefined
     enabled: boolean
@@ -58,6 +59,7 @@
       name: source?.name ?? '',
       command: source?.command ?? '',
       args: source?.args.join(' ') ?? '',
+      updateCommand: source?.updateCommand ?? '',
       icon: source?.icon,
       iconDark: source?.iconDark,
       enabled: source?.enabled ?? true
@@ -95,6 +97,7 @@
     draft.name = preset.name
     draft.command = preset.command
     draft.args = preset.args.join(' ')
+    draft.updateCommand = preset.updateCommand ?? ''
   }
 
   async function save(): Promise<void> {
@@ -106,6 +109,7 @@
         name: draft.name.trim(),
         command: draft.command.trim(),
         args: splitArgs(draft.args),
+        updateCommand: draft.updateCommand.trim() || null,
         icon: draft.icon ?? null,
         iconDark: draft.iconDark ?? null,
         enabled: draft.enabled
@@ -243,6 +247,18 @@
     <label class="block space-y-1 text-xs font-medium">
       <span>Arguments</span>
       <input class={MONO_FIELD} placeholder="acp" required bind:value={draft.args} />
+    </label>
+
+    <label class="block space-y-1 text-xs font-medium">
+      <span>Update command</span>
+      <input
+        class={MONO_FIELD}
+        placeholder="cursor-agent update"
+        bind:value={draft.updateCommand}
+      />
+      <span class="block text-[0.625rem] font-normal text-dimmed">
+        The vendor's own updater. Update runs it in the terminal, the way a harness updates itself.
+      </span>
     </label>
 
     <div class="space-y-1.5">
