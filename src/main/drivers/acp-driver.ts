@@ -67,6 +67,43 @@ interface AcpSessionBinding {
   promptCapabilities: AcpPromptCapabilities
 }
 
+/**
+ * The failure a prompt's stop reason describes, or null when the turn finished.
+ *
+ * ACP reports how a turn ended: `cancelled` means the agent abandoned the work
+ * (its own transport failed, for instance), and `refusal` means it declined.
+ * Both used to settle as a successful turn carrying whatever text had streamed,
+ * so a truncated answer was stored as the final one and the work behind it was
+ * never retried. `max_tokens` and `max_turn_requests` stop short of finishing
+ * for the same reason a context limit does, and are reported so the turn is
+ * resumed rather than accepted.
+ */
+function acpTurnOutcomeError(
+  result: unknown,
+  cancelledByApp: boolean
+): { message: string; transient: boolean } | null {
+  const stopReason = acpString(acpRecord(result)?.['stopReason'])
+  if (stopReason === 'end_turn' || stopReason === undefined) return null
+  if (stopReason === 'cancelled') {
+    return cancelledByApp
+      ? null
+      : { message: 'The agent cancelled the turn before it finished', transient: true }
+  }
+  if (stopReason === 'refusal') {
+    return { message: 'The agent refused to continue this request', transient: false }
+  }
+  if (stopReason === 'max_tokens') {
+    return { message: 'The agent reached its token limit before finishing', transient: false }
+  }
+  if (stopReason === 'max_turn_requests') {
+    return {
+      message: 'The agent reached its request limit for this turn before finishing',
+      transient: false
+    }
+  }
+  return null
+}
+
 /** The turn currently streaming on one app session. */
 interface AcpActiveTurn {
   sessionId: string
@@ -79,6 +116,9 @@ interface AcpActiveTurn {
   pending: number
   /** Result of the most recently settled prompt, used for usage accounting. */
   lastResult: unknown
+  /** True when this app asked the agent to stop, so a cancelled outcome is the
+   *  stop the user requested rather than a turn that died on its own. */
+  cancelledByApp?: boolean
 }
 
 /**
@@ -388,6 +428,8 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     await this.requireSession(projectPath, sessionId)
     const binding = this.bindings.get(sessionId)
     if (!binding) return
+    const turn = this.activeTurns.get(sessionId)
+    if (turn) turn.cancelledByApp = true
     this.transports.get(projectPath)?.cancel(binding.acpSessionId)
   }
 
@@ -609,6 +651,14 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     turn.pending = Math.max(0, turn.pending - 1)
     if (turn.pending > 0) return
     if (this.activeTurns.get(turn.sessionId) !== turn) return
+    const outcome = acpTurnOutcomeError(result, turn.cancelledByApp === true)
+    if (outcome) {
+      // The agent stopped on its own: its transport failed or it declined. Only
+      // the transport case is worth retrying on its own, so only it is marked
+      // transient.
+      this.failTurn(turn, session, new Error(outcome.message), outcome.transient)
+      return
+    }
     await this.completeTurn(turn, session, result)
   }
 
@@ -653,19 +703,35 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     this.emit({ type: 'session.idle', sessionId: turn.sessionId })
   }
 
-  private failTurn(turn: AcpActiveTurn, session: PersistentCliSession, error: unknown): void {
+  private failTurn(
+    turn: AcpActiveTurn,
+    session: PersistentCliSession,
+    error: unknown,
+    transient = false
+  ): void {
     const message = error instanceof Error ? error.message : 'The ACP turn failed'
     this.activeTurns.delete(turn.sessionId)
     // Keep whatever the turn produced, so a failed turn still explains itself.
     this.mergeMessages(session, [turn.fold.message()])
     void this.persistSession(session).catch(() => undefined)
+    // A turn the agent abandoned is weather, not a verdict: the app's connection
+    // wait resumes the thread on its own instead of parking it on an error card.
+    const issue = transient
+      ? { kind: 'network' as const, message, harnessId: this.id, retryable: true }
+      : undefined
     this.emit({
       type: 'message.completed',
       sessionId: turn.sessionId,
       messageId: turn.messageId,
-      error: message
+      error: message,
+      ...(issue ? { issue } : {})
     })
-    this.emit({ type: 'session.error', sessionId: turn.sessionId, error: message })
+    this.emit({
+      type: 'session.error',
+      sessionId: turn.sessionId,
+      error: message,
+      ...(issue ? { issue } : {})
+    })
     this.emit({ type: 'session.idle', sessionId: turn.sessionId })
   }
 
