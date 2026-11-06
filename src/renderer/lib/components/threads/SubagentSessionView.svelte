@@ -6,6 +6,7 @@
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
   import type { AgentEvent, AgentMessage, AgentPart, AgentSessionStatus } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { latestWorkingTraceParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
   import { subagentTaskDetail, subagentTaskLabel } from '$lib/subagent-presentation'
   import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
@@ -317,6 +318,18 @@
         stopping = false
       })
   }
+
+  /**
+   * Walk back up the delegation chain.
+   *
+   * A sub-agent has no thread of its own: this tab is the only place its work is
+   * read, so the parent it belongs to has to be one control away rather than
+   * something the reader has to remember. The tab already carries the parent's
+   * ids, so opening it is the same reveal every other surface uses.
+   */
+  function openParentThread(): void {
+    void openThreadById(tab.projectId, tab.threadId)
+  }
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
@@ -333,6 +346,7 @@
     background={tab.activity.background}
     providerTaskId={tab.activity.providerTaskId}
     {sessionId}
+    onOpenParent={openParentThread}
   />
 
   <div

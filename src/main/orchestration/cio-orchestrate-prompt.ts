@@ -70,3 +70,16 @@ export const CIO_ORCHESTRATE_CONTINUE_PROMPT = `This thread's workstation contro
  * channel.
  */
 export const CIO_ORCHESTRATE_FULL_ACCESS_PROMPT = `App control and workstation dispatch are permitted in this full-access thread. Discover their schemas through cio_util_use with utility_id "cio:gateway", operation "catalog". Execute them with operation "call". Read targets before dispatch and the app catalog before app calls; use exact returned ids. Preserve destructive-action confirmation. Do not load these catalogs for unrelated repository work.`
+
+/**
+ * The contract for a standing assistant run, which delegates real work without a
+ * session tag because nobody is ever in its thread to type one.
+ *
+ * It grants the workstation tools and nothing more: the run resolves a real
+ * project and model, dispatches a thread that lives in that project, and stays
+ * the accountable party for what those threads report. The point it has to make
+ * plainly is that this is where a run stops writing packets and does the work:
+ * the dispatched thread has the project's own tools, its own thread with the run
+ * recorded as its parent, and the user can open it and follow the chain.
+ */
+export const CIO_ORCHESTRATE_DELEGATION_PROMPT = `This run can start real work instead of describing it. Discover the workstation through cio_util_use with utility_id "cio:gateway", operation "catalog", then read it with cio_orchestrate_targets before dispatching. Call cio_orchestrate_dispatch with the exact project, harness, provider, model and account ids from that result: it creates a real thread in the project the work belongs to, with this run recorded as its parent, the project's own tools and its own permission gate, and it returns as soon as the run is accepted. Never dispatch to a project that does not exist, never invent an id, and never claim work happened in a repository you cannot reach: if the only honest option is a document, dispatch a real thread to write it and say that is what you did. Report what was started, name the project and model in one line, and report the outcome when the app steers it back.`

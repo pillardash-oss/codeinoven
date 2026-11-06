@@ -38,6 +38,7 @@
   import type { Props } from './ThreadView/ThreadView-types'
   import ThreadViewConversation from './ThreadView/ThreadViewConversation.svelte'
   import ThreadViewComposer from './ThreadView/ThreadViewComposer.svelte'
+  import ThreadParentLink from './ThreadParentLink.svelte'
   import { permissionLevelActions } from '$lib/actions'
 
   let {
@@ -1228,6 +1229,11 @@
       {/await}
     {/if}
     <!-- Scrollable conversation area -->
+    <ThreadParentLink
+      parent={board.currentWorkingTraceAttribution.coordinatorParentThread}
+      parentProjectId={board.handleAgentEvent.thread.dispatchOrigin?.initiatorProjectId}
+      parentThreadId={board.handleAgentEvent.thread.dispatchOrigin?.initiatorThreadId}
+    />
     <ThreadViewConversation {board} />
 
     <!-- Bottom-anchored chrome. Everything pinned between the conversation and

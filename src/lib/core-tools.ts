@@ -10,6 +10,15 @@ export const CIO_REQUEST_FILES_TOOL_NAME = 'cio_request_files'
 export const CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME = 'cio_sensitive_access_reason'
 /** Spawns nested sub-agent worker threads controlled by the primary agent. */
 export const CIO_SPAWN_AGENT_TOOL_NAME = 'cio_spawn_agent'
+/**
+ * Sends a message to a delegated worker, or from a worker to whoever spawned it.
+ *
+ * Delegation used to be one-way: a worker reported once, at the end, and nobody
+ * could reach it while it was working. This is the channel that makes a spawned
+ * agent addressable, in both directions, including between two workers of the
+ * same spawner.
+ */
+export const CIO_AGENT_MESSAGE_TOOL_NAME = 'cio_agent_message'
 /** Checks or waits for spawned sub-agent threads; returns metadata only. */
 export const CIO_AGENT_STATUS_TOOL_NAME = 'cio_agent_status'
 /** Reads the final output of finished sub-agent threads, keyed by agent id. */
@@ -39,6 +48,7 @@ export const PI_CORE_TOOLS_TOOL_NAMES = [
   CIO_TODO_WRITE_TOOL_NAME,
   CIO_REQUEST_FILES_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME,
+  CIO_AGENT_MESSAGE_TOOL_NAME,
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_AGENT_OUTPUT_TOOL_NAME
 ] as const

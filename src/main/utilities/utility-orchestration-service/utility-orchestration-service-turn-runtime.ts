@@ -172,6 +172,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // @cio-hey session. The gateway refuses a route the turn never received.
       if (isOrchestrationTool(name)) {
         return (
+          request.delegationReach === true ||
           request.permissionLevel === 'full_access' ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
