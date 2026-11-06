@@ -79,8 +79,13 @@
   })
 </script>
 
+<!-- The bottom chrome takes the composer's own rung (z-40). A card here answers
+     for the conversation below it, so it paints over what the transcript draws
+     across this band, including the comment bubbles pinned to annotated
+     passages: a bubble fixed at z-40 without this rung floated over an assistant
+     summary that covers the passage it belongs to. -->
 <div
-  class="bottom-chrome relative {board.composerScope.centeredComposer
+  class="bottom-chrome relative z-40 {board.composerScope.centeredComposer
     ? 'flex min-h-0 flex-1 flex-col justify-center'
     : 'shrink-0'}"
 >

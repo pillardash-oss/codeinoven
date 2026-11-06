@@ -246,17 +246,22 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     // A bubble is measured in viewport coordinates, so it has to be re-measured
-    // when the conversation changes width: a sidebar drag or a docked panel moves
-    // every highlight without firing a window resize. A height change is content,
-    // which the publish trigger already covers, and re-measuring on every
-    // streamed frame would force layout for nothing.
+    // when the conversation's own box changes: a sidebar drag or a docked panel
+    // moves every highlight without firing a window resize, and a card taking the
+    // composer's place shortens the reading area under every highlight already on
+    // screen, which left a bubble pinned where its passage used to be rather than
+    // where it now sits. This observes the scroll container itself, whose box only
+    // changes with layout: streamed content grows inside it, which the publish
+    // trigger already covers, so re-measuring every frame is not what this is.
     $effect(() => {
       const element = this.root.loadOlderMessages.scrollEl
       if (!element) return
       let lastWidth = element.clientWidth
+      let lastHeight = element.clientHeight
       const observer = new ResizeObserver(() => {
-        if (element.clientWidth === lastWidth) return
+        if (element.clientWidth === lastWidth && element.clientHeight === lastHeight) return
         lastWidth = element.clientWidth
+        lastHeight = element.clientHeight
         this.root.steerQueuedMessage.scheduleResponseBubbleUpdate()
       })
       observer.observe(element)
