@@ -590,8 +590,16 @@ export function validateAssignmentAuditExecutionEvidence(input: {
   const normalizeCommandEvidence = (value: string): string =>
     value
       .normalize('NFKC')
-      .replace(/\\(["'$`])/gu, '$1')
-      .replace(/\\+/gu, '\\')
+      // A shell wrapper re-escapes whatever it hands to the shell (`\"`, `\.`,
+      // `\[`, `\'`), and the report records the command the auditor meant to
+      // run, so an escaped character is the same character here. Removing only
+      // the quote escapes left the tables and brackets a regex carries escaped
+      // on one side and bare on the other, and no real command could match the
+      // search it reported. The wrapper can add a second layer (`\\.` for the
+      // `\.` it means), so unescape until the text stops changing. Quote
+      // stripping below still handles the wrapper itself.
+      .replace(/\\(.)/gu, '$1')
+      .replace(/\\(.)/gu, '$1')
       .replace(/["']/gu, '')
       .replace(/\s+/gu, ' ')
       .trim()
@@ -644,10 +652,15 @@ export function validateAssignmentAuditExecutionEvidence(input: {
     [...value.matchAll(/(?:^|[;&|]\s*)cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)/gu)]
       .map((match) => match[1].replace(/["']/gu, '').replace(/\/+$/u, '').trim())
       .filter((directory) => /[\p{L}\p{N}]/u.test(directory))
+  // A command an auditor ran is evidence whether or not it succeeded. Harnesses
+  // disagree about what a non-zero exit means: pi and opencode complete the tool
+  // call and report the exit code in its output, while codex marks the whole
+  // `command_execution` part `error`. Accepting only `completed` parts therefore
+  // made every *failing* check   and a failing test is what an audit is usually
+  // looking at   read as a command the auditor never ran, which is why a codex
+  // audit always came back with its test facts awaiting validation.
   const observedCommands = observedTools
-    .filter(
-      (part) => part.state.status === 'completed' && /bash|command|shell|exec/iu.test(part.tool)
-    )
+    .filter((part) => /bash|command|shell|exec/iu.test(part.tool))
     .map((part) => {
       const invocation = [part.tool, part.state.title, JSON.stringify(part.state.input)]
         .filter((value): value is string => Boolean(value))
