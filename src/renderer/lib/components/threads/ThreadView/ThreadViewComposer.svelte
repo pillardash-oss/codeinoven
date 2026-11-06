@@ -468,7 +468,7 @@
               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         {/if}
-        {#if board.unmirroredTraceStartTime.isAssignmentAuditorThread}
+        {#if board.unmirroredTraceStartTime.isAssignmentAuditorThread && board.currentWorkingTraceAttribution.assignmentAuditorCardApplies}
           <AuditGeneratedCard
             state={board.buildSpecActionPrompt.assignmentAuditState}
             version={board.buildSpecActionPrompt.assignmentAuditState === 'running'

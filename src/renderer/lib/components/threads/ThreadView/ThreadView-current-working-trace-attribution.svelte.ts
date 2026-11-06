@@ -243,6 +243,29 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
     return this.independentAuditDisplayEnabled
   })
 
+  /**
+   * Whether the Assignment audit card belongs on the open thread.
+   *
+   * The card is the Assignment or Achievement auditor's own surface. An
+   * independent (spec-less) audit owns a durable auditor child too, and that
+   * child is not an Assignment auditor: rendering the card there put a second
+   * copy of the same failure beside the thread's own error card, and its Retry
+   * ran the Assignment/Engineering audit, which answered "An approved
+   * Engineering implementation is required before audit" for a thread that has
+   * its own independent auditor. The parent row is what tells the two apart and
+   * it arrives with the thread reconcile, so an auditor whose parent is not
+   * loaded yet is treated as independent and shows no card.
+   */
+  assignmentAuditorCardApplies = $derived.by(() => {
+    const thread = this.root.handleAgentEvent.thread
+    if (thread.assignmentId !== undefined) return true
+    if (thread.achievementRole !== 'auditor') return false
+    return (
+      this.coordinatorParentThread !== null &&
+      this.coordinatorParentThread.independentAudit !== true
+    )
+  })
+
   /** The switch only exists once the thread has work and no Engineering mode
    *  is on   a staged (intent-only) Toolbox selection counts as on, so the
    *  two controls can never be lit at the same time before a send commits

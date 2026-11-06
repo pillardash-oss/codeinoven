@@ -581,6 +581,14 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.thread.projectId,
       this.root.handleAgentEvent.thread.coordinatorThreadId
     )
+    // An independent (spec-less) audit's Retry must reach its own runner. The
+    // implementation audit needs an approved Engineering contract, so routing
+    // there answered "An approved Engineering implementation is required before
+    // audit" for a thread that audits itself.
+    if (coordinator?.independentAudit === true) {
+      await this.root.contextUsage.generateIndependentAudit(selected)
+      return
+    }
     if (coordinator?.settings?.loopMode === true) {
       await this.generateDurableAchievementAudit(
         selected,
