@@ -264,31 +264,45 @@
   const frameBounds = $derived(placement === 'fullscreen' ? null : bounds)
 
   /**
-   * Whether the native host, not this component's own DOM panel, is the
-   * presentation on screen.
+   * Whether the native host may still be asked to draw this panel.
    *
-   * A modal the host can draw is projected into the overlay window, which sits
-   * above the browser's native page view. Painting the DOM panel as well shows
-   * it *behind* that page: the panel and its scrim land in the app window's DOM,
-   * which the page composites over, so the user sees the dimmed chrome around the
-   * page, then the panel vanish and reappear the moment the host takes over.
-   *
-   * The DOM panel is therefore the projection source only while the host can draw
-   * it, and becomes the presentation the moment it cannot. Nothing else decides
-   * this: a half-drawn handover is exactly the double appearance.
+   * Intent, not evidence: the projection has been handed a dock and has not been
+   * refused. A host that accepted a frame and never drew it stays in this state,
+   * so nothing on screen may depend on it alone.
    */
   const nativeProjected = $derived(nativeId !== undefined && !nativeFailed)
-  const domPresented = $derived(!nativeProjected)
+
+  /**
+   * Whether the native host has proven that it drew the panel it was given.
+   *
+   * Only a drawn frame may take the panel away from this component's own DOM. A
+   * host that answers `setDockOverlay` but never confirms the frame is
+   * indistinguishable, from here, from one that is still loading its document,
+   * and believing it early is what used to leave the window painting nothing at
+   * all: the DOM panel was withheld until the host refused, which is the end of
+   * its acknowledgement deadline, so every dialog took that whole deadline to
+   * appear on a host that never answered.
+   */
+  const nativePresenting = $derived(nativeProjected && nativeReady)
+
+  /**
+   * The DOM panel is the presentation until the host has drawn its own.
+   *
+   * It is also the projection source throughout, which is what makes a modal open
+   * on the press that asked for it: the panel is painted here, and the native
+   * document takes over one frame later, above it, with no gap in between.
+   */
+  const domPresented = $derived(!nativePresenting)
 
   /**
    * Whether this component's own DOM must be kept out of reach.
    *
-   * While the native document draws the panel it owns the pointer and the
-   * keyboard, and before it draws the panel is not on screen at all. Either way
-   * nothing here may be focused or pressed, so Tab cannot wander into a copy the
-   * user cannot see.
+   * Only while the native document is the panel on screen: it owns the pointer
+   * and the keyboard then. Before that, the DOM panel is what the user sees, so
+   * keeping it inert would leave a visible dialog that answers nothing, which is
+   * a worse failure than the one this ordering fixes.
    */
-  const sourceInert = $derived(nativeProjected || nativeReady)
+  const sourceInert = $derived(nativePresenting)
 
   function nativePanel(id: string): Attachment<HTMLElement> {
     return (panel) => {

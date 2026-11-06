@@ -177,12 +177,15 @@ describe('canonical native modal', () => {
     const request = projection()
     expect(request.modal).toBe(true)
     expect(request.nodes.length).toBeGreaterThan(0)
-    expect(document.querySelector<HTMLElement>('[role="dialog"]')?.parentElement?.inert).toBe(true)
+    // Until the host confirms it drew, the app window's own panel is what the
+    // user has, so it stays out of the inert layer that hands input to the host.
+    expect(document.querySelector<HTMLElement>('[role="dialog"]')?.parentElement?.inert).toBeFalsy()
     bridge.listeners.get('browser:overlay:dockDrawn')?.({
       id: request.id,
       revision: request.revision
     })
     flushSync()
+    expect(document.querySelector<HTMLElement>('[role="dialog"]')?.parentElement?.inert).toBe(true)
     expect(bridge.invoke).toHaveBeenCalledWith('browser:focusDockOverlay', request.id)
     expect(bridge.hideWhile.mock.calls.every((call) => call[2] === false)).toBe(true)
     await vi.advanceTimersByTimeAsync(2100)

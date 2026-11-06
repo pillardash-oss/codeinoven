@@ -899,7 +899,15 @@ export class BrowserOverlayWindow {
           errorDescription,
           url
         })
-        if (this.popup === popup) this.dispose()
+        if (this.popup !== popup) return
+        // A document that will never load is the same news as one that threw on
+        // mount: nothing projected into it can ever draw. Say so now instead of
+        // letting every panel wait out its acknowledgement deadline, which reads
+        // as a dialog that takes an eternity to open. `dispose` first, so the
+        // app's fallback never races the window it is falling back from.
+        this.dispose()
+        if (!this.parent.isDestroyed())
+          sendToRenderer(this.parent.webContents, 'browser:overlay:failed')
       }
     )
     popup.on('closed', () => {
