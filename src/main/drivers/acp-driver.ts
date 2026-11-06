@@ -56,6 +56,8 @@ interface AcpSessionBinding {
   acpSessionId: string
   modelId?: string
   commands: HarnessCommand[]
+  /** What the agent said it accepts in a prompt, from `initialize`. */
+  promptCapabilities: AcpPromptCapabilities
 }
 
 /** The turn currently streaming on one app session. */
@@ -64,6 +66,12 @@ interface AcpActiveTurn {
   messageId: string
   fold: AcpTurnFold
   startedAt: number
+  /** Prompts still open on this turn. A steer opens one, and the turn only
+   *  settles when the last of them answers, so a steer never closes the turn
+   *  that carried it. */
+  pending: number
+  /** Result of the most recently settled prompt, used for usage accounting. */
+  lastResult: unknown
 }
 
 /**
@@ -81,8 +89,10 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     // One long-lived agent process per project hosts every session in it.
     runtimeTopology: { kind: 'shared_daemon', scope: 'application' },
     streaming: true,
-    // ACP has no append-to-active-turn primitive; a steer would start a new prompt.
-    steering: false,
+    // A mid-turn `session/prompt` on the live session is a steer: the agent
+    // abandons its current line of work and answers the new prompt in the same
+    // session, and the answer streams into the turn already on screen.
+    steering: true,
     nativeResume: false,
     messageHistory: 'mirrored',
     interactivePermissions: true,
@@ -283,7 +293,7 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
         init.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
       const blocks = await acpPromptBlocks(opts.text, opts.attachments, capabilities)
       const result = await transport.prompt(binding.acpSessionId, blocks, TURN_TIMEOUT_MS)
-      await this.completeTurn(turn, session, result)
+      await this.settlePrompt(turn, session, result)
     } catch (error) {
       this.failTurn(turn, session, error)
     }
@@ -320,8 +330,30 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     return []
   }
 
-  async steerPrompt(_projectPath: string, _opts: SteerPromptOptions): Promise<void> {
-    throw new Error('ACP does not support steering an active turn')
+  /**
+   * Send one mid-turn prompt on the live ACP session.
+   *
+   * ACP has no dedicated steer method, but an agent that is mid-turn accepts a
+   * further `session/prompt` on the same session and answers it instead of what
+   * it was doing (verified against cursor-agent: a prompt sent while it counts
+   * stops the count and answers the new text). The turn stays open until every
+   * prompt on it has answered, so the steer's answer lands in the message the
+   * user is already reading rather than in a turn that closed underneath it.
+   */
+  async steerPrompt(projectPath: string, opts: SteerPromptOptions): Promise<void> {
+    const session = await this.requireSession(projectPath, opts.sessionId)
+    const turn = this.activeTurns.get(opts.sessionId)
+    const binding = this.bindings.get(opts.sessionId)
+    if (!turn || !binding) throw new Error('No ACP turn is running for this session')
+    const transport = this.transportFor(binding.projectPath)
+    const blocks = await acpPromptBlocks(opts.text, opts.attachments, binding.promptCapabilities)
+    turn.pending += 1
+    try {
+      const result = await transport.prompt(binding.acpSessionId, blocks, TURN_TIMEOUT_MS)
+      turn.lastResult = result
+    } finally {
+      await this.settlePrompt(turn, session, turn.lastResult)
+    }
   }
 
   async listCommands(): Promise<HarnessCommand[]> {
@@ -388,7 +420,13 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     let binding = this.bindings.get(session.id)
     if (!binding) {
       const opened = await transport.newSession()
-      binding = { projectPath, acpSessionId: opened.sessionId, commands: [] }
+      binding = {
+        projectPath,
+        acpSessionId: opened.sessionId,
+        commands: [],
+        promptCapabilities:
+          transport.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
+      }
       this.bindings.set(session.id, binding)
     }
     // An agent that reports a placeholder current model (`default[]`) leaves
@@ -425,7 +463,14 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
       },
       this.id
     )
-    const turn: AcpActiveTurn = { sessionId: session.id, messageId, fold, startedAt: Date.now() }
+    const turn: AcpActiveTurn = {
+      sessionId: session.id,
+      messageId,
+      fold,
+      startedAt: Date.now(),
+      pending: 1,
+      lastResult: undefined
+    }
     this.activeTurns.set(session.id, turn)
     return turn
   }
@@ -453,6 +498,23 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     }
     this.applyEventToSession(session, event)
     this.emit(event)
+  }
+
+  /**
+   * Record that one prompt on this turn answered, and finish the turn when it
+   * was the last. A steer and the prompt it joined both land here, so whichever
+   * of them answers last is what closes the message.
+   */
+  private async settlePrompt(
+    turn: AcpActiveTurn,
+    session: PersistentCliSession,
+    result: unknown
+  ): Promise<void> {
+    turn.lastResult = result
+    turn.pending = Math.max(0, turn.pending - 1)
+    if (turn.pending > 0) return
+    if (this.activeTurns.get(turn.sessionId) !== turn) return
+    await this.completeTurn(turn, session, result)
   }
 
   private async completeTurn(
@@ -575,7 +637,9 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
           sessionId,
           messageId: `acp:${sessionId}:1:1`,
           fold,
-          startedAt: Date.now()
+          startedAt: Date.now(),
+          pending: 1,
+          lastResult: undefined
         })
         const blocks = await acpPromptBlocks(prompt, [], NO_PROMPT_CAPABILITIES)
         await transport.prompt(opened.sessionId, blocks, AUXILIARY_TIMEOUT_MS)
