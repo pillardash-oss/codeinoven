@@ -189,6 +189,9 @@ export interface RendererRecoverySnapshot {
   assistantRecentModels: string[]
   /** Default audit model key (harnessId:providerId:modelId). */
   auditModelKey?: string
+  /** Account the chosen audit model runs on, so an auditor account switch
+   *  survives a restart and seeds the next thread with the same account. */
+  auditAccountId?: string
 }
 
 export interface RecoveryStorage {
@@ -267,7 +270,8 @@ export function emptyRendererRecoverySnapshot(): RendererRecoverySnapshot {
     chatRecentModels: [],
     assistantFavoriteModels: [],
     assistantRecentModels: [],
-    auditModelKey: undefined
+    auditModelKey: undefined,
+    auditAccountId: undefined
   }
 }
 
@@ -678,6 +682,10 @@ export function parseRendererRecoveryState(raw: string | null): RendererRecovery
       auditModelKey:
         typeof parsed.auditModelKey === 'string' && parsed.auditModelKey.length > 0
           ? parsed.auditModelKey
+          : undefined,
+      auditAccountId:
+        typeof parsed.auditAccountId === 'string' && parsed.auditAccountId.length > 0
+          ? parsed.auditAccountId
           : undefined
     }
   } catch {

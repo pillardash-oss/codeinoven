@@ -414,6 +414,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       return {
         ...this.root.loadOlderMessages.settings,
         ...inheritedAuditor,
+        ...(rendererRecovery.auditAccountId ? { accountId: rendererRecovery.auditAccountId } : {}),
         loopMode: false
       }
     }

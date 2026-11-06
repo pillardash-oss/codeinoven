@@ -726,12 +726,14 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       harnessId: normalized.harnessId,
       providerId: normalized.providerId,
       modelId: normalized.modelId,
+      accountId: normalized.accountId,
       thinkingLevel: normalized.thinkingLevel,
       inferenceMode: normalized.inferenceMode,
       contextWindow: normalized.contextWindow
     }
     rendererRecovery.setAuditModel(
-      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId),
+      normalized.accountId
     )
     if (this.root.unmirroredTraceStartTime.isAssignmentAuditorThread) {
       this.updateSettings({
@@ -764,6 +766,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
             harnessId: this.auditSettings.harnessId,
             providerId: this.auditSettings.providerId,
             modelId: this.auditSettings.modelId,
+            accountId: this.auditSettings.accountId,
             thinkingLevel: this.auditSettings.thinkingLevel,
             inferenceMode: this.auditSettings.inferenceMode,
             contextWindow: this.auditSettings.contextWindow

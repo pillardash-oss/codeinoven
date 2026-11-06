@@ -35,6 +35,34 @@ export class ChatEngineAudit {
   constructor(private readonly host: ChatEngine) {}
 
   /**
+   * Start a session that is not bound to the runtime the user just replaced.
+   *
+   * A parked provider reset belongs to the session that hit it, so changing the
+   * auditor's harness, model or account has to discard that session. Keeping it
+   * made an account switch do nothing: the next audit bounced off the same reset
+   * window and reported the previous provider's usage limit again.
+   */
+  private async resetAuditorRuntimeIfChanged(
+    projectId: string,
+    auditor: Thread,
+    nextSettings: ThreadSettings
+  ): Promise<void> {
+    const previous = auditor.settings
+    const runtimeChanged =
+      previous !== undefined &&
+      (previous.harnessId !== nextSettings.harnessId ||
+        previous.providerId !== nextSettings.providerId ||
+        previous.modelId !== nextSettings.modelId ||
+        (previous.accountId ?? '') !== (nextSettings.accountId ?? ''))
+    if (!auditor.sessionId || !(runtimeChanged || previous?.harnessId === undefined)) return
+    await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
+    this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
+    this.host.state.retryScheduler?.clear(auditor.sessionId)
+    this.host.state.retryScheduler?.dropThread(auditor.id)
+    await this.host.threadManager.clearSessionId(projectId, auditor.id)
+  }
+
+  /**
    * Prepare the app utility gateway for one audit turn. Every audit dispatch
    * path (independent, implementation, achievement, Assignment) routes through
    * this shared helper so the auditor always reaches cio_util_find / activate
@@ -270,15 +298,7 @@ export class ChatEngineAudit {
         userInputLocked: true
       })
     }
-    if (
-      auditor.sessionId &&
-      auditor.settings?.harnessId &&
-      auditor.settings.harnessId !== auditorSettings.harnessId
-    ) {
-      await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
-      this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
-      await this.host.threadManager.clearSessionId(projectId, auditor.id)
-    }
+    await this.resetAuditorRuntimeIfChanged(projectId, auditor, auditorSettings)
     await this.host.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.host.threadManager.updateThread(projectId, auditor.id, {
       achievementRole: 'auditor',
@@ -611,15 +631,7 @@ export class ChatEngineAudit {
         userInputLocked: true
       })
     }
-    if (
-      auditor.sessionId &&
-      auditor.settings?.harnessId &&
-      auditor.settings.harnessId !== auditorSettings.harnessId
-    ) {
-      await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
-      this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
-      await this.host.threadManager.clearSessionId(projectId, auditor.id)
-    }
+    await this.resetAuditorRuntimeIfChanged(projectId, auditor, auditorSettings)
     await this.host.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.host.threadManager.updateThread(projectId, auditor.id, {
       achievementRole: 'auditor',
@@ -654,15 +666,7 @@ export class ChatEngineAudit {
       coordinatorThreadId,
       auditorSettings
     )
-    if (
-      auditor.sessionId &&
-      auditor.settings?.harnessId &&
-      auditor.settings.harnessId !== auditorSettings.harnessId
-    ) {
-      await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
-      this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
-      await this.host.threadManager.clearSessionId(projectId, auditor.id)
-    }
+    await this.resetAuditorRuntimeIfChanged(projectId, auditor, auditorSettings)
     await this.host.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.host.threadManager.updateThread(projectId, auditor.id, { userInputLocked: true })
     return (await this.host.threadManager.getThread(projectId, auditor.id)) ?? auditor

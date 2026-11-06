@@ -91,6 +91,7 @@ export class RendererRecoveryStore {
   assistantFavoriteModels = $state<string[]>([])
   assistantRecentModels = $state<string[]>([])
   auditModelKey = $state<string | undefined>(undefined)
+  auditAccountId = $state<string | undefined>(undefined)
   private composerDrafts = $state<Record<string, ComposerDraftEntry>>({})
   private queuedMessages = $state<Record<string, QueuedMessageEntry[]>>({})
 
@@ -114,6 +115,7 @@ export class RendererRecoveryStore {
     this.assistantFavoriteModels = saved.assistantFavoriteModels
     this.assistantRecentModels = saved.assistantRecentModels
     this.auditModelKey = saved.auditModelKey
+    this.auditAccountId = saved.auditAccountId
     this.composerDrafts = saved.composerDrafts
     this.queuedMessages = saved.queuedMessages
 
@@ -171,7 +173,8 @@ export class RendererRecoveryStore {
       chatRecentModels: [...this.chatRecentModels],
       assistantFavoriteModels: [...this.assistantFavoriteModels],
       assistantRecentModels: [...this.assistantRecentModels],
-      auditModelKey: this.auditModelKey
+      auditModelKey: this.auditModelKey,
+      auditAccountId: this.auditAccountId
     }
   }
 
@@ -1022,8 +1025,9 @@ export class RendererRecoveryStore {
     else this.reorderFavorite(draggedKey, targetKey, position)
   }
 
-  setAuditModel(modelKey: string): void {
+  setAuditModel(modelKey: string, accountId?: string): void {
     this.auditModelKey = modelKey
+    this.auditAccountId = accountId
     const parsed = parseModelKey(modelKey)
     if (parsed && !this.isFavorite(modelKey)) {
       this.addRecentModel(modelKey)
