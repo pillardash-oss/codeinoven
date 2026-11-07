@@ -152,7 +152,11 @@ function designTarget() {
       devicePixelRatio: 2,
       visualScale: 1
     },
-    presented: null
+    presented: null,
+    identity: { 'data-testid': 'otp', name: 'otp' },
+    state: {},
+    surface: null,
+    matches: 1
   }
 }
 

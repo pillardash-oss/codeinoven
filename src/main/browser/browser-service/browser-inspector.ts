@@ -122,6 +122,22 @@ export function inspectorInstallScript(key: string): string {
   })
   return String.raw`(() => {
   const config = ${config};
+  // Attributes that name an element steadily, where a CSS path is only a place in
+  // one rendered tree. A component re-rendered from a list, or a dialog opened a
+  // second time, keeps these; its nth-of-type path may not.
+  const IDENTITY_ATTRIBUTES = [
+    'data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-slot', 'data-key', 'name', 'aria-label'
+  ];
+  // Attributes that say what state something is in. A modal's contents only exist
+  // while the surface is open, so the state of that surface is part of what a
+  // comment is about and how the agent gets back to the same render.
+  const STATE_ATTRIBUTES = [
+    'open', 'hidden', 'inert', 'disabled', 'popover', 'data-state', 'data-open',
+    'aria-hidden', 'aria-expanded', 'aria-selected', 'aria-pressed', 'aria-checked', 'aria-disabled'
+  ];
+  // Surfaces that appear on an interaction and go away again.
+  const SURFACE_SELECTOR =
+    'dialog,[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[role="tooltip"],[popover]';
   try {
     if (globalThis[config.key]) return true;
     if (!document.documentElement) return false;
@@ -359,6 +375,59 @@ export function inspectorInstallScript(key: string): string {
       return name;
     }
 
+    /** The attributes of one element that are present, clipped to a readable size. */
+    function attributesFrom(element, names) {
+      const found = {};
+      for (let index = 0; index < names.length; index += 1) {
+        const name = names[index];
+        const value = element.getAttribute(name);
+        if (value === null) continue;
+        found[name] = text(value === '' ? 'true' : value, 120);
+      }
+      return found;
+    }
+
+    /** How many elements a path matches in its own document, so ambiguity is named. */
+    function matchCount(doc, selector) {
+      if (!selector) return 0;
+      try {
+        return doc.querySelectorAll(selector).length;
+      } catch (error) {
+        return 0;
+      }
+    }
+
+    /**
+     * The nearest transient surface holding an element, or null for the page itself.
+     *
+     * A dialog, menu, popover or tooltip exists only while it is open, so an element
+     * inside one is not in the page the agent will find when it opens the file: the
+     * surface and its state are what say which interaction has to happen first.
+     */
+    function surfaceOf(element) {
+      const doc = documentOf(element);
+      let node = element.parentElement;
+      let steps = 0;
+      while (node && node !== doc.documentElement && steps < 40) {
+        steps += 1;
+        let isSurface = false;
+        try {
+          isSurface = node.matches(SURFACE_SELECTOR);
+        } catch (error) {
+          isSurface = false;
+        }
+        if (isSurface) {
+          return {
+            selector: cssPath(node),
+            name: shortName(node),
+            state: attributesFrom(node, STATE_ATTRIBUTES)
+          };
+        }
+        node = node.parentElement;
+      }
+      return null;
+    }
+
     /** One element's viewport rectangle, rounded, in this document's CSS pixels. */
     function elementRect(element) {
       if (!element) return { x: 0, y: 0, width: 0, height: 0 };
@@ -485,8 +554,9 @@ export function inspectorInstallScript(key: string): string {
         ancestors.unshift(shortName(parent));
         parent = parent.parentElement;
       }
+      const selector = cssPath(element);
       return {
-        selector: cssPath(element),
+        selector: selector,
         tag: element.tagName.toLowerCase(),
         id: element.id || null,
         classes: (element.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 12),
@@ -498,7 +568,15 @@ export function inspectorInstallScript(key: string): string {
         rect: elementRect(element),
         viewport: pageViewport(element),
         page: pageContext(element),
-        presented: framePresentation(element)
+        presented: framePresentation(element),
+        // What the element is called beyond its position in this one tree.
+        identity: attributesFrom(element, IDENTITY_ATTRIBUTES),
+        // The state it is in, which is what a link or a toggle is commented about.
+        state: attributesFrom(element, STATE_ATTRIBUTES),
+        // The surface that had to be open for it to exist at all, if any.
+        surface: surfaceOf(element),
+        // Whether this path names one element or every row of a list.
+        matches: matchCount(doc, selector)
       };
     }
 
