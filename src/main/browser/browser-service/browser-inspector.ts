@@ -43,6 +43,7 @@ import type {
   BrowserInspectorTheme
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
+import { ELEMENT_PATH_SOURCE } from '../../dom/element-path-script'
 import {
   INSPECTOR_REARM_INTERVAL_MS,
   MAX_INSPECTOR_ARM_FAILURES,
@@ -122,6 +123,7 @@ export function inspectorInstallScript(key: string): string {
   })
   return String.raw`(() => {
   const config = ${config};
+  ${ELEMENT_PATH_SOURCE}
   // Attributes that name an element steadily, where a CSS path is only a place in
   // one rendered tree. A component re-rendered from a list, or a dialog opened a
   // second time, keeps these; its nth-of-type path may not.
@@ -223,7 +225,6 @@ export function inspectorInstallScript(key: string): string {
       return Math.round(value * factor) / factor;
     };
     const text = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
-    const escapeId = (value) => (globalThis.CSS && CSS.escape ? CSS.escape(String(value)) : String(value));
 
     /**
      * The same-origin frames of this document, in document order.
@@ -339,34 +340,6 @@ export function inspectorInstallScript(key: string): string {
       return svg;
     }
 
-    function cssPath(element) {
-      const parts = [];
-      let node = element;
-      while (node && node.nodeType === 1 && parts.length < 8) {
-        let part = node.tagName.toLowerCase();
-        if (node.id) {
-          const id = escapeId(node.id);
-          try {
-            if (documentOf(element).querySelectorAll('#' + id).length === 1) {
-              parts.unshift(part + '#' + id);
-              break;
-            }
-          } catch (error) {}
-          part += '#' + id;
-        }
-        const classes = (node.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 2);
-        if (classes.length > 0) part += '.' + classes.map(escapeId).join('.');
-        const parent = node.parentElement;
-        if (parent) {
-          const siblings = Array.prototype.filter.call(parent.children, (child) => child.tagName === node.tagName);
-          if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-        }
-        parts.unshift(part);
-        node = node.parentElement;
-      }
-      return parts.join(' > ');
-    }
-
     function shortName(element) {
       let name = element.tagName.toLowerCase();
       if (element.id) name += '#' + element.id;
@@ -418,7 +391,7 @@ export function inspectorInstallScript(key: string): string {
         }
         if (isSurface) {
           return {
-            selector: cssPath(node),
+            selector: elementPath(node),
             name: shortName(node),
             state: attributesFrom(node, STATE_ATTRIBUTES)
           };
@@ -554,7 +527,7 @@ export function inspectorInstallScript(key: string): string {
         ancestors.unshift(shortName(parent));
         parent = parent.parentElement;
       }
-      const selector = cssPath(element);
+      const selector = elementPath(element);
       return {
         selector: selector,
         tag: element.tagName.toLowerCase(),

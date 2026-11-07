@@ -83,5 +83,21 @@ export function lintDesignCraft(html: string): DesignCraftFinding[] {
         'An icon-only button needs an action-specific title and aria-label.'
       )
   }
+  // A state only exists on the canvas when the control that opens it declares
+  // what it does: discovery reads these attributes, so an undeclared trigger is a
+  // state no frame can reach and no reader can compare.
+  const declaresState = /\b(?:aria-expanded|aria-haspopup|aria-controls|popover)\s*=/iu
+  const opensSomething =
+    /\b(?:onclick|data-toggle|data-target|data-modal|data-open|data-menu|data-sheet|data-dialog|data-popover|data-state)\s*=/iu
+  for (const match of html.matchAll(/<[a-z][a-z0-9-]*\b[^>]*>/giu)) {
+    const tag = match[0]
+    if (!/^<(?:button|a|summary|div|span|label|li)\b/iu.test(tag)) continue
+    if (!opensSomething.test(tag) || declaresState.test(tag)) continue
+    add(
+      'state-intent',
+      match.index!,
+      'Declare what this control opens with aria-expanded, aria-haspopup, aria-controls or popover.'
+    )
+  }
   return findings
 }

@@ -151,6 +151,14 @@ Keep one product in one folder. A website and its dashboard split across two fol
 
 The board reads a screen as an \`.html\` file in the design's folder or one folder below it, so \`dashboard.html\` and \`pages/pricing.html\` are both screens and a page two levels down is not one it shows. A file whose name starts with \`_\` is read as a partial (\`_nav.html\`), and a folder or file whose name starts with \`.\` is skipped, so keep fragments, scratch pages and notes under those names and they stay out of the way.
 
+## Every state declares itself
+
+The Screen Canvas frames every screen of the folder, and it also frames the states of those screens: a dialog that is up, a menu that is open, a popover, a tooltip. It finds those states by reading the markup, so a state reaches the canvas only when the control that opens it says what it does. This is a hard requirement, not a style preference: every element that opens, reveals, expands, closes or toggles anything must carry the declaration that names it, or that state is invisible to the canvas, to the board and to the review that follows.
+
+Declare it on the control a person actually presses, with the attribute that matches what it does: \`aria-expanded\` on anything that opens or collapses, \`aria-haspopup\` together with \`aria-expanded\` on a menu, \`aria-controls\` naming the id of the element it reveals, and the native \`popover\` attribute on a popover. Keep \`aria-expanded\` in step with reality as the state changes, and give the control an accessible name so its canvas frame is labelled. A \`<dialog>\` with no declared trigger is a state nobody can find: wire the button that opens it and declare that button.
+
+So write the declaration as you write the control, in the same edit. An interface whose panels open only through a hand-wired \`onclick\` on a bare \`div\` renders as one static page: no canvas state, no board frame, nothing for the user to compare side by side.
+
 ## Groups on the board
 
 The user decides how their designs are grouped, and the group is the board's own record rather than a folder. It never moves anything: every design stays in \`<root>/<name>/\`, and a group only decides which heading the board draws it under and whether that heading is folded. That is why grouping is safe to do whenever the user asks for it, and why it is never a reason to rename or move a folder.
