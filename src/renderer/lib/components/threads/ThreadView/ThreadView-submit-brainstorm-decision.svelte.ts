@@ -286,6 +286,17 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
           return 'achievement'
         }
         if (parent.independentAudit === true) return 'audit'
+        // A plain engineering audit: the parent carries this auditor thread and the
+        // approved spec, but no Assignment, no loop and no independent-audit
+        // switch, so the checks above miss the board its row owns. Without this the
+        // auditor's own view published nothing and the row stayed on the last
+        // props its parent had, which carry no way back to the Sr. Engineer.
+        if (
+          this.root.handleAgentEvent.thread.achievementRole === 'auditor' &&
+          parent.auditorThreadId === this.root.handleAgentEvent.thread.id
+        ) {
+          return 'audit'
+        }
       }
     } else {
       if (

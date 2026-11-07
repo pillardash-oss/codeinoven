@@ -2,11 +2,13 @@
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
+  import CoordinatorRunTimer from '$lib/components/threads/CoordinatorRunTimer.svelte'
   import {
     THREAD_GROUP_COLORS,
     THREAD_GROUP_ICONS
   } from '$lib/components/threads/thread-group-presentation'
   import { groupThreadsByStatus } from '$lib/components/workspace/workspace-thread-helpers'
+  import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
   import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
@@ -37,6 +39,18 @@
   let selectedThreadId = $derived(workspaceState.selectedThread?.id ?? null)
   let bothKinds = $derived(pawns.length > 0 && runs.length > 0)
   let running = $derived(pawnAgentsState.runningCount(threadId))
+  /** Every thread this board lists is part of its run, so the timer spans the
+   *  earliest start and stays live while any of them is still working. */
+  let runStartedAt = $derived.by(() => {
+    const all = [...pawns, ...runs]
+    return all.length > 0 ? Math.min(...all.map((thread) => thread.createdAt)) : undefined
+  })
+  let runLive = $derived([...pawns, ...runs].some((thread) => isThreadLiveWorking(thread)))
+  let runEndedAt = $derived.by(() => {
+    if (runLive) return undefined
+    const all = [...pawns, ...runs]
+    return all.length > 0 ? Math.max(...all.map((thread) => thread.updatedAt)) : undefined
+  })
 
   /** The Threads view's own status grouping, in the user's configured order. */
   function visibleGroups(threads: Thread[]) {
@@ -114,11 +128,17 @@
     <div class="flex min-w-0 items-center gap-2 text-foreground">
       <CioSubagent size={15} class="shrink-0" />
       <h2 class="text-xs font-semibold uppercase tracking-wide">Spawned agents</h2>
-      {#if running > 0}
-        <span class="ml-auto shrink-0 text-[0.625rem] font-medium text-thread-working">
-          {running} running
-        </span>
-      {/if}
+      <div class="ml-auto flex shrink-0 items-baseline gap-2">
+        {#if running > 0}
+          <span class="text-[0.625rem] font-medium text-thread-working">{running} running</span>
+        {/if}
+        <CoordinatorRunTimer
+          startedAt={runStartedAt}
+          endedAt={runEndedAt}
+          live={runLive}
+          label="Total run time of these agents"
+        />
+      </div>
     </div>
     <p class="mt-2 text-xs leading-relaxed text-muted">
       Threads this one started: helper agents it spawned for itself, and runs it dispatched into any

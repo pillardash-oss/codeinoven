@@ -423,6 +423,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         component: 'achievement',
         props: {
           specTitle: this.root.handleAgentEvent.thread.title,
+          runStartedAt: activeSpec?.approvedAt ?? this.durableAuditThread?.createdAt,
           specSummary: activeSpec.content.resolutionSummary,
           auditThread: this.durableAuditThread,
           auditState: this.root.submitSpecDecision.auditState,
@@ -492,13 +493,28 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       component: 'achievement',
       props: {
         mode: 'audit',
-        specTitle: this.root.handleAgentEvent.thread.title,
+        // On an auditor's own view the board still belongs to the Sr. Engineer's
+        // row, so its title, audit state and duration come from that coordination:
+        // this is what keeps the panel (and its way back) truthful without asking
+        // the user to return to the parent first.
+        specTitle:
+          this.root.currentWorkingTraceAttribution.orchestrationChild &&
+          this.root.currentWorkingTraceAttribution.coordinatorParentThread
+            ? this.root.currentWorkingTraceAttribution.coordinatorParentThread.title
+            : this.root.handleAgentEvent.thread.title,
+        runStartedAt: this.root.currentWorkingTraceAttribution.orchestrationChild
+          ? this.root.handleAgentEvent.thread.createdAt
+          : this.durableAuditThread?.createdAt,
         specSummary:
           auditSpec?.content.resolutionSummary ??
           this.root.editVideoNote.brainstorm?.content.summary ??
           '',
-        auditThread: this.durableAuditThread,
-        auditState: this.root.submitSpecDecision.auditState,
+        auditThread: this.root.currentWorkingTraceAttribution.orchestrationChild
+          ? undefined
+          : this.durableAuditThread,
+        auditState: this.root.currentWorkingTraceAttribution.orchestrationChild
+          ? this.root.currentWorkingTraceAttribution.coordinatorParentThread?.auditState
+          : this.root.submitSpecDecision.auditState,
         reportAvailable: this.auditReport !== null,
         selectedThreadId: this.root.handleAgentEvent.thread.id,
         auditorSettings: this.auditSettings,
@@ -508,7 +524,12 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         recentModels: rendererRecovery.recentModels,
         onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
         coordinatorWorking: this.root.submitSpecDecision.auditBusy,
-        onOpenAudit: () => void this.root.buildSpecActionPrompt.generateAudit(this.auditSettings),
+        onOpenAudit: () =>
+          void this.generateDurableImplementationAudit(
+            this.auditSettings,
+            this.root.handleAgentEvent.thread.coordinatorThreadId ??
+              this.root.handleAgentEvent.thread.id
+          ),
         onViewReport: this.openAuditStudio,
         onOpenThread: (auditor) => workspaceState.openThread(auditor, this.project),
         onModelChange: this.changeAuditModel,

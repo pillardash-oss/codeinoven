@@ -1,6 +1,7 @@
 import { unarchivedSubtreeSql, unarchivedThreadSql } from '../../../lib/archives'
 import { ledgerContextUsageSql } from '../thread-context-usage-sql'
 import type { Database } from '../database'
+import { queryConcepts } from '../../../lib/search/query-evidence'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
   isAuthoredWorkKind,
@@ -349,14 +350,18 @@ const FTS_QUERY_TOKEN_LIMIT = 32
 const SNIPPET_BEFORE = 60
 const SNIPPET_AFTER = 120
 
-/** Build a safe FTS5 MATCH expression from free-form input (prefix per word). */
+/**
+ * Build a safe FTS5 MATCH expression from free-form input (prefix per word).
+ *
+ * Filler words are dropped first: requiring "the" next to the words that carry
+ * the question is what made an all-term query match long messages that happened
+ * to contain every word somewhere. The concepts still have to appear together,
+ * so precision is unchanged for the words that mean something.
+ */
 function toFtsQuery(raw: string): string {
-  const tokens = raw.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+  const tokens = queryConcepts(raw).slice(0, FTS_QUERY_TOKEN_LIMIT)
   if (tokens.length === 0) return ''
-  return tokens
-    .slice(0, FTS_QUERY_TOKEN_LIMIT)
-    .map((token) => `"${token}"*`)
-    .join(' ')
+  return tokens.map((token) => `"${token}"*`).join(' ')
 }
 
 /** Escape LIKE wildcards so user input matches literally. */

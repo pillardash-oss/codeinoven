@@ -616,6 +616,9 @@ export class SearchService {
       // A rebuild, disable, or model change may have started during embedding.
       if (!this.settings.enabled || this.settings.activeModelId !== model.id) return []
       const matches = await this.index.search(vector, Math.max(1, limit), accept)
+      // Count only: this is what tells a report of "semantic search does not
+      // run" apart from "it ran and ranked badly".
+      Logger.dev('Intent search ranked threads by meaning', { matches: matches.length })
       return this.settings.enabled && this.settings.activeModelId === model.id ? matches : []
     } catch (error) {
       Logger.dev('Intent search failed; falling back to keyword results.', error)

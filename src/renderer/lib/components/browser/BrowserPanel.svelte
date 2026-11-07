@@ -239,6 +239,14 @@
   /** A blank tab has no address yet: show the empty state instead of a native page. */
   let isBlank = $derived(pageState.url === '' && !pageState.loading && !pageState.loadError)
   /**
+   * Whether this surface draws its own card in place of the page.
+   *
+   * A failed load and a tab that has not navigated yet both park the native view,
+   * so the card is what the browser is for the user and clicks land on the host
+   * below it rather than on Chromium.
+   */
+  let showsDomCard = $derived(pageState.loadError !== null || isBlank)
+  /**
    * Whether element inspection is armed on this tab.
    *
    * Read from the shared session, not owned here: the mode belongs to the tab,
@@ -454,6 +462,27 @@
     return () => browserVisibility.clearNativeFrame(nativeFrameKey)
   }
   $effect(synchronizeNativeFrame)
+
+  /**
+   * Keep the browser the surface that owns the input while its card stands in
+   * for the page.
+   *
+   * A parked page hands the keyboard back to the app window, and focus would
+   * otherwise rest on the document body, where no surface owns it: a history
+   * gesture or a browser key then takes the app's meaning instead of the
+   * browser's, and a swipe over this card navigates the app out from under it.
+   * Focusing the host is the same claim a click into a live page makes, because
+   * the sidebar's claim follows focus inside its own region. Focus only moves
+   * when nothing else holds it, so an address bar the user is still typing in
+   * keeps its caret.
+   */
+  $effect(() => {
+    if (!showsDomCard) return
+    if (!fullscreen && !panelVisible) return
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body) return
+    contentElement?.focus({ preventScroll: true })
+  })
 
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
@@ -1027,6 +1056,7 @@
     {@attach attachContentElement}
     data-native-browser-content
     class="native-rail-gutter min-h-0 min-w-0 flex-1 bg-surface"
+    tabindex="-1"
     role={pageState.loadError ? undefined : 'document'}
     aria-label={pageState.loadError
       ? undefined
