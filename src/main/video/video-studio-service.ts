@@ -392,7 +392,7 @@ export class VideoStudioService {
     const folder = operation === 'export' ? await videoFolder(root, input.directory) : null
     const source = folder ? null : await videoFile(root, input.source)
     const config = operation === 'transcribe' ? await this.options.config() : null
-    return this.jobs.start(context.projectId, context.threadId, operation, async (job) => {
+    return this.jobs.start(context.projectId, context.threadId, operation, root, async (job) => {
       if (folder) return exportVideo(root, folder, this.options.previews, job)
       if (
         operation === 'track' ||
