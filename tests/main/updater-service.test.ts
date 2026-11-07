@@ -39,7 +39,7 @@ interface MockAutoUpdater {
   emit: (event: string, ...args: unknown[]) => void
 }
 
-const { autoUpdater, autoUpdaterHandlers } = vi.hoisted(() => {
+const { autoUpdater, autoUpdaterHandlers, nativeAutoUpdater } = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => void>()
   let channel: string | null = null
   const updater = {
@@ -72,7 +72,10 @@ const { autoUpdater, autoUpdaterHandlers } = vi.hoisted(() => {
       handlers.get(event)?.(...args)
     }
   } as MockAutoUpdater
-  return { autoUpdater: updater, autoUpdaterHandlers: handlers }
+  // Electron's native updater is what Squirrel.Mac itself calls during a
+  // dispatched install; the service re-issues a cancelled local transfer there.
+  const native = { checkForUpdates: vi.fn(() => Promise.resolve()) }
+  return { autoUpdater: updater, autoUpdaterHandlers: handlers, nativeAutoUpdater: native }
 })
 
 vi.mock('electron-updater', () => ({ default: { autoUpdater } }))
@@ -81,7 +84,8 @@ vi.mock('electron', () => ({
   // The updater only runs in a shipped build, so the fixture is one: a
   // development launch (isPackaged without a handed app path) has nothing to
   // update and never reaches these flows.
-  app: { getVersion: () => '0.1.0', isPackaged: true }
+  app: { getVersion: () => '0.1.0', isPackaged: true },
+  autoUpdater: nativeAutoUpdater
 }))
 
 const DEFERRED_POLL_MS = 5_000
@@ -184,6 +188,8 @@ beforeEach(() => {
   autoUpdater.downloadUpdate.mockClear()
   autoUpdater.downloadUpdate.mockResolvedValue(undefined)
   autoUpdater.allowPrerelease = false
+  nativeAutoUpdater.checkForUpdates.mockClear()
+  nativeAutoUpdater.checkForUpdates.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -597,6 +603,95 @@ describe('UpdaterService check failure handling', () => {
   })
 })
 
+describe('UpdaterService macOS local transfer', () => {
+  const realPlatform = process.platform
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+  }
+
+  beforeEach(() => {
+    setPlatform('darwin')
+  })
+
+  afterEach(() => {
+    setPlatform(realPlatform)
+  })
+
+  /** Dispatch an install and let it reach the platform installer. */
+  async function dispatchInstall(): Promise<{ service: UpdaterService; storage: StorageHarness }> {
+    const config = defaultConfig()
+    config.autoInstallUpdates = false
+    const storage = makeStorage({ getConfig: vi.fn(async () => config) })
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+    await emitDownloaded()
+    service.quitAndInstall()
+    await flush()
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    return { service, storage }
+  }
+
+  /** The cancellation macOS reports when the network path changes mid-transfer. */
+  function cancelledTransfer(): Error {
+    return Object.assign(new Error('The network connection was lost.'), { code: -1005 })
+  }
+
+  it('re-issues a cancelled loopback transfer instead of failing the install', async () => {
+    const { service } = await dispatchInstall()
+
+    autoUpdater.emit('error', cancelledTransfer())
+    await flush()
+
+    // Nothing was downloaded from the internet, so this is not an error state.
+    expect(service.status.state).not.toBe('error')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(nativeAutoUpdater.checkForUpdates).toHaveBeenCalledTimes(1)
+
+    // A network change takes more than one beat to settle: keep retrying.
+    autoUpdater.emit('error', cancelledTransfer())
+    await flush()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(nativeAutoUpdater.checkForUpdates).toHaveBeenCalledTimes(2)
+    expect(service.status.state).not.toBe('error')
+  })
+
+  it('keeps the cached payload and its failure budget when every retry is used up', async () => {
+    const { service, storage } = await dispatchInstall()
+
+    // Every attempt fails at once; the delays grow between them.
+    const delays = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 30_000]
+    for (const delay of delays) {
+      autoUpdater.emit('error', cancelledTransfer())
+      await flush()
+      await vi.advanceTimersByTimeAsync(delay)
+    }
+    autoUpdater.emit('error', cancelledTransfer())
+    await flush()
+
+    expect(nativeAutoUpdater.checkForUpdates).toHaveBeenCalledTimes(delays.length)
+    expect(service.status.state).toBe('error')
+    expect(service.status.errorMessage).toContain('choose Install to retry')
+    // No build was installed or rejected, so this must not count against the
+    // version's attempt limit   the cached update stays installable.
+    expect(storage.files.get('updater/install-failure.json')).toBeUndefined()
+    expect(storage.files.get('updater/install-dispatch.json')).toBeUndefined()
+  })
+
+  it('treats a real installer failure as final instead of retrying it', async () => {
+    const { service } = await dispatchInstall()
+
+    autoUpdater.emit('error', new Error('ShipIt could not validate the signature'))
+    await flush()
+
+    expect(nativeAutoUpdater.checkForUpdates).not.toHaveBeenCalled()
+    expect(service.status.state).toBe('error')
+    expect(service.status.errorMessage).toBe(
+      'The update could not be installed: ShipIt could not validate the signature'
+    )
+  })
+})
+
 describe('UpdaterService update channel', () => {
   it('applies the string channel latest for the stable channel', async () => {
     const storage = makeStorage()
@@ -650,6 +745,27 @@ describe('UpdaterService update channel', () => {
     await flush()
 
     expect(autoUpdater.downloadUpdate).toHaveBeenCalledTimes(1)
+  })
+
+  it('records the downloaded build so an offline launch can still install it', async () => {
+    const storage = makeStorage()
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+
+    autoUpdater.emit('update-available', {
+      version: '0.2.0',
+      files: [{ url: 'codeinoven-0.2.0-arm64.zip', sha512: 'zip-hash', size: 10 }]
+    })
+    await flush()
+    autoUpdater.emit('update-downloaded', { version: '0.2.0' })
+    await flush()
+
+    // The name and hash of the payload, not the payload itself, are what let the
+    // check answer from disk when the feed is unreachable.
+    expect(storage.files.get('updater/cached-update.json')).toMatchObject({
+      version: '0.2.0',
+      files: [{ url: 'codeinoven-0.2.0-arm64.zip', sha512: 'zip-hash', size: 10 }]
+    })
   })
 })
 
