@@ -497,6 +497,30 @@ export class ChatEnginePermissions {
         : {})
     })
     const thread = await this.host.threadManager.getThread(info.projectId, info.threadId)
+    // A chat is told to go to the web: its own system prompt makes search and
+    // fetch the first answer for anything it does not know, so a card for an
+    // outbound request contradicts the contract the same session just received
+    // and parks a run the user asked for. Only file access is the chat's gate;
+    // a project thread keeps the full policy, where an outbound request is a
+    // real decision about the project.
+    const chatScope =
+      info.projectId === INBOX_PROJECT_ID || info.projectId === GLOBAL_BROWSER_PROJECT_ID
+    if (chatScope && request.permission === 'network' && !policy.approved) {
+      const reason = 'Auto-approved: this chat reaches the web directly; only file access asks.'
+      policy = {
+        ...policy,
+        approved: true,
+        decision: 'auto_review',
+        reason,
+        approval: { ...policy.approval, required: false, expiresAt: undefined },
+        ledger: {
+          ...policy.ledger,
+          decision: 'auto_review',
+          reason,
+          expiresAt: undefined
+        }
+      }
+    }
     // Only an app-owned browser call may supply this decision. Harness metadata
     // cannot turn an unclassified tool into an automatically approved action.
     const sensitiveFileApproval = request.permission === 'bundled-pi-sensitive-files'
