@@ -143,7 +143,7 @@ export class ChatEngineAssignment {
       await this.sendAssignmentCoordinatorPrompt(
         assignment,
         coordinator.settings,
-        this.coordinatorAssignmentPrompt(assignment),
+        await this.coordinatorResumePrompt(assignment),
         { action: 'Resume Assignment coordination' },
         true
       )
@@ -552,7 +552,7 @@ export class ChatEngineAssignment {
       await this.sendAssignmentCoordinatorPrompt(
         assignment,
         settings,
-        this.coordinatorAssignmentPrompt(assignment),
+        await this.coordinatorResumePrompt(assignment),
         { action: 'Resume Assignment' },
         true
       )
@@ -575,7 +575,7 @@ export class ChatEngineAssignment {
       await this.sendAssignmentCoordinatorPrompt(
         assignment,
         settings,
-        this.coordinatorAssignmentPrompt(assignment),
+        await this.coordinatorResumePrompt(assignment),
         { action: 'Resume Assignment' },
         true
       )
@@ -785,6 +785,59 @@ export class ChatEngineAssignment {
         2
       )
     ].join('\n\n')
+  }
+
+  /**
+   * The delta prompt for a coordinator that was already briefed.
+   *
+   * Every resume turn reopened with the complete brief: the static rules, the
+   * Assignment API contract and the full task list, roughly 8k characters. The
+   * coordinator has all of that in its own conversation, and the snapshot claim
+   * only lets a turn through when the durable state changed, so the repeat spent
+   * context without adding a decision. The delta carries the two rules a turn
+   * must never break as a reminder, then the one thing that is new: the
+   * actionable task state.
+   */
+  coordinatorContinuationPrompt(assignment: AssignmentPlan): string {
+    const actionableTasks = assignment.content.tasks.filter(
+      (task) => task.status !== 'completed' && task.status !== 'blocked'
+    )
+    return [
+      'Continue coordinating the approved Assignment. Your coordinator brief, the Assignment API contract and the full task list are already in this thread, so do not reopen the work from them.',
+      `Waiting is the application's job: end this turn instead of polling when every remaining task is a running worker. ${this.coordinatorSteeringInstruction()}`,
+      'Act on the current state below. Assign ready tasks, review reported or attention tasks, and perform any Sr. Engineer task that is yours.',
+      'Actionable Assignment state:',
+      JSON.stringify(
+        {
+          id: assignment.id,
+          version: assignment.version,
+          scopeBucketId: assignment.scopeBucketId,
+          annotations: (assignment.annotations ?? []).filter(
+            (annotation) => annotation.status === 'open'
+          ),
+          actionableTasks
+        },
+        null,
+        2
+      )
+    ].join('\n\n')
+  }
+
+  /**
+   * The prompt that resumes coordination. The full brief belongs to the turn
+   * that starts execution in a fresh session (the approval path clears the
+   * coordinator's planning session before it sends it). Every later resume runs
+   * in that same session, whose conversation already holds the brief, so it gets
+   * the delta instead of a second copy.
+   */
+  async coordinatorResumePrompt(assignment: AssignmentPlan): Promise<string> {
+    const coordinator = await this.host.threadManager.getThread(
+      assignment.projectId,
+      assignment.coordinatorThreadId
+    )
+    return coordinator?.sessionId
+      ? this.coordinatorContinuationPrompt(assignment)
+      : this.coordinatorAssignmentPrompt(assignment)
   }
 
   async assignmentCoordinatorUserTurnPrompt(
