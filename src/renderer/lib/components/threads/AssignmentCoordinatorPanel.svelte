@@ -9,6 +9,7 @@
   import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadRow from './ThreadRow.svelte'
+  import CoordinatorRunTimer from './CoordinatorRunTimer.svelte'
   import ThreadStatusChip from '../shared/ThreadStatusChip.svelte'
   import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
   import {
@@ -87,6 +88,33 @@
   const auditWorkAvailable = $derived(
     (auditState === 'offered' || auditState === 'failed') && !finalComplete
   )
+  /** When this run first started working: the earliest task start, or the
+   *  sign-off when the Sr. Engineer is already on it. */
+  const runStartedAt = $derived.by(() => {
+    const starts = assignment.content.tasks
+      .map((task) => task.startedAt)
+      .filter((at): at is number => at !== undefined)
+    return starts.length > 0 ? Math.min(...starts) : (assignment.approvedAt ?? undefined)
+  })
+  /** Live while any part of the run is working. Tasks may overlap or queue, so
+   *  the timer is wall clock, not a sum of task durations. */
+  const runLive = $derived(
+    assignment.status !== 'completed' &&
+      assignment.status !== 'stopped' &&
+      (coordinatorWorking || workersWorking || running > 0)
+  )
+  /** A stopped, paused or settled run freezes at the last real activity, so the
+   *  number never grows while nothing is working. */
+  const runEndedAt = $derived.by(() => {
+    if (assignment.status === 'completed') return assignment.completedAt ?? assignment.updatedAt
+    if (assignment.status === 'stopped') return assignment.stoppedAt ?? assignment.updatedAt
+    if (runLive) return undefined
+    const ends = [
+      ...assignment.content.tasks.map((task) => task.completedAt ?? task.startedAt),
+      ...threads.map((worker) => worker.lastActivity)
+    ].filter((at): at is number => at !== undefined)
+    return ends.length > 0 ? Math.max(...ends) : undefined
+  })
 
   function linkedThread(taskThreadId: string | undefined): Thread | undefined {
     return taskThreadId ? threads.find((thread) => thread.id === taskThreadId) : undefined
@@ -355,7 +383,15 @@
     {/if}
 
     <section class="p-4" aria-label="Assignment tasks">
-      <h3 class="pb-2 text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
+      <div class="flex items-baseline justify-between gap-2 pb-2">
+        <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
+        <CoordinatorRunTimer
+          startedAt={runStartedAt}
+          endedAt={runEndedAt}
+          live={runLive}
+          label="Total run time of these tasks"
+        />
+      </div>
       <div class="space-y-1">
         {#each assignment.content.tasks as task, taskIndex (task.id)}
           {@const linkedWorker = linkedThread(task.threadId)}

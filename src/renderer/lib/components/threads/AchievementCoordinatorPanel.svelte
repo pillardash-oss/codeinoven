@@ -6,6 +6,7 @@
   import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
+  import CoordinatorRunTimer from './CoordinatorRunTimer.svelte'
   import type { AchievementCoordinatorPanelProps, ThinkingLevel } from '$shared/types'
 
   let {
@@ -16,6 +17,7 @@
     auditState,
     reportAvailable = false,
     achievementReached = false,
+    runStartedAt,
     selectedThreadId,
     auditorSettings,
     providers,
@@ -47,6 +49,18 @@
 
   let auditRunning = $derived(auditState === 'running')
   let loopComplete = $derived(mode === 'achievement' && achievementReached)
+  /** Live while the Sr. Engineer, the auditor or the rework turn is working. A
+   *  paused or settled run freezes the number at its last real activity. */
+  let runLive = $derived(
+    !loopComplete && (coordinatorWorking || auditRunning || auditState === 'reworking')
+  )
+  let runEndedAt = $derived(
+    loopComplete
+      ? (auditThread?.lastSuccessAt ?? auditThread?.updatedAt)
+      : runLive || auditThread === undefined
+        ? undefined
+        : auditThread.updatedAt
+  )
   let coordinatorLabel = $derived(
     mode === 'achievement' ? 'Achievement coordinator' : 'Audit coordinator'
   )
@@ -175,7 +189,17 @@
 
   <div class="min-h-0 flex-1 overflow-y-auto">
     <section class="border-b border-border p-4" aria-label={`${coordinatorLabel} progress`}>
-      <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
+      <div class="flex items-baseline justify-between gap-2">
+        <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+          Current state
+        </p>
+        <CoordinatorRunTimer
+          startedAt={runStartedAt}
+          endedAt={runEndedAt}
+          live={runLive}
+          label="Total run time of this coordination"
+        />
+      </div>
       <div class="mt-2 flex items-start gap-2">
         <span class="mt-1.5 h-2 w-2 shrink-0 bg-current {progress.tone}" aria-hidden="true"></span>
         <div class="min-w-0">

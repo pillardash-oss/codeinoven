@@ -423,6 +423,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         component: 'achievement',
         props: {
           specTitle: this.root.handleAgentEvent.thread.title,
+          runStartedAt: activeSpec?.approvedAt ?? this.durableAuditThread?.createdAt,
           specSummary: activeSpec.content.resolutionSummary,
           auditThread: this.durableAuditThread,
           auditState: this.root.submitSpecDecision.auditState,
@@ -493,6 +494,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       props: {
         mode: 'audit',
         specTitle: this.root.handleAgentEvent.thread.title,
+        runStartedAt: this.durableAuditThread?.createdAt,
         specSummary:
           auditSpec?.content.resolutionSummary ??
           this.root.editVideoNote.brainstorm?.content.summary ??

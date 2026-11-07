@@ -39,6 +39,9 @@ export interface AchievementCoordinatorPanelProps {
   reportAvailable?: boolean
   /** The achievement loop verified the goal and closed itself; no further work remains. */
   achievementReached?: boolean
+  /** When this run first started working (spec approval, or the auditor thread
+   *  of a plain implementation audit). Absent hides the run timer. */
+  runStartedAt?: number
   selectedThreadId: string
   auditorSettings: ThreadSettings
   providers: ProviderCatalog[]
