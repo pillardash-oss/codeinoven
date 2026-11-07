@@ -173,6 +173,18 @@ export class NativeDockController {
    * confirm promptly or the fallback is the right answer.
    */
   private confirmed = false
+  /**
+   * Whether the app window's own panel has already taken a real gesture.
+   *
+   * A modal paints its panel in the app window first and hands it to the native
+   * document when the host confirms it drew. That handover moves the caret into
+   * another window and repaints the dialog underneath it, so a panel the user
+   * has already pressed or typed into is never taken away: the app window keeps
+   * it for the rest of its open, exactly as it does for a refused projection.
+   * Otherwise a keyboard-driven palette could open, take a keystroke in its own
+   * field, and have the field repainted in the overlay a frame later.
+   */
+  private engaged = false
   private active = false
   constructor(
     private id: string,
@@ -208,6 +220,12 @@ export class NativeDockController {
     const unsubscribeAck = subscribe('browser:overlay:dockDrawn', (ack) => {
       if (this.active && ack.id === this.id && ack.revision === this.revision) {
         clearTimeout(this.timer)
+        // A modal the user has already used here stays here. The handover is
+        // only worth making to a panel nobody has touched yet.
+        if (this.engaged && !this.ready && this.modalOptions && !this.modalOptions.panel) {
+          this.refuse('the app window already held its input', true)
+          return
+        }
         this.confirmed = true
         const firstDraw = !this.ready
         this.ready = true
@@ -245,7 +263,11 @@ export class NativeDockController {
         // included: the switcher cycles its entries on it, and a list that owns
         // Tab must see it. The key is delivered to the source's own element, so
         // its handlers run exactly as they would with that control focused here.
-        const target = this.keyTarget(input.target) ?? this.root
+        // The native document names the control it focused, and a key arriving
+        // before that report lands belongs to whatever this panel already holds
+        // the caret in. Falling back to the panel root dropped a keystroke typed
+        // straight after the handover.
+        const target = this.keyTarget(input.target) ?? this.focusedSource() ?? this.root
         if (target) target.dispatchEvent(event)
         else window.dispatchEvent(event)
       }
@@ -352,6 +374,15 @@ export class NativeDockController {
       this.schedule()
     }
     root.addEventListener('scroll', scrolled, true)
+    // Any real gesture in the app window's own copy of a dialog is the point of
+    // no return for the handover (see `engaged`). A pointer press and a key are
+    // exactly what the user means by "using" the panel; the initial focus the
+    // modal places is programmatic and correctly not one of them.
+    const engage = (): void => {
+      if (this.modalOptions && !this.modalOptions.panel) this.engaged = true
+    }
+    root.addEventListener('pointerdown', engage, true)
+    root.addEventListener('keydown', engage, true)
     this.schedule()
     return () => {
       observer.disconnect()
@@ -361,6 +392,8 @@ export class NativeDockController {
       unsubscribeKey()
       unsubscribeEvent()
       root.removeEventListener('scroll', scrolled, true)
+      root.removeEventListener('pointerdown', engage, true)
+      root.removeEventListener('keydown', engage, true)
       clearTimeout(this.frame)
       clearTimeout(this.timer)
       this.root = null
@@ -408,6 +441,19 @@ export class NativeDockController {
       this.frame = undefined
       this.publish()
     }, 16)
+  }
+
+  /**
+   * The control this document's own panel is holding, while the overlay owns the
+   * keyboard.
+   *
+   * The app window keeps its `activeElement` even while another window of the app
+   * is key, which is exactly the control a key typed before the overlay reported
+   * its focus belongs to.
+   */
+  private focusedSource(): HTMLElement | null {
+    const active = document.activeElement
+    return active instanceof HTMLElement && this.root?.contains(active) ? active : null
   }
 
   /** Resolve the native document's focused control to the element that owns it. */
