@@ -313,18 +313,39 @@ export class BrowserServiceKeyboard {
     return true
   }
 
-  /** Route a window history gesture to the browser only when its active page or
-   *  toolbar owns focus. The caller falls back to app navigation when this
-   *  returns false. A focused browser consumes the input even at a history end. */
+  /**
+   * Route a window history gesture to the browser when a browser surface owns
+   * the input, and answer whether it did. The caller falls back to the app's
+   * own navigation only when this returns false, and a focused browser consumes
+   * the gesture even at a history end.
+   *
+   * The renderer reports which tab's chrome holds the keyboard, and that report
+   * is the first answer because it is the only signal for a page that is not on
+   * screen: a failed load parks the page and clears the active tab, while its
+   * error card stays up and focused. Reading the active tab first would walk the
+   * app's history out from under that card, which is what the user was looking
+   * at. A page that holds native focus itself never reports a chrome claim, so
+   * the active tab still answers for a page the user clicked straight into.
+   */
   navigateFocusedHistory(direction: 'back' | 'forward'): boolean {
+    const chromeTabId = this.host.focusedChromeTabId
+    if (chromeTabId !== null) {
+      const chromeTab = this.host.tabs.get(chromeTabId)
+      // A claim can name a tab this process holds no page for yet. Its row is
+      // still the renderer's, so the gesture is still the browser's, and there is
+      // nothing to walk until the page exists.
+      if (!chromeTab) return false
+      if (liveContents(chromeTab.view)) {
+        navigatePageHistory(chromeTab.view.webContents, direction)
+      }
+      return true
+    }
+
     const tabId = this.host.activeTabId
     if (!tabId) return false
     const tab = this.host.tabs.get(tabId)
     if (!tab || !liveContents(tab.view)) return false
-
-    const isFocusedToolbar = tabId === this.host.focusedChromeTabId
-    const isFocusedPage = tab.view.webContents.isFocused()
-    if (!isFocusedToolbar && !isFocusedPage) return false
+    if (!tab.view.webContents.isFocused()) return false
 
     // The same traversal a page's own swipe gesture takes, so focus handling is
     // stated once for every surface that walks a page's history.
