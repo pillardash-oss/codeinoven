@@ -360,6 +360,95 @@ export function planScreenCanvas(input: {
 }
 
 /**
+ * One state of one screen, found by reading the screen's own markup.
+ *
+ * A screen that draws a dialog, a menu or a popover has a state for each trigger
+ * that opens it. The canvas can reach such a state by clicking the trigger, so
+ * discovering one is only a matter of naming the screen and the selector: nothing
+ * is captured and nothing is written back, and a frame that follows the design as
+ * it changes is the result.
+ */
+export interface ScreenCanvasDiscoveredState {
+  /** Screen file the state belongs to, as the folder spells it. */
+  entry: string
+  /** Selector the canvas clicks inside the screen to reach the state. */
+  click: string
+  /** What the trigger calls itself, or null to keep the screen's own label. */
+  title: string | null
+}
+
+/** Ceiling on the states one screen contributes to the canvas. */
+export const MAX_DISCOVERED_STATES_PER_SCREEN = 6
+
+/**
+ * How long a discovered state's frame waits after the click before it is shown.
+ *
+ * A state is opened by the screen's own script, and a dialog that animates in is
+ * a flash of the closed page if the frame is measured at the click. The wait is
+ * part of the frame rather than of the canvas, so a frame that never settles still
+ * shows what the screen looks like.
+ */
+export const DISCOVERED_STATE_WAIT_MS = 500
+
+/**
+ * The canvas with every discovered state framed beside the screen it belongs to.
+ *
+ * Declared frames keep leading, and a state a design already declares through
+ * `canvas.json` is not framed twice: the declared frame is the one a person wrote,
+ * label and all, and the discovered one is the same state seen by a script. A
+ * state whose screen the folder no longer holds is dropped with the screen, which
+ * is the same rule declared orphan frames follow.
+ */
+export function withDiscoveredStates(
+  plan: ScreenCanvasPlan,
+  states: readonly ScreenCanvasDiscoveredState[]
+): ScreenCanvasPlan {
+  if (states.length === 0) return plan
+  const declared = new Set<string>()
+  for (const frame of plan.frames) {
+    if (frame.state?.click) declared.add(`${frame.entry}\u0000${frame.state.click}`)
+  }
+  const byEntry = new Map<string, ScreenCanvasDiscoveredState[]>()
+  for (const state of states) {
+    const entry = normalizedFrameEntry(state.entry)
+    if (entry === '' || state.click.trim() === '') continue
+    const key = `${entry}\u0000${state.click}`
+    if (declared.has(key)) continue
+    declared.add(key)
+    const list = byEntry.get(entry) ?? []
+    if (list.length >= MAX_DISCOVERED_STATES_PER_SCREEN) continue
+    list.push({ ...state, entry })
+    byEntry.set(entry, list)
+  }
+  if (byEntry.size === 0) return plan
+  const frames: ScreenCanvasFrame[] = []
+  for (const frame of plan.frames) {
+    frames.push(frame)
+    const found = byEntry.get(normalizedFrameEntry(frame.entry))
+    if (found === undefined) continue
+    for (const state of found) {
+      frames.push({
+        entry: frame.entry,
+        title: state.title ?? frame.title,
+        caption: frame.caption,
+        width: frame.width,
+        height: frame.height,
+        state: {
+          click: state.click,
+          focus: null,
+          scroll: null,
+          hash: null,
+          search: null,
+          wait: DISCOVERED_STATE_WAIT_MS
+        }
+      })
+    }
+  }
+  // A state whose screen is not framed at all has nothing to be a state of.
+  return { ...plan, frames }
+}
+
+/**
  * What the user sends when they press "Make this design live".
  *
  * A live preview is the design's own entry page served in the browser, so it can

@@ -51,7 +51,8 @@ import { openVideoPreview } from '../video/video-preview-session'
 import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
 import { listDesignScreens } from './design-screens'
-import { readScreenCanvasState, readScreenCanvas, screenCanvasScreen } from './screen-canvas-page'
+import { readScreenCanvas, screenCanvasScreen, screenCanvasStateOf } from './screen-canvas-page'
+import { ensureScreenStates } from './design-states-discovery'
 import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
 import {
   resolveDesignRevisionId,
@@ -1339,12 +1340,22 @@ export class DesignService {
     // screen it frames: its picture therefore goes stale exactly when the canvas
     // it pictures would have changed, with no stamp of its own to keep.
     const listed = await listDesignScreens(folder.absolute)
-    const canvas =
+    const canvasRead =
       listed.length === 0
         ? null
-        : screenCanvasScreen(
-            await readScreenCanvas({ folderAbsolute: folder.absolute, screens: listed })
-          )
+        : await readScreenCanvas({ folderAbsolute: folder.absolute, screens: listed })
+    const canvas = canvasRead === null ? null : screenCanvasScreen(canvasRead)
+    if (canvasRead !== null) {
+      // The sweep is the other moment a design is looked at, so it keeps the
+      // discovered states current too: a screen rewritten since the last read gets
+      // its state frames on the next canvas load without the user asking twice.
+      ensureScreenStates({
+        folderAbsolute: folder.absolute,
+        stamp: canvasRead.stamp,
+        screens: listed,
+        previews: this.options.previews
+      })
+    }
     const screens = canvas === null ? listed : [canvas, ...listed]
     const shotWidth = Math.min(
       MAX_THUMBNAIL_WIDTH,
@@ -1434,10 +1445,20 @@ export class DesignService {
     const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
     const folder = resolveServedFolder(scope.path, directory, currentWorkRoot('design', projectId))
     const screens = await listDesignScreens(folder.absolute)
-    return readScreenCanvasState({
+    // Reading the canvas is what starts discovery of the states its screens
+    // declare: the board asks for a canvas before the user opens one, so by the
+    // time the page is asked for, its state frames are usually already known.
+    const read = await readScreenCanvas({ folderAbsolute: folder.absolute, screens })
+    ensureScreenStates({
       folderAbsolute: folder.absolute,
+      stamp: read.stamp,
+      screens,
+      previews: this.options.previews
+    })
+    return screenCanvasStateOf({
+      plan: read.plan,
       directory: folder.display,
-      screens
+      metadataError: read.metadataError
     })
   }
 

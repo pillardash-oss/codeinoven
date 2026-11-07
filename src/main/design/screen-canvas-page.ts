@@ -28,10 +28,12 @@ import {
   isScreenCanvasEntry,
   planScreenCanvas,
   readScreenCanvasMetadata,
-  screenCanvasFrameStateAttribute
+  screenCanvasFrameStateAttribute,
+  withDiscoveredStates
 } from '../../lib/design/screen-canvas'
 import type { ScreenCanvasMetadata, ScreenCanvasPlan } from '../../lib/design/screen-canvas'
 import { listDesignScreens } from './design-screens'
+import { knownScreenStates } from './design-states-registry'
 
 /** What one design folder's canvas is, and what its metadata could not say. */
 export interface ScreenCanvasRead {
@@ -92,12 +94,17 @@ export async function readScreenCanvas(input: {
   screens?: readonly DesignScreen[]
 }): Promise<ScreenCanvasRead> {
   const listed = input.screens ?? (await listDesignScreens(input.folderAbsolute))
-  const { metadata, error, stamp } = await readMetadata(input.folderAbsolute)
+  const { metadata, error, stamp: metadataStamp } = await readMetadata(input.folderAbsolute)
   const newest = listed.reduce((latest, screen) => Math.max(latest, screen.updatedAt), 0)
+  const stamp = Math.max(newest, metadataStamp)
+  // Discovered states are read from what the design declared when it was last
+  // read, so the canvas gains them after the folder has been read once rather than
+  // holding the page open for a browser.
+  const states = knownScreenStates(input.folderAbsolute, stamp)
   return {
-    plan: planScreenCanvas({ screens: screensOf(listed), metadata }),
+    plan: withDiscoveredStates(planScreenCanvas({ screens: screensOf(listed), metadata }), states),
     metadataError: error,
-    stamp: Math.max(newest, stamp)
+    stamp
   }
 }
 
@@ -115,28 +122,33 @@ export function screenCanvasScreen(read: ScreenCanvasRead): DesignScreen | null 
 }
 
 /**
- * The canvas as the board reads it, or null when the folder holds nothing.
+ * The board's reading of one canvas plan.
  *
- * Null is the whole answer for a design with no screens and no sketches: there
- * is no page to open and nothing to describe, which is a design the agent has
- * not started rather than a canvas that failed.
+ * Null is the whole answer for a design with no screens and no sketches: there is
+ * no page to open and nothing to describe, which is a design the agent has not
+ * started rather than a canvas that failed.
+ *
+ * One function rather than a second copy in the handler: the board's list of
+ * screens is what a canvas is, and a plan read one way here and another way there
+ * is how a card and the frame behind it start disagreeing.
  */
-export async function readScreenCanvasState(input: {
-  folderAbsolute: string
+export function screenCanvasStateOf(input: {
+  plan: ScreenCanvasPlan
   directory: string
-  screens: readonly DesignScreen[]
-}): Promise<ScreenCanvasState | null> {
-  const { metadata, error } = await readMetadata(input.folderAbsolute)
-  const plan = planScreenCanvas({ screens: screensOf(input.screens), metadata })
+  metadataError: string | null
+}): ScreenCanvasState | null {
+  const { plan } = input
   if (plan.frames.length === 0 && plan.sketches.length === 0) return null
   return {
     directory: input.directory,
     entry: SCREEN_CANVAS_PATH,
     columns: plan.columns,
-    screens: plan.frames.map((frame) => frame.entry),
+    // One card per screen: a state is a frame of its screen, not a second screen
+    // to open, so the board keeps listing the design rather than every state of it.
+    screens: [...new Set(plan.frames.map((frame) => frame.entry))],
     sketches: plan.sketches,
     orphanFrames: plan.orphanFrames,
-    metadataError: error
+    metadataError: input.metadataError
   }
 }
 

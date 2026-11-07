@@ -50,6 +50,13 @@ function formatScale(scale: number): string {
   return `${Number(scale.toFixed(3))}x`
 }
 
+/** `data-testid="plan-pro" name="plan"`, attributes as an unambiguous list. */
+function formatAttributes(attributes: Record<string, string>): string {
+  return Object.entries(attributes)
+    .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
+    .join(' ')
+}
+
 /**
  * The descriptor the model reads inside `<element>`.
  *
@@ -74,6 +81,10 @@ export function designElementDescriptor(
   // in the page the agent can scroll to and find again.
   const documentX = target.rect.x + page.scroll.x
   const documentY = target.rect.y + page.scroll.y
+  const identity = formatAttributes(target.identity)
+  const state = formatAttributes(target.state)
+  const surface = target.surface
+  const surfaceState = surface ? formatAttributes(surface.state) : ''
   const lines = [
     `Design element: ${short}`,
     // The screen an element lives on, because a canvas frames several of them
@@ -83,6 +94,18 @@ export function designElementDescriptor(
     page.title ? `title: ${page.title}` : null,
     `selector: ${target.selector}`,
     context ? `context: ${context}` : null,
+    // Ambiguity is named rather than left to be discovered: a path that matches
+    // every row of a list is not an identity, and a model that assumes it is will
+    // edit one row and claim the whole list.
+    `matches: ${target.matches} element${target.matches === 1 ? '' : 's'} in this document`,
+    identity ? `identity: ${identity}` : null,
+    state ? `state: ${state}` : null,
+    // A dialog's contents are not in the page until the dialog is open, so this is
+    // what turns "the submit button" into "the submit button of the open settings
+    // dialog", a state the agent can reproduce instead of guessing at markup.
+    surface
+      ? `surface: ${surface.name}${surface.selector !== surface.name ? ` selector ${surface.selector}` : ''}${surfaceState ? ` (${surfaceState})` : ''}`
+      : null,
     `box: ${target.rect.width}x${target.rect.height} CSS px at ${target.rect.x},${target.rect.y} in the viewport (${documentX},${documentY} in the document)`,
     `viewport: ${formatViewport(target.viewport)}`,
     `scroll: ${page.scroll.x},${page.scroll.y} of ${page.extent.width}x${page.extent.height}`,

@@ -119,7 +119,7 @@ export async function exportDesign(
         })
       })
     }
-    return { directory: outputRelative, files }
+    return { directory: outputRelative, files, root: projectRoot }
   } finally {
     exporting = false
   }

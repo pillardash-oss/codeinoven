@@ -15,19 +15,28 @@ import type { VideoJob } from '$shared/video/studio'
 export interface ExportOutcome {
   /** The folder a design export wrote to, empty for a video export. */
   directory: string
-  /** The files the export wrote, relative to the project root. */
+  /** The files the export wrote, relative to `root` (and to `directory` for a
+   *  design export). */
   files: string[]
+  /**
+   * The absolute root those paths are relative to: the exporting conversation's
+   * own workspace for a chat, assistant task or browser tab, and the project
+   * checkout otherwise. The reveal action needs it because a conversation's
+   * paths do not resolve against the project root.
+   */
+  root: string
 }
 
 /** Which export the one panel is reporting on. */
 export type ExportKind = 'design' | 'video'
 
 /**
- * The project-relative path the panel's reveal action lands on.
+ * The scope-relative path the panel's reveal action lands on: relative to
+ * {@link ExportOutcome.root}, not to the project root.
  *
  * The two exports report their files differently. A video export names files
- * already relative to the project root and leaves `directory` empty, so its MP4
- * is revealed directly. A design export names files relative to the folder it
+ * already relative to that root and leaves `directory` empty, so its MP4 is
+ * revealed directly. A design export names files relative to the folder it
  * created, so the folder has to be joined on before the path means anything in
  * the tree. An export that reported no files at all reveals that folder.
  */
@@ -94,6 +103,9 @@ class ExportProgressState {
    *  that project's own file tree. Kept across the export because the panel
    *  outlives the board that started it. */
   projectId = $state('')
+  /** The conversation the export ran in, which is the workspace an app-owned
+   *  export was written to and therefore the tree its reveal has to land in. */
+  threadId = $state('')
   /** Whether the panel is landing the finished export in the file tree. */
   revealing = $state(false)
   private mounted = false
@@ -133,11 +145,16 @@ class ExportProgressState {
       return
     }
     const generation = ++this.generation
-    this.begin('design', `${entry ?? 'Whole design'} as ${format.toUpperCase()}`, projectId)
+    this.begin(
+      'design',
+      `${entry ?? 'Whole design'} as ${format.toUpperCase()}`,
+      projectId,
+      threadId
+    )
     try {
       const exported = await invoke('design:export', projectId, threadId, directory, entry, format)
       if (this.generation !== generation) return
-      this.result = { directory: exported.directory, files: exported.files }
+      this.result = { directory: exported.directory, files: exported.files, root: exported.root }
     } catch (failure: unknown) {
       if (this.generation !== generation) return
       logRendererError('Design export failed.', failure)
@@ -158,7 +175,7 @@ class ExportProgressState {
       return
     }
     const generation = ++this.generation
-    this.begin('video', VIDEO_EXPORT_LABEL, projectId)
+    this.begin('video', VIDEO_EXPORT_LABEL, projectId, threadId)
     this.stage = 'Starting'
     try {
       // The export runs in main as a job, so its progress is read back until it
@@ -182,7 +199,8 @@ class ExportProgressState {
           if (polls > VIDEO_POLL_LIMIT) throw new Error('The export took longer than expected.')
           continue
         }
-        if (job.state === 'completed') this.result = { directory: '', files: job.files }
+        if (job.state === 'completed')
+          this.result = { directory: '', files: job.files, root: job.root ?? '' }
         else if (job.state === 'cancelled') this.error = 'The export was cancelled.'
         else this.error = job.error ?? 'The export failed.'
         return
@@ -207,23 +225,34 @@ class ExportProgressState {
   }
 
   /**
-   * Reveal what a finished export wrote in the exporting project's own file
+   * Reveal what a finished export wrote in the exporting conversation's own file
    * tree, and dock the panel onto the tree it just brought on screen.
    *
-   * The reveal is the app's existing one (`revealProjectFileFromAbsolutePath`):
-   * it opens the files surface, expands the ancestors and selects the entry, so
-   * an export lands in the same tree every other path citation uses instead of
-   * a folder the user has to find again.
+   * An export's paths are relative to the scope main wrote them into: the
+   * project checkout for a project thread, and that conversation's own workspace
+   * for a chat, an assistant task or a browser tab. Revealing through the app's
+   * existing helper (`revealScopeRelativePath`) mounts the tree on that same scope and
+   * expands the ancestors, so an export lands in the tree every other path
+   * citation uses instead of a folder the user has to find again. A path no tree
+   * can show opens in the OS file manager instead of leaving the click with no
+   * result.
    */
   async revealInFileTree(): Promise<void> {
     const outcome = this.result
     const kind = this.kind
-    const path = outcome && kind ? exportRevealPath(kind, outcome) : null
-    if (!outcome || !kind || !this.projectId || !path || this.revealing) return
+    const relativePath = outcome && kind ? exportRevealPath(kind, outcome) : null
+    if (!outcome || !kind || !this.projectId || !relativePath || this.revealing) return
     this.revealing = true
     try {
-      const { revealProjectFileFromAbsolutePath } = await import('$lib/reveal-file')
-      const revealed = await revealProjectFileFromAbsolutePath(this.projectId, path)
+      const root = outcome.root.replace(/\/+$/u, '')
+      const absolutePath = root ? `${root}/${relativePath.replace(/^\/+/u, '')}` : relativePath
+      const { revealScopeRelativePath } = await import('$lib/reveal-file')
+      const revealed = await revealScopeRelativePath(
+        this.projectId,
+        this.threadId,
+        relativePath,
+        absolutePath
+      )
       if (revealed) {
         // The tree is on screen now, and the panel floats over the right edge
         // where the sidebar just opened: dock it so it covers nothing the user
@@ -231,52 +260,25 @@ class ExportProgressState {
         this.minimized = true
         return
       }
-      // The path exists (the export just wrote it) but the project's tree could
-      // not show it, which is what a thread mounted on a worktree looks like:
-      // the export writes under the project root, the tree reads the checkout.
-      // The file manager can still show the file, so the action is not a
-      // dead end.
-      await this.revealInFileManager(path)
+      toast.error('The exported file could not be revealed. It may have been moved or deleted.')
     } catch (failure: unknown) {
       // The export itself succeeded, so a failed reveal must not replace the
       // panel's report of it with an error card; it is reported beside it.
       logRendererError('The exported file could not be revealed.', failure)
       toast.error(
-        failure instanceof Error
-          ? failure.message
-          : 'The exported file could not be revealed in the file tree.'
+        failure instanceof Error ? failure.message : 'The exported file could not be revealed.'
       )
     } finally {
       this.revealing = false
     }
   }
 
-  /**
-   * Last resort for a file the project's tree cannot show: hand it to the OS
-   * file manager, which displays any existing path. A conversation mounted on a
-   * worktree checkout reads a different root than the one the export wrote to,
-   * so the tree is not always the right surface. Never throws over the panel's
-   * report of a successful export.
-   */
-  private async revealInFileManager(path: string): Promise<void> {
-    const project = await invoke('project:get', this.projectId).catch(() => null)
-    const root = project?.path.replace(/\/+$/u, '')
-    if (!root) {
-      toast.error('The exported file could not be revealed in the file tree.')
-      return
-    }
-    const { revealInOsFileManager } = await import('$lib/os-file-manager')
-    const revealed = await revealInOsFileManager(`${root}/${path.replace(/^\/+/, '')}`)
-    if (!revealed) {
-      toast.error('The exported file could not be revealed in the file tree.')
-    }
-  }
-
   /** Reset the panel for a new export and bring it to the front. */
-  private begin(kind: ExportKind, label: string, projectId: string): void {
+  private begin(kind: ExportKind, label: string, projectId: string, threadId: string): void {
     this.kind = kind
     this.label = label
     this.projectId = projectId
+    this.threadId = threadId
     this.revealing = false
     this.stage = ''
     this.progress = 0

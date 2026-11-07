@@ -70,7 +70,15 @@ export interface VideoJob {
   state: 'running' | 'completed' | 'failed' | 'cancelled'
   progress: number
   stage: string
+  /** The files the job wrote, relative to `root`. */
   files: string[]
+  /**
+   * The absolute root `files` is relative to: the job's conversation workspace
+   * for an assistant, chat or browser thread, and the project checkout
+   * otherwise. Revealing a finished job needs it, because a conversation's
+   * paths never resolve against the project root.
+   */
+  root?: string
   error?: string
   result?: unknown
 }

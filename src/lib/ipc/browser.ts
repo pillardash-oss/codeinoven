@@ -411,6 +411,52 @@ export interface BrowserInspectorTarget {
    * at half size. The scale and the frame's box are what tell the two apart.
    */
   presented: BrowserInspectorPresentation | null
+  /**
+   * The attributes that name the element steadily, where a CSS path is only a
+   * place in one rendered tree.
+   *
+   * A row rendered from a list, or a dialog opened a second time, keeps its
+   * `data-testid`, `name` or `aria-label` while its `nth-of-type` path can change.
+   * Only attributes actually present are listed; an element with none reports an
+   * empty record rather than a guessed name.
+   */
+  identity: Record<string, string>
+  /**
+   * The state attributes the element itself carried at pick time.
+   *
+   * `open`, `aria-expanded`, `aria-pressed`, `disabled`, `hidden` and the rest say
+   * what the element was doing when the comment was written: a note about a closed
+   * disclosure or a pressed toggle means something different from the same note on
+   * the opposite state.
+   */
+  state: Record<string, string>
+  /**
+   * The transient surface that had to be open for the element to exist at all.
+   *
+   * The contents of a dialog, menu, popover or tooltip are not in the page the
+   * agent finds when it reads the source: the comment is about a state, and this
+   * names the surface and the state it was in, so the same render can be reached
+   * again rather than explained away.
+   */
+  surface: BrowserInspectorSurface | null
+  /**
+   * How many elements the selector matches in its own document.
+   *
+   * One means the path names this element exactly. More than one means it names a
+   * shape (every row of a list), and the element has to be found by its identity
+   * attributes or its own content instead of by the path alone.
+   */
+  matches: number
+}
+
+/** One transient surface (dialog, menu, popover, tooltip) an element lives in. */
+export interface BrowserInspectorSurface {
+  /** CSS path of the surface in its document. */
+  selector: string
+  /** `dialog#settings`, the short form for a label. */
+  name: string
+  /** The state attributes the surface carried, e.g. `{ open: 'true' }`. */
+  state: Record<string, string>
 }
 
 /** The page's viewport size in CSS pixels. */

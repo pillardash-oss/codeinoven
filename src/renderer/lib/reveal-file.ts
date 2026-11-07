@@ -5,7 +5,7 @@ import {
   filePreviewFlags,
   canAnnotateDocument
 } from '$lib/components/files/project-files-panel-preview'
-import { revealInOsFileManager } from '$lib/os-file-manager'
+import { revealExportedPathInOsFileManager, revealInOsFileManager } from '$lib/os-file-manager'
 import { projectFilesWorkspace, type ProjectFileView } from '$lib/stores/project-files.svelte'
 import { citationPathsState } from '$lib/stores/citation-paths.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -174,6 +174,63 @@ export async function revealFileInAppTree(projectId: string, path: string): Prom
 }
 
 /**
+ * Reveal a file main already resolved to a project (`project:findFileOwner`) in
+ * that project's own file tree. Like {@link openProjectFileFromAbsolutePath} the
+ * relative path is given rather than derived from the *active* project, so a
+ * reveal lands in the right tree whichever project happens to be on screen.
+ * Returns whether the entry resolved, so the caller can fall back to the OS file
+ * manager instead of leaving a click with no visible result.
+ */
+export async function revealProjectFileFromAbsolutePath(
+  projectId: string,
+  relativePath: string
+): Promise<boolean> {
+  // Prepare the surface before probing the path: a conversation container's tree
+  // is mounted on that conversation's own workspace directory, and the probe
+  // resolves through that mount. Probing first is what made a design written
+  // into an assistant's workspace look like a folder the app could not show.
+  await ensureProjectFilesReady(projectId)
+  const entry = await exactEntry(projectId, relativePath)
+  if (!entry) return false
+  await revealEntry(projectId, entry)
+  return true
+}
+
+/**
+ * Reveal a path relative to the scope a conversation writes into: the app-owned
+ * workspace a chat, assistant task or browser tab mounts, or the project
+ * checkout a project thread works in.
+ *
+ * Exports and authored work report their paths from that scope root, and only a
+ * tree mounted on the same root can show them. The conversation is named
+ * explicitly rather than read from whatever is selected, because the surface
+ * that reports a finished export outlives the thread switch that followed it.
+ * `absolutePath` is optional and only used for the OS file manager fallback, for
+ * callers that never learned where their file landed on disk. Returns whether
+ * any surface took it, so a caller reports a reveal that worked instead of one
+ * that silently did nothing.
+ */
+export async function revealScopeRelativePath(
+  projectId: string,
+  threadId: string,
+  relativePath: string,
+  absolutePath = ''
+): Promise<boolean> {
+  if (!relativePath) return absolutePath ? revealExportedPathInOsFileManager(absolutePath) : false
+  if (usesThreadWorkspaceMount(projectId)) {
+    await ensureProjectFilesReady(projectId, threadId)
+    const entry = await exactEntry(projectId, relativePath)
+    if (entry) {
+      await revealEntry(projectId, entry)
+      return true
+    }
+  } else if (await revealProjectFileFromAbsolutePath(projectId, relativePath)) {
+    return true
+  }
+  return absolutePath ? revealExportedPathInOsFileManager(absolutePath) : false
+}
+
+/**
  * Open a file in a project's own editor from a path main already resolved to that
  * project (`project:findFileOwner`). Unlike {@link revealFileInAppTree} the
  * relative path is given rather than derived from the *active* project, so an OS
@@ -195,25 +252,6 @@ export async function openProjectFileFromAbsolutePath(
   if (!entry) return false
   await ensureProjectFilesReady(projectId)
   await revealEntry(projectId, entry, focusLine, focusLine === undefined ? undefined : 'source')
-  return true
-}
-
-/**
- * Reveal a file main already resolved to a project (`project:findFileOwner`) in
- * that project's own file tree. Like {@link openProjectFileFromAbsolutePath} the
- * relative path is given rather than derived from the *active* project, so a
- * reveal lands in the right tree whichever project happens to be on screen.
- * Returns whether the entry resolved, so the caller can fall back to the OS file
- * manager instead of leaving a click with no visible result.
- */
-export async function revealProjectFileFromAbsolutePath(
-  projectId: string,
-  relativePath: string
-): Promise<boolean> {
-  const entry = await exactEntry(projectId, relativePath)
-  if (!entry) return false
-  await ensureProjectFilesReady(projectId)
-  await revealEntry(projectId, entry)
   return true
 }
 

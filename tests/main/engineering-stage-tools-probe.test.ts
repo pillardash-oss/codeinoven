@@ -43,7 +43,7 @@ describe('Engineering stage tools probe', () => {
     {
       stage: 'spec',
       toolName: CREATE_SPEC_TOOL_NAME,
-      intents: ['spec', 'implementation plan']
+      intents: ['spec', 'specification']
     },
     {
       stage: 'assignment',
@@ -81,6 +81,8 @@ describe('Engineering stage tools probe', () => {
       }
     }
     expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).toContain('Engineering stages')
+    expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).toContain('A plan is not a spec')
+    expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).not.toContain('implementation plan')
     expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).not.toContain('Engineering Toolbox')
     expect(DEFAULT_AGENT_BEHAVIOR_PROMPT).not.toContain('Auto Pilot')
   })

@@ -62,10 +62,16 @@ const DESIGN_SESSION_STEPS = `How to run the session:
    app's own page: it is generated from the folder, so every screen you write is
    on it without you writing any markup. Never write a \`canvas.html\`; put a
    \`canvas.json\` beside the screens to order and label them, to declare a state
-   you have not built yet as a sketch, and to show the states inside a page (a
-   menu open, a dialog up) as extra frames with \`"state"\`: \`{"click": "#account-menu"}\`.
+   you have not built yet as a sketch, and to show a state the markup cannot
+   declare as an extra frame with \`"state"\`: \`{"click": "#account-menu"}\`.
    The canvas is where the user sees the whole product at once, so a state that
-   only exists after a click belongs on it rather than in a sentence.
+   only exists after a click belongs on it rather than in a sentence. A state is
+   discovered from the control that opens it, so every control that opens,
+   reveals, expands or toggles anything MUST carry its declaration:
+   \`aria-expanded\`, \`aria-haspopup\`, \`aria-controls\` naming the element it
+   reveals, or the native \`popover\` attribute. That is required, not suggested:
+   an undeclared trigger is a state the canvas, the board and the review never
+   show.
 4. Check the result yourself before you describe it, in this thread's own in-app
    browser: preview the folder so the tab has its served URL, activate the
    \`cio:browser\` capability, and use its \`screenshot\` for a phone width and a
@@ -136,7 +142,7 @@ ${DESIGN_SESSION_STEPS}`
  * project's live record, and a turn that reads it cannot move the work by accident.
  */
 export function designSessionContinuation(root: string, grouping = ''): string {
-  return `This thread is in a design session, and the design capability stays active. The design folder is \`${root}\`, and the work belongs there: move anything of this design that sits elsewhere into it, then keep working in the folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds, and the Screen Canvas shows them all at once without being written. A state that only exists after a click belongs on that canvas rather than in a sentence, so declare it in \`canvas.json\` beside the screens when the design has one (see the design session). Report what changed and what a viewer can now try.
+  return `This thread is in a design session, and the design capability stays active. The design folder is \`${root}\`, and the work belongs there: move anything of this design that sits elsewhere into it, then keep working in the folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds, and the Screen Canvas shows them all at once without being written. A state that only exists after a click belongs on that canvas rather than in a sentence: declare the control that opens it with \`aria-expanded\`, \`aria-haspopup\`, \`aria-controls\` or \`popover\`, because discovery finds a state only through that declaration, and reach for \`canvas.json\` when a state needs a click the markup cannot express (see the design session). Report what changed and what a viewer can now try.
 
 Save a baseline checkpoint before editing an existing screen, then call this capability's \`checkpoint\` with directory, entry and a short completed-step label after each major section, title, image or navbar change, before starting the next step.${grouping === '' ? '' : `\n\n${grouping}`}`
 }

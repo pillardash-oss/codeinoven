@@ -48,6 +48,14 @@ function inspector(): InstalledInspector {
 }
 
 beforeEach(() => {
+  // A previous test's inspector is still wired into this document unless it is
+  // told to cease: its listeners would intercept the next test's clicks.
+  const previous = (globalThis as unknown as Record<string, Partial<InstalledInspector>>)[KEY]
+  try {
+    previous?.run?.({ type: 'cease' })
+  } catch {
+    // A document that already went away has nothing left to detach.
+  }
   for (const host of document.querySelectorAll('[data-cio-inspector]')) host.remove()
   Reflect.deleteProperty(globalThis, KEY)
   document.body.innerHTML = '<div id="otp">Code</div>'
@@ -81,6 +89,67 @@ describe('a picked element', () => {
     // framed presentation and its own viewport as the layout it was measured in.
     expect(event.target.presented).toBeNull()
     expect(event.target.viewport).toEqual({ width: window.innerWidth, height: window.innerHeight })
+  })
+
+  it('names a transient surface and the identity attributes of what it holds', async () => {
+    // A modal's contents are not in the page the agent reads: the surface and its
+    // state are what say the element exists only while the dialog is open, and the
+    // identity attributes are what keep naming it once it has re-rendered.
+    document.body.innerHTML =
+      '<dialog id="settings" open><form><button id="save" data-testid="save-plan" aria-expanded="false">Save</button></form></dialog>'
+    const button = document.querySelector('#save') as HTMLElement
+    button.getBoundingClientRect = rect
+    install()
+    inspector().run({ type: 'arm' })
+
+    const pending = inspector().wait()
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    const event = await pending
+
+    expect(event.target.identity).toEqual({ 'data-testid': 'save-plan' })
+    expect(event.target.state).toEqual({ 'aria-expanded': 'false' })
+    expect(event.target.surface?.name).toBe('dialog#settings')
+    expect(event.target.surface?.state).toEqual({ open: 'true' })
+    expect(event.target.matches).toBe(1)
+  })
+
+  it('says when a path is a shape rather than one element', async () => {
+    // A path is built from a bounded number of ancestors, so two identical deep
+    // subtrees produce one path that names both of them: the count is what tells
+    // the agent the path has to be backed by identity attributes or content.
+    const branch = (label: string): string => {
+      let markup = `<button class="deep">${label}</button>`
+      for (let level = 0; level < 9; level += 1) markup = `<div class="level">${markup}</div>`
+      return markup
+    }
+    document.body.innerHTML = branch('A') + branch('B')
+    const first = document.querySelector('.deep') as HTMLElement
+    first.getBoundingClientRect = rect
+    install()
+    inspector().run({ type: 'arm' })
+
+    const pending = inspector().wait()
+    first.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    const event = await pending
+
+    expect(event.target.matches).toBeGreaterThan(1)
+    expect(event.target.surface).toBeNull()
+  })
+
+  it('pins a list row exactly while the row is the only thing at that path', async () => {
+    document.body.innerHTML =
+      '<ul><li class="row"><button class="act">A</button></li><li class="row"><button class="act">B</button></li></ul>'
+    const second = document.querySelectorAll('.act')[1] as HTMLElement
+    second.getBoundingClientRect = rect
+    install()
+    inspector().run({ type: 'arm' })
+
+    const pending = inspector().wait()
+    second.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    const event = await pending
+
+    expect(event.target.matches).toBe(1)
+    expect(event.target.selector).toContain('nth-of-type(2)')
   })
 })
 
