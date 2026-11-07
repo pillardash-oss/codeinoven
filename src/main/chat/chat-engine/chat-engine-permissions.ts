@@ -24,6 +24,44 @@ import { posixDirname } from '../../../lib/paths'
 import type { AgentPart } from '../../../lib/types'
 import type { ChatEngine } from '../chat-engine'
 
+/**
+ * The permission kinds that mean "an operation on a file". Every other kind is
+ * the chat's own work: its web access and the tools it was given.
+ */
+const FILE_SYSTEM_PERMISSIONS = new Set([
+  'read',
+  'write',
+  'edit',
+  'delete',
+  'move',
+  'bash',
+  'execute',
+  'file',
+  'files',
+  'bundled-pi-sensitive-files'
+])
+
+/**
+ * The app-owned gateway tool a request would run, if that is what it is.
+ *
+ * The app serves the turn's gateway MCP server itself, and every route behind it
+ * enforces its own permission, so a card for one of those calls asks the user to
+ * authorize the app to call the app.
+ */
+function appGatewayToolCall(metadata: Record<string, unknown>): string | undefined {
+  const input = metadata['input']
+  if (typeof input !== 'object' || input === null) return undefined
+  const record = input as Record<string, unknown>
+  const provider = record['providerIdentifier']
+  const tool = record['toolName']
+  if (typeof tool !== 'string' || !tool.startsWith('cio_')) return undefined
+  // `utilities` is the transport name the app gives its own gateway server. An
+  // agent that omits the provider still names the call in the app's namespace,
+  // which no user MCP server shares.
+  if (provider !== undefined && provider !== 'utilities') return undefined
+  return tool
+}
+
 /** ChatEngine permissions: one concern, moved verbatim from the composition root. */
 export class ChatEnginePermissions {
   constructor(private readonly host: ChatEngine) {}
@@ -505,8 +543,22 @@ export class ChatEnginePermissions {
     // real decision about the project.
     const chatScope =
       info.projectId === INBOX_PROJECT_ID || info.projectId === GLOBAL_BROWSER_PROJECT_ID
-    if (chatScope && request.permission === 'network' && !policy.approved) {
-      const reason = 'Auto-approved: this chat reaches the web directly; only file access asks.'
+    // Two calls never need a card:
+    //  - a tool the app itself serves. The gateway the turn received is the app's
+    //    own MCP server, and its routes already carry their own permission
+    //    checks, so asking the user to approve `cio_util_find` asks them to
+    //    authorize CodeInOven to talk to CodeInOven.
+    //  - anything a chat does that is not file access. A chat's contract is that
+    //    the web is its first answer for what it does not know, and only file
+    //    access is the gate; a network or tool card there contradicts the prompt
+    //    the same session was given and parks a run the user asked for.
+    const appOwnedTool = appGatewayToolCall(request.metadata)
+    const chatNonFile = chatScope && !FILE_SYSTEM_PERMISSIONS.has(request.permission)
+    if ((appOwnedTool !== undefined || chatNonFile) && !policy.approved) {
+      const reason =
+        appOwnedTool !== undefined
+          ? `Auto-approved: ${appOwnedTool} is an app-owned tool.`
+          : 'Auto-approved: a chat reaches the web and its tools directly; only file access asks.'
       policy = {
         ...policy,
         approved: true,
