@@ -9,7 +9,7 @@ import {
   type ThreadSearchSql
 } from '../../main/database/repositories/thread-repo'
 import { Logger } from '../../main/system/logger'
-import { mergeHybridThreadSearchResults } from '../search/hybrid-merge'
+import { mergeHybridThreadSearchResults, rankThreadsByEvidence } from '../search/hybrid-merge'
 import {
   evidenceAnyFtsQuery,
   queryConceptCoverage,
@@ -118,11 +118,19 @@ export class ThreadSearchService {
   ): Promise<ThreadSearchResult[]> {
     const raw = query.trim()
     if (!raw) return []
-    const { results: keyword, limit } = await this.keywordSearch(raw, options)
+    const [{ results: keyword, limit }, evidence] = await Promise.all([
+      this.keywordSearch(raw, options),
+      this.conversationEvidence(raw, options, options.limit ?? 20)
+    ])
+    // The first answer is already ranked by how much of the query a thread
+    // carries, not only by full-text rank. The model then refines it; a query
+    // whose words are all common should never open on the longest message that
+    // happened to contain them.
+    const firstPaint = rankThreadsByEvidence([...keyword, ...evidence], raw, limit)
     const provider = this.intentProvider
-    if (!provider) return keyword
-    void this.enrichWithIntent(raw, options, keyword, limit, provider, onIntentReady)
-    return keyword
+    if (!provider) return firstPaint
+    void this.enrichWithIntent(raw, options, keyword, evidence, limit, provider, onIntentReady)
+    return firstPaint
   }
 
   /**
@@ -137,12 +145,13 @@ export class ThreadSearchService {
     raw: string,
     options: ThreadSearchOptions,
     keyword: readonly ThreadSearchResult[],
+    evidence: readonly ThreadSearchResult[],
     limit: number,
     provider: IntentSearchProvider,
     onIntentReady: (results: ThreadSearchResult[]) => void
   ): Promise<void> {
     try {
-      const merged = await this.mergedWithIntent(raw, options, keyword, limit, provider)
+      const merged = await this.mergedWithIntent(raw, options, keyword, evidence, limit, provider)
       if (merged) onIntentReady(merged)
     } catch (error: unknown) {
       Logger.dev('Intent search enrichment failed; keeping keyword results.', error)
@@ -166,17 +175,18 @@ export class ThreadSearchService {
   ): Promise<{ results: ThreadSearchResult[]; semantic: boolean }> {
     const raw = query.trim()
     if (!raw) return { results: [], semantic: false }
-    const { results: keyword, limit } = await this.keywordSearch(raw, options)
-    const provider = this.intentProvider
-    // The evidence pass is the part that does not need a model: it re-reads the
-    // index with the query's concepts OR-ed together and keeps the passages that
-    // carry most of them. Running it without a provider is what stops a
+    const [{ results: keyword, limit }, evidence] = await Promise.all([
+      this.keywordSearch(raw, options),
+      this.conversationEvidence(raw, options, options.limit ?? 20)
+    ])
+    // The evidence ranking is the part that does not need a model: it re-reads
+    // the index with the query's concepts OR-ed together and keeps the passages
+    // that carry most of them. Running it without a provider is what stops a
     // sentence-shaped question from being answered with "no threads found" on a
     // machine where the embedding model is off or unready.
-    if (!provider) {
-      const evidence = await this.conversationEvidence(raw, options, limit)
-      return { results: mergeHybridThreadSearchResults(keyword, evidence, limit), semantic: false }
-    }
+    const firstPaint = rankThreadsByEvidence([...keyword, ...evidence], raw, limit)
+    const provider = this.intentProvider
+    if (!provider) return { results: firstPaint, semantic: false }
 
     let timer: ReturnType<typeof setTimeout> | undefined
     const timedOut = new Promise<null>((resolve) => {
@@ -184,14 +194,16 @@ export class ThreadSearchService {
     })
     try {
       const merged = await Promise.race([
-        this.mergedWithIntent(raw, options, keyword, limit, provider).catch((error: unknown) => {
-          Logger.dev('Semantic thread search failed; keeping keyword results.', error)
-          return null
-        }),
+        this.mergedWithIntent(raw, options, keyword, evidence, limit, provider).catch(
+          (error: unknown) => {
+            Logger.dev('Semantic thread search failed; keeping keyword results.', error)
+            return null
+          }
+        ),
         timedOut
       ])
       if (merged) return { results: merged, semantic: true }
-      return { results: keyword, semantic: false }
+      return { results: firstPaint, semantic: false }
     } finally {
       clearTimeout(timer)
     }
@@ -208,16 +220,16 @@ export class ThreadSearchService {
     raw: string,
     options: ThreadSearchOptions,
     keyword: readonly ThreadSearchResult[],
+    evidence: readonly ThreadSearchResult[],
     limit: number,
     provider: IntentSearchProvider
   ): Promise<ThreadSearchResult[] | null> {
-    const [matches, evidence] = await Promise.all([
-      provider(raw, options),
-      this.conversationEvidence(raw, options, limit)
-    ])
-    const grounded = [...keyword.filter((result) => result.kind === 'message'), ...evidence]
+    const matches = await provider(raw, options)
     if (matches.length === 0) {
-      return evidence.length > 0 ? mergeHybridThreadSearchResults(keyword, grounded, limit) : null
+      // No meaning-based matches to add: keep the evidence-ranked keyword list
+      // untouched rather than re-sending a reordered copy of it.
+      Logger.dev('Intent search found no meaning-based match', { ranked: 0 })
+      return null
     }
     const threads = await this.threadRepo.listByIdsViaWorker(matches.map((match) => match.threadId))
     const byId = new Map(threads.map((thread) => [thread.id, thread]))
@@ -228,8 +240,19 @@ export class ThreadSearchService {
       if (!threadMatchesSearchScope(thread, options)) continue
       intent.push({ thread, kind: 'intent', score: match.score })
     }
-    if (intent.length === 0 && evidence.length === 0) return null
-    return mergeHybridThreadSearchResults(keyword, [...grounded, ...intent], limit)
+    if (intent.length === 0) {
+      // The model answered but none of its threads survived hydration or the
+      // scope. Reported, because otherwise this looks exactly like intent search
+      // being switched off.
+      Logger.dev('Intent search matches did not survive hydration', {
+        matched: matches.length,
+        hydrated: threads.length
+      })
+      return null
+    }
+    // Evidence rows carry the long excerpt the coverage score was measured on,
+    // so they stay in the keyword half where that score belongs.
+    return mergeHybridThreadSearchResults([...keyword, ...evidence], intent, limit, raw)
   }
 
   private async conversationEvidence(
