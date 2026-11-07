@@ -384,6 +384,12 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       )
         return
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
+      // A worker or auditor view never owns its row's board: the Sr. Engineer
+      // publishes it and is the only view that may withdraw it. A plain
+      // engineering auditor names no coordinator kind of its own, and withdrawing
+      // from here dropped the board the moment the user stepped into the auditor,
+      // leaving the sidebar saying "Coordinator unavailable".
+      if (this.root.currentWorkingTraceAttribution.orchestrationChild) return
       // A row that started real work has a coordinator of its own: the delegation
       // board. A nested sub-agent does not dock one, so it does not hold it open.
       const ownedRowId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
