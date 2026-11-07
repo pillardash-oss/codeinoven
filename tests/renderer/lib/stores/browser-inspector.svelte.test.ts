@@ -129,6 +129,33 @@ function designReference(
   }
 }
 
+/** The pick a page reports, including the page state read at pick time. */
+function designTarget() {
+  return {
+    selector: 'div#otp',
+    tag: 'div',
+    id: 'otp',
+    classes: [],
+    role: null,
+    text: 'Code',
+    html: '<div id="otp"></div>',
+    ancestors: [],
+    frame: null,
+    rect: { x: 10, y: 20, width: 30, height: 40 },
+    viewport: { width: 1512, height: 850 },
+    page: {
+      url: 'http://127.0.0.1:52035/index.html?step=otp#code',
+      title: 'Authorize device',
+      scheme: 'dark' as const,
+      scroll: { x: 0, y: 120 },
+      extent: { width: 1512, height: 3400 },
+      devicePixelRatio: 2,
+      visualScale: 1
+    },
+    presented: null
+  }
+}
+
 /** The design report main publishes when a tab commits to a design page. */
 function reportDesign(
   tabId: string,
@@ -153,19 +180,7 @@ describe('design pins', () => {
   it('names the design page a picked element belongs to, not only its tab', () => {
     const reference = designElementReference(
       'marker-one',
-      {
-        selector: 'div#otp',
-        tag: 'div',
-        id: 'otp',
-        classes: [],
-        role: null,
-        text: 'Code',
-        html: '<div id="otp"></div>',
-        ancestors: [],
-        frame: null,
-        rect: { x: 10, y: 20, width: 30, height: 40 },
-        viewport: { width: 1512, height: 850 }
-      },
+      designTarget(),
       { directory: DESIGN_DIRECTORY, origin: 'http://127.0.0.1:52035' },
       { id: TAB, url: 'http://127.0.0.1:52035/index.html' }
     )
@@ -343,19 +358,7 @@ describe('the open comment', () => {
       kind: 'pick',
       id: 'marker-one',
       anchor: { x: 10, y: 20, width: 30, height: 40 },
-      target: {
-        selector: 'div#otp',
-        tag: 'div',
-        id: 'otp',
-        classes: [],
-        role: null,
-        text: 'Code',
-        html: '<div id="otp"></div>',
-        ancestors: [],
-        frame: null,
-        rect: { x: 10, y: 20, width: 30, height: 40 },
-        viewport: { width: 1512, height: 850 }
-      }
+      target: designTarget()
     })
     await new Promise((resolve) => setTimeout(resolve, 0))
 

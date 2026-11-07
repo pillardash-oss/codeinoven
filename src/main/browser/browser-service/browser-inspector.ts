@@ -202,6 +202,10 @@ export function inspectorInstallScript(key: string): string {
     const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const round = (value, decimals) => {
+      const factor = Math.pow(10, decimals);
+      return Math.round(value * factor) / factor;
+    };
     const text = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
     const escapeId = (value) => (globalThis.CSS && CSS.escape ? CSS.escape(String(value)) : String(value));
 
@@ -385,6 +389,94 @@ export function inspectorInstallScript(key: string): string {
       };
     }
 
+    /**
+     * The document's own URL, query string and hash included.
+     *
+     * A design page is a file on a loopback origin, and a reader who filtered it
+     * or jumped to an anchor commented on that exact state: a comment copied
+     * without the query reads as a comment about the unfiltered default page. A
+     * document this script cannot read answers an empty string rather than
+     * throwing.
+     */
+    function pageUrl(doc) {
+      try {
+        const href = doc && doc.location ? doc.location.href : '';
+        return String(href || '').slice(0, 2000);
+      } catch (error) {
+        return '';
+      }
+    }
+
+    /**
+     * The page state one element was measured in: which page, where, at what zoom.
+     *
+     * Read from the element's own document, so a pick inside a canvas frame
+     * reports that screen's URL and scroll position rather than the canvas around
+     * it. Every read falls back to a neutral value, because a document the
+     * inspector was allowed to look at is not a document it is allowed to assume
+     * anything about.
+     */
+    function pageContext(element) {
+      const doc = documentOf(element);
+      const view = viewOf(doc);
+      const root = doc.documentElement || doc.body;
+      let scheme = 'light';
+      try {
+        if (view && view.matchMedia && view.matchMedia('(prefers-color-scheme: dark)').matches) {
+          scheme = 'dark';
+        }
+      } catch (error) {}
+      return {
+        url: pageUrl(doc),
+        title: text(doc.title, 200),
+        scheme: scheme,
+        scroll: {
+          x: Math.round((view && view.scrollX) || 0),
+          y: Math.round((view && view.scrollY) || 0)
+        },
+        extent: {
+          width: Math.round((root && root.scrollWidth) || 0),
+          height: Math.round((root && root.scrollHeight) || 0)
+        },
+        devicePixelRatio: round((view && view.devicePixelRatio) || 1, 2),
+        visualScale: round((view && view.visualViewport && view.visualViewport.scale) || 1, 2)
+      };
+    }
+
+    /**
+     * How the element's document is drawn inside this page, for a framed screen.
+     *
+     * A canvas scales each framed screen to fit its own area, so the same button
+     * is a different number of drawn pixels on a zoomed-out canvas than at 100%.
+     * The scale and the frame's box are what let a reader tell "the screen is
+     * cramped" from "the canvas is zoomed out", and they are reported for the
+     * outermost frame because that is the one on screen.
+     */
+    function framePresentation(element) {
+      let doc = element.ownerDocument;
+      let scale = 1;
+      let outer = null;
+      let steps = 0;
+      while (doc && doc !== document && steps < 8) {
+        steps += 1;
+        const view = viewOf(doc);
+        const frame = view ? view.frameElement : null;
+        if (!frame) break;
+        const box = frame.getBoundingClientRect();
+        const layoutWidth = view.innerWidth || box.width || 1;
+        scale = scale * (box.width / layoutWidth);
+        outer = {
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          width: Math.round(box.width),
+          height: Math.round(box.height)
+        };
+        doc = frame.ownerDocument;
+      }
+      if (!outer) return null;
+      return { scale: round(scale, 3), rect: outer };
+    }
+
     function describe(element) {
       const doc = documentOf(element);
       const ancestors = [];
@@ -404,7 +496,9 @@ export function inspectorInstallScript(key: string): string {
         ancestors: ancestors,
         frame: frameEntryOf(doc),
         rect: elementRect(element),
-        viewport: pageViewport(element)
+        viewport: pageViewport(element),
+        page: pageContext(element),
+        presented: framePresentation(element)
       };
     }
 

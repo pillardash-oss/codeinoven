@@ -45,12 +45,22 @@ export function viewportLabel(width: number): string {
   return 'wide desktop'
 }
 
+/** `0.5x`, a scale written as a number "at 100%" would only repeat. */
+function formatScale(scale: number): string {
+  return `${Number(scale.toFixed(3))}x`
+}
+
 /**
  * The descriptor the model reads inside `<element>`.
  *
  * Deliberately plain `key: value` lines rather than JSON: the same text is
  * rendered in the composer popover, and a block of readable lines is what a
  * human wants there too.
+ *
+ * The page lines come before the element's own text and markup because the
+ * descriptor is clipped to a fixed length: when it has to cut something, it is
+ * the clipped opening markup that goes, never the URL, the scroll offset or the
+ * viewport that make the comment about one exact render.
  */
 export function designElementDescriptor(
   target: BrowserInspectorTarget,
@@ -58,15 +68,29 @@ export function designElementDescriptor(
 ): string {
   const short = describeInspectorTarget(target)
   const context = target.ancestors.length > 0 ? `${target.ancestors.join(' > ')} > ${short}` : null
+  const page = target.page
+  // The element's place in the whole document, not only in the viewport: a pick
+  // reports where it was on screen, and the scroll offset turns that into a place
+  // in the page the agent can scroll to and find again.
+  const documentX = target.rect.x + page.scroll.x
+  const documentY = target.rect.y + page.scroll.y
   const lines = [
     `Design element: ${short}`,
     // The screen an element lives on, because a canvas frames several of them
     // and a selector alone does not say which file to open to find it.
     target.frame ? `screen: ${target.frame}` : null,
+    page.url ? `page: ${page.url}` : null,
+    page.title ? `title: ${page.title}` : null,
     `selector: ${target.selector}`,
     context ? `context: ${context}` : null,
-    `size: ${target.rect.width}x${target.rect.height}`,
+    `box: ${target.rect.width}x${target.rect.height} CSS px at ${target.rect.x},${target.rect.y} in the viewport (${documentX},${documentY} in the document)`,
     `viewport: ${formatViewport(target.viewport)}`,
+    `scroll: ${page.scroll.x},${page.scroll.y} of ${page.extent.width}x${page.extent.height}`,
+    `zoom: device pixel ratio ${page.devicePixelRatio}, visual scale ${page.visualScale}`,
+    `scheme: ${page.scheme}`,
+    target.presented
+      ? `canvas: screen framed at ${formatScale(target.presented.scale)} inside ${target.presented.rect.width}x${target.presented.rect.height} at ${target.presented.rect.x},${target.presented.rect.y}`
+      : null,
     design ? `design: ${design.directory}` : null,
     target.text ? `text: ${JSON.stringify(target.text)}` : null,
     target.html ? `markup: ${target.html}` : null
