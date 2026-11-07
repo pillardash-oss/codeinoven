@@ -49,11 +49,11 @@ The agent reaches every stage through a real callable tool instead of the app wa
 
 - `cio_create_brainstorm` turns Brainstorm on and creates the thread's durable Brainstorm draft.
 - `cio_create_prd` turns PRD on and creates the product requirements document.
-- `cio_create_spec` turns Spec on and generates the specification draft.
+- `cio_create_spec` turns Spec on and generates the specification draft, only on an explicit request for a spec.
 - `cio_create_assignment` turns Assignment on and creates the task graph for the user to sign off.
 - `cio_create_achievement` turns Achievement on so the thread implements, audits and reworks until the approved specification is verified. It requires an approved specification, because the independent audit judges the result against that contract.
 
-The behavior prompt and the gateway instructions carry the same reading of a request, so the agent does not have to interrogate the user about which stage they mean: brainstorming or exploring a direction calls `cio_create_brainstorm`, product requirements or a PRD calls `cio_create_prd`, a spec or implementation plan calls `cio_create_spec`, splitting the work into tasks or across agents calls `cio_create_assignment`, and "keep going until this works" or "until the goal is reached" calls `cio_create_achievement`.
+Each stage tool is invoked only when the user explicitly asks for that artifact by name. A plan is not a spec: a request for a plan, a checklist, an approach or the steps is answered with the agent's own plan in prose or a markdown file, followed by the work, and never converted into a stage. The behavior prompt and the gateway instructions carry the same rule, so the agent does not infer a stage from the size or risk of the work: brainstorming or exploring a direction calls `cio_create_brainstorm`, product requirements or a PRD calls `cio_create_prd`, a spec or a specification calls `cio_create_spec`, splitting the work into tasks or across agents calls `cio_create_assignment`, and "keep going until this works" or "until the goal is reached" calls `cio_create_achievement`.
 
 Each tool runs the same machinery the Studio buttons use: an isolated generation session that persists a reviewable draft and broadcasts the matching `ready` event. Nothing is approved, implemented or signed off on the user's behalf, so the existing review surface keeps owning that decision.
 
