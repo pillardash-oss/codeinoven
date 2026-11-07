@@ -1,9 +1,13 @@
 <script lang="ts">
+  import { onMount } from 'svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import CioChat from '@pdslng/cio-icon/CioChat.svelte'
   import type { ActionDefinition, ActionSelection } from '$lib/actions'
   import { invoke } from '$lib/ipc.svelte'
   import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { orderedBuckets } from '$lib/stores/scope-board'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import { threadPaletteRow } from '$lib/threads/thread-palette-row'
   import { isOrchestrationChildThread, type Thread } from '$shared/types'
   import {
@@ -11,6 +15,7 @@
     type ComposerRelocationItem,
     type ComposerRelocationMode
   } from './composer-relocation'
+  import { orderRelocationDestinations } from './relocation-destinations'
 
   interface Props {
     projectId: string
@@ -49,7 +54,8 @@
     onClose
   }: Props = $props()
 
-  let threads = $state<Thread[]>([])
+  /** The project's rows as the database reported them on mount. */
+  let listedThreads = $state<Thread[]>([])
   let loading = $state(false)
   let requestId = 0
 
@@ -83,12 +89,47 @@
     })
   }
 
+  const projectBuckets = $derived.by(() => {
+    const board = scopeState.boards.get(projectId)
+    return board ? orderedBuckets(board) : []
+  })
+
   /**
    * The project's chats, in the order the project view shows them.
    *
    * Nothing narrows them beyond the exclusions above, and every other chat of the
    * project is a destination: an annotation always fits, and a file only fails a
    * row that says so.
+   *
+   * The rows are the ones the sidebar draws, not a second reading of the database:
+   * this window's live thread memory wins over the row the query returned, and the
+   * sidebar's own staging decides the order. That is what keeps a chat holding
+   * unsent composer text in the Todo slice the sidebar lifted it to, instead of
+   * leaving it at the bottom where its last activity put it.
+   */
+  const destinations = $derived.by((): Thread[] => {
+    // This window's snapshot wins for a row it holds: that is the row the sidebar
+    // draws, carrying the draft state committed here rather than the delay of a
+    // database read.
+    const live = scopeState.allScopeThreads.filter((thread) => thread.projectId === projectId)
+    const liveIds = new SvelteSet(live.map((thread) => thread.id))
+    const rows = [...live, ...listedThreads.filter((thread) => !liveIds.has(thread.id))]
+    return orderRelocationDestinations(rows.filter(isDestination), {
+      buckets: projectBuckets,
+      sliceFor: (thread) => ({
+        bucketId: scopeState.bucketForThread(thread),
+        stage: scopeState.stageForThread(thread)
+      })
+    })
+  })
+
+  /**
+   * Load the project's chats once, then let the live thread memory keep the list
+   * current.
+   *
+   * Deliberately not reactive: the destination list reads the memory this window
+   * already holds, so re-asking the database on every draft or status change
+   * would be one round trip per keystroke elsewhere in the app.
    */
   $effect(() => {
     const request = ++requestId
@@ -99,21 +140,29 @@
     void invoke('thread:list', projectId)
       .then((result) => {
         if (request !== requestId) return
-        // The list arrives in the project view's own order   pinned first, then
-        // the order the sidebar shows   so the picker never re-sorts it.
-        threads = result.filter(isDestination)
-        logRendererDev(`[relocation] picker listed ${threads.length} destinations`)
+        listedThreads = result
         loading = false
+        logRendererDev(
+          `[relocation] picker listed ${destinations.length} destinations of ${result.length} rows`
+        )
       })
       .catch(() => {
         if (request !== requestId) return
-        threads = []
+        listedThreads = []
         loading = false
       })
   })
 
+  // One mount, one carry: a project's scope board is cached for whichever project
+  // the user activated last, so the scopes the order is read from are warmed here
+  // rather than inside the effect above, which never asks the database twice.
+  onMount(() => {
+    void scopeState.ensureBoardLoaded(projectId).catch(() => undefined)
+    void scopeState.ensureProjectThreadsLoaded(projectId).catch(() => undefined)
+  })
+
   const actions = $derived<ActionDefinition[]>(
-    threads.map((thread) => {
+    destinations.map((thread) => {
       const blocked = blockedReason(thread)
       return {
         ...threadPaletteRow({
@@ -128,7 +177,7 @@
   )
 
   function selectThread(selection: ActionSelection): void {
-    const thread = threads.find((candidate) => rowId(candidate.id) === selection.action.id)
+    const thread = destinations.find((candidate) => rowId(candidate.id) === selection.action.id)
     logRendererDev(
       `[relocation] picker selected ${thread?.id ?? 'nothing'} (${selection.action.id})`
     )
@@ -144,11 +193,16 @@
      palette that owns the close closes *before* it reports the pick, and that
      close clears the state the host opened it with. This picker is closed by the
      carry itself, which is the same moment the request is consumed. -->
+<!-- The destination list is the sidebar's own: every chat is reachable without
+     typing, because the palette's default bound draws sixty rows and a project's
+     older chats   the one holding an unsent draft among them   are exactly what
+     fell past it. -->
 {#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
   <CommandPalette
     open
     {title}
     {actions}
+    maxResults={Math.max(actions.length, 1)}
     placeholder={`Search threads to ${mode} into…`}
     emptyLabel={loading
       ? 'Loading threads…'
