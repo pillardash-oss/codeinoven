@@ -454,7 +454,6 @@ export async function createFileEditor(
       line: line.number - 1,
       character: position - line.from,
       word: view.state.sliceDoc(word.from, word.to),
-      text: view.state.doc.toString(),
       x: x || coords?.left || 0,
       y: y || coords?.bottom || 0
     }
@@ -478,7 +477,6 @@ export async function createFileEditor(
           line: 0,
           character: 0,
           word: '',
-          text: view.state.doc.toString(),
           x: 0,
           y: 0
         }
