@@ -3,7 +3,6 @@ import { engineeringStudioVisible } from '$shared/engineering-generation'
 import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
 import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
 import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
-import CioMonogram from '$lib/components/icons/cio/CioMonogram.svelte'
 import { onDestroy, onMount, tick } from 'svelte'
 import { onVoiceComposerReset, onVoiceDraftLanded } from '../../../speech/voice-send'
 import { findNavState } from '$lib/stores/find-nav.svelte'
@@ -65,23 +64,6 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
    * the board's constructor, which the component calls during its own setup,
    * so every effect here is owned by the component.
    */
-  /**
-   * Whether this thread delegated work to a nested sub-agent.
-   *
-   * A nested worker has no thread row, so the transcript's own `subagent` parts
-   * are the only record that delegation happened. The board reads the same parts,
-   * which is what keeps the dock and the list from disagreeing about whether a
-   * thread has anything to show. Pawn parts are excluded here because a pawn
-   * already docks the board through its own thread row.
-   */
-  private hasNestedSubagent(projectId: string, threadId: string): boolean {
-    return threadMessages
-      .messages(projectId, threadId)
-      .some((message) =>
-        message.parts.some((part) => part.type === 'subagent' && part.activity.pawn !== true)
-      )
-  }
-
   init(): void {
     // A trace the reader expanded on a settled turn belongs to the visit that
     // expanded it: opening this thread again starts from the fold each turn asks
@@ -311,9 +293,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           ? 'Assignment coordinator'
           : kind === 'achievement'
             ? 'Achievement coordinator'
-            : kind === 'orchestrator'
-              ? 'Orchestrator'
-              : 'Audit coordinator'
+            : 'Audit coordinator'
       const panel = this.root.contextUsage.coordinatorPanel(kind)
       if (!panel) return
       // No unmount cleanup: publishing is a prop update for the row, and the
@@ -325,13 +305,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         threadId: this.root.currentWorkingTraceAttribution.coordinatorDockThreadId,
         label,
         icon:
-          kind === 'assignment'
-            ? CioNetwork
-            : kind === 'achievement'
-              ? CioTarget
-              : kind === 'orchestrator'
-                ? CioMonogram
-                : CioShieldCheck,
+          kind === 'assignment' ? CioNetwork : kind === 'achievement' ? CioTarget : CioShieldCheck,
         panel
       })
       // Docks itself the first time a thread starts coordinating, unless the user
@@ -355,31 +329,38 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     /**
-     * Keep the pawn board docked on the row that spawned the pawns.
+     * Keep the delegation board docked on the row that started real work.
      *
-     * A pawn runs on a thread of its own and is therefore hidden from the thread
-     * list, so this board is the only place its delegated work is listed. It is
-     * published from the row's own thread memory, which means it appears the
-     * moment the pawn exists and survives a reopen without a second read.
+     * The board lists threads this one created, and only threads: a pawn it spawned
+     * for itself, which is hidden from the thread list, and a run it dispatched into
+     * any project. A nested sub-agent is not one of them, so it neither docks this
+     * board nor appears in it: a sub-agent has no thread of its own and is reached
+     * from the trace of the turn that spawned it.
      *
-     * A row already carrying an orchestration board keeps it: one row docks one
+     * Both kinds are published from data the row already holds, which is what makes
+     * the board appear the moment the work exists and survive a reopen without a
+     * second read. A row that carries a workflow board keeps it: one row docks one
      * coordinator, and the workflow board is the more specific of the two.
      */
     $effect(() => {
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
       const thread = this.root.handleAgentEvent.thread
       const rowThreadId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
-      const pawnCount = pawnAgentsState.workersOf(rowThreadId).length
-      if (pawnCount === 0 && !this.hasNestedSubagent(thread.projectId, rowThreadId)) return
+      const hasPawns = pawnAgentsState.hasWorkers(rowThreadId)
+      if (!hasPawns && !orchestrationCoordinatorState.hasDispatches(thread.projectId, rowThreadId))
+        return
       coordinatorDockState.register({
         projectId: thread.projectId,
         threadId: rowThreadId,
         label: 'Spawned agents',
         icon: CioSubagent,
-        panel: { component: 'pawn', props: { projectId: thread.projectId, threadId: rowThreadId } }
+        panel: {
+          component: 'delegation',
+          props: { projectId: thread.projectId, threadId: rowThreadId }
+        }
       })
-      // Docks itself the first time a thread delegates work, unless the user closed
-      // it before; later spawns are no-ops because the tab already exists.
+      // Docks itself the first time a thread starts work of its own, unless the user
+      // closed it before; later work is a no-op because the tab already exists.
       if (
         coordinatorDockState.canAutoOpen(thread.projectId, rowThreadId) &&
         !contextSidebarState.hasCoordinator(thread.projectId, rowThreadId)
@@ -403,14 +384,14 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       )
         return
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
-      // A row that delegated work has a coordinator of its own: the spawn board.
+      // A row that started real work has a coordinator of its own: the delegation
+      // board. A nested sub-agent does not dock one, so it does not hold it open.
+      const ownedRowId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
       if (
-        pawnAgentsState.hasWorkers(
-          this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
-        ) ||
-        this.hasNestedSubagent(
+        pawnAgentsState.hasWorkers(ownedRowId) ||
+        orchestrationCoordinatorState.hasDispatches(
           this.root.handleAgentEvent.thread.projectId,
-          this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+          ownedRowId
         )
       )
         return

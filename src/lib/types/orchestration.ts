@@ -1,29 +1,15 @@
 /**
- * The orchestrator board's props, and the change notice its rows listen to.
+ * The delegation board's props: the thread that started the work.
  *
- * The board reads the dispatch ledger itself, so these are only the ids it is
- * published under: the thread that asked for the runs. Nothing about a
- * dispatched run travels through props, because a run is a real thread and the
- * board reads those threads' own rows rather than a description of them.
+ * Like every coordinator board, nothing about a delegated thread travels through
+ * props. A pawn and a dispatched run are real threads the renderer already holds,
+ * so the board is published under the spawner's ids and reads its rows from thread
+ * memory and the dispatch ledger itself.
  */
-export interface OrchestrateCoordinatorPanelProps {
-  /** Project of the thread that asked for the dispatches. */
+export interface DelegationCoordinatorPanelProps {
+  /** Project of the thread that started the work. */
   projectId: string
-  /** That thread: the board lists the dispatches it started. */
-  threadId: string
-}
-
-/**
- * The pawn board's props: the thread that spawned the pawn agents.
- *
- * Like the orchestrator board, nothing about a pawn travels through props. A pawn
- * is a real thread the renderer already holds, so the board is published under
- * the spawner's ids and reads the rows from thread memory itself.
- */
-export interface PawnCoordinatorPanelProps {
-  /** Project of the thread that spawned the pawns. */
-  projectId: string
-  /** That thread: the board lists the pawn threads it owns. */
+  /** That thread: the board lists what it started. */
   threadId: string
 }
 

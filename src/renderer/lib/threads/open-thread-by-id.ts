@@ -22,10 +22,14 @@ import { workspaceState } from '$lib/stores/workspace.svelte'
  * resolved looks like a button that does nothing, and every path that ends
  * nowhere is reported so the log names the id that failed instead of leaving a
  * dead click unexplained.
+ *
+ * Returns whether the thread is now open. A caller that has to leave the view it
+ * is on (a deleted thread it can no longer show) needs that answer to know
+ * whether the reveal worked, instead of blanking the view and hoping.
  */
-export async function openThreadById(projectId: string, threadId: string): Promise<void> {
+export async function openThreadById(projectId: string, threadId: string): Promise<boolean> {
   const selected = workspaceState.selectedThread
-  if (selected?.projectId === projectId && selected.id === threadId) return
+  if (selected?.projectId === projectId && selected.id === threadId) return true
   try {
     const [project, thread] = await Promise.all([
       invoke('project:get', projectId),
@@ -33,12 +37,12 @@ export async function openThreadById(projectId: string, threadId: string): Promi
     ])
     if (!thread) {
       logRendererError(`Could not reveal thread ${threadId}: no thread ${threadId} in ${projectId}`)
-      return
+      return false
     }
     const openFromNotification = workspaceState.openThreadFromNotification
     if (!project || !openFromNotification) {
       workspaceState.openThread(thread, project)
-      return
+      return true
     }
     try {
       await openFromNotification(thread, project)
@@ -49,10 +53,12 @@ export async function openThreadById(projectId: string, threadId: string): Promi
       logRendererError(`Could not open thread ${threadId} in its own view`, error)
       workspaceState.openThread(thread, project)
     }
+    return true
   } catch (error) {
     // A deleted thread or a failed lookup must not dead-end the caller: the
     // surface stays where it is and the user can retry, and the failure is in the
     // log for whoever has to explain why the button did nothing.
     logRendererError(`Could not reveal thread ${threadId} in project ${projectId}`, error)
+    return false
   }
 }

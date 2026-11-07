@@ -341,8 +341,20 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     if (!deleted) return
     const coordinatorThreadId =
       deleted.achievementRole === 'auditor' ? deleted.coordinatorThreadId : undefined
+    // Move to the coordinator first, without clearing the selection: clearing it
+    // deactivates the context sidebar, which is the panel that holds the way
+    // back to the Sr. Engineer, so the user came back to an auditor thread with
+    // its coordinator panel gone. Only a reveal that could not happen hands the
+    // shell back to the empty state it would have shown anyway.
+    if (coordinatorThreadId) {
+      void openThreadById(projectId, coordinatorThreadId).then((opened) => {
+        if (!opened && workspaceState.selectedThread?.id === threadId) {
+          workspaceState.clearThread()
+        }
+      })
+      return
+    }
     workspaceState.clearThread()
-    if (coordinatorThreadId) void openThreadById(projectId, coordinatorThreadId)
   })
   // The spotlight's ranking by meaning is computed after its keyword rows land;
   // the open panel takes the merged ranking from here.

@@ -8,7 +8,8 @@
   import Dock from '#lib/components/Dock.svelte'
   import NewThreadSheet from '#lib/components/NewThreadSheet.svelte'
   import { DOUBLE_TAP_MS, planNewThread, startNewThread } from '#lib/new-thread'
-  import { isPanel, showsDock } from '#lib/navigation'
+  import { showsDock, screenMotion } from '#lib/navigation'
+  import { prefersLessMotion, SCREEN_MOTION } from '#lib/motion'
   import { appearance } from '#lib/stores/appearance.svelte'
   import { syncSystemBars } from '#lib/system-bars'
   import '../app.css'
@@ -29,31 +30,50 @@
    * A screen change follows the direction it was opened from. Panels are the root,
    * a conversation is one step under the list it was opened from, and a screen
    * opened from either is one step further, so it pushes in over its parent and
-   * its parent returns the way it came. The browser does the crossfade and the
-   * slide in one snapshot pass, which keeps it off the main thread.
+   * its parent returns the way it came. Moving between two panels runs the way the
+   * dock reads, and the two readings of the work list turn in place.
+   *
+   * The browser snapshots both screens as images and animates those, so the slide
+   * costs no layout and nothing in either screen can reflow. Which animation each
+   * snapshot gets travels as an inherited custom property: ancestor-qualified
+   * selectors never reach the view-transition pseudo-elements, so a data attribute
+   * on the document could not choose them.
    */
-  function depth(path: string): number {
-    if (path === '/sign-in') return 0
-    if (isPanel(path)) return 1
-    return /^\/threads\/[^/]+$/.test(path) ? 2 : 3
-  }
-
-  function reduced(): boolean {
-    return globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-  }
-
   onNavigate((navigation) => {
-    if (!document.startViewTransition || reduced()) return
+    if (!document.startViewTransition || prefersLessMotion()) return
     const from = navigation.from?.url.pathname ?? ''
     const to = navigation.to?.url.pathname ?? ''
-    const forward = depth(to) > depth(from)
-    const back = depth(to) < depth(from)
-    document.documentElement.dataset.nav = forward ? 'forward' : back ? 'back' : 'swap'
+    const motion = screenMotion(from, to)
+    if (motion === 'none') return
+    const plan = SCREEN_MOTION[motion]
+
+    const root = document.documentElement
+    root.style.setProperty('--screen-in', plan.in)
+    root.style.setProperty('--screen-out', plan.out)
+    root.style.setProperty('--screen-ms', `${plan.ms}ms`)
+    root.style.setProperty('--screen-ease', plan.ease)
+    // A second change can start before this one has finished, and it owns the
+    // properties by then, so the slower transition only clears what is still its
+    // own.
+    const clear = (): void => {
+      if (root.style.getPropertyValue('--screen-in') !== plan.in) return
+      root.style.removeProperty('--screen-in')
+      root.style.removeProperty('--screen-out')
+      root.style.removeProperty('--screen-ms')
+      root.style.removeProperty('--screen-ease')
+    }
+
     return new Promise<void>((resolve) => {
-      document.startViewTransition(async () => {
+      const transition = document.startViewTransition(async () => {
         resolve()
-        await navigation.complete
+        try {
+          await navigation.complete
+        } catch {
+          // A navigation the reader abandoned before it landed has no new screen
+          // to draw, and the frame it left behind is already gone.
+        }
       })
+      void transition.finished.then(clear, clear)
     })
   })
 
