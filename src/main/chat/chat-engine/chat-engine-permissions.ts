@@ -553,7 +553,16 @@ export class ChatEnginePermissions {
     //    access is the gate; a network or tool card there contradicts the prompt
     //    the same session was given and parks a run the user asked for.
     const appOwnedTool = appGatewayToolCall(request.metadata)
-    const chatNonFile = chatScope && !FILE_SYSTEM_PERMISSIONS.has(request.permission)
+    // What makes a request file access is what it acts on, not the word the
+    // harness used for it: a web search arrives labelled `read` from some agents,
+    // and a file read always carries the path it will open (a shell command
+    // always carries the command line).
+    const touchesFiles = request.patterns.length > 0 || commands.length > 0
+    const chatNonFile =
+      chatScope &&
+      !touchesFiles &&
+      request.permission !== 'bundled-pi-sensitive-files' &&
+      !FILE_SYSTEM_PERMISSIONS.has(request.permission)
     if ((appOwnedTool !== undefined || chatNonFile) && !policy.approved) {
       const reason =
         appOwnedTool !== undefined

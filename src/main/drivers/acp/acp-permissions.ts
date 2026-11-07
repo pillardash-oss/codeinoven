@@ -12,6 +12,9 @@ import {
   type AcpToolCallKind
 } from './acp-protocol'
 
+/** Titles that name work on the network rather than on a file. */
+const WEB_TOOL_TITLE = /\b(?:web|internet|http|url|browse|search|fetch|download|upload)\b/iu
+
 /** One `session/request_permission` awaiting the user's decision. */
 export interface AcpPendingPermission {
   requestId: string
@@ -25,6 +28,10 @@ export function acpPermissionCategory(
   kind: AcpToolCallKind | undefined,
   title: string | undefined
 ): string {
+  // An agent may label a web tool `read` (it reads the web) or leave the kind
+  // empty. The title is what says the request leaves this machine, and a
+  // mislabelled one reaches the app as file access and parks a chat on a card.
+  if (WEB_TOOL_TITLE.test(title ?? '')) return 'network'
   switch (kind) {
     case 'execute':
       return 'bash'
