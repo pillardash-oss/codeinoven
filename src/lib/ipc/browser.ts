@@ -83,6 +83,16 @@ export interface BrowserPopupWindow {
    */
   extensionId: string | null
   /**
+   * Whether this is a window the extension asked the app for, rather than the
+   * action popup a click on its icon opens.
+   *
+   * The distinction matters to whatever is presenting the page: an action popup
+   * belongs to the extension's icon and is replaced by the next click on it, while
+   * a window the extension asked for belongs to the request that opened it   a
+   * passkey prompt, for instance   and has to be brought to the front on its own.
+   */
+  windowRequested: boolean
+  /**
    * The size an extension's own popup asked for by laying its document out, in
    * density-independent pixels, or null while it has not reported one.
    *
@@ -177,6 +187,20 @@ export interface BrowserThreadBrowserPage {
   boxId: string | null
   /** The address the tab is on, or the empty string for a blank tab. */
   url: string
+}
+
+/**
+ * A browser tab one conversation's agent has claimed.
+ *
+ * A claim is what the tab strip reads to say which thread is working on a tab: the
+ * tab an agent opened for itself and the page a conversation was assigned are both
+ * claimed for that conversation, and nothing else is.
+ */
+export interface BrowserAgentTabClaim {
+  tabId: string
+  projectId: string
+  /** The thread whose agent holds this tab. */
+  threadId: string
 }
 
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */
@@ -332,6 +356,10 @@ export type BrowserTransportCommand =
  * The descriptor is what the model reads, so it carries identity (selector, id,
  * classes, ancestors), a little text, and a clipped opening tag: enough to find
  * the element in the source without shipping the whole subtree to the prompt.
+ * It also carries the page state the pick was made in through `page` and
+ * `presented`, so a comment about a cramped column or a broken state is read
+ * against the exact URL, scroll offset, zoom and framed layout it was written at
+ * rather than against whatever the design looks like when the agent opens it.
  */
 export interface BrowserInspectorTarget {
   /** CSS path from the nearest ancestor with a unique id, or from the body. */
@@ -366,12 +394,110 @@ export interface BrowserInspectorTarget {
    * cramped" as a phone-width problem instead of asking which size it was.
    */
   viewport: BrowserInspectorViewport
+  /**
+   * The document the element lives in, as the reader was looking at it.
+   *
+   * A selector says which element; this says which page state. Together with the
+   * scroll offset and the framed screen's presentation it is what makes a comment
+   * land on one exact render of one exact page instead of on a lookalike.
+   */
+  page: BrowserInspectorPage
+  /**
+   * How a framed screen is drawn inside the page that frames it, or null when the
+   * element is in the page itself.
+   *
+   * A Screen Canvas scales each screen to fit, so a comment about a button being
+   * too small can be about the screen's own layout or about the canvas drawing it
+   * at half size. The scale and the frame's box are what tell the two apart.
+   */
+  presented: BrowserInspectorPresentation | null
+  /**
+   * The attributes that name the element steadily, where a CSS path is only a
+   * place in one rendered tree.
+   *
+   * A row rendered from a list, or a dialog opened a second time, keeps its
+   * `data-testid`, `name` or `aria-label` while its `nth-of-type` path can change.
+   * Only attributes actually present are listed; an element with none reports an
+   * empty record rather than a guessed name.
+   */
+  identity: Record<string, string>
+  /**
+   * The state attributes the element itself carried at pick time.
+   *
+   * `open`, `aria-expanded`, `aria-pressed`, `disabled`, `hidden` and the rest say
+   * what the element was doing when the comment was written: a note about a closed
+   * disclosure or a pressed toggle means something different from the same note on
+   * the opposite state.
+   */
+  state: Record<string, string>
+  /**
+   * The transient surface that had to be open for the element to exist at all.
+   *
+   * The contents of a dialog, menu, popover or tooltip are not in the page the
+   * agent finds when it reads the source: the comment is about a state, and this
+   * names the surface and the state it was in, so the same render can be reached
+   * again rather than explained away.
+   */
+  surface: BrowserInspectorSurface | null
+  /**
+   * How many elements the selector matches in its own document.
+   *
+   * One means the path names this element exactly. More than one means it names a
+   * shape (every row of a list), and the element has to be found by its identity
+   * attributes or its own content instead of by the path alone.
+   */
+  matches: number
+}
+
+/** One transient surface (dialog, menu, popover, tooltip) an element lives in. */
+export interface BrowserInspectorSurface {
+  /** CSS path of the surface in its document. */
+  selector: string
+  /** `dialog#settings`, the short form for a label. */
+  name: string
+  /** The state attributes the surface carried, e.g. `{ open: 'true' }`. */
+  state: Record<string, string>
 }
 
 /** The page's viewport size in CSS pixels. */
 export interface BrowserInspectorViewport {
   width: number
   height: number
+}
+
+/**
+ * The page state one pick was made in.
+ *
+ * Everything here is read from the document the element belongs to, so a pick
+ * inside a Screen Canvas frame describes that screen's own page rather than the
+ * canvas around it.
+ */
+export interface BrowserInspectorPage {
+  /** Full URL of the document, query string and hash included. */
+  url: string
+  /** The document's title, which names a page a URL alone does not. */
+  title: string
+  /** The colour scheme the page was rendered in, which a contrast note depends on. */
+  scheme: 'light' | 'dark'
+  /** Scroll offset of the document at pick time, in CSS pixels. */
+  scroll: { x: number; y: number }
+  /** Full scrollable size of the document, so a scroll offset can be placed. */
+  extent: { width: number; height: number }
+  /**
+   * Device pixels per CSS pixel, which folds browser and page zoom into one
+   * number: 2 means the page was laid out at half the physical pixel width.
+   */
+  devicePixelRatio: number
+  /** Pinch-zoom scale of the visual viewport, 1 when the reader has not pinched. */
+  visualScale: number
+}
+
+/** How one framed screen is drawn inside the page that frames it. */
+export interface BrowserInspectorPresentation {
+  /** Scale the screen is drawn at, 1 when it is shown at its own size. */
+  scale: number
+  /** Where the screen's frame sits in the outer page, in CSS pixels. */
+  rect: BrowserInspectorRect
 }
 
 /** A viewport rectangle in CSS pixels. */

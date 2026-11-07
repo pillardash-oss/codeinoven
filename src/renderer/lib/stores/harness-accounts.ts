@@ -1,4 +1,5 @@
 import { invoke } from '$lib/ipc.svelte'
+import { registerAppControlRevalidation } from '$lib/app-control/app-control-revalidation'
 import type { HarnessAccount } from '$shared/types'
 import { SvelteMap } from 'svelte/reactivity'
 
@@ -72,6 +73,25 @@ class HarnessAccountCache {
     await invoke('providerAccounts:activate', account.id)
   }
 
+  /**
+   * Hide an account from the pickers that offer one, or restore it.
+   *
+   * The registry answers with the updated row, so the cache swaps that entry in
+   * place instead of invalidating: every picker reading the cached list drops or
+   * regains the account immediately, and the rest of the list keeps its order.
+   */
+  async setHidden(account: HarnessAccount, hidden: boolean): Promise<HarnessAccount> {
+    const updated = await invoke('providerAccounts:setAccountHidden', account.id, hidden)
+    const cached = this.cache.get(account.harnessId)
+    if (cached) {
+      this.cache.set(account.harnessId, {
+        accounts: cached.accounts.map((entry) => (entry.id === updated.id ? updated : entry)),
+        expiresAt: cached.expiresAt
+      })
+    }
+    return updated
+  }
+
   /** Reconcile account registries whenever the matching model catalogs refresh. */
   async refreshHarnesses(harnessIds: Iterable<string>, force = false): Promise<void> {
     const targets = [...new Set(harnessIds)]
@@ -91,3 +111,11 @@ class HarnessAccountCache {
 }
 
 export const harnessAccountCache = new HarnessAccountCache()
+
+// Accounts added, renamed, hidden or made default through app control wrote the
+// registry in main. The cache is what every account picker reads, so it is told
+// to re-ask rather than keeping the set and the default it read before.
+registerAppControlRevalidation({
+  channels: ['providerAccounts:'],
+  refresh: () => harnessAccountCache.invalidate()
+})

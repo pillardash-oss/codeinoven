@@ -1,3 +1,4 @@
+import type { WebContents } from 'electron'
 import type { PermissionLevel } from '../../../lib/types'
 import {
   browserActionTargetScript,
@@ -7,17 +8,21 @@ import {
 import {
   agentCheckScript,
   agentEvaluateScript,
+  agentFieldValueScript,
   agentFocusScript,
   agentHitTestScript,
   agentScrollScript,
   agentSelectScript,
+  agentPrepareTypingScript,
   agentSnapshotScript,
   agentTypeScript,
-  agentWaitScript
+  agentWaitScript,
+  BROWSER_WAIT_MAX_TIMEOUT_MS
 } from './browser-agent-page'
 import {
   agentCount,
   dragAgentMouse,
+  MAX_TYPED_KEYSTROKES,
   normalizeAgentModifiers,
   pressAgentKey,
   sendAgentMouse
@@ -64,11 +69,15 @@ export interface AgentUtilityHost {
   readonly agentPointFrom: BrowserService['agentPointFrom']
   readonly agentSelector: BrowserService['agentSelector']
   readonly agentSignedNumber: BrowserService['agentSignedNumber']
+  readonly agentTabClaims: BrowserService['agentTabClaims']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentTargetChanged: BrowserService['agentTargetChanged']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
+  readonly boxOfExistingTab: BrowserService['boxOfExistingTab']
+  readonly closeUnreferencedAgentTabs: BrowserService['closeUnreferencedAgentTabs']
   readonly captureScreenshot: BrowserService['captureScreenshot']
   readonly clickAgentTarget: BrowserService['clickAgentTarget']
+  readonly conversationBoxFor: BrowserService['conversationBoxFor']
   readonly conversationScope: BrowserService['conversationScope']
   readonly ensureTab: BrowserService['ensureTab']
   readonly isRelaxed: BrowserService['isRelaxed']
@@ -83,6 +92,8 @@ export interface AgentUtilityHost {
   readonly runAgentScript: BrowserService['runAgentScript']
   readonly stage: BrowserService['stage']
   readonly stateFor: BrowserService['stateFor']
+  readonly tabs: BrowserService['tabs']
+  readonly previousPageTarget: BrowserService['previousPageTarget']
   readonly threadBrowserHint: BrowserService['threadBrowserHint']
   readonly touchParkedTab: BrowserService['touchParkedTab']
   readonly uploadFiles: BrowserService['uploadFiles']
@@ -135,18 +146,35 @@ export class BrowserServiceAgentUtility {
     const projectId = validateProjectId(context.projectId)
     const threadId = validateThreadId(context.threadId)
     const contextKey = browserContextKey(projectId, threadId)
-    const scope = this.host.conversationScope(projectId, threadId)
     if (operation === 'open') {
       const url = validateBrowserUrl(this.host.requiredInputString(input, 'url'))
       const attention = validateAttention(input['attention'])
-      const tabId = `browser:agent:${crypto.randomUUID()}`
-      const tab = this.host.ensureTab(tabId, projectId, threadId)
+      // One agent tab per conversation. A research turn opens several pages, and
+      // minting a tab for each one left a renderer process behind every time:
+      // 154 processes and 7.8 GB in a five hour session. The tab this
+      // conversation already owns is navigated instead.
+      const existing = this.host.agentTabIds.get(contextKey) ?? null
+      const reused = existing !== null && this.host.tabs.has(existing)
+      const tabId = reused && existing ? existing : `browser:agent:${crypto.randomUUID()}`
+      const tab = this.host.ensureTab(
+        tabId,
+        projectId,
+        threadId,
+        this.host.conversationBoxFor(projectId, threadId) ?? this.host.boxOfExistingTab(tabId)
+      )
       tab.initialNavigationStarted = true
       // Mount the tab offscreen before anything else: the page must run whether
       // or not the user ends up looking at it.
-      this.host.parkTab(tabId)
+      if (!reused) this.host.parkTab(tabId)
+      else if (this.host.activeTabId !== tabId && !this.host.stage.isParked(tab.view)) {
+        // The parked cap can drop a view off the stage window without freeing it,
+        // so a reused tab is mounted again before it navigates.
+        this.host.parkTab(tabId)
+      }
       this.host.load(tabId, url)
       this.host.agentTabIds.set(contextKey, tabId)
+      this.publishAgentClaims()
+      this.host.closeUnreferencedAgentTabs(contextKey)
       // An opportunistic reveal is skipped once the user has shown twice that
       // they leave agent-opened tabs straight away.
       const relaxed = attention === 'focus' && this.host.isRelaxed(threadId)
@@ -165,12 +193,12 @@ export class BrowserServiceAgentUtility {
         attention: reveal ? 'focus' : 'background',
         relaxed,
         page: this.host.stateFor(tabId, tab),
-        ...this.host.threadBrowserHint(scope, tabId, contextKey)
+        ...this.host.threadBrowserHint(projectId, threadId, tabId, contextKey)
       }
     }
 
     const page = validateUtilityPage(input['page'])
-    const target = this.host.utilityTarget({ scope, threadId, contextKey, page })
+    const target = this.host.utilityTarget({ projectId, threadId, contextKey, page })
     if (!target) {
       // The conversation's browser holding a page this process has not mounted, or
       // a browser conversation's bound page that is not in memory right now, is
@@ -185,6 +213,9 @@ export class BrowserServiceAgentUtility {
               : 'Open a browser page before using this operation'
       )
     }
+    // The strip names the thread behind a tab from this, so it is published the
+    // moment an agent takes one, not when the tab's page happens to change.
+    this.publishAgentClaims()
     const { tabId, tab, attached } = target
     if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
@@ -214,7 +245,7 @@ export class BrowserServiceAgentUtility {
           ...this.host.utilityTabContext(tabId, tab),
           page: attached ? 'user' : 'agent',
           cancelled: true,
-          ...this.host.threadBrowserHint(scope, tabId, contextKey)
+          ...this.host.threadBrowserHint(projectId, threadId, tabId, contextKey)
         }
       }
       reviewedTarget = reviewed.target
@@ -235,7 +266,8 @@ export class BrowserServiceAgentUtility {
       // Which page the answer came from, so the agent can tell a page it opened
       // apart from the page the user is reading.
       page: attached ? ('user' as const) : ('agent' as const),
-      ...this.host.threadBrowserHint(scope, tabId, contextKey)
+      ...this.movedPageHint(contextKey, tabId),
+      ...this.host.threadBrowserHint(projectId, threadId, tabId, contextKey)
     }
     if (operation === 'viewport') {
       const viewport = validateViewportRequest(
@@ -254,7 +286,7 @@ export class BrowserServiceAgentUtility {
         viewport,
         applied: 'displayed',
         detail:
-          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport applies the next time the tab is parked, unless the user displays it at a size of their own after this request.'
+          'The user is viewing this tab, so it is laid out at the on-screen size right now. This viewport holds until you change it, and it is the size the page renders at the next time the tab is offscreen, however the user had it on screen.'
       }
     }
     if (operation === 'navigate') {
@@ -306,11 +338,12 @@ export class BrowserServiceAgentUtility {
           result: { typed: false, reason: 'target changed; inspect the page and retry' }
         }
       }
-      const result = await this.host.runAgentScript(
-        contents,
-        agentTypeScript({ selector, text, append: input['append'] === true })
-      )
-      await this.host.paintAgentCursorAtElement(tab, selector, false)
+      const result = await this.typeWithKeys(contents, {
+        selector,
+        text,
+        append: input['append'] === true
+      })
+      await this.host.paintAgentCursorAtElement(tab, selector)
       if (input['submit'] === true) {
         await pressAgentKey(contents, { key: 'Enter', modifiers: [], times: 1 })
       }
@@ -327,7 +360,7 @@ export class BrowserServiceAgentUtility {
             result: { pressed: false, reason: 'the target could not be focused', detail: focused }
           }
         }
-        await this.host.paintAgentCursorAtElement(tab, selector, false)
+        await this.host.paintAgentCursorAtElement(tab, selector)
       }
       const result = await pressAgentKey(contents, {
         key: this.host.requiredInputString(input, 'key'),
@@ -417,8 +450,7 @@ export class BrowserServiceAgentUtility {
         deltaY: this.host.agentSignedNumber(input['deltaY'], 0),
         modifiers: normalizeAgentModifiers(input['modifiers'])
       })
-      const pressed = action === 'click' || action === 'down'
-      await this.host.paintAgentCursor(tab, point, pressed)
+      await this.host.paintAgentCursor(tab, point)
       return {
         ...utilityContext,
         result: { action, x: point.x, y: point.y, button, trusted: true }
@@ -430,7 +462,7 @@ export class BrowserServiceAgentUtility {
       const to = await this.host.agentPointFrom(input, tab, 'to')
       const modifiers = normalizeAgentModifiers(input['modifiers'])
       const result = await dragAgentMouse(contents, { from, to, modifiers })
-      await this.host.paintAgentCursor(tab, to, true)
+      await this.host.paintAgentCursor(tab, to)
       return { ...utilityContext, result: { ...result, from, to, trusted: true } }
     }
     if (operation === 'wait') {
@@ -444,7 +476,13 @@ export class BrowserServiceAgentUtility {
             : {}),
           ...(input['gone'] === true ? { gone: true } : {}),
           ...(input['visible'] === false ? { visible: false } : {}),
-          timeoutMs: this.host.agentBoundedNumber(input['timeoutMs'], 5000, 0, 30000)
+          ...(input['changed'] === true ? { changed: true } : {}),
+          timeoutMs: this.host.agentBoundedNumber(
+            input['timeoutMs'],
+            5000,
+            0,
+            BROWSER_WAIT_MAX_TIMEOUT_MS
+          )
         })
       )
       return { ...utilityContext, result }
@@ -470,7 +508,103 @@ export class BrowserServiceAgentUtility {
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
   }
 
+  /** Tell the renderer which tabs agents are on, so a tab can name its thread. */
+  private publishAgentClaims(): void {
+    sendToRenderer(
+      liveWindowContents(this.host.window),
+      'browser:agentTabClaimsChanged',
+      this.host.agentTabClaims()
+    )
+  }
+
   /** Route a browser action through the ledger and confirm consequential effects. */
+  /**
+   * Type the way a hand would: focus the field, then send the text as keystrokes.
+   *
+   * A page distinguishes a script from a keyboard, so a field written through its value
+   * setter never fires the `keydown` a search-as-you-type box, a shortcut handler or a
+   * rich editor listens for. The text therefore goes in as real key sequences, up to
+   * {@link MAX_TYPED_KEYSTROKES} characters; anything longer, and any text with a line
+   * break (Enter submits the form it is typed into), is inserted in one step instead,
+   * and the result says which happened.
+   */
+  private async typeWithKeys(
+    contents: WebContents,
+    request: { selector: string; text: string; append: boolean }
+  ): Promise<Record<string, unknown>> {
+    const prepared = asObject(
+      await this.host.runAgentScript(contents, agentPrepareTypingScript(request))
+    )
+    if (prepared?.['ok'] !== true) {
+      return { typed: false, reason: prepared?.['reason'] ?? 'element is not editable' }
+    }
+    const typedWithKeys = !/[\r\n]/u.test(request.text)
+      ? request.text.slice(0, MAX_TYPED_KEYSTROKES)
+      : ''
+    const remainder = request.text.slice(typedWithKeys.length)
+    for (const character of typedWithKeys) {
+      await pressAgentKey(contents, { key: character, modifiers: [], times: 1 })
+    }
+    if (remainder.length > 0) {
+      // Keys already replaced the prepared selection, so only the rest of the text has
+      // to append. When no key was sent (a line break, or an empty text that clears the
+      // field) the insert carries the caller's own append flag instead.
+      await this.host.runAgentScript(
+        contents,
+        agentTypeScript({
+          selector: request.selector,
+          text: remainder,
+          append: request.append || typedWithKeys.length > 0
+        })
+      )
+    }
+    const read = asObject(
+      await this.host.runAgentScript(contents, agentFieldValueScript(request.selector))
+    )
+    const expected =
+      (request.append ? Number(prepared['previousLength'] ?? 0) : 0) + request.text.length
+    const length = Number(read?.['length'] ?? 0)
+    return {
+      typed: true,
+      mode: typedWithKeys.length === request.text.length ? 'keys' : 'inserted',
+      keystrokes: typedWithKeys.length,
+      inserted: remainder.length,
+      applied: length === expected,
+      length,
+      value: read?.['value'] ?? '',
+      ...(length === expected
+        ? {}
+        : {
+            reason: 'the field did not keep the text it was given; check its type or its validation'
+          })
+    }
+  }
+
+  /**
+   * Say so when the page moved between two calls.
+   *
+   * A conversation's page is the tab the user handed it, so the user pointing that
+   * conversation's strip at another tab legitimately moves it. The one thing that must
+   * never happen is a model typing into a different site without being told, which is
+   * why the tab this call did not want is named in its result instead of silently
+   * replacing the last one.
+   */
+  private movedPageHint(
+    contextKey: string,
+    answeredTabId: string
+  ): { pageMoved?: { fromTabId: string; fromUrl: string; detail: string } } {
+    const previous = this.host.previousPageTarget(contextKey)
+    if (!previous || previous.tabId === answeredTabId) return {}
+    return {
+      pageMoved: {
+        fromTabId: previous.tabId,
+        fromUrl: previous.url,
+        detail:
+          'The page this call worked on is not the one the previous call worked on: the user pointed this conversation at another tab. Read the page before acting again, or open a page of your own with "open" and use page "agent" to keep one of your own.'
+      }
+    }
+  }
+
   async approveAttachedPageOperation(
     operation: string,
     input: Record<string, unknown>,

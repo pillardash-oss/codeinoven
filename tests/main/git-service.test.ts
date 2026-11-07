@@ -25,12 +25,32 @@ async function commitAll(directory: string, message: string): Promise<void> {
   await repo.commit(message)
 }
 
+/**
+ * Every fixture repo carries its own commit identity.
+ *
+ * A GitHub runner has no `~/.gitconfig`, so a commit that falls back to the
+ * machine's ambient `user.name`/`user.email` dies with "Author identity
+ * unknown" there while passing on a developer machine. Local `git config`
+ * keeps the suite independent of whatever identity the host happens to have.
+ */
+async function configureIdentity(directory: string): Promise<void> {
+  const repo = simpleGit(directory)
+  await repo.addConfig('user.name', 'CodeInOven Test')
+  await repo.addConfig('user.email', 'test@codeinoven.invalid')
+}
+
+async function initializeRepository(service: GitService, directory: string): Promise<void> {
+  await service.initialize(directory)
+  await configureIdentity(directory)
+}
+
 describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('reports a clean status for an initialized repository', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
 
-    const initial = await service.initialize(directory)
+    await initializeRepository(service, directory)
+    const initial = await service.getStatus(directory)
     expect(initial.clean).toBe(true)
     expect(initial.changes).toHaveLength(0)
 
@@ -44,7 +64,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('stages, unstages, and commits files', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
 
     await writeFile(join(directory, 'a.txt'), 'a\n', 'utf-8')
     await writeFile(join(directory, 'b.txt'), 'b\n', 'utf-8')
@@ -69,7 +89,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('reports a unified diff for a modified file', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'diff.txt'), 'line one\nline two\n', 'utf-8')
     await commitAll(directory, 'initial')
 
@@ -84,7 +104,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('lists branches and tracks the current branch', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'file.txt'), 'hello\n', 'utf-8')
     await commitAll(directory, 'initial')
 
@@ -99,7 +119,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('rejects paths that escape the repository root', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await expect(service.getDiff(directory, '../outside.txt', false)).rejects.toThrow(
       'Repository path escapes the project root'
     )
@@ -108,7 +128,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('reads and writes a repo-local identity', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
 
     const after = await service.setIdentity(directory, 'Test User', 'test@example.com')
     expect(after.configured).toBe(true)
@@ -131,7 +151,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
     const bare = await temporaryDirectory('codeinoven-git-remote-bare')
     const service = new GitService()
 
-    await service.initialize(working)
+    await initializeRepository(service, working)
     await writeFile(join(working, 'feature.txt'), 'feature\n', 'utf-8')
     await service.stage(working, ['feature.txt'])
     await service.commit(working, 'feature commit')
@@ -158,7 +178,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
     const bare = await temporaryDirectory('codeinoven-git-ahead-bare')
     const service = new GitService()
 
-    await service.initialize(working)
+    await initializeRepository(service, working)
     await writeFile(join(working, 'a.txt'), 'a\n', 'utf-8')
     await service.stage(working, ['a.txt'])
     await service.commit(working, 'first')
@@ -192,7 +212,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('removes a remote', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await service.addRemote(directory, 'origin', 'https://example.com/repo.git')
     await service.addRemote(directory, 'upstream', 'https://example.com/upstream.git')
     const afterRemove = await service.removeRemote(directory, 'upstream')
@@ -202,7 +222,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('surfaces merge conflicts and aborts the merge back to a clean tree', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
     await service.stage(directory, ['conflict.txt'])
     await service.commit(directory, 'base')
@@ -233,7 +253,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('marks a conflicted file resolved once its conflict markers are removed', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
     await service.stage(directory, ['conflict.txt'])
     await service.commit(directory, 'base')
@@ -276,7 +296,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('parses conflict hunks with ours/theirs sides and exact line spans', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
     await service.stage(directory, ['conflict.txt'])
     await service.commit(directory, 'base')
@@ -315,7 +335,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('persists a resolved conflict file and stages it', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'conflict.txt'), 'base\n', 'utf-8')
     await service.stage(directory, ['conflict.txt'])
     await service.commit(directory, 'base')
@@ -360,7 +380,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('reports binary and missing conflict files without parsing', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'plain.txt'), 'plain\n', 'utf-8')
     await service.stage(directory, ['plain.txt'])
     await service.commit(directory, 'plain')
@@ -373,7 +393,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('leaves non-conflicted paths untouched during resolution', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'plain.txt'), 'hello\n', 'utf-8')
     await service.stage(directory, ['plain.txt'])
     await service.commit(directory, 'plain')
@@ -389,7 +409,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('surfaces rebase conflicts and aborts the rebase', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'rebase.txt'), 'base\n', 'utf-8')
     await service.stage(directory, ['rebase.txt'])
     await service.commit(directory, 'base')
@@ -419,7 +439,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('stashes dirty changes and restores a clean tree', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'keep.txt'), 'keep\n', 'utf-8')
     await service.stage(directory, ['keep.txt'])
     await service.commit(directory, 'keep')
@@ -437,7 +457,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('adds ignored paths to .gitignore and drops them from status', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'keep.txt'), 'keep\n', 'utf-8')
     await service.stage(directory, ['keep.txt'])
     await service.commit(directory, 'keep')
@@ -460,7 +480,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('discards working-tree changes and deletes untracked files', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'tracked.txt'), 'original\n', 'utf-8')
     await service.stage(directory, ['tracked.txt'])
     await service.commit(directory, 'initial')
@@ -478,7 +498,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('deletes a commit by dropping it from history and replaying later commits', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     for (const [name, content] of [
       ['a', 'one\n'],
       ['b', 'two\n'],
@@ -503,7 +523,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('stashes only the paths given when a subset is requested', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'a.txt'), 'a\n', 'utf-8')
     await writeFile(join(directory, 'b.txt'), 'b\n', 'utf-8')
     await service.stage(directory, ['a.txt', 'b.txt'])
@@ -525,7 +545,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
     const bare = await temporaryDirectory('codeinoven-git-token-bare')
     const service = new GitService()
 
-    await service.initialize(working)
+    await initializeRepository(service, working)
     await writeFile(join(working, 'a.txt'), 'a\n', 'utf-8')
     await service.stage(working, ['a.txt'])
     await service.commit(working, 'initial')
@@ -552,7 +572,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('no-ops on empty stage/unstage without invoking git', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     const status = await service.getStatus(directory)
 
     const staged = await service.stage(directory, [])
@@ -566,7 +586,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
     const bare = await temporaryDirectory('codeinoven-git-pull-bare')
     const service = new GitService()
 
-    await service.initialize(working)
+    await initializeRepository(service, working)
     await writeFile(join(working, 'a.txt'), 'a\n', 'utf-8')
     await service.stage(working, ['a.txt'])
     await service.commit(working, 'first')
@@ -578,6 +598,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
     // A peer clone advances the shared remote.
     const clone = await temporaryDirectory('codeinoven-git-pull-clone')
     await simpleGit().clone(bare, clone)
+    await configureIdentity(clone)
     const cloneRepo = simpleGit(clone)
     await writeFile(join(clone, 'b.txt'), 'b\n', 'utf-8')
     await cloneRepo.add('.')
@@ -597,7 +618,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('serializes concurrent mutations per repository without corruption', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
 
     await writeFile(join(directory, 'a.txt'), 'a\n', 'utf-8')
     await writeFile(join(directory, 'b.txt'), 'b\n', 'utf-8')
@@ -620,7 +641,7 @@ describe.skipIf(process.platform === 'win32')('GitService', () => {
   it('surfaces both halves of a staged-and-modified (MM) file', async () => {
     const directory = await temporaryDirectory()
     const service = new GitService()
-    await service.initialize(directory)
+    await initializeRepository(service, directory)
     await writeFile(join(directory, 'mm.txt'), 'v1\n', 'utf-8')
     await service.stage(directory, ['mm.txt'])
 

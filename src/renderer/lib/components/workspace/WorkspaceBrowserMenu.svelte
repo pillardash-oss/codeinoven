@@ -1,6 +1,8 @@
 <script lang="ts">
   import CioCookie from '@pdslng/cio-icon/CioCookie.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {
@@ -25,6 +27,26 @@
   role="menu"
   aria-label="Browser menu"
 >
+  <button
+    type="button"
+    class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs text-danger transition-colors hover:bg-danger/10"
+    role="menuitem"
+    title="Close all browser tabs in this thread and leave one blank tab"
+    onclick={() => void browser.closeAllTabs()}
+  >
+    <CioClose size={14} />
+    <span>Close all tabs</span>
+  </button>
+  <button
+    type="button"
+    class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs text-danger transition-colors hover:bg-danger/10"
+    role="menuitem"
+    title="Close all browser tabs in this thread and close the thread browser"
+    onclick={() => void browser.closeBrowser()}
+  >
+    <CioThreadBrowser size={14} />
+    <span>Close browser</span>
+  </button>
   <button
     type="button"
     class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-xs text-foreground transition-colors hover:bg-elevated"

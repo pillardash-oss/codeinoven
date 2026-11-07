@@ -42,7 +42,7 @@ import {
   textForMessage
 } from './chat-engine-message-text'
 import { assertHarnessRequestCapabilities, traceLeanAgent } from './chat-engine-constants'
-import { TEMPORARY_CHAT_ALLOWED_TOOLS } from './chat-engine-prompts'
+import { TEMPORARY_CHAT_ALLOWED_TOOLS, TEMPORARY_CHAT_SYSTEM_PROMPT } from './chat-engine-prompts'
 import { validatePromptReferences } from './chat-engine-pure'
 import { ChatEngine } from '../chat-engine'
 
@@ -293,13 +293,16 @@ export class ChatEngineTemporaryChats {
       'Temporary chat'
     )
     try {
+      const ownerThread = await this.host.threadManager.getThread(projectId, threadId)
       const memoryPrompt = await this.host.state.memoryService.formatCurrent(
         projectId,
         threadId,
-        modelKey(settings.harnessId, settings.providerId, settings.modelId)
+        modelKey(settings.harnessId, settings.providerId, settings.modelId),
+        ownerThread?.assistantId,
+        ownerThread?.scopeBucketId
       )
       const systemPrompt = [
-        await this.host.units['turns-dispatch'].cioPrompt('temporary-chat'),
+        TEMPORARY_CHAT_SYSTEM_PROMPT,
         memoryPrompt,
         temporary.contextApplied && context
           ? ''

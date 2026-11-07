@@ -42,7 +42,7 @@ Control who can merge, what must pass, and what runs automatically.
   - [x] Only trigger on version tags (`v*`).
   - [x] Upload checksums (`.yml`/`.sha256`) alongside installers.
 - [x] **Add code-signing secrets to GitHub Actions secrets** (never to the repo): `CSC_LINK` (cert p12, base64), `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`   all set. A `GITLEAKS_LICENSE` is also set for the org.
-- [x] **Verify the existing `quality.yml` workflow**: `check + lint + test + production build` on every pull request. The dev → nightly promotion PR is the single gate (its required "Release verification" check is green and `strict` before auto-merge), so the resulting push to `nightly` runs no duplicate suite. The nightly → main promotion PR skips the heavy jobs and runs only the cheap "Release promotion policy" gate; pushes to `main` trigger no quality run at all — `main` only ever receives nightly promotion merges.
+- [x] **Verify the existing `quality.yml` workflow**: type check, lint, tests, the Gitleaks scan and `bun audit` in one ubuntu `suite` job, plus the macOS (tests + production build + bundle budgets), Windows and Linux runtime jobs, on every pull request. The dev → nightly promotion PR is the single gate (its required "Release verification" check is green and `strict` before auto-merge), so the resulting push to `nightly` runs no duplicate suite. The nightly → main promotion PR skips the heavy jobs and runs only the cheap `policy` job (suite scope + release promotion policy); pushes to `main` trigger no quality run at all — `main` only ever receives nightly promotion merges. A pull request makes at most one macOS arm64 runner acquisition, because GitHub's macOS arm64 hosted pool is capacity constrained and aborts a job it cannot place after about 15 minutes.
 - [x] **Add Dependabot** (`.github/dependabot.yml`) for `bun`/npm ecosystem, weekly cadence, `main` target, and label `dependencies`.
 - [x] **Add a secret-scanning step to CI** (`gitleaks-action`) so pushes with secrets fail the build.
 - [x] **Add `concurrency` groups** to workflows so rapid PR pushes cancel superseded runs instead of stacking CI time.
@@ -137,7 +137,7 @@ The public-facing cutover.
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR checklist                                |
 | `.github/ISSUE_TEMPLATE/*.yml`     | Bug/feature forms + config                  |
 | `.github/workflows/release.yml`    | Tagged release + publish (added previously) |
-| `.github/workflows/security.yml`   | Gitleaks + `bun audit`                      |
+| `.github/workflows/quality.yml`    | Every PR gate: suite + security + per-OS      |
 | `.github/workflows/stale.yml`      | Stale issue/PR cleanup                      |
 | `.github/workflows/nightly.yml`    | Scheduled nightly prerelease build          |
 | `.github/workflows/download-mirror.yml` | Copies each release to `dl.codeinoven.com` |

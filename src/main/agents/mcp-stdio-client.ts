@@ -10,6 +10,18 @@ import { getConfigRoot } from '../../lib/utils'
 export const MCP_TIMEOUT_MS = 30_000
 
 /**
+ * The budget a package-running server gets to answer its first `initialize`.
+ *
+ * `bunx`/`npx` materialize a package tree before the server exists, and on a
+ * cold cache that install takes far longer than a live request should ever be
+ * allowed to. Killing it mid-install is not harmless: the runner keeps the
+ * half-written tree and its lockfile, and every later start dies inside it (see
+ * `mcp-scratch-recovery`). The generous budget applies to the handshake only;
+ * every call after it keeps the ordinary one.
+ */
+export const MCP_STARTUP_TIMEOUT_MS = 300_000
+
+/**
  * How long a retired connection's child gets to read what was sent to it and
  * stop on its own before it is signalled.
  *
@@ -23,8 +35,15 @@ const RETIRE_GRACE_MS = 300
 /** How much child stderr is kept so a startup failure can say why it failed. */
 const STDERR_TAIL_LIMIT = 2_000
 
-/** Share of the retained stderr that one error message carries. */
-const STDERR_REPORT_LIMIT = 600
+/**
+ * Share of the retained stderr that one error message carries.
+ *
+ * Split between the head and the tail: the head names the failure (`Cannot find
+ * package ... imported from ...`) and the tail carries the stack and the runtime
+ * version. Reporting only the tail hid the one line that explained a failed
+ * start behind a stack trace, which is exactly the line the reader needs.
+ */
+const STDERR_REPORT_LIMIT = 1_600
 
 export interface JsonRpcResponse {
   jsonrpc: '2.0'
@@ -110,6 +129,26 @@ async function mcpWorkingDirectory(): Promise<string | undefined> {
 }
 
 /**
+ * The handshake budget for one command.
+ *
+ * Only a command that first has to install its server needs the install budget;
+ * a server started from its own binary answers in the ordinary one, so a wedged
+ * process there still fails the turn quickly.
+ */
+function startupBudgetFor(command: string, args: string[]): number {
+  const executable = basename(command).toLowerCase()
+  const first = args[0]?.toLowerCase()
+  const installs =
+    executable === 'bunx' ||
+    executable.startsWith('npx') ||
+    (executable.startsWith('bun') && first === 'x') ||
+    (executable.startsWith('pnpm') && first === 'dlx') ||
+    (executable.startsWith('yarn') && first === 'dlx') ||
+    (executable.startsWith('npm') && first === 'exec')
+  return installs ? MCP_STARTUP_TIMEOUT_MS : MCP_TIMEOUT_MS
+}
+
+/**
  * Minimal JSON-over-stdio MCP client shared by the per-turn utility gateway
  * and long-lived services (e.g. the computer-use PiP monitor). One instance
  * owns one spawned child process.
@@ -175,11 +214,15 @@ export class StdioMcpClient implements McpClient {
       command
     )
     client.serverInfo = parseMcpServerInfo(
-      await client.request('initialize', {
-        protocolVersion: '2025-03-26',
-        capabilities: {},
-        clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
-      })
+      await client.request(
+        'initialize',
+        {
+          protocolVersion: '2025-03-26',
+          capabilities: {},
+          clientInfo: { name: 'codeinoven-utility-gateway', version: '1' }
+        },
+        startupBudgetFor(command, args)
+      )
     )
     client.notify('notifications/initialized', {})
     client.announceService(command, args, owner)
@@ -263,7 +306,11 @@ export class StdioMcpClient implements McpClient {
     child.once('close', () => clearTimeout(killTimer))
   }
 
-  private request(method: string, params: Record<string, unknown>): Promise<unknown> {
+  private request(
+    method: string,
+    params: Record<string, unknown>,
+    budgetMs = MCP_TIMEOUT_MS
+  ): Promise<unknown> {
     if (this.retired) {
       // A retired connection has no child left to answer, so this fails now
       // instead of spending a request budget waiting for nothing.
@@ -278,11 +325,11 @@ export class StdioMcpClient implements McpClient {
         // is already delaying every later call on this child.
         this.notify('notifications/cancelled', {
           requestId: id,
-          reason: `\`${method}\` exceeded the ${MCP_TIMEOUT_MS} ms request budget`
+          reason: `\`${method}\` exceeded the ${budgetMs} ms request budget`
         })
         this.retire(`MCP request timed out: ${method}`)
         reject(new Error(`MCP request timed out: ${method}`))
-      }, MCP_TIMEOUT_MS)
+      }, budgetMs)
       this.pending.set(id, { resolve, reject, timer })
       this.write({ jsonrpc: '2.0', id, method, params })
     })
@@ -333,12 +380,14 @@ export class StdioMcpClient implements McpClient {
       combined.length > STDERR_TAIL_LIMIT ? combined.slice(-STDERR_TAIL_LIMIT) : combined
   }
 
-  /** The failure an agent can act on: how the process died, and what it said first. */
+  /** The failure an agent can act on: how the process died, and what it said. */
   private exitError(code: number | null, signal: NodeJS.Signals | null): Error {
     const how = signal ? `signal ${signal}` : `exit code ${code ?? 'unknown'}`
     const detail = this.stderrTail.trim()
     const reported =
-      detail.length > STDERR_REPORT_LIMIT ? `...${detail.slice(-STDERR_REPORT_LIMIT)}` : detail
+      detail.length > STDERR_REPORT_LIMIT
+        ? `${detail.slice(0, STDERR_REPORT_LIMIT / 2)}\n…\n${detail.slice(-STDERR_REPORT_LIMIT / 2)}`
+        : detail
     return new Error(
       `MCP server \`${this.command}\` exited with ${how}${reported ? `: ${reported}` : ''}`
     )

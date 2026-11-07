@@ -18,6 +18,7 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { modelKey } from '$lib/model-keys'
 import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from '$shared/types'
 import type {
+  ComposerProject,
   Thread,
   ThreadSettings,
   ThreadContextUsage,
@@ -65,11 +66,16 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
     // chat's own title in place of what it actually is.
     if (this.root.loadOlderMessages.hasController) return { kind: 'chat', temporary: true }
     if (target.projectId === ASSISTANT_SPACE_ID) {
+      // A bound task works in a real checkout, so the shoe states that project's
+      // branch beside the scope exactly as a project thread does.
+      const boundProject = this.boundProject(target)
       // A run inherits its task's assistant, so this resolves for a task and each
       // of its runs alike; an assistant-less task is named by itself.
       const assistant = assistants.assistantForTask(target)
-      if (assistant) return { kind: 'assistant', assistant }
-      return { kind: 'task', task: target }
+      if (assistant) {
+        return { kind: 'assistant', assistant, ...(boundProject ? { project: boundProject } : {}) }
+      }
+      return { kind: 'task', task: target, ...(boundProject ? { project: boundProject } : {}) }
     }
     if (!this.root.props.chatMode && this.project) {
       return {
@@ -91,6 +97,28 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       }
     }
     return { kind: 'chat' }
+  }
+
+  /**
+   * The project checkout a bound assistant task works in, shaped as the shoe's
+   * project identity so the binding reads as one row rather than a second bar.
+   *
+   * The branch is the thread's own recorded branch, which is what the project
+   * thread identity uses for the same pill.
+   */
+  private boundProject(target: Thread): ComposerProject | undefined {
+    const bound = target.boundScope
+    if (!bound) return undefined
+    const project = scopeState.projectRecords.find((record) => record.id === bound.projectId)
+    if (!project) return undefined
+    return {
+      name: project.name,
+      path: project.path,
+      source: project.source,
+      host: project.host,
+      iconUrl: getProjectIcon(project, this.root.switchProject.projectIconUrl ?? undefined),
+      branch: target.branch
+    }
   }
 
   contextUsage = $derived.by((): AgentContextUsage | undefined => {
@@ -346,22 +374,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
   // renders the matching component. The sidebar picks the component from the
   // registration, so a task update or a worker/auditor switch updates props
   // instead of remounting the panel.
-  coordinatorPanel(
-    kind: 'assignment' | 'achievement' | 'audit' | 'orchestrator'
-  ): CoordinatorDockPanel | null {
-    // The workstation board is the one board that is not about this thread's own
-    // Engineering state: it lists the runs this thread dispatched into any project,
-    // so it needs nothing but the ids it was published under and reads its rows
-    // from the dispatch ledger itself.
-    if (kind === 'orchestrator') {
-      return {
-        component: 'orchestrate',
-        props: {
-          projectId: this.root.handleAgentEvent.thread.projectId,
-          threadId: this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
-        }
-      }
-    }
+  coordinatorPanel(kind: 'assignment' | 'achievement' | 'audit'): CoordinatorDockPanel | null {
     // Only an orchestration child carries the way back to the Sr. Engineer.
     const onBackToCoordinator = this.root.currentWorkingTraceAttribution.coordinatorParentId
       ? this.root.currentWorkingTraceAttribution.openCoordinatorParent
@@ -410,6 +423,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         component: 'achievement',
         props: {
           specTitle: this.root.handleAgentEvent.thread.title,
+          runStartedAt: activeSpec?.approvedAt ?? this.durableAuditThread?.createdAt,
           specSummary: activeSpec.content.resolutionSummary,
           auditThread: this.durableAuditThread,
           auditState: this.root.submitSpecDecision.auditState,
@@ -479,13 +493,28 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       component: 'achievement',
       props: {
         mode: 'audit',
-        specTitle: this.root.handleAgentEvent.thread.title,
+        // On an auditor's own view the board still belongs to the Sr. Engineer's
+        // row, so its title, audit state and duration come from that coordination:
+        // this is what keeps the panel (and its way back) truthful without asking
+        // the user to return to the parent first.
+        specTitle:
+          this.root.currentWorkingTraceAttribution.orchestrationChild &&
+          this.root.currentWorkingTraceAttribution.coordinatorParentThread
+            ? this.root.currentWorkingTraceAttribution.coordinatorParentThread.title
+            : this.root.handleAgentEvent.thread.title,
+        runStartedAt: this.root.currentWorkingTraceAttribution.orchestrationChild
+          ? this.root.handleAgentEvent.thread.createdAt
+          : this.durableAuditThread?.createdAt,
         specSummary:
           auditSpec?.content.resolutionSummary ??
           this.root.editVideoNote.brainstorm?.content.summary ??
           '',
-        auditThread: this.durableAuditThread,
-        auditState: this.root.submitSpecDecision.auditState,
+        auditThread: this.root.currentWorkingTraceAttribution.orchestrationChild
+          ? undefined
+          : this.durableAuditThread,
+        auditState: this.root.currentWorkingTraceAttribution.orchestrationChild
+          ? this.root.currentWorkingTraceAttribution.coordinatorParentThread?.auditState
+          : this.root.submitSpecDecision.auditState,
         reportAvailable: this.auditReport !== null,
         selectedThreadId: this.root.handleAgentEvent.thread.id,
         auditorSettings: this.auditSettings,
@@ -495,7 +524,12 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         recentModels: rendererRecovery.recentModels,
         onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
         coordinatorWorking: this.root.submitSpecDecision.auditBusy,
-        onOpenAudit: () => void this.root.buildSpecActionPrompt.generateAudit(this.auditSettings),
+        onOpenAudit: () =>
+          void this.generateDurableImplementationAudit(
+            this.auditSettings,
+            this.root.handleAgentEvent.thread.coordinatorThreadId ??
+              this.root.handleAgentEvent.thread.id
+          ),
         onViewReport: this.openAuditStudio,
         onOpenThread: (auditor) => workspaceState.openThread(auditor, this.project),
         onModelChange: this.changeAuditModel,
@@ -604,7 +638,8 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
   async generateIndependentAudit(selected: ThreadSettings): Promise<void> {
     this.root.submitSpecDecision.auditBusy = true
     this.root.buildSpecActionPrompt.auditError = ''
-    this.root.handleAgentEvent.errorMessage = ''
+    this.root.submitSpecDecision.auditFailed = false
+    this.root.submitSpecDecision.auditState = 'running'
     this.auditSettings = selected
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
@@ -614,34 +649,34 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         await invoke(
           'thread:setIndependentAudit',
           this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id,
+          this.root.submitSpecDecision.auditWorkflowThreadId(),
           true
         )
         this.root.currentWorkingTraceAttribution.pendingIndependentAudit = null
         clearIndependentAuditIntent(
           this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id
+          this.root.submitSpecDecision.auditWorkflowThreadId()
         )
       }
       this.durableAuditThread = await invoke(
         'agent:ensureIndependentAuditorThread',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         selected
       )
       coordinatorDockState.restore(
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id
+        this.root.submitSpecDecision.auditWorkflowThreadId()
       )
       contextSidebarState.openCoordinator(
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         'Audit coordinator'
       )
       const result = await invoke(
         'agent:generateIndependentAudit',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         {
           settings: selected
         }
@@ -655,16 +690,21 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       this.root.buildSpecActionPrompt.auditVersions = await invoke(
         'audit:listVersions',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         this.auditReport.id
       )
     } catch (error) {
       const rawError = error instanceof Error ? error.message : 'The independent audit failed.'
-      this.root.handleAgentEvent.errorMessage = rawError.replace(
+      // The audit card owns this failure: it carries the error and the model
+      // picker the user needs to change the auditor's account. Pushing it into
+      // the composer's error slot instead put a card over the composer that can
+      // neither explain which audit failed nor offer the fix.
+      this.root.buildSpecActionPrompt.auditError = rawError.replace(
         /^Error invoking remote method '[^']+': Error:\s*/u,
         ''
       )
-      this.root.buildSpecActionPrompt.auditError = this.root.handleAgentEvent.errorMessage
+      this.root.submitSpecDecision.auditFailed = true
+      this.root.submitSpecDecision.auditState = 'offered'
     } finally {
       this.root.submitSpecDecision.auditBusy = false
     }
@@ -692,12 +732,14 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       harnessId: normalized.harnessId,
       providerId: normalized.providerId,
       modelId: normalized.modelId,
+      accountId: normalized.accountId,
       thinkingLevel: normalized.thinkingLevel,
       inferenceMode: normalized.inferenceMode,
       contextWindow: normalized.contextWindow
     }
     rendererRecovery.setAuditModel(
-      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId)
+      modelKey(normalized.harnessId, normalized.providerId, normalized.modelId),
+      normalized.accountId
     )
     if (this.root.unmirroredTraceStartTime.isAssignmentAuditorThread) {
       this.updateSettings({
@@ -730,6 +772,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
             harnessId: this.auditSettings.harnessId,
             providerId: this.auditSettings.providerId,
             modelId: this.auditSettings.modelId,
+            accountId: this.auditSettings.accountId,
             thinkingLevel: this.auditSettings.thinkingLevel,
             inferenceMode: this.auditSettings.inferenceMode,
             contextWindow: this.auditSettings.contextWindow

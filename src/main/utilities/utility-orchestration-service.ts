@@ -7,6 +7,7 @@ import type {
   UtilityDefinitionFor,
   PermissionLevel,
   AgentUtilitySuggestionEntry,
+  AgentMcpSignInTarget,
   ThreadSearchResult
 } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
@@ -29,6 +30,7 @@ import type { ScopeToolContext } from '../workspaces/scope-tool-service'
 import { UtilityScopeFootprintService } from './utility-scope-footprint'
 import { type ThreadBankEntry } from './utility-orchestration/utility-turn-state'
 import { type UtilitySuggestionResolution } from '../../lib/utility-suggestion'
+import type { AgentMcpSignInResolution } from '../../lib/mcp-sign-in'
 import type { McpOAuthService } from './mcp-oauth/mcp-oauth-service'
 import { buildUtilityOrchestrationServiceUnits } from './utility-orchestration-service/utility-orchestration-service-units'
 
@@ -81,6 +83,19 @@ export interface UtilityTurnRequest {
    */
   orchestrationSession?: OrchestrationSessionMode
   /**
+   * Whether this turn may delegate real work whether or not the user opened a
+   * session with `@cio-hey`.
+   *
+   * A standing assistant run is the case this exists for: it belongs to no
+   * project, the user never types into its thread, so it can never carry the tag,
+   * and a worker it spawns could only write notes into the assistant's own
+   * workspace instead of touching the project the work belongs to. The grant
+   * opens the workstation tools only, and only for creating work on a machine;
+   * the turn keeps its own permission level, so every action inside a dispatched
+   * thread is gated exactly as that thread would gate it for the user.
+   */
+  delegationReach?: boolean
+  /**
    * Whether this turn may create the thread's engineering artifacts (Brainstorm,
    * PRD, specification, Assignment) through the app-owned artifact tools. Set
    * for a real project thread's user turn, and never for a chat, an assistant
@@ -120,9 +135,7 @@ export interface UtilityTurnRequest {
    * paths the turn cited as its own work, so the chat engine can publish one card
    * per entry when the turn settles.
    */
-  citeWork?: (
-    paths: string[]
-  ) => Promise<{
+  citeWork?: (paths: string[]) => Promise<{
     cited: Array<{ name: string; path: string; kind: 'file' | 'directory' }>
     missing: string[]
   }>
@@ -243,6 +256,19 @@ export type DesignCapabilityExecutor = (
 ) => Promise<unknown>
 
 /**
+ * Runs one gateway invocation of the app-owned follow-up capability.
+ *
+ * The app supplies it because the clock, the persistence and the resume are the
+ * app's: the agent decides that a wake is worth scheduling and writes what it
+ * should do, and never gets to reach any thread but the one it is running in.
+ */
+export type FollowUpExecutor = (
+  operation: string,
+  input: Record<string, unknown>,
+  context: { projectId: string; threadId: string }
+) => Promise<unknown>
+
+/**
  * Runs one gateway invocation of the app-owned video capability for the turn
  * that made it. The two operations have different owners: `preview` composes the
  * loopback directory preview with the in-app browser, and `capture` adds the
@@ -312,6 +338,27 @@ export type UtilitySuggestionExecutor = (
 
 /** Which turn is proposing, so the card is bound to the right thread and session. */
 export interface UtilitySuggestionContext {
+  projectId: string
+  threadId: string
+  projectPath: string
+  sessionId: string
+  harnessId: string
+}
+
+/**
+ * Runs one MCP sign-in for the turn that needs it: it surfaces the card, awaits
+ * the user's browser authorization and reports what they did. The chat engine
+ * supplies it because it owns the pending-question machinery and the broadcast
+ * the renderer reads; the authorization itself stays with the shared OAuth
+ * service, so a grant a turn uses is a grant the Utilities page issued.
+ */
+export type McpSignInExecutor = (
+  target: AgentMcpSignInTarget,
+  context: McpSignInContext
+) => Promise<AgentMcpSignInResolution>
+
+/** Which turn is asking, so the card is bound to the right thread and session. */
+export interface McpSignInContext {
   projectId: string
   threadId: string
   projectPath: string
@@ -415,6 +462,17 @@ export interface TurnState {
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
   /**
+   * The connection settings each cached client was opened with, keyed like
+   * `clients`.
+   *
+   * A utility can be edited while a turn runs: its URL, headers, command or
+   * arguments may all change under a connection this turn already holds. A
+   * client opened with the old settings answers for the old endpoint, so the
+   * signature is what lets the next call notice the change and reconnect
+   * instead of quietly serving a stale one.
+   */
+  clientSignatures: Map<string, string>
+  /**
    * Connections being established right now, keyed like `clients`.
    *
    * The gateway serves concurrent calls, so two of them can reach the same
@@ -504,6 +562,8 @@ export class UtilityOrchestrationService {
   imageDescriptorExecutor: ImageDescriptorExecutor | null = null
   artifactExecutor: DesignCapabilityExecutor | null = null
   browserExecutor: BrowserUtilityExecutor | null = null
+  /** App-owned follow-up capability: schedules and cancels this thread's wakes. */
+  followUpExecutor: FollowUpExecutor | null = null
   designPreviewExecutor: DesignCapabilityExecutor | null = null
   designAssignmentExecutor: DesignCapabilityExecutor | null = null
   designMediaExecutor: DesignCapabilityExecutor | null = null
@@ -515,6 +575,7 @@ export class UtilityOrchestrationService {
   scopeToolExecutor: ScopeToolExecutor | null = null
   secretRequestExecutor: SecretRequestExecutor | null = null
   utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
+  mcpSignInExecutor: McpSignInExecutor | null = null
   orchestrationExecutor: OrchestrationExecutor | null = null
   appControlExecutor: AppControlExecutor | null = null
   engineeringExecutor: EngineeringToolExecutor | null = null
@@ -568,6 +629,9 @@ export class UtilityOrchestrationService {
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     return this.units['executors'].setBrowserExecutor(executor)
   }
+  setFollowUpExecutor(executor: FollowUpExecutor | null): void {
+    return this.units['executors'].setFollowUpExecutor(executor)
+  }
   setDesignPreviewExecutor(executor: DesignCapabilityExecutor | null): void {
     return this.units['executors'].setDesignPreviewExecutor(executor)
   }
@@ -600,6 +664,9 @@ export class UtilityOrchestrationService {
   }
   setUtilitySuggestionExecutor(executor: UtilitySuggestionExecutor | null): void {
     return this.units['capability-invoke'].setUtilitySuggestionExecutor(executor)
+  }
+  setMcpSignInExecutor(executor: McpSignInExecutor | null): void {
+    return this.units['executors'].setMcpSignInExecutor(executor)
   }
   setOrchestrationExecutor(executor: OrchestrationExecutor | null): void {
     return this.units['executors'].setOrchestrationExecutor(executor)

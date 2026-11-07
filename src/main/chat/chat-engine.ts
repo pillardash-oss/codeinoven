@@ -40,14 +40,17 @@ import type {
   BrowserUtilityExecutor,
   DesignCapabilityExecutor,
   EngineeringToolContext,
+  FollowUpExecutor,
   PawnToolContext,
   VideoCapabilityExecutor,
   ScopeToolExecutor,
   SecretRequestContext,
+  McpSignInContext,
   UtilitySuggestionContext
 } from '../utilities/utility-orchestration-service'
 import type { EngineeringToolOperation } from '../../lib/engineering-tools'
 import { type UtilitySuggestionResolution } from '../../lib/utility-suggestion'
+import { type AgentMcpSignInResolution } from '../../lib/mcp-sign-in'
 import type {
   ImageDescriptorExecutorRequest,
   ImageDescriptorResult
@@ -91,7 +94,9 @@ import type {
   ProviderCatalog,
   ProviderCatalogRefreshOptions,
   AgentSecretSubmission,
+  AgentSecretDraft,
   AgentUtilitySuggestionEntry,
+  AgentMcpSignInTarget,
   SpecGenerationRequest,
   SpecActionIntent,
   UserMessagePresentation,
@@ -112,6 +117,7 @@ import type {
   AssistantAgents
 } from '../../lib/types'
 import { ModelPricingService } from '../providers/model-pricing-service'
+import { isQuestionAnswerRecord } from '../../lib/question-answers'
 import type {
   AutoAnswerReport,
   PendingQuestionInfo,
@@ -237,6 +243,11 @@ export function pawnThinkingOverride(value: unknown): ThinkingLevel | undefined 
 
 export function isTurnBoundaryPrompt(message: AgentMessage): boolean {
   if (message.origin === 'orchestrator') return false
+  // The app's record of an answered question resumes the provider turn that
+  // asked it, so it must not move the working trace's boundary either. Reading
+  // it as a boundary closed the turn the reader was watching and started a
+  // second trace under the answer.
+  if (isQuestionAnswerRecord(message)) return false
   return !(
     message.parts.length > 0 &&
     message.parts.every((part) => part.type === 'compaction' || part.type === 'subagent')
@@ -464,6 +475,16 @@ export class ChatEngine {
   /** The workstation tools' implementation and the dispatches awaiting a report. */
   public orchestration: OrchestrationRuntime | null = null
 
+  /**
+   * Read the HEAD commit of one checkout, for a run's starting point.
+   *
+   * A narrow port rather than a Git dependency: the engine records where a run
+   * begins (so its receipt has a range) but never reads history itself, and the
+   * service that owns Git is wired in where Git already lives. Absent leaves a
+   * run with no base, which its receipt reports as `no-base` instead of guessing.
+   */
+  gitHeadCommit?: (projectPath: string) => Promise<string | null>
+
   constructor(
     public storage: StorageEngine,
     public database: Database,
@@ -497,6 +518,14 @@ export class ChatEngine {
   }
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     return this.units['utilities'].setBrowserUtilityExecutor(executor)
+  }
+  /**
+   * Register the app-owned follow-up capability. The app supplies it after paint
+   * because it owns the persisted wake and the clock that fires it, while the
+   * engine only knows how to start a turn on the thread that gets woken.
+   */
+  setFollowUpExecutor(executor: FollowUpExecutor | null): void {
+    return this.units['utilities'].setFollowUpExecutor(executor)
   }
   setExpertSettings(settings: ExpertSettingsService | null): void {
     return this.units['utilities-mcp'].setExpertSettings(settings)
@@ -577,6 +606,12 @@ export class ChatEngine {
   ): Promise<UtilitySuggestionResolution> {
     return this.units['utilities'].requestUtilitySuggestion(entry, context)
   }
+  async requestMcpSignIn(
+    target: AgentMcpSignInTarget,
+    context: McpSignInContext
+  ): Promise<AgentMcpSignInResolution> {
+    return this.units['mcp-sign-in'].requestMcpSignIn(target, context)
+  }
   async dismissQuestion(projectId: string, threadId: string, requestId: string): Promise<void> {
     return this.units['questions-ask'].dismissQuestion(projectId, threadId, requestId)
   }
@@ -597,6 +632,23 @@ export class ChatEngine {
       requestId,
       questionIndex,
       answers,
+      nextQuestionIndex
+    )
+  }
+  async updateSecretDraft(
+    projectId: string,
+    threadId: string,
+    requestId: string,
+    questionIndex: number,
+    draft: AgentSecretDraft,
+    nextQuestionIndex?: number
+  ): Promise<PendingAgentQuestionRequest | null> {
+    return this.units['questions-ask'].updateSecretDraft(
+      projectId,
+      threadId,
+      requestId,
+      questionIndex,
+      draft,
       nextQuestionIndex
     )
   }
@@ -627,6 +679,9 @@ export class ChatEngine {
   }
   refreshOpenCodeHarness(): void {
     return this.units['providers-catalog'].refreshOpenCodeHarness()
+  }
+  async refreshAcpHarnesses(): Promise<void> {
+    return this.units['providers-catalog'].refreshAcpHarnesses()
   }
   async restartHarnessRuntime(
     harnessId: string,

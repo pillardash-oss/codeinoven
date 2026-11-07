@@ -63,6 +63,10 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
   /** Set by `bind()`: whether the conversation was left scrolled away. */
   userScrolledAway = $state(false)
 
+  /** Where the reader last was, so a scroll event can tell travel direction.
+   *  Plain, not reactive: only the scroll handler reads it. */
+  private lastScrollTop = 0
+
   /** Set by `bind()`: how many messages the first paint mounts. */
   mountedCount = $state(0)
 
@@ -282,7 +286,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   onScroll(): void {
     if (!this.scrollEl) return
-    const away = !this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
+    // Any upward travel detaches the reader, even inside the at-bottom band.
+    // Measured only against where the reader was, the band made the first small
+    // nudge of a trackpad gesture still read as "at the bottom", so the tail
+    // follower grabbed the viewport back on the next content resize and the
+    // reader could not scroll away at all. A downward scroll onto the bottom
+    // still re-attaches them, and so does an explicit jump to the latest.
+    const previousTop = this.lastScrollTop
+    this.lastScrollTop = this.scrollEl.scrollTop
+    const movedUp = this.scrollEl.scrollTop < previousTop - 0.5
+    const away = movedUp || !this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
     // Pin the window to what the reader is reading the moment they leave the
     // tail, and release it back to the tail-relative window when they return.
     // While pinned, a streaming turn grows the window instead of sliding it
@@ -290,20 +303,12 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // entries arriving at the tail.
     if (away && !this.userScrolledAway) {
       this.windowStartId = this.root.composerScope.mountedWindowStartId()
-    } else if (
-      !away &&
-      this.userScrolledAway &&
-      !this.loadingOlderMessages &&
-      !this.viewportSettling
-    ) {
-      // A transcript that fits the viewport is at its bottom AND at its top at
-      // the same time, so a page landing above the reader can leave them
-      // "at the bottom" by measurement while they are reading history. The
-      // release is skipped while a load is running or settling, otherwise it
-      // unmounted the page that had just arrived and left the reader at a top
-      // that refused to load again.
-      this.windowStartId = null
     }
+    // The mounted window only ever grows. Releasing the anchor on the way back
+    // down used to unmount every page the reader had loaded, which is what made
+    // the transcript flicker at the bottom of a scroll and what made the same
+    // history load and mount again on the next scroll up. History that was
+    // mounted stays mounted, off screen included.
     this.userScrolledAway = away
     // Self-heal: the mounted window must never sit at zero while the store
     // holds messages   a windowed view that collapsed to nothing would leave
@@ -325,6 +330,62 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // Nothing loads from here: the history row's own visibility observer (see
     // `watchHistoryHead`) is what triggers the conversation-level fetch, and
     // only once that row is genuinely on screen.
+    this.captureReaderAnchor()
+  }
+
+  /**
+   * What the reader is looking at, and where it sits in their viewport.
+   *
+   * The transcript has several writers (the tail follower, the history seam, the
+   * first-paint reveal, a trace folding or opening above the reader, media that
+   * finds its height late), and every one of them changes the layout under a
+   * reader who is not at the bottom. Holding the block at the top of the
+   * viewport is what keeps their place across all of them: it is the reader's
+   * viewport, and none of those writers is allowed to move it.
+   */
+  private readerAnchor: { node: HTMLElement; offset: number } | null = null
+
+  /** Remember the block at the top of the reader's viewport. Called on every
+   *  scroll, so the offset always describes the frame before a change lands. */
+  captureReaderAnchor(): void {
+    const el = this.scrollEl
+    if (!el || !this.userScrolledAway) {
+      this.readerAnchor = null
+      return
+    }
+    const frame = el.getBoundingClientRect()
+    let anchor: HTMLElement | null = null
+    let lastAbove: HTMLElement | null = null
+    for (const block of el.querySelectorAll<HTMLElement>('.message-block')) {
+      if (block.getBoundingClientRect().bottom > frame.top + 1) {
+        anchor = block
+        break
+      }
+      lastAbove = block
+    }
+    // Nothing straddles the top (the reader is inside a gap, a card or a long
+    // trace): the nearest block above still moves by exactly the height any
+    // layout change above them adds, so it anchors the same viewport.
+    anchor ??= lastAbove
+    this.readerAnchor = anchor
+      ? { node: anchor, offset: anchor.getBoundingClientRect().top - frame.top }
+      : null
+  }
+
+  /** Put the reader's block back where it was after a layout change above it.
+   *  A no-op while the history seam is already holding the same place. */
+  holdReaderPlace(): void {
+    const el = this.scrollEl
+    const anchor = this.readerAnchor
+    if (!el || !anchor || !anchor.node.isConnected) return
+    if (!this.userScrolledAway || this.loadingOlderMessages || this.viewportSettling) return
+    const frame = el.getBoundingClientRect()
+    const drift = anchor.node.getBoundingClientRect().top - frame.top - anchor.offset
+    if (Math.abs(drift) < 0.5) return
+    el.scrollTop += drift
+    // Read back: the browser clamps, and the next scroll event measures the
+    // reader against what the scroller actually holds.
+    this.viewportWriteTop = el.scrollTop
   }
 
   loadingOlderMessages = $state(false)
@@ -756,7 +817,9 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // lock synchronously and re-anchoring a tick later keeps the tail engaged
     // even if the bottom grew between the click and this snap's scroll event.
     this.userScrolledAway = false
-    this.windowStartId = null
+    // The mounted window is grow-only: a reader who jumped back to the latest
+    // message keeps every page they had already loaded, so scrolling up again
+    // finds the same work in the document instead of mounting it from scratch.
     this.scrollEl.scrollTo({ top: this.scrollEl.scrollHeight, behavior: 'auto' })
     void tick().then(() => {
       if (!this.scrollEl || this.userScrolledAway) return

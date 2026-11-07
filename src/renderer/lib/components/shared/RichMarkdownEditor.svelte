@@ -807,9 +807,36 @@
     else placeCaretAtEnd(editor)
   }
 
+  /** Selects a code block's whole content, so the block can be copied or
+   *  replaced as one run without the wrapper, its header or the rest of the note
+   *  coming along. The inner `<code>` is its own editing host inside a
+   *  `contenteditable="false"` wrapper, so the browser's own Select All never
+   *  resolves to just this text. */
+  function selectCodeBlock(codeBlock: HTMLElement): void {
+    const codeElement = codeBlock.querySelector('code')
+    if (!codeElement) return
+    const range = document.createRange()
+    range.selectNodeContents(codeElement)
+    codeElement.focus()
+    const selection = window.getSelection()
+    if (!selection) return
+    selection.removeAllRanges()
+    selection.addRange(range)
+    publishCaretText()
+  }
+
   function handleEditorClick(event: MouseEvent): void {
     if (!editor) return
     const target = event.target as HTMLElement | null
+    const selectButton = target?.closest<HTMLElement>('[data-editor-codeblock-select]')
+    if (selectButton) {
+      event.preventDefault()
+      event.stopPropagation()
+      const codeBlock = selectButton.closest<HTMLElement>('[data-editor-codeblock]')
+      if (!codeBlock || !editor.contains(codeBlock)) return
+      selectCodeBlock(codeBlock)
+      return
+    }
     const deleteButton = target?.closest<HTMLElement>('[data-editor-codeblock-delete]')
     if (deleteButton) {
       event.preventDefault()
@@ -907,10 +934,12 @@
     <!-- The placeholder sits at the writing line's first column. A host that
          draws its own marker in a gutter next to the field   the composer's
          console prompt   moves this over by setting `--editor-gutter` on an
-         ancestor, so the two never overlap. -->
+         ancestor, so the two never overlap. It stays on one clipped line: a
+         long unbreakable token or a second wrapped line would otherwise paint
+         past the field's edge, over the toolbar beneath it. -->
     <span
       aria-hidden="true"
-      class="pointer-events-none absolute top-3 left-[var(--editor-gutter,0.875rem)] text-sm leading-5 text-dimmed"
+      class="pointer-events-none absolute top-3 right-3 left-[var(--editor-gutter,0.875rem)] truncate text-sm leading-5 text-dimmed"
     >
       {placeholder}
     </span>

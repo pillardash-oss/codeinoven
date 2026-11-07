@@ -9,6 +9,10 @@ import type { BrowserDownload } from '$shared/ipc-contract'
 export interface WorkspaceBrowserOptions {
   /** Project of the thread on screen; read per call so the controller follows selection. */
   getSelectedProjectId: () => string | null
+  /** Thread on screen; the thread browser's tabs belong to it. */
+  getSelectedThreadId: () => string | null
+  /** Hide the thread browser dock for the thread on screen. */
+  closeThreadBrowser: () => void
 }
 
 /**
@@ -21,6 +25,8 @@ export interface WorkspaceBrowserOptions {
  */
 export class WorkspaceBrowserController {
   private readonly getSelectedProjectId: () => string | null
+  private readonly getSelectedThreadId: () => string | null
+  private readonly closeThreadBrowser: () => void
 
   /** Whether the message-history jump menu's browser context menu is open. */
   menuOpen = $state(false)
@@ -31,6 +37,50 @@ export class WorkspaceBrowserController {
 
   constructor(options: WorkspaceBrowserOptions) {
     this.getSelectedProjectId = options.getSelectedProjectId
+    this.getSelectedThreadId = options.getSelectedThreadId
+    this.closeThreadBrowser = options.closeThreadBrowser
+  }
+
+  /**
+   * Close every tab the conversation's browser owns, then leave one blank page
+   * so the address bar still has somewhere to navigate.
+   *
+   * This is the rail menu's escape hatch for a browser that has accumulated
+   * pages: destroying the views is what gives the renderer processes back.
+   */
+  async closeAllTabs(): Promise<void> {
+    this.menuOpen = false
+    const projectId = this.getSelectedProjectId()
+    const threadId = this.getSelectedThreadId()
+    if (!projectId || !threadId) return
+    try {
+      await contextSidebarState.closeBrowserTabsForThread(projectId, threadId)
+      const blank = contextSidebarState.openBrowserForContext(
+        '',
+        projectId,
+        threadId,
+        undefined,
+        true
+      )
+      browserAddressFocus.request(blank)
+    } catch (error: unknown) {
+      reportError(error, 'The browser tabs could not be closed.')
+    }
+  }
+
+  /** Close every tab and put the thread browser away for this thread. */
+  async closeBrowser(): Promise<void> {
+    this.menuOpen = false
+    const projectId = this.getSelectedProjectId()
+    const threadId = this.getSelectedThreadId()
+    if (projectId && threadId) {
+      try {
+        await contextSidebarState.closeBrowserTabsForThread(projectId, threadId)
+      } catch (error: unknown) {
+        reportError(error, 'The thread browser could not be closed.')
+      }
+    }
+    this.closeThreadBrowser()
   }
 
   /** The selected project's downloads, newest first. No selected project means

@@ -1,0 +1,521 @@
+/* CodeInOven mobile: tokens and the primitives every screen shares.
+   Type is the app's own: Oven Box, bundled from resources/fonts/oven, with the
+   same 200 to 800 range the desktop loads. The base weight is 200, which is what
+   makes the interface read as this product rather than as a generic mobile list.
+   The tokens mirror src/renderer/app.css, which stays the source of truth, and
+   every rule reads them by name so a palette change lands in one place. */
+@font-face {
+  font-family: 'Oven Box';
+  font-style: normal;
+  font-weight: 200 800;
+  font-display: swap;
+  src: url('/fonts/oven-box.woff2') format('woff2');
+}
+
+@font-face {
+  font-family: 'Oven Mono';
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url('/fonts/oven-mono.woff2') format('woff2');
+}
+
+:root {
+  --color-app: #f7f6f2;
+  --color-surface: #ffffff;
+  --color-elevated: #f0efea;
+  --color-overlay: #e8e7e2;
+  --color-foreground: #081825;
+  --color-muted: #4a5568;
+  --color-dimmed: #8b95a5;
+  --color-border: #e2e1dc;
+  --color-border-strong: #c8c7c2;
+  --color-accent: #d4af37;
+  --color-accent-hover: #c19d2b;
+  /* Ink on the gold plate is the app's own dark, in both themes: the accent does
+     not flip with the scheme, so neither does what is written on it. */
+  --color-on-accent: #081825;
+  --color-primary: #081825;
+  --color-on-primary: #f7f6f2;
+  --color-success: #0f7a37;
+  --color-warning: #9a5b06;
+  --color-danger: #c02626;
+  --color-info: #2563eb;
+  --color-thread-spec: #6d28d9;
+  --ink-meta: #5f6672;
+
+  /* The shared appearance table writes both stacks onto the root; these are the
+     values the phone draws before a stored choice has been read. */
+  --font-app:
+    'Oven Box', 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'Symbols Nerd Font Mono',
+    ui-monospace, monospace;
+  --font-mono:
+    'Oven Box', 'JetBrains Mono Variable', 'JetBrainsMono Nerd Font Mono', 'Symbols Nerd Font Mono',
+    ui-monospace, monospace;
+  --font-weight-base: 200;
+
+  --gutter: 1.25rem;
+  --mark: 2.25rem;
+  /* Where a row's separator starts: the text column, past the leading mark. */
+  --row-inset: calc(var(--gutter) + var(--mark) + 0.875rem);
+}
+
+html.dark {
+  --color-app: #0b0b0d;
+  --color-surface: #141417;
+  --color-elevated: #1c1c20;
+  --color-overlay: #08080a;
+  --color-foreground: #f5f4f0;
+  --color-muted: #9d9da6;
+  --color-dimmed: #5f5f68;
+  --color-border: #27272c;
+  --color-border-strong: #3b3b42;
+  --color-accent-hover: #e0bd4d;
+  --color-primary: #f5f4f0;
+  --color-on-primary: #0b0b0d;
+  --color-success: #34d399;
+  --color-warning: #fbbf24;
+  --color-danger: #f87171;
+  --color-info: #7ba3d4;
+  --color-thread-spec: #a78bfa;
+  --ink-meta: #9d9da6;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --color-app: #0b0b0d;
+    --color-surface: #141417;
+    --color-elevated: #1c1c20;
+    --color-overlay: #08080a;
+    --color-foreground: #f5f4f0;
+    --color-muted: #9d9da6;
+    --color-dimmed: #5f5f68;
+    --color-border: #27272c;
+    --color-border-strong: #3b3b42;
+    --color-accent-hover: #e0bd4d;
+    --color-primary: #f5f4f0;
+    --color-on-primary: #0b0b0d;
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-danger: #f87171;
+    --color-info: #7ba3d4;
+    --color-thread-spec: #a78bfa;
+    --ink-meta: #9d9da6;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--color-app);
+  overscroll-behavior: none;
+  color: var(--color-foreground);
+  font-family: var(--font-app);
+  /* The app's base weight is light; chrome earns its weight back one step at a
+     time. This single value is most of why the desktop reads calm. */
+  font-weight: var(--font-weight-base);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  font-variant-ligatures: none;
+  font-feature-settings:
+    'calt' 0,
+    'liga' 0,
+    'dlig' 0;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* The brand draws no soft corners: a control is square to 2px and never round. */
+:where(button, input, textarea, select, [role='dialog']) {
+  border-radius: 2px;
+}
+
+/* Focus is the app's rule, a 1px foreground outline offset by 2px, not a ring. */
+:where(button, a, [role='radio'], [role='switch']):focus-visible {
+  outline: 1px solid var(--color-foreground);
+  outline-offset: 2px;
+}
+
+:where(input, textarea):focus,
+:where(input, textarea):focus-visible {
+  outline: none;
+}
+
+/* One dot is a state, never an ornament: a square, because the brand draws no
+   soft corners, filled from the tone the status names. */
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 0.375rem;
+  height: 0.375rem;
+  background: currentColor;
+}
+
+/* A project's mark: its own asset when it has one, otherwise its initials on a
+   wash of its own colour, which is the rule the desktop follows. */
+.mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--mark);
+  height: var(--mark);
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--tint, var(--color-muted));
+  background: color-mix(in srgb, var(--tint, var(--color-muted)) 12%, transparent);
+  overflow: hidden;
+}
+
+.mark > svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  display: block;
+}
+
+.mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* A project that has a real icon keeps no wash behind it: the wash is the
+   fallback for initials, and a tint under a logo muddies its colour. */
+.mark.plain {
+  background: transparent;
+}
+
+.mark.gold {
+  --tint: #8a6d1f;
+}
+
+.mark.blue {
+  --tint: #1d4ed8;
+}
+
+.mark.green {
+  --tint: #0f7a37;
+}
+
+.mark.red {
+  --tint: #b91c1c;
+}
+
+.mark.violet {
+  --tint: #6d28d9;
+}
+
+.mark.slate {
+  --tint: #556070;
+}
+
+.mark.amber {
+  --tint: #9a5b06;
+}
+
+.mark.rose {
+  --tint: #be123c;
+}
+
+.mark.orange {
+  --tint: #c2410c;
+}
+
+.btn {
+  min-height: 2.75rem;
+  padding: 0 0.875rem;
+  border: 1px solid var(--color-border-strong);
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  font-weight: 400;
+}
+
+.btn:hover {
+  background: var(--color-elevated);
+}
+
+.btn.primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-on-primary);
+  font-weight: 500;
+}
+
+.btn.quiet {
+  border-color: transparent;
+  color: var(--color-muted);
+}
+
+/* A destructive action wears the app's danger ink on the same plate as the
+   primary one, so it is never mistaken for a quiet alternative. */
+.btn.danger {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: var(--color-surface);
+  font-weight: 500;
+}
+
+.btn:disabled {
+  color: var(--color-dimmed);
+  cursor: default;
+}
+
+.btn:focus-visible,
+.send:focus-visible,
+.dockitem:focus-visible,
+.row:focus-visible,
+.strip-toggle:focus-visible {
+  outline: 2px solid var(--color-foreground);
+  outline-offset: -2px;
+}
+
+/* A list with nothing in it says so in one quiet line. */
+.empty {
+  padding: 3rem var(--gutter);
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--color-muted);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---- Screen changes ----
+   Every change of screen moves for a reason, and the reason is where the screen
+   came from. A conversation is one step under the list it was opened from, so it
+   arrives over that list while the list gives way a third of the width; going back
+   returns the list the same way it left. Two panels beside each other in the dock
+   travel together in the direction the dock reads. The two readings of the work
+   list turn in place, because the list did not move anywhere. Signing in settles
+   the app up over the frame, and signing out lays the frame back over it.
+
+   The browser snapshots both screens and animates the images, so none of this runs
+   on the main thread and nothing in either screen can reflow.
+
+   The animation names arrive as inherited custom properties rather than through a
+   selector: the view-transition pseudo-elements sit in the top layer, where no
+   ancestor-qualified selector such as `html[data-nav] ::view-transition-new(root)`
+   reaches them, so a data attribute on the document would leave the browser's own
+   crossfade running instead. A custom property does inherit into them. */
+
+:root {
+  --screen-ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+::view-transition {
+  background: var(--color-app);
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--screen-ms, 280ms);
+  animation-timing-function: var(--screen-ease, cubic-bezier(0.32, 0.72, 0, 1));
+  animation-fill-mode: both;
+  /* The browser blends the two snapshots additively for its own crossfade, which
+     washes paper and ink out grey the moment a screen is moving. */
+  mix-blend-mode: normal;
+}
+
+/* The dock belongs to the panels and outlives the screen above it, so it is drawn
+   as its own piece: it holds still while panels travel past it, and it is gone
+   early when a screen reached from a panel replaces it. */
+::view-transition-old(dock) {
+  animation-duration: 110ms;
+}
+
+::view-transition-new(dock) {
+  animation-duration: 160ms;
+}
+
+::view-transition-old(root) {
+  animation-name: var(--screen-out);
+}
+
+::view-transition-new(root) {
+  animation-name: var(--screen-in);
+}
+
+/* One step down: the screen arrives whole and the one it was opened from gives way
+   and dims, so the arrival reads as depth rather than as a dissolve. */
+@keyframes screen-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes screen-out-left {
+  to {
+    opacity: 0.72;
+    transform: translateX(-30%);
+  }
+}
+
+/* One step back up: the same pair, time reversed. The conversation leaves to the
+   right and the list returns from the edge it had been pushed to. */
+@keyframes screen-in-left {
+  from {
+    opacity: 0.72;
+    transform: translateX(-30%);
+  }
+}
+
+@keyframes screen-out-right {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Two panels a dock square apart: both travel a full width, so the pair reads as
+   one strip being pulled rather than two screens trading places. */
+@keyframes panel-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes panel-out-left {
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes panel-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes panel-out-right {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* The same list, read the other way: a short turn in place, which says the place
+   did not change, and the direction follows the menu that was used. */
+/* The same list, read the other way: a short turn in place, which says the place
+   did not change, and the direction follows the menu that was used. The arriving
+   reading stays opaque, so it covers the one it replaces rather than showing
+   through it. */
+@keyframes reread-in-up {
+  from {
+    transform: translateY(-1.25rem);
+  }
+}
+
+@keyframes reread-out-down {
+  to {
+    opacity: 0.35;
+    transform: translateY(1rem);
+  }
+}
+
+@keyframes reread-in-down {
+  from {
+    transform: translateY(1.25rem);
+  }
+}
+
+@keyframes reread-out-up {
+  to {
+    opacity: 0.35;
+    transform: translateY(-1rem);
+  }
+}
+
+/* The session: the app settles up over the sign-in frame on the way in, and sinks
+   back onto it on the way out. */
+@keyframes session-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.985);
+  }
+}
+
+@keyframes session-out {
+  to {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.985);
+  }
+}
+
+@keyframes frame-out {
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes frame-in {
+  from {
+    opacity: 0;
+  }
+}
+
+/* The one entrance: a list, a row or a menu rises a quarter of a rem. */
+@keyframes list-in {
+  from {
+    opacity: 0;
+    transform: translateY(0.25rem);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
+  }
+}
+
+/* A card is the sign-in screen's paper: a bordered surface with a foot that
+   carries its two controls. Settings and the panels are lists, not cards. */
+.card {
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.card-foot .right {
+  display: flex;
+  gap: 0.375rem;
+}
+
+/* A one-line reading under a control: quiet, and never a second paragraph. */
+.note {
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.75rem;
+  color: var(--color-muted);
+}

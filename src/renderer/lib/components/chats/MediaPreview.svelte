@@ -216,6 +216,7 @@
              action here: this surface already is the fullscreen view. -->
         <VideoPlayer
           {src}
+          sourceKey={revealUrl ?? src}
           label={filename}
           {startAt}
           {autoPlay}

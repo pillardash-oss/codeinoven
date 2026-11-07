@@ -54,18 +54,59 @@ class SidebarState {
 
   /** True when the sidebar is visible in any form. */
   get visible(): boolean {
-    return !this.collapsed || this.hoverOpen
+    return !this.collapsed || this.hoverOpen || this.held
+  }
+
+  /**
+   * Interactions that started in the panel and continue outside it.
+   *
+   * A search popover is portaled to the body and opens beside the panel, so the
+   * pointer leaves the panel the instant it moves onto the search it just
+   * opened. Without a hold the panel reads that as the user walking away and
+   * closes underneath the query being typed, taking the search with it.
+   */
+  #holds = $state(0)
+
+  /** Whether the pointer currently rests on a floating panel. Not reactive: it
+   *  only decides what a release does, never what the panel draws. */
+  #pointerInside = false
+
+  /** Whether something is holding the floating panel open. */
+  get held(): boolean {
+    return this.#holds > 0
+  }
+
+  /** Keep the floating panel open until the matching `releaseHold`. */
+  hold(): void {
+    this.#holds += 1
+  }
+
+  /**
+   * Release one hold. The last release closes the floating panel when the
+   * pointer is not on it: the leave that would have closed it already happened
+   * while the hold stood, so no second leave is coming to close it later.
+   */
+  releaseHold(): void {
+    if (this.#holds > 0) this.#holds -= 1
+    if (this.#holds === 0 && !this.#pointerInside) this.hoverOpen = false
+  }
+
+  /** Report the pointer entering or leaving a floating panel. */
+  reportPointer(inside: boolean): void {
+    this.#pointerInside = inside
   }
 
   toggle(): void {
     this.collapsed = !this.collapsed
     if (this.collapsed) this.hoverOpen = false
+    this.#pointerInside = false
     this.persist()
   }
 
   redock(): void {
     this.collapsed = false
     this.hoverOpen = false
+    this.#pointerInside = false
     this.persist()
   }
 

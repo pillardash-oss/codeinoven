@@ -17,8 +17,11 @@ import { sendToRenderer } from '../ipc/renderer-delivery'
 import {
   discoverHarnessRuntimes,
   probeHarnessRuntime,
+  runHarnessCommand,
   type HarnessRuntime
 } from '../drivers/harness-runtime'
+import { resolveExecutablePathAsync } from '../drivers/cli-environment'
+import { currentAcpAgents, findAcpAgent, isAcpAgentId } from '../drivers/acp/acp-agents-store'
 
 /** Reopening Settings inside this window reuses the last completed probe pass. */
 const PROBE_CACHE_TTL_MS = 60_000
@@ -26,6 +29,29 @@ const PROBE_CACHE_TTL_MS = 60_000
 const PROBE_YIELD_MS = 50
 /** Coalesce renderer work while still reporting progress during a full pass. */
 const PROBE_BROADCAST_BATCH_SIZE = 2
+/** An ACP agent's own `--version` is a single short line, so it is cheap to ask. */
+const ACP_VERSION_TIMEOUT_MS = 8_000
+const ACP_VERSION_MAX_BYTES = 16 * 1024
+
+/**
+ * First line of `<command> --version` for an ACP agent.
+ *
+ * The app never installs an agent, so it cannot know a version by reading its
+ * own manifest: the command is the only authority, and one that does not answer
+ * simply has no version to show rather than a row that fails its probe.
+ */
+async function acpCommandVersion(command: string): Promise<string | undefined> {
+  try {
+    const result = await runHarnessCommand(command, ['--version'], {
+      timeoutMs: ACP_VERSION_TIMEOUT_MS,
+      maxOutputBytes: ACP_VERSION_MAX_BYTES
+    })
+    const line = (result.stdout || result.stderr).split(/\r?\n/u)[0]?.trim()
+    return line ? line : undefined
+  } catch {
+    return undefined
+  }
+}
 
 /** Every command that can satisfy a harness: its canonical name plus aliases. */
 function commandCandidates(definition: HarnessDescriptor): string[] {
@@ -46,6 +72,8 @@ export class ProviderConnectionService {
   private probeQueueTail: Promise<void> = Promise.resolve()
   /** Last settled (non-probing) result per harness, for change detection. */
   private lastSettled = new Map<string, ProviderConnectionInfo>()
+  /** Rows for the ACP agents the user added; empty until one exists. */
+  private acpRows = new Map<string, ProviderConnectionInfo>()
   /** Fired when a probe changes a harness's install state (status/version). */
   private readonly onStatusesChanged?: () => void
 
@@ -59,6 +87,7 @@ export class ProviderConnectionService {
         integration: harness.integration,
         supportsCustomProviders: harness.supportsCustomProviders,
         supportsManualCompaction: harnessSupportsManualCompaction(harness.id),
+        transport: harness.transport ?? 'native',
         status: 'idle'
       })
     }
@@ -71,14 +100,104 @@ export class ProviderConnectionService {
   }
 
   getAll(): ProviderConnectionInfo[] {
-    return Array.from(this.statuses.values())
+    this.syncAcpRows()
+    return [...this.statuses.values(), ...this.acpRows.values()]
+  }
+
+  /**
+   * Reconcile the ACP agent rows with the store.
+   *
+   * ACP agents are the user's, so the row list is derived from what they saved
+   * rather than from the harness registry: an agent they removed must lose its
+   * row, and one they just added must appear before the next full probe.
+   */
+  private syncAcpRows(): void {
+    for (const agent of currentAcpAgents()) {
+      const existing = this.acpRows.get(agent.id)
+      const enabled = agent.enabled !== false
+      // A saved edit must reach the row, including the Enabled switch: a rename,
+      // a re-pointed command and a parked agent all change what the page shows.
+      if (
+        existing?.name === agent.name &&
+        existing.command === agent.command &&
+        existing.enabled === enabled
+      ) {
+        continue
+      }
+      const fresh = existing === undefined || existing.command !== agent.command
+      this.acpRows.set(agent.id, {
+        id: agent.id,
+        name: agent.name,
+        command: agent.command,
+        integration: 'ready',
+        supportsCustomProviders: false,
+        supportsManualCompaction: false,
+        transport: 'acp',
+        enabled,
+        status: existing?.status ?? 'idle',
+        ...(existing?.resolvedPath ? { resolvedPath: existing.resolvedPath } : {})
+      })
+      // A new or re-pointed agent is probed right away: every harness picker
+      // gates on availability, and an `idle` row would be invisible there until
+      // the user pressed Check all.
+      if (fresh) void this.checkOne(agent.id).catch(() => undefined)
+    }
+    const known = new Set(currentAcpAgents().map((agent) => agent.id))
+    for (const id of [...this.acpRows.keys()]) {
+      if (!known.has(id)) this.acpRows.delete(id)
+    }
+  }
+
+  /** Probe one ACP agent's command: where it lives and the version it reports. */
+  private async probeAcpAgent(id: string): Promise<ProviderConnectionInfo> {
+    this.syncAcpRows()
+    const agent = await findAcpAgent(id)
+    const row = this.acpRows.get(id) ?? {
+      id,
+      name: id,
+      command: id,
+      integration: 'ready' as const,
+      supportsCustomProviders: false,
+      supportsManualCompaction: false,
+      transport: 'acp' as const,
+      status: 'error' as const,
+      detail: 'This ACP agent is no longer configured.'
+    }
+    if (!agent)
+      return { ...row, status: 'error', detail: 'This ACP agent is no longer configured.' }
+    const resolvedPath = await resolveExecutablePathAsync(agent.command)
+    const version = resolvedPath ? await acpCommandVersion(agent.command) : undefined
+    const result: ProviderConnectionInfo = resolvedPath
+      ? {
+          ...row,
+          name: agent.name,
+          command: agent.command,
+          enabled: agent.enabled !== false,
+          status: 'available',
+          resolvedPath,
+          ...(version ? { version } : {})
+        }
+      : {
+          ...row,
+          name: agent.name,
+          command: agent.command,
+          enabled: agent.enabled !== false,
+          status: 'error',
+          resolvedPath: undefined,
+          version: undefined,
+          detail: `"${agent.command}" was not found on PATH.`
+        }
+    this.acpRows.set(id, result)
+    this.broadcast()
+    this.noteSettled(result)
+    return result
   }
 
   async checkOne(id: string): Promise<ProviderConnectionInfo> {
     const active = this.checkOneInFlight.get(id)
     if (active) return active
 
-    const check = this.runCheckOne(id)
+    const check = isAcpAgentId(id) ? this.probeAcpAgent(id) : this.runCheckOne(id)
     this.checkOneInFlight.set(id, check)
     try {
       return await check
@@ -99,6 +218,7 @@ export class ProviderConnectionService {
           integration: 'planned',
           supportsCustomProviders: false,
           supportsManualCompaction: false,
+          transport: 'native',
           status: 'error',
           detail: 'Unknown provider'
         }
@@ -153,6 +273,10 @@ export class ProviderConnectionService {
       if (index < harnesses.length - 1) await this.yieldToMainLoop()
     }
 
+    for (const agent of currentAcpAgents()) {
+      await this.enqueueProbe(() => this.probeAcpAgent(agent.id))
+    }
+
     this.lastCheckedAt = Date.now()
     return this.getAll()
   }
@@ -201,6 +325,7 @@ export class ProviderConnectionService {
       integration: def.integration,
       supportsCustomProviders: def.supportsCustomProviders,
       supportsManualCompaction: harnessSupportsManualCompaction(def.id),
+      transport: def.transport ?? 'native',
       status: 'idle'
     }
 
@@ -214,6 +339,14 @@ export class ProviderConnectionService {
       const runtime = runtimes.get(command)
       if (!runtime) continue
       resolved ??= runtime
+      // A bundled runtime already knows its own version from the build that
+      // shipped it. Probing it would spawn a whole Electron run-as-node process
+      // to parse the harness bundle for one line, which is the single most
+      // expensive part of opening Harnesses on a weak machine.
+      if (runtime.target.kind === 'bundled' && runtime.version) {
+        candidates.push({ version: runtime.version, value: runtime })
+        continue
+      }
       const versionResult = await probeHarnessRuntime(runtime, def.versionArgs)
       if (!versionResult.ok) {
         failures.push(`${command}: ${versionResult.reason}`)

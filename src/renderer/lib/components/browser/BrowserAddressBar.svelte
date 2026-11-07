@@ -4,12 +4,10 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { Attachment } from 'svelte/attachments'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
-  import type { BrowserHistoryEntry } from '$shared/browser/browser-library'
   import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { browserAddressDrawer } from '$lib/stores/browser-address-drawer.svelte'
   import { browserHistory } from '$lib/stores/browser-history.svelte'
   import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
-  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
-  import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
 
   interface Props {
     /** The address of the page on screen, which the field mirrors until the user
@@ -65,19 +63,28 @@
    *
    * The drawer offers pages from this browser's unboxed scope, or from its selected
    * box when it uses a shared profile. Box history follows the box across the
-   * global and thread browsers; unboxed conversation history lasts for the session
-   * and disappears with the last tab.
+   * global and thread browsers; unboxed conversation history lasts for the session,
+   * so it is still offered after the thread browser is closed and reopened, and it
+   * goes when the app quits.
    *
-   * The drawer is a floating DOM overlay over the page, and the page is a native
-   * view composed above every DOM surface, so the drawer publishes its own
-   * rectangle and the visibility store detaches the page for as long as it is up
-   * (`trackBrowserOcclusion`). Nothing here has to know that happened.
+   * The drawer is a row of the browser column rather than an overlay on the page.
+   * The page is a native view composed above every DOM surface, so a drawer drawn
+   * over it could only be seen by parking the page (`trackBrowserOcclusion`), and
+   * the user would watch their page blank while typing an address. The field
+   * publishes the open drawer to `browserAddressDrawer` instead, and the panel
+   * draws it under the toolbar, which shrinks the page's frame and lets the
+   * observers place the live page beneath it (`BrowserPanel.svelte`, the same
+   * answer `BrowserFindBar` gives).
    */
 
   /** How many history rows are offered. A drawer is scanned, not read. */
   const SUGGESTION_LIMIT = 7
 
   const listId = $props.id()
+
+  /** This field's claim on the tab's drawer, so the other copy of the same tab
+   *  (the sidebar's and the full screen's) can never take it away. */
+  const drawerOwner = Symbol('browser-address-drawer')
 
   let input = $state<HTMLInputElement | undefined>(undefined)
   /** The field's own element, captured as an attachment: the drawer's keyboard
@@ -186,6 +193,20 @@
     onNavigate(target)
   }
 
+  /**
+   * The row the panel draws is this field's own drawer, so it opens and
+   * highlights through the same state the keys drive. Exported because the panel
+   * column is not inside this component.
+   */
+  export function openSuggestion(url: string): void {
+    open(url)
+  }
+
+  /** Hovering a row and arrowing to it are one highlight. */
+  export function highlightSuggestion(index: number): void {
+    highlight = index
+  }
+
   function submit(): void {
     const picked = suggestions[highlight]
     if (picked) {
@@ -248,6 +269,23 @@
     event.preventDefault()
     submit()
   }
+
+  // The row that draws this drawer is a row of the browser column, not part of
+  // this field (see the drawer's note above), so the field hands the open drawer
+  // over for as long as it has one on this tab. The cleanup takes the row away
+  // with the field: a panel that unmounts mid-typing must not leave a drawer
+  // under the next toolbar.
+  $effect(() => {
+    const id = tabId
+    if (id === null) return
+    const shown = drawerVisible
+    browserAddressDrawer.publish(
+      id,
+      drawerOwner,
+      shown ? { listId, entries: suggestions, highlight } : null
+    )
+    return () => browserAddressDrawer.publish(id, drawerOwner, null)
+  })
 </script>
 
 <div class="relative min-w-0 flex-1">
@@ -309,20 +347,5 @@
     >
       <CioSpinner size={13} class="animate-spin text-primary" />
     </span>
-  {/if}
-  {#if drawerVisible}
-    <div
-      {@attach trackBrowserOcclusion}
-      class="absolute top-full right-0 left-0 z-20 mt-1 max-h-[min(16rem,50vh)] overflow-y-auto border border-border bg-surface p-1.5 shadow-lg"
-    >
-      <BrowserHistorySuggestions
-        {listId}
-        {suggestions}
-        {highlight}
-        compact
-        onHighlight={(index) => (highlight = index)}
-        onOpen={(entry: BrowserHistoryEntry) => open(entry.url)}
-      />
-    </div>
   {/if}
 </div>

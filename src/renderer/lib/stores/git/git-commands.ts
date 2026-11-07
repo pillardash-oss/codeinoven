@@ -91,6 +91,15 @@ export class GitStateCommands {
       this.host.statusError = null
       publishedStatus = true
       this.host.statusReadAt = Date.now()
+      // The prepared PR-conflict session comes from the status itself: main
+      // records it on disk when the PR head is checked out, so it survives a
+      // renderer reload and an app restart. Mirroring it here (instead of
+      // remembering it in this window) is what keeps Complete merge able to push
+      // the resolution back to the pull request, and a refresh for another
+      // project can no longer wipe it.
+      this.host.prResolveSession = status.prResolveSession
+        ? { ...status.prResolveSession, projectId }
+        : null
       // Conflicts mode is only meaningful while actual conflicts exist - once
       // they are all resolved the filter auto-closes, like the last-turn one.
       // Decided here, off the status alone, so the filter settles without
@@ -100,19 +109,6 @@ export class GitStateCommands {
       const [branches, identity, remotes, credentialStatus, stashes] = await chrome
       if (!stillCurrent()) return
       this.host.branches = branches
-      // A recorded PR-conflict session is only real while its temporary
-      // `pr-<n>` branch still exists: once the branch is gone (finished, or
-      // deleted by hand) the session must not keep offering a merge to
-      // complete.
-      const session = this.host.prResolveSession
-      if (
-        session &&
-        !branches.some(
-          (branch) => branch.kind === 'local' && branch.name === `pr-${session.pullNumber}`
-        )
-      ) {
-        this.host.prResolveSession = null
-      }
       this.host.identity = identity
       this.host.remotes = Array.isArray(remotes) ? remotes : []
       this.host.credentialStatus = credentialStatus

@@ -20,8 +20,10 @@ export interface JobStepView {
   detail?: string
 }
 
-/** How a run stands as a whole. */
-export type JobStatus = 'running' | 'succeeded' | 'failed'
+/** How a run stands as a whole. `cancelled` is work that never happened
+ *  because the user backed out: it is not a failure, and it must end the panel's
+ *  wait instead of leaving it armed for a prompt that will not come. */
+export type JobStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
 /** One minimized run, as the shared dock row draws it. */
 export interface JobDockEntry {

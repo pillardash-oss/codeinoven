@@ -1,11 +1,12 @@
 import type { AgentProviderIssue, AgentProviderIssueKind } from './types'
 
 /**
- * True when a provider issue represents a usage/rate-limit reset wait rather
- * than a terminal failure. This is the app-wide contract: such issues always
- * surface as a `waiting` provider card with a retry time, and the retry
- * scheduler resumes the thread once the reset passes   for every harness,
- * whether or not the harness schedules its own provider retry.
+ * True when a provider issue represents a retry wait rather than a terminal
+ * failure: a usage/rate-limit reset window, or a retryable provider-load outage
+ * (a 429 `overloaded`/`server_error`, a 5xx). This is the app-wide contract:
+ * such issues always surface as a `waiting` provider card with a retry time,
+ * and the retry scheduler resumes the thread once the wait passes   for every
+ * harness, whether or not the harness schedules its own provider retry.
  */
 export function isUsageResetWaitIssue(
   issue: Pick<AgentProviderIssue, 'kind' | 'retryable'> | undefined | null
@@ -28,6 +29,26 @@ export const SCHEDULED_RETRY_WAKE_WINDOW_MS = 6 * 60 * 60 * 1_000
 export function isLongScheduledRetryWait(retryAt: number, now = Date.now()): boolean {
   return retryAt - now > SCHEDULED_RETRY_WAKE_WINDOW_MS
 }
+
+/**
+ * How long to wait before retrying a transient provider-load failure.
+ *
+ * Such a failure is not an account window: `overloaded`, `server_error`, and
+ * 5xx responses clear in seconds to minutes. The retry scheduler must never
+ * derive a usage reset from account telemetry for one, or a "retry shortly"
+ * notice turns into the far-future reset of an unrelated (often monthly)
+ * window   observed on OpenCode Go as a `provider_unavailable` record parked
+ * three weeks out. One fixed minute is long enough to let a load spike pass and
+ * short enough that a still-failing turn resumes promptly.
+ */
+export const TRANSIENT_PROVIDER_RETRY_MS = 60 * 1_000
+
+/**
+ * Upper bound for a persisted transient provider-load wait. A saved record that
+ * claims a longer wait is a legacy record written before the fixed backoff
+ * above, so load-time repair clamps it instead of parking the thread for weeks.
+ */
+export const TRANSIENT_PROVIDER_RETRY_MAX_MS = 15 * 60 * 1_000
 
 /**
  * Provider errors frequently arrive as a driver-formatted string wrapping a raw

@@ -1,9 +1,9 @@
 import { conversationScopeId, ASSISTANT_SPACE_ID } from '../../../lib/types'
-import type { BrowserThreadBrowserPage } from '../../../lib/ipc-contract'
+import type { BrowserAgentTabClaim, BrowserThreadBrowserPage } from '../../../lib/ipc-contract'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc-contract'
 import { Logger } from '../../system/logger'
 import { type BrowserTab } from './browser-types'
-import { type BrowserUtilityPage } from './browser-validation'
+import { browserContextKey, type BrowserUtilityPage } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 
 /**
@@ -21,6 +21,7 @@ import type { BrowserService } from '../browser-service'
  * root cannot drift apart: a changed signature is a compile error here.
  */
 export interface ConversationPagesHost {
+  readonly agentPageTargets: BrowserService['agentPageTargets']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentUserPageTabIds: BrowserService['agentUserPageTabIds']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
@@ -58,26 +59,54 @@ export class BrowserServiceConversationPages {
    * {@link ATTACHED_PAGE_READ_OPERATIONS}):
    *
    *   - the page the agent opened and owns (`open`), which it edits freely;
-   *   - the page this conversation's thread browser is in use on, which is the
-   *     page the user is reading and is therefore attached;
+   *   - the page assigned to this conversation by its thread browser, which is the
+   *     page the user gave it and is therefore attached;
    *   - the page a browser tab's assistant conversation is bound to, which is the
    *     same rule for the global browser's strips.
    *
    * `page` picks between the first and the second, and it is honoured exactly: an
-   * agent that asks for its own page is not handed the user's. The thread browser's
-   * page is the default when the agent owns none, and `"user"` asks for it
-   * explicitly, so an agent that opened a page of its own can still reach the one
-   * that holds the user's session.
+   * agent that asks for its own page is not handed the user's. The assigned page is
+   * the default when the agent owns none, and `"user"` asks for it explicitly, so an
+   * agent that opened a page of its own can still reach the one that holds the
+   * user's session.
    *
-   * A project's threads share one strip, so the tab the thread browser is on is
-   * not stable: the user switching tabs or a sibling thread showing a preview
-   * moves it. `"user"` therefore answers the tab this agent resolved the first
-   * time and keeps answering it while it lives (see `agentUserPageTabIds`), which
-   * is what stops another conversation's page from becoming this one's target;
-   * `"strip"` is the explicit way to move onto whatever the strip shows now.
+   * The assignment belongs to the conversation, not to the project's strip. A
+   * project's threads share one strip, so plenty of other tabs come and go on it;
+   * what one thread was given stays that thread's page until the user closes the tab
+   * or points that thread at another one (see `threadBrowserPages`). Both `"user"`
+   * and `"strip"` answer it, and neither can move it onto a sibling thread's page.
    */
   utilityTarget(input: {
-    scope: string
+    projectId: string
+    threadId: string
+    contextKey: string
+    page: BrowserUtilityPage | null
+  }): { tabId: string; tab: BrowserTab; attached: boolean } | null {
+    const target = this.resolveTarget(input)
+    if (target) {
+      const contents = target.tab.view.webContents
+      this.host.agentPageTargets.set(input.contextKey, {
+        tabId: target.tabId,
+        url: contents.isDestroyed() ? '' : contents.getURL()
+      })
+      // Remember what this conversation was given, so the page survives the app
+      // dropping the binding (a panel closing, a turn where no strip is on screen)
+      // while the tab itself lives on. Only a tab the user closed is forgotten.
+      if (input.page !== 'agent' && this.host.agentTabIds.get(input.contextKey) !== target.tabId) {
+        this.host.agentUserPageTabIds.set(input.contextKey, target.tabId)
+      }
+    }
+    return target
+  }
+
+  /** What the previous call for this context worked on, if any. */
+  previousPageTarget(contextKey: string): { tabId: string; url: string } | null {
+    return this.host.agentPageTargets.get(contextKey) ?? null
+  }
+
+  /** The tab one browser utility call resolves to, before the ledger is updated. */
+  private resolveTarget(input: {
+    projectId: string
     threadId: string
     contextKey: string
     page: BrowserUtilityPage | null
@@ -87,25 +116,15 @@ export class BrowserServiceConversationPages {
     const ownedTarget =
       owned && ownedTabId ? { tabId: ownedTabId, tab: owned, attached: false } : null
     if (input.page === 'agent') return ownedTarget
-    if (input.page === 'strip') {
-      const stripPage = this.pinConversationPage(input.scope, input.contextKey, ownedTabId)
-      return stripPage ? { ...stripPage, attached: stripPage.tabId !== ownedTabId } : null
-    }
-    if (input.page === 'user') {
-      const userPage =
-        this.pinnedConversationPage(input.contextKey) ??
-        this.pinConversationPage(input.scope, input.contextKey, ownedTabId)
-      if (!userPage) return null
-      // A page the agent opened may itself be the tab the thread browser is on, and
-      // then it is still the agent's own page: nothing changes about who may edit
-      // it.
-      return { ...userPage, attached: userPage.tabId !== ownedTabId }
+    const assigned = this.assignedPage(input.projectId, input.threadId, input.contextKey)
+    if (input.page === 'user' || input.page === 'strip') {
+      // A page the agent opened may itself be the page assigned to this
+      // conversation, and then it is still the agent's own page: nothing changes
+      // about who may edit it.
+      return assigned ? { ...assigned, attached: assigned.tabId !== ownedTabId } : null
     }
     if (ownedTarget) return ownedTarget
-    const conversationPage =
-      this.pinnedConversationPage(input.contextKey) ??
-      this.pinConversationPage(input.scope, input.contextKey, ownedTabId)
-    if (conversationPage) return { ...conversationPage, attached: true }
+    if (assigned) return { ...assigned, attached: true }
     const pageTabId = this.host.assistantPageTabIds.get(input.threadId)
     if (!pageTabId) return null
     const page = this.host.tabs.get(pageTabId)
@@ -113,11 +132,28 @@ export class BrowserServiceConversationPages {
   }
 
   /**
-   * The thread browser page this agent already resolved, while that tab is live.
+   * The page this conversation was given: what its thread browser is on, else the
+   * page it last worked on.
+   *
+   * The binding wins, because pointing this conversation's strip at another tab is
+   * how the user hands the agent a different page. The pin is the fallback for the
+   * moment the binding is gone while the tab lives on, so a panel closing never
+   * costs a thread the tab it was given.
+   */
+  private assignedPage(
+    projectId: string,
+    threadId: string,
+    contextKey: string
+  ): { tabId: string; tab: BrowserTab } | null {
+    return this.conversationPageTab(projectId, threadId) ?? this.pinnedConversationPage(contextKey)
+  }
+
+  /**
+   * The page this conversation last worked on, while that tab is live.
    *
    * A tab the user closed is not an error and not a stale answer: the pin is
-   * dropped here, so the next call resolves the strip's page afresh exactly as the
-   * first one did.
+   * dropped here, and that close is the one case that earns a new tab. Nothing here
+   * ever keeps naming a page that is gone.
    */
   private pinnedConversationPage(contextKey: string): { tabId: string; tab: BrowserTab } | null {
     const tabId = this.host.agentUserPageTabIds.get(contextKey)
@@ -129,34 +165,68 @@ export class BrowserServiceConversationPages {
   }
 
   /**
-   * Resolve the page the thread browser is on now and pin it to this agent.
+   * The box (cookie jar) one conversation's browser is using, when it has a page.
    *
-   * A page the agent opened itself is not pinned: it is already reachable as the
-   * agent's own page, and pinning it would keep naming a tab the next `open`
-   * replaces.
+   * A tab's jar is fixed when it is created, so this is what a page the agent opens
+   * has to use: the user may have moved this conversation onto the personal box to
+   * bring a signed-in session into it, and a page opened into the conversation's own
+   * empty jar would see none of that session.
    */
-  private pinConversationPage(
-    scope: string,
-    contextKey: string,
-    ownedTabId: string | undefined
-  ): { tabId: string; tab: BrowserTab } | null {
-    const page = this.conversationPageTab(scope)
-    if (!page) {
-      this.host.agentUserPageTabIds.delete(contextKey)
-      return null
-    }
-    if (page.tabId !== ownedTabId) this.host.agentUserPageTabIds.set(contextKey, page.tabId)
-    return page
+  conversationBoxFor(projectId: string, threadId: string): string | null {
+    return this.threadBrowserPage(projectId, threadId)?.boxId ?? null
   }
 
   /**
-   * The page one conversation's thread browser is in use on, when it is live.
+   * File the page one conversation's thread browser is on.
+   *
+   * The app reports this, never an agent operation: it is the user pointing a
+   * conversation at a tab, and it is per conversation so that browsing in one
+   * thread can never reassign another thread's page.
+   */
+  bindConversationPage(projectId: string, threadId: string, page: BrowserThreadBrowserPage): void {
+    this.host.threadBrowserPages.set(this.conversationPageKey(projectId, threadId), page)
+  }
+
+  /** Drop that binding, for a conversation whose thread browser holds no page. */
+  unbindConversationPage(projectId: string, threadId: string): void {
+    this.host.threadBrowserPages.delete(this.conversationPageKey(projectId, threadId))
+  }
+
+  /**
+   * Every tab an agent is working on, and the thread it belongs to.
+   *
+   * Both kinds of claim are here: the tab an agent opened for itself and the page a
+   * conversation was assigned. A tab the user opened and handed to a thread's agent
+   * is claimed the moment that agent works on it, which is what the strip's badge
+   * reports. A closed tab drops out because its entry is gone.
+   */
+  agentTabClaims(): BrowserAgentTabClaim[] {
+    const claims: BrowserAgentTabClaim[] = []
+    const seen = new Set<string>()
+    for (const tabId of [
+      ...this.host.agentTabIds.values(),
+      ...this.host.agentUserPageTabIds.values()
+    ]) {
+      if (seen.has(tabId)) continue
+      const tab = this.host.tabs.get(tabId)
+      if (!tab) continue
+      seen.add(tabId)
+      claims.push({ tabId, projectId: tab.projectId, threadId: tab.threadId })
+    }
+    return claims
+  }
+
+  /**
+   * The page one conversation's thread browser is assigned, when it is live.
    *
    * Used for what an answer advertises rather than for what it does, so it never
    * mounts anything: telling an agent about a page must not cost a process.
    */
-  liveConversationPage(scope: string): { tabId: string; tab: BrowserTab } | null {
-    const binding = this.threadBrowserPage(scope)
+  liveConversationPage(
+    projectId: string,
+    threadId: string
+  ): { tabId: string; tab: BrowserTab } | null {
+    const binding = this.threadBrowserPage(projectId, threadId)
     if (!binding) return null
     const tab = this.host.tabs.get(binding.tabId)
     return tab ? { tabId: binding.tabId, tab } : null
@@ -171,8 +241,11 @@ export class BrowserServiceConversationPages {
    * exactly as an agent's own `open` mounts its page, so the agent can read it
    * without the user's view changing and without taking the tab over.
    */
-  conversationPageTab(scope: string): { tabId: string; tab: BrowserTab } | null {
-    const binding = this.threadBrowserPage(scope)
+  conversationPageTab(
+    projectId: string,
+    threadId: string
+  ): { tabId: string; tab: BrowserTab } | null {
+    const binding = this.threadBrowserPage(projectId, threadId)
     if (!binding) return null
     const live = this.host.tabs.get(binding.tabId)
     if (live) return { tabId: binding.tabId, tab: live }
@@ -206,7 +279,8 @@ export class BrowserServiceConversationPages {
    * page that answered already is that page.
    */
   threadBrowserHint(
-    scope: string,
+    projectId: string,
+    threadId: string,
     answeredTabId: string | null,
     contextKey: string
   ): {
@@ -220,7 +294,7 @@ export class BrowserServiceConversationPages {
     /** The tab `page "user"` answers, present when the answer came from another. */
     userPage?: { tabId: string; url: string; title: string }
   } {
-    const page = this.liveConversationPage(scope)
+    const page = this.liveConversationPage(projectId, threadId)
     const pinned = this.pinnedConversationPage(contextKey)
     const answered = answeredTabId
     const hint: {
@@ -240,7 +314,7 @@ export class BrowserServiceConversationPages {
         ...strip,
         boxId: page.tab.boxId,
         detail:
-          'This conversation\u2019s thread browser is showing this page now, and it moves whenever the user or another conversation opens something in it. Pass page "strip" to read or act on it, or page "agent" for a page you opened.'
+          'This conversation\u2019s thread browser is on this page, the one the agent was given. Pass page "user" or page "strip" to read or act on it, or page "agent" for a page you opened.'
       }
     }
     return hint
@@ -262,17 +336,33 @@ export class BrowserServiceConversationPages {
   }
 
   /**
-   * The binding one conversation's thread browser filed, when the page it names
-   * belongs to that conversation.
+   * The binding one conversation's thread browser filed, when the page it names is
+   * still one of that conversation's pages.
    *
-   * A binding is a reference, not an authority: a page answers only for the
-   * conversation whose browser it is in, so a scope that outlived the tab it was
-   * filed with can never hand one conversation's page to another's agent.
+   * A binding is a reference, not an authority: a page answers only while it
+   * belongs to the same browser, so a record that outlived the tab it was filed for
+   * can never hand a conversation a page from another project or another hidden
+   * container.
    */
-  threadBrowserPage(scope: string): BrowserThreadBrowserPage | null {
-    const page = this.host.threadBrowserPages.get(scope)
+  threadBrowserPage(projectId: string, threadId: string): BrowserThreadBrowserPage | null {
+    const page = this.host.threadBrowserPages.get(this.conversationPageKey(projectId, threadId))
     if (!page) return null
+    const scope = this.conversationScope(projectId, threadId)
     return this.conversationScope(page.projectId, page.threadId) === scope ? page : null
+  }
+
+  /**
+   * The key one conversation's assigned page is filed under.
+   *
+   * Every thread of a project keeps its own assignment, so the key is the
+   * conversation. A hidden container that already groups its conversations into one
+   * browser (an assistant's tasks) keeps that grouping, because those threads share
+   * one strip and one page by design.
+   */
+  private conversationPageKey(projectId: string, threadId: string): string {
+    const scope = this.conversationScope(projectId, threadId)
+    const grouped = scope !== projectId && scope !== threadId
+    return grouped ? scope : browserContextKey(projectId, threadId)
   }
 
   /**

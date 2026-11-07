@@ -69,7 +69,9 @@ export class IdeService {
     if (request.action === 'close') this.documentOwners.delete(request.owner)
     else if (
       request.path &&
-      ['sync', 'capabilities', 'definition', 'references', 'hover'].includes(request.action)
+      ['sync', 'capabilities', 'definition', 'references', 'hover', 'format'].includes(
+        request.action
+      )
     )
       this.documentOwners.add(request.owner)
     if ((request.action === 'close' || request.action === 'cancel') && !this.worker) return {}

@@ -3,13 +3,13 @@
   import { scopeState, type ThreadStage } from '$lib/stores/scope.svelte'
   import { threadSettings } from '$lib/stores/thread-settings.svelte'
   import {
-    inheritEngineeringLifecycle,
     persistInheritedThreadSettings,
     settingsForNewThread,
     threadWithInheritedSettings,
     withProjectOven
   } from '$lib/thread-settings-inheritance'
   import { workspaceState, findEmptyNewThread } from '$lib/stores/workspace.svelte'
+  import { moveThreadToScope } from '$lib/stores/thread-scope-move'
   import {
     DEFAULT_THREAD_TITLE,
     activeThreadRowId,
@@ -172,11 +172,9 @@
     const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
     if (!thread || scopeState.bucketForThread(thread) === bucketId) return
     try {
-      const updated = await invoke('thread:update', thread.projectId, thread.id, {
-        scopeBucketId: bucketId
-      })
-      scopeState.updateThread(updated)
-      workspaceState.updateThread(updated)
+      // A refused move is toasted by the helper, which is why it answers null
+      // instead of throwing an error this banner would have to repeat.
+      await moveThreadToScope(thread.projectId, thread.id, bucketId)
     } catch (error) {
       actionError = errorMessage(error, 'The thread could not be moved.')
     }
@@ -230,16 +228,7 @@
           scopeState.updateThread(thread)
           scopeState.showSidebarForThread(thread, bucketId)
           navigateToScopedThreads?.()
-          // Adopt the inherited row: it carries the Engineering marker the
-          // opened view reads to keep its Toolbox filled.
-          let opened = thread
-          if (activeThread && activeThread.projectId === activeProject.id) {
-            opened =
-              (await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)) ??
-              thread
-            scopeState.updateThread(opened)
-          }
-          workspaceState.openThread(opened, activeProject)
+          workspaceState.openThread(thread, activeProject)
         } catch (error) {
           actionError = errorMessage(error, 'The thread could not be opened.')
         }
@@ -261,18 +250,9 @@
       scopeState.updateThread(thread)
       scopeState.showSidebarForThread(thread, bucketId)
       navigateToScopedThreads?.()
-      // Adopt the inherited row: it carries the Engineering marker the opened
-      // view reads to keep its Toolbox filled.
-      let opened = thread
-      if (activeThread && activeThread.projectId === activeProject.id) {
-        opened =
-          (await inheritEngineeringLifecycle(activeProject.id, activeThread.id, thread.id)) ??
-          thread
-        scopeState.updateThread(opened)
-      }
-      workspaceState.openThread(opened, activeProject)
+      workspaceState.openThread(thread, activeProject)
       if (activeThread?.settings) {
-        void persistInheritedThreadSettings(opened, inheritedSettings).catch((error) => {
+        void persistInheritedThreadSettings(thread, inheritedSettings).catch((error) => {
           actionError = errorMessage(error, 'The inherited thread settings could not be saved.')
         })
       }

@@ -9,6 +9,8 @@ import type {
   CuaOperationEvent,
   DesignCapabilityExecutor,
   EngineeringToolExecutor,
+  FollowUpExecutor,
+  McpSignInExecutor,
   OrchestrationExecutor,
   PawnToolExecutor,
   SecretRequestExecutor,
@@ -27,6 +29,15 @@ export class UtilityOrchestrationServiceExecutors {
 
   setBrowserExecutor(executor: BrowserUtilityExecutor | null): void {
     this.host.browserExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the app-owned `cio:follow-up` capability, which
+   * wakes the thread the agent is running in at a time it agreed with the user.
+   * The app supplies it because it owns the clock, the stored wake and the resume.
+   */
+  setFollowUpExecutor(executor: FollowUpExecutor | null): void {
+    this.host.followUpExecutor = executor
   }
 
   /**
@@ -100,6 +111,19 @@ export class UtilityOrchestrationServiceExecutors {
    */
   setSecretRequestExecutor(executor: SecretRequestExecutor | null): void {
     this.host.secretRequestExecutor = executor
+  }
+
+  /**
+   * Register the executor behind the MCP sign-in card.
+   *
+   * A remote MCP server that refuses for lack of authorization has to reach the
+   * user, and only the chat engine owns the pending-question surface that shows
+   * a card and waits for it. The authorization itself is the shared OAuth
+   * service's, so the card and the Utilities page sign in the same server the
+   * same way, and the grant they produce is the same one.
+   */
+  setMcpSignInExecutor(executor: McpSignInExecutor | null): void {
+    this.host.mcpSignInExecutor = executor
   }
 
   /**

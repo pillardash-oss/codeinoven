@@ -77,6 +77,7 @@ import { registerIssueHandlers } from './handlers/issue-handlers'
 import { registerCloudHandlers } from './handlers/cloud-handlers'
 import { registerEditorsHandlers } from './handlers/editors-handlers'
 import { registerThreadHandlers } from './handlers/thread-handlers'
+import { registerReceiptHandlers } from './handlers/receipt-handlers'
 import { registerNotesHandlers } from './handlers/notes-handlers'
 import { registerHistoryHandlers } from './handlers/history-handlers'
 import { registerSearchHandlers } from './handlers/search-handlers'
@@ -172,7 +173,8 @@ export function registerIpcHandlers(
       ? (query, searchOptions) =>
           options.searchService!.searchIntent(
             query,
-            Math.max(1, Math.min((searchOptions.limit ?? 20) * 3, 200))
+            Math.max(1, Math.min((searchOptions.limit ?? 20) * 3, 200)),
+            searchOptions
           )
       : null
   )
@@ -215,6 +217,14 @@ export function registerIpcHandlers(
     // being frozen at construction: raising it applies to the next conflict.
     conflictFileLimit: async () => (await storage.getConfig()).maxConflictFileBytes
   })
+  // A run records the commit it starts from through this port: one bounded log
+  // read through the same Git service every panel uses, never a second git path.
+  if (chatEngine) {
+    chatEngine.gitHeadCommit = async (projectPath: string) => {
+      const [head] = await gitService.log(projectPath, 1)
+      return head?.hash ?? null
+    }
+  }
   /**
    * The sync's other end is resolved once, for both the picker that lists the
    * options and the operation that acts on the choice, so the two can never name
@@ -522,6 +532,7 @@ export function registerIpcHandlers(
   registerCloudHandlers(ctx)
   registerEditorsHandlers(ctx)
   registerThreadHandlers(ctx)
+  registerReceiptHandlers(ctx)
   registerNotesHandlers(ctx)
   registerHistoryHandlers(ctx)
   registerSearchHandlers(ctx)

@@ -1,4 +1,4 @@
-import { app, dialog, Menu, MenuItem, type MenuItemConstructorOptions } from 'electron'
+import { app, dialog, type MenuItemConstructorOptions } from 'electron'
 import { Worker } from 'node:worker_threads'
 import { APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
@@ -64,22 +64,4 @@ async function requestRestart(quitApp: () => void): Promise<void> {
     restartPending = false
     Logger.error('Could not restart the application', error)
   }
-}
-
-/** Preserve the development menu and expose recovery on every desktop platform. */
-export function installForceRestartMenu(quitApp: () => void): void {
-  const menu = Menu.getApplicationMenu()
-  const submenu = menu?.items[0]?.submenu
-  if (menu && submenu) {
-    const quitIndex = submenu.items.findIndex((item) => item.role === 'quit')
-    const index = quitIndex < 0 ? submenu.items.length : quitIndex
-    submenu.insert(index, new MenuItem(forceRestartMenuItem(quitApp)))
-    Menu.setApplicationMenu(menu)
-    return
-  }
-  Menu.setApplicationMenu(
-    Menu.buildFromTemplate([
-      { label: APP_NAME, submenu: [forceRestartMenuItem(quitApp), { role: 'quit' }] }
-    ])
-  )
 }

@@ -6,6 +6,7 @@
  * the emitted module is byte-for-byte identical to the original single string.
  */
 import {
+  CIO_AGENT_MESSAGE_TOOL_NAME,
   CIO_AGENT_OUTPUT_TOOL_NAME,
   CIO_AGENT_STATUS_TOOL_NAME,
   CIO_SPAWN_AGENT_TOOL_NAME
@@ -271,6 +272,7 @@ function refreshCioReadOnlyTools(api) {
 // worker. The allowlist names them explicitly if a future scope needs them.
 const CIO_SUBAGENT_TOOL_NAMES = new Set([
   '${CIO_SPAWN_AGENT_TOOL_NAME}',
+  '${CIO_AGENT_MESSAGE_TOOL_NAME}',
   '${CIO_AGENT_STATUS_TOOL_NAME}',
   '${CIO_AGENT_OUTPUT_TOOL_NAME}'
 ])
@@ -282,7 +284,9 @@ const CIO_SUBAGENT_PROMPT_GUIDELINES = [
   'When the user asks to split work across workers and wants to prompt those workers themselves, use ${CREATE_ASSIGNMENT_TOOL_NAME} instead of ${CIO_SPAWN_AGENT_TOOL_NAME}: both can be monitored, but only Assignment workers can be prompted independently. Ask with cio_ask_user which the user wants when they have not already said, and do not ask again once they have.',
   'Every worker inherits the project rules you follow: scope its instructions to the files it owns, tell it to verify only those files (a project-wide check is forbidden for a worker), and never ask it to commit, stage or stash.',
   'Give each sub-agent complete, self-contained instructions; spawn separate sub-agents for independent work. Never end your turn while sub-agents are still running: wait with ${CIO_AGENT_STATUS_TOOL_NAME} (wait: true), then read every finished worker with ${CIO_AGENT_OUTPUT_TOOL_NAME}   successful or failed   because the primary agent owns committing the files the workers changed.',
-  'At most four sub-agents run at the same time and the fifth is refused, so keep the fan-out inside that and queue the remaining work behind it. Reach for a pawn agent (${PAWN_AGENT_TOOL_NAME}) only when the work genuinely needs five or more worker runs in flight at once and waiting for a free sub-agent slot would stall it, or when the user explicitly asks for pawns   then hand the overflow to a single pawn, never a batch of them, and never use a pawn to dodge the cap when the same work can simply run in sequence.'
+  'At most four sub-agents run at the same time and the fifth is refused, so keep the fan-out inside that and queue the remaining work behind it. Reach for a pawn agent (${PAWN_AGENT_TOOL_NAME}) only when the work genuinely needs five or more worker runs in flight at once and waiting for a free sub-agent slot would stall it, or when the user explicitly asks for pawns   then hand the overflow to a single pawn, never a batch of them, and never use a pawn to dodge the cap when the same work can simply run in sequence.',
+  'Delegation is a conversation, not a handoff: a correction, a fact another worker found or a question goes to the worker working on it with ${CIO_AGENT_MESSAGE_TOOL_NAME}, which reaches it mid-run, and a worker asks you with the same tool instead of stopping. Never spawn a second worker just to change direction.',
+  'Whatever you delegate is visible: the thread docks a spawn board that lists every worker it started, and every worker can walk back up to the thread that spawned it, so do not hide work in a shape the user cannot open.'
 ]
 
 // Pi's own bundled system prompt opens with a "you are an assistant" framing
@@ -653,6 +657,40 @@ function textResult(value) {
  * carries the native question contract through its existing dialog channel. */
 function questionDialogTitle(questions) {
   return CIO_QUESTION_MARKER + JSON.stringify({ questions })
+}
+
+/**
+ * The picture an agent may attach to a question or to one of its options.
+ *
+ * Exactly one medium is set. HTML and SVG are authored in place, an image is a
+ * picture the agent generated, and Mermaid is the fallback for a model that can
+ * draw nothing else. The question card draws whichever arrived behind one eye
+ * button, so the user decides from what they can see rather than from prose.
+ */
+function questionVisualParameters() {
+  return Type.Object({
+    html: Type.Optional(
+      Type.String({
+        description:
+          'A self-contained HTML document (inline styles only, no scripts) drawing what this question or option means.'
+      })
+    ),
+    svg: Type.Optional(
+      Type.String({ description: 'Raw SVG markup drawing what this question or option means.' })
+    ),
+    image: Type.Optional(
+      Type.String({
+        description:
+          'A generated picture: a data URL, an http(s) URL, or a path inside the project.'
+      })
+    ),
+    mermaid: Type.Optional(
+      Type.String({ description: 'A Mermaid diagram, when the point is a flow or a relationship.' })
+    ),
+    caption: Type.Optional(
+      Type.String({ description: 'One short line naming what the picture shows.' })
+    )
+  })
 }
 
 export default function codeInOvenCoreToolsExtension(pi) {

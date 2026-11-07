@@ -90,10 +90,18 @@ export function mergeSessionMessages(
  * feed moves on instead of only being readable.
  */
 export function estimateMissingCost(message: AgentMessage): void {
-  if (typeof message.cost === 'number' && message.costProvenance?.source !== 'model_catalog') return
+  const catalogCost = message.costProvenance?.source === 'model_catalog'
+  // A catalog cost that carries rates was computed here from the price snapshot,
+  // so a later token snapshot may replace it. One without rates came from a
+  // harness that priced the response from a catalog this app does not hold (pi
+  // prices its own responses): that figure is the only one available, and
+  // dropping it for a local estimate   or for nothing at all when the model is
+  // not in our snapshot   would throw away the harness's own accounting.
+  if (catalogCost && message.costProvenance?.rates === undefined) return
+  if (typeof message.cost === 'number' && !catalogCost) return
   // Late final token snapshots replace provisional catalog estimates.
   // Provider-reported charges remain authoritative.
-  if (message.costProvenance?.source === 'model_catalog') {
+  if (catalogCost) {
     delete message.cost
     delete message.costProvenance
   }

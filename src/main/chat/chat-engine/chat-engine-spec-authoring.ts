@@ -28,6 +28,7 @@ import {
 import {
   ASSIGNMENT_GENERATION_INSTRUCTION,
   PROMPT_READ_ONLY_TOOLS,
+  SPEC_GENERATION_SYSTEM_PROMPT,
   SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
   engineeringArtifactBoundaryInstruction
 } from './chat-engine-prompts'
@@ -65,9 +66,9 @@ export class ChatEngineSpecAuthoring {
       projectId,
       threadId
     )
-    const workflowThread = pendingWorkflow
-      ? await this.host.threadManager.getThread(projectId, threadId)
-      : null
+    // Read once: the pending workflow and the thread's feature scope both need it.
+    const ownerThread = await this.host.threadManager.getThread(projectId, threadId)
+    const workflowThread = pendingWorkflow ? ownerThread : null
     const artifactDirectory = featureArtifactDirectory(
       await ensureFeatureSlug(this.host.database, projectId, threadId)
     )
@@ -75,14 +76,16 @@ export class ChatEngineSpecAuthoring {
     const memoryPrompt = await this.host.state.memoryService.formatCurrent(
       projectId,
       threadId,
-      modelKey(settings.harnessId, settings.providerId, settings.modelId)
+      modelKey(settings.harnessId, settings.providerId, settings.modelId),
+      ownerThread?.assistantId,
+      ownerThread?.scopeBucketId
     )
     const specMemoryPrompt = await this.host.units['memory'].formatSpecGenerationMemory(
       projectId,
       settings
     )
     const generationSystemPrompt = [
-      await this.host.units['turns-dispatch'].cioPrompt('engineering-spec'),
+      SPEC_GENERATION_SYSTEM_PROMPT,
       artifactBoundary,
       memoryPrompt,
       specMemoryPrompt,
@@ -91,7 +94,7 @@ export class ChatEngineSpecAuthoring {
       .filter(Boolean)
       .join('\n\n')
     const fallbackSystemPrompt = [
-      await this.host.units['turns-dispatch'].cioPrompt('engineering-spec'),
+      SPEC_GENERATION_SYSTEM_PROMPT,
       SPEC_JSON_FALLBACK_SYSTEM_PROMPT,
       artifactBoundary,
       memoryPrompt,

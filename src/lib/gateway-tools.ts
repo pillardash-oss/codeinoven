@@ -2,6 +2,7 @@ import { UTILITY_KIND_VALUES } from './types'
 import { ORCHESTRATION_TOOLS } from './orchestration-tools'
 import { APP_CONTROL_TOOLS } from './app-control-tools'
 import { ENGINEERING_TOOLS } from './engineering-tools'
+import { EXT_SIMULATION_TOOLS } from './simulation-tools'
 import { PAWN_TOOLS } from './pawn-tools'
 
 /** Stable app-owned gateway tool names. */
@@ -64,12 +65,13 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   cio_app_call:
     'Invoke one catalog-listed IPC channel or UI action, or pass capture:true to see the live app window as an image. Prefer background data operations. Destructive actions require user confirmation before destructiveConfirmed:true.',
   cio_create_brainstorm:
-    'Create a durable Brainstorm draft from this conversation and optional constraints for review.',
-  cio_create_prd: 'Create a PRD draft from the finalized Brainstorm or conversation for review.',
+    'Create a durable Brainstorm draft for review, only when the user explicitly asks to brainstorm or explore an idea.',
+  cio_create_prd:
+    'Create a PRD draft for review, only when the user explicitly asks for a PRD or product requirements.',
   cio_create_spec:
-    'Create an implementation-ready engineering specification draft for review. Does not approve or implement it.',
+    'Create an engineering specification draft for review, only when the user explicitly asks for a spec or a specification. A plan is not a spec. Does not approve or implement it.',
   cio_create_assignment:
-    'Draft independently promptable worker tasks for user review and model selection. Nothing runs until sign-off. If preference is unknown, ask whether the user wants promptable Assignment workers or inline sub-agents.',
+    'Draft independently promptable worker tasks, only when the user explicitly asks to split work across workers, tasks or agents. Nothing runs until sign-off. If preference is unknown, ask whether the user wants promptable Assignment workers or inline sub-agents.',
   cio_util_find:
     'Find app-managed capabilities by task or name. Evaluate candidates semantically. Only notFound:true proves absence. Known eligible ids may be activated directly.',
   cio_util_init:
@@ -196,6 +198,7 @@ const UTILITY_BUNDLE_INPUT_SCHEMA: Record<string, unknown> = {
 export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   ...ORCHESTRATION_TOOLS,
   ...APP_CONTROL_TOOLS,
+  ...EXT_SIMULATION_TOOLS,
   ...ENGINEERING_TOOLS,
   ...PAWN_TOOLS,
   {

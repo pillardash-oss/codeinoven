@@ -1,4 +1,5 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
+import { isAcpAgentId } from '../drivers/acp/acp-agents-store'
 import { isAbsolute } from 'node:path'
 import type { HarnessAccount, ProviderAccountLoginOptions } from '../../lib/types'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -136,6 +137,14 @@ export function registerProviderAccountIpc(
       text(rawLabel, 'Account label', 80)
     )
   )
+  ipcMain.handle(
+    'providerAccounts:setAccountHidden',
+    (_, rawAccountId: unknown, rawHidden: unknown) =>
+      accounts.setHidden(
+        validateEntityId(rawAccountId, 'Account ID', 256),
+        boolean(rawHidden, 'Hidden')
+      )
+  )
   ipcMain.handle('providerAccounts:setDefault', async (_, rawAccountId: unknown) => {
     const account = await accounts.setDefault(validateEntityId(rawAccountId, 'Account ID', 256))
     return accounts.list(account.harnessId)
@@ -168,6 +177,11 @@ export function registerProviderAccountIpc(
   ): Promise<HarnessAuthStatus> {
     const status = await auth.getStatus(harnessId, projectPath)
     if (status.state === 'error' || status.state === 'unknown') return status
+    // An ACP agent owns its own sign-in and has no credential home for the app
+    // to hold, so its status is reported and nothing is mirrored into the
+    // account registry. Its entry reached Accounts as "Cursor agent 1..3" noise
+    // before this rule.
+    if (isAcpAgentId(harnessId)) return status
     // Legacy reconciliation must only see default-home credentials; merged
     // container entries are display-only for the provider check list.
     await accounts.reconcileLegacy(harnessId, status.accounts)
@@ -284,6 +298,19 @@ export function registerProviderAccountIpc(
             `${providerName} is connected on ${matching.length} accounts. Disconnect it from the accounts tab to choose which one.`
           )
         }
+      }
+      // A row whose harness has no authentication at all is a stale record left
+      // by an earlier build (an ACP agent used to register one). There is no
+      // credential to remove, so dropping the row is the whole operation; saying
+      // "authentication is not supported" left the user with a row they could
+      // neither disconnect nor delete.
+      const capabilities = await auth.capabilities(harnessId)
+      // An ACP agent owns its own sign-in (it now reports a status capability),
+      // so a row naming one is still only a stale record: there is no credential
+      // here to remove, and dropping the row is the whole operation.
+      if (!capabilities || isAcpAgentId(harnessId)) {
+        if (accountId) await accounts.remove(accountId)
+        return
       }
       const account = accountId
         ? await resolveCredentialAccount(accounts, harnessId, accountId)

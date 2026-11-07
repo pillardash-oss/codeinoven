@@ -2,17 +2,36 @@
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
+  import CioArrowRight from '@pdslng/cio-icon/CioArrowRight.svelte'
   interface Props {
     head: string
     headIsCurrent: boolean
     pushErrorDetails: string
     recoverMode: 'merge' | 'rebase' | null
+    /**
+     * The thread the divergence handoff minted, once it exists.
+     *
+     * The handoff is opened from this panel and the thread is built inside it,
+     * so this is the id the panel is handed back: without it, a user who
+     * reviewed the prompt first was left with a conversation they had to find in
+     * the thread list.
+     */
+    agentThreadId?: string | null
     onRecover: (mode: 'merge' | 'rebase') => void
     onResolveWithAgent: () => void
+    onOpenAgentThread?: () => void
   }
 
-  let { head, headIsCurrent, pushErrorDetails, recoverMode, onRecover, onResolveWithAgent }: Props =
-    $props()
+  let {
+    head,
+    headIsCurrent,
+    pushErrorDetails,
+    recoverMode,
+    agentThreadId = null,
+    onRecover,
+    onResolveWithAgent,
+    onOpenAgentThread
+  }: Props = $props()
 </script>
 
 <div class="border border-warning/30 bg-warning/10 px-3 py-2.5">
@@ -69,14 +88,31 @@
     </div>
   </div>
   <div class="mt-2 border-t border-warning/20 pt-2">
-    <button
-      type="button"
-      class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 border border-warning/40 bg-surface px-3 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
-      title="Choose a model and scope, then hand this branch divergence to an agent"
-      onclick={onResolveWithAgent}
-    >
-      <CioSubagent size={12} />
-      Resolve with agent
-    </button>
+    {#if agentThreadId && onOpenAgentThread}
+      <!--
+        The handoff already minted a thread for this divergence. The agent's own
+        turn is what resolves it, so the panel offers the way back into that
+        conversation instead of a second identical handoff.
+      -->
+      <button
+        type="button"
+        class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 border border-border bg-surface px-3 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated"
+        title="Open the agent thread resolving this divergence"
+        onclick={onOpenAgentThread}
+      >
+        <CioArrowRight size={12} />
+        Open agent thread
+      </button>
+    {:else}
+      <button
+        type="button"
+        class="flex h-8 w-full cursor-pointer items-center justify-center gap-1.5 border border-warning/40 bg-surface px-3 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-default disabled:opacity-50"
+        title="Choose a model and scope, then hand this branch divergence to an agent"
+        onclick={onResolveWithAgent}
+      >
+        <CioSubagent size={12} />
+        Resolve with agent
+      </button>
+    {/if}
   </div>
 </div>

@@ -5,11 +5,17 @@ import {
   threadMatchesSearchScope,
   threadSearchMessageLimit,
   ThreadRepo,
-  type ThreadSearchOptions
+  type ThreadSearchOptions,
+  type ThreadSearchSql
 } from '../../main/database/repositories/thread-repo'
 import { Logger } from '../../main/system/logger'
-import { mergeHybridThreadSearchResults } from '../search/hybrid-merge'
-import { evidenceFtsQuery, hasQueryEvidence } from '../search/query-evidence'
+import { mergeHybridThreadSearchResults, rankThreadsByEvidence } from '../search/hybrid-merge'
+import {
+  evidenceAnyFtsQuery,
+  queryConceptCoverage,
+  queryConcepts,
+  requiredEvidenceConcepts
+} from '../search/query-evidence'
 import type { IntentThreadMatch } from '../search/types'
 import type { ThreadSearchResult } from '../types'
 
@@ -35,6 +41,22 @@ export type IntentSearchProvider = (
  * "still searching" ceiling: the IPC hop and the row build have to fit after it.
  */
 const INTERACTIVE_SEARCH_DEADLINE_MS = 1200
+
+/**
+ * Tokens of one message the evidence pass reads to judge concept coverage.
+ *
+ * The displayed snippet stays short, but coverage measured over 64 tokens called
+ * a long answer that carried most of the question unmatching, because its
+ * concepts sat past the window.
+ */
+const EVIDENCE_SNIPPET_TOKENS = 400
+
+/** The indexed excerpt a candidate row carries, for coverage scoring. */
+function snippetTextOf(row: unknown): string {
+  if (typeof row !== 'object' || row === null) return ''
+  const snippet = (row as { snippet_text?: unknown }).snippet_text
+  return typeof snippet === 'string' ? snippet : ''
+}
 
 /**
  * Search across thread titles and conversation content (user messages + agent
@@ -96,11 +118,19 @@ export class ThreadSearchService {
   ): Promise<ThreadSearchResult[]> {
     const raw = query.trim()
     if (!raw) return []
-    const { results: keyword, limit } = await this.keywordSearch(raw, options)
+    const [{ results: keyword, limit }, evidence] = await Promise.all([
+      this.keywordSearch(raw, options),
+      this.conversationEvidence(raw, options, options.limit ?? 20)
+    ])
+    // The first answer is already ranked by how much of the query a thread
+    // carries, not only by full-text rank. The model then refines it; a query
+    // whose words are all common should never open on the longest message that
+    // happened to contain them.
+    const firstPaint = rankThreadsByEvidence([...keyword, ...evidence], raw, limit)
     const provider = this.intentProvider
-    if (!provider) return keyword
-    void this.enrichWithIntent(raw, options, keyword, limit, provider, onIntentReady)
-    return keyword
+    if (!provider) return firstPaint
+    void this.enrichWithIntent(raw, options, keyword, evidence, limit, provider, onIntentReady)
+    return firstPaint
   }
 
   /**
@@ -115,12 +145,13 @@ export class ThreadSearchService {
     raw: string,
     options: ThreadSearchOptions,
     keyword: readonly ThreadSearchResult[],
+    evidence: readonly ThreadSearchResult[],
     limit: number,
     provider: IntentSearchProvider,
     onIntentReady: (results: ThreadSearchResult[]) => void
   ): Promise<void> {
     try {
-      const merged = await this.mergedWithIntent(raw, options, keyword, limit, provider)
+      const merged = await this.mergedWithIntent(raw, options, keyword, evidence, limit, provider)
       if (merged) onIntentReady(merged)
     } catch (error: unknown) {
       Logger.dev('Intent search enrichment failed; keeping keyword results.', error)
@@ -144,9 +175,18 @@ export class ThreadSearchService {
   ): Promise<{ results: ThreadSearchResult[]; semantic: boolean }> {
     const raw = query.trim()
     if (!raw) return { results: [], semantic: false }
-    const { results: keyword, limit } = await this.keywordSearch(raw, options)
+    const [{ results: keyword, limit }, evidence] = await Promise.all([
+      this.keywordSearch(raw, options),
+      this.conversationEvidence(raw, options, options.limit ?? 20)
+    ])
+    // The evidence ranking is the part that does not need a model: it re-reads
+    // the index with the query's concepts OR-ed together and keeps the passages
+    // that carry most of them. Running it without a provider is what stops a
+    // sentence-shaped question from being answered with "no threads found" on a
+    // machine where the embedding model is off or unready.
+    const firstPaint = rankThreadsByEvidence([...keyword, ...evidence], raw, limit)
     const provider = this.intentProvider
-    if (!provider) return { results: keyword, semantic: false }
+    if (!provider) return { results: firstPaint, semantic: false }
 
     let timer: ReturnType<typeof setTimeout> | undefined
     const timedOut = new Promise<null>((resolve) => {
@@ -154,14 +194,16 @@ export class ThreadSearchService {
     })
     try {
       const merged = await Promise.race([
-        this.mergedWithIntent(raw, options, keyword, limit, provider).catch((error: unknown) => {
-          Logger.dev('Semantic thread search failed; keeping keyword results.', error)
-          return null
-        }),
+        this.mergedWithIntent(raw, options, keyword, evidence, limit, provider).catch(
+          (error: unknown) => {
+            Logger.dev('Semantic thread search failed; keeping keyword results.', error)
+            return null
+          }
+        ),
         timedOut
       ])
       if (merged) return { results: merged, semantic: true }
-      return { results: keyword, semantic: false }
+      return { results: firstPaint, semantic: false }
     } finally {
       clearTimeout(timer)
     }
@@ -178,16 +220,16 @@ export class ThreadSearchService {
     raw: string,
     options: ThreadSearchOptions,
     keyword: readonly ThreadSearchResult[],
+    evidence: readonly ThreadSearchResult[],
     limit: number,
     provider: IntentSearchProvider
   ): Promise<ThreadSearchResult[] | null> {
-    const [matches, evidence] = await Promise.all([
-      provider(raw, options),
-      this.conversationEvidence(raw, options, limit)
-    ])
-    const grounded = [...keyword.filter((result) => result.kind === 'message'), ...evidence]
+    const matches = await provider(raw, options)
     if (matches.length === 0) {
-      return evidence.length > 0 ? mergeHybridThreadSearchResults(keyword, grounded, limit) : null
+      // No meaning-based matches to add: keep the evidence-ranked keyword list
+      // untouched rather than re-sending a reordered copy of it.
+      Logger.dev('Intent search found no meaning-based match', { ranked: 0 })
+      return null
     }
     const threads = await this.threadRepo.listByIdsViaWorker(matches.map((match) => match.threadId))
     const byId = new Map(threads.map((thread) => [thread.id, thread]))
@@ -198,8 +240,19 @@ export class ThreadSearchService {
       if (!threadMatchesSearchScope(thread, options)) continue
       intent.push({ thread, kind: 'intent', score: match.score })
     }
-    if (intent.length === 0 && evidence.length === 0) return null
-    return mergeHybridThreadSearchResults(keyword, [...grounded, ...intent], limit)
+    if (intent.length === 0) {
+      // The model answered but none of its threads survived hydration or the
+      // scope. Reported, because otherwise this looks exactly like intent search
+      // being switched off.
+      Logger.dev('Intent search matches did not survive hydration', {
+        matched: matches.length,
+        hydrated: threads.length
+      })
+      return null
+    }
+    // Evidence rows carry the long excerpt the coverage score was measured on,
+    // so they stay in the keyword half where that score belongs.
+    return mergeHybridThreadSearchResults([...keyword, ...evidence], intent, limit, raw)
   }
 
   private async conversationEvidence(
@@ -207,22 +260,40 @@ export class ThreadSearchService {
     options: ThreadSearchOptions,
     limit: number
   ): Promise<ThreadSearchResult[]> {
-    const query = evidenceFtsQuery(raw)
+    const query = evidenceAnyFtsQuery(raw)
     if (!query) return []
-    const built = buildThreadSearchSql(raw, options, this.db.isSearchMetaReady(), query)
+    const required = requiredEvidenceConcepts(queryConcepts(raw).length)
+    const built = buildThreadSearchSql(
+      raw,
+      options,
+      this.db.isSearchMetaReady(),
+      query,
+      EVIDENCE_SNIPPET_TOKENS
+    )
     if (!built.fts) return []
-    // Never scan transcripts or fall back to the main connection for this pass.
+    // The same bounded FTS read the keyword pass runs, with the worker and the
+    // primary connection as its two homes: this is a ranking read, not a
+    // transcript scan, so it follows `keywordSearch`'s degradation instead of
+    // answering "no threads found" on an instance whose worker is down.
     const candidates = await this.db.queryViaWorker(
       built.fts.sql,
       built.fts.params,
-      threadSearchMessageLimit(limit),
-      { allowPrimaryFallback: false }
+      threadSearchMessageLimit(limit) * 2
     )
     if (!candidates.ok) return []
-    const verified = candidates.rows.filter(
-      (row) => typeof row.snippet_text === 'string' && hasQueryEvidence(raw, row.snippet_text)
+    const scored = candidates.rows
+      .map((row) => ({
+        row,
+        coverage: queryConceptCoverage(raw, snippetTextOf(row))
+      }))
+      .filter((candidate) => candidate.coverage >= required)
+      .sort((left, right) => right.coverage - left.coverage)
+    return mergeThreadSearchResults(
+      [],
+      scored.map((candidate) => candidate.row),
+      raw,
+      limit
     )
-    return mergeThreadSearchResults([], verified, raw, limit)
   }
 
   private async keywordSearch(
@@ -234,40 +305,67 @@ export class ThreadSearchService {
     // Both halves are read at once and both are bounded: a title row that is
     // ready must never wait for the message ranking behind it in the worker
     // queue, and neither may hold the answer past the interactive deadline.
+    const first = await this.readKeywordHalves(built, raw, INTERACTIVE_SEARCH_DEADLINE_MS)
+    if (first.complete) return { results: first.results, limit: built.limit }
+    if (first.allFailed) {
+      if (first.timedOut) {
+        // Both halves ran out of time. A deadline stops the wait, never the
+        // answer: the two reads are already queued on the worker, so they are
+        // re-issued without a deadline and the rows arrive instead of an empty
+        // list that reads to the user as "nothing matches". Nothing here runs on
+        // the main thread, and the palette's own watchdog has already stopped
+        // claiming to be busy.
+        const late = await this.readKeywordHalves(built, raw)
+        return { results: late.results, limit: built.limit }
+      }
+      return { results: this.threadRepo.search(raw, options, useSearchMeta), limit: built.limit }
+    }
+    // One half answered and the other did not. Use the answer in hand instead
+    // of throwing the reply away for a slower, complete one.
+    return { results: first.results, limit: built.limit }
+  }
+
+  /**
+   * Read both keyword halves and report how much of the answer is usable.
+   *
+   * `deadlineMs` bounds the wait only; the same reads are issued again without
+   * one when the whole answer timed out, which is what keeps a busy worker from
+   * turning a real match into an empty result.
+   */
+  private async readKeywordHalves(
+    built: ThreadSearchSql,
+    raw: string,
+    deadlineMs?: number
+  ): Promise<{
+    results: ThreadSearchResult[]
+    complete: boolean
+    allFailed: boolean
+    timedOut: boolean
+  }> {
+    const options = deadlineMs === undefined ? {} : { deadlineMs }
     const [title, message] = await Promise.all([
-      this.db.queryViaWorker(built.title.sql, built.title.params, built.limit, {
-        deadlineMs: INTERACTIVE_SEARCH_DEADLINE_MS
-      }),
+      this.db.queryViaWorker(built.title.sql, built.title.params, built.limit, options),
       built.fts
         ? this.db.queryViaWorker(
             built.fts.sql,
             built.fts.params,
             threadSearchMessageLimit(built.limit),
-            { deadlineMs: INTERACTIVE_SEARCH_DEADLINE_MS }
+            options
           )
         : Promise.resolve(null)
     ])
-    if (!title.ok && !message?.ok) {
-      // Both halves ran out of time: answer with nothing and let the palette keep
-      // the rows it painted from memory. Neither read is abandoned   each keeps
-      // running on the worker   and the semantic push the panel is waiting for
-      // still arrives once the model answers.
-      if (title.timedOut || message?.timedOut) return { results: [], limit: built.limit }
-      return { results: this.threadRepo.search(raw, options, useSearchMeta), limit: built.limit }
-    }
-    if (!title.ok || (built.fts && !message?.ok)) {
-      // One half answered and the other did not. Use the answer in hand instead
-      // of throwing the reply away for a slower, complete one.
-      const titleRows = title.ok ? (title.rows ?? []) : []
-      const messageRows = message?.ok ? (message.rows ?? []) : []
-      return {
-        results: mergeThreadSearchResults(titleRows, messageRows, raw, built.limit),
-        limit: built.limit
-      }
-    }
+    const results = mergeThreadSearchResults(
+      title.ok ? (title.rows ?? []) : [],
+      message?.ok ? (message.rows ?? []) : [],
+      raw,
+      built.limit
+    )
+    const messageOk = built.fts ? Boolean(message?.ok) : true
     return {
-      results: mergeThreadSearchResults(title.rows ?? [], message?.rows ?? [], raw, built.limit),
-      limit: built.limit
+      results,
+      complete: title.ok && messageOk,
+      allFailed: !title.ok && !messageOk,
+      timedOut: Boolean(title.timedOut || message?.timedOut)
     }
   }
 }

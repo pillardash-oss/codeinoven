@@ -106,6 +106,10 @@ export interface BackgroundLifecycleDeps {
   storage: StorageEngine
   /** Create the window, or show and focus the existing one. */
   openWindow: () => void
+  /** Show the Settings page in the window, opening it when the app is parked. */
+  openSettings: () => void
+  /** Open a second instance beside this one, sharing the same data. */
+  newInstance: () => void
   /** Destroy the current window. Its renderer process goes with it. */
   destroyWindow: () => void
   /** Run the real quit (sets `quitConfirmed` and calls `app.quit()`). */
@@ -680,9 +684,11 @@ export class BackgroundLifecycleService {
   private buildContextMenu(): Menu {
     return Menu.buildFromTemplate([
       { label: `Open ${APP_NAME}`, click: () => this.deps.openWindow() },
+      { label: 'Settings…', click: () => this.deps.openSettings() },
       { type: 'separator' },
       this.updateMenuItem(),
       { type: 'separator' },
+      { label: 'New Instance', click: () => this.deps.newInstance() },
       forceRestartMenuItem(() => this.deps.quitApp()),
       { label: `Quit ${APP_NAME}`, click: () => this.deps.quitApp() }
     ])
@@ -710,16 +716,17 @@ export class BackgroundLifecycleService {
       case 'waiting':
         return { label: 'Restarting to Update…', enabled: false }
       default:
-        return { label: 'Check for Updates', click: () => this.runTrayUpdate() }
+        return { label: 'Check for Updates', click: () => this.requestUpdateCheck() }
     }
   }
 
   /**
-   * The user asked for an update from the menu bar. Show the check in the menu
-   * immediately so the click has visible feedback, then let the updater drive the
-   * rest: download, then a silent install that relaunches windowless.
+   * The user asked for an update from the menu bar or the application menu. Show
+   * the check in the menu immediately so the click has visible feedback, then let
+   * the updater drive the rest: download, then a silent install that relaunches
+   * windowless.
    */
-  private runTrayUpdate(): void {
+  requestUpdateCheck(): void {
     const updater = this.updater
     if (!updater) return
     this.trayCheckRequested = true
@@ -866,7 +873,14 @@ export class BackgroundLifecycleService {
     if (this.stopped) return
     const window = this.deps.state.mainWindow
     const hasWindow = window !== null && !window.isDestroyed() && window.isVisible()
-    if (this.backgroundEnabled && (!hasWindow || this.tray === null)) this.armActivationPoll()
+    // Only a process whose window has actually closed has anything to poll
+    // for. Before the first window exists there is no parked request and no
+    // residency to decide, and a 2 s interval there only ran synchronous
+    // directory and database reads under the app's startup. A visible window is
+    // the user already being here, and opening it reconciles the icon, so the
+    // watcher alone stays armed for both.
+    const windowless = !hasWindow && this.windowlessSince !== null
+    if (this.backgroundEnabled && windowless) this.armActivationPoll()
     else this.clearActivationPoll()
   }
 

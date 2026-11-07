@@ -35,6 +35,13 @@ export interface ResponseReferenceAnchor extends PromptReference {
    *  picker used on the folder listing, and on references written before it
    *  existed. */
   designEntry?: string
+  /** Design references: the design page this comment belongs to, independent of
+   *  the tab it was written in. A design can be shown in a thread's own tab, in
+   *  its screen's tab from the board, or in a tab the app reopened, and the pin
+   *  has to be drawn on that page wherever it is opened next. Absent on
+   *  references written before it existed, which fall back to `directory` and
+   *  `designEntry`. */
+  designId?: string
   /** Document annotations: the project-relative path of the document the
    *  passage was annotated in, so a document's preview pins only its own
    *  annotations and the path travels with the prompt. */
@@ -181,6 +188,72 @@ class ResponseReferencesState {
 
   forThread(projectId: string, threadId: string): ResponseReferenceAnchor[] {
     return this.references[referenceKey(projectId, threadId)] ?? []
+  }
+
+  /**
+   * The conversation holding this exact reference, or null when nothing does.
+   *
+   * A reference names the thread that wrote it, and a browser tab can outlive
+   * that naming: a screen tab's id is derived from the screen, so opening the
+   * same screen from another conversation moves the tab while the comment stays
+   * with the conversation that made it. Asking for the reference itself is what
+   * survives that move, and it is also what tells a removal from a change of
+   * owner.
+   */
+  findById(referenceId: string): {
+    projectId: string
+    threadId: string
+    reference: ResponseReferenceAnchor
+  } | null {
+    for (const owner of this.owners()) {
+      const reference = this.forThread(owner.projectId, owner.threadId).find(
+        (candidate) => candidate.id === referenceId
+      )
+      if (reference) return { ...owner, reference }
+    }
+    return null
+  }
+
+  /** Every conversation with a design comment pinned to this browser tab. */
+  forTab(tabId: string): { projectId: string; threadId: string }[] {
+    const owners: { projectId: string; threadId: string }[] = []
+    for (const owner of this.owners()) {
+      const pinned = this.forThread(owner.projectId, owner.threadId).some(
+        (reference) => reference.kind === 'design' && reference.tabId === tabId
+      )
+      if (pinned) owners.push(owner)
+    }
+    return owners
+  }
+
+  /**
+   * Every conversation that currently holds composer references, with its list.
+   *
+   * A browser tab can show a design another conversation wrote comments on (the
+   * same screen opened from a second tab, or the thread's tab moved through the
+   * work), so the pins are answered from every conversation rather than only the
+   * one that owns the tab.
+   */
+  entries(): { projectId: string; threadId: string; references: ResponseReferenceAnchor[] }[] {
+    return this.owners().map((owner) => ({
+      ...owner,
+      references: this.forThread(owner.projectId, owner.threadId)
+    }))
+  }
+
+  /** Every conversation that currently holds composer references. */
+  private owners(): { projectId: string; threadId: string }[] {
+    return Object.keys(this.references).flatMap((key) => {
+      try {
+        const parsed: unknown = JSON.parse(key)
+        if (!Array.isArray(parsed) || parsed.length !== 2) return []
+        const [projectId, threadId] = parsed
+        if (typeof projectId !== 'string' || typeof threadId !== 'string') return []
+        return [{ projectId, threadId }]
+      } catch {
+        return []
+      }
+    })
   }
 
   setForThread(projectId: string, threadId: string, references: ResponseReferenceAnchor[]): void {

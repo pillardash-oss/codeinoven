@@ -43,6 +43,7 @@ import type {
   BrowserInspectorTheme
 } from '../../../lib/ipc/browser'
 import { Logger } from '../../system/logger'
+import { ELEMENT_PATH_SOURCE } from '../../dom/element-path-script'
 import {
   INSPECTOR_REARM_INTERVAL_MS,
   MAX_INSPECTOR_ARM_FAILURES,
@@ -122,6 +123,23 @@ export function inspectorInstallScript(key: string): string {
   })
   return String.raw`(() => {
   const config = ${config};
+  ${ELEMENT_PATH_SOURCE}
+  // Attributes that name an element steadily, where a CSS path is only a place in
+  // one rendered tree. A component re-rendered from a list, or a dialog opened a
+  // second time, keeps these; its nth-of-type path may not.
+  const IDENTITY_ATTRIBUTES = [
+    'data-testid', 'data-test-id', 'data-test', 'data-qa', 'data-slot', 'data-key', 'name', 'aria-label'
+  ];
+  // Attributes that say what state something is in. A modal's contents only exist
+  // while the surface is open, so the state of that surface is part of what a
+  // comment is about and how the agent gets back to the same render.
+  const STATE_ATTRIBUTES = [
+    'open', 'hidden', 'inert', 'disabled', 'popover', 'data-state', 'data-open',
+    'aria-hidden', 'aria-expanded', 'aria-selected', 'aria-pressed', 'aria-checked', 'aria-disabled'
+  ];
+  // Surfaces that appear on an interaction and go away again.
+  const SURFACE_SELECTOR =
+    'dialog,[role="dialog"],[role="alertdialog"],[role="menu"],[role="listbox"],[role="tooltip"],[popover]';
   try {
     if (globalThis[config.key]) return true;
     if (!document.documentElement) return false;
@@ -202,8 +220,11 @@ export function inspectorInstallScript(key: string): string {
     const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 
     const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+    const round = (value, decimals) => {
+      const factor = Math.pow(10, decimals);
+      return Math.round(value * factor) / factor;
+    };
     const text = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
-    const escapeId = (value) => (globalThis.CSS && CSS.escape ? CSS.escape(String(value)) : String(value));
 
     /**
      * The same-origin frames of this document, in document order.
@@ -319,40 +340,65 @@ export function inspectorInstallScript(key: string): string {
       return svg;
     }
 
-    function cssPath(element) {
-      const parts = [];
-      let node = element;
-      while (node && node.nodeType === 1 && parts.length < 8) {
-        let part = node.tagName.toLowerCase();
-        if (node.id) {
-          const id = escapeId(node.id);
-          try {
-            if (documentOf(element).querySelectorAll('#' + id).length === 1) {
-              parts.unshift(part + '#' + id);
-              break;
-            }
-          } catch (error) {}
-          part += '#' + id;
-        }
-        const classes = (node.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 2);
-        if (classes.length > 0) part += '.' + classes.map(escapeId).join('.');
-        const parent = node.parentElement;
-        if (parent) {
-          const siblings = Array.prototype.filter.call(parent.children, (child) => child.tagName === node.tagName);
-          if (siblings.length > 1) part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')';
-        }
-        parts.unshift(part);
-        node = node.parentElement;
-      }
-      return parts.join(' > ');
-    }
-
     function shortName(element) {
       let name = element.tagName.toLowerCase();
       if (element.id) name += '#' + element.id;
       const classes = (element.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean);
       if (classes.length > 0) name += '.' + classes.slice(0, 2).join('.');
       return name;
+    }
+
+    /** The attributes of one element that are present, clipped to a readable size. */
+    function attributesFrom(element, names) {
+      const found = {};
+      for (let index = 0; index < names.length; index += 1) {
+        const name = names[index];
+        const value = element.getAttribute(name);
+        if (value === null) continue;
+        found[name] = text(value === '' ? 'true' : value, 120);
+      }
+      return found;
+    }
+
+    /** How many elements a path matches in its own document, so ambiguity is named. */
+    function matchCount(doc, selector) {
+      if (!selector) return 0;
+      try {
+        return doc.querySelectorAll(selector).length;
+      } catch (error) {
+        return 0;
+      }
+    }
+
+    /**
+     * The nearest transient surface holding an element, or null for the page itself.
+     *
+     * A dialog, menu, popover or tooltip exists only while it is open, so an element
+     * inside one is not in the page the agent will find when it opens the file: the
+     * surface and its state are what say which interaction has to happen first.
+     */
+    function surfaceOf(element) {
+      const doc = documentOf(element);
+      let node = element.parentElement;
+      let steps = 0;
+      while (node && node !== doc.documentElement && steps < 40) {
+        steps += 1;
+        let isSurface = false;
+        try {
+          isSurface = node.matches(SURFACE_SELECTOR);
+        } catch (error) {
+          isSurface = false;
+        }
+        if (isSurface) {
+          return {
+            selector: elementPath(node),
+            name: shortName(node),
+            state: attributesFrom(node, STATE_ATTRIBUTES)
+          };
+        }
+        node = node.parentElement;
+      }
+      return null;
     }
 
     /** One element's viewport rectangle, rounded, in this document's CSS pixels. */
@@ -385,6 +431,94 @@ export function inspectorInstallScript(key: string): string {
       };
     }
 
+    /**
+     * The document's own URL, query string and hash included.
+     *
+     * A design page is a file on a loopback origin, and a reader who filtered it
+     * or jumped to an anchor commented on that exact state: a comment copied
+     * without the query reads as a comment about the unfiltered default page. A
+     * document this script cannot read answers an empty string rather than
+     * throwing.
+     */
+    function pageUrl(doc) {
+      try {
+        const href = doc && doc.location ? doc.location.href : '';
+        return String(href || '').slice(0, 2000);
+      } catch (error) {
+        return '';
+      }
+    }
+
+    /**
+     * The page state one element was measured in: which page, where, at what zoom.
+     *
+     * Read from the element's own document, so a pick inside a canvas frame
+     * reports that screen's URL and scroll position rather than the canvas around
+     * it. Every read falls back to a neutral value, because a document the
+     * inspector was allowed to look at is not a document it is allowed to assume
+     * anything about.
+     */
+    function pageContext(element) {
+      const doc = documentOf(element);
+      const view = viewOf(doc);
+      const root = doc.documentElement || doc.body;
+      let scheme = 'light';
+      try {
+        if (view && view.matchMedia && view.matchMedia('(prefers-color-scheme: dark)').matches) {
+          scheme = 'dark';
+        }
+      } catch (error) {}
+      return {
+        url: pageUrl(doc),
+        title: text(doc.title, 200),
+        scheme: scheme,
+        scroll: {
+          x: Math.round((view && view.scrollX) || 0),
+          y: Math.round((view && view.scrollY) || 0)
+        },
+        extent: {
+          width: Math.round((root && root.scrollWidth) || 0),
+          height: Math.round((root && root.scrollHeight) || 0)
+        },
+        devicePixelRatio: round((view && view.devicePixelRatio) || 1, 2),
+        visualScale: round((view && view.visualViewport && view.visualViewport.scale) || 1, 2)
+      };
+    }
+
+    /**
+     * How the element's document is drawn inside this page, for a framed screen.
+     *
+     * A canvas scales each framed screen to fit its own area, so the same button
+     * is a different number of drawn pixels on a zoomed-out canvas than at 100%.
+     * The scale and the frame's box are what let a reader tell "the screen is
+     * cramped" from "the canvas is zoomed out", and they are reported for the
+     * outermost frame because that is the one on screen.
+     */
+    function framePresentation(element) {
+      let doc = element.ownerDocument;
+      let scale = 1;
+      let outer = null;
+      let steps = 0;
+      while (doc && doc !== document && steps < 8) {
+        steps += 1;
+        const view = viewOf(doc);
+        const frame = view ? view.frameElement : null;
+        if (!frame) break;
+        const box = frame.getBoundingClientRect();
+        const layoutWidth = view.innerWidth || box.width || 1;
+        scale = scale * (box.width / layoutWidth);
+        outer = {
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          width: Math.round(box.width),
+          height: Math.round(box.height)
+        };
+        doc = frame.ownerDocument;
+      }
+      if (!outer) return null;
+      return { scale: round(scale, 3), rect: outer };
+    }
+
     function describe(element) {
       const doc = documentOf(element);
       const ancestors = [];
@@ -393,8 +527,9 @@ export function inspectorInstallScript(key: string): string {
         ancestors.unshift(shortName(parent));
         parent = parent.parentElement;
       }
+      const selector = elementPath(element);
       return {
-        selector: cssPath(element),
+        selector: selector,
         tag: element.tagName.toLowerCase(),
         id: element.id || null,
         classes: (element.getAttribute('class') || '').trim().split(/\s+/).filter(Boolean).slice(0, 12),
@@ -404,7 +539,17 @@ export function inspectorInstallScript(key: string): string {
         ancestors: ancestors,
         frame: frameEntryOf(doc),
         rect: elementRect(element),
-        viewport: pageViewport(element)
+        viewport: pageViewport(element),
+        page: pageContext(element),
+        presented: framePresentation(element),
+        // What the element is called beyond its position in this one tree.
+        identity: attributesFrom(element, IDENTITY_ATTRIBUTES),
+        // The state it is in, which is what a link or a toggle is commented about.
+        state: attributesFrom(element, STATE_ATTRIBUTES),
+        // The surface that had to be open for it to exist at all, if any.
+        surface: surfaceOf(element),
+        // Whether this path names one element or every row of a list.
+        matches: matchCount(doc, selector)
       };
     }
 
@@ -503,14 +648,24 @@ export function inspectorInstallScript(key: string): string {
       return element === doc.documentElement || element === doc.body;
     }
 
+    /**
+     * Whether a rectangle overlaps the visible page.
+     *
+     * viewportRect answers in x/y/width/height, not a DOMRect, so the edges are
+     * derived here instead of read off the rectangle. Reading bottom, right, top
+     * or left from it was always undefined, which made every comparison false:
+     * the boxes and pins were placed and then hidden on every layout, so a
+     * comment written on a design could never show the indicator the reader has
+     * to click to edit it, armed or not.
+     */
     function onScreen(rect) {
       return (
         rect.width > 0 &&
         rect.height > 0 &&
-        rect.bottom > 0 &&
-        rect.right > 0 &&
-        rect.top < innerHeight &&
-        rect.left < innerWidth
+        rect.x + rect.width > 0 &&
+        rect.y + rect.height > 0 &&
+        rect.y < innerHeight &&
+        rect.x < innerWidth
       );
     }
 

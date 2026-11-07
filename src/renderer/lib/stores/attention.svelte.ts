@@ -13,9 +13,9 @@ import {
  * instead of each fetching their own copy.
  *
  * A record is read relative to the conversation on screen, not globally: the
- * rail item only exists while the open thread (or its task, or its assistant) has
- * an undismissed decision, so a decision made in one thread never lights the
- * rail in another.
+ * rail item only exists while the open thread (or the task that thread ran for)
+ * has an undismissed decision, so a decision made in one thread never lights the
+ * rail in another, including its siblings under the same assistant.
  */
 class AttentionState {
   private _items = $state<AutoAnswerItem[]>([])

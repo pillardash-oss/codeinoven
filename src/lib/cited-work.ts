@@ -99,6 +99,9 @@ export const CITE_OPERATIONS = [
   }
 ] as const
 
+/** The authored work a cited folder holds, when it holds any. */
+export type CitedWorkKind = 'design' | 'video'
+
 /** One entry the app can draw as a card. */
 export interface CitedEntry {
   /** The name the card leads with: the file or folder's own name, or a title. */
@@ -109,6 +112,15 @@ export interface CitedEntry {
   kind: 'file' | 'directory'
   /** Last modification time of the entry on disk. */
   modifiedAt: number
+  /**
+   * The authored work this folder is, when it is one.
+   *
+   * A design or a composition is not a folder to browse: it is served and shown
+   * in the browser. The card's action follows this, so the answer is resolved
+   * once, where the app's own work roots are known, instead of being guessed in
+   * the renderer.
+   */
+  work?: CitedWorkKind
 }
 
 /**
@@ -146,4 +158,25 @@ export function normalizeCitedPath(raw: string): string | null {
   if (segments.length === 0) return null
   if (segments.some((segment) => segment === '..')) return null
   return segments.join('/')
+}
+
+/**
+ * Which authored work a cited folder holds, if any.
+ *
+ * `roots` are the project's own design and video folders, project-relative. A
+ * cited folder is that work when it *is* the root's child at any depth, so
+ * `mobile-home` and `.cio/designs/mobile-home` both answer the same while a
+ * folder of scripts outside the roots answers nothing.
+ */
+export function citedWorkKind(
+  path: string,
+  roots: { design: string; video: string }
+): CitedWorkKind | undefined {
+  const target = path.replace(/^(\.\/)+/u, '').replace(/\/+$/u, '')
+  for (const kind of ['design', 'video'] as const) {
+    const root = roots[kind].replace(/^(\.\/)+/u, '').replace(/\/+$/u, '')
+    if (root.length === 0) continue
+    if (target === root || target.startsWith(`${root}/`)) return kind
+  }
+  return undefined
 }

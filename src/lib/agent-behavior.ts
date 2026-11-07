@@ -1,5 +1,12 @@
 import { ASK_SECRET_TOOL_NAME } from './gateway-tools'
 import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from './utility-ids'
+import {
+  CREATE_ACHIEVEMENT_TOOL_NAME,
+  CREATE_ASSIGNMENT_TOOL_NAME,
+  CREATE_BRAINSTORM_TOOL_NAME,
+  CREATE_PRD_TOOL_NAME,
+  CREATE_SPEC_TOOL_NAME
+} from './engineering-tools'
 
 const APP_CUA_DRIVER_BEHAVIOR_CLAUSE = ` or computer use tool "${APP_CUA_DRIVER_UTILITY_ID}" to test directly on the computer`
 
@@ -71,6 +78,18 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
    - Install current stable dependencies compatible with peers. Never use deprecated dependencies or APIs.
    - Keep all harness scratch, caches, downloads, session data and intermediate files inside the project. Disposable work belongs in \`.cio/tmp/\`; other non-source artifacts belong in the mode-specific work folder above. Never use OS temp, global harness data, sibling directories or root-level var/tmp/cache folders for agent work.
    - Use the in-app browser ${APP_BROWSER_UTILITY_ID} for rendered work and the computer-use tool ${APP_CUA_DRIVER_UTILITY_ID} when desktop interaction is necessary. Inspect every authored or changed page, design, prototype or video at its served URL before reporting completion. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl for that inspection.
+
+7. Engineering stages
+   - Brainstorm, PRD, Spec, Assignment and Achievement are artifact tools you turn on yourself, never switches the user has to find, and each one exists only for the artifact the user explicitly asks for by name. Call its tool in that same turn, instead of describing the stage or asking the user to enable it, when their own words name it:
+     - brainstorm, explore an idea, research a direction, "let's brainstorm" -> ${CREATE_BRAINSTORM_TOOL_NAME}
+     - PRD, product requirements, product document -> ${CREATE_PRD_TOOL_NAME}
+     - spec, specification -> ${CREATE_SPEC_TOOL_NAME}
+     - split this into tasks, assign workers or agents, spread it across agents -> ${CREATE_ASSIGNMENT_TOOL_NAME}
+     - keep going until it works, do this until the goal is reached, take it all the way, achieve this -> ${CREATE_ACHIEVEMENT_TOOL_NAME}
+   - A plan is not a spec. When the user asks for a plan, a checklist, an approach, the steps, a breakdown or an explanation, that is a request for your own plan in prose or a markdown file, followed by the work itself. Never convert it into a spec, a PRD, an Assignment or an Achievement, and never pick a stage because the work is large, risky, multi-step or deserves care.
+   - A user describing the outcome they want is asking for the work, not for the stage that packages it. Only the artifact names above are stage requests. Never ask which stage to enable, never offer a stage as an upgrade to a plan, and never answer a plan request by describing a stage instead of the plan.
+   - ${CREATE_ASSIGNMENT_TOOL_NAME} asks once whether the user wants workers they can prompt or inline sub-agents, and only when that preference is not already stated.
+   - Every one of these tools produces a draft for review. Never claim a stage is on, a document exists, or an Assignment is running until the tool call actually succeeded.
 
 Before the final reply, ensure every matching skill has been loaded and all completed work has been validated and committed.`
 

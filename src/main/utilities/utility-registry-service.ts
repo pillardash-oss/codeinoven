@@ -47,6 +47,11 @@ import {
   CITE_CAPABILITY_NAME,
   CITE_CAPABILITY_SUMMARY
 } from '../../lib/cited-work'
+import {
+  FOLLOW_UP_CAPABILITY_DOCS,
+  FOLLOW_UP_CAPABILITY_NAME,
+  FOLLOW_UP_CAPABILITY_SUMMARY
+} from '../../lib/follow-up'
 import type { StorageEngine } from '../storage/storage-engine'
 import { parseMcpOAuthConfig } from './mcp-oauth/mcp-oauth-config'
 // Sourced from the shared `lib/utility-ids` module (and re-exported here for
@@ -60,6 +65,7 @@ import {
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
+  APP_FOLLOW_UP_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
   APP_VIDEO_UTILITY_ID,
   canToggleUtilityEnabled
@@ -71,6 +77,7 @@ export {
   APP_BROWSER_UTILITY_ID,
   APP_CUA_DRIVER_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
+  APP_FOLLOW_UP_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
   APP_VIDEO_UTILITY_ID
 }
@@ -192,7 +199,7 @@ export class UtilityRegistryService {
         kind: 'computer_use',
         name: 'cio:browser',
         description:
-          'Runs project- and thread-scoped browsers for localhost and web application testing: navigation, element snapshots with live values and stable references, real pointer and keyboard input (clicks, hover, drag, typing, key presses, select and checkbox control, scrolling), page-condition waits, page evaluation, reviewed file uploads, viewport, full-page and element screenshots, and browser console diagnostics. This is also the browser that renders your own design, prototype and video work at the URL the app served it on, so open it there before you describe the result.',
+          'Runs project- and thread-scoped browsers for localhost and web application testing: navigation, element snapshots with live values and stable references, real pointer and keyboard input (clicks, hover, drag, typing, key presses, select and checkbox control, scrolling), page-condition waits including waiting for the page content to change, page evaluation, reviewed file uploads, viewport, full-page and element screenshots, and browser console diagnostics. It also carries a live conversation with another party such as a business support, billing or sales chat, a queued ticket, or another agent, which it can poll until the conversation resolves. This is also the browser that renders your own design, prototype and video work at the URL the app served it on, so open it there before you describe the result.',
         enabled: true,
         activation: 'on_demand',
         scope: { level: 'global' },
@@ -340,6 +347,23 @@ export class UtilityRegistryService {
       activation: 'on_demand',
       scope: { level: 'global' },
       config: { instructions: CITE_CAPABILITY_DOCS },
+      credentials: [],
+      harnessBindings: [{ harnessId: ALL_HARNESSES_BINDING_ID, strategy: 'skill' as const }],
+      appOwned: true,
+      createdAt: now,
+      updatedAt: now
+    })
+    defaults.push({
+      // Knowledge with one clock attached: the app owns the wake, the agent owns
+      // the instruction it runs on, and the user owns the decision to schedule it.
+      id: APP_FOLLOW_UP_UTILITY_ID,
+      kind: 'skill',
+      name: FOLLOW_UP_CAPABILITY_NAME,
+      description: FOLLOW_UP_CAPABILITY_SUMMARY,
+      enabled: true,
+      activation: 'on_demand',
+      scope: { level: 'global' },
+      config: { instructions: FOLLOW_UP_CAPABILITY_DOCS },
       credentials: [],
       harnessBindings: [{ harnessId: ALL_HARNESSES_BINDING_ID, strategy: 'skill' as const }],
       appOwned: true,

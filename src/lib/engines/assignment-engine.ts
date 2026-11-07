@@ -22,6 +22,7 @@ import { DEFAULT_SCOPE_BUCKET_ID, workerReportsToCoordinator } from '../types'
 import { generateId } from '../utils'
 import { validateAssignment } from '../assignment/assignment-validation'
 import { ThreadManager } from './thread-manager'
+import { markThreadEngineeringEngaged } from './engineering-engagement'
 import type { SpecEngine } from './spec-engine'
 import { AssignmentEngineError } from './assignment-engine-error'
 import {
@@ -93,6 +94,12 @@ export class AssignmentEngine {
    * inherits the Assignment's scope.
    */
   private workerScopes: AssignmentWorkerScopeProvisioner = inheritOnlyWorkerScopes
+  /**
+   * Installed by the app so a replaced worker can be retired for real: stopped
+   * and unscheduled. Unlinking alone left it parked on a quota retry with
+   * nothing left to report to, and it resumed days later on its own.
+   */
+  private retireWorker: ((projectId: string, threadId: string) => Promise<void>) | null = null
 
   constructor(
     private readonly storage: StorageEngine,
@@ -117,6 +124,27 @@ export class AssignmentEngine {
    */
   setWorkerScopeProvisioner(provisioner: AssignmentWorkerScopeProvisioner | null): void {
     this.workerScopes = provisioner ?? inheritOnlyWorkerScopes
+  }
+
+  /**
+   * Install the app's retirement handler for a worker the Assignment replaced.
+   * Only the app owns sessions, so stopping the thread and clearing its pending
+   * retry cannot happen here. Late-bound for the same reason as the provisioner.
+   */
+  setWorkerRetirementHandler(
+    handler: ((projectId: string, threadId: string) => Promise<void>) | null
+  ): void {
+    this.retireWorker = handler
+  }
+
+  /** Housekeeping only: a failed retirement must never block the reassignment. */
+  private async retireReplacedWorker(projectId: string, threadId: string): Promise<void> {
+    if (!this.retireWorker) return
+    try {
+      await this.retireWorker(projectId, threadId)
+    } catch {
+      // The abandoned thread keeps its old state, which is what happened before.
+    }
   }
 
   /**
@@ -186,7 +214,6 @@ export class AssignmentEngine {
     await this.persist(assignment)
     return assignment
   }
-
   getActive(projectId: string, coordinatorThreadId: string): AssignmentPlan | null {
     return this.repo.getActive(projectId, coordinatorThreadId)
   }
@@ -553,7 +580,7 @@ export class AssignmentEngine {
     model: AssignmentModelSelection
   ): Promise<AssignmentPlan> {
     const active = this.requireActive(projectId, coordinatorThreadId)
-    if (!['approved', 'running', 'attention'].includes(active.status)) {
+    if (!['approved', 'running', 'attention', 'stopped', 'failed'].includes(active.status)) {
       throw new AssignmentEngineError(
         'invalid_transition',
         'Worker models can only be updated on an active signed-off Assignment'
@@ -571,6 +598,57 @@ export class AssignmentEngine {
     }
 
     return this.replaceTask(active, { ...task, model: structuredClone(model) }, active.status)
+  }
+
+  /**
+   * Update the model every worker in a signed-off phase will run on.
+   *
+   * A phase is only editable while none of its workers has started: the moment
+   * one task has a thread (or has finished), the phase has been reached and its
+   * remaining tasks keep their own per-task controls instead. A stopped or
+   * failed Assignment still accepts this for phases it never got to, so
+   * retargeting a blocked phase does not require resuming it first.
+   */
+  async updateUnlinkedPhaseModel(
+    projectId: string,
+    coordinatorThreadId: string,
+    phaseId: string,
+    model: AssignmentModelSelection
+  ): Promise<AssignmentPlan> {
+    const active = this.requireActive(projectId, coordinatorThreadId)
+    if (!['approved', 'running', 'attention', 'stopped', 'failed'].includes(active.status)) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Phase models can only be updated on an active signed-off Assignment'
+      )
+    }
+    const phase = active.content.phases.find((candidate) => candidate.id === phaseId)
+    if (!phase) {
+      throw new AssignmentEngineError('not_found', 'Assignment phase not found')
+    }
+    const reached = active.content.tasks.some(
+      (task) =>
+        task.phaseId === phaseId && (task.threadId !== undefined || task.status === 'completed')
+    )
+    if (reached) {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'This phase has already started; change the model on its worker threads instead'
+      )
+    }
+    const updated: AssignmentPlan = {
+      ...active,
+      content: {
+        ...active.content,
+        phases: active.content.phases.map((candidate) =>
+          candidate.id === phaseId
+            ? { ...candidate, defaultModel: structuredClone(model) }
+            : candidate
+        )
+      },
+      updatedAt: this.now()
+    }
+    return this.persistPlan(updated, active.version)
   }
 
   /**
@@ -815,6 +893,11 @@ export class AssignmentEngine {
     return this.auditCycle.complete(projectId, coordinatorThreadId)
   }
 
+  /** Undo an accepted audit, returning the report to review. */
+  async retractAuditCycle(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    return this.auditCycle.retract(projectId, coordinatorThreadId)
+  }
+
   async makeAuditAvailable(
     projectId: string,
     coordinatorThreadId: string
@@ -937,6 +1020,7 @@ export class AssignmentEngine {
     if (staleThreadId && staleThreadId !== active.coordinatorThreadId) {
       this.removeApiCapabilitiesForThread(active.id, staleThreadId)
       await this.threads.unlinkAssignmentThread(active.projectId, staleThreadId)
+      await this.retireReplacedWorker(active.projectId, staleThreadId)
     }
 
     let assignedTask: AssignmentTask
@@ -1338,6 +1422,11 @@ export class AssignmentEngine {
   ): Promise<AssignmentPlan> {
     const settled = settleAuditOffer(plan)
     this.repo.save(settled, approvedVersion)
+    // The plan now exists, so the coordinator thread owns an Assignment and the
+    // view must read it: the marker is what lets the Assignment card and the
+    // header's Studio control appear for an Assignment an agent created from a
+    // plain conversation, on this mount and every later one.
+    markThreadEngineeringEngaged(this.db, settled.projectId, settled.coordinatorThreadId)
     await this.artifacts.writeMarkdown(settled)
     return settled
   }

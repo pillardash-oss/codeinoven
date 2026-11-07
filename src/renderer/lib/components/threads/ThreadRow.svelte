@@ -8,8 +8,9 @@
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import AuthoredWorkMarks from '$lib/components/threads/AuthoredWorkMarks.svelte'
+  import ThreadFollowUpMark from '$lib/components/threads/ThreadFollowUpMark.svelte'
   import ThreadNoteMark from '$lib/components/threads/ThreadNoteMark.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
@@ -53,6 +54,7 @@
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
+  import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
@@ -60,6 +62,7 @@
   import { effectiveThreadTitle } from '$lib/stores/draft-label'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
   import { pipState } from '$lib/stores/pip.svelte'
+  import { displayAvailability } from '$lib/stores/display-availability.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -73,15 +76,16 @@
   import { THREAD_DRAG_TYPE } from '$lib/components/chats/chat-composer-drop-source'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
+  import { resolveModelProvider } from '$shared/provider-identity'
   import type { Thread } from '$shared/types'
   import {
     coordinatorHasActiveDelegates,
     coordinatorHasUnreadWorkers,
     DEFAULT_SCOPE_BUCKET_ID,
-    isOrchestrationChildThread,
-    isThreadBusy
+    isOrchestrationChildThread
   } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
+  import { dispatchBadgeFor } from './thread-dispatch-badge'
 
   import { Portal } from 'bits-ui'
   import type { Component } from 'svelte'
@@ -298,7 +302,7 @@
   }
 
   function harnessName(id: string): string {
-    return getAgentIcon(id)?.name ?? id
+    return agentDisplayName(id)
   }
 
   /** Harness icons shown on the full row's footer line before the `+n` chip. */
@@ -306,10 +310,15 @@
 
   /** Provider name for the thread's current model, resolved for its vendor icon. */
   let currentModelProviderName = $derived.by((): string | null => {
-    const providerId = thread.settings?.providerId
-    if (!providerId) return null
-    const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
-    return providers.find((provider) => provider.id === providerId)?.name ?? null
+    const provider = resolveModelProvider(
+      providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached(),
+      {
+        providerId: thread.settings?.providerId,
+        harnessId: thread.settings?.harnessId,
+        modelId: thread.settings?.modelId
+      }
+    )
+    return provider?.name ?? null
   })
 
   /** Provider id of the thread's current model   ids drive icon resolution so
@@ -411,24 +420,15 @@
     | 'approval'
     | 'error'
 
-  /** Threads with any unsent composer content read as "todo" (filled gray dot).
-   *  Live dictation counts too: from the first mic press through transcription
-   *  the user is drafting with their voice, so the row must read as draft
-   *  before the transcript ever reaches the composer. */
-  let isDraft = $derived(
-    rendererRecovery.hasDraftContent(thread.projectId, thread.id) ||
-      speechController.isCapturingThread(thread.id)
-  )
-
   /** Whether the user is typing into this thread's composer right now.
    *
-   *  Deliberately narrower than `isDraft`: that one also reports a message
-   *  already queued, and the two must stay apart or the row could not tell
-   *  "waiting to send" from "typing now" -- which is the whole reason the
-   *  secondary slot can say which of the two happened last. Live dictation counts
-   *  too: from the first mic press through transcription the user is drafting with
-   *  their voice, so the row reads draft before the transcript reaches the
-   *  composer. */
+   *  Deliberately narrower than "has any unsent content": it reports a composer
+   *  the user has actually touched, not a message waiting behind the thread's own
+   *  run, and the two must stay apart or the row could not tell "waiting to send"
+   *  from "typing now" -- which is the whole reason the secondary slot can say
+   *  which of the two happened last. Live dictation counts too: from the first mic
+   *  press through transcription the user is drafting with their voice, so the row
+   *  reads draft before the transcript reaches the composer. */
   let isTyping = $derived(
     rendererRecovery.hasTypedContent(thread.projectId, thread.id) ||
       speechController.isCapturingThread(thread.id)
@@ -487,13 +487,22 @@
   /** Another CodeInOven instance owns this thread's in-flight turn, so its live
    *  output and its stop control are there rather than here. */
   let isForeignRun = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
-  let isBusyIndicator = $derived(
-    isWorking || isRetryPaused || (Boolean(thread.sessionId) && isThreadBusy(thread) && !isDraft)
-  )
+  /** Whether the row wears the working mark on its own account.
+   *
+   *  The persisted status is deliberately not a second source here. `isWorking`
+   *  already falls back to it before any live session has settled the run, and
+   *  from the moment a session settles, the live flag is the authority: reading
+   *  the status again let a stale `planning`/`executing` row keep spinning on the
+   *  sidebar while the header, the rail and the scope strips  every surface on
+   *  the shared rule  had already read the thread as idle. */
+  let isBusyIndicator = $derived(isWorking || isRetryPaused)
   let isRecording = $derived(speechController.isRecordingThread(thread.id))
   /** The thread's agent is driving the computer right now   window-scoped or
    *  desktop-scoped. Shares the recorder's indicator slot via `indicator`. */
   let isUsingComputerUse = $derived(pipState.isThreadUsingComputerUse(thread.id))
+  /** The thread's agent is driving a display target (an emulator, a simulator, a
+   *  mirrored screen) right now. Shares the same indicator slot. */
+  let isUsingDisplay = $derived(displayAvailability.isThreadUsingDisplay(thread.id))
   /** When a browser tab owned by this thread started playing sound, or null while
    *  the thread's browser is silent. Shares the recorder's indicator slot. */
   let browserAudioAt = $derived(browserAudio.threadAudioStartedAt(thread.id))
@@ -542,6 +551,7 @@
             : 'transcribing'
       )
     }
+    if (isUsingDisplay) live.push('display')
     if (isUsingComputerUse) live.push('computer-use')
     if (browserAudioAt !== null) live.push('browser-audio')
     for (const kind of browserAudio.activitiesForThread(thread.id)) {
@@ -562,6 +572,10 @@
     // fact about the thread that asked, so it shows on a project thread, a chat
     // and an assistant task alike, and it persists after the run settles.
     if (orchestrationCoordinatorState.hasDispatched(thread.id)) live.push('orchestrator')
+    // The delegation mark: this thread spawned pawn agents, which live on threads
+    // of their own and are therefore never rows of their own. The pawn board is
+    // where those threads are listed, so the row has to say they exist.
+    if (pawnAgentsState.hasWorkers(thread.id)) live.push('pawn')
     return live
   })
 
@@ -772,6 +786,9 @@
   )
 
   /** Title colour, shared by every row layout. */
+  /** The origin badge an orchestrated dispatch wears, above its title. */
+  let dispatchBadge = $derived(dispatchBadgeFor(thread))
+
   let titleClass = $derived(
     threadState === 'approval'
       ? 'font-medium text-warning'
@@ -1254,6 +1271,7 @@
               <span>{branchLabel}</span>
             </span>
           {/if}
+          <ThreadFollowUpMark threadId={thread.id} />
           <ThreadNoteMark threadId={thread.id} />
           <AuthoredWorkMarks kinds={authoredWorkKinds} />
           {#each activeIndicators as live (live)}
@@ -1452,9 +1470,16 @@
         <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
         {@render threadStatusSlot(Boolean(projectIconUrl || projectIconGlyph))}
 
-        <!-- Title -->
-        <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">
-          {displayTitle}
+        <!-- Title, with the origin badge above it for a dispatched thread. -->
+        <span class="flex min-w-0 flex-1 flex-col">
+          {#if dispatchBadge}
+            <span class="truncate text-xs text-muted" title={dispatchBadge.title}>
+              {dispatchBadge.label}
+            </span>
+          {/if}
+          <span class="min-w-0 truncate text-[0.75rem] {titleClass}">
+            {displayTitle}
+          </span>
         </span>
         {@render peekIndicator()}
 
@@ -1564,6 +1589,7 @@
                 <span>{branchLabel}</span>
               </span>
             {/if}
+            <ThreadFollowUpMark threadId={thread.id} />
             <ThreadNoteMark threadId={thread.id} />
             {@render temporaryChatMarker()}
             <AuthoredWorkMarks kinds={authoredWorkKinds} />
@@ -1630,7 +1656,14 @@
            user, else the age. Pinning is not here: the row's context menu and
            the pin keymap already do it, so the line keeps no reserved space. -->
       <span class="flex w-full min-w-0 items-center gap-2">
-        <span class="min-w-0 flex-1 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
+        <span class="flex min-w-0 flex-1 flex-col">
+          {#if dispatchBadge}
+            <span class="truncate text-xs text-muted" title={dispatchBadge.title}>
+              {dispatchBadge.label}
+            </span>
+          {/if}
+          <span class="min-w-0 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
+        </span>
         {@render peekIndicator()}
         {#if activeIndicators.length > 0}
           <!-- Every live action the thread has, not only the loudest one. A thread
@@ -1735,6 +1768,7 @@
                 <span class="truncate">{branchLabel}</span>
               </span>
             {/if}
+            <ThreadFollowUpMark threadId={thread.id} />
             <ThreadNoteMark threadId={thread.id} />
             {@render temporaryChatMarker()}
             <AuthoredWorkMarks kinds={authoredWorkKinds} />

@@ -65,6 +65,11 @@
     replaceDisabled: boolean
     onSearch: () => void
     onSearchReplace: () => void
+    /** IDE Mode project-wide searches, unavailable until the reader is on a
+     *  working-tree source view with IDE Mode enabled. */
+    projectSearchDisabled: boolean
+    onProjectTextSearch: () => void
+    onProjectFileFind: () => void
     onSetView: (view: ProjectFileView) => void
     onInfo: () => void
     /** File info is disabled for files that no longer exist on disk. */
@@ -113,6 +118,9 @@
     replaceDisabled,
     onSearch,
     onSearchReplace,
+    projectSearchDisabled,
+    onProjectTextSearch,
+    onProjectFileFind,
     onSetView,
     onInfo,
     infoDisabled = false,
@@ -254,6 +262,9 @@
     {replaceDisabled}
     {onSearch}
     {onSearchReplace}
+    {projectSearchDisabled}
+    {onProjectTextSearch}
+    {onProjectFileFind}
     {onInfo}
     {infoDisabled}
     {onUndo}

@@ -141,7 +141,7 @@
   /** The frame the page occupies, derived from the pane it is fitted into. */
   let pageRect = $derived(fittedBounds(paneRect))
 
-  let placed = $derived(active && browserVisibility.isVisible(placedTab.tabId, pageRect))
+  let placed = $derived(active && browserVisibility.isVisible(placedTab.tabId, pageRect, surface))
 
   function measurePane(): BrowserViewBounds | null {
     if (!host || !active) return null
@@ -198,7 +198,7 @@
     // Ask the store directly instead of reading `placed`: this also runs from
     // observers and continuations, after the effect that owns a derived may have
     // been torn down.
-    if (!browserVisibility.isVisible(placedTab.tabId, frame)) return
+    if (!browserVisibility.isVisible(placedTab.tabId, frame, surface)) return
     try {
       await invoke(
         'browser:show',
@@ -214,7 +214,7 @@
       // view can exist at a time, so a stale attach would leave the page over
       // the surface that now owns it.
       const current = fittedBounds(measurePane())
-      if (!current || !browserVisibility.isVisible(placedTab.tabId, current)) {
+      if (!current || !browserVisibility.isVisible(placedTab.tabId, current, surface)) {
         browserVisibility.detachUnlessAnotherSurfaceDisplays(placedTab.tabId, surface)
       }
     } catch {

@@ -18,7 +18,7 @@
  * agent receives with its continuation.
  */
 
-import type { AgentMessage, AgentPart, Thread } from '../../../lib/types'
+import type { AgentMessage, AgentPart } from '../../../lib/types'
 
 /** One worker a hand-off stopped, as the resuming agent must hear about it. */
 export interface HandedOffWorker {
@@ -71,22 +71,12 @@ function workerLabel(activity: SubagentPart['activity']): string {
 /**
  * Whether a thread is a pawn worker spawned by `spawnerThreadId`.
  *
- * A pawn is the app's agent-owned worker thread: it carries the spawner in
- * `coordinatorThreadId` and no Assignment or Achievement role, which is what
- * tells it apart from an orchestration worker of those workflows. The user's
- * threads never carry a coordinator.
+ * The rule lives in the shared thread vocabulary because the renderer reads it
+ * too: a pawn is a thread carrying its spawner in `coordinatorThreadId` and no
+ * Assignment or Achievement role, which is what the row mark, the pawn board and
+ * the worker hand-off all have to agree on.
  */
-export function isPawnWorkerThread(
-  thread: Pick<
-    Thread,
-    'coordinatorThreadId' | 'assignmentRole' | 'achievementRole' | 'assignmentId'
-  >,
-  spawnerThreadId: string
-): boolean {
-  if (thread.coordinatorThreadId !== spawnerThreadId) return false
-  if (thread.assignmentRole !== undefined || thread.achievementRole !== undefined) return false
-  return thread.assignmentId === undefined
-}
+export { isPawnWorkerThread } from '../../../lib/types/thread'
 
 /**
  * The workers of a thread that are still running, newest card first.

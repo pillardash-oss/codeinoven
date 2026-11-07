@@ -104,6 +104,50 @@ describe('RetrySchedulerService', () => {
     restarted.stop()
   })
 
+  it('clamps a legacy transient provider wait parked on a far-future reset', async () => {
+    const storageEngine = await storage()
+    const first = new RetrySchedulerService(storageEngine)
+    await first.start()
+    // A 429 `overloaded` from before the fixed backoff: `provider_unavailable`
+    // parked on the account's monthly window, weeks out.
+    const poisoned = record({
+      issueKind: 'provider_unavailable',
+      issueMessage: '429: upstream overloaded, retry shortly',
+      retryAt: Date.now() + 30 * 24 * 60 * 60 * 1_000
+    })
+    await first.track(poisoned)
+    await first.flush()
+    first.dispose()
+
+    const restarted = new RetrySchedulerService(storageEngine)
+    await restarted.start()
+    const pending = restarted.getPendingRetry('session-1')
+    expect(pending?.issueKind).toBe('provider_unavailable')
+    expect(pending?.retryAt).toBeGreaterThan(Date.now())
+    expect(pending?.retryAt).toBeLessThanOrEqual(Date.now() + 60_000)
+    expect(pending?.resetAt).toBe(pending?.retryAt)
+    restarted.stop()
+  })
+
+  it('leaves a transient provider wait inside the bound untouched', async () => {
+    const storageEngine = await storage()
+    const first = new RetrySchedulerService(storageEngine)
+    await first.start()
+    const saved = record({
+      issueKind: 'provider_unavailable',
+      issueMessage: '429: upstream overloaded, retry shortly',
+      retryAt: Date.now() + 60_000
+    })
+    await first.track(saved)
+    await first.flush()
+    first.dispose()
+
+    const restarted = new RetrySchedulerService(storageEngine)
+    await restarted.start()
+    expect(restarted.getPendingRetry('session-1')).toEqual(saved)
+    restarted.stop()
+  })
+
   it('admits all six due retries in pairs without waiting for their turns to finish', async () => {
     const scheduler = new RetrySchedulerService(await storage())
     await scheduler.start()

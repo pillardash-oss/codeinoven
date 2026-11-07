@@ -2,7 +2,13 @@ import { WebContentsView } from 'electron'
 import { Logger } from '../../system/logger'
 import { type BrowserExtensionActionPopupOpenRequest } from '../extensions/browser-extension-service'
 import { ownedExtensionPageUrl } from '../extensions/browser-extension-page-url'
-import { type BrowserPageOwner } from './browser-types'
+import { browserPartitionFor } from './browser-validation'
+import {
+  BROWSER_EXTENSION_HOSTED_WINDOW_ID,
+  extensionWindowKey
+} from '../../../lib/browser/browser-extension-window'
+import { loadExtensionDocument } from '../extensions/browser-extension-page-load'
+import { type BrowserPageOwner, type BrowserTab } from './browser-types'
 import { MAX_POPUP_WINDOWS_PER_TAB } from './browser-validation'
 import { liveContents } from './browser-view-contents'
 import type { BrowserService } from '../browser-service'
@@ -27,11 +33,13 @@ export interface ExtensionPagesHost {
   readonly ensureTab: BrowserService['ensureTab']
   readonly extensionPopupOpenings: BrowserService['extensionPopupOpenings']
   readonly extensions: BrowserService['extensions']
+  readonly notifyExtensionWindow: BrowserService['notifyExtensionWindow']
   readonly openExtensionSidePanel: BrowserService['openExtensionSidePanel']
   readonly openNewTabFor: BrowserService['openNewTabFor']
   readonly popupWindows: BrowserService['popupWindows']
   readonly reportExtensionPageTabs: BrowserService['reportExtensionPageTabs']
   readonly sessionForProject: BrowserService['sessionForProject']
+  readonly sidePanels: BrowserService['sidePanels']
   readonly tabForContents: BrowserService['tabForContents']
   readonly tabs: BrowserService['tabs']
   readonly validateTabNavigationUrl: BrowserService['validateTabNavigationUrl']
@@ -40,6 +48,67 @@ export interface ExtensionPagesHost {
 
 export class BrowserServiceExtensionPages {
   constructor(private readonly host: ExtensionPagesHost) {}
+
+  /**
+   * Open a web page because an extension's own page called `chrome.tabs.create`,
+   * and answer with the id of the tab that page now lives in.
+   *
+   * There is no second window: the tab strip is the app's, so a launch from a
+   * password manager's popup becomes a tab beside the page that popup was acting
+   * on, in that page's jar, held to the same address rule a link click is. The id
+   * returned is the new page's `WebContents` id, which is the id this runtime's
+   * own `chrome.tabs` answers with, so the caller's own bookkeeping works against
+   * the tab it opened.
+   *
+   * Null for a request with nothing to open, an address the browser will not
+   * navigate to, or a surface that no longer has a tab to open beside   in which
+   * case the page's call answers with no tab rather than a promise that hangs.
+   *
+   * `active` is accepted for the shape `chrome.tabs.create` documents, and the tab
+   * is revealed either way: the strip is the one surface this browser has, and a
+   * tab the user was not shown is a page they cannot reach.
+   */
+  openTabFromExtensionPage(
+    contentsId: number,
+    request: { url: string; active: boolean }
+  ): number | null {
+    const owner = this.ownerForExtensionSurface(contentsId)
+    if (!owner) {
+      Logger.dev('An extension page asked for a tab with no page to open it beside')
+      return null
+    }
+    try {
+      const url = this.host.validateTabNavigationUrl(owner.projectId, owner.boxId, request.url)
+      return this.host.openNewTabFor(owner, url).id
+    } catch (error: unknown) {
+      Logger.dev('An extension page asked for a tab on an address it may not open:', {
+        url: request.url,
+        error
+      })
+      return null
+    }
+  }
+
+  /**
+   * The tab an extension's own document acts on.
+   *
+   * A document the app hosts for an extension   an action popup in the rail, a
+   * side panel, an extension page opened as a tab   stands beside one page of one
+   * browser and is that page's to act on, so the request a document makes lands
+   * where the document came from. Null when the surface is gone and its tab with
+   * it, which is a request with nowhere to go.
+   */
+  ownerForExtensionSurface(contentsId: number): BrowserPageOwner | null {
+    const record = this.host.popupWindows.recordForContents(contentsId)
+    const tabId =
+      record?.tabId ??
+      this.host.sidePanels.tabIdForContents(contentsId) ??
+      this.host.tabForContents(contentsId)?.id
+    if (!tabId) return null
+    const tab = this.host.tabs.get(tabId)
+    if (!tab) return null
+    return { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId }
+  }
 
   /** Resolve a worker window request and route it to the surface it belongs on. */
   /**
@@ -132,11 +201,60 @@ export class BrowserServiceExtensionPages {
     return { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId }
   }
 
+  /**
+   * The page of one jar a request lands on when it named none.
+   *
+   * An extension's worker shares one notion of the tab it acts for across the whole
+   * jar, so a request can arrive unable to name the page it belongs to   a passkey
+   * prompt is issued by the very worker the ceremony woke. The jar's page on screen
+   * is then the page the prompt is about, which is the same answer a browser gives.
+   * A jar with nothing on screen falls back to its first page, and a jar with no
+   * page at all answers null.
+   */
+  jarPageOwner(jar: string): { id: string; tab: BrowserTab } | null {
+    const entries = [...this.host.tabs.entries()].filter(
+      ([, candidate]) => browserPartitionFor(candidate.projectId, candidate.boxId) === jar
+    )
+    const entry = entries.find(([tabId]) => tabId === this.host.activeTabId) ?? entries[0]
+    if (!entry) return null
+    const [tabId, tab] = entry
+    return { id: tabId, tab }
+  }
+
   openExtensionWindowFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
-    const owner = this.host.tabForContents(request.extensionTabId)
-    if (!owner) return
+    // A request names the jar it came from, and a box's jar is one session every
+    // context that picked that box shares. The jar is therefore what the request is
+    // held to, never the context the jar first happened to be loaded by: a boxed
+    // conversation tab and the global browser's tab of the same box are the same
+    // jar, and refusing the conversation's request because the global browser got
+    // there first is what kept a passkey prompt in the thread browser from ever
+    // being asked for.
+    const jar = browserPartitionFor(request.projectId, request.boxId)
+    const owner = this.host.tabForContents(request.extensionTabId) ?? this.jarPageOwner(jar)
+    if (!owner) {
+      this.refuseExtensionWindow(request, 'there is no page to open it beside')
+      return
+    }
     const tab = owner.tab
-    if (tab.projectId !== request.projectId || tab.boxId !== request.boxId) return
+    if (browserPartitionFor(tab.projectId, tab.boxId) !== jar) {
+      Logger.dev('An extension window request named a page in another jar:', {
+        extensionId: request.extensionId,
+        kind: request.kind,
+        requestedJar: jar,
+        tabJar: browserPartitionFor(tab.projectId, tab.boxId)
+      })
+      this.refuseExtensionWindow(request, 'the page it named is in another jar')
+      return
+    }
+    // The page's own context owns what it opens: a box's jar is shared, its tabs
+    // are not, and a popup opened beside a conversation's page belongs to that
+    // conversation.
+    const tabOwner = {
+      tabId: owner.id,
+      projectId: tab.projectId,
+      threadId: tab.threadId,
+      boxId: tab.boxId
+    }
 
     if (request.kind === 'open-tab') {
       // The extension asked for a window that is not its own popout, and this app
@@ -144,11 +262,8 @@ export class BrowserServiceExtensionPages {
       // extension is acting on. The URL is held to the same rule a link click is,
       // so a web page is admitted and nothing else is.
       try {
-        const url = this.host.validateTabNavigationUrl(request.projectId, tab.boxId, request.url)
-        this.host.openNewTabFor(
-          { tabId: owner.id, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
-          url
-        )
+        const url = this.host.validateTabNavigationUrl(tab.projectId, tab.boxId, request.url)
+        this.host.openNewTabFor(tabOwner, url)
       } catch (error: unknown) {
         Logger.dev('An extension window request used an invalid URL:', {
           extensionId: request.extensionId,
@@ -169,11 +284,23 @@ export class BrowserServiceExtensionPages {
     }
 
     if (request.kind === 'hide-window') {
-      const cached = this.host.popupWindows.extensionPopupForJar(
-        request.extensionId,
-        request.projectId,
-        request.boxId
-      )
+      // A window the extension asked for is hidden by its own address, which is
+      // what names it to the extension too: hiding the jar's action popup instead
+      // would take the vault away while leaving the prompt on screen.
+      const windowKey = request.url ? extensionWindowKey(request.url) : null
+      const cached =
+        windowKey === null
+          ? this.host.popupWindows.extensionPopupForJar(
+              request.extensionId,
+              tabOwner.projectId,
+              tabOwner.boxId
+            )
+          : this.host.popupWindows.extensionWindowFor(
+              request.extensionId,
+              tabOwner.projectId,
+              tabOwner.boxId,
+              windowKey
+            )
       if (cached) this.host.popupWindows.dismiss(cached)
       return
     }
@@ -189,10 +316,10 @@ export class BrowserServiceExtensionPages {
       return
     }
     void this.openExtensionPopup(
-      request.projectId,
-      owner.id,
-      tab.threadId,
-      tab.boxId,
+      tabOwner.projectId,
+      tabOwner.tabId,
+      tabOwner.threadId,
+      tabOwner.boxId,
       request.extensionId,
       requestedUrl
     ).catch((error: unknown) => {
@@ -200,13 +327,44 @@ export class BrowserServiceExtensionPages {
         extensionId: request.extensionId,
         error
       })
+      this.refuseExtensionWindow(request, 'its page could not be opened')
     })
   }
 
   /**
-   * Open an extension's own popup in the rail. Its page runs in the extension's
-   * jar, remains live when hidden, and is retargeted when the extension is used in
-   * another tab in the same jar.
+   * End the extension's pretend window when the app cannot draw it.
+   *
+   * The worker shim answers a `chrome.windows.create` as soon as the request is
+   * routed, so a window this app then fails to host is still a window the extension
+   * believes it has, and a password manager waits on its prompt forever. Telling it
+   * the window is gone is the truthful answer: it aborts the pending ceremony, and
+   * the page falls back to whatever its own sign-in offers.
+   */
+  refuseExtensionWindow(request: BrowserExtensionActionPopupOpenRequest, reason: string): void {
+    if (request.kind !== 'open-window' && request.kind !== 'focus-window') return
+    Logger.dev('An extension window could not be shown, so it was reported closed:', {
+      extensionId: request.extensionId,
+      reason
+    })
+    this.host.notifyExtensionWindow(request.projectId, request.boxId, 'onRemoved', [
+      BROWSER_EXTENSION_HOSTED_WINDOW_ID
+    ])
+  }
+
+  /**
+   * Open one of an extension's own pages in the rail.
+   *
+   * Two kinds of page land here, and they are two objects in a browser:
+   *
+   *   - the extension's action popup, which a click on its icon opens: one retained
+   *     page per jar, parked off screen while the user works on the page instead;
+   *   - a window the extension asked the app for with `chrome.windows.create`,
+   *     which a password manager uses for its passkey prompt: its own address, its
+   *     own page and its own life, and the extension is told when it ends.
+   *
+   * Keeping the second kind out of the first is what makes a passkey prompt appear:
+   * reusing the vault popup for it replaced both documents, and the navigation that
+   * did it was then aborted as superseded, so neither page came up.
    */
   async openExtensionPopup(
     projectId: string,
@@ -245,39 +403,27 @@ export class BrowserServiceExtensionPages {
       })
       return null
     }
-    // One live popup page per extension jar: moving to another tab retargets this
-    // view instead of creating another extension document and worker connection.
-    const cached = this.host.popupWindows.extensionPopupForJar(extensionId, projectId, tab.boxId)
+    const windowKey = requestedUrl ? extensionWindowKey(requestedUrl) : null
+    const owner = { tabId, projectId, threadId: tab.threadId, boxId: tab.boxId }
     const activateCached = async (popupId: string): Promise<boolean> => {
-      if (
-        !this.host.popupWindows.retargetExtensionPopup(
-          popupId,
-          { tabId, projectId, threadId: tab.threadId, boxId: tab.boxId },
-          requestedUrl ??
-            this.host.extensions.popupUrlFor(extensionId, projectId, tab.boxId) ??
-            undefined
-        )
-      )
-        return false
-      if (requestedUrl) {
-        try {
-          if (!(await this.host.popupWindows.navigateExtensionPopup(popupId, requestedUrl)))
-            return false
-        } catch (error: unknown) {
-          Logger.dev('A retained extension page could not navigate to its requested popup:', {
-            extensionId,
-            error
-          })
-          return true
-        }
-      }
+      // The page a click on the icon asks for is already the one a retained action
+      // popup is showing, so it is left alone: only a request that names another
+      // page (an extension window, a popout) makes the retained page load again.
+      const shown = windowKey
+        ? await this.host.popupWindows.activateExtensionWindow(popupId, requestedUrl ?? '')
+        : await this.host.popupWindows.retargetExtensionPopup(popupId, owner, requestedUrl)
+      if (!shown) return false
       this.host.reportExtensionPageTabs(tabId)
       return true
     }
-    if (cached && (await activateCached(cached))) {
-      return cached
-    }
-    const popupKey = JSON.stringify([projectId, tab.boxId, extensionId])
+    // One live page per surface: the jar's action popup, and one per window the
+    // extension asked for, so a passkey prompt opening beside the vault popup does
+    // not take it away.
+    const cached =
+      windowKey === null
+        ? this.host.popupWindows.extensionPopupForJar(extensionId, projectId, tab.boxId)
+        : this.host.popupWindows.extensionWindowFor(extensionId, projectId, tab.boxId, windowKey)
+    const popupKey = JSON.stringify([projectId, tab.boxId, extensionId, windowKey])
     let opening = this.host.extensionPopupOpenings.get(popupKey)
     while (opening) {
       try {
@@ -288,13 +434,15 @@ export class BrowserServiceExtensionPages {
       }
       opening = this.host.extensionPopupOpenings.get(popupKey)
     }
-    const openedWhileWaiting = this.host.popupWindows.extensionPopupForJar(
-      extensionId,
-      projectId,
-      tab.boxId
-    )
+    const openedWhileWaiting =
+      windowKey === null
+        ? this.host.popupWindows.extensionPopupForJar(extensionId, projectId, tab.boxId)
+        : this.host.popupWindows.extensionWindowFor(extensionId, projectId, tab.boxId, windowKey)
     if (openedWhileWaiting && (await activateCached(openedWhileWaiting))) {
       return openedWhileWaiting
+    }
+    if (cached && cached !== openedWhileWaiting && (await activateCached(cached))) {
+      return cached
     }
     const creation = this.createExtensionPopup(
       projectId,
@@ -302,7 +450,8 @@ export class BrowserServiceExtensionPages {
       tab.threadId,
       tab.boxId,
       extensionId,
-      requestedUrl
+      requestedUrl,
+      windowKey
     )
     this.host.extensionPopupOpenings.set(popupKey, creation)
     try {
@@ -321,7 +470,8 @@ export class BrowserServiceExtensionPages {
     threadId: string,
     boxId: string | null,
     extensionId: string,
-    requestedUrl?: string
+    requestedUrl?: string,
+    windowKey: string | null = null
   ): Promise<string> {
     if (this.host.popupWindows.countForTab(tabId) >= MAX_POPUP_WINDOWS_PER_TAB) {
       throw new Error('This tab already holds the popups it may host')
@@ -352,6 +502,7 @@ export class BrowserServiceExtensionPages {
     const popupId = this.host.popupWindows.hostExtension({
       owner: { tabId, projectId, threadId, boxId },
       extensionId,
+      windowKey,
       url,
       view,
       viewport: null
@@ -365,7 +516,7 @@ export class BrowserServiceExtensionPages {
       if (currentTabId) this.host.reportExtensionPageTabs(currentTabId)
     })
     try {
-      await view.webContents.loadURL(url)
+      await loadExtensionDocument(view.webContents, url)
     } catch (error: unknown) {
       // A page that could not load is not a popup: without this the rail would keep
       // a tab that can never show anything.

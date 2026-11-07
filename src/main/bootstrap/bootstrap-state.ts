@@ -25,6 +25,7 @@ import type { ConnectivityService } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import type { CioCleanupService } from '../cio-cleanup/cio-cleanup-service'
 import type { AssistantSchedulerService } from '../scheduler/assistant-scheduler-service'
+import type { FollowUpService } from '../follow-ups/follow-up-service'
 import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
 import type { AutoAnswerStore } from '../system/auto-answer-store'
 import type { CleanShutdownStore } from '../system/clean-shutdown-store'
@@ -70,6 +71,11 @@ export interface BootstrapState {
   /** Workspace startup failed; the independent recovery/update surface owns quit. */
   startupRecovery: boolean
   startupServicesFailed: boolean
+  /**
+   * The shutdown pipeline handed the process to Electron's teardown, so the
+   * watchdog covering that phase now owns the exit and nothing may disarm it.
+   */
+  quitTeardownStarted: boolean
   shutdownFailsafe: ReturnType<typeof setTimeout> | null
 
   // Renderer readiness and startup milestones.
@@ -110,6 +116,13 @@ export interface BootstrapState {
   designService: DesignService | null
   assistantManager: AssistantManager | null
   assistantScheduler: AssistantSchedulerService | null
+  /**
+   * The agent-scheduled wakes of individual threads: one clock, armed only while
+   * a wake is pending, that resumes the same thread at the time the user agreed.
+   */
+  followUpService: FollowUpService | null
+  /** Unsubscribes the follow-up clock from cross-instance ownership changes. */
+  stopFollowUpOwnershipListener: (() => void) | null
   /** Durable record of unattended (background) runs for the "while you were away" list. */
   backgroundRunLedger: BackgroundRunLedger | null
   /** Durable record of gates the app resolved without the user (attention rail). */
@@ -177,6 +190,7 @@ export function createBootstrapState(): BootstrapState {
     quitForUpdate: false,
     startupRecovery: false,
     startupServicesFailed: false,
+    quitTeardownStarted: false,
     shutdownFailsafe: null,
     rendererReadyReported: false,
     packagedSmokeProofStarted: false,
@@ -204,6 +218,8 @@ export function createBootstrapState(): BootstrapState {
     designService: null,
     assistantManager: null,
     assistantScheduler: null,
+    followUpService: null,
+    stopFollowUpOwnershipListener: null,
     backgroundRunLedger: null,
     autoAnswerStore: null,
     cleanShutdownStore: null,

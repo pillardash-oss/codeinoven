@@ -144,15 +144,17 @@ export class MemoryService {
    * Every memory entry an agent turn in this context receives.
    *
    * The audience comes from the container (a project thread, a chat, or an
-   * assistant task), and `assistantId` narrows assistant turns to their own
-   * assistant's memory. Entries are filtered here rather than at format time so a
-   * caller that inspects `entries` (duplicate detection, proposals) sees exactly
-   * what the agent would.
+   * assistant task), `assistantId` narrows assistant turns to their own
+   * assistant's memory, and `scopeBucketId` narrows project turns to the feature
+   * scope their thread belongs to. Entries are filtered here rather than at
+   * format time so a caller that inspects `entries` (duplicate detection,
+   * proposals) sees exactly what the agent would.
    */
   async current(
     projectId?: string,
     threadId?: string,
-    assistantId?: string
+    assistantId?: string,
+    scopeBucketId?: string
   ): Promise<MemoryConfig> {
     const config = await this.storage.read<AppConfig>('config.json')
     const isChat = projectId === 'inbox'
@@ -172,7 +174,7 @@ export class MemoryService {
       enabled: isChat ? (config?.memory?.chatEnabled ?? true) : (config?.memory?.enabled ?? true),
       chatEnabled: config?.memory?.chatEnabled ?? true,
       entries: dedupeEntriesById(entries).filter((entry) =>
-        entryMatchesContext(entry, projectId, threadId, assistantId)
+        entryMatchesContext(entry, projectId, threadId, assistantId, scopeBucketId)
       )
     }
   }
@@ -405,14 +407,16 @@ export class MemoryService {
     projectId?: string,
     threadId?: string,
     modelKey?: string,
-    assistantId?: string
+    assistantId?: string,
+    scopeBucketId?: string
   ): Promise<string> {
     return this.format(
-      await this.current(projectId, threadId, assistantId),
+      await this.current(projectId, threadId, assistantId, scopeBucketId),
       projectId,
       threadId,
       modelKey,
-      assistantId
+      assistantId,
+      scopeBucketId
     )
   }
 
@@ -421,12 +425,13 @@ export class MemoryService {
     projectId?: string,
     threadId?: string,
     modelKey?: string,
-    assistantId?: string
+    assistantId?: string,
+    scopeBucketId?: string
   ): string {
     if (!config.enabled) return ''
     const entries = config.entries.filter((entry) =>
       entry.enabled
-        ? entryAppliesToContext(entry, projectId, threadId, modelKey, assistantId)
+        ? entryAppliesToContext(entry, projectId, threadId, modelKey, assistantId, scopeBucketId)
         : false
     )
     if (entries.length === 0) return ''
@@ -470,14 +475,16 @@ export class MemoryService {
     projectId?: string,
     threadId?: string,
     modelKey?: string,
-    assistantId?: string
+    assistantId?: string,
+    scopeBucketId?: string
   ): Promise<SpecContextReference[]> {
-    const config = await this.current(projectId, threadId, assistantId)
+    const config = await this.current(projectId, threadId, assistantId, scopeBucketId)
     if (!config.enabled) return []
     return config.entries
       .filter(
         (entry) =>
-          entry.enabled && entryAppliesToContext(entry, projectId, threadId, modelKey, assistantId)
+          entry.enabled &&
+          entryAppliesToContext(entry, projectId, threadId, modelKey, assistantId, scopeBucketId)
       )
       .map((entry): SpecContextReference => ({
         id: `memory-${entry.id}`,
@@ -510,6 +517,7 @@ export class MemoryService {
       source?: MemorySource
       modelKeys?: string[]
       projectId?: string
+      scopeBucketId?: string
       threadId?: string
       assistantId?: string
     } = {}
@@ -531,7 +539,8 @@ export class MemoryService {
       scopes,
       options.projectId,
       options.threadId,
-      options.assistantId
+      options.assistantId,
+      options.scopeBucketId
     )
     const now = Date.now()
     const entry: MemoryEntry = {
@@ -548,6 +557,7 @@ export class MemoryService {
       frequency: 1,
       lastReinforced: now,
       projectId: location.entryProjectId,
+      scopeBucketId: location.entryScopeBucketId,
       threadId: location.entryThreadId,
       assistantId: location.entryAssistantId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {})
@@ -636,6 +646,7 @@ export class MemoryService {
       scopes?: MemoryScope[]
       modelKeys?: string[]
       projectId?: string
+      scopeBucketId?: string
       threadId?: string
       assistantId?: string
     } = {}
@@ -661,7 +672,8 @@ export class MemoryService {
       scopes,
       options.projectId,
       options.threadId,
-      options.assistantId
+      options.assistantId,
+      options.scopeBucketId
     )
     const queueProjectId = location.projectId
     const proposals = await this.readProposals(queueProjectId)
@@ -688,6 +700,7 @@ export class MemoryService {
       priority,
       scopes,
       projectId: location.entryProjectId,
+      scopeBucketId: location.entryScopeBucketId,
       threadId: location.entryThreadId,
       assistantId: location.entryAssistantId,
       ...(category === 'models' && modelKeys.length > 0 ? { modelKeys } : {}),
@@ -714,6 +727,7 @@ export class MemoryService {
       source: 'auto-detected',
       modelKeys: proposal.modelKeys,
       projectId: proposal.projectId,
+      scopeBucketId: proposal.scopeBucketId,
       threadId: proposal.threadId,
       assistantId: proposal.assistantId
     })

@@ -6,6 +6,7 @@
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import CioZap from '@pdslng/cio-icon/CioZap.svelte'
   import { Command } from 'bits-ui'
+  import { SvelteSet } from 'svelte/reactivity'
   import { tick } from 'svelte'
   import type { Component } from 'svelte'
   import { filterActions } from '../../actions'
@@ -16,7 +17,7 @@
   import ScopeBadge from '$lib/components/shared/ScopeBadge.svelte'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
-  import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import MultiSelectPicker from '$lib/components/shared/MultiSelectPicker.svelte'
   import type { MultiSelectOption } from '$lib/components/shared/multi-select-option'
@@ -47,6 +48,16 @@
      *  identify and leaves it out. */
     screenKey?: string
     actions: readonly ActionDefinition[]
+    /**
+     * Rows that already rank above the action list and must not be re-filtered
+     * by the query.
+     *
+     * The spotlight home uses this for its inline thread search: the server
+     * ranking (title, then meaning, then evidence) is the answer, so a semantic
+     * hit whose text never repeats the query must still reach the list. Order is
+     * the caller's; duplicates of a filtered action are dropped.
+     */
+    leadingActions?: readonly ActionDefinition[]
     onSelect: (selection: ActionSelection) => void | Promise<void>
     onClose: () => void
     /** Restores an explicitly captured focus target. Return true to suppress dialog fallback. */
@@ -55,6 +66,10 @@
     title?: string
     placeholder?: string
     emptyLabel?: string
+    /** A live one-line status shown in the footer, e.g. a ranking that is still
+     *  in flight. Empty by default, so a palette without one renders exactly as
+     *  before. */
+    statusNote?: string
     initialQuery?: string
     maxResults?: number
     closeOnSelect?: boolean
@@ -86,6 +101,7 @@
     title = 'Commands',
     placeholder = 'Search actions…',
     emptyLabel = 'No matching actions',
+    statusNote = '',
     initialQuery = '',
     maxResults = 60,
     closeOnSelect = true,
@@ -95,6 +111,7 @@
     headerIconBadge = false,
     headerIconBadgeClass = '',
     serverFiltered = false,
+    leadingActions = [],
     onBack,
     filter = null
   }: Props = $props()
@@ -115,6 +132,24 @@
       ? actions.slice(0, maxResults)
       : filterActions(actions, query, { limit: maxResults })
   )
+
+  /**
+   * The rows actually rendered, in order: the unfiltered leading rows first, then
+   * the filtered actions. One row per id, so a leading row that is also an action
+   * cannot appear twice.
+   */
+  let listedActions = $derived.by((): ActionDefinition[] => {
+    if (leadingActions.length === 0) return visibleActions
+    const seen = new SvelteSet<ActionDefinition['id']>()
+    const listed: ActionDefinition[] = []
+    for (const action of [...leadingActions, ...visibleActions]) {
+      if (seen.has(action.id)) continue
+      if (listed.length >= maxResults) break
+      seen.add(action.id)
+      listed.push(action)
+    }
+    return listed
+  })
 
   /**
    * A fresh open and a screen change both start clean: an empty query and no
@@ -188,7 +223,7 @@
 
   /** Human-readable harness name for an agent icon tooltip. */
   function harnessLabel(id: string): string {
-    return getAgentIcon(id)?.name ?? id
+    return agentDisplayName(id)
   }
 </script>
 
@@ -265,7 +300,7 @@
          rows (an empty "search threads" screen shrank the whole surface). The
          room is the same ceiling it always had, now always claimed. -->
     <Command.List class="h-[min(24rem,55vh)] overflow-y-auto p-1.5" aria-label="{title} results">
-      {#each visibleActions as action (action.id)}
+      {#each listedActions as action (action.id)}
         <Command.Item
           value={action.id}
           disabled={Boolean(action.disabledReason)}
@@ -475,7 +510,12 @@
             Back
           </button>
         {/if}
-        <span class="tabular-nums">{visibleActions.length} actions</span>
+        <span class="tabular-nums">{listedActions.length} actions</span>
+        {#if statusNote}
+          <span class="min-w-0 truncate border-l border-border-strong pl-2" role="status">
+            {statusNote}
+          </span>
+        {/if}
       </span>
       {#if filter}
         <MultiSelectPicker

@@ -33,12 +33,6 @@ const NEXT_STAGE_AFTER_GATE: Partial<Record<EngineeringLifecycleGate, Engineerin
     spec_approval: 'spec',
     assignment_approval: 'assignment'
   }
-const NEXT_STAGE: Partial<Record<EngineeringLifecycleStage, EngineeringLifecycleStage>> = {
-  brainstorm: 'prd',
-  prd: 'spec',
-  spec: 'assignment',
-  assignment: 'achievement'
-}
 
 /** A stage that must be enabled for the given dependent stage to run. Assignment
  *  stands alone: it decomposes the approved Spec when one exists and the thread
@@ -49,13 +43,12 @@ const STAGE_DEPENDENCIES: Partial<Record<EngineeringLifecycleStage, EngineeringL
     achievement: ['spec']
   }
 
-/** True when the lifecycle runs the given stage (Auto Pilot includes every stage). */
+/** True when the lifecycle runs the given stage. */
 export function hasSelectedStage(
   state: EngineeringLifecycleState | null | undefined,
   stage: EngineeringLifecycleStage
 ): boolean {
   if (!state) return false
-  if (state.autopilot) return true
   return state.selectedStages.includes(stage)
 }
 
@@ -77,10 +70,8 @@ export function normalizeLifecycleStages(
 
 /** Back-compat single representative used by legacy lifecycle labels and settings. */
 export function representativeLifecycleSelection(
-  stages: EngineeringLifecycleStage[],
-  autopilot: boolean
+  stages: EngineeringLifecycleStage[]
 ): EngineeringLifecycleSelection {
-  if (autopilot) return 'run_all'
   if (stages.length === 0) return 'none'
   return stages[0]
 }
@@ -95,8 +86,7 @@ export function deriveEngineeringLifecycleSwitchState(
   state: EngineeringLifecycleState | null,
   stage: EngineeringLifecycleStage
 ): EngineeringLifecycleSwitchState {
-  const disabled = state?.autopilot === true
-  return { checked: hasSelectedStage(state, stage), disabled }
+  return { checked: hasSelectedStage(state, stage), disabled: false }
 }
 
 export class EngineeringLifecycleError extends Error {
@@ -125,7 +115,6 @@ export interface EngineeringLifecycleAdvanceInput {
 /** The switches a sibling thread inherits, plus the source's highlight marker. */
 export interface EngineeringLifecycleInheritInput {
   stages: EngineeringLifecycleStage[]
-  autopilot: boolean
   /** The source's permanent `started_at`; carried only when nothing is selected. */
   startedAt?: number
 }
@@ -174,21 +163,25 @@ export class EngineeringLifecycleEngine {
         )
       : []
     let selectedStages = this.parseStages(row.selected_stages_json)
-    // Legacy migration: a single-stage or run_all selection predates the multi-select
-    // columns. Derive the set so previously selected stages survive the upgrade.
-    let autopilot = row.autopilot === 1
-    if (row.selection === 'run_all') {
-      autopilot = true
-      selectedStages = []
-    } else if (!autopilot && selectedStages.length === 0 && row.selection !== 'none') {
+    // Legacy migration: a single-stage selection, or the retired run_all value
+    // that used to mean Auto Pilot, predates the multi-select columns. Auto Pilot
+    // is gone, so a run_all row becomes every stage switched on instead.
+    if (row.selection === 'run_all' || row.autopilot === 1) {
+      selectedStages = [...ENGINEERING_LIFECYCLE_STAGE_VALUES]
+    } else if (selectedStages.length === 0 && row.selection !== 'none') {
       selectedStages = [row.selection]
     }
+    // The stored selection stays authoritative: a terminal advance clears it to
+    // 'none' while the completed stage set remains until cancellation.
+    const selection =
+      row.selection === 'run_all' || row.autopilot === 1
+        ? representativeLifecycleSelection(selectedStages)
+        : row.selection
     return {
       projectId: row.project_id,
       threadId: row.thread_id,
-      selection: row.selection,
+      selection,
       selectedStages,
-      autopilot,
       completedStages,
       ...(row.active_stage ? { activeStage: row.active_stage } : {}),
       ...(row.human_gate ? { humanGate: row.human_gate } : {}),
@@ -221,7 +214,6 @@ export class EngineeringLifecycleEngine {
       threadId,
       selection: 'none',
       selectedStages: [],
-      autopilot: false,
       completedStages: [],
       updatedAt: now
     }
@@ -239,12 +231,10 @@ export class EngineeringLifecycleEngine {
         'Confirm cancellation before replacing active Engineering work'
       )
     }
-    const autopilot = input.autopilot === true
-    const selectedStages = autopilot ? [] : normalizeLifecycleStages(input.stages)
-    const selection = representativeLifecycleSelection(selectedStages, autopilot)
+    const selectedStages = normalizeLifecycleStages(input.stages)
+    const selection = representativeLifecycleSelection(selectedStages)
     if (
       current.selection === selection &&
-      current.autopilot === autopilot &&
       this.sameStages(current.selectedStages, selectedStages)
     ) {
       return current
@@ -258,7 +248,7 @@ export class EngineeringLifecycleEngine {
       'UPDATE engineering_lifecycle SET selection=?, selected_stages_json=?, autopilot=?, completed_stages_json=?, started_at=NULL, resume_token=NULL, last_consumed_resume_token=NULL, failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
       selection,
       JSON.stringify(selectedStages),
-      autopilot ? 1 : 0,
+      0,
       '[]',
       now,
       projectId,
@@ -268,7 +258,6 @@ export class EngineeringLifecycleEngine {
       ...current,
       selection,
       selectedStages,
-      autopilot,
       completedStages: [],
       failure: undefined,
       updatedAt: now
@@ -278,7 +267,7 @@ export class EngineeringLifecycleEngine {
   /**
    * Seed a sibling thread from a source Engineering thread.
    *
-   * The source's switches (and Auto Pilot) travel as a fresh run: a brand-new
+   * The source's switches travel as a fresh run: a brand-new
    * selection with no started marker, so a send on the sibling starts the stage
    * it is showing. The exception is a source with no switch on   a parked,
    * completed or cancelled run   whose Toolbox stays filled through its
@@ -294,18 +283,16 @@ export class EngineeringLifecycleEngine {
     destinationThreadId: string,
     input: EngineeringLifecycleInheritInput
   ): EngineeringLifecycleState {
-    const autopilot = input.autopilot === true
-    const selectedStages = autopilot ? [] : normalizeLifecycleStages(input.stages)
-    const selection = representativeLifecycleSelection(selectedStages, autopilot)
-    const carryStartedAt =
-      !autopilot && selectedStages.length === 0 && input.startedAt !== undefined
+    const selectedStages = normalizeLifecycleStages(input.stages)
+    const selection = representativeLifecycleSelection(selectedStages)
+    const carryStartedAt = selectedStages.length === 0 && input.startedAt !== undefined
     const current = this.ensure(destinationProjectId, destinationThreadId)
     const now = this.now()
     this.db.run(
       'UPDATE engineering_lifecycle SET selection=?, selected_stages_json=?, autopilot=?, completed_stages_json=?, active_stage=NULL, human_gate=NULL, started_at=?, resume_token=NULL, last_consumed_resume_token=NULL, failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
       selection,
       JSON.stringify(selectedStages),
-      autopilot ? 1 : 0,
+      0,
       '[]',
       carryStartedAt ? input.startedAt : null,
       now,
@@ -316,7 +303,6 @@ export class EngineeringLifecycleEngine {
       ...current,
       selection,
       selectedStages,
-      autopilot,
       completedStages: [],
       activeStage: undefined,
       humanGate: undefined,
@@ -334,7 +320,7 @@ export class EngineeringLifecycleEngine {
     stage?: EngineeringLifecycleStage
   ): EngineeringLifecycleTransitionResult {
     const current = this.ensure(projectId, threadId)
-    if (!current.autopilot && current.selectedStages.length === 0) {
+    if (current.selectedStages.length === 0) {
       throw new EngineeringLifecycleError('invalid_transition', 'Select an Engineering stage first')
     }
     if (current.activeStage || current.humanGate) return { state: current, idempotent: true }
@@ -344,7 +330,7 @@ export class EngineeringLifecycleEngine {
         `Unknown Engineering stage ${stage}`
       )
     }
-    const stageToStart = stage ?? (current.autopilot ? 'brainstorm' : current.selectedStages[0])
+    const stageToStart = stage ?? current.selectedStages[0]
     const now = this.now()
     this.db.run(
       'UPDATE engineering_lifecycle SET active_stage=?, started_at=COALESCE(started_at, ?), failure=NULL, updated_at=? WHERE project_id=? AND thread_id=?',
@@ -426,17 +412,7 @@ export class EngineeringLifecycleEngine {
         `Cannot complete ${stage} while ${current.activeStage ?? 'no stage'} is active`
       )
     }
-    if (current.autopilot) {
-      if (stage === 'achievement') {
-        return this.advance(projectId, threadId, { completedStage: stage, terminal: true })
-      }
-      const nextStage = NEXT_STAGE[stage]
-      if (!nextStage) {
-        throw new EngineeringLifecycleError('invalid_transition', `No stage follows ${stage}`)
-      }
-      return this.advance(projectId, threadId, { completedStage: stage, nextStage })
-    }
-    // Manual mode: a completed circle turns its switch OFF and drops the thread to
+    // A completed circle turns its switch OFF and drops the thread to
     // implementation mode. Selected stages remaining (e.g. PRD after Brainstorm) do NOT
     // auto-advance   the user continues by pressing the designated Next-step/Review/
     // Implement/Approve buttons. Achievement keeps the chained loop behavior: its audit/
@@ -449,7 +425,7 @@ export class EngineeringLifecycleEngine {
       return this.advance(projectId, threadId, { completedStage: stage, nextStage })
     }
     const selectedStages = current.selectedStages.filter((candidate) => candidate !== stage)
-    const selection = representativeLifecycleSelection(selectedStages, false)
+    const selection = representativeLifecycleSelection(selectedStages)
     const completedStages = [...new Set([...current.completedStages, stage])]
     const terminal = selectedStages.length === 0
     const now = this.now()
@@ -528,7 +504,7 @@ export class EngineeringLifecycleEngine {
 
   fail(projectId: string, threadId: string, failure: string): EngineeringLifecycleState {
     const current = this.require(projectId, threadId)
-    if (!current.activeStage || (!current.autopilot && current.selectedStages.length === 0)) {
+    if (!current.activeStage || current.selectedStages.length === 0) {
       return current
     }
     if (current.humanGate === 'terminal_failure') return current
@@ -558,7 +534,6 @@ export class EngineeringLifecycleEngine {
       ...current,
       selection: 'none',
       selectedStages: [],
-      autopilot: false,
       activeStage: undefined,
       completedStages: [],
       humanGate: undefined,

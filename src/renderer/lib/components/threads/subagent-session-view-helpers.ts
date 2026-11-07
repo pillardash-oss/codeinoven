@@ -1,4 +1,5 @@
 import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
+import { resolveModelProvider } from '$shared/provider-identity'
 import type {
   AgentMessage,
   AgentPart,
@@ -195,6 +196,14 @@ export function unwrapWorkerPrompt(text: string): string | undefined {
   return trimmed.slice(marker + WORKER_PROMPT_MARKER.length).trim()
 }
 
+/** True when the text is the app's own framed worker prompt rather than
+ *  something the worker produced. Records written before the driver stopped
+ *  collecting the worker's user message still carry the prompt as captured
+ *  output, so the view refuses to render it as the sub-agent's result. */
+export function isWorkerPromptText(text: string): boolean {
+  return text.trim().startsWith(WORKER_PROMPT_FRAMING)
+}
+
 /** Rewrite a framed worker prompt message to carry only the instructions. */
 function withoutWorkerFraming(message: AgentMessage, instructions: string): AgentMessage {
   const parts: AgentPart[] = []
@@ -271,6 +280,7 @@ export function shouldShowCapturedOutput(
 ): boolean {
   return (
     finalOutput.length > 0 &&
+    !isWorkerPromptText(finalOutput) &&
     !busy &&
     !loading &&
     (loadError !== '' || messages.length === 0 || !transcriptHasAssistantText(messages))
@@ -366,11 +376,13 @@ export function catalogModelLabel(
     models.find((m) => modelId.endsWith(`/${m.id}`))
   return model?.name ?? modelId
 }
-
 /** Display name of the provider that runs this worker, when the catalog has it. */
 export function catalogProviderName(
   activity: AgentSubagentActivity,
   providers: ProviderCatalog[]
 ): string | undefined {
-  return providers.find((p) => p.id === activity.providerId)?.name ?? undefined
+  return resolveModelProvider(providers, {
+    providerId: activity.providerId,
+    modelId: activity.modelId
+  })?.name
 }

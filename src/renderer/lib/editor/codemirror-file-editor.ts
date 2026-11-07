@@ -140,6 +140,11 @@ interface CodeMirrorApi {
   invertedEffects: (typeof import('@codemirror/commands'))['invertedEffects']
   isolateHistory: (typeof import('@codemirror/commands'))['isolateHistory']
   indentUnit: (typeof import('@codemirror/language'))['indentUnit']
+  indentOnInput: (typeof import('@codemirror/language'))['indentOnInput']
+  bracketMatching: (typeof import('@codemirror/language'))['bracketMatching']
+  codeFolding: (typeof import('@codemirror/language'))['codeFolding']
+  foldGutter: (typeof import('@codemirror/language'))['foldGutter']
+  foldKeymap: (typeof import('@codemirror/language'))['foldKeymap']
   syntaxHighlighting: (typeof import('@codemirror/language'))['syntaxHighlighting']
   HighlightStyle: (typeof import('@codemirror/language'))['HighlightStyle']
   tags: (typeof import('@lezer/highlight'))['tags']
@@ -383,9 +388,7 @@ export async function createFileEditor(
     api.syntaxHighlighting(buildHighlightStyle(api.HighlightStyle, api.tags), { fallback: true }),
     api.EditorState.tabSize.of(2),
     api.indentUnit.of(TAB_INSERT),
-    gutterCompartment.of(
-      showLineNumbers ? [api.lineNumbers(), api.highlightActiveLineGutter()] : []
-    ),
+    gutterCompartment.of(buildGutters(api, showLineNumbers)),
     languageCompartment.of([]),
     editableCompartment.of(api.EditorView.editable.of(!readonly)),
     wrapCompartment.of(wrap ? api.EditorView.lineWrapping : []),
@@ -405,7 +408,14 @@ export async function createFileEditor(
       return [setConflictRanges.of(previous.map((range) => ({ ...range })))]
     }),
     api.history(),
-    api.keymap.of([tabBinding, ...api.defaultKeymap, ...api.historyKeymap]),
+    api.indentOnInput(),
+    api.bracketMatching(),
+    // Folding comes from each grammar's own fold node properties, so a JavaScript
+    // block, a JSON object, an HTML element and a Svelte markup block each fold
+    // at their own boundaries. The gutter marker, the gutter click, the fold
+    // keymap and the placeholder text are all part of the same extension.
+    api.codeFolding(),
+    api.keymap.of([tabBinding, ...api.foldKeymap, ...api.defaultKeymap, ...api.historyKeymap]),
     api.EditorView.updateListener.of((update) => {
       reportHistory(update.state)
       const conflictRangesChanged = update.transactions.some(
@@ -444,7 +454,6 @@ export async function createFileEditor(
       line: line.number - 1,
       character: position - line.from,
       word: view.state.sliceDoc(word.from, word.to),
-      text: view.state.doc.toString(),
       x: x || coords?.left || 0,
       y: y || coords?.bottom || 0
     }
@@ -468,7 +477,6 @@ export async function createFileEditor(
           line: 0,
           character: 0,
           word: '',
-          text: view.state.doc.toString(),
           x: 0,
           y: 0
         }
@@ -571,11 +579,7 @@ export async function createFileEditor(
       })
     },
     setShowLineNumbers(show: boolean): void {
-      view.dispatch({
-        effects: gutterCompartment.reconfigure(
-          show ? [api.lineNumbers(), api.highlightActiveLineGutter()] : []
-        )
-      })
+      view.dispatch({ effects: gutterCompartment.reconfigure(buildGutters(api, show)) })
     },
     setSpellcheck(enabled: boolean): void {
       view.dispatch({
@@ -794,6 +798,11 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     invertedEffects: commandModule.invertedEffects,
     isolateHistory: commandModule.isolateHistory,
     indentUnit: languageModule.indentUnit,
+    indentOnInput: languageModule.indentOnInput,
+    bracketMatching: languageModule.bracketMatching,
+    codeFolding: languageModule.codeFolding,
+    foldGutter: languageModule.foldGutter,
+    foldKeymap: languageModule.foldKeymap,
     syntaxHighlighting: languageModule.syntaxHighlighting,
     HighlightStyle: languageModule.HighlightStyle,
     tags: tagsModule.tags
@@ -829,6 +838,20 @@ function buildHighlightStyle(
     },
     { tag: [tags.tagName, tags.labelName, tags.meta], color: 'var(--syntax-tag)' }
   ])
+}
+
+/**
+ * The editor's left gutter, rebuilt whenever the line-number preference changes.
+ *
+ * Folding is not part of that preference: hiding line numbers is a taste about
+ * numbering, and a reader who hid them must still be able to fold a function, so
+ * the fold gutter stays mounted either way.
+ */
+function buildGutters(api: CodeMirrorApi, showLineNumbers: boolean): Extension[] {
+  const gutters: Extension[] = []
+  if (showLineNumbers) gutters.push(api.lineNumbers(), api.highlightActiveLineGutter())
+  gutters.push(api.foldGutter())
+  return gutters
 }
 
 function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
@@ -881,6 +904,31 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       '.cm-activeLineGutter': {
         backgroundColor: 'var(--color-selected)',
         color: 'var(--color-muted)'
+      },
+      '.cm-foldGutter .cm-gutterElement': {
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        minWidth: '1rem',
+        padding: '0 2px',
+        color: 'var(--color-dimmed)',
+        cursor: 'pointer'
+      },
+      '.cm-foldGutter .cm-gutterElement:hover': {
+        color: 'var(--color-foreground)'
+      },
+      // The collapsed line keeps a marker where the block used to be, so a
+      // folded range is visible and one click away from unfolding.
+      '.cm-foldPlaceholder': {
+        margin: '0 4px',
+        padding: '0 6px',
+        border: '1px solid var(--color-border)',
+        backgroundColor: 'var(--color-elevated)',
+        color: 'var(--color-muted)',
+        cursor: 'pointer'
+      },
+      '.cm-foldPlaceholder:hover': {
+        color: 'var(--color-foreground)'
       },
       '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
         backgroundColor: 'color-mix(in srgb, var(--color-primary) 30%, transparent)'

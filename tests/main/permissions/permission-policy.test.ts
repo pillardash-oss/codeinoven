@@ -47,11 +47,11 @@ describe('permission policy', () => {
       protectedPathPatterns: ['internal-only.txt']
     })
 
-    expect(policy.evaluate({ permission: 'read', paths: ['../outside.txt'] }).reason).toContain(
-      'traversal'
-    )
     expect(policy.evaluate({ permission: 'read', paths: ['.git/config'] }).decision).toBe('ask')
-    expect(policy.evaluate({ permission: 'read', paths: ['.env.local'] }).decision).toBe('ask')
+    expect(policy.evaluate({ permission: 'read', paths: ['.env.local'] })).toMatchObject({
+      decision: 'ask',
+      risk: 'critical'
+    })
     expect(policy.evaluate({ permission: 'read', paths: ['secrets/token.txt'] }).decision).toBe(
       'ask'
     )
@@ -72,6 +72,37 @@ describe('permission policy', () => {
       }
     )
     expect(policy.evaluate({ permission: 'Bash', commands: ['bun run test'] }).approved).toBe(true)
+  })
+
+  it('runs high-risk work outside the project root in auto_review mode', () => {
+    const policy = new PermissionPolicy({ projectRoot, mode: 'auto_review' })
+
+    // Only critical work asks in Auto Review, so the project boundary no longer
+    // parks a read or an edit of a file elsewhere behind a card.
+    expect(
+      policy.evaluate({ permission: 'edit', paths: [resolve('/Users/me/other-project/src/a.ts')] })
+    ).toMatchObject({ decision: 'auto_review', approved: true, risk: 'high' })
+    expect(policy.evaluate({ permission: 'read', paths: ['../outside.txt'] })).toMatchObject({
+      decision: 'auto_review',
+      approved: true,
+      risk: 'low'
+    })
+    expect(
+      policy.evaluate({ permission: 'write-file', paths: ['/Users/me/other-project/src/a.ts'] })
+        .approved
+    ).toBe(true)
+    // A critical request still answers for the path it names.
+    expect(
+      policy.evaluate({ permission: 'shell', paths: ['/Users/me/other-project/run.sh'] })
+    ).toMatchObject({ decision: 'ask', approved: false, risk: 'critical' })
+  })
+
+  it('asks for a tool it cannot classify', () => {
+    const policy = new PermissionPolicy({ projectRoot, mode: 'auto_review' })
+
+    expect(policy.evaluate({ permission: 'mcp-tool', unclassifiedTool: 'mcp_tool' })).toMatchObject(
+      { decision: 'ask', approved: false, risk: 'critical' }
+    )
   })
 
   it('allows system temporary paths in auto_review mode', () => {
@@ -149,6 +180,51 @@ describe('permission policy', () => {
     ).toBe(false)
   })
 
+  it('never prompts for a destructive command confined to the session workspace', () => {
+    const workspace = resolve('/workspace/assistant-cwd/abc')
+    const policy = new PermissionPolicy({
+      projectRoot: workspace,
+      mode: 'auto_review',
+      workspaceRoots: [workspace]
+    })
+
+    // An assistant staging a site inside its own workspace deletes the staged
+    // tree and rebuilds it in one chain. Redirections and globs in the other
+    // segments do not hide what the delete removes.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          `cd ${workspace}/dispatch/site && rm -rf scratch/testsite && mkdir -p scratch/testsite/build && cp apply/static/*.txt scratch/testsite/static/ && printf '# placeholder\\n' > scratch/testsite/static/robots.txt`
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+  })
+
+  it('still asks when a destructive command can leave the session workspace', () => {
+    const workspace = resolve('/workspace/assistant-cwd/abc')
+    const policy = new PermissionPolicy({
+      projectRoot: workspace,
+      mode: 'auto_review',
+      workspaceRoots: [workspace]
+    })
+
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf /Users/me/Documents'] })
+    ).toMatchObject({ decision: 'ask' })
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['cd /tmp && rm -rf build'] })
+    ).toMatchObject({ decision: 'ask' })
+    // A glob hides its targets.
+    expect(policy.evaluate({ permission: 'bash', commands: ['rm -rf *'] })).toMatchObject({
+      decision: 'ask'
+    })
+    // Wrappers evaluate another command, so nothing is proven.
+    expect(
+      policy.evaluate({ permission: 'bash', commands: [`bash -c 'ls && rm -rf scratch'`] })
+    ).toMatchObject({ decision: 'ask' })
+  })
+
   it('runs every operation in yolo mode under full_access, including home directory paths', () => {
     const policy = new PermissionPolicy({ projectRoot, mode: 'full_access', now: () => 1000 })
 
@@ -185,12 +261,12 @@ describe('permission policy', () => {
     expect(result).toMatchObject({
       decision: 'ask',
       approved: false,
-      risk: 'high',
+      risk: 'critical',
       approval: { required: true, expiresAt: 46_000 },
       ledger: {
         permission: '',
         decision: 'ask',
-        risk: 'high',
+        risk: 'critical',
         scope: { projectRoot, paths: [resolve(projectRoot, 'internal-only.txt')] },
         expiresAt: 46_000
       }

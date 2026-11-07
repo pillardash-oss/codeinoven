@@ -49,6 +49,7 @@ import { generateId } from '../../../lib/utils'
 import { messageId as createMessageId } from '../../../lib/id'
 import type {
   ImageDescriptorUserDecision,
+  ImageDescriptorSessionRecord,
   PendingImageDescriptorDecision
 } from './chat-engine-types'
 import { ImageDescriptorInactivityError, rawErrorMessage } from './chat-engine-errors'
@@ -60,6 +61,10 @@ import {
   imageDescriptorFailureResults
 } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
+
+/** What a cancelled descriptor reports to the model that requested it. */
+const IMAGE_DESCRIPTOR_CANCELLED_MESSAGE =
+  'The image descriptor was cancelled because the turn was stopped.'
 
 /** ChatEngine media-visual: one concern, moved verbatim from the composition root. */
 export class ChatEngineMediaVisual {
@@ -162,6 +167,112 @@ export class ChatEngineMediaVisual {
   }
 
   /**
+   * Whether the descriptor work behind this turn was cancelled by a stop or a
+   * rejected permission. A cancelled run must never open another disposable
+   * vision session or raise another card: the user ended the work, so
+   * continuing it only spends tokens.
+   */
+  imageDescriptorCancelled(parentSessionId: string): boolean {
+    return this.host.state.cancelledImageDescriptorSessions.has(parentSessionId)
+  }
+
+  /** Register one disposable vision session so a stop can reach it. */
+  private trackImageDescriptorSession(record: ImageDescriptorSessionRecord): void {
+    this.host.state.imageDescriptorSessions.set(record.sessionId, record)
+  }
+
+  /** Whether a descriptor run for this parent session is live right now. */
+  private hasLiveImageDescriptorRun(parentSessionId: string): boolean {
+    for (const record of this.host.state.imageDescriptorSessions.values()) {
+      if (record.parentSessionId === parentSessionId) return true
+    }
+    return false
+  }
+
+  /** Forget one disposable vision session once its run has fully unwound. */
+  private releaseImageDescriptorSession(sessionId: string): void {
+    this.host.state.imageDescriptorSessions.delete(sessionId)
+  }
+
+  /**
+   * Stop one vision session at its own driver. The completion waiter is
+   * rejected first so the engine stops waiting immediately, instead of holding
+   * the descriptor open until the inactivity deadline while the provider keeps
+   * generating (and billing) the reply nobody will read.
+   */
+  private async abortImageDescriptorSession(record: ImageDescriptorSessionRecord): Promise<void> {
+    this.host.units['runtime-connectivity'].rejectCompletionWaiter(
+      record.sessionId,
+      'The image descriptor was cancelled'
+    )
+    const driver = this.host.units['turns-dispatch'].driverForRuntime(
+      record.driverId,
+      record.accountId
+    )
+    if (!driver) return
+    try {
+      if (record.isolated && supportsIsolatedSessions(driver)) {
+        await driver.abort(record.projectPath, record.sessionId, record.isolated)
+      } else {
+        await driver.abort(record.projectPath, record.sessionId)
+      }
+    } catch (error) {
+      Logger.dev('Image descriptor session abort was incomplete:', error)
+    }
+  }
+
+  /**
+   * Cancel every image-descriptor run the given turn owns.
+   *
+   * A descriptor session is disposable and belongs to no unit, so a stop, a
+   * rejected permission, or a thread teardown has to reach it here. Without
+   * this the vision call kept streaming after the turn was already gone, and
+   * the retry loop could even open a fresh session for a turn the user had
+   * just ended. `threadId` widens the sweep to every descriptor session running
+   * for the same conversation (a rejection raised inside the vision session
+   * itself names that session, not the turn that asked for it).
+   */
+  async abortImageDescriptorWork(parentSessionId: string, threadId?: string): Promise<void> {
+    const owned = [...this.host.state.imageDescriptorSessions.values()].filter(
+      (record) =>
+        record.parentSessionId === parentSessionId ||
+        record.sessionId === parentSessionId ||
+        (threadId !== undefined && record.threadId === threadId)
+    )
+    await this.cancelImageDescriptorRecords(owned, [parentSessionId])
+  }
+
+  /**
+   * Cancel every image-descriptor run left on one conversation.
+   *
+   * A Stop can land before the thread's own session id is bound (the descriptor
+   * runs while the first prompt is still being composed), so the thread is the
+   * only handle available then. Cancelling by conversation is what keeps that
+   * stop from leaving an orphaned vision session behind.
+   */
+  async abortThreadImageDescriptorWork(projectId: string, threadId: string): Promise<void> {
+    const owned = [...this.host.state.imageDescriptorSessions.values()].filter(
+      (record) => record.projectId === projectId && record.threadId === threadId
+    )
+    await this.cancelImageDescriptorRecords(
+      owned,
+      owned.map((record) => record.parentSessionId)
+    )
+  }
+
+  /** Mark the given runs cancelled, then stop every one of their sessions. */
+  private async cancelImageDescriptorRecords(
+    owned: readonly ImageDescriptorSessionRecord[],
+    parentSessionIds: readonly string[]
+  ): Promise<void> {
+    if (owned.length === 0) return
+    for (const parentSessionId of parentSessionIds) {
+      this.host.state.cancelledImageDescriptorSessions.add(parentSessionId)
+    }
+    await Promise.allSettled(owned.map((record) => this.abortImageDescriptorSession(record)))
+  }
+
+  /**
    * Run the image descriptor agent: resolve the thread's (or global) vision
    * model selection and describe every requested image. Compatible multi-image
    * requests run as one structured vision call attributed to the parent turn
@@ -200,6 +311,18 @@ export class ChatEngineMediaVisual {
   async runImageDescriptor(
     request: ImageDescriptorExecutorRequest
   ): Promise<ImageDescriptorResult[]> {
+    // A cancellation entry outlives the run it cancelled by design, so a new
+    // turn that reuses this session starts clean: only a run whose own session
+    // is live right now can still be the reason the entry is set.
+    if (!this.hasLiveImageDescriptorRun(request.sessionId)) {
+      this.host.state.cancelledImageDescriptorSessions.delete(request.sessionId)
+    }
+    // A stopped or rejected turn must not spend a single token more on image
+    // description: the tool call that asked for it can arrive after the stop,
+    // and the disposable vision session it would open outlives the turn.
+    if (this.imageDescriptorCancelled(request.sessionId)) {
+      return imageDescriptorFailureResults(request, IMAGE_DESCRIPTOR_CANCELLED_MESSAGE)
+    }
     const thread = await this.host.threadManager.getThread(request.projectId, request.threadId)
     // A model that can already see images must never have a dedicated vision
     // model describe them: the provider catalog says so, or the user reported
@@ -331,6 +454,9 @@ export class ChatEngineMediaVisual {
       }
     } finally {
       this.host.units['lifecycle'].startSessionWatchdog(request.sessionId)
+      // The run is over: nothing is left to cancel for this session, and a
+      // cancelled entry that survived would silently cancel the next turn.
+      this.host.state.cancelledImageDescriptorSessions.delete(request.sessionId)
     }
   }
 
@@ -389,8 +515,20 @@ export class ChatEngineMediaVisual {
     )
     const registeredBatchSession = this.host.sessionRegistry.get(sessionId)
     if (registeredBatchSession) registeredBatchSession.accountId = settings.accountId
+    const descriptorSession: ImageDescriptorSessionRecord = {
+      sessionId,
+      parentSessionId: request.sessionId,
+      projectId: request.projectId,
+      threadId: request.threadId,
+      projectPath: request.projectPath,
+      driverId: selection.harnessId,
+      accountId: account.id,
+      ...(isolated ? { isolated } : {})
+    }
+    this.trackImageDescriptorSession(descriptorSession)
     let response: AgentMessage | undefined
     let failure: string | null = null
+    let settled = false
     try {
       const attachments: PromptAttachment[] = []
       for (const image of images) {
@@ -422,6 +560,7 @@ export class ChatEngineMediaVisual {
         await driver.sendPrompt(request.projectPath, requestOptions)
       }
       await completion
+      settled = true
       const messages =
         isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(request.projectPath, sessionId, isolated)
@@ -457,6 +596,12 @@ export class ChatEngineMediaVisual {
       }
       this.host.units['runtime-connectivity'].clearCompletionWaiter(sessionId)
       this.host.units['turns-sessions'].clearSessionWatchdog(sessionId)
+      // A vision call that never settled is still streaming at the provider, and
+      // dropping the session record does not cancel it: stop the run before the
+      // session is torn down, so a timeout or a stop cannot keep billing in the
+      // background after the turn that asked for it is gone.
+      if (!settled) await this.abortImageDescriptorSession(descriptorSession)
+      this.releaseImageDescriptorSession(sessionId)
       this.host.sessionRegistry.delete(sessionId)
       this.host.sessionStatuses.delete(sessionId)
       this.host.state.reasoningTimes.delete(sessionId)
@@ -501,6 +646,19 @@ export class ChatEngineMediaVisual {
     // card   enough rounds to cover the configured pair without ever hanging
     // the turn in a loop.
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      // The turn ended (stopped, rejected, or torn down) while this image was
+      // in flight. Nothing this loop does from here can reach the user, so it
+      // must not open another disposable vision session or raise another card:
+      // it reports the cancellation and lets the parent turn settle.
+      if (this.imageDescriptorCancelled(request.sessionId)) {
+        return {
+          id: currentImage.id,
+          source: currentImage.source,
+          type: currentImage.type,
+          description: '',
+          error: IMAGE_DESCRIPTOR_CANCELLED_MESSAGE
+        }
+      }
       const active = next
       // A reply to the error card briefly re-arms the parent watchdog. The
       // descriptor owns its own adaptive inactivity deadline while retrying.
@@ -513,6 +671,7 @@ export class ChatEngineMediaVisual {
           active,
           currentImage,
           attempt,
+          request.sessionId,
           parentTurnId
         )
         return {
@@ -554,6 +713,15 @@ export class ChatEngineMediaVisual {
           kind,
           currentImage.id
         )
+        if (this.imageDescriptorCancelled(request.sessionId)) {
+          return {
+            id: currentImage.id,
+            source: currentImage.source,
+            type: currentImage.type,
+            description: '',
+            error: IMAGE_DESCRIPTOR_CANCELLED_MESSAGE
+          }
+        }
         if (decision.action === 'retry') {
           if (decision.selection) {
             selection.current = decision.selection
@@ -605,6 +773,12 @@ export class ChatEngineMediaVisual {
     kind: AgentProviderIssueKind,
     imageId?: string
   ): Promise<ImageDescriptorUserDecision> {
+    // A card raised after the turn ended would only park a thread the user has
+    // already stopped. The decision resolves as `ignore` without broadcasting
+    // anything, so the descriptor unwinds instead of opening another session.
+    if (this.imageDescriptorCancelled(request.sessionId)) {
+      return { action: 'ignore' }
+    }
     const id = generateId()
     this.host.units['turns-sessions'].clearSessionWatchdog(request.sessionId)
     this.host.units['turns'].markProjectActive(request.projectId)
@@ -764,6 +938,7 @@ export class ChatEngineMediaVisual {
     selection: AgentModelSelection,
     image: ResolvedImageEntry,
     attempt: number,
+    parentSessionId: string,
     parentTurnId?: string
   ): Promise<string> {
     const account = await this.host.state.accountRegistry.resolveForProvider(
@@ -801,8 +976,20 @@ export class ChatEngineMediaVisual {
     )
     const registeredImageSession = this.host.sessionRegistry.get(sessionId)
     if (registeredImageSession) registeredImageSession.accountId = settings.accountId
+    const descriptorSession: ImageDescriptorSessionRecord = {
+      sessionId,
+      parentSessionId,
+      projectId,
+      threadId,
+      projectPath,
+      driverId: selection.harnessId,
+      accountId: account.id,
+      ...(isolated ? { isolated } : {})
+    }
+    this.trackImageDescriptorSession(descriptorSession)
     let response: AgentMessage | undefined
     let failure: string | null = null
+    let settled = false
     try {
       // Pasted/dropped images live in the project's temporary attachment
       // directory, so pass the resolved file path to the vision session and
@@ -848,6 +1035,7 @@ export class ChatEngineMediaVisual {
         await driver.sendPrompt(projectPath, request)
       }
       await completion
+      settled = true
       const messages =
         isolated && supportsIsolatedSessions(driver)
           ? await driver.loadMessages(projectPath, sessionId, isolated)
@@ -892,6 +1080,12 @@ export class ChatEngineMediaVisual {
       }
       this.host.units['runtime-connectivity'].clearCompletionWaiter(sessionId)
       this.host.units['turns-sessions'].clearSessionWatchdog(sessionId)
+      // A vision call that never settled is still streaming at the provider, and
+      // dropping the session record does not cancel it: stop the run before the
+      // session is torn down, so a timeout or a stop cannot keep billing in the
+      // background after the turn that asked for it is gone.
+      if (!settled) await this.abortImageDescriptorSession(descriptorSession)
+      this.releaseImageDescriptorSession(sessionId)
       this.host.sessionRegistry.delete(sessionId)
       this.host.sessionStatuses.delete(sessionId)
       this.host.state.reasoningTimes.delete(sessionId)

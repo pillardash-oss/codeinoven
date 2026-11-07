@@ -156,23 +156,17 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
 
   /** The lifecycle selection currently in force: a staged (intent-only)
    *  selection from the toolbox or action menu wins over the persisted one. */
-  effectiveLifecycleSelection = $derived.by(
-    (): { stages: EngineeringLifecycleStage[]; autopilot: boolean } => {
-      const pending = this.root.harnessUsage.pendingLifecycleSelection
-      if (pending) {
-        return {
-          stages: normalizeLifecycleStages(pending.stages),
-          autopilot: pending.autopilot === true
-        }
-      }
-      return {
-        stages: normalizeLifecycleStages(
-          this.root.handleAgentEvent.engineeringLifecycle?.selectedStages ?? []
-        ),
-        autopilot: this.root.handleAgentEvent.engineeringLifecycle?.autopilot === true
-      }
+  effectiveLifecycleSelection = $derived.by((): { stages: EngineeringLifecycleStage[] } => {
+    const pending = this.root.harnessUsage.pendingLifecycleSelection
+    if (pending) {
+      return { stages: normalizeLifecycleStages(pending.stages) }
     }
-  )
+    return {
+      stages: normalizeLifecycleStages(
+        this.root.handleAgentEvent.engineeringLifecycle?.selectedStages ?? []
+      )
+    }
+  })
 
   actionId(value: string): ActionDefinition['id'] {
     return value as ActionDefinition['id']
@@ -697,27 +691,6 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
         ...this.root.loadOlderMessages.settings,
         thinkingLevel: thinkingLevel.id as ThinkingLevel
       })
-      return
-    }
-
-    // Engineering lifecycle stage toggles stage their selection exactly like
-    // the Engineering Toolbox: intent only, applied when a message is sent.
-    const stageToggle = /^mode:stage:(brainstorm|prd|spec|assignment|achievement)$/u.exec(action.id)
-    if (stageToggle) {
-      const current = this.effectiveLifecycleSelection
-      if (current.autopilot) return
-      const stage = stageToggle[1] as EngineeringLifecycleStage
-      const stages = current.stages.includes(stage)
-        ? current.stages.filter((candidate) => candidate !== stage)
-        : [...current.stages, stage]
-      this.selectEngineeringLifecycle({ stages, autopilot: false })
-      return
-    }
-
-    if (action.id === 'mode:autopilot') {
-      const current = this.effectiveLifecycleSelection
-      const autopilot = !current.autopilot
-      this.selectEngineeringLifecycle({ stages: autopilot ? [] : current.stages, autopilot })
       return
     }
 

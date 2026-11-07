@@ -27,6 +27,7 @@
   import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
+  import { acpAgentsStore } from '$lib/stores/acp-agents.svelte'
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
   import { harnessLifecycleStore } from '$lib/stores/harness-lifecycle.svelte'
   import { ovenSetupStore } from '$lib/stores/oven-setup.svelte'
@@ -38,6 +39,10 @@
   import { guideState } from '$lib/guide/guide-state.svelte'
   import { createApp } from './App/App-board.svelte'
   const board = createApp()
+
+  // Agent names label every transcript row and status line, so they are read
+  // once here instead of only when the Harnesses page or the editor opens.
+  void acpAgentsStore.load()
 </script>
 
 <div class="flex h-screen flex-col bg-app">
@@ -270,6 +275,15 @@
          opens the harness's provider list without navigating away. -->
     {#await import('$lib/components/providers/ProviderConnectHost.svelte') then { default: ProviderConnectHost }}
       <ProviderConnectHost />
+    {/await}
+  {/if}
+
+  {#if acpAgentsStore.editing !== null}
+    <!-- The ACP agent editor is a dockable panel owned here for the same reason
+         as the base-URL editor: docking it must leave a chip behind after the
+         settings page closes. -->
+    {#await import('$lib/components/providers/AcpAgentHost.svelte') then { default: AcpAgentHost }}
+      <AcpAgentHost />
     {/await}
   {/if}
 

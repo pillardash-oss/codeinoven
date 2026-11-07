@@ -262,6 +262,7 @@
   const statusChips = $derived.by(() => {
     const buckets: Array<{ value: StatusFilter; label: string; tone: StatusTone }> = [
       { value: 'failed', label: 'Deploy failed', tone: 'danger' },
+      { value: 'cancelled', label: 'Deploy cancelled', tone: 'neutral' },
       { value: 'building', label: 'Deploying', tone: 'warning' },
       { value: 'success', label: 'Deployed', tone: 'success' },
       { value: 'unknown', label: 'Unknown', tone: 'neutral' }

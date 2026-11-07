@@ -10,6 +10,7 @@
   import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
+  import CioMinusCircle from '@pdslng/cio-icon/CioMinusCircle.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
@@ -102,6 +103,19 @@
       if (logLines[i].text.toLowerCase().includes(q)) indexes.push(i)
     }
     return indexes
+  })
+
+  /**
+   * Line index to position in {@link searchMatches}, laid out once per query so
+   * the log rows never scan the match list (that turned every render into a
+   * lines-by-matches walk on a long log).
+   */
+  const searchMatchPositions = $derived.by((): number[] => {
+    const positions: number[] = new Array<number>(logLines.length).fill(-1)
+    searchMatches.forEach((lineIndex, matchIndex) => {
+      positions[lineIndex] = matchIndex
+    })
+    return positions
   })
 
   function openSearch(): void {
@@ -547,7 +561,7 @@
         <div class="p-3">
           <div class="space-y-0.5 font-mono text-[0.625rem] leading-relaxed">
             {#each logLines as line, index (index)}
-              {@const matchIndex = searchMatches.indexOf(index)}
+              {@const matchIndex = searchMatchPositions[index] ?? -1}
               {@const isActiveMatch = matchIndex !== -1 && matchIndex === activeMatch}
               <div
                 data-log-line={index}
@@ -628,6 +642,8 @@
                 <CioCheckCircle size={14} class="shrink-0 text-success" />
               {:else if deployment.status === 'failed'}
                 <CioCrossCircle size={14} class="shrink-0 text-danger" />
+              {:else if deployment.status === 'cancelled'}
+                <CioMinusCircle size={14} class="shrink-0 text-dimmed" />
               {:else}
                 <CioCloud size={14} class="shrink-0 text-muted" />
               {/if}

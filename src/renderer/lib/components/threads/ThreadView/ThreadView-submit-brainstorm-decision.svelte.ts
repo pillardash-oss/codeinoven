@@ -4,7 +4,6 @@ import { messageId } from '$shared/id'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
-import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
 import type {
   Thread,
   AgentPart,
@@ -56,7 +55,7 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
   engineeringOn = $derived.by(() => {
     const pending = this.root.harnessUsage.pendingLifecycleSelection
     if (pending) {
-      return pending.autopilot === true || normalizeLifecycleStages(pending.stages).length > 0
+      return normalizeLifecycleStages(pending.stages).length > 0
     }
     const lifecycle = this.root.handleAgentEvent.engineeringLifecycle
     return (
@@ -269,58 +268,53 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
   )
 
   /** Which coordinator, if any, this thread publishes to the context dock. */
-  coordinatorKind = $derived.by(
-    (): 'assignment' | 'achievement' | 'audit' | 'orchestrator' | null => {
-      // A worker/auditor child presents the coordination it belongs to, so it can
-      // show that board and carry the way back to it instead of dead-ending.
-      if (this.root.currentWorkingTraceAttribution.orchestrationChild) {
-        if (
-          this.root.submitSpecDecision.assignment &&
-          this.root.submitSpecDecision.assignment.status !== 'draft'
-        )
+  coordinatorKind = $derived.by((): 'assignment' | 'achievement' | 'audit' | null => {
+    // A worker/auditor child presents the coordination it belongs to, so it can
+    // show that board and carry the way back to it instead of dead-ending.
+    if (this.root.currentWorkingTraceAttribution.orchestrationChild) {
+      if (
+        this.root.submitSpecDecision.assignment &&
+        this.root.submitSpecDecision.assignment.status !== 'draft'
+      )
+        return 'assignment'
+      const parent = this.root.currentWorkingTraceAttribution.coordinatorParentThread
+      if (parent) {
+        if (parent.assignmentId !== undefined || parent.assignmentRole === 'coordinator') {
           return 'assignment'
-        const parent = this.root.currentWorkingTraceAttribution.coordinatorParentThread
-        if (parent) {
-          if (parent.assignmentId !== undefined || parent.assignmentRole === 'coordinator') {
-            return 'assignment'
-          }
-          if (parent.settings?.loopMode === true || parent.achievementRole === 'coordinator') {
-            return 'achievement'
-          }
-          if (parent.independentAudit === true) return 'audit'
         }
-      } else {
-        if (
-          this.root.submitSpecDecision.assignment &&
-          this.root.submitSpecDecision.assignment.status !== 'draft'
-        )
-          return 'assignment'
-        // A staged (not-yet-run) Independent Audit already docks its coordinator:
-        // the sidebar appears the moment the switch is turned on, and clicking
-        // "Run audit" there is what commits the choice durably.
-        if (this.root.currentWorkingTraceAttribution.independentAuditDisplayEnabled) return 'audit'
-        if (this.root.unmirroredTraceStartTime.achievementTriggered && this.spec) {
+        if (parent.settings?.loopMode === true || parent.achievementRole === 'coordinator') {
           return 'achievement'
         }
-        if (this.plainEngineeringAuditAvailable) return 'audit'
+        if (parent.independentAudit === true) return 'audit'
+        // A plain engineering audit: the parent carries this auditor thread and the
+        // approved spec, but no Assignment, no loop and no independent-audit
+        // switch, so the checks above miss the board its row owns. Without this the
+        // auditor's own view published nothing and the row stayed on the last
+        // props its parent had, which carry no way back to the Sr. Engineer.
+        if (
+          this.root.handleAgentEvent.thread.achievementRole === 'auditor' &&
+          parent.auditorThreadId === this.root.handleAgentEvent.thread.id
+        ) {
+          return 'audit'
+        }
       }
-      // Workstation control last, because an Engineering coordination is the more
-      // specific state and already owns this row when both are true: a thread that
-      // dispatched runs into other projects keeps its board even after the turn that
-      // dispatched them is over, since the runs are threads of their own and the
-      // ledger that points at them outlives the turn.
-      const thread = this.root.handleAgentEvent.thread
+    } else {
       if (
-        orchestrationCoordinatorState.hasDispatches(
-          thread.projectId,
-          this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
-        )
-      ) {
-        return 'orchestrator'
+        this.root.submitSpecDecision.assignment &&
+        this.root.submitSpecDecision.assignment.status !== 'draft'
+      )
+        return 'assignment'
+      // A staged (not-yet-run) Independent Audit already docks its coordinator:
+      // the sidebar appears the moment the switch is turned on, and clicking
+      // "Run audit" there is what commits the choice durably.
+      if (this.root.currentWorkingTraceAttribution.independentAuditDisplayEnabled) return 'audit'
+      if (this.root.unmirroredTraceStartTime.achievementTriggered && this.spec) {
+        return 'achievement'
       }
-      return null
+      if (this.plainEngineeringAuditAvailable) return 'audit'
     }
-  )
+    return null
+  })
 
   achievementAutonomous = $derived(
     this.root.loadOlderMessages.settings.loopMode === true &&
@@ -411,6 +405,9 @@ export class ThreadViewSubmitBrainstormDecision extends BoardUnit<ThreadView> {
     // never shares the bottom edge with the thing it is asking about.
     if (this.root.composerScope.visibleTodo !== null && !this.failureRetryVisible)
       slots.push('todo')
+    // A coordinated thread swaps its composer for the card that explains the
+    // lock, so that card takes the composer's place at the bottom of the stack.
+    if (this.root.currentWorkingTraceAttribution.inputLockedForComposer) slots.push('locked')
     return slots
   })
 

@@ -45,12 +45,29 @@ export function viewportLabel(width: number): string {
   return 'wide desktop'
 }
 
+/** `0.5x`, a scale written as a number "at 100%" would only repeat. */
+function formatScale(scale: number): string {
+  return `${Number(scale.toFixed(3))}x`
+}
+
+/** `data-testid="plan-pro" name="plan"`, attributes as an unambiguous list. */
+function formatAttributes(attributes: Record<string, string>): string {
+  return Object.entries(attributes)
+    .map(([name, value]) => `${name}=${JSON.stringify(value)}`)
+    .join(' ')
+}
+
 /**
  * The descriptor the model reads inside `<element>`.
  *
  * Deliberately plain `key: value` lines rather than JSON: the same text is
  * rendered in the composer popover, and a block of readable lines is what a
  * human wants there too.
+ *
+ * The page lines come before the element's own text and markup because the
+ * descriptor is clipped to a fixed length: when it has to cut something, it is
+ * the clipped opening markup that goes, never the URL, the scroll offset or the
+ * viewport that make the comment about one exact render.
  */
 export function designElementDescriptor(
   target: BrowserInspectorTarget,
@@ -58,20 +75,63 @@ export function designElementDescriptor(
 ): string {
   const short = describeInspectorTarget(target)
   const context = target.ancestors.length > 0 ? `${target.ancestors.join(' > ')} > ${short}` : null
+  const page = target.page
+  // The element's place in the whole document, not only in the viewport: a pick
+  // reports where it was on screen, and the scroll offset turns that into a place
+  // in the page the agent can scroll to and find again.
+  const documentX = target.rect.x + page.scroll.x
+  const documentY = target.rect.y + page.scroll.y
+  const identity = formatAttributes(target.identity)
+  const state = formatAttributes(target.state)
+  const surface = target.surface
+  const surfaceState = surface ? formatAttributes(surface.state) : ''
   const lines = [
     `Design element: ${short}`,
     // The screen an element lives on, because a canvas frames several of them
     // and a selector alone does not say which file to open to find it.
     target.frame ? `screen: ${target.frame}` : null,
+    page.url ? `page: ${page.url}` : null,
+    page.title ? `title: ${page.title}` : null,
     `selector: ${target.selector}`,
     context ? `context: ${context}` : null,
-    `size: ${target.rect.width}x${target.rect.height}`,
+    // Ambiguity is named rather than left to be discovered: a path that matches
+    // every row of a list is not an identity, and a model that assumes it is will
+    // edit one row and claim the whole list.
+    `matches: ${target.matches} element${target.matches === 1 ? '' : 's'} in this document`,
+    identity ? `identity: ${identity}` : null,
+    state ? `state: ${state}` : null,
+    // A dialog's contents are not in the page until the dialog is open, so this is
+    // what turns "the submit button" into "the submit button of the open settings
+    // dialog", a state the agent can reproduce instead of guessing at markup.
+    surface
+      ? `surface: ${surface.name}${surface.selector !== surface.name ? ` selector ${surface.selector}` : ''}${surfaceState ? ` (${surfaceState})` : ''}`
+      : null,
+    `box: ${target.rect.width}x${target.rect.height} CSS px at ${target.rect.x},${target.rect.y} in the viewport (${documentX},${documentY} in the document)`,
     `viewport: ${formatViewport(target.viewport)}`,
+    `scroll: ${page.scroll.x},${page.scroll.y} of ${page.extent.width}x${page.extent.height}`,
+    `zoom: device pixel ratio ${page.devicePixelRatio}, visual scale ${page.visualScale}`,
+    `scheme: ${page.scheme}`,
+    target.presented
+      ? `canvas: screen framed at ${formatScale(target.presented.scale)} inside ${target.presented.rect.width}x${target.presented.rect.height} at ${target.presented.rect.x},${target.presented.rect.y}`
+      : null,
     design ? `design: ${design.directory}` : null,
     target.text ? `text: ${JSON.stringify(target.text)}` : null,
     target.html ? `markup: ${target.html}` : null
   ].filter((line): line is string => line !== null)
   return lines.join('\n').slice(0, MAX_DESCRIPTOR_LENGTH)
+}
+
+/**
+ * The design page a reference belongs to, named independently of its tab.
+ *
+ * A design page is one folder's one entry, and the same page can be shown in a
+ * thread's own tab, in a tab of its screen from the board, or in a reopened tab
+ * the app had to create. The tab is where the page happened to be shown when the
+ * comment was written; this is which page it was, so a pin can be drawn on that
+ * page wherever it is opened next.
+ */
+export function designPageIdentity(directory: string, entry: string | undefined | null): string {
+  return `${directory}\u0000${entry ?? ''}`
 }
 
 /** `390x844 CSS px (mobile)`, the layout the element was measured inside. */
@@ -131,6 +191,7 @@ export function designElementReference(
     tabId: tab.id,
     ...(target.frame ? { frame: target.frame } : {}),
     ...(design ? { directory: design.directory } : {}),
-    ...(entry ? { designEntry: entry } : {})
+    ...(entry ? { designEntry: entry } : {}),
+    ...(design ? { designId: designPageIdentity(design.directory, entry) } : {})
   }
 }

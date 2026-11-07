@@ -39,6 +39,16 @@ export interface Props {
    * so it sets the kind here.
    */
   kind?: AuthoredWorkKind
+  /**
+   * Whether the project's rail opened this board to browse the project's work.
+   *
+   * A session's board belongs to the thread and leads with nothing until the thread
+   * writes work of its own, because a design another thread made is not what the
+   * session was opened for. A board the rail opened is the opposite: browsing the
+   * project's designs or videos is its whole purpose, so it puts the newest one in
+   * front rather than an empty surface.
+   */
+  projectBoard?: boolean
   active?: boolean
 }
 

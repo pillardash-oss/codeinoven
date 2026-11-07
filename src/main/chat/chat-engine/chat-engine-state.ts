@@ -15,6 +15,7 @@ import { EngineeringLifecycleEngine } from '../../../lib/engines/engineering-lif
 import { OvenChat } from '../../ovens/oven-chat'
 import { MemoryService } from '../memory-service'
 import { PromptAssembler } from '../prompt-assembler'
+import type { AcpAgent } from '../../../lib/acp'
 import type { HarnessDriver, PreparedUtilityRuntime } from '../../drivers/driver.interface'
 import { HarnessUsageRepo } from '../../database/repositories/harness-usage-repo'
 import { AssistantRepo } from '../../database/repositories/assistant-repo'
@@ -68,6 +69,7 @@ import type {
   ChildSessionInfo,
   AutoAnswerReport,
   HeldSteer,
+  ImageDescriptorSessionRecord,
   PendingImageDescriptorDecision,
   PendingAssignmentTurn,
   PendingMemoryDecision,
@@ -98,6 +100,13 @@ export class ChatEngineState {
   readonly openUsage = new OpenUsageClient()
 
   readonly customProviderUsage = new CustomProviderUsageClient()
+
+  /**
+   * Builds the driver for one configured ACP agent. ACP agents are the user's
+   * own records, so their drivers are created on demand instead of coming from
+   * the harness registry's factory table.
+   */
+  acpDriverFactory: ((agent: AcpAgent) => HarnessDriver) | null = null
 
   /** Which OpenCode transport `drivers.get('opencode')` currently holds. */
   openCodeDriverIsV2 = false
@@ -130,7 +139,39 @@ export class ChatEngineState {
    *  permission request. Rebuilt lazily on first access. */
   chatAttachmentAllowlists = new Map<string, string[]>()
 
+  /**
+   * Absolute POSIX paths each live session created itself, fed from the tool
+   * parts every harness already streams. Auto Review reads this so an agent can
+   * remove its own throwaway file, wherever it wrote it, without a card.
+   * Dropped with the session.
+   */
+  agentCreatedFiles = new Map<string, Set<string>>()
+
+  /**
+   * Creation targets of tool calls seen before they ran, keyed by
+   * `<sessionId>:<callId>`, holding only the targets that did not exist yet.
+   * The check is made while the call is still running, because afterwards the
+   * file exists either way and an overwrite would look like a creation.
+   */
+  pendingToolCreations = new Map<string, string[]>()
+
   pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
+
+  /**
+   * The disposable vision sessions the image descriptor is running right now,
+   * keyed by their own session id. A stop or a rejected permission cancels the
+   * work through these records, because a descriptor session belongs to no
+   * other unit and would otherwise keep streaming after its turn is gone.
+   */
+  imageDescriptorSessions = new Map<string, ImageDescriptorSessionRecord>()
+
+  /**
+   * Parent sessions whose image-descriptor work was cancelled by a stop or a
+   * rejected permission. The descriptor checks this before every attempt so a
+   * cancelled turn never opens another disposable vision session; each run
+   * drops its own entry as it unwinds.
+   */
+  cancelledImageDescriptorSessions = new Set<string>()
 
   completionWaiters = new Map<string, SessionCompletionWaiter>()
 

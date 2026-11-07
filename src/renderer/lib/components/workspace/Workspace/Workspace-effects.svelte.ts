@@ -2,10 +2,12 @@ import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelt
 import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
+import { viewShowsWorkspaceShell } from '$lib/content-view-projects'
 import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { motionDuration } from '$lib/motion'
+import { openInBrowser } from '$lib/open-in-browser'
 import { isOverlayOpen } from '$lib/overlay-close.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { speechController } from '$lib/speech/speech-controller.svelte'
@@ -14,6 +16,7 @@ import { loadBrowser } from '$lib/stores/browser-access.svelte'
 import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
 import { projectWorkState } from '$lib/stores/project-work.svelte'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { ovens } from '$lib/stores/ovens.svelte'
@@ -588,6 +591,10 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
           (candidate) => candidate.projectId === projectId && candidate.id === threadId
         )
         if (listed) listed.branch = branch
+        // The scope board and its sidebar draw their own list. A scope move
+        // drops the previous checkout's branch before the destination's settles,
+        // so this patch is what puts the new label back on that row.
+        scopeState.patchThreadBranch(projectId, threadId, branch)
       })
     })
 
@@ -663,6 +670,24 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
     })
 
     $effect(() => {
+      // A project deletion runs in the main process without holding any window
+      // on it, so this is where every window learns what happened: the row it
+      // greyed leaves the sidebar on `deleted`, and comes back on `failed` with
+      // the reason instead of sitting greyed forever.
+      return subscribe('project:deletion', (event) => {
+        projectDeletionState.applyEvent(event)
+        if (event.status === 'deleted') {
+          this.root.openThreadFromSwitcher.applyProjectDeleted(event.projectId)
+        } else if (event.status === 'failed') {
+          this.root.openThreadFromSwitcher.applyProjectDeletionFailed(
+            event.projectId,
+            event.error ?? 'The deletion did not finish.'
+          )
+        }
+      })
+    })
+
+    $effect(() => {
       return subscribe('agent:processesChanged', (projectId, threadId) => {
         if (
           workspaceState.selectedThread?.projectId === projectId &&
@@ -713,14 +738,16 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
     })
 
     /**
-     * Tell main which page a conversation's thread browser is on.
+     * Tell main which page a conversation's thread browser is assigned.
      *
      * A thread browser is the browser a conversation shares with its agent, so this
-     * is what lets the agent's browser capability reach the page the user is
-     * reading, in whatever box the user put it, instead of only pages it opened
-     * itself. It is reported for the conversation on screen, which is the one whose
-     * strip is in use, and the report never moves that strip: only the app writes
-     * this, so no agent operation can switch the tab or the box under the user.
+     * is what lets the agent's browser capability reach the page the user handed
+     * that conversation, in whatever box the user put it, instead of only pages it
+     * opened itself. It is reported for the conversation on screen, and it is filed
+     * per conversation: browsing in one thread of a project never reassigns another
+     * thread's page, which is what lets several agents work on one strip at once.
+     * Only the app writes this, so no agent operation can switch the tab or the box
+     * under the user.
      */
     $effect(() => {
       const projectId = contextSidebarState.dockedProjectId
@@ -729,16 +756,17 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
       if (!projectId || !threadId) return
       const scope = contextSidebarState.browserScopeIdFor(projectId, threadId)
       const reported = this.root.state.reportedThreadBrowserPage
+      const sameConversation = reported?.projectId === projectId && reported.threadId === threadId
       if (!page || contextSidebarState.browserScopeIdFor(page.projectId, page.threadId) !== scope) {
         // The strip on screen holds no page for this conversation, so the page main
         // remembers for it is one nothing shows any more.
-        if (reported?.scope !== scope) return
+        if (!sameConversation) return
         this.root.state.reportedThreadBrowserPage = null
-        void invoke('browser:unbindThreadBrowserPage', scope).catch(() => {})
+        void invoke('browser:unbindThreadBrowserPage', projectId, threadId).catch(() => {})
         return
       }
       if (
-        reported?.scope === scope &&
+        sameConversation &&
         reported.tabId === page.tabId &&
         reported.boxId === page.boxId &&
         reported.url === page.url
@@ -746,12 +774,13 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
         return
       }
       this.root.state.reportedThreadBrowserPage = {
-        scope,
+        projectId,
+        threadId,
         tabId: page.tabId,
         boxId: page.boxId,
         url: page.url
       }
-      void invoke('browser:bindThreadBrowserPage', scope, page).catch(() => {})
+      void invoke('browser:bindThreadBrowserPage', projectId, threadId, page).catch(() => {})
     })
 
     $effect(() => {
@@ -776,6 +805,14 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
             context.reveal,
             context.boxId
           )
+          return
+        }
+        // A surface with no project context is not a workspace thread: Settings,
+        // Scope and the app-wide browser all replace the shell, so a plain link
+        // clicked there belongs where every other in-app link goes, never in a
+        // project thread's browser the reader cannot connect to the page in front.
+        if (!viewShowsWorkspaceShell(rendererRecovery.activeView)) {
+          void openInBrowser(url, 'global')
           return
         }
         if (contextSidebarState.openBrowser(url) === null) void invoke('shell:openExternal', url)

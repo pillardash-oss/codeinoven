@@ -195,14 +195,18 @@ class BrowserPopupWindowsState {
   }
 
   /**
-   * The popup one extension currently associates with one tab, if it has one.
+   * The action popup one extension currently has open on one tab, if any.
    *
    * The header pin and extension row use the active tab to query their box's
-   * current action state without keeping a second copy of that answer.
+   * current action state without keeping a second copy of that answer. A window the
+   * extension asked the app for is not that answer: a passkey prompt on this tab
+   * says nothing about whether the extension's own popup is open, and selecting the
+   * prompt when the user reaches for the icon would leave them looking at a request
+   * that is not theirs to answer there.
    */
   extensionPopupFor(extensionId: string, tabId: string): string | null {
     for (const popup of this.forTab(tabId)) {
-      if (popup.extensionId === extensionId) return popup.id
+      if (popup.extensionId === extensionId && !popup.windowRequested) return popup.id
     }
     return null
   }

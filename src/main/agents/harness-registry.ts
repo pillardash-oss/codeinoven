@@ -39,6 +39,12 @@ export interface HarnessDescriptor {
   commandAliases?: readonly string[]
   versionArgs: string[]
   integration: ProviderConnectionInfo['integration']
+  /**
+   * How the app drives this harness. `native` is a dedicated driver shipped in
+   * this repository. ACP agents are not registry entries at all: they are the
+   * user's own records, so `acp` never appears here. Defaults to `native`.
+   */
+  transport?: 'native' | 'acp'
   /** Whether this harness driver can inject custom base-URL providers. */
   supportsCustomProviders: boolean
   /**
@@ -145,12 +151,17 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     supportsCustomProviders: false,
     // Muse compacts via a local summary checkpoint for its stateless transport.
     manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
-  }
+  },
 ]
 
 /** The canonical ordered harness list   the single source of truth. */
 export function listHarnesses(): readonly HarnessDescriptor[] {
   return HARNESSES
+}
+
+/** How the app drives a harness: its own driver, or the generic ACP transport. */
+export function harnessTransport(id: string): 'native' | 'acp' {
+  return findHarness(id)?.transport ?? 'native'
 }
 
 /** Look up a harness descriptor by id. */

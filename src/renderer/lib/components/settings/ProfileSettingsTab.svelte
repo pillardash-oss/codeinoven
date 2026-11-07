@@ -25,6 +25,7 @@
   import DataTable, { type DataTableColumn } from '$lib/components/ui/DataTable.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import {
@@ -937,9 +938,7 @@
                 {:else}
                   <VendorIcon name={harness.id} size={16} />
                 {/if}
-                <span class="truncate"
-                  >{getAgentIcon(harness.id)?.name ?? formatIdentifier(harness.id)}</span
-                >
+                <span class="truncate">{agentDisplayName(harness.id)}</span>
               </span>
               <span class="shrink-0 tabular-nums text-muted">
                 {formatNumber(harness.tokens)} tokens · {formatCost(harness.costUsd)}

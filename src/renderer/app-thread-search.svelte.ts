@@ -21,8 +21,14 @@ import {
 } from '$shared/types'
 import { actionId } from './app-palette-actions'
 
-/** The thread families the spotlight can search in their own screen. */
-export type ThreadSearchFamily = 'projects' | 'chats' | 'assistant'
+/**
+ * The thread families the spotlight can search in their own screen.
+ *
+ * `all` is the unified screen: it searches project threads, standalone chats and
+ * assistant tasks through one query, which is what the unscoped backend search
+ * already covers (every family except the hidden browser container).
+ */
+export type ThreadSearchFamily = 'projects' | 'chats' | 'assistant' | 'all'
 
 /** A picked row is either a thread to open or an assistant to focus. */
 type ThreadSearchTarget = { thread: Thread } | { assistant: Assistant }
@@ -42,6 +48,15 @@ const RESULT_LIMIT = 50
 const SEARCH_WATCHDOG_MS = 3000
 /** Assistant-name matches surfaced above the task rows. */
 const MAX_ASSISTANT_RESULTS = 12
+/**
+ * How long the panel may keep saying it is still ranking by meaning.
+ *
+ * The local model answers in milliseconds once warm and can take tens of seconds
+ * on its first query after a retire. Past this the note would be a lie the user
+ * cannot act on, so the keyword ranking is presented as the final answer instead
+ * of the panel promising a second one forever.
+ */
+const RANKING_NOTE_TIMEOUT_MS = 30_000
 
 export interface ThreadSearchPaletteDeps {
   openThread: (thread: Thread) => void
@@ -53,13 +68,24 @@ export interface ThreadSearchPaletteDeps {
  * Reactive state machine behind a family-scoped thread search palette: the
  * debounced fan-out search, the row metadata, and opening the picked thread or
  * assistant. One instance serves the Projects screen (filtered by project), the
- * Chats screen (no filter), and the Assistant screen (filtered by assistant, where
- * matching assistant names are surfaced above their tasks).
+ * Chats screen (no filter), the Assistant screen (filtered by assistant, where
+ * matching assistant names are surfaced above their tasks), and the unified
+ * all-threads screen (every family in one ranking, no filter).
  */
 export class ThreadSearchPaletteController {
   paletteOpen = $state(false)
   actions = $state<ActionDefinition[]>([])
   loading = $state(false)
+  /**
+   * The rows on screen are keyword matches and the meaning-based ranking that
+   * replaces them has not landed yet.
+   *
+   * Set only when main reports intent search as active, so a palette with the
+   * model switched off or unindexed never claims to be ranking by meaning. The
+   * footer shows it, which is what stops a query like "ci optimization" from
+   * reading as the final answer when it is really only the first half of one.
+   */
+  rankingByMeaning = $state(false)
   /** Selected sub-container ids for the footer picker; empty = all of them.
    *  Project ids for the Projects screen, assistant ids for the Assistant one. */
   scopeIds = $state<string[]>([])
@@ -88,12 +114,57 @@ export class ThreadSearchPaletteController {
   private renderedRequest = -1
   /** Semantic batches that beat their own keyword rows, keyed by request. */
   private readonly deferredIntents = new SvelteMap<number, ThreadSearchResult[][]>()
+  /** Main can rank by meaning right now: intent search is on and the index holds
+   *  threads. Read once per open, since that is when the user is about to type. */
+  private intentAvailable = false
+  private rankingTimer: number | null = null
+  /**
+   * The controller is ranking for the spotlight's home input rather than for its
+   * own screen.
+   *
+   * A home query shows thread rows inline, so the answer has to be accepted while
+   * the dedicated screen is closed. Everything else stays the same: one request
+   * counter, one watchdog, one semantic route.
+   */
+  private inlineActive = false
   private readonly targets = new SvelteMap<ActionDefinition['id'], ThreadSearchTarget>()
 
   constructor(
     private readonly deps: ThreadSearchPaletteDeps,
     private readonly family: ThreadSearchFamily
   ) {}
+
+  /** Whether a query is being answered on either surface. */
+  private get active(): boolean {
+    return this.paletteOpen || this.inlineActive
+  }
+
+  /**
+   * Rank for the home input, or stop.
+   *
+   * Called as the user types on the spotlight home. Turning it off resets the
+   * controller, so rows from a home query can never leak into a screen the user
+   * has since opened (and the reverse).
+   */
+  setInlineActive(active: boolean): void {
+    if (this.inlineActive === active) return
+    this.inlineActive = active
+    if (!active) {
+      this.reset()
+      return
+    }
+    // Same preparation the dedicated screen does on open: the model may have
+    // retired cold, the intent state decides whether the note is honest, and a
+    // row's Oven has to resolve before the first result names one.
+    warmIntentSearch()
+    void this.refreshIntentAvailability()
+    void ovens.ensure()
+  }
+
+  /** Whether this controller produced the row the palette just reported. */
+  ownsAction(id: ActionDefinition['id']): boolean {
+    return this.targets.has(id)
+  }
 
   reset(): void {
     if (this.timer !== null) {
@@ -111,15 +182,18 @@ export class ThreadSearchPaletteController {
     this.lastQuery = ''
     this.renderedRequest = -1
     this.deferredIntents.clear()
+    this.stopRankingNote()
   }
 
   openPalette(): void {
     this.reset()
+    this.inlineActive = false
     this.paletteOpen = true
     // The model ranks by meaning and boots cold after its five-minute idle
     // retire; start that boot while the user is still typing. Main no-ops it
     // unless intent search is enabled.
     warmIntentSearch()
+    void this.refreshIntentAvailability()
     // The assistant screen's assistant picker and assistant rows read the assistants
     // Store, which may not have hydrated yet on a session that restored onto a
     // non-content view. Idempotent, so an already-initialised store is free.
@@ -132,6 +206,47 @@ export class ThreadSearchPaletteController {
   close(): void {
     this.paletteOpen = false
     this.reset()
+  }
+
+  /**
+   * Arm the "ranking by meaning" note for a search that asked the model.
+   *
+   * The keyword rows are already painted when this runs, so the note describes a
+   * second delivery that is genuinely in flight: it is cleared the moment that
+   * batch lands, when the request is superseded, and by a bounded timeout.
+   */
+  private startRankingNote(): void {
+    this.stopRankingNote()
+    if (!this.intentAvailable) return
+    this.rankingByMeaning = true
+    this.rankingTimer = window.setTimeout(() => {
+      this.rankingTimer = null
+      this.rankingByMeaning = false
+    }, RANKING_NOTE_TIMEOUT_MS)
+  }
+
+  private stopRankingNote(): void {
+    if (this.rankingTimer !== null) {
+      window.clearTimeout(this.rankingTimer)
+      this.rankingTimer = null
+    }
+    this.rankingByMeaning = false
+  }
+
+  /**
+   * Ask main whether a query would actually be ranked by meaning.
+   *
+   * The footer note is only shown for a palette where semantic search can answer,
+   * so a disabled model, a missing runtime or an unindexed corpus shows nothing
+   * rather than a promise the app cannot keep. Failure is read as unavailable.
+   */
+  private async refreshIntentAvailability(): Promise<void> {
+    try {
+      const state = await invoke('search:getState')
+      this.intentAvailable = state.status.active
+    } catch {
+      this.intentAvailable = false
+    }
   }
 
   handleQuery(query: string): void {
@@ -201,7 +316,7 @@ export class ThreadSearchPaletteController {
     this.clearWatchdog()
     this.watchdog = window.setTimeout(() => {
       this.watchdog = null
-      if (request !== this.request || !this.paletteOpen) return
+      if (request !== this.request || !this.active) return
       this.loading = false
     }, SEARCH_WATCHDOG_MS)
   }
@@ -235,6 +350,7 @@ export class ThreadSearchPaletteController {
 
   /** Whether a known thread belongs to the family and scope this screen searches. */
   private inFamilyScope(thread: Thread): boolean {
+    if (this.family === 'all') return thread.projectId !== GLOBAL_BROWSER_PROJECT_ID
     if (this.family === 'chats') return thread.projectId === INBOX_PROJECT_ID
     if (this.family === 'assistant') {
       if (thread.projectId !== ASSISTANT_SPACE_ID) return false
@@ -254,6 +370,7 @@ export class ThreadSearchPaletteController {
       if (key !== request) this.deferredIntents.delete(key)
     }
     this.armWatchdog(request)
+    this.startRankingNote()
     let results: ThreadSearchResult[]
     try {
       // Scoped search: fan out per selected sub-container so the manager can use
@@ -262,9 +379,10 @@ export class ThreadSearchPaletteController {
       results = await this.runFanOut(query)
     } catch {
       results = []
+      this.stopRankingNote()
     }
     this.clearWatchdog()
-    if (request !== this.request || !this.paletteOpen) return
+    if (request !== this.request || !this.active) return
 
     this.lastResults = results
     this.renderedRequest = request
@@ -322,12 +440,14 @@ export class ThreadSearchPaletteController {
         )
       ).flat()
     }
-    return invoke('threads:search', query, {
-      family: this.family,
-      limit: RESULT_LIMIT,
-      semantic: true,
-      requestId: this.request
-    })
+    // The unified screen leaves `family` out: the backend's unscoped search
+    // spans every family except the hidden browser container, so projects,
+    // chats and assistant tasks come back in one ranking.
+    const options =
+      this.family === 'all'
+        ? { limit: RESULT_LIMIT, semantic: true, requestId: this.request }
+        : { family: this.family, limit: RESULT_LIMIT, semantic: true, requestId: this.request }
+    return invoke('threads:search', query, options)
   }
 
   /**
@@ -344,7 +464,7 @@ export class ThreadSearchPaletteController {
     requestId: number
     results: ThreadSearchResult[]
   }): void {
-    if (!this.paletteOpen) return
+    if (!this.active) return
     if (payload.requestId !== this.request) return
     if (payload.query !== this.lastQuery.trim()) return
     if (this.renderedRequest !== payload.requestId) {
@@ -360,6 +480,8 @@ export class ThreadSearchPaletteController {
   /** Fold one semantic batch into the rows on screen. */
   private applyIntent(request: number, incoming: readonly ThreadSearchResult[]): void {
     if (request !== this.request) return
+    // The ranking this note was waiting for has arrived.
+    this.stopRankingNote()
     // A fan-out answers one query with several hybrid rankings; merging keeps the
     // rows each of them already returned. A single query swaps wholesale, which
     // is the ranking the merge produced (title matches, then meaning, then the
@@ -392,7 +514,7 @@ export class ThreadSearchPaletteController {
     }
     if (missing.size === 0) return
     await Promise.all([...missing].map((projectId) => scopeState.cacheBoardForLookup(projectId)))
-    if (request !== this.request || !this.paletteOpen) return
+    if (request !== this.request || !this.active) return
     this.renderRows()
   }
 
@@ -409,7 +531,13 @@ export class ThreadSearchPaletteController {
     icon?: Component
   } {
     if (this.family === 'chats') return { label: 'Chats', icon: CioChat }
-    if (this.family === 'assistant') {
+    // A unified screen has no single family, so each row names the container its
+    // own thread lives in: the Chats inbox, the assistant it runs under, or the
+    // project that owns it.
+    if (this.family === 'all' && thread.projectId === INBOX_PROJECT_ID) {
+      return { label: 'Chats', icon: CioChat }
+    }
+    if (this.family === 'assistant' || thread.projectId === ASSISTANT_SPACE_ID) {
       const assistant = assistants.assistantForTask(thread)
       if (assistant) {
         const iconUri = getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null)

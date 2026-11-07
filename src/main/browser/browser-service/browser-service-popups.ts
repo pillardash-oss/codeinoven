@@ -1,6 +1,7 @@
 import { WebContentsView, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import type { BrowserShortcutAction } from '../../../lib/ipc-contract'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc-contract'
+import { BROWSER_EXTENSION_HOSTED_WINDOW_ID } from '../../../lib/browser/browser-extension-window'
 import { getGlobalBrowserContextMenuBoxes } from '../../ipc/global-browser-ipc'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { Logger } from '../../system/logger'
@@ -54,6 +55,7 @@ export interface PopupsHost {
   readonly mountedPopupViews: BrowserService['mountedPopupViews']
   readonly nativeStrip: BrowserService['nativeStrip']
   readonly nativeToasts: BrowserService['nativeToasts']
+  readonly notifyExtensionWindow: BrowserService['notifyExtensionWindow']
   readonly offerExternalNavigation: BrowserService['offerExternalNavigation']
   readonly openNewTabFor: BrowserService['openNewTabFor']
   readonly pageKeys: BrowserService['pageKeys']
@@ -244,7 +246,15 @@ export class BrowserServicePopups {
         this.host.stage.release(view)
       },
       wire: (record) => this.wirePopupWindow(record),
-      changed: () => this.publishPopupWindows()
+      changed: () => this.publishPopupWindows(),
+      windowClosed: (record) => {
+        // A window the extension asked the app for is gone, and the extension is
+        // the one side that has to hear it: it is waiting on this to abandon the
+        // passkey prompt the window was showing.
+        this.host.notifyExtensionWindow(record.projectId, record.boxId, 'onRemoved', [
+          BROWSER_EXTENSION_HOSTED_WINDOW_ID
+        ])
+      }
     }
   }
 
@@ -307,6 +317,16 @@ export class BrowserServicePopups {
     contents.on('before-input-event', (event, input) => {
       if (this.host.consumeSwitcherKey(input)) {
         event.preventDefault()
+        return
+      }
+      // Escape closes an extension's own popup, exactly as it closes the bubble a
+      // browser hangs under the extension's icon. The page has the keyboard here,
+      // so this is the only place that chord can be answered: without it a popup
+      // whose page never got a close control of its own could not be put away at
+      // all, which is a prompt the user cannot dismiss.
+      if (input.type === 'keyDown' && input.key === 'Escape' && record.extensionId !== null) {
+        event.preventDefault()
+        this.host.popupWindows.dismiss(record.id)
         return
       }
       const action = matchBrowserShortcut(input, this.host.shortcutBindings)

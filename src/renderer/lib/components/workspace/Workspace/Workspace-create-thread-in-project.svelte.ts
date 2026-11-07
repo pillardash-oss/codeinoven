@@ -19,7 +19,6 @@ import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadSettings } from '$lib/stores/thread-settings.svelte'
 import { findEmptyNewThread, threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import {
-  inheritEngineeringLifecycle,
   persistInheritedThreadSettings,
   settingsForNewAssistantTask,
   settingsForNewThread,
@@ -683,9 +682,6 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
             .then((updated) => this.upsertThreadInList(updated))
             .catch(() => {})
         }
-        if (activeThread && activeThread.projectId === project.id) {
-          void inheritEngineeringLifecycle(project.id, activeThread.id, thread.id)
-        }
       }
       return
     }
@@ -757,13 +753,6 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
         this.upsertThreadInList(confirmed)
         if (workspaceState.selectedThread?.id === optimisticId) {
           workspaceState.openThread(confirmed, project)
-        }
-        // Lifecycle inheritance must run only after the destination row is
-        // durable: fired concurrently with creation, its internal `thread:get`
-        // can race ahead of the insert and the "Thread not found" failure is
-        // swallowed   leaving the toolbox icon lit while every switch reads off.
-        if (activeThread && activeThread.projectId === project.id) {
-          void inheritEngineeringLifecycle(project.id, activeThread.id, optimisticId)
         }
         if (activeThread?.settings) {
           // Settings already applied optimistically and persisted by thread:create;

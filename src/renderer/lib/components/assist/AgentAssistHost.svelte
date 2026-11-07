@@ -28,9 +28,11 @@
             ? job.detail
             : job.status === 'failed'
               ? 'Failed'
-              : job.delivery === 'draft'
-                ? 'Prompt ready'
-                : 'Agent finished'
+              : job.status === 'cancelled'
+                ? 'Cancelled'
+                : job.delivery === 'draft'
+                  ? 'Prompt ready'
+                  : 'Agent finished'
       }))
   )
 </script>

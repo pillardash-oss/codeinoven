@@ -48,8 +48,8 @@
     This checks out the <strong class="text-foreground">{summary.headRef}</strong> branch locally as
     <code class="font-mono">pr-{number}</code>, merges
     <strong class="text-foreground">{summary.baseRef}</strong> into it, and switches the Git panel to
-    the changes tab. You'll resolve each conflicted file in your editor, then commit and push to update
-    the pull request.
+    the changes tab. You'll resolve each conflicted file in your editor, then Complete merge commits the
+    resolution, pushes it to the pull request and merges the pull request.
   </p>
 </ConfirmDialog>
 

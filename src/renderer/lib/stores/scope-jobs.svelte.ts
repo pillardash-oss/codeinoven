@@ -16,6 +16,7 @@
 
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
+import { moveThreadToScope } from '$lib/stores/thread-scope-move'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { APP_SLUG } from '$shared/brand'
 import { DEFAULT_SCOPE_BUCKET_ID } from '$shared/types'
@@ -493,11 +494,12 @@ class ScopeJobStore {
       if (options.assignToThread && options.targetThreadId) {
         this.#patch(id, { activeStepId: 'handoff', stage: null })
         try {
-          const thread = await invoke('thread:update', projectId, options.targetThreadId, {
-            scopeBucketId: bucketId
-          })
-          workspaceState.updateThread(thread)
-          scopeState.updateThread(thread)
+          // The refusal (a working thread in a worktree scope) was already
+          // toasted, so this only has to fail the job that could not finish.
+          const thread = await moveThreadToScope(projectId, options.targetThreadId, bucketId)
+          if (!thread) {
+            throw new Error('The scope was created, but the thread could not be moved.')
+          }
         } catch (cause) {
           const detail = cause instanceof Error ? ` ${cause.message}` : ''
           throw new Error(`The scope was created, but the thread could not be moved.${detail}`, {
@@ -588,14 +590,14 @@ class ScopeJobStore {
     }
     const reassigned = await Promise.all(
       affected.map((thread) =>
-        invoke('thread:update', thread.projectId, thread.id, {
-          scopeBucketId: DEFAULT_SCOPE_BUCKET_ID
-        })
+        moveThreadToScope(thread.projectId, thread.id, DEFAULT_SCOPE_BUCKET_ID)
       )
     )
-    for (const thread of reassigned) {
-      scopeState.updateThread(thread)
-      workspaceState.updateThread(thread)
+    // A refusal left a thread in the scope being removed. The reason was toasted
+    // when it happened; stopping here keeps the deletion from finishing over a
+    // thread that still points at the scope.
+    if (reassigned.some((thread) => thread === null)) {
+      throw new Error('The scope still holds a working thread, so it was not deleted.')
     }
   }
 

@@ -4,6 +4,7 @@ import { InactiveQuestionTurnError, QuestionRequestGoneError } from '../../drive
 import type { TypesafeDecisionService } from '../../typesafe/typesafe-decision-service'
 import type { TypesafeDecisionStatus } from '../../../lib/types/typesafe'
 import { isUtilitySuggestionQuestion } from '../../../lib/utility-suggestion'
+import { isMcpSignInQuestion } from '../../../lib/mcp-sign-in'
 import type { AgentQuestionRequest, AgentQuestionResolution } from '../../../lib/types'
 import type { PendingQuestionInfo, RankingGradeCandidate } from './chat-engine-types'
 import {
@@ -184,8 +185,7 @@ export class ChatEngineQuestions {
   }
 
   schedulePendingQuestion(pending: PendingQuestionInfo): void {
-    if (pending.timer) clearTimeout(pending.timer)
-    // Creating a Brainstorm version is a human decision with no safe default at
+    if (pending.timer) clearTimeout(pending.timer) // Creating a Brainstorm version is a human decision with no safe default at
     // all, so that card never expires. A secret request does run on the timer:
     // nothing can invent a value the user never supplied, but an abandoned card
     // must still close so the waiting tool call is settled.
@@ -224,6 +224,32 @@ export class ChatEngineQuestions {
       pending.timer = setTimeout(
         () => this.host.units['questions-secrets'].expireSecretQuestion(pending),
         Math.max(0, secretExpiresAt - Date.now())
+      )
+      return
+    }
+
+    // A sign-in card runs the same absolute countdown as a secret request, and
+    // for the same reason: the user leaves the app to finish the flow in a
+    // browser, so a card that only counted down while they were here would expire
+    // exactly when they are signing in. The card pauses its own countdown the
+    // moment the flow starts, so the window it does have only measures how long an
+    // untouched card is worth keeping open.
+    if (pending.request.questions.some(isMcpSignInQuestion)) {
+      if (pending.request.interactedQuestionIndexes.length > 0) {
+        pending.request.expiresAt = undefined
+        if (this.host.units['turns'].isUserActive()) {
+          pending.timer = setTimeout(
+            () => this.schedulePendingQuestion(pending),
+            ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+          )
+          return
+        }
+      }
+      const signInExpiresAt = pending.request.expiresAt ?? Date.now() + pending.timeoutMs
+      pending.request.expiresAt = signInExpiresAt
+      pending.timer = setTimeout(
+        () => this.host.units['mcp-sign-in'].expireMcpSignInQuestion(pending),
+        Math.max(0, signInExpiresAt - Date.now())
       )
       return
     }
@@ -298,7 +324,12 @@ export class ChatEngineQuestions {
       const question = pending.request.questions[currentIndex]
       if (!question) return
       pending.timer = undefined
-      pending.request.answers[currentIndex] = [recommendedQuestionAnswer(question)]
+      // The timer only answers what nobody answered. An entry the user already
+      // filled in keeps their own answer, so a card that timed out half filled
+      // sends what was filled instead of the recommended option on top of it.
+      if ((pending.request.answers[currentIndex] ?? []).length === 0) {
+        pending.request.answers[currentIndex] = [recommendedQuestionAnswer(question)]
+      }
 
       const nextIndex = pending.request.answers.findIndex(
         (answer, index) => index !== currentIndex && answer.length === 0
@@ -425,6 +456,11 @@ export class ChatEngineQuestions {
     // decision already settled it; anything else (dismissal, teardown) is a
     // decline, so a capability is never installed by a card that went away.
     pending.settleUtilitySuggestion?.({ decision: 'declined' })
+    // An MCP sign-in card holds a gateway connection that refused for lack of
+    // authorization. A card that went away authorized nothing, so the connection
+    // is told the user declined rather than left waiting on a request that no
+    // longer exists.
+    pending.settleMcpSignIn?.({ status: 'declined' })
   }
 
   clearPendingQuestionsForSession(sessionId: string): void {

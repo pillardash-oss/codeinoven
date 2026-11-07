@@ -1,6 +1,7 @@
 /// <reference types="electron-vite/node" />
 import createValidationWorker from './pele-validation-worker.ts?nodeWorker'
 import { Logger } from '../system/logger'
+import { trackQuitWorker } from '../system/quit-worker-sweep'
 
 const MAX_MERMAID_BLOCKS = 12
 const MERMAID_FENCE_PATTERN =
@@ -23,7 +24,7 @@ function parseSources(sources: string[]): Promise<MermaidValidationFailure[]> {
   const result = validationQueue.then(
     () =>
       new Promise<MermaidValidationFailure[]>((resolve, reject) => {
-        const worker = createValidationWorker({ workerData: sources })
+        const worker = trackQuitWorker(createValidationWorker({ workerData: sources }))
         let settled = false
         const finish = (error?: Error, failures: MermaidValidationFailure[] = []): void => {
           if (settled) return

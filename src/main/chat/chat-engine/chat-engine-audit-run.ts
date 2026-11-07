@@ -19,6 +19,9 @@ import { rawErrorDetail, rawErrorMessage } from './chat-engine-errors'
 import {
   ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
   AUDIT_ALLOWED_TOOLS,
+  AUDIT_GENERATION_SYSTEM_PROMPT,
+  AUDIT_REPAIR_SYSTEM_PROMPT,
+  INDEPENDENT_AUDIT_SYSTEM_PROMPT,
   formatOpenAnnotations
 } from './chat-engine-prompts'
 import {
@@ -30,6 +33,16 @@ import {
   validateAssignmentAuditExecutionEvidence
 } from './chat-engine-pure'
 import { ChatEngine } from '../chat-engine'
+
+/**
+ * Raised when the auditor's harness produced no tool activity at all.
+ *
+ * A run that read no file and ran no command has nothing behind any of its
+ * claims, so it cannot produce a report worth reviewing. It is also not
+ * correctable by prompting the same session again: the session started without
+ * usable tools, and a correction attempt would only restate the same report.
+ */
+class AuditWithoutToolEvidenceError extends Error {}
 
 /** ChatEngine audit-run: one concern, moved verbatim from the composition root. */
 export class ChatEngineAuditRun {
@@ -51,7 +64,16 @@ export class ChatEngineAuditRun {
     )
     const auditorSettings = auditorThread.settings ?? settings
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, auditorThread.id)
+    // The auditor's own account, never the harness default: resolving this
+    // driver without it dispatched every audit on the project's default
+    // account, so an auditor switched to another account kept reporting the
+    // default account's usage limit.
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      auditorThread.id,
+      auditorSettings.accountId
+    )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
     const transcript = buildTranscriptMarkdown(
       await this.host.loadMessages(projectId, coordinatorThreadId),
@@ -201,10 +223,7 @@ export class ChatEngineAuditRun {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.host.units['turns-dispatch'].cioPrompt('independent-audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [INDEPENDENT_AUDIT_SYSTEM_PROMPT, utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -240,9 +259,28 @@ export class ChatEngineAuditRun {
         // Most recent structurally-valid content, kept as the partial fallback
         // whenever the evidence matcher still leaves gaps on that response.
         partialCandidate = { content, issues: [] }
+        const auditMessages = await driver.loadMessages(projectPath, sessionId)
+        // A report is only reviewable if the auditor actually looked at something.
+        // Codex on this machine answered a whole audit from reasoning alone   no
+        // command, no file read, no utility call   and every check came back
+        // `not_applicable`, which the report parser accepts and the evidence
+        // matcher then flags as unvalidated facts. Nothing in that run can be
+        // validated, so it is reported as a run failure instead of persisted as a
+        // report the user is asked to re-check.
+        const executedAnything = auditMessages.some(
+          (message) =>
+            message.role === 'assistant' &&
+            message.createdAt >= auditStartedAt - 1_000 &&
+            message.parts.some((part) => part.type === 'tool')
+        )
+        if (!executedAnything) {
+          throw new AuditWithoutToolEvidenceError(
+            `The Auditor executed no command and read no file this run: ${auditorSettings.harnessId ?? driverId} started without usable tools, so none of its findings could be checked and no report was saved. Confirm that harness's tools are available on this machine, then run the audit again, or audit with a model on another harness.`
+          )
+        }
         const evidence = validateAssignmentAuditExecutionEvidence({
           content,
-          messages: await driver.loadMessages(projectPath, sessionId),
+          messages: auditMessages,
           auditStartedAt,
           utilitySearchRequired: utilityTurn.runtimeAvailable
         })
@@ -330,6 +368,9 @@ export class ChatEngineAuditRun {
           )
           break
         }
+        // Retrying a session that never had tools only burns attempts and then
+        // persists the same unusable report, so the run ends with the reason.
+        if (lastError instanceof AuditWithoutToolEvidenceError) break
         const correctableOutput =
           lastError instanceof AuditReportValidationError ||
           lastError instanceof SyntaxError ||
@@ -448,7 +489,12 @@ export class ChatEngineAuditRun {
     )
     const auditorSettings = auditorThread.settings ?? settings
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, auditorThread.id)
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      auditorThread.id,
+      auditorSettings.accountId
+    )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
     // Durable sessions must remain loadable after the run. OpenCode accepts a
     // JSON-schema request but cannot decode that persisted message later, so
@@ -700,11 +746,9 @@ export class ChatEngineAuditRun {
       )
       try {
         const auditSystemPrompt = repairing
-          ? await this.host.units['turns-dispatch'].cioPrompt('audit-repair')
+          ? AUDIT_REPAIR_SYSTEM_PROMPT
           : [
-              await this.host.units['turns-dispatch'].cioPrompt(
-                spec ? 'audit-report' : 'independent-audit-report'
-              ),
+              spec ? AUDIT_GENERATION_SYSTEM_PROMPT : INDEPENDENT_AUDIT_SYSTEM_PROMPT,
               ASSIGNMENT_AUDIT_EVIDENCE_CONTRACT,
               utilityInstructions
             ]
@@ -944,7 +988,12 @@ export class ChatEngineAuditRun {
     )
     const auditorSettings = auditorThread.settings ?? settings
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, auditorThread.id)
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      auditorThread.id,
+      auditorSettings.accountId
+    )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
     const contractPath = await this.host.units['media-artifacts'].artifactRef(
       projectId,
@@ -1017,7 +1066,7 @@ export class ChatEngineAuditRun {
           text: prompt,
           attachments: [],
           systemPrompt: [
-            await this.host.units['turns-dispatch'].cioPrompt('audit-report'),
+            AUDIT_GENERATION_SYSTEM_PROMPT,
             ...(!spec
               ? [
                   'For this audit, the supplied finalized Brainstorm replaces the approved specification as the implementation contract. Apply all audit checks to that document.'
@@ -1134,7 +1183,12 @@ export class ChatEngineAuditRun {
     )
     const auditorSettings = auditorThread.settings ?? settings
     const driverId = auditorSettings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, auditorThread.id)
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      auditorThread.id,
+      auditorSettings.accountId
+    )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
     const specPath = await this.host.units['media-artifacts'].artifactRef(
       projectId,
@@ -1204,10 +1258,7 @@ export class ChatEngineAuditRun {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [
-            await this.host.units['turns-dispatch'].cioPrompt('audit-report'),
-            utilityTurn.instructions
-          ]
+          systemPrompt: [AUDIT_GENERATION_SYSTEM_PROMPT, utilityTurn.instructions]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,

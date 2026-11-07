@@ -3,6 +3,7 @@
   import type { MediaActivity } from '$shared/media-activity'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
   import type { Project } from '$shared/types'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
@@ -49,6 +50,17 @@
      *  expanded folder wears becomes its solid form while it is stuck.
      */
     sticky?: boolean
+    /**
+     * The project is being deleted right now.
+     *
+     * The row stays on screen instead of vanishing on a guess: deleting is
+     * accepted instantly and finished in the background, so the honest display is
+     * an inert, greyed row with its progress. It leaves only when the deletion
+     * really completed, and comes back usable when one fails.
+     */
+    deleting?: boolean
+    /** What this deletion is doing, e.g. `Removing threads 3/12`. */
+    deletingLabel?: string
   }
 
   let {
@@ -63,7 +75,9 @@
     onMoveProject,
     onContextMenu,
     showLocation = false,
-    sticky = false
+    sticky = false,
+    deleting = false,
+    deletingLabel = 'Removing'
   }: Props = $props()
 
   const resolvedIcon = $derived(getProjectIcon(project, iconUrl ?? undefined))
@@ -135,7 +149,7 @@
 <div
   class="group relative flex items-center gap-1 border-l-2 px-1.5 py-1.5 transition-colors {rootBackgroundClass} {sticky
     ? 'sticky -top-2 z-10'
-    : ''}"
+    : ''} {deleting ? 'pointer-events-none opacity-60' : ''}"
   style={project.color
     ? `border-color: ${project.color}`
     : expanded
@@ -144,7 +158,8 @@
   class:border-transparent={!project.color && !expanded}
   class:hover:border-border-strong={!project.color && !expanded}
   role="listitem"
-  draggable="true"
+  aria-busy={deleting}
+  draggable={!deleting}
   ondragstart={handleDragStart}
   ondragover={handleDragOver}
   ondrop={handleDrop}
@@ -213,7 +228,14 @@
        keeps the full width of the row until the actions are actually visible. The
        left-to-right fade keeps the overlaid controls legible over a long name. -->
   <MediaActivityTrail activities={media} label={project.name} />
-  {#if hasThreadStateCounts(stateCounts)}
+  {#if deleting}
+    <span
+      class="absolute inset-y-0 right-1.5 flex items-center gap-1.5 bg-linear-to-l from-elevated from-65% to-transparent pl-4 text-[0.6875rem] text-muted"
+    >
+      <CioSpinner size={12} class="animate-spin" />
+      {deletingLabel}
+    </span>
+  {:else if hasThreadStateCounts(stateCounts)}
     <span
       class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
     >
@@ -221,7 +243,7 @@
     </span>
   {/if}
 
-  {#if actions}
+  {#if actions && !deleting}
     <span
       class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center justify-end bg-linear-to-l from-elevated from-65% to-transparent pl-4 opacity-0 transition-opacity duration-150 group-hover:opacity-100 group-focus-within:opacity-100 {actionsPinned
         ? 'opacity-100'

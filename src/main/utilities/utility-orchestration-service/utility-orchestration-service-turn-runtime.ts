@@ -4,6 +4,7 @@ import {
   APP_CITE_UTILITY_ID,
   APP_ADB_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
+  APP_FOLLOW_UP_UTILITY_ID,
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
 import { APP_BROWSER_UTILITY_ID, APP_SCOPE_UTILITY_ID } from '../utility-registry-service'
@@ -171,6 +172,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // @cio-hey session. The gateway refuses a route the turn never received.
       if (isOrchestrationTool(name)) {
         return (
+          request.delegationReach === true ||
           request.permissionLevel === 'full_access' ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
@@ -225,6 +227,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
       eligible: new Map(eligible.map((entry) => [entry.utility.id, entry])),
       activated: new Map(always.map((entry) => [entry.utility.id, entry])),
       clients: new Map(),
+      clientSignatures: new Map(),
       connecting: new Map(),
       attributionSequence: 0,
       searched: false,
@@ -291,7 +294,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(gatewayTools.some(({ name }) => isEngineeringTool(name))
         ? [
-            `For a requested Brainstorm, PRD, spec or Assignment, discover the matching cio_create_* schema through cio:gateway and invoke it. Ask once whether the user wants independently promptable Assignment workers or inline sub-agents when that preference is unknown.`
+            `Brainstorm, PRD, Spec, Assignment and Achievement are artifact tools you turn on yourself: discover the matching cio_create_* schema through cio:gateway and invoke it in the same turn the user explicitly asks for that artifact by name. Brainstorm or "explore this idea" -> cio_create_brainstorm; product requirements or PRD -> cio_create_prd; spec or specification -> cio_create_spec; split this into tasks or assign workers/agents -> cio_create_assignment; "keep going until it works" or "do this until the goal is reached" -> cio_create_achievement. A plan is not a spec: when the user asks for a plan, a checklist, an approach or the steps, write that plan yourself in prose or a markdown file and do the work. Never convert a plan request into a stage, never pick a stage because the work is large or multi-step, and never ask the user to enable a stage they did not name. Ask once whether they want independently promptable Assignment workers or inline sub-agents when that preference is unknown.`
           ]
         : []),
       ...(sessionToolsAskRequired
@@ -326,7 +329,13 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_BROWSER_UTILITY_ID)
         ? [
-            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. The page this conversation's thread browser is on is readable in whatever box the user put it: pass page "user" when they refer to the page they are looking at (it stays on the tab it resolved for you), page "strip" for whatever that browser shows right now, and page "agent" for a page you opened. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`
+            `Use the in-app browser (${APP_BROWSER_UTILITY_ID}) to inspect every authored or changed renderable page at its served URL. Activate with ${UTILITY_ACTIVATE_TOOL_NAME}; inspect screenshot, viewport, snapshot and console in background. The page this conversation's thread browser is on is readable in whatever box the user put it: pass page "user" when they refer to the page they are looking at (it stays on the tab it resolved for you), page "strip" for whatever that browser shows right now, and page "agent" for a page you opened. Drive a multi-step browser flow (open, navigate, click, type, snapshot, screenshot) through code mode in one model request instead of one invocation per step: every separate browser call is its own model step, and its result stays in context for the rest of the turn. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl.`,
+            `A live conversation you open or join in a browser page is yours to carry to an outcome: a business's support or billing chat, a sales or hosting desk, a queue with a bot, or another agent in a chat window. You speak for the user there, so send the message, then poll for the answer with ${UTILITY_INVOKE_TOOL_NAME} on ${APP_BROWSER_UTILITY_ID} (wait with changed, then snapshot) in bounded cycles for as long as it takes, answer every follow-up yourself from what the user already told you, and keep pressing for the fix rather than for activity. A slow human, a queued ticket or a minute of silence is normal and never a reason to end the turn, and asking the user to watch the tab and ping you when a reply arrives hands your work back to them. End that turn only with the outcome, or with the one thing only the user can supply, which you ask for and then use.`
+          ]
+        : []),
+      ...(eligible.some(({ utility }) => utility.id === APP_FOLLOW_UP_UTILITY_ID)
+        ? [
+            `When the next step is blocked until another party's clock reaches a time, such as a support desk that is closed until morning, a ticket answered by email, a promised callback, a refund or review window, or a deployment that finishes tonight, turn that into a decision instead of leaving the wait with the user. Say plainly when they reopen, propose the exact time you would pick the work up, and ask whether they want that. Once they agree, activate ${APP_FOLLOW_UP_UTILITY_ID} and call schedule_followup with the agreed time and a self-contained instruction naming the counterparty, the reference, the page to poll and what counts as resolved: the app wakes this same thread then, with its browser pages still open, and the turn that runs cannot see this conversation. Never schedule one the user has not agreed to, never claim a reminder is set without calling the capability, and never tell the user to remember to come back themselves. Cancel it if the answer arrives first.`
           ]
         : []),
       ...(hasDesignCapability

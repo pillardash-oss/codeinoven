@@ -22,6 +22,7 @@ import {
 } from './config-helpers'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { Logger } from '../../system/logger'
+import { sharedLocalAiRuntimeRegistry } from '../../local-ai/local-ai-runtime-registry'
 import { sendToRenderer } from '../renderer-delivery'
 import type {
   AgentRole,
@@ -277,6 +278,21 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     }
     return { name, script, variables, color }
   }
+  /**
+   * Push a project's new action list to every window.
+   *
+   * The panel is not the only writer: an agent driving `projectActions:save`
+   * through app control writes the same file from outside the panel, and a
+   * second window writes it behind the first one's back. Without this the
+   * Actions panel keeps showing the list it read when it mounted, which reads as
+   * the action the user was just told about never having been created.
+   */
+  const broadcastProjectActionsChanged = (projectId: string, actions: ProjectAction[]): void => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+      sendToRenderer(win.webContents, 'projectActions:changed', projectId, actions)
+    }
+  }
   ipcMain.handle('projectActions:list', (_, projectId: string) => readProjectActions(projectId))
   ipcMain.handle(
     'projectActions:save',
@@ -312,6 +328,7 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
         next = [...actions, action]
       }
       await storage.write(projectActionsPath(projectId), { actions: next })
+      broadcastProjectActionsChanged(projectId, next)
       return action
     }
   )
@@ -320,6 +337,7 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     const next = actions.filter((action) => action.id !== validateEntityId(actionId, 'Action ID'))
     if (next.length === actions.length) return false
     await storage.write(projectActionsPath(projectId), { actions: next })
+    broadcastProjectActionsChanged(projectId, next)
     return true
   })
   ipcMain.handle('projectActions:reorder', async (_, projectId: string, orderedIds: unknown) => {
@@ -336,6 +354,7 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       next.push(action)
     }
     await storage.write(projectActionsPath(projectId), { actions: next })
+    broadcastProjectActionsChanged(projectId, next)
     return next
   })
   ipcMain.handle('projectActions:markRun', async (_, projectId: string, actionId: string) => {
@@ -346,9 +365,9 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     // A run is activity, not an edit: `updatedAt` (and its createdAt) stay put
     // so the record's authorship timestamps keep meaning what they say.
     const updated: ProjectAction = { ...existing, lastRunAt: Date.now() }
-    await storage.write(projectActionsPath(projectId), {
-      actions: actions.map((action) => (action.id === id ? updated : action))
-    })
+    const next = actions.map((action) => (action.id === id ? updated : action))
+    await storage.write(projectActionsPath(projectId), { actions: next })
+    broadcastProjectActionsChanged(projectId, next)
     return updated
   })
   ipcMain.handle('config:update', async (_, input: unknown) => {
@@ -394,6 +413,11 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       maxHoldMs: config.maxBackgroundWakeHoldMs
     })
     void options.backgroundLifecycle?.applyConfig(config)
+    if (patch.llamaCppUnload !== undefined) {
+      // Live, not at next launch: the window the user picked applies to the
+      // servers already resident, without re-loading a model to change it.
+      sharedLocalAiRuntimeRegistry().setUnloadOption(config.llamaCppUnload)
+    }
     if (patch.sound && options.speechService) {
       options.speechService.updateUnloadOptions({
         asr: patch.sound.asrUnload,

@@ -17,6 +17,16 @@ import type {
 export interface McpOAuthHost {
   utility: () => UtilityDefinition | null
   onChanged: (utility: UtilityDefinition) => void
+  /**
+   * A grant for the loaded server exists, whoever produced it.
+   *
+   * The status can become authorized without this controller's own `authorize`
+   * call: another surface may have run the flow, or the grant may already be in
+   * the vault when the surface appears. A surface that is asking the user to sign
+   * in uses this to stop asking, instead of leaving a prompt up for a server that
+   * is already authorized.
+   */
+  onConnected?: (status: McpOAuthStatus) => void
 }
 
 /**
@@ -37,6 +47,16 @@ export class McpOAuthController {
   busy = $state(false)
   /** The latest `progress` message while a browser flow runs; `null` otherwise. */
   progress = $state<string | null>(null)
+  /**
+   * The authorization page the running flow opened, once it exists.
+   *
+   * The address only exists after the flow has discovered the authorization
+   * server and registered this app with it, so there is nothing a surface could
+   * offer before the user starts signing in. Once it is here, a surface shows it
+   * as a real link: the app's link context menu copies it and hands it to any
+   * browser, which is what a runner that cannot open the built-in one needs.
+   */
+  authUrl = $state<string | null>(null)
   error = $state<string | null>(null)
   clientId = $state('')
   clientSecret = $state('')
@@ -63,6 +83,7 @@ export class McpOAuthController {
       const status = await invoke('utilities:mcpOAuthStatus', utilityId)
       if (this.#utilityId !== utilityId) return
       this.status = status
+      if (status.state === 'connected') this.#host.onConnected?.(status)
       this.clientId = status.clientId ?? ''
       // The vault holds the secret; the field is only ever a fresh value to send.
       this.clientSecret = ''
@@ -81,6 +102,7 @@ export class McpOAuthController {
     if (!utilityId || this.busy) return
     this.busy = true
     this.error = null
+    this.authUrl = null
     this.progress = 'Starting authorization…'
     if (this.status) this.status = { ...this.status, state: 'authorizing' }
     try {
@@ -88,6 +110,7 @@ export class McpOAuthController {
       const status = await invoke('utilities:authorizeMcpOAuth', utilityId, request)
       if (this.#utilityId !== utilityId) return
       this.status = status
+      if (status.state === 'connected') this.#host.onConnected?.(status)
     } catch (authorizeError) {
       if (this.#utilityId !== utilityId) return
       this.error = ipcErrorMessage(authorizeError, 'The authorization could not be completed.')
@@ -104,6 +127,7 @@ export class McpOAuthController {
   async cancel(): Promise<void> {
     const utilityId = this.#utilityId
     if (!utilityId) return
+    this.authUrl = null
     try {
       const status = await invoke('utilities:cancelMcpOAuth', utilityId)
       if (this.#utilityId !== utilityId) return
@@ -166,6 +190,9 @@ export class McpOAuthController {
     if (payload.utilityId !== this.#utilityId) return
     switch (payload.kind) {
       case 'authorize':
+        // Recorded before the page is opened, so the address survives a browser
+        // the user closed, blocked, or would rather replace with their own.
+        this.authUrl = payload.authUrl
         void this.#openAuthPage(payload.authUrl)
         break
       case 'progress':
@@ -175,7 +202,9 @@ export class McpOAuthController {
         this.status = payload.status
         this.busy = false
         this.progress = null
+        this.authUrl = null
         this.error = null
+        this.#host.onConnected?.(payload.status)
         break
       case 'failed':
         this.error = payload.error

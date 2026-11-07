@@ -1,5 +1,6 @@
 import { mergeSubagentParts } from '$lib/working-trace-parts'
 import { isTodoToolPart } from '$lib/agent-todos'
+import { isQuestionAnswerRecord } from '$shared/question-answers'
 import { checkpointForTurn } from '$lib/threads/checkpoint-matching'
 import type {
   AgentMessage,
@@ -45,10 +46,17 @@ export function isActivityOnlyUserMessage(message: AgentMessage): boolean {
  * keeps one trace instead of splitting into a new one under the message.
  *
  * Unlike `isActivityOnlyUserMessage`, a transparent steer still renders: it is
- * the user's own message, it just does not move the turn boundary.
+ * the user's own message, it just does not move the turn boundary. The app's
+ * record of an answered question is transparent to grouping for the same
+ * reason: the answer resumes the turn that asked, so it must not close it and
+ * open a second trace under the message.
  */
 export function isTurnTransparentUserMessage(message: AgentMessage): boolean {
-  return isActivityOnlyUserMessage(message) || message.turnTransparent === true
+  return (
+    isActivityOnlyUserMessage(message) ||
+    message.turnTransparent === true ||
+    isQuestionAnswerRecord(message)
+  )
 }
 
 /**
@@ -142,6 +150,12 @@ export interface TranscriptIndex {
   steerCard: (number | null)[]
   /** Whether the turn that opens at this index has completed. */
   turnCompleted: boolean[]
+  /**
+   * Whether the tail card had to be rescued because no resolution rule could
+   * place the newest finished turn's card. True is a bug report, not a state
+   * the reader should ever meet, and the renderer logs it when it happens.
+   */
+  tailCardRescued: boolean
 }
 
 /**
@@ -183,6 +197,7 @@ function resolveCheckpointOwners(
   owners: (TurnCheckpointSummary | null)[]
   card: boolean[]
   steer: (number | null)[]
+  rescued: boolean
 } {
   const owners: (TurnCheckpointSummary | null)[] = new Array(messages.length).fill(null)
   const card: boolean[] = new Array(messages.length).fill(false)
@@ -195,6 +210,32 @@ function resolveCheckpointOwners(
     const message = messages[index]
     if (message) indexByMessageId.set(message.id, index)
   }
+
+  // Which indices close a turn, in one backward pass. `isTurnEndIndex` walks
+  // forward from each candidate, so asking it inside the loops below would make
+  // a long transcript quadratic for no reason. `closesAfter` carries what the
+  // next meaningful message is: a non-transparent prompt closes everything above
+  // it, an assistant opens a run that must not be closed, and an activity notice
+  // changes nothing.
+  const closesTurn: boolean[] = new Array(messages.length).fill(false)
+  let closesAfter = true
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!message || message.inlineArtifact) continue
+    if (message.role === 'assistant') {
+      closesTurn[index] = closesAfter
+      closesAfter = false
+      continue
+    }
+    if (!isTurnTransparentUserMessage(message)) closesAfter = true
+  }
+  // A transcript that ends on a finished answer has nothing left streaming, so a
+  // card placed at its tail is reporting a turn the reader already watched end.
+  let lastVisible = messages.length - 1
+  while (lastVisible >= 0 && messages[lastVisible]?.inlineArtifact) lastVisible -= 1
+  const finalMessage = lastVisible >= 0 ? messages[lastVisible] : undefined
+  const transcriptFinished =
+    finalMessage?.role === 'assistant' && finalMessage.completedAt !== undefined
 
   // Two checkpoints for one prompt (a resumed or retried turn) share a slot;
   // the newest one owns the turn, including while it is still running: an
@@ -226,6 +267,7 @@ function resolveCheckpointOwners(
     const windowEnd = starts[i + 1] ?? messages.length
     const turnEnd = nextTurnStartIndex(messages, start, windowEnd)
     let cardIndex = -1
+    let lastOwnedEnd = -1
     for (let index = start; index < windowEnd; index++) {
       const message = messages[index]
       if (!message || message.role !== 'assistant' || message.inlineArtifact) continue
@@ -236,8 +278,19 @@ function resolveCheckpointOwners(
       if (!isCompleted(checkpoint)) continue
       owners[index] = checkpoint
       if (index < turnEnd) cardIndex = index
+      if (closesTurn[index]) lastOwnedEnd = index
     }
-    if (cardIndex >= 0 && isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
+    // A checkpoint can own a run that continues past the prompt which ends its
+    // own window. An internal continuation (a retry, an incomplete-turn nudge)
+    // carries the user's prompt as its source, so the transcript grows a turn no
+    // checkpoint is anchored to, and the assistants after that prompt are still
+    // this turn's work: its card belongs at the end of the run it owns, not
+    // above the prompt that interrupted the accounting. That is exactly the
+    // shape where the finished turn drew no card at all.
+    if (transcriptFinished && lastOwnedEnd >= turnEnd && closesTurn[lastOwnedEnd]) {
+      cardIndex = lastOwnedEnd
+    }
+    if (cardIndex >= 0 && closesTurn[cardIndex]) card[cardIndex] = true
     // A steer splits the turn into the work already done and the work it was
     // steered into, so the earlier half gets its own card above the steered
     // message, listing only the files recorded up to that point. The turn's own
@@ -249,7 +302,7 @@ function resolveCheckpointOwners(
       if (!promptContinuesTurn(messages, index, start)) continue
       const boundary = previousAssistantIndex(messages, index)
       if (boundary <= start || boundary >= cardIndex) continue
-      if (isTurnEndIndex(messages, boundary)) steer[boundary] = index
+      if (closesTurn[boundary]) steer[boundary] = index
     }
   }
 
@@ -279,11 +332,75 @@ function resolveCheckpointOwners(
     }
     // The fallback can match a trailing assistant of a run a later attempt
     // replaced, so it too places a card only where a turn actually ends.
-    if (isTurnEndIndex(messages, cardIndex)) card[cardIndex] = true
+    if (closesTurn[cardIndex]) card[cardIndex] = true
     index = cardIndex
   }
 
-  return { messageIndexById: indexByMessageId, owners, card, steer }
+  const rescued = placeTailCardForUncardedTurn(messages, checkpoints, owners, card)
+
+  return { messageIndexById: indexByMessageId, owners, card, steer, rescued }
+}
+
+/**
+ * The last guard between a finished turn that changed files and a reader who
+ * sees no card for it.
+ *
+ * Every rule above places a card only where a turn provably ends: the anchored
+ * rule needs the prompt that opened the turn in the loaded window, and the
+ * timestamp fallback needs the assistant rows to fall inside the checkpoint's
+ * start and completion clocks. A window that begins mid-turn, a mirror whose
+ * clock runs slightly behind the checkpoint, or a shipped summary that lost its
+ * source message id can leave the newest finished turn owning no card at all,
+ * and the reader is shown a turn that committed files as if it had touched
+ * nothing.
+ *
+ * So the newest finished checkpoint that recorded changes and placed no card
+ * anywhere draws at the transcript's final turn end, provided its own window
+ * covers that turn. A turn with a card of its own is never displaced: this only
+ * runs when the resolution above produced nothing for the turn the reader just
+ * watched finish.
+ */
+function placeTailCardForUncardedTurn(
+  messages: readonly AgentMessage[],
+  checkpoints: readonly TurnCheckpointSummary[],
+  owners: (TurnCheckpointSummary | null)[],
+  card: boolean[]
+): boolean {
+  const tail = lastTurnEndIndex(messages)
+  if (tail < 0) return false
+  let newest: TurnCheckpointSummary | null = null
+  for (const checkpoint of checkpoints) {
+    if (!isCompleted(checkpoint) || checkpoint.changes.length === 0) continue
+    if (!newest || checkpoint.createdAt > newest.createdAt) newest = checkpoint
+  }
+  if (!newest) return false
+  // Its card may already be on screen somewhere; only a turn nobody carded is
+  // this guard's business.
+  for (let index = 0; index < card.length; index++) {
+    if (card[index] && owners[index]?.id === newest.id) return false
+  }
+  // The checkpoint must be the one that produced that answer: it started before
+  // the answer was written and settled no earlier than the answer closed. A
+  // retried turn begins after its prompt and still owns it, which is why this
+  // reads the answer rather than the prompt.
+  const answer = messages[tail]
+  if (!answer || answer.createdAt === undefined) return false
+  if (newest.createdAt >= answer.createdAt) return false
+  if (newest.completedAt === undefined || answer.completedAt === undefined) return false
+  if (newest.completedAt < answer.completedAt) return false
+  owners[tail] = newest
+  card[tail] = true
+  return true
+}
+
+/** Index of the newest message that closes a turn, or -1 when there is none. */
+function lastTurnEndIndex(messages: readonly AgentMessage[]): number {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (message?.role !== 'assistant' || message.inlineArtifact) continue
+    return isTurnEndIndex(messages, index) ? index : -1
+  }
+  return -1
 }
 
 /**
@@ -415,7 +532,10 @@ export function buildTranscriptIndex(
     }
   }
 
-  const { messageIndexById, owners, card, steer } = resolveCheckpointOwners(messages, checkpoints)
+  const { messageIndexById, owners, card, steer, rescued } = resolveCheckpointOwners(
+    messages,
+    checkpoints
+  )
   for (let index = 0; index < count; index++) {
     const opens = isTurnStartIndex(messages, index)
     const closes = isTurnEndIndex(messages, index)
@@ -441,7 +561,8 @@ export function buildTranscriptIndex(
     checkpoint,
     checkpointCard,
     steerCard,
-    turnCompleted
+    turnCompleted,
+    tailCardRescued: rescued
   }
 }
 
@@ -750,6 +871,147 @@ export function getTurnWorkingParts(
     }
   }
   return { leading, body }
+}
+
+/**
+ * One slice of a turn's working trace, ending where the reader answered.
+ *
+ * A question answer resumes the turn that asked, so the answer is transparent
+ * to turn grouping and the whole turn keeps one span. The trace itself must
+ * still follow the order the run was lived in: work before the answer, the
+ * answer, then the work the answer unblocked. Each slice carries the answer
+ * record that opened it, and the message the slice renders beside.
+ */
+export interface TraceSegmentLayout {
+  /** Index of the turn's first assistant message. */
+  turnStart: number
+  /** The answer record that opened this slice, or null for the first slice. */
+  answerIndex: number | null
+  /** Message the slice renders beside, or null when the turn has mirrored no
+   *  assistant message after its answer yet. */
+  mountIndex: number | null
+  /** Whether the slice renders above or below the message at `mountIndex`. */
+  placement: 'before' | 'after'
+  /** Every answer record inside the turn, oldest first. */
+  boundaries: readonly number[]
+  /** Ordinal of this slice within its turn. */
+  segmentIndex: number
+}
+
+/**
+ * Cut every turn at the answer records the reader sent while it was running.
+ *
+ * The first slice mounts on the turn's opening assistant message, exactly where
+ * a turn without answers renders its trace. A later slice mounts on the first
+ * assistant message that follows its answer, so the resumed work reads under
+ * the answer card; while that row has not been mirrored yet the slice renders
+ * under the answer record itself.
+ */
+export function buildTraceSegmentLayout(
+  messages: readonly AgentMessage[],
+  isTransparent: TurnTransparency = persistedTurnTransparency
+): TraceSegmentLayout[] {
+  const layout: TraceSegmentLayout[] = []
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index]
+    if (!message || message.inlineArtifact || message.role !== 'assistant') continue
+    if (!isTurnStartIndex(messages, index)) continue
+    const turnEnd = turnSpanEndIndex(messages, index, isTransparent)
+    const boundaries: number[] = []
+    for (let cursor = index + 1; cursor <= turnEnd; cursor++) {
+      const candidate = messages[cursor]
+      if (candidate?.role === 'user' && isQuestionAnswerRecord(candidate)) boundaries.push(cursor)
+    }
+    if (boundaries.length === 0) {
+      layout.push({
+        turnStart: index,
+        answerIndex: null,
+        mountIndex: index,
+        placement: 'before',
+        boundaries,
+        segmentIndex: 0
+      })
+      continue
+    }
+    for (let segment = 0; segment <= boundaries.length; segment++) {
+      const answerIndex = segment === 0 ? null : boundaries[segment - 1]!
+      let mountIndex: number | null = null
+      let placement: TraceSegmentLayout['placement'] = 'before'
+      if (segment === 0) {
+        mountIndex = index
+      } else {
+        for (let cursor = answerIndex! + 1; cursor <= turnEnd; cursor++) {
+          const candidate = messages[cursor]
+          if (candidate?.role === 'assistant' && !candidate.inlineArtifact) {
+            mountIndex = cursor
+            break
+          }
+        }
+        // The answer card is already on screen; work that never mirrored an
+        // assistant row reads directly under it rather than waiting for one.
+        if (mountIndex === null) {
+          mountIndex = answerIndex
+          placement = 'after'
+        }
+      }
+      layout.push({
+        turnStart: index,
+        answerIndex,
+        mountIndex,
+        placement,
+        boundaries,
+        segmentIndex: segment
+      })
+    }
+  }
+  return layout
+}
+
+/** The wall-clock start a trace part reported, when it reported one. */
+function partStartTime(part: AgentPart): number | undefined {
+  if (part.type === 'tool') return part.state.time?.start
+  if (part.type === 'reasoning') return part.time?.start
+  if (part.type === 'subagent') return part.activity.time?.start
+  return undefined
+}
+
+/**
+ * Split one turn's assembled trace at the answer records that interrupt it.
+ *
+ * A mirrored part names the message it belongs to, which places every entry the
+ * transcript knows about exactly. Entries that only exist in the durable stream
+ * log are placed by their own wall clock against the answer, and an entry with
+ * no clock (a text part) keeps the slice of the entry before it, because the
+ * assembled list is already in stream order.
+ */
+export function splitTurnTraceParts(
+  messages: readonly AgentMessage[],
+  parts: readonly AgentPart[],
+  boundaries: readonly number[],
+  index: TranscriptIndex
+): AgentPart[][] {
+  const slices: AgentPart[][] = Array.from({ length: boundaries.length + 1 }, () => [])
+  let segment = 0
+  for (const part of parts) {
+    const carriedAt = index.partIndexById.get(part.id)
+    const startedAt = partStartTime(part)
+    while (segment < boundaries.length) {
+      const boundaryIndex = boundaries[segment]!
+      const answeredAt = messages[boundaryIndex]?.createdAt
+      let afterBoundary: boolean | null = null
+      if (carriedAt !== undefined) {
+        afterBoundary =
+          carriedAt > boundaryIndex ||
+          (startedAt !== undefined && answeredAt !== undefined && startedAt > answeredAt)
+      } else if (startedAt !== undefined && answeredAt !== undefined) {
+        afterBoundary = startedAt > answeredAt
+      }
+      if (afterBoundary !== true) break
+      segment += 1
+    }
+    slices[segment]!.push(part)
+  }
+  return slices
 }
 
 /**

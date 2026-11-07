@@ -17,13 +17,14 @@
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
+  import { onDestroy } from 'svelte'
   import { prefersReducedMotion } from 'svelte/motion'
   import { fade, slide } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import { ListRowReflow, rowArrangement } from '$lib/motion'
   import { DropdownMenu } from 'bits-ui'
   import type { SvelteMap } from 'svelte/reactivity'
-  import { foldSlide } from '$lib/components/shared/card-motion'
+  import { foldDuration, foldSlide } from '$lib/components/shared/card-motion'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import type { ScopeActionsController } from '$lib/components/scope/ScopeActionsController.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -51,6 +52,7 @@
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
+  import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { STAGE_COLORS, STAGE_LABELS, STAGE_ORDER, scopeState } from '$lib/stores/scope.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
@@ -433,11 +435,38 @@
       // default page, exactly as if the user had clicked "Show less".
       sidebar.showLessThreads(projectId)
       rendererRecovery.toggleCollapsedFolder(projectId)
+      settleFold(projectId)
     } else {
       sidebar.expandedFolders.add(projectId)
       rendererRecovery.toggleCollapsedFolder(projectId)
+      if (foldingProjectId === projectId) foldingProjectId = null
     }
   }
+
+  /**
+   * The project whose fold is still playing, so its peek row waits for it.
+   *
+   * A folded folder keeps the one thread the user is working in on screen, but
+   * that row may not mount in the same frame as the fold: an outgoing `slide`
+   * holds the list in flow while its height collapses, so a peek row drawn
+   * beside it would show the active thread twice for the length of the fold.
+   * One folder is folded at a time, so one id is all the state this needs.
+   */
+  let foldingProjectId = $state<string | null>(null)
+  let foldSettleTimer: ReturnType<typeof setTimeout> | undefined
+
+  function settleFold(projectId: string): void {
+    clearTimeout(foldSettleTimer)
+    const settle = foldDuration()
+    if (settle <= 0) {
+      foldingProjectId = null
+      return
+    }
+    foldingProjectId = projectId
+    foldSettleTimer = setTimeout(() => (foldingProjectId = null), settle)
+  }
+
+  onDestroy(() => clearTimeout(foldSettleTimer))
 
   // ─── Folder ellipsis menu actions ────────────────────────────────────────
 
@@ -523,6 +552,38 @@
     }
   }
 </script>
+
+<!-- The detailed row both project folder lists draw, and the one row a folded
+     folder keeps on screen for the thread the user is working in. One markup for
+     every place a folder's row is drawn, so a peeked row and a listed row stay
+     the same row, with the same bookmark, drag and menu behavior. -->
+{#snippet folderThreadRow(thread: Thread, projectId: string, siblings: readonly Thread[])}
+  <ThreadRow
+    {thread}
+    detailed
+    hideProjectName
+    selected={activeThreadId === thread.id}
+    onOpen={onOpenThread}
+    {onRename}
+    {onTogglePin}
+    showBookmark
+    onBookmark={async (target) => {
+      try {
+        const updated = await invoke('thread:setBookmarked', target.projectId, target.id, true)
+        workspaceState.updateThread(updated)
+        scopeState.updateThread(updated)
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : 'Could not bookmark thread.')
+      }
+    }}
+    {onDelete}
+    {onFork}
+    onMoveThread={(draggedId, targetId, position) => {
+      const ordered = moveThreadInList(siblings, draggedId, targetId, position)
+      if (ordered) void onThreadDrop(projectId, ordered, draggedId)
+    }}
+  />
+{/snippet}
 
 <svelte:window
   onkeydown={(event) => {
@@ -988,7 +1049,7 @@
              in a different list and travels with the reflow pair above instead
              of Svelte's FLIP. -->
       <div bind:this={threadsListElement}>
-        {#each threadSections as section (section.key)}
+        {#each threadSections as section, sectionIndex (section.key)}
           <!-- The section spans the heading and its rows, so `position: sticky`
                  keeps the heading put while its own rows pass underneath and the
                  next section pushes it out as that section reaches the top. Three
@@ -1038,6 +1099,13 @@
                 sectionThreads,
                 TIMELINE_PAGE_SIZE
               )}
+          <!-- Older history is the tail of this list, so its control belongs to
+               the last section, inside the fold that holds the tail's rows. Left
+               as a sibling of the sections it floated under a folded group with
+               no visible tie to it; nested here it reads as the section's own
+               ending and folds away with the group it continues. -->
+          {@const isLastSection = sectionIndex === threadSections.length - 1}
+          {@const showLoadOlder = isLastSection && !searchPanelActive && hasMoreHistory}
           <section>
             {#if section.group}
               {@const group = section.group}
@@ -1063,7 +1131,7 @@
                 />
               </div>
             {/if}
-            <div class="space-y-px {section.group ? 'pb-5' : ''}" role="list">
+            <div class="space-y-px {section.group && !isLastSection ? 'pb-5' : ''}" role="list">
               {#each sectionThreads as thread (thread.id)}
                 {@const result = searchPanelActive ? searchResultsById.get(thread.id) : undefined}
                 <SidebarListRow
@@ -1119,6 +1187,17 @@
                 Show less
               </button>
             {/if}
+            {#if showLoadOlder}
+              <button
+                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait {section.group
+                  ? 'pb-5'
+                  : ''}"
+                disabled={historyLoading}
+                onclick={() => void onLoadHistoryPage()}
+              >
+                {historyLoading ? 'Loading history…' : 'Load older threads'}
+              </button>
+            {/if}
           </section>
         {:else}
           {#if searchPanelActive || pinnedTimelineThreads.length === 0}
@@ -1134,17 +1213,19 @@
                     : 'No threads in the selected projects'}
             </p>
           {/if}
+          <!-- No section owns the tail here, so the older-history control falls
+               back to the pane itself. -->
+          {#if !searchPanelActive && hasMoreHistory}
+            <button
+              class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
+              disabled={historyLoading}
+              onclick={() => void onLoadHistoryPage()}
+            >
+              {historyLoading ? 'Loading history…' : 'Load older threads'}
+            </button>
+          {/if}
         {/each}
       </div>
-      {#if !searchPanelActive && hasMoreHistory}
-        <button
-          class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-          disabled={historyLoading}
-          onclick={() => void onLoadHistoryPage()}
-        >
-          {historyLoading ? 'Loading history…' : 'Load older threads'}
-        </button>
-      {/if}
     </SidebarListPane>
     <SidebarListPane name="projects" visible={!loading && projectsTreeVisible}>
       <!-- Pinned threads above everything. This block owns its rows, so it
@@ -1235,6 +1316,8 @@
                       sticky
                       {stateCounts}
                       showLocation={hasProjectNameCollision(project, visibleProjects)}
+                      deleting={projectDeletionState.isPending(project.id)}
+                      deletingLabel={projectDeletionState.label(project.id) ?? undefined}
                       actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
                         openProjectMenuId === project.id}
                       onToggle={() => toggleFolder(project.id)}
@@ -1284,7 +1367,7 @@
                         </span>
                       {/snippet}
                     </FolderRow>
-                    {#if expanded || revealedThreads.length > 0}
+                    {#if expanded}
                       {@const searchQ = sidebar.projectSearchQueries.get(project.id) ?? ''}
                       {@const isSearching = Boolean(searchQ.trim())}
                       {@const searchResults = sidebar.projectSearchResults.get(project.id) ?? []}
@@ -1303,6 +1386,9 @@
                         filteredThreads,
                         visibleFolderThreads
                       )}
+                      <!-- The list the fold owns. It is the only child of this branch,
+                           so its own `slide` is what plays when the folder closes:
+                           folding never drops an ancestor with it. -->
                       <div transition:slide={foldSlide()} class="ml-2">
                         {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                           <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
@@ -1326,47 +1412,7 @@
                         {:else}
                           <div class="space-y-px py-0.5" role="list">
                             {#each projectDisplayThreads as thread (thread.id)}
-                              <ThreadRow
-                                {thread}
-                                detailed
-                                hideProjectName
-                                selected={activeThreadId === thread.id}
-                                onOpen={onOpenThread}
-                                {onRename}
-                                {onTogglePin}
-                                showBookmark
-                                onBookmark={async (target) => {
-                                  try {
-                                    const updated = await invoke(
-                                      'thread:setBookmarked',
-                                      target.projectId,
-                                      target.id,
-                                      true
-                                    )
-                                    workspaceState.updateThread(updated)
-                                    scopeState.updateThread(updated)
-                                  } catch (error) {
-                                    toast.error(
-                                      error instanceof Error
-                                        ? error.message
-                                        : 'Could not bookmark thread.'
-                                    )
-                                  }
-                                }}
-                                {onDelete}
-                                {onFork}
-                                onMoveThread={(draggedId, targetId, pos) => {
-                                  const ordered = moveThreadInList(
-                                    folderThreads,
-                                    draggedId,
-                                    targetId,
-                                    pos
-                                  )
-                                  if (ordered) {
-                                    void onThreadDrop(project.id, ordered, draggedId)
-                                  }
-                                }}
-                              />
+                              {@render folderThreadRow(thread, project.id, folderThreads)}
                             {/each}
                           </div>
                           {#if expanded && hiddenFolderCount > 0}
@@ -1397,6 +1443,16 @@
                             </button>
                           {/if}
                         {/if}
+                      </div>
+                    {:else if revealedThreads.length > 0 && foldingProjectId !== project.id}
+                      <!-- Folded, a folder keeps the one thread the user is working in
+                             on screen. That row is its own block, never a reason to hold
+                             the list open: holding it open is what used to swallow the
+                             fold animation for the folder the user was working in. -->
+                      <div class="ml-2 space-y-px py-0.5" role="list">
+                        {#each revealedThreads as thread (thread.id)}
+                          {@render folderThreadRow(thread, project.id, folderThreads)}
+                        {/each}
                       </div>
                     {/if}
                   </div>
@@ -1516,6 +1572,8 @@
                   sticky
                   {stateCounts}
                   showLocation={hasProjectNameCollision(project, visibleProjects)}
+                  deleting={projectDeletionState.isPending(project.id)}
+                  deletingLabel={projectDeletionState.label(project.id) ?? undefined}
                   actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
                     openProjectMenuId === project.id}
                   onToggle={() => toggleFolder(project.id)}
@@ -1565,7 +1623,7 @@
                 </FolderRow>
 
                 <!-- Threads under folder -->
-                {#if expanded || revealedThreads.length > 0}
+                {#if expanded}
                   {@const searchQ = sidebar.projectSearchQueries.get(project.id) ?? ''}
                   {@const isSearching = Boolean(searchQ.trim())}
                   {@const searchResults = sidebar.projectSearchResults.get(project.id) ?? []}
@@ -1584,6 +1642,8 @@
                     filteredThreads,
                     visibleFolderThreads
                   )}
+                  <!-- The list the fold owns: the only child of this branch, so its
+                       own `slide` plays when the folder closes. See the pinned list. -->
                   <div transition:slide={foldSlide()} class="ml-2">
                     {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                       <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
@@ -1607,47 +1667,7 @@
                     {:else}
                       <div class="space-y-px py-0.5" role="list">
                         {#each projectDisplayThreads as thread (thread.id)}
-                          <ThreadRow
-                            {thread}
-                            detailed
-                            hideProjectName
-                            selected={activeThreadId === thread.id}
-                            onOpen={onOpenThread}
-                            {onRename}
-                            {onTogglePin}
-                            showBookmark
-                            onBookmark={async (target) => {
-                              try {
-                                const updated = await invoke(
-                                  'thread:setBookmarked',
-                                  target.projectId,
-                                  target.id,
-                                  true
-                                )
-                                workspaceState.updateThread(updated)
-                                scopeState.updateThread(updated)
-                              } catch (error) {
-                                toast.error(
-                                  error instanceof Error
-                                    ? error.message
-                                    : 'Could not bookmark thread.'
-                                )
-                              }
-                            }}
-                            {onDelete}
-                            {onFork}
-                            onMoveThread={(draggedId, targetId, pos) => {
-                              const ordered = moveThreadInList(
-                                folderThreads,
-                                draggedId,
-                                targetId,
-                                pos
-                              )
-                              if (ordered) {
-                                void onThreadDrop(project.id, ordered, draggedId)
-                              }
-                            }}
-                          />
+                          {@render folderThreadRow(thread, project.id, folderThreads)}
                         {/each}
                       </div>
                       {#if expanded && hiddenFolderCount > 0}
@@ -1676,6 +1696,14 @@
                         </button>
                       {/if}
                     {/if}
+                  </div>
+                {:else if revealedThreads.length > 0 && foldingProjectId !== project.id}
+                  <!-- The one row a folded folder keeps for the thread being worked
+                         in, drawn after the fold so closing the folder still moves. -->
+                  <div class="ml-2 space-y-px py-0.5" role="list">
+                    {#each revealedThreads as thread (thread.id)}
+                      {@render folderThreadRow(thread, project.id, folderThreads)}
+                    {/each}
                   </div>
                 {/if}
               </div>

@@ -4,6 +4,7 @@ import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
 import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
 import CioTabTasks from '@pdslng/cio-icon/CioTabTasks.svelte'
 import CioPackage from '@pdslng/cio-icon/CioPackage.svelte'
+import CioPhone from '$lib/components/icons/cio/CioPhone.svelte'
 
 /**
  * Every feature's canonical name and mark live here, once.
@@ -13,7 +14,13 @@ import CioPackage from '@pdslng/cio-icon/CioPackage.svelte'
  * site: renaming a feature or swapping its mark is one edit in this file.
  */
 export type FeatureId =
-  'utilities' | 'thread-note' | 'tab-note' | 'sticky-notes' | 'task-manager' | 'settings'
+  | 'utilities'
+  | 'thread-note'
+  | 'tab-note'
+  | 'sticky-notes'
+  | 'task-manager'
+  | 'settings'
+  | 'display'
 
 export interface FeatureDefinition {
   id: FeatureId
@@ -31,7 +38,11 @@ export const FEATURES: Record<FeatureId, FeatureDefinition> = {
   'tab-note': { id: 'tab-note', name: 'Tab note', icon: CioNote },
   'sticky-notes': { id: 'sticky-notes', name: 'Sticky notes', icon: CioNotes },
   'task-manager': { id: 'task-manager', name: 'Task manager', icon: CioTabTasks },
-  settings: { id: 'settings', name: 'Settings', icon: CioTabSettings }
+  settings: { id: 'settings', name: 'Settings', icon: CioTabSettings },
+  // A handset, not a monitor: the monitor is the local oven's mark, and this
+  // feature is the device an agent is driving (an emulator, a simulator, a phone
+  // on a cable), so it must not read as "runs on this computer".
+  display: { id: 'display', name: 'Display', icon: CioPhone }
 }
 
 /** The definition for one feature. */

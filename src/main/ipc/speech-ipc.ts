@@ -167,15 +167,50 @@ export function registerSpeechIpc(
     sendToRenderer(renderer(), 'speech:progress', progress)
   })
 
+  /**
+   * Follow the renderer that opened a microphone, so a reload or a dead renderer
+   * cannot leave a capture open in main.
+   *
+   * The recorder, the audio still being uploaded and the ability to finish the
+   * attempt all live in that renderer: when it goes, the capture is over without
+   * ever being finalized. Registered once per contents, from the recording
+   * gesture itself, so nothing is watched while no one is recording.
+   */
+  let watchedContentsId: number | null = null
+  const watchCaptureOwner = (sender: WebContents): void => {
+    if (watchedContentsId === sender.id) return
+    watchedContentsId = sender.id
+    const abandon = (): void => service.abandonOpenCaptures()
+    sender.once('destroyed', abandon)
+    sender.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) abandon()
+    })
+    sender.on('render-process-gone', abandon)
+  }
+
   ipcMain.handle('speech:getCapabilities', () => speechResult(() => service.capabilities()))
   ipcMain.handle('speech:getCatalog', () => speechResult(async () => service.catalogSnapshot()))
-  ipcMain.handle('speech:beginCapture', (_event, rawScope: unknown, rawMimeType: unknown) =>
-    speechResult(() =>
-      service.beginCapture(scope(rawScope), boundedString(rawMimeType, 'MIME type', 128))
-    )
+  ipcMain.handle('speech:beginCapture', (event, rawScope: unknown, rawMimeType: unknown) =>
+    speechResult(() => {
+      watchCaptureOwner(event.sender)
+      return service.beginCapture(scope(rawScope), boundedString(rawMimeType, 'MIME type', 128))
+    })
   )
-  ipcMain.handle('speech:beginNativeCapture', (_event, rawScope: unknown) =>
-    speechResult(() => service.beginNativeCapture(scope(rawScope)))
+  ipcMain.handle('speech:beginNativeCapture', (event, rawScope: unknown, rawPressedAt: unknown) =>
+    speechResult(() => {
+      watchCaptureOwner(event.sender)
+      return service.beginNativeCapture(
+        scope(rawScope),
+        typeof rawPressedAt === 'number' && Number.isFinite(rawPressedAt) ? rawPressedAt : undefined
+      )
+    })
+  )
+  // Opening the microphone ahead of the press. Nothing here starts a capture: it
+  // only lets the device open while the pointer is on the mic, so the press does
+  // not lose its first words to CoreAudio startup.
+  ipcMain.handle('speech:armNativeCapture', () => speechResult(() => service.armNativeCapture()))
+  ipcMain.handle('speech:disarmNativeCapture', () =>
+    speechResult(() => service.disarmNativeCapture())
   )
   // The microphone prompt is issued here, from the recording gesture, never
   // from launch.
@@ -520,6 +555,8 @@ export function registerSpeechIpc(
       'speech:getCatalog',
       'speech:beginCapture',
       'speech:beginNativeCapture',
+      'speech:armNativeCapture',
+      'speech:disarmNativeCapture',
       'speech:ensureMicrophoneAccess',
       'speech:recordPermissionFailure',
       'speech:appendCapture',

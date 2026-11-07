@@ -19,6 +19,7 @@
   import Switch from '../ui/Switch.svelte'
   import type { ProviderSignInController } from './provider-sign-in.svelte'
   import { shellCommand, stateLabel, type ConnectStep } from './add-provider-modal-helpers'
+  import AddProviderConnectAction from './AddProviderConnectAction.svelte'
 
   interface Props {
     harness: ProviderConnectionInfo
@@ -41,6 +42,9 @@
     apiKey: string
     apiKeyEntry: boolean
     pickerLogin: boolean
+    canSignIn: boolean
+    storingKey: boolean
+    oauthLoginId: string | null
     /** Provider ids the harness currently hides from its own model picker. */
     hiddenIds: string[]
     /** Whether this harness exposes a config-file mechanism to hide providers. */
@@ -53,6 +57,7 @@
     onSaveAuthenticatedAccount: () => void
     onBackToList: () => void
     onConnectWithKey: () => void
+    onStartConnect: (provider: OfferedProvider | null) => void
     onLoginExit: (exitCode: number, output: string) => void
     onRequestDisconnect: (account: HarnessAccount | null) => void
     onToggleHidden: (providerId: string, hidden: boolean) => void
@@ -79,6 +84,9 @@
     apiKey = $bindable(),
     apiKeyEntry,
     pickerLogin,
+    canSignIn,
+    storingKey,
+    oauthLoginId,
     hiddenIds,
     supportsHide,
     togglingHide,
@@ -89,12 +97,23 @@
     onSaveAuthenticatedAccount,
     onBackToList,
     onConnectWithKey,
+    onStartConnect,
     onLoginExit,
     onRequestDisconnect,
     onToggleHidden
   }: Props = $props()
 
   const selectedProviderIsOauth = $derived(selectedProvider?.oauth === true)
+
+  /**
+   * Whether this harness already holds a provider. The connect action lives in
+   * the empty state until it does, so the screen never shows the same button
+   * twice and the body carries the call to action while there is nothing else
+   * to look at.
+   */
+  const hasConnectedProviders = $derived(
+    (authStatus?.accounts ?? []).some((account) => account.active !== false)
+  )
 
   /**
    * Hiding is a provider-level action, so the toggle renders once per provider
@@ -400,40 +419,61 @@
       {/if}
     </div>
   {:else}
-    <div
-      class={apiKeyEntry && !authStatus?.accounts.some((account) => account.active !== false)
-        ? 'flex min-h-56 flex-col items-center justify-center gap-4 px-4 py-8 text-center'
-        : 'border border-dashed px-3 py-2.5'}
-    >
-      {#if apiKeyEntry && !authStatus?.accounts.some((account) => account.active !== false)}
+    {#if !hasConnectedProviders}
+      <div class="flex min-h-56 flex-col items-center justify-center gap-4 px-4 py-8 text-center">
         <p class="text-sm text-muted">Connect your first provider to {harness.name}.</p>
-        <button
-          type="button"
-          class="flex min-h-12 items-center justify-center gap-2 bg-primary px-6 py-3 text-sm font-medium text-on-primary hover:bg-primary-hover focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-primary"
-          title="Search the {harness.name} provider catalog"
-          data-modal-primary
-          onclick={onOpenPicker}
-        >
-          <CioSearch size={20} /> Search providers
-        </button>
-      {:else if apiKeyEntry}
+        {#if canSignIn}
+          <AddProviderConnectAction
+            prominent
+            step="idle"
+            {apiKeyEntry}
+            {pickerLogin}
+            {storingKey}
+            {oauthLoginId}
+            selectedProvider={null}
+            {onOpenPicker}
+            {onStartConnect}
+            {onConnectWithKey}
+          />
+        {/if}
+        {#if apiKeyEntry}
+          <p class="max-w-80 text-[0.6875rem] leading-relaxed text-muted">
+            Browse {harness.name}’s full provider catalog, then sign in or paste an API key to
+            connect.
+          </p>
+        {:else if pickerLogin}
+          <p class="max-w-80 text-[0.6875rem] leading-relaxed text-muted">
+            {harness.name} opens its own provider picker in the built-in terminal.
+          </p>
+        {:else}
+          <p class="max-w-80 text-[0.6875rem] leading-relaxed text-muted">
+            Pick a provider and sign in from here no copying commands.
+          </p>
+        {/if}
+      </div>
+    {:else if apiKeyEntry}
+      <div class="border border-dashed px-3 py-2.5">
         <p class="text-[0.6875rem] text-muted">
           Click <strong class="font-medium text-foreground">Search providers</strong> below to
           browse
           {harness.name}’s full provider catalog, then sign in or paste an API key to connect.
         </p>
-      {:else if pickerLogin}
+      </div>
+    {:else if pickerLogin}
+      <div class="border border-dashed px-3 py-2.5">
         <p class="text-[0.6875rem] text-muted">
           Click <strong class="font-medium text-foreground">Connect provider</strong> below to open
           {harness.name}’s own provider picker in the built-in terminal choose the provider you want
           there.
         </p>
-      {:else}
+      </div>
+    {:else}
+      <div class="border border-dashed px-3 py-2.5">
         <p class="text-[0.6875rem] text-muted">
           Click <strong class="font-medium text-foreground">Connect provider</strong> below to pick a
           provider and sign in from here no copying commands.
         </p>
-      {/if}
-    </div>
+      </div>
+    {/if}
   {/if}
 </div>

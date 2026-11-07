@@ -22,9 +22,11 @@
  *    reports success. The prototype setter is what leaves the tracker stale, and
  *    the read-back in the result is what makes the outcome verifiable instead of
  *    assumed.
- * 3. **A pointer a person would recognise.** The synthetic cursor is a real node in
- *    the page, marked as the agent's own, so a screenshot shows where the agent is
- *    working and no snapshot mistakes it for page content.
+ * 3. **A mark nobody mistakes for their own cursor.** The agent's mark is a real node
+ *    in the page, marked as the agent's own, so a screenshot shows where it is working
+ *    and no snapshot mistakes it for page content. It is a lock-on reticle rather than
+ *    a pointing hand, because the point of it is that a system, not a person, is acting
+ *    here.
  */
 
 import { type AgentCursorAppearance } from '../../../lib/browser/agent-cursor'
@@ -343,6 +345,70 @@ export function agentTypeScript(request: {
   })()`
 }
 
+/**
+ * Make a field ready for real keystrokes.
+ *
+ * Typing like a hand means the field must hold the caret where those keys go, so this
+ * focuses it and either selects what is already there (a replace: the first key
+ * overwrites the selection) or collapses to the end (an append). Nothing is written
+ * here; the keys that follow are the only thing that changes the value.
+ */
+export function agentPrepareTypingScript(request: { selector: string; append: boolean }): string {
+  return `(() => {
+    ${pageHelpers()}
+    const element = resolveElement(${JSON.stringify(request.selector)});
+    if (!element) return { ok: false, reason: 'not found' };
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      if (element.disabled) return { ok: false, reason: 'the field is disabled' };
+      if (element.readOnly) return { ok: false, reason: 'the field is read-only' };
+      if (element.type === 'file') return { ok: false, reason: 'a file input takes files, not text' };
+      element.focus();
+      const end = element.value ? element.value.length : 0;
+      try { element.setSelectionRange(${request.append ? 'end, end' : '0, end'}); } catch {}
+      return {
+        ok: true,
+        editable: true,
+        kind: element.tagName.toLowerCase(),
+        selected: ${request.append ? '0' : 'end'},
+        previousLength: end
+      };
+    }
+    if (element.isContentEditable || element.getAttribute('contenteditable') !== null) {
+      element.focus();
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      if (${request.append ? 'true' : 'false'}) range.collapse(false);
+      if (selection) {
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      return { ok: true, editable: true, kind: 'contenteditable', selected: ${request.append ? '0' : '1'} };
+    }
+    return { ok: false, reason: 'element is not editable' };
+  })()`
+}
+
+/** Read back what a field holds now, for a result that reports the outcome. */
+export function agentFieldValueScript(selector: string): string {
+  return `(() => {
+    ${pageHelpers()}
+    const element = resolveElement(${JSON.stringify(selector)});
+    if (!element) return { found: false };
+    const masked = element instanceof HTMLInputElement && element.type === 'password';
+    const raw =
+      element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+        ? String(element.value || '')
+        : String(element.innerText || element.textContent || '');
+    return {
+      found: true,
+      masked,
+      length: raw.length,
+      value: masked ? '[redacted]' : raw.slice(0, ${MAX_VALUE_CHARS})
+    };
+  })()`
+}
+
 /** Put the caret in a field, so a following key press lands where the agent means. */
 export function agentFocusScript(selector: string): string {
   return `(() => {
@@ -484,28 +550,43 @@ export function agentHitTestScript(point: { x: number; y: number }): string {
   })()`
 }
 
-/** Move the agent's own cursor overlay to a point, and optionally show a press. */
+/**
+ * Move the agent's own mark to a point.
+ *
+ * The mark is a cursor rather than a reticle: a solid gold blade whose tip is the
+ * point the action touched, notched at the back so it never reads as a pin. A game's
+ * cursor is the reference, because that is the one place a pointer is unmistakably an
+ * instrument, and it points rather than tracks, which is what an action does.
+ *
+ * It is completely static. There is no rotation, no pulse and no keyframes, so a page
+ * with the agent on it costs exactly one node and its inline styles: nothing runs
+ * while the app waits for the next action.
+ *
+ * Contrast is structural, not hopeful: the gold body sits in an obsidian edge, so the
+ * mark separates from a white page, a near-black one, and a page painted the accent's
+ * own gold. It is drawn as a node of its own, so a screenshot shows it and no
+ * snapshot mistakes it for page content.
+ */
 export function agentCursorScript(request: {
   x: number
   y: number
-  press: boolean
   hide: boolean
   appearance: AgentCursorAppearance
 }): string {
   return `(() => {
     const MARK_ATTR = ${JSON.stringify(AGENT_OWNED_ATTRIBUTE)};
-    const CURSOR_ID = '__cio-agent-cursor';
+    const HOST_ID = '__cio-agent-cursor';
     const APPEARANCE = ${JSON.stringify(request.appearance)};
     const appearanceKey = JSON.stringify(APPEARANCE);
-    const existing = document.getElementById(CURSOR_ID);
+    const existing = document.getElementById(HOST_ID);
     if (${request.hide ? 'true' : 'false'}) {
       if (existing) existing.remove();
       globalThis.__cioAgentCursor = null;
       return { cursor: false };
     }
     let record = globalThis.__cioAgentCursor;
-    // A pointer drawn before the theme, contrast level or UI scale changed carries
-    // the old colours or size, so it is redrawn rather than moved.
+    // A mark drawn before the theme, contrast level or UI scale changed carries the
+    // old colours or size, so it is redrawn rather than moved.
     if (
       !record ||
       !existing ||
@@ -513,64 +594,42 @@ export function agentCursorScript(request: {
       record.appearanceKey !== appearanceKey
     ) {
       if (existing) existing.remove();
-      const { fill, stroke, accent, scale } = APPEARANCE;
+      const { stroke, accent, scale } = APPEARANCE;
+      // The blade's own box, in units, with its tip on the hotspot so the point the
+      // action touched is the point that is drawn.
+      const LEFT = -20;
+      const TIP = -3;
       const host = document.createElement('div');
-      host.id = CURSOR_ID;
+      host.id = HOST_ID;
       host.setAttribute(MARK_ATTR, 'cursor');
       host.setAttribute('aria-hidden', 'true');
+      // \`all:initial\` first: the mark sits inside a stranger's document, and a page
+      // rule that gives every svg a margin, a line height or a fill would otherwise
+      // move or recolour it. Inline declarations win over the page's own rules, so the
+      // mark is drawn where the action happened on any page rather than on a polite one.
       host.style.cssText =
-        'position:fixed;left:0;top:0;width:0;height:0;z-index:2147483647;pointer-events:none;transition:left 90ms linear,top 90ms linear;';
-      // The pointer is a light body in a dark outline, so it separates from a page of
-      // either colour: the outline is what a light page shows, the body is what a dark
-      // one shows. The drop shadows sit behind the whole shape, which is what keeps a
-      // mid-tone page from swallowing it.
-      const pointer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      pointer.setAttribute('width', String(18 * scale));
-      pointer.setAttribute('height', String(24 * scale));
-      pointer.setAttribute('viewBox', '0 0 18 24');
-      const tip = 1 * scale;
-      pointer.style.cssText =
-        'position:absolute;overflow:visible;left:' + (-tip) + 'px;top:' + (-tip) + 'px;' +
-        'filter:drop-shadow(0 1px 2px rgba(0,0,0,0.55)) drop-shadow(0 0 1px rgba(0,0,0,0.45));';
-      const shape = 'M1 1 L1 19.2 L5.6 14.9 L8.6 21.6 L11.6 20.2 L8.6 13.7 L14.6 13.1 Z';
-      const halo = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      halo.setAttribute('d', shape);
-      halo.setAttribute('fill', stroke);
-      halo.setAttribute('stroke', stroke);
-      halo.setAttribute('stroke-width', '2.6');
-      halo.setAttribute('stroke-linejoin', 'round');
-      const body = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      body.setAttribute('d', shape);
-      body.setAttribute('fill', fill);
-      body.setAttribute('stroke', stroke);
-      body.setAttribute('stroke-width', '1.2');
-      body.setAttribute('stroke-linejoin', 'round');
-      pointer.appendChild(halo);
-      pointer.appendChild(body);
-      const ringSize = Math.round(28 * scale);
-      const ring = document.createElement('div');
-      // The ring carries the accent, with a dark edge of its own so it survives a page
-      // of that same gold and does not read as page content.
-      ring.style.cssText =
-        'position:absolute;border-radius:9999px;opacity:0;box-sizing:border-box;' +
-        'left:' + (-ringSize / 2) + 'px;top:' + (-ringSize / 2) + 'px;width:' + ringSize + 'px;height:' + ringSize + 'px;' +
-        'border:2px solid ' + accent + ';box-shadow:0 0 0 1.5px rgba(8,24,37,0.65);';
-      host.appendChild(ring);
-      host.appendChild(pointer);
+        'all:initial;display:block;position:fixed;left:0;top:0;width:0;height:0;margin:0;padding:0;' +
+        'z-index:2147483647;pointer-events:none;transition:left 90ms linear,top 90ms linear;';
+      const svgNs = 'http://www.w3.org/2000/svg';
+      const svg = document.createElementNS(svgNs, 'svg');
+      svg.setAttribute('width', String(40 * scale));
+      svg.setAttribute('height', String(40 * scale));
+      svg.setAttribute('viewBox', '0 0 40 40');
+      svg.style.cssText =
+        'all:initial;display:block;position:absolute;left:' + LEFT * scale + 'px;top:' + TIP * scale + 'px;' +
+        'margin:0;padding:0;overflow:visible;filter:drop-shadow(0 1px 2px rgba(0,0,0,0.5));';
+      const blade = document.createElementNS(svgNs, 'path');
+      blade.setAttribute('d', 'M20 3 L33.5 34 L20 27 L6.5 34 Z');
+      blade.style.cssText =
+        'fill:' + accent + ';stroke:' + stroke + ';stroke-width:1.6;stroke-linejoin:miter;';
+      svg.appendChild(blade);
+      host.appendChild(svg);
       (document.body || document.documentElement).appendChild(host);
-      record = { host, ring, pointer, appearanceKey };
+      record = { host, svg, appearanceKey };
       globalThis.__cioAgentCursor = record;
     }
     record.host.style.left = ${JSON.stringify(request.x)} + 'px';
     record.host.style.top = ${JSON.stringify(request.y)} + 'px';
-    if (${request.press ? 'true' : 'false'}) {
-      try {
-        record.ring.animate(
-          [{ opacity: 0.9, transform: 'scale(0.5)' }, { opacity: 0, transform: 'scale(1.4)' }],
-          { duration: 260, easing: 'ease-out' }
-        );
-      } catch {}
-    }
     return { cursor: true, x: ${JSON.stringify(request.x)}, y: ${JSON.stringify(request.y)} };
   })()`
 }
@@ -604,11 +663,47 @@ export function agentScrollScript(request: {
 }
 
 /**
+ * Longest one in-page wait may hold, in milliseconds.
+ *
+ * A wait used to stop at 30 s, which is shorter than the pause before a support
+ * reply: an agent polling a live conversation had to spend a model step per
+ * half minute and usually gave up instead. Two minutes keeps a poll loop cheap
+ * and still finishes well inside the engine's five-minute silence watchdog, so
+ * a patient wait can never be mistaken for a dead session.
+ */
+export const BROWSER_WAIT_MAX_TIMEOUT_MS = 120_000
+
+/** How often a `changed` wait re-reads the page: text comparison is the cost. */
+const CHANGED_POLL_INTERVAL_MS = 400
+
+/**
+ * The text one `changed` wait compares between polls.
+ *
+ * It is scoped to the selector when one is given (a message list, a thread
+ * container) and to the whole page otherwise, so a wait can watch the part of a
+ * live conversation that actually carries the reply.
+ */
+function waitSignatureSource(selector: string | undefined): string {
+  return selector
+    ? `(() => {
+        let element = null;
+        try { element = document.querySelector(${JSON.stringify(selector)}); } catch { element = null; }
+        return element instanceof HTMLElement ? (element.innerText ?? element.textContent ?? '') : '';
+      })`
+    : `(() => { const body = document.body; return body ? (body.innerText ?? body.textContent ?? '') : ''; })`
+}
+
+/**
  * Wait for a page condition, in the page, for a bounded time.
  *
  * It resolves rather than throws on timeout, because "the thing the agent wanted
  * never appeared" is an answer it has to read and act on, not an exception that
  * hides what the page looked like.
+ *
+ * `changed` is the condition a live conversation needs: instead of naming text it
+ * cannot know in advance, the caller waits for the visible text to become
+ * different from what it was when the wait started. The reply it is waiting for
+ * is exactly that change.
  */
 export function agentWaitScript(request: {
   selector?: string
@@ -616,8 +711,37 @@ export function agentWaitScript(request: {
   urlIncludes?: string
   gone?: boolean
   visible?: boolean
+  changed?: boolean
   timeoutMs: number
 }): string {
+  const timeoutMs = JSON.stringify(
+    Math.max(0, Math.min(request.timeoutMs, BROWSER_WAIT_MAX_TIMEOUT_MS))
+  )
+  if (request.changed) {
+    return `(() => {
+      ${pageHelpers()}
+      const timeoutMs = ${timeoutMs};
+      const readSignature = ${waitSignatureSource(request.selector)};
+      const baseline = (() => { try { return readSignature(); } catch { return ''; } })();
+      const startedAt = Date.now();
+      return new Promise((resolve) => {
+        const check = () => {
+          let current = baseline;
+          try { current = readSignature(); } catch { current = baseline; }
+          if (current !== baseline) {
+            resolve({ ok: true, matched: true, changed: true, waitedMs: Date.now() - startedAt, readyState: document.readyState, url: location.href });
+            return;
+          }
+          if (Date.now() - startedAt >= timeoutMs) {
+            resolve({ ok: false, matched: false, changed: false, timedOut: true, waitedMs: Date.now() - startedAt, readyState: document.readyState, url: location.href });
+            return;
+          }
+          setTimeout(check, ${CHANGED_POLL_INTERVAL_MS});
+        };
+        check();
+      });
+    })()`
+  }
   const condition = request.selector
     ? `(() => {
         let element = null;
@@ -635,7 +759,7 @@ export function agentWaitScript(request: {
         : `document.readyState === 'complete'`
   return `(() => {
     ${pageHelpers()}
-    const timeoutMs = ${JSON.stringify(Math.max(0, Math.min(request.timeoutMs, 30000)))};
+    const timeoutMs = ${timeoutMs};
     const startedAt = Date.now();
     return new Promise((resolve) => {
       const check = () => {

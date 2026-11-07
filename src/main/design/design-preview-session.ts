@@ -1,6 +1,8 @@
 import type { BrowserDesignTab } from '../../lib/ipc/browser'
+import type { PreviewFolder, PreviewTarget } from '../../lib/design/preview-target'
 import type { BrowserService } from '../browser/browser-service'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
+import type { PreviewTargetRegistry } from './preview-target-registry'
 import {
   SERVED_FOLDER_ENTRY_FILE,
   resolveServedEntry,
@@ -38,6 +40,16 @@ export interface DesignPreviewDeps {
   previews: DirectoryPreviewService
   /** Read lazily: the service exists only while the app has a window to host tabs. */
   browser: () => BrowserService | null
+  /**
+   * What the app remembers about each preview target: the tab it was shown in
+   * and the port its folder was served on.
+   *
+   * Optional, because a caller that only needs a page shown (the motion service,
+   * watching one file) does not own the choice of tab or server. The board, the
+   * capability's preview and every capture go through the design service, which
+   * does.
+   */
+  targets?: PreviewTargetRegistry
 }
 
 export interface DesignPreviewRequest {
@@ -95,27 +107,59 @@ export interface DesignPreviewResult {
  * Which tab is the caller's choice (`tab`), so the board's canvas clicks can
  * each keep their own while the app's own captures share the thread's; the
  * browser is the authority on whether a tab still exists, not a memo here.
+ *
+ * Nothing is created that is already there. The folder's server is looked up
+ * before a second one is started, and the port it was served on before is asked
+ * for, so a tab restored onto that origin still finds the design. A screen's tab
+ * is looked up through the record of what it was shown in, falling back to the
+ * tab its own identity names, so clicking an open screen reaches its tab instead
+ * of stacking a second one. Both are written back afterwards, which is what makes
+ * the next click, and the next launch, find them again.
  */
 export async function openDesignPreview(
   deps: DesignPreviewDeps,
   request: DesignPreviewRequest
 ): Promise<DesignPreviewResult> {
   const directory = resolveServedFolder(request.projectPath, request.directory, request.defaultRoot)
-  const registration = await deps.previews.open(directory.absolute).catch((error: unknown) => {
-    throw new Error(
-      `The design folder "${directory.display}" is not there yet. Write the design into it first, or name a folder that exists. Underlying error: ${error instanceof Error ? error.message : String(error)}`
-    )
-  })
+  const targets = deps.targets ?? null
+  // A server belongs to a folder rather than to a screen, so every screen of one
+  // design shares it: the port is a property of the folder, and only the tabs are
+  // properties of each screen.
+  const folder: PreviewFolder = {
+    projectId: request.projectId,
+    threadId: request.threadId,
+    directory: directory.display
+  }
+  const rememberedPort =
+    targets === null
+      ? null
+      : await targets.portFor(folder, (root) => deps.previews.registrationFor(root)?.port ?? null)
+  const registration = await deps.previews
+    .open(directory.absolute, { port: rememberedPort })
+    .catch((error: unknown) => {
+      throw new Error(
+        `The design folder "${directory.display}" is not there yet. Write the design into it first, or name a folder that exists. Underlying error: ${error instanceof Error ? error.message : String(error)}`
+      )
+    })
   const entry = await resolveServedEntry(directory.absolute, request.entry, DESIGN_VIRTUAL_ENTRIES)
   const url = servedFileUrl(registration.url, entry)
   const origin = new URL(registration.url).origin
   const design: BrowserDesignTab = { directory: directory.display, origin }
+  // The file the URL resolves to is the target's identity, so a screen asked for
+  // as `index.html` and a default entry that lands on it are one screen with one
+  // tab and one remembered port.
+  const target: PreviewTarget = {
+    ...folder,
+    entry: entry === null ? null : entry.segments.join('/')
+  }
 
   const browser = deps.browser()
   let tab: 'reused' | 'opened' | null = null
   let tabId: string | null = null
   if (browser) {
     if (request.tab === 'screen') {
+      const rememberedTab =
+        targets === null ? null : await targets.tabFor(target, (id) => browser.hasTab(id))
       // A screen tab reveals (and un-reveals) through the open itself: the event
       // carries the URL that was asked for, where a separate reveal would read
       // the page a moment after its load started.
@@ -123,12 +167,10 @@ export async function openDesignPreview(
         projectId: request.projectId,
         threadId: request.threadId,
         directory: directory.display,
-        // The file the URL resolves to is the screen's identity, so a screen
-        // asked for as `index.html` and a default entry that lands on it are one
-        // screen with one tab.
-        entry: entry === null ? null : entry.segments.join('/'),
+        entry: target.entry,
         url,
-        reveal: request.reveal
+        reveal: request.reveal,
+        preferredTabId: rememberedTab
       })
       tabId = opened.tabId
       tab = opened.tab
@@ -151,6 +193,18 @@ export async function openDesignPreview(
       // inspection only on a tab that is rendering a design.
       browser.markDesignTab(tabId, design)
     }
+  }
+
+  if (targets !== null) {
+    // The server is remembered for the folder, so every screen of this design
+    // reads back the same port; only a screen tab is remembered against the page
+    // it shows, because the thread's own tab belongs to the thread and to every
+    // capture that moves it, not to one screen.
+    await targets.rememberServer(folder, {
+      root: registration.root,
+      port: registration.port
+    })
+    if (request.tab === 'screen' && tabId !== null) await targets.rememberTab(target, tabId)
   }
 
   return {

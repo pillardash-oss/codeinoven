@@ -49,6 +49,19 @@ export interface DirectoryPreviewRegistration {
   started: boolean
 }
 
+/** How a caller asks for one served directory. */
+export interface DirectoryPreviewOpenOptions {
+  /**
+   * The port to ask the OS for first, or null/absent to let it choose.
+   *
+   * A folder the app served before reads its port back from the preview
+   * session records, so a tab restored onto that origin still finds the design
+   * rather than a dead page. It is ignored when the folder is already being
+   * served, and a port that is not free falls back to a fresh one.
+   */
+  port?: number | null
+}
+
 export class DirectoryPreviewService {
   private readonly live = new Map<string, LivePreview>()
   private changeListener: DirectoryPreviewChangeListener | null = null
@@ -68,14 +81,21 @@ export class DirectoryPreviewService {
    * `directory` is resolved through `realpath` so the same folder always maps
    * to one registration, however it was spelled by the caller.
    */
-  async open(directory: string): Promise<DirectoryPreviewRegistration> {
+  async open(
+    directory: string,
+    options: DirectoryPreviewOpenOptions = {}
+  ): Promise<DirectoryPreviewRegistration> {
     const root = await realpath(directory)
     const existing = this.live.get(root)
     if (existing) {
       existing.touchedAt = Date.now()
       return { ...existing.endpoint, root, started: false }
     }
-    const server = new DirectoryPreviewServer(root, (change) => this.changeListener?.(change))
+    const server = new DirectoryPreviewServer(
+      root,
+      (change) => this.changeListener?.(change),
+      options.port ?? null
+    )
     const endpoint = await server.start()
     this.live.set(root, {
       server,
@@ -97,6 +117,19 @@ export class DirectoryPreviewService {
     })
     await this.evictBeyondCapacity(root)
     return { ...endpoint, root, started: true }
+  }
+
+  /**
+   * The live registration for one canonical folder, or null when this service
+   * serves nothing there.
+   *
+   * The read side of `open`, and what makes a remembered port trustworthy: a
+   * record naming a port this process no longer serves the folder on is stale,
+   * and the caller should not act on it.
+   */
+  registrationFor(root: string): DirectoryPreviewRegistration | null {
+    const entry = this.live.get(root)
+    return entry ? { ...entry.endpoint, root, started: false } : null
   }
 
   /**

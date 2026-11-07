@@ -245,13 +245,6 @@
           "scenario": "While browsing composer history."
         },
         {
-          "id": "chat-engineering-mode",
-          "keys": ["mod", "e"],
-          "label": "Toggle Engineering Toolbox",
-          "description": "Toggles the Engineering lifecycle stage switches. ArrowUp and ArrowDown move the outline between rows; Enter toggles the outlined row.",
-          "scenario": "Composer focused with engineering mode available."
-        },
-        {
           "id": "chat-mention-nav",
           "keys": ["arrowup", "arrowdown"],
           "label": "Navigate mentions",
@@ -320,13 +313,6 @@
           "label": "Close start-after picker",
           "description": "Closes the composer's start-after picker.",
           "scenario": "While the start-after popover is open."
-        },
-        {
-          "id": "chat-engineering-close",
-          "keys": ["escape"],
-          "label": "Close Engineering Toolbox",
-          "description": "Closes the Engineering Toolbox and returns focus to the composer.",
-          "scenario": "Engineering Toolbox open."
         },
         {
           "id": "chat-annotation-close",

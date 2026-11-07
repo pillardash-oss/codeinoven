@@ -1,19 +1,22 @@
 import type { Database } from '../database/database'
 import type { AutoAnswerItem } from '../../lib/types'
 
-/** The thread/task/assistant keys a settled gate is filed under. */
+/** The task and provenance keys a settled gate is filed under. */
 export type AutoAnswerScope = Pick<AutoAnswerItem, 'taskId' | 'assistantId'>
 
 /**
  * Resolve a settled gate's scope from the thread it settled on.
  *
- * A decision is shown on the conversation that asked for it, and through that
- * conversation on the assistant task it ran for and the assistant that owns the
- * task. The run thread is transient, so its `assistantTaskId` and `assistantId`
- * are copied onto the record the moment it is written; after the thread is
- * evicted the record still points at what the decision actually concerned.
+ * A decision is shown on the conversation that asked for it, and on the
+ * assistant task that conversation ran for. The run thread is transient, so its
+ * `assistantTaskId` is copied onto the record the moment it is written; after the
+ * thread is evicted the record still points at the task the decision actually ran
+ * for.
  *
- * Reads only the two columns it needs, synchronously, so recording an
+ * The owning assistant is recorded too, but only as provenance: an assistant holds
+ * many tasks, so its id never decides where the decision surfaces.
+ *
+ * Reads only the three columns it needs, synchronously, so recording an
  * auto-resolved gate never waits on the worker. A missing row (an ephemeral
  * chat, or a thread read after deletion) simply files the gate under its own
  * thread id.

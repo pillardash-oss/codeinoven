@@ -29,7 +29,7 @@ function storageKey(projectId: string, threadId: string): string {
 /** Validate an unknown parsed value as a selection input; null when invalid. */
 function sanitize(value: unknown): EngineeringLifecycleSelectionInput | null {
   if (typeof value !== 'object' || value === null) return null
-  const candidate = value as { stages?: unknown; autopilot?: unknown }
+  const candidate = value as { stages?: unknown }
   if (!Array.isArray(candidate.stages)) return null
   const stages: EngineeringLifecycleStage[] = []
   for (const stage of candidate.stages) {
@@ -38,7 +38,7 @@ function sanitize(value: unknown): EngineeringLifecycleSelectionInput | null {
       stages.push(stage as EngineeringLifecycleStage)
     }
   }
-  return { stages, autopilot: candidate.autopilot === true }
+  return { stages }
 }
 
 /** Load the staged selection for a thread, or null when none is staged. */
@@ -62,12 +62,59 @@ export function saveLifecycleIntent(
   threadId: string,
   input: EngineeringLifecycleSelectionInput
 ): void {
+  rememberProjectSelection(projectId, input)
   if (typeof window === 'undefined') return
   try {
     window.localStorage.setItem(storageKey(projectId, threadId), JSON.stringify(input))
   } catch {
     // Storage unavailable (private mode, quota) — non-fatal; the intent still
     // lives in view state for this session.
+  }
+}
+
+const PROJECT_KEY_PREFIX = `${APP_SLUG}.lifecycleIntentProject.`
+
+function projectStorageKey(projectId: string): string {
+  return `${PROJECT_KEY_PREFIX}${projectId}`
+}
+
+/**
+ * Remember the selection the user last staged in a project, so a thread created
+ * afterwards starts in the same mode instead of silently arriving neutral.
+ *
+ * The per-thread intent cannot answer that question: a new thread has no id
+ * yet, and its switches would read off even though the user had just staged
+ * Brainstorm or PRD and created the thread to use it. Turning every switch off
+ * is an explicit answer too, so an empty selection forgets the memory rather
+ * than resurrecting the previous mode in the next thread.
+ */
+function rememberProjectSelection(
+  projectId: string,
+  input: EngineeringLifecycleSelectionInput
+): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (input.stages.length === 0) {
+      window.localStorage.removeItem(projectStorageKey(projectId))
+      return
+    }
+    window.localStorage.setItem(projectStorageKey(projectId), JSON.stringify(input))
+  } catch {
+    // Storage unavailable — a neutral new thread is the only consequence.
+  }
+}
+
+/** The selection last staged in a project, or null when the user has none. */
+export function loadProjectLifecycleIntent(
+  projectId: string
+): EngineeringLifecycleSelectionInput | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = window.localStorage.getItem(projectStorageKey(projectId))
+    if (!raw) return null
+    return sanitize(JSON.parse(raw))
+  } catch {
+    return null
   }
 }
 

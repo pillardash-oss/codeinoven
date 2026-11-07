@@ -1,5 +1,3 @@
-import { spawn } from 'node:child_process'
-import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { constants, access } from 'node:fs/promises'
 import { readdir } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -22,6 +20,11 @@ import {
   buildLessonExtractionUserPrompt,
   parseLessonExtraction
 } from '../lesson-protocol'
+import {
+  sharedLocalAiRuntimeRegistry,
+  type LocalAiRuntimeRegistry,
+  type LocalAiServerHandle
+} from '../../local-ai/local-ai-runtime-registry'
 
 interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
@@ -55,19 +58,16 @@ const S1_CONTROL_LINE = '[Styling: semi-formal] [Structure: prose] [Context: gen
  */
 export class LlamaServerSpeechBackend implements SpeechBackend {
   readonly runtime = 'gguf' as const
-  private child: ChildProcessWithoutNullStreams | null = null
-  private currentModelFile: string | null = null
-  private port = 0
-  private stderrTail = ''
-
   /**
-   * Journal hooks wired by {@link SpeechService}. They let a later launch reap
-   * a llama-server this app spawned and left orphaned by an unclean exit,
-   * without ever touching a server the user runs outside the app.
+   * The registry's handle, never a child process of our own: the local AI
+   * registry spawns, unloads on the user's idle window, and journals the server,
+   * so a server it retired reads as gone here instead of as a live child.
    */
+  private handle: LocalAiServerHandle | null = null
+  private currentModelFile: string | null = null
+
   constructor(
-    private readonly registerChild?: (pid: number, command: string, cwd: string) => void,
-    private readonly unregisterChild?: (pid: number) => void,
+    private readonly registry: LocalAiRuntimeRegistry = sharedLocalAiRuntimeRegistry(),
     private readonly trackChild?: (pid: number, command: string, cwd: string) => void
   ) {}
 
@@ -153,113 +153,80 @@ export class LlamaServerSpeechBackend implements SpeechBackend {
   }
 
   isResident(): boolean {
-    return this.child !== null
+    return this.handle !== null && this.registry.isAlive(this.handle)
   }
 
   async dispose(): Promise<void> {
-    const child = this.child
-    this.child = null
+    const handle = this.handle
+    this.handle = null
     this.currentModelFile = null
-    child?.kill('SIGTERM')
+    if (handle) await this.registry.release(handle)
   }
 
   private async ensureServer(artifact: SpeechBackendArtifact): Promise<void> {
     const modelFile = await locateGgufModel(artifact.directory)
-    if (this.child && this.currentModelFile === modelFile) return
-    await this.dispose()
-    // llama-server picks its own free TCP port with --port 0 and reports the
-    // listening URL on stderr before the model finishes loading.
-    this.stderrTail = ''
     const executable = getEffectiveLlamaServerPath()
     if (!executable) throw new Error('No llama.cpp runtime is available.')
-    const child = spawn(
+    // A different artifact is a different model, so the previous server is
+    // released rather than left loaded beside the new one.
+    if (this.currentModelFile !== null && this.currentModelFile !== modelFile) await this.dispose()
+    this.handle = await this.registry.ensureServer({
+      runtime: 'llama.cpp',
+      modelFile,
+      port: 0,
       executable,
-      [
-        '--model',
-        modelFile,
-        '--host',
-        '127.0.0.1',
-        '--port',
-        '0',
-        // A transcript normalizer and a cleanup instruct model both work in a
-        // few thousand tokens, so the server must never size its KV cache from
-        // the model's own training context. Left unset, llama-server reads
-        // `context_length` from the GGUF (40960 for the S1 mini artifact) and
-        // allocates 4.4 GB of KV at this model's 112 KB per token, plus four
-        // parallel slots worth of batch and logits buffers: about 10.5 GB of
-        // writable memory for a 0.6B model, which is what pushed a 16 GB machine
-        // to 8.5 GB of swap. 8192 keeps roughly double the headroom the largest
-        // real prompt needs (lesson context plus both transcripts), and the
-        // job queue runs at most one cleanup request per runtime, so one slot
-        // is correct.
-        '--ctx-size',
-        '8192',
-        '--parallel',
-        '1',
-        // Qwen3-based cleanup models were trained with thinking off; the S1
-        // normalizer requires it too or it produces no usable output.
-        '--jinja',
-        '--chat-template-kwargs',
-        '{"enable_thinking":false}'
-      ],
-      { stdio: ['ignore', 'pipe', 'pipe'] }
-    ) as unknown as ChildProcessWithoutNullStreams
-    this.child = child
-    this.currentModelFile = modelFile
-    this.registerChild?.(child.pid ?? 0, executable, process.cwd())
-    this.trackChild?.(child.pid ?? 0, executable, process.cwd())
-    const pid = child.pid ?? 0
-    child.once('exit', () => this.unregisterChild?.(pid))
-    let buffered = ''
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(
-        () => finish(new Error('llama-server did not report its port.')),
-        30_000
-      )
-      const finish = (failure?: Error): void => {
-        clearTimeout(timeout)
-        if (failure) reject(failure)
-        else resolve()
-      }
-      child.stderr.setEncoding('utf8')
-      child.stderr.on('data', (chunk: string) => {
-        this.stderrTail = `${this.stderrTail}${chunk}`.slice(-4000)
-        buffered += chunk
-        const match = /(?:http|https):\/\/[^\s]+:(\d+)/u.exec(buffered)
-        if (!match || !match[1]) return
-        this.port = Number(match[1])
-        finish()
-      })
-      child.once('error', (error) => finish(error))
-      child.once('exit', () =>
-        finish(new Error(this.stderrTail.trim() || 'llama-server exited early.'))
-      )
+      args: this.serverArgs(modelFile),
+      cwd: process.cwd(),
+      label: 'speech-cleanup',
+      // Cleanup only runs because a person spoke, so it always counts as
+      // interactive: it restarts the idle window the model is held under.
+      interactive: true,
+      ...(this.trackChild ? { onSpawn: this.trackChild } : {})
     })
-    // Wait for model load to complete before accepting requests.
-    await this.waitHealthy()
+    this.currentModelFile = modelFile
   }
 
-  private async waitHealthy(): Promise<void> {
-    const deadline = Date.now() + 180_000
-    while (Date.now() < deadline) {
-      try {
-        const response = await fetch(`http://127.0.0.1:${this.port}/health`)
-        if (response.ok) return
-      } catch {
-        // Server still booting; retry below.
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500))
-    }
-    throw new Error('llama-server did not become healthy after loading the cleanup model.')
+  private serverArgs(modelFile: string): string[] {
+    return [
+      '--model',
+      modelFile,
+      '--host',
+      '127.0.0.1',
+      '--port',
+      '0',
+      // A transcript normalizer and a cleanup instruct model both work in a
+      // few thousand tokens, so the server must never size its KV cache from
+      // the model's own training context. Left unset, llama-server reads
+      // `context_length` from the GGUF (40960 for the S1 mini artifact) and
+      // allocates 4.4 GB of KV at this model's 112 KB per token, plus four
+      // parallel slots worth of batch and logits buffers: about 10.5 GB of
+      // writable memory for a 0.6B model, which is what pushed a 16 GB machine
+      // to 8.5 GB of swap. 8192 keeps roughly double the headroom the largest
+      // real prompt needs (lesson context plus both transcripts), and the
+      // job queue runs at most one cleanup request per runtime, so one slot
+      // is correct.
+      '--ctx-size',
+      '8192',
+      '--parallel',
+      '1',
+      // Qwen3-based cleanup models were trained with thinking off; the S1
+      // normalizer requires it too or it produces no usable output.
+      '--jinja',
+      '--chat-template-kwargs',
+      '{"enable_thinking":false}'
+    ]
   }
 
   private async complete(messages: ChatMessage[], signal: AbortSignal): Promise<string> {
-    if (!this.child || this.port === 0) throw new Error('The cleanup runtime is not running.')
+    if (!this.isResident() || this.handle === null) {
+      throw new Error('The cleanup runtime is not running.')
+    }
+    const port = this.handle.port
     const controller = new AbortController()
     const abortForward = (): void => controller.abort()
     signal.addEventListener('abort', abortForward, { once: true })
     try {
-      const response = await fetch(`http://127.0.0.1:${this.port}/v1/chat/completions`, {
+      const response = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

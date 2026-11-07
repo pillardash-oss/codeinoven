@@ -1,4 +1,5 @@
 import { openInBrowser } from '$lib/open-in-browser'
+import { reportError } from '$lib/stores/app-errors.svelte'
 import {
   invalidateRepositoryPreflight,
   loadRepositoryPreflight
@@ -6,7 +7,10 @@ import {
 import { appConfigState } from '$lib/stores/app-config.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { cacheHasDeployments } from '$lib/git-deployments-cache'
-import { resolveCurrentConflictsWithAgent } from '../git-status-panel-agent-actions'
+import {
+  openAgentThread,
+  resolveCurrentConflictsWithAgent
+} from '../git-status-panel-agent-actions'
 import type { GitCommitInfo, GitFileChange, GitPullStrategy } from '$shared/types'
 import { toast } from 'svelte-sonner'
 import { GitStatusPanelBranchesController } from '../GitStatusPanel/git-status-panel-branches-controller.svelte'
@@ -73,6 +77,15 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
 
   /** Which recovery action is running ('merge' | 'rebase'), to disable the buttons. */
   pushRecoverMode = $state<'merge' | 'rebase' | null>(null)
+
+  /**
+   * The thread this panel's conflict handoff minted, if any.
+   *
+   * The resolved thread is the initiator's record of the run it started: the
+   * conflicted row reopens it instead of leaving the user with a conversation
+   * they can only find by searching their thread list.
+   */
+  agentConflictThreadId = $state<string | null>(null)
 
   commitHistory = $state<GitCommitInfo[]>([])
 
@@ -224,7 +237,19 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
     await resolveCurrentConflictsWithAgent(
       this.root.props.projectId,
       this.root.props.scopeBucketId,
-      this.status?.branch ?? 'this worktree'
+      this.status?.branch ?? 'this worktree',
+      (threadId) => {
+        this.agentConflictThreadId = threadId
+      }
+    )
+  }
+
+  /** Reopen the thread the last conflict handoff from this panel minted. */
+  openAgentConflictThread(): void {
+    const threadId = this.agentConflictThreadId
+    if (!threadId) return
+    void openAgentThread(this.root.props.projectId, threadId).catch((error: unknown) =>
+      reportError(error, 'Could not open the conflict resolution thread.')
     )
   }
 
@@ -637,9 +662,9 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
 
   /**
    * The temporary `pr-<n>` branch a PR conflict resolution is staged on, while
-   * its session is still open. `preparePrResolve` records the session and the
-   * store drops it once the branch is gone, so this names the branch the finish
-   * step still has to delete.
+   * its session is still open. Main records the session beside the pull request
+   * and reports it on every status read, so this survives a reload, and the
+   * branch the finish step still has to push from and delete.
    */
   prResolveBranch = $derived(
     gitState.prResolveSession ? `pr-${gitState.prResolveSession.pullNumber}` : null
@@ -665,6 +690,18 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
   prResolvePending = $derived(this.prResolveBranch !== null && this.conflicted.length === 0)
 
   mergeAwaitsCompletion = $derived(this.mergePending || this.prResolvePending)
+
+  /**
+   * A merge is pending on a temporary `pr-<n>` branch, but no recorded PR session
+   * was found for it. Then completing the merge only writes the commit in this
+   * checkout: nothing is pushed, and the pull request keeps its conflicts. The
+   * panel says so instead of implying the resolution will be published.
+   */
+  prResolveLost = $derived(
+    this.mergePending &&
+      this.prResolveBranch === null &&
+      /^pr-\d+$/u.test(this.status?.branch ?? '')
+  )
 
   /** Complete-merge modal state: optional title/description, defaults auto-generated. */
   completeMergeOpen = $state(false)
@@ -700,20 +737,74 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
   async confirmCompleteMerge(): Promise<void> {
     if (this.root.confirmAcceptAllConflicts.completeMergeBusy || !this.mergeAwaitsCompletion) return
     const temporaryBranch = this.prResolveBranch
+    const lostSessionBranch = this.prResolveLost ? (this.status?.branch ?? null) : null
     if (this.mergePending) {
       await gitState.commit(this.root.props.projectId, this.mergeCommitMessage())
       if (gitState.error) return
-      if (!temporaryBranch) toast.success('Merge committed')
+      // A local merge is done once committed. A `pr-<n>` branch with no recorded
+      // session is not: the commit stays here, so say where it stops instead of
+      // letting it read as a published resolution.
+      if (!temporaryBranch) {
+        toast.success(
+          lostSessionBranch
+            ? `Merge committed on ${lostSessionBranch}; push it to update the pull request`
+            : 'Merge committed'
+        )
+      }
     }
     if (temporaryBranch) {
+      // The finish step clears the session, so the pull request it belongs to is
+      // read before the push.
+      const pullNumber = gitState.prResolveSession?.pullNumber ?? null
       const finished = await gitState.finishPrResolve(this.root.props.projectId)
       if (!finished) return
-      toast.success(`Resolution pushed to the pull request; ${temporaryBranch} removed`)
+      const merged = pullNumber === null ? false : await this.mergeResolvedPullRequest(pullNumber)
+      toast.success(
+        merged
+          ? `Resolution pushed to pull request #${pullNumber} and merged`
+          : pullNumber === null
+            ? `Resolution pushed to the pull request; ${temporaryBranch} removed`
+            : `Resolution pushed to pull request #${pullNumber}; merge it from the pull request view`
+      )
     }
     this.completeMergeOpen = false
     this.mergeTitle = ''
     this.mergeDescription = ''
     void this.root.handlePrListAction.refreshStatus()
+  }
+
+  /**
+   * Merge the pull request whose resolution was just pushed.
+   *
+   * Completing a PR conflict resolution is the user's whole intent: they resolved
+   * the conflicts in order to get the pull request merged, so stopping at a pushed
+   * branch left them to finish the same flow by hand in the pull request view.
+   * The merge uses the configured default method and GitHub's own rules, so a
+   * protected branch or a failing required check is refused and reported instead
+   * of being forced. Answers whether the pull request actually merged.
+   */
+  private async mergeResolvedPullRequest(pullNumber: number): Promise<boolean> {
+    const identity = this.root.handlePrListAction.githubIdentity
+    if (!identity) return false
+    // GitHub recomputes a pull request's mergeability asynchronously after the
+    // push that resolved the conflicts, so the first attempt can be refused for
+    // a state that is already gone. Only that refusal is retried: permission
+    // prompts and real rule violations are final.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 1500))
+      const merged = await gitState.mergePullRequest(
+        this.root.props.projectId,
+        identity.owner,
+        identity.repo,
+        pullNumber,
+        appConfigState.defaultMergeMethod
+      )
+      if (merged !== null) return true
+      if (!/not mergeable|conflict|cannot be merged|mergeability/iu.test(gitState.error ?? '')) {
+        return false
+      }
+    }
+    return false
   }
 
   atRiskFiles = $derived(this.changes.length > 0 ? this.changes.map((change) => change.path) : [])

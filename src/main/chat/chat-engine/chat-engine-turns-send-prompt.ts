@@ -19,6 +19,7 @@ import { isCioUtilityRequest } from '../../utilities/cio-utility-prompt'
 import { isCioDesignRequest } from '../../utilities/cio-design-prompt'
 import { isCioVideoRequest } from '../../utilities/cio-video-prompt'
 import { isCioOrchestrateRequest } from '../../orchestration/cio-orchestrate-prompt'
+import { RunScopeGate } from '../run-scope-gate'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import type { UtilityTurnBudgetContext } from '../../utilities/utility-orchestration-service'
 import type {
@@ -70,6 +71,8 @@ import type {
 import { rawErrorDetail, rawErrorMessage } from './chat-engine-errors'
 import { withoutTransportParts } from './chat-engine-message-merge'
 import { formatProjectReferenceContext } from './chat-engine-message-text'
+import { firstTurnForkNotice } from './chat-engine-fork-parent'
+import { readForkOrigin } from '../../../lib/engines/thread-manager-fork'
 import {
   MAX_RECAP_TOKENS,
   SPEC_GENERATION_FAILURE_USER_MESSAGE,
@@ -79,6 +82,12 @@ import {
 } from './chat-engine-constants'
 import {
   CHAT_WORKSPACE_TOOLS,
+  ASSIGNMENT_DISCUSSION_SYSTEM_PROMPT,
+  BRAINSTORM_DISCUSSION_SYSTEM_PROMPT,
+  CHAT_SYSTEM_PROMPT,
+  FILE_SYSTEM_CHAT_SYSTEM_PROMPT,
+  PRD_DISCUSSION_SYSTEM_PROMPT,
+  SPEC_GENERATION_SYSTEM_PROMPT,
   chatGatewayAllowedTools,
   ENGINEERING_PARKED_LIFECYCLE_INSTRUCTION,
   IMAGE_DESCRIPTOR_SYSTEM_NOTE,
@@ -102,7 +111,16 @@ import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine turns-send-prompt: one concern, moved verbatim from the composition root. */
 export class ChatEngineTurnsSendPrompt {
-  constructor(private readonly host: ChatEngine) {}
+  /**
+   * The bound-scope gate, built once from the resolver this engine already uses
+   * for every other scope read. A run that cannot name its checkout never
+   * starts, whichever origin asked for the turn.
+   */
+  private readonly runScopeGate: RunScopeGate
+
+  constructor(private readonly host: ChatEngine) {
+    this.runScopeGate = new RunScopeGate(host.scopeRoots)
+  }
 
   /** Send a prompt to the agent (non-blocking; the reply streams over events). */
   async sendPrompt(
@@ -164,7 +182,13 @@ export class ChatEngineTurnsSendPrompt {
         settings.permissionLevel,
         settings.harnessId
       )
+      // A remote Oven runs the same turn, so a forked thread's first prompt
+      // carries the same pointer to the thread its context came from.
+      const remoteForkOrigin = await readForkOrigin(projectId, threadId)
       const remoteContext = [
+        remoteForkOrigin
+          ? ((await firstTurnForkNotice(this.host.database, threadId, remoteForkOrigin)) ?? '')
+          : '',
         promptContext ? validateBoundedString(promptContext, 'Prompt context', 1, 100_000) : '',
         ...validatePromptReferences(promptReferences).map(
           (reference) =>
@@ -315,6 +339,16 @@ export class ChatEngineTurnsSendPrompt {
     ) {
       throw new Error('This Assignment task is locked. Return to its coordinator to continue.')
     }
+    // An assistant task bound to a project runs in that project's checkout, so
+    // the checkout is inspected before the turn starts. An unhealthy scope parks
+    // the run with the resolver's own guidance and refuses the turn: continuing
+    // would write the run's files into assistant storage while the user believes
+    // it worked in their project.
+    if (targetThread?.boundScope) {
+      await this.runScopeGate.guard(targetThread, (parkReason) =>
+        this.host.threadManager.parkThread(projectId, threadId, parkReason)
+      )
+    }
     const hiddenPromptContext = promptContext
       ? validateBoundedString(promptContext, 'Prompt context', 1, 100_000)
       : ''
@@ -326,7 +360,16 @@ export class ChatEngineTurnsSendPrompt {
       targetThread?.scopeBucketId
     )
     const projectReferenceContext = formatProjectReferenceContext(validatedProjectReferences)
-    let hiddenContext = [hiddenPromptContext, projectReferenceContext].filter(Boolean).join('\n\n')
+    // A forked thread opens with the thread its context was copied from, so the
+    // agent can read the rest of that conversation itself instead of answering
+    // from the copy alone. Only the fork's first turn carries it.
+    const forkOrigin = await readForkOrigin(projectId, threadId)
+    const forkParentContext = forkOrigin
+      ? await firstTurnForkNotice(this.host.database, threadId, forkOrigin)
+      : null
+    let hiddenContext = [forkParentContext, hiddenPromptContext, projectReferenceContext]
+      .filter(Boolean)
+      .join('\n\n')
     // A run of an assistant that already has its knowledge: the knowledge is the
     // instruction set, and this contract tells the agent to supply any
     // connection the run needs that is not set up, asking the user for what
@@ -609,7 +652,6 @@ export class ChatEngineTurnsSendPrompt {
       specAction === undefined &&
       (lifecycleForMode?.activeStage === 'assignment' ||
         lifecycleForMode?.humanGate === 'assignment_approval') &&
-      lifecycleForMode.autopilot !== true &&
       (ownedAssignment === null || ownedAssignment.status === 'draft')
     if (
       planningSpecTurn &&
@@ -796,6 +838,13 @@ export class ChatEngineTurnsSendPrompt {
       if (driver.capabilities?.steering !== true || !driver.steerPrompt) {
         throw new Error(`${driver.name} does not expose native active-turn steering`)
       }
+      // The user is speaking again, so this session is no longer one they
+      // stopped. A stop-and-resend (an account switch mid-turn) latches the
+      // session as user-aborted, and only a full dispatch used to clear that
+      // latch; delivering the message as a steer left every event of the turn
+      // it joined discarded, so a retry read as delivered while nothing it
+      // produced ever reached the thread.
+      this.host.state.userAbortedSessions.delete(sessionId)
       const outboundIds =
         this.host.state.outboundMessageIdsBySession.get(sessionId) ?? new Set<string>()
       outboundIds.add(messageId)
@@ -1009,6 +1058,10 @@ export class ChatEngineTurnsSendPrompt {
       designSession,
       videoSession,
       orchestrationSession,
+      // A standing assistant run delegates real work: nobody types into its
+      // thread, so the workstation tools are opened for it here rather than by
+      // a tag, and the dispatched thread carries the project's own gate.
+      assistantTaskTurn,
       // A real project thread may create its engineering artifacts through the
       // artifact tools. A chat, an assistant task, the inbox and an Assignment
       // worker are offered none of those routes.
@@ -1104,9 +1157,7 @@ export class ChatEngineTurnsSendPrompt {
     const brainstormingTurn = planningSpecTurn
     const chatSystemPrompt = isChatThread
       ? [
-          await this.host.units['turns-dispatch'].cioPrompt(
-            chatFileSystemEnabled ? 'file-system-chat' : 'chat'
-          ),
+          chatFileSystemEnabled ? FILE_SYSTEM_CHAT_SYSTEM_PROMPT : CHAT_SYSTEM_PROMPT,
           chatFileSystemEnabled
             ? `This chat owns the dedicated workspace ${chatWorkspaceRoot}. Work inside it, including image generation, scripts, and generated files, is already authorized and requires no permission question.`
             : chatFilesystemBoundaryInstruction(chatWorkspaceRoot)
@@ -1116,7 +1167,7 @@ export class ChatEngineTurnsSendPrompt {
       : ''
     const brainstormDiscussionPrompt = brainstormingTurn
       ? [
-          await this.host.units['turns-dispatch'].cioPrompt('brainstorm-discussion'),
+          BRAINSTORM_DISCUSSION_SYSTEM_PROMPT,
           activeBrainstormSession
             ? await this.host.units['brainstorm-review'].brainstormAlignmentContext(
                 projectId,
@@ -1128,21 +1179,19 @@ export class ChatEngineTurnsSendPrompt {
           .filter(Boolean)
           .join('\n\n')
       : ''
-    const engineeringSpecPrompt = brainstormingTurn
-      ? await this.host.units['turns-dispatch'].cioPrompt('engineering-spec')
-      : ''
+    const engineeringSpecPrompt = brainstormingTurn ? SPEC_GENERATION_SYSTEM_PROMPT : ''
     // This turn is never schema-enforced, because the agent must stay free to ask
     // product questions instead of submitting. The shape therefore travels in the
     // prompt, exactly as it does for drivers without structured output.
     const prdDiscussionPrompt = prdDiscussionTurn
       ? [
-          await this.host.units['turns-dispatch'].cioPrompt('prd-discussion'),
+          PRD_DISCUSSION_SYSTEM_PROMPT,
           `The ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME} contract in this conversation is one JSON object matching this schema and nothing else: ${JSON.stringify(PRD_DOCUMENT_JSON_SCHEMA)}`
         ].join('\n\n')
       : ''
     const assignmentDiscussionPrompt = assignmentDiscussionTurn
       ? [
-          await this.host.units['turns-dispatch'].cioPrompt('assignment-discussion'),
+          ASSIGNMENT_DISCUSSION_SYSTEM_PROMPT,
           `The ${ASSIGNMENT_PLAN_TOOL_NAME} contract in this conversation is one JSON object matching this schema and nothing else: ${JSON.stringify(ASSIGNMENT_PLAN_SCHEMA)}`
         ].join('\n\n')
       : ''

@@ -55,6 +55,9 @@ const LISTING_READ_LIMIT = 512
 export interface ProjectFilesExplorerHost {
   stateFor(projectId: string): ProjectFilesState
   existingState(projectId: string): ProjectFilesState | undefined
+  /** The key that project's file surface lives under, which distinguishes the
+   *  conversations of a hidden conversation container from one another. */
+  stateKeyFor(projectId: string): string
   scopeFor(projectId: string): string
   threadArg(projectId: string): string | undefined
   mountKeyFor(projectId: string): string
@@ -96,9 +99,11 @@ export class ProjectFilesExplorer {
 
   constructor(private readonly host: ProjectFilesExplorerHost) {}
 
-  /** Mark a freshly created project state for the cheap first-open reveal. */
-  markPendingRestore(projectId: string): void {
-    this.pendingRestores.add(projectId)
+  /** Mark a freshly created project state for the cheap first-open reveal. The
+   *  key names one file surface, which is one conversation for a hidden
+   *  conversation container. */
+  markPendingRestore(stateKey: string): void {
+    this.pendingRestores.add(stateKey)
   }
 
   /** Whether the cached listings describe the mount the tree should now
@@ -181,8 +186,8 @@ export class ProjectFilesExplorer {
         // the revealed/selected path is loaded, never the whole saved set of
         // expanded folders. Loading hundreds of persisted folders at once was
         // what ballooned the renderer heap and OOM'd the app on open.
-        if (directory === '' && this.pendingRestores.has(projectId)) {
-          this.pendingRestores.delete(projectId)
+        if (directory === '' && this.pendingRestores.has(this.host.stateKeyFor(projectId))) {
+          this.pendingRestores.delete(this.host.stateKeyFor(projectId))
           await this.restoreRevealedPath(projectId, state)
         }
       } catch (error) {
@@ -764,13 +769,14 @@ export class ProjectFilesExplorer {
   }
 
   private beginFocus(projectId: string): number {
-    const generation = (this.focusGenerations.get(projectId) ?? 0) + 1
-    this.focusGenerations.set(projectId, generation)
+    const key = this.host.stateKeyFor(projectId)
+    const generation = (this.focusGenerations.get(key) ?? 0) + 1
+    this.focusGenerations.set(key, generation)
     return generation
   }
 
   private isCurrentFocus(projectId: string, generation: number): boolean {
-    return this.focusGenerations.get(projectId) === generation
+    return this.focusGenerations.get(this.host.stateKeyFor(projectId)) === generation
   }
 
   private async expandDirectoryPath(

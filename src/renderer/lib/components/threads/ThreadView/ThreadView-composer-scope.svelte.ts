@@ -1,4 +1,5 @@
 import type { ComposerIdentity } from '../../chats/ComposerIdentity.svelte'
+import { resolveThreadBoundScope } from '$shared/bound-scope'
 import {
   type ComposerRelocationItem,
   type ComposerRelocationMode
@@ -30,11 +31,7 @@ import {
 import { latestAgentTodo } from '$lib/agent-todos'
 import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
 import { revealAttachmentFile, revealCitationFile, revealFileInAppTree } from '$lib/reveal-file'
-import {
-  ASSISTANT_SPACE_ID,
-  DEFAULT_SCOPE_BUCKET_ID,
-  usesThreadWorkspaceMount
-} from '$shared/types'
+import { ASSISTANT_SPACE_ID, usesThreadWorkspaceMount } from '$shared/types'
 import type {
   Thread,
   ThreadSettings,
@@ -42,6 +39,7 @@ import type {
   AgentPart,
   AgentProviderIssue,
   AgentSecretSubmission,
+  AgentSecretDraft,
   PermissionRequest,
   ProjectFileEntry,
   CapturableSpecContextType,
@@ -181,21 +179,33 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
       : null
   )
 
-  /** The scope segment's data, for a project thread that has a scope on the board. */
+  /**
+   * The scope segment's data, for a thread that works in a real checkout.
+   *
+   * A project thread states its own scope; a bound assistant task states the
+   * scope it is bound to, in the same row, through the same badge. The resolver
+   * is the shared one, so the shoe, the rail and the run receipt can never name
+   * different checkouts for one thread.
+   */
   composerScope(identity: ComposerIdentity, isNewThread: boolean) {
-    if (identity.kind !== 'project') return undefined
-    const bucketId = this.root.handleAgentEvent.thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
-    // Resolve against the thread's own project board like scope.bucketForThread.
+    const thread = this.root.handleAgentEvent.thread
+    const target = resolveThreadBoundScope(thread)
+    if (!target) return undefined
     const board =
-      scopeState.boards.get(this.root.handleAgentEvent.thread.projectId) ?? scopeState.board
-    const bucket = board.buckets.find((candidate) => candidate.id === bucketId)
+      scopeState.boards.get(target.projectId) ??
+      (target.projectId === thread.projectId ? scopeState.board : undefined)
+    const bucket = board?.buckets.find((candidate) => candidate.id === target.scopeBucketId)
     if (!bucket) return undefined
+    // Only a project thread chooses its scope from the composer. A bound task's
+    // scope is its binding, edited from the task itself, so the shoe states it.
+    const readOnly = identity.kind !== 'project'
     return {
-      projectId: this.root.handleAgentEvent.thread.projectId,
-      threadId: this.root.handleAgentEvent.thread.id,
+      projectId: target.projectId,
+      threadId: thread.id,
       bucket,
-      isNewThread,
-      onOpenScopeView: () => this.root.props.onOpenScopeView?.(this.root.handleAgentEvent.thread)
+      isNewThread: readOnly ? false : isNewThread,
+      ...(readOnly ? { readOnly: true } : {}),
+      onOpenScopeView: () => this.root.props.onOpenScopeView?.(thread)
     }
   }
 
@@ -295,13 +305,15 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   studioExitConfirmationOpen = $state(false)
 
   seniorModelForThread(): AssignmentModelSelection {
+    const settings = this.root.loadOlderMessages.settings
     return {
-      harnessId: this.root.loadOlderMessages.settings.harnessId,
-      providerId: this.root.loadOlderMessages.settings.providerId,
-      modelId: this.root.loadOlderMessages.settings.modelId,
-      thinkingLevel: this.root.loadOlderMessages.settings.thinkingLevel,
-      inferenceMode: this.root.loadOlderMessages.settings.inferenceMode,
-      contextWindow: this.root.loadOlderMessages.settings.contextWindow
+      harnessId: settings.harnessId,
+      providerId: settings.providerId,
+      modelId: settings.modelId,
+      accountId: settings.accountId,
+      thinkingLevel: settings.thinkingLevel,
+      inferenceMode: settings.inferenceMode,
+      contextWindow: settings.contextWindow
     }
   }
 
@@ -635,10 +647,13 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   async revealAssignmentInAppFile(content: AssignmentPlanContent): Promise<void> {
     this.root.submitSpecDecision.assignmentError = ''
     try {
+      // The Assignment belongs to its coordinator, which a worker thread's view
+      // presents; key the call on the document's owner, never the mounted thread.
+      const owner = this.root.submitSpecDecision.assignmentOwner()
       const absPath = await invoke(
         'assignment:revealInFiles',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        owner.projectId,
+        owner.threadId,
         content
       )
       await revealFileInAppTree(this.root.handleAgentEvent.thread.projectId, absPath)
@@ -754,6 +769,61 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.thread.id,
       requestId,
       secrets
+    )
+    this.root.sources.resolvedQuestionRequestIds.add(requestId)
+    this.root.handleAgentEvent.pendingQuestionRequests =
+      this.root.handleAgentEvent.pendingQuestionRequests.filter(
+        (request) => request.requestId !== requestId
+      )
+  }
+
+  /**
+   * Persist one entry of a secret card the user is filling in.
+   *
+   * The values typed so far belong to the pending request, so leaving the thread
+   * and coming back resumes the card instead of an empty one, and the main
+   * process drops the draft the moment the request settles. When the request is
+   * already gone the card is closed here rather than reporting a save failure.
+   */
+  async handleSecretDraft(
+    requestId: string,
+    questionIndex: number,
+    draft: AgentSecretDraft,
+    nextQuestionIndex?: number
+  ): Promise<void> {
+    const updated = await invoke(
+      'agent:updateSecretDraft',
+      this.root.handleAgentEvent.thread.projectId,
+      this.root.handleAgentEvent.thread.id,
+      requestId,
+      questionIndex,
+      draft,
+      nextQuestionIndex
+    )
+    if (!updated) {
+      this.root.sources.resolvedQuestionRequestIds.add(requestId)
+      this.root.handleAgentEvent.pendingQuestionRequests =
+        this.root.handleAgentEvent.pendingQuestionRequests.filter(
+          (request) => request.requestId !== requestId
+        )
+    }
+  }
+
+  /**
+   * Report the MCP sign-in card's outcome to the main process.
+   *
+   * The sign-in itself already ran through the shared OAuth flow, which wrote the
+   * grant into the encrypted vault; this only settles the gateway connection that
+   * hit the server's refusal, which then retries with that grant. Nothing about
+   * the grant travels through here.
+   */
+  async handleMcpSignInSubmit(requestId: string, answer: string): Promise<void> {
+    await invoke(
+      'agent:answerQuestion',
+      this.root.handleAgentEvent.thread.projectId,
+      this.root.handleAgentEvent.thread.id,
+      requestId,
+      [[answer]]
     )
     this.root.sources.resolvedQuestionRequestIds.add(requestId)
     this.root.handleAgentEvent.pendingQuestionRequests =

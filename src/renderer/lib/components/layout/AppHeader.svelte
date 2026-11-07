@@ -254,7 +254,7 @@
           scopeState.updateThread(updated)
         }
       } catch (error) {
-        reportError(error, 'Could not hide the assistant behavior thread')
+        reportError(error, 'Could not hide the Getting started thread')
       }
     }
   })

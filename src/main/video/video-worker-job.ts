@@ -6,6 +6,7 @@ import { utilityProcess, type UtilityProcess } from 'electron'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import createTrackingWorker from './video-tracking-worker.ts?nodeWorker'
 import mattingProcessPath from './video-matting-process.ts?modulePath'
+import { trackQuitWorker } from '../system/quit-worker-sweep'
 import type { VideoJobContext } from './video-jobs'
 
 export async function videoWorkerJob(
@@ -17,7 +18,7 @@ export async function videoWorkerJob(
   context.signal.throwIfAborted()
   const worker: Worker | UtilityProcess =
     kind === 'track'
-      ? createTrackingWorker({ workerData })
+      ? trackQuitWorker(createTrackingWorker({ workerData }))
       : utilityProcess.fork(mattingProcessPath, [], {
           env: buildProcessEnvironment(),
           serviceName: 'Video background removal',

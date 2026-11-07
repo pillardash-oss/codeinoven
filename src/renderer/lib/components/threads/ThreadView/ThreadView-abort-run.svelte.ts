@@ -135,12 +135,23 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
     return pendingContinuationRequest(this.root.loadOlderMessages.messages)
   }
 
-  /** Retry after an error or a paused provider retry   replace the live turn first. */
+  /**
+   * Retry after an error or a paused provider retry - replace the live turn first.
+   *
+   * A thread parked on a provider wait is not `busy`: nothing is being produced,
+   * so its run reads as settled while the harness still owns the turn it is
+   * retrying (see `agentRuns.setWaiting`). Retrying on that reading skipped the
+   * abort and the request was steered into the paused run, so the retrying card
+   * stayed up and the message waited in a queue the failed account never drained.
+   * The card on screen is the signal that an attempt is still held, so it replaces
+   * that turn exactly like a busy one does.
+   */
   async retryConnection(): Promise<void> {
     if (this.providerRetrying) return
     this.providerRetrying = true
     try {
-      if (this.root.switchProject.busy) {
+      const pausedTurn = this.root.handleAgentEvent.providerStatus !== null
+      if (this.root.switchProject.busy || pausedTurn) {
         this.userRequestedStop = true
         if (this.root.props.controller) {
           // Controller conversations (temporary chats) run on their own
@@ -234,6 +245,7 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         nextCheckpoints,
         request
       )
+      this.reportTurnCards(id)
     } catch (error) {
       // A silently dropped read blanks every turn card in the thread for the
       // whole session (the list is the only source a card is drawn from), so a
@@ -299,6 +311,38 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
       // it already holds.
       return list
     }
+  }
+
+  /**
+   * What the transcript index decided about turn cards for this thread.
+   *
+   * "The card is not showing" cannot be checked from the database: the rows are
+   * correct and the rules place the card when they are fed the loaded window, so
+   * the only thing that can be wrong is what the renderer was holding. One dev
+   * line per checkpoint read pins that down   how many messages the index saw,
+   * how many cards it placed, which checkpoint owns the tail, and whether the
+   * safety net had to draw it.
+   */
+  private reportTurnCards(threadId: string): void {
+    const index = this.root.pollStreamParts.transcriptIndex
+    const messages = this.root.buildSpecActionPrompt.structureMessages
+    const tail = messages.length - 1
+    let cards = 0
+    for (const flag of index.checkpointCard) if (flag) cards += 1
+    logRendererDev(
+      `Turn cards: ${JSON.stringify({
+        threadId,
+        messages: messages.length,
+        checkpoints: this.checkpoints.length,
+        cards,
+        tailRole: messages[tail]?.role ?? null,
+        tailIsTurnEnd: index.isTurnEnd[tail] ?? false,
+        tailCheckpoint: index.checkpoint[tail]?.id ?? null,
+        tailChanges: index.checkpoint[tail]?.changes.length ?? null,
+        rescued: index.tailCardRescued,
+        chatMode: this.root.props.chatMode
+      })}`
+    )
   }
 
   /**
@@ -652,6 +696,17 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
   }
 
   async openSpecStudio(): Promise<void> {
+    // A tool call has started the stage but its document does not exist yet. The
+    // studio opens on its pending state and says the agent is still working,
+    // rather than asking main for a document that is not there and showing an
+    // error.
+    if (!this.root.submitBrainstormDecision.spec && this.root.sources.generationInFlight !== null) {
+      workspaceState.specAgentSidebarOpen = false
+      this.root.harnessUsage.studioDocument =
+        this.root.sources.generationInFlight === 'assignment' ? 'assignment' : 'spec'
+      this.root.submitSpecDecision.showSpecStudio = true
+      return
+    }
     // The workspace already holds the active specification, with its versions and
     // its validation: opening is a visibility change, not a fetch. Asking main for
     // the same document again put two round trips in front of the first paint of a

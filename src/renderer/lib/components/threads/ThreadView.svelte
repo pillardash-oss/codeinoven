@@ -31,12 +31,14 @@
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { hasSelectedStage } from '$shared/engines/engineering-lifecycle-engine'
+  import { engineeringPendingMessage } from '$shared/engineering-generation'
   import { supportsManualCompaction } from '$shared/thread-status-policy'
   import { ANNOTATION_BUBBLE_SIZE } from '$lib/selection-anchors'
   import { createThreadView } from './ThreadView/ThreadView-board.svelte'
   import type { Props } from './ThreadView/ThreadView-types'
   import ThreadViewConversation from './ThreadView/ThreadViewConversation.svelte'
   import ThreadViewComposer from './ThreadView/ThreadViewComposer.svelte'
+  import ThreadParentLink from './ThreadParentLink.svelte'
   import { permissionLevelActions } from '$lib/actions'
 
   let {
@@ -166,36 +168,6 @@
         category: 'reasoning',
         source: board.state.applicationActionSource,
         keywords: ['effort', 'reasoning', level.id]
-      })
-    }
-
-    // Orchestration child threads (workers, auditors) are driven by their
-    // coordinator   they can never enable engineering mode themselves, so the
-    // stage toggles and Auto Pilot are not offered to them.
-    if (!board.props.chatMode && !board.currentWorkingTraceAttribution.orchestrationChild) {
-      // Engineering is a set of lifecycle stages, not one switch: expose every
-      // stage as its own toggle so "turn engineering on/off" is never ambiguous.
-      // Each action stages the selection exactly like the Engineering Toolbox
-      // intent only, applied when the next message is sent.
-      const lifecycle = board.switchProject.effectiveLifecycleSelection
-      for (const stage of board.engineeringStageActions.engineeringStageActions) {
-        const enabled = lifecycle.autopilot || lifecycle.stages.includes(stage.stage)
-        actions.push({
-          id: board.switchProject.actionId(`mode:stage:${stage.stage}`),
-          title: enabled ? `Turn off ${stage.label}` : `Turn on ${stage.label}`,
-          description: stage.description,
-          category: 'mode',
-          source: board.state.applicationActionSource,
-          keywords: stage.keywords
-        })
-      }
-      actions.push({
-        id: 'mode:autopilot',
-        title: lifecycle.autopilot ? 'Turn off Auto Pilot' : 'Turn on Auto Pilot',
-        description: 'Run every Engineering stage on full autonomy, reworking until complete.',
-        category: 'mode',
-        source: board.state.applicationActionSource,
-        keywords: ['autopilot', 'auto', 'pilot', 'autonomy', 'engineering']
       })
     }
 
@@ -517,8 +489,7 @@
     }
     board.submitSpecDecision.assignment = activeAssignment
     if (
-      board.handleAgentEvent.engineeringLifecycle?.autopilot &&
-      board.handleAgentEvent.engineeringLifecycle.activeStage === 'achievement' &&
+      board.handleAgentEvent.engineeringLifecycle?.activeStage === 'achievement' &&
       activeAssignment?.auditCycle?.status === 'completed'
     ) {
       board.handleAgentEvent.engineeringLifecycle = await invoke(
@@ -624,8 +595,7 @@
       workflowThread?.status !== 'failed' &&
       !board.state.planningResumeRequested &&
       (!board.handleAgentEvent.engineeringLifecycle ||
-        (board.handleAgentEvent.engineeringLifecycle.selectedStages.length === 0 &&
-          !board.handleAgentEvent.engineeringLifecycle.autopilot))
+        board.handleAgentEvent.engineeringLifecycle.selectedStages.length === 0)
     ) {
       const resume =
         workflow?.stage === 'skipped'
@@ -1041,6 +1011,8 @@
               )}
             onReview={board.submitSpecDecision.reviewAudit}
             onComplete={board.submitSpecDecision.completeAudit}
+            retractAvailable={board.submitSpecDecision.auditRetractAvailable}
+            onRetract={board.submitSpecDecision.retractAudit}
             onOpenInEditor={board.buildSpecActionPrompt.openAuditInEditor}
             onRevealInAppFile={board.buildSpecActionPrompt.revealAuditInAppFile}
           />
@@ -1098,6 +1070,7 @@
             onRevealInAppFile={board.composerScope.revealAssignmentInAppFile}
             onWorkerModelChange={(selection) => board.sources.syncAgentRole('worker', selection)}
             onSeniorModelChange={board.sources.updateAssignmentSeniorModel}
+            onPhaseModelChange={board.submitSpecDecision.updateAssignmentPhaseModel}
             onTaskModelChange={board.submitSpecDecision.updateAssignmentTaskModel}
             onTaskScopeChange={board.submitSpecDecision.updateAssignmentTaskScope}
             onWorkerScopeChange={board.submitSpecDecision.updateAssignmentWorkerScope}
@@ -1213,10 +1186,19 @@
         {/await}
       {/key}
     {:else}
-      <div class="flex flex-1 items-center justify-center text-sm text-dimmed">
-        {board.abortRun.specBusy
-          ? 'Loading specification…'
-          : board.abortRun.specError || 'No specification is available.'}
+      <div class="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
+        {#if engineeringPendingMessage(board.sources.generationInFlight)}
+          <CioSpinner size={15} class="animate-spin text-dimmed" />
+          <p class="max-w-md text-sm leading-relaxed text-muted" role="status">
+            {engineeringPendingMessage(board.sources.generationInFlight)}
+          </p>
+        {:else}
+          <p class="text-sm text-dimmed">
+            {board.abortRun.specBusy
+              ? 'Loading specification…'
+              : board.abortRun.specError || 'No specification is available.'}
+          </p>
+        {/if}
       </div>
     {/if}
   {/if}
@@ -1247,6 +1229,14 @@
       {/await}
     {/if}
     <!-- Scrollable conversation area -->
+    <ThreadParentLink
+      parent={board.currentWorkingTraceAttribution.coordinatorParentThread}
+      parentProjectId={board.currentWorkingTraceAttribution.coordinatorParentId
+        ? board.handleAgentEvent.thread.projectId
+        : board.handleAgentEvent.thread.dispatchOrigin?.initiatorProjectId}
+      parentThreadId={board.currentWorkingTraceAttribution.coordinatorParentId ??
+        board.handleAgentEvent.thread.dispatchOrigin?.initiatorThreadId}
+    />
     <ThreadViewConversation {board} />
 
     <!-- Bottom-anchored chrome. Everything pinned between the conversation and

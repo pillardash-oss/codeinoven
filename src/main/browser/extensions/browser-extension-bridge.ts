@@ -31,6 +31,7 @@
 
 import { WebContentsView, webContents, type Session } from 'electron'
 import type { BrowserExtensionMenuRecord } from '../../../lib/ipc/browser'
+import { BROWSER_EXTENSION_UNNAMED_TAB_ID } from '../../../lib/browser/browser-extension-window'
 import { Logger } from '../../system/logger'
 import { BrowserLoadWaits } from '../browser-service/browser-load-wait'
 import type {
@@ -371,7 +372,7 @@ function toActionPopupRequest(value: unknown): BrowserExtensionActionPopupReques
     seq <= 0 ||
     typeof tabId !== 'number' ||
     !Number.isFinite(tabId) ||
-    tabId < 0
+    (tabId < 0 && tabId !== BROWSER_EXTENSION_UNNAMED_TAB_ID)
   ) {
     return null
   }

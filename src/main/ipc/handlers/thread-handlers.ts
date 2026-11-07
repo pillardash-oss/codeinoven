@@ -19,6 +19,7 @@ import {
   validateThreadUpdateInput
 } from '../ipc-validation'
 import { isRecord, requireString } from './shared'
+import { ScopeSwapRefusal } from '../../../lib/thread-scope-swap'
 import type { Thread, ThreadMessageCursor } from '../../../lib/types'
 import type { IpcHandlerContext } from './context'
 
@@ -31,6 +32,7 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
     threadDeletion,
     threadManager,
     branchBackfillDeps,
+    cancelThreadFollowUps,
     waitForThreadReady
   } = ctx
 
@@ -337,9 +339,38 @@ export function registerThreadHandlers(ctx: IpcHandlerContext): void {
       validateThreadUpdateInput(input)
     )
   )
+  ipcMain.handle(
+    'thread:moveScope',
+    async (_, projectId: unknown, threadId: unknown, scopeBucketId: unknown) => {
+      const validProjectId = validateEntityId(projectId, 'Project ID')
+      const validThreadId = validateEntityId(threadId, 'Thread ID')
+      const validBucketId = validateEntityId(scopeBucketId, 'Scope bucket ID')
+      try {
+        const thread = await threadManager.updateThread(validProjectId, validThreadId, {
+          scopeBucketId: validBucketId
+        })
+        // A move re-derives the thread's compatibility root from the destination
+        // scope, which forgets the branch of the checkout it left (a managed
+        // scope keeps its own worktree branch). Settle the destination's branch
+        // now so every surface reading the row never keeps showing the previous
+        // scope's branch.
+        settleThreadBranch(branchBackfillDeps, thread)
+        return { ok: true, thread }
+      } catch (error) {
+        // A refusal is feedback the renderer toasts, so it travels as data: a
+        // rejected handler would put an expected sentence in the main log for
+        // every drop the user makes on an impossible target. Anything else is a
+        // real failure and still rejects.
+        if (error instanceof ScopeSwapRefusal) return { ok: false, refusal: error.message }
+        throw error
+      }
+    }
+  )
   ipcMain.handle('thread:delete', (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     const validThreadId = validateEntityId(threadId, 'Thread ID')
+    // A wake armed on this thread has nowhere to go once it is gone.
+    cancelThreadFollowUps?.(validThreadId)
     threadDeletion.begin(
       validProjectId,
       validThreadId,

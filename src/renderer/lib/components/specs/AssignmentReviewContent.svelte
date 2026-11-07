@@ -35,6 +35,12 @@
     onChange: (content: AssignmentPlanContent) => void
     onWorkerModelChange?: (selection: AssignmentModelSelection) => void
     onSeniorModelChange?: (selection: AssignmentModelSelection) => void
+    /** Retargets a phase whose workers have not started yet, on a signed-off
+     *  Assignment. The phase model only reaches tasks that never picked one. */
+    onPhaseModelChange?: (
+      phaseId: string,
+      selection: AssignmentModelSelection
+    ) => void | Promise<void>
     onTaskModelChange?: (
       taskId: string,
       selection: AssignmentModelSelection
@@ -87,6 +93,7 @@
     onChange,
     onWorkerModelChange,
     onSeniorModelChange,
+    onPhaseModelChange,
     onTaskModelChange,
     onTaskScopeChange,
     onWorkerScopeChange,
@@ -194,12 +201,28 @@
 
   function canUpdateTaskModel(task: AssignmentTask): boolean {
     if (!readOnly) return true
+    // A signed-off task is retargetable until its worker exists, including while
+    // the Assignment is stopped: nothing has been dispatched yet, so there is
+    // nothing to preserve.
     return (
       onTaskModelChange !== undefined &&
       task.owner === 'worker' &&
       !task.threadId &&
-      task.status !== 'completed' &&
-      task.status !== 'stopped'
+      task.status !== 'completed'
+    )
+  }
+
+  /**
+   * A phase is reached the moment one of its workers is dispatched or finished;
+   * from then on the phase model no longer describes pending work, so the
+   * remaining tasks keep their own per-task controls instead.
+   */
+  function canUpdatePhaseModel(phaseId: string): boolean {
+    if (!readOnly) return true
+    if (onPhaseModelChange === undefined) return false
+    return !content.tasks.some(
+      (task) =>
+        task.phaseId === phaseId && (task.threadId !== undefined || task.status === 'completed')
     )
   }
 
@@ -350,11 +373,13 @@
       // Only the topmost phase doubles as the "default phase model" control:
       // changing it reflects from the top to the bottom and seeds the last-used
       // worker model. Deeper phase changes stay local to their own cascade.
-      if (!readOnly) {
-        for (const [phaseId, selection] of phaseEntries) {
-          const index = content.phases.findIndex((phase) => phase.id === phaseId)
-          if (index === 0) onWorkerModelChange?.(selection)
+      for (const [phaseId, selection] of phaseEntries) {
+        if (readOnly) {
+          if (canUpdatePhaseModel(phaseId)) await onPhaseModelChange?.(phaseId, selection)
+          continue
         }
+        const index = content.phases.findIndex((phase) => phase.id === phaseId)
+        if (index === 0) onWorkerModelChange?.(selection)
       }
 
       // Task models are local to the task; worker-task edits never mutate the
@@ -593,9 +618,9 @@
       class="scroll-mt-5 space-y-3"
       aria-label={phase.title}
     >
-      <div class="flex flex-wrap items-start justify-between gap-3">
-        <div class="min-w-0 flex-1">
-          <div class="flex items-center gap-1.5">
+      <div class="space-y-1">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div class="flex min-w-0 flex-1 items-center gap-1.5">
             <EditableMarkdown
               {readOnly}
               class={compact
@@ -627,61 +652,61 @@
               >
             {/if}
           </div>
-          <EditableMarkdown
-            {readOnly}
-            class="mt-1 text-sm leading-7 text-muted outline-none focus:bg-surface focus:text-foreground"
-            text={phase.description}
-            fallback="No phase description."
-            ariaLabel={`Description for ${phase.title}`}
-            onChange={(value) => updatePhaseText(phase.id, 'description', value)}
-          />
-          {@render AnnotationBubbles(`phase:${phase.id}`)}
-        </div>
-        {#if !readOnly}
-          <div class="flex items-center gap-1.5">
-            <ModelPicker
-              {providers}
-              {projectId}
-              harnessId={selectedPhaseModel.harnessId}
-              providerId={selectedPhaseModel.providerId}
-              modelId={selectedPhaseModel.modelId}
-              accountId={selectedPhaseModel.accountId}
-              {favoriteModels}
-              {recentModels}
-              {onRemoveRecent}
-              side="bottom"
-              variant="action"
-              label="Phase model"
-              onSelect={(providerId, modelId, harnessId, accountId) =>
-                updatePhaseModel(phase.id, providerId, modelId, harnessId, accountId)}
-              {onToggleFavorite}
-              {onReorderFavorite}
-              thinkingLevel={selectedPhaseModel.thinkingLevel}
-              runtimeSettings={selectedPhaseModel}
-              onSelectRuntime={(runtime) =>
-                queuePhaseSelection(phase.id, { ...selectedPhaseModel, ...runtime })}
-              onSelectThinking={(level) =>
-                updatePhaseModel(
-                  phase.id,
-                  selectedPhaseModel.providerId,
-                  selectedPhaseModel.modelId,
-                  selectedPhaseModel.harnessId,
-                  selectedPhaseModel.accountId,
-                  level
-                )}
-            />
-            {#if projectId}
-              <WorkerScopePicker
+          {#if !readOnly || canUpdatePhaseModel(phase.id)}
+            <div class="flex items-center gap-1.5">
+              <ModelPicker
+                {providers}
                 {projectId}
-                inheritBucketId={phaseInherit.bucketId}
-                inheritFallbackName={phaseInherit.fallbackName}
-                inheritHint={phaseInherit.hint}
-                value={phase.workerScope ?? { mode: 'inherit' }}
-                onSelect={(choice) => updatePhaseScope(phase.id, choice)}
+                harnessId={selectedPhaseModel.harnessId}
+                providerId={selectedPhaseModel.providerId}
+                modelId={selectedPhaseModel.modelId}
+                accountId={selectedPhaseModel.accountId}
+                {favoriteModels}
+                {recentModels}
+                {onRemoveRecent}
+                side="bottom"
+                variant="action"
+                label="Phase model"
+                onSelect={(providerId, modelId, harnessId, accountId) =>
+                  updatePhaseModel(phase.id, providerId, modelId, harnessId, accountId)}
+                {onToggleFavorite}
+                {onReorderFavorite}
+                thinkingLevel={selectedPhaseModel.thinkingLevel}
+                runtimeSettings={selectedPhaseModel}
+                onSelectRuntime={(runtime) =>
+                  queuePhaseSelection(phase.id, { ...selectedPhaseModel, ...runtime })}
+                onSelectThinking={(level) =>
+                  updatePhaseModel(
+                    phase.id,
+                    selectedPhaseModel.providerId,
+                    selectedPhaseModel.modelId,
+                    selectedPhaseModel.harnessId,
+                    selectedPhaseModel.accountId,
+                    level
+                  )}
               />
-            {/if}
-          </div>
-        {/if}
+              {#if !readOnly && projectId}
+                <WorkerScopePicker
+                  {projectId}
+                  inheritBucketId={phaseInherit.bucketId}
+                  inheritFallbackName={phaseInherit.fallbackName}
+                  inheritHint={phaseInherit.hint}
+                  value={phase.workerScope ?? { mode: 'inherit' }}
+                  onSelect={(choice) => updatePhaseScope(phase.id, choice)}
+                />
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <EditableMarkdown
+          {readOnly}
+          class="text-sm leading-7 text-muted outline-none focus:bg-surface focus:text-foreground"
+          text={phase.description}
+          fallback="No phase description."
+          ariaLabel={`Description for ${phase.title}`}
+          onChange={(value) => updatePhaseText(phase.id, 'description', value)}
+        />
+        {@render AnnotationBubbles(`phase:${phase.id}`)}
       </div>
 
       <div class="space-y-3">

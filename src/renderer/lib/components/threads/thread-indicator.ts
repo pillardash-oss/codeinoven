@@ -22,13 +22,25 @@ import { isOrchestrationChildThread, type Thread } from '$shared/types'
  * transient action is the more urgent fact, and the Engineering mark returns
  * the moment the slot is free.
  *
+ * `display` is an agent mirroring the device it is working on (an emulator, a
+ * simulator, a phone on a cable), reported by the `ext_simulation` call that asked
+ * the panel to show it. It competes on the same "last action wins" rule.
+ *
  * `orchestrator` is the durable workstation mark: this thread started work in
  * another project with `cio_orchestrate_dispatch`. It is a fact about the thread
  * that asked, not about the run, so it appears on every thread kind   a project
  * thread, a chat, an assistant task   and yields the slot to live actions for the
  * same reason the Engineering mark does.
+ *
+ * `pawn` is the durable delegation mark: this thread spawned a pawn agent   a
+ * worker thread of its own that answers only to it (`cio_pawn_agent`). A pawn is
+ * hidden from the thread list and lives on its own thread, so the mark is the one
+ * place the spawner's row says the work it started belongs to it (the pawn board
+ * lists those threads). Like the other durable marks it is a fact about the
+ * thread, not an action in flight, so it never takes the slot from a live one.
  */
 export type ThreadIndicator =
+  | 'display'
   | 'recording'
   | 'speaking'
   | 'transcribing'
@@ -41,6 +53,7 @@ export type ThreadIndicator =
   | 'browser-screen'
   | 'engineering'
   | 'orchestrator'
+  | 'pawn'
 
 export interface ThreadIndicatorCandidate {
   indicator: ThreadIndicator

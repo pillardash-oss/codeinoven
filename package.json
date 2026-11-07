@@ -1,6 +1,6 @@
 {
   "name": "codeinoven",
-  "version": "0.5.68",
+  "version": "0.5.69",
   "description": "CodeInOven   Desktop workstation for coordinated agentic software engineering",
   "license": "MIT",
   "packageManager": "bun@1.4.3",
@@ -80,7 +80,19 @@
     "winget:manifest": "bun scripts/winget-manifest.ts",
     "msix:check": "bun scripts/msix.ts --check",
     "msix:build": "bun scripts/msix.ts",
-    "msix:submit": "bun scripts/store-submission.ts"
+    "msix:submit": "bun scripts/store-submission.ts",
+    "services:db:setup": "bash services/backend/scripts/db-setup.sh",
+    "services:backend:dev": "cd services/backend && go run ./cmd/server",
+    "services:backend:seed": "cd services/backend && go run ./cmd/seed",
+    "services:mobile:dev": "cd services/mobile && bun run dev",
+    "services:mobile:build": "cd services/mobile && bun run build",
+    "services:mobile:check": "cd services/mobile && bun run check",
+    "services:mobile:android": "bash services/mobile/scripts/mobile-dev.sh",
+    "services:mobile:backend": "bash services/mobile/scripts/backend-dev.sh",
+    "services:mobile:app": "bash services/mobile/scripts/android-app.sh",
+    "services:mobile:db:setup": "bash services/backend/scripts/db-setup.sh codeinoven_mobile_dev",
+    "services:backend:dev:mobile": "cd services/backend && HTTP_ADDR=127.0.0.1:8081 PUBLIC_BASE_URL=http://127.0.0.1:8081 DATABASE_URL='postgres://localhost:5432/codeinoven_mobile_dev?sslmode=disable' go run ./cmd/server",
+    "services:backend:seed:mobile": "cd services/backend && DATABASE_URL='postgres://localhost:5432/codeinoven_mobile_dev?sslmode=disable' go run ./cmd/seed"
   },
   "dependencies": {
     "@codemirror/commands": "^6.11.1",
@@ -112,8 +124,8 @@
   "devDependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.280",
     "@baybreezy/file-extension-icon": "^0.0.5",
-    "@earendil-works/pi-coding-agent": "1.4.0",
-    "@earendil-works/pi-mcp": "1.4.0",
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-mcp": "1.5.0",
     "@electron-toolkit/utils": "^4.0.0",
     "@electron/fuses": "2.1.3",
     "@electron/osx-sign": "2.7.0",
@@ -122,7 +134,7 @@
     "@lobehub/icons-static-svg": "^1.101.0",
     "@mediabunny/server": "1.61.3",
     "@modelcontextprotocol/sdk": "^1.32.2",
-    "@pdslng/cio-icon": "^0.1.1",
+    "@pdslng/cio-icon": "^0.3.0",
     "@remotion/video-matting": "4.0.535",
     "@resvg/resvg-js": "^2.6.2",
     "@sveltejs/vite-plugin-svelte": "^7.3.1",

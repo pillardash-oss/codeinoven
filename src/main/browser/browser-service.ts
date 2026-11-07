@@ -31,6 +31,7 @@ import type {
   BrowserShortcutChord,
   BrowserSwitcherBindings,
   BrowserTabDestroyReason,
+  BrowserAgentTabClaim,
   BrowserThreadBrowserPage,
   BrowserScrollbarTheme,
   BrowserTransportCommand,
@@ -52,7 +53,8 @@ import {
   type BrowserExtensionSidePanelOpenRequest,
   type BrowserExtensionTabEventName,
   type BrowserExtensionTabReplay,
-  type BrowserExtensionWebNavigationEventName
+  type BrowserExtensionWebNavigationEventName,
+  type BrowserExtensionWindowEventName
 } from './extensions/browser-extension-service'
 import { PermissionPromptWindow } from './permission-prompt-window'
 import { BrowserOverlayWindow } from './browser-overlay-window'
@@ -165,33 +167,40 @@ export class BrowserService {
    */
   public readonly assistantPageTabIds = new Map<string, string>()
   /**
-   * The page each conversation's thread browser is in use on, by conversation
-   * scope.
+   * The page each conversation's thread browser is assigned, by conversation.
    *
    * The thread browser is the browser a conversation shares with its agent, so
-   * this is what lets the agent's browser capability reach the page the user is
-   * reading: without it an agent could only ever answer about a page it opened
-   * itself. Keyed by scope because that is what the strip groups its tabs by (a
-   * project's threads share one browser, an inbox chat and an assistant own
-   * theirs), and it holds the whole reference so a page this process has no view
-   * for yet can be mounted. The app reports it; nothing an agent calls moves the
-   * thread browser to another tab or another box.
+   * this is what lets the agent's browser capability reach the page the user handed
+   * that conversation: without it an agent could only ever answer about a page it
+   * opened itself. Keyed by the conversation rather than by the strip, because a
+   * project's threads share one strip and each of them keeps its own page, so
+   * browsing in one thread never takes another thread's page away. It holds the
+   * whole reference so a page this process has no view for yet can be mounted. The
+   * app reports it; nothing an agent calls moves the thread browser to another tab
+   * or another box.
    */
   public readonly threadBrowserPages = new Map<string, BrowserThreadBrowserPage>()
   /**
    * The thread browser page each agent resolved, by context key (project and
    * thread).
    *
-   * A project's threads share one strip and one binding, so "the page the thread
-   * browser is on" moves whenever the user switches tabs or a sibling thread
-   * shows a preview. An agent that had resolved that page keeps it here instead
-   * of being silently redirected to whatever took the strip's place: `page
-   * "user"` answers the pinned tab until it is gone, and `page "strip"` asks for
-   * the strip's current page and re-pins. The pin is a tab reference rather than
-   * the strip's own binding, so a page this process has no view for yet is still
-   * mounted through the ordinary binding path.
+   * The binding above is the live answer and wins, because pointing a
+   * conversation's strip at another tab is how the user hands the agent a different
+   * page. This is the fallback for the moment the binding is gone while the tab
+   * lives on, so a panel closing never costs a thread the tab it was given, and it
+   * is dropped only when the tab itself is closed. Every write to it lands on a page
+   * resolved for this conversation, so no thread can inherit a sibling's tab.
    */
   public readonly agentUserPageTabIds = new Map<string, string>()
+  /**
+   * The page the previous browser call for each context worked on, by context key.
+   *
+   * A conversation's page can legitimately change between two calls, because the user
+   * may point the strip at another tab. A model that is mid-edit is not helped by a
+   * silent move, and the page it was on is only knowable here: so the answer to a call
+   * whose tab changed says what changed and which page it was on before.
+   */
+  public readonly agentPageTargets = new Map<string, { tabId: string; url: string }>()
   public readonly configuredSessions = new Set<string>()
   /** Where the browser page's identity preload was written, or null if it could not be. */
   public browserIdentityPreloadPath: string | null = null
@@ -904,20 +913,12 @@ export class BrowserService {
     return this.cursorAppearance.current()
   }
 
-  async paintAgentCursor(
-    tab: BrowserTab,
-    point: { x: number; y: number },
-    press: boolean
-  ): Promise<void> {
-    return this.agentScriptUnit.paintAgentCursor(tab, point, press)
+  async paintAgentCursor(tab: BrowserTab, point: { x: number; y: number }): Promise<void> {
+    return this.agentScriptUnit.paintAgentCursor(tab, point)
   }
 
-  async paintAgentCursorAtElement(
-    tab: BrowserTab,
-    selector: string,
-    press: boolean
-  ): Promise<void> {
-    return this.agentScriptUnit.paintAgentCursorAtElement(tab, selector, press)
+  async paintAgentCursorAtElement(tab: BrowserTab, selector: string): Promise<void> {
+    return this.agentScriptUnit.paintAgentCursorAtElement(tab, selector)
   }
 
   requiredInputString(input: Record<string, unknown>, field: string, allowEmpty = false): string {
@@ -962,8 +963,16 @@ export class BrowserService {
     url: string
     /** Bring the tab to the user once it is loaded, or leave it in the sidebar. */
     reveal: boolean
+    /** The tab the app remembers for this screen, or null when it remembers none. */
+    preferredTabId?: string | null
   }): Promise<{ tabId: string; tab: 'reused' | 'opened' }> {
     return this.surfacesUnit.openDesignScreen(input)
+  }
+
+  /** Whether this browser still holds one tab, which is what makes a remembered
+   *  tab trustworthy rather than stale. */
+  hasTab(tabId: string): boolean {
+    return this.surfacesUnit.hasTab(tabId)
   }
 
   async showThreadWorkTab(input: {
@@ -1181,6 +1190,10 @@ export class BrowserService {
     this.tabsUnit.destroy(tabId, reason)
   }
 
+  closeUnreferencedAgentTabs(contextKey: string): number {
+    return this.tabsUnit.closeUnreferencedAgentTabs(contextKey)
+  }
+
   // ---------------------------------------------------------------------------
   // browser-service-popups.ts
   // ---------------------------------------------------------------------------
@@ -1225,6 +1238,13 @@ export class BrowserService {
 
   openOptionsPageFromPage(contentsId: number): void {
     this.extensionPagesUnit.openOptionsPageFromPage(contentsId)
+  }
+
+  openTabFromExtensionPage(
+    contentsId: number,
+    request: { url: string; active: boolean }
+  ): number | null {
+    return this.extensionPagesUnit.openTabFromExtensionPage(contentsId, request)
   }
 
   private openExtensionWindowFromWorker(request: BrowserExtensionActionPopupOpenRequest): void {
@@ -1277,6 +1297,15 @@ export class BrowserService {
     args: unknown[]
   ): void {
     this.extensionRuntimeUnit.notifyExtensionTab(tabId, projectId, boxId, name, args)
+  }
+
+  notifyExtensionWindow(
+    projectId: string,
+    boxId: string | null,
+    name: BrowserExtensionWindowEventName,
+    args: unknown[]
+  ): void {
+    this.extensionRuntimeUnit.notifyExtensionWindow(projectId, boxId, name, args)
   }
 
   reportExtensionPageTabs(tabId: string): void {
@@ -1641,7 +1670,7 @@ export class BrowserService {
   // ---------------------------------------------------------------------------
 
   utilityTarget(input: {
-    scope: string
+    projectId: string
     threadId: string
     contextKey: string
     page: BrowserUtilityPage | null
@@ -1649,8 +1678,29 @@ export class BrowserService {
     return this.conversationPagesUnit.utilityTarget(input)
   }
 
+  conversationBoxFor(projectId: string, threadId: string): string | null {
+    return this.conversationPagesUnit.conversationBoxFor(projectId, threadId)
+  }
+
+  bindConversationPage(projectId: string, threadId: string, page: BrowserThreadBrowserPage): void {
+    this.conversationPagesUnit.bindConversationPage(projectId, threadId, page)
+  }
+
+  unbindConversationPage(projectId: string, threadId: string): void {
+    this.conversationPagesUnit.unbindConversationPage(projectId, threadId)
+  }
+
+  agentTabClaims(): BrowserAgentTabClaim[] {
+    return this.conversationPagesUnit.agentTabClaims()
+  }
+
+  previousPageTarget(contextKey: string): { tabId: string; url: string } | null {
+    return this.conversationPagesUnit.previousPageTarget(contextKey)
+  }
+
   threadBrowserHint(
-    scope: string,
+    projectId: string,
+    threadId: string,
     answeredTabId: string | null,
     contextKey: string
   ): {
@@ -1663,7 +1713,12 @@ export class BrowserService {
     }
     userPage?: { tabId: string; url: string; title: string }
   } {
-    return this.conversationPagesUnit.threadBrowserHint(scope, answeredTabId, contextKey)
+    return this.conversationPagesUnit.threadBrowserHint(
+      projectId,
+      threadId,
+      answeredTabId,
+      contextKey
+    )
   }
 
   conversationScope(projectId: string, threadId: string): string {

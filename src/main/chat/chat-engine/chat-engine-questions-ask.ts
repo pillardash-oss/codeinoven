@@ -10,10 +10,12 @@ import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validatio
 import { InactiveQuestionTurnError, QuestionRequestGoneError } from '../../drivers/driver.interface'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { utilitySuggestionResolution } from '../../../lib/utility-suggestion'
+import { mcpSignInResolution } from '../../../lib/mcp-sign-in'
 import type {
   AgentEvent,
   AgentMessage,
   AgentQuestionResolution,
+  AgentSecretDraft,
   PendingAgentQuestionRequest
 } from '../../../lib/types'
 import type { PendingQuestionInfo } from './chat-engine-types'
@@ -54,6 +56,21 @@ export class ChatEngineQuestionsAsk {
       requestId
     )
     const safeAnswers = validateQuestionAnswers(answers, pending.request.questions)
+    // An MCP sign-in card is app-owned too: the card already signed the user in
+    // through the shared OAuth flow, so the answer settles the gateway connection
+    // that hit the server's refusal instead of travelling to a harness. Nothing is
+    // persisted from it: the retried tool call is the record the agent needs.
+    if (pending.settleMcpSignIn) {
+      await this.host.units['questions'].resolvePendingQuestion(
+        pending,
+        'answered',
+        safeAnswers,
+        async () => {
+          pending.settleMcpSignIn?.(mcpSignInResolution(safeAnswers))
+        }
+      )
+      return
+    }
     // An agent-proposed capability is an app-owned request with no harness behind
     // it: the user's choice settles the waiting gateway call here, and only the
     // gateway installs, and only on acceptance.
@@ -231,6 +248,20 @@ export class ChatEngineQuestionsAsk {
         undefined,
         async () => {
           pending.settleSecret?.({ status: 'dismissed', secrets: [] })
+        }
+      )
+      return
+    }
+    if (pending.settleMcpSignIn) {
+      // A sign-in card has no harness side either: declining it settles the
+      // waiting connection as un-authorized so the agent continues without the
+      // server instead of hanging on a request the user closed.
+      await this.host.units['questions'].resolvePendingQuestion(
+        pending,
+        'dismissed',
+        undefined,
+        async () => {
+          pending.settleMcpSignIn?.({ status: 'declined' })
         }
       )
       return
@@ -482,6 +513,101 @@ export class ChatEngineQuestionsAsk {
       // countdown, under a card that still says it is paused.
       this.host.units['questions'].schedulePendingQuestion(pending)
     }
+    return structuredClone(pending.request)
+  }
+
+  /**
+   * Persist the draft progress of one secret card entry.
+   *
+   * A multi-secret card is filled over minutes, and the user routinely leaves
+   * the thread between two of them: the values typed so far, the reuse note on
+   * each entry and the entry they were looking at belong to the request, not to
+   * the mounted card, so they survive the card unmounting and are handed back
+   * when it mounts again. The draft never reaches `answers`, so it can never
+   * travel to a provider, the transcript, or a durable record, and it is dropped
+   * with the request the moment it settles.
+   *
+   * Saving is also the interaction that holds the countdown, exactly as a
+   * question draft does: a value must never be cut off mid-paste.
+   */
+  async updateSecretDraft(
+    projectId: string,
+    threadId: string,
+    requestId: string,
+    questionIndex: number,
+    draft: AgentSecretDraft,
+    nextQuestionIndex?: number
+  ): Promise<PendingAgentQuestionRequest | null> {
+    this.host.units['messages'].touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    requestId = validateEntityId(requestId, 'Question request ID', 256)
+    const pending = this.host.units['questions'].pendingQuestionForThread(
+      projectId,
+      threadId,
+      requestId
+    )
+    if (!pending) {
+      Logger.dev(`Ignoring secret draft for settled question request: ${requestId}`)
+      return null
+    }
+    assertQuestionIndex(questionIndex, pending.request.questions.length)
+    if (nextQuestionIndex !== undefined) {
+      assertQuestionIndex(nextQuestionIndex, pending.request.questions.length)
+    }
+    if (!pending.request.questions.some(isSecretQuestion)) {
+      throw new TypeError('This request is not a secret request')
+    }
+    if (typeof draft !== 'object' || draft === null || Array.isArray(draft)) {
+      throw new TypeError('Secret draft must be an object')
+    }
+    const alternativeMode = draft.alternativeMode === true
+    // A secret is sent exactly as the user typed or pasted it: a token may carry
+    // leading or trailing whitespace that is part of the value, so the draft is
+    // never trimmed here.
+    const draftString = (value: unknown, label: string): string => {
+      if (value === undefined) return ''
+      if (typeof value !== 'string' || value.length > 20_000 || value.includes('\0')) {
+        throw new TypeError(`${label} must be a string of at most 20000 characters`)
+      }
+      return value
+    }
+    // Only the branch on screen is kept: an entry answered with a value never
+    // carries a stale instruction, and one answered by an instruction never
+    // carries a value, so clearing either field in the card clears it here too.
+    const value = alternativeMode
+      ? ''
+      : draftString(draft.value, `Secret value ${questionIndex + 1}`)
+    const alternative = alternativeMode
+      ? draftString(draft.alternative, `Alternative instruction ${questionIndex + 1}`)
+      : ''
+    // A resolution is already in flight; the draft is not accepted and the card
+    // is told the state the main process still holds instead of an error.
+    if (pending.resolving) return structuredClone(pending.request)
+
+    const drafts = (pending.request.secretDrafts ?? []).slice()
+    while (drafts.length < pending.request.questions.length) drafts.push({})
+    drafts[questionIndex] = {
+      ...(value ? { value } : {}),
+      ...(alternative ? { alternative } : {}),
+      ...(alternativeMode ? { alternativeMode: true } : {})
+    }
+    pending.request.secretDrafts = drafts
+    // The entry on screen is part of the draft: coming back to the card returns
+    // to the secret the user was working on rather than the first one.
+    pending.request.activeQuestionIndex = nextQuestionIndex ?? questionIndex
+    if (!pending.request.interactedQuestionIndexes.includes(questionIndex)) {
+      pending.request.interactedQuestionIndexes = [
+        ...pending.request.interactedQuestionIndexes,
+        questionIndex
+      ]
+    }
+    if (pending.timer) {
+      clearTimeout(pending.timer)
+      pending.timer = undefined
+    }
+    pending.request.expiresAt = undefined
+    this.host.units['questions'].schedulePendingQuestion(pending)
     return structuredClone(pending.request)
   }
 

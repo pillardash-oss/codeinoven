@@ -60,6 +60,17 @@ export interface AgentAssistRequest {
     settings: ThreadSettings
     project: Project
   }) => Promise<AgentAssistPrepared>
+  /**
+   * Receives the thread the moment it exists, before it opens or sends.
+   *
+   * Both deliveries mint the same thread, so the surface that raised the request
+   * records it here and can point back at the run afterwards, whether the user
+   * sent the brief straight away or reviewed it first. Without it a surface only
+   * ever held the thread if it created the record itself (a PR assignment), and
+   * a conflict or divergence handoff had no way back to the conversation it
+   * started.
+   */
+  onThread?: (threadId: string) => void
 }
 
 class AgentAssistStore {

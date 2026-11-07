@@ -80,6 +80,23 @@ describe('parseDeploymentLog', () => {
     ])
   })
 
+  it('salvages whole entries from a payload cut mid-entry', () => {
+    const raw = JSON.stringify([
+      { output: 'first step', type: 'stdout', timestamp: '2026-08-11T06:49:50.202938Z' },
+      { output: 'second step', type: 'stdout', timestamp: '2026-08-11T06:49:51.202938Z' }
+    ])
+    const lines = parseDeploymentLog(raw.slice(0, raw.length - 20))
+
+    expect(lines).toEqual([
+      { text: '2026-Aug-11 06:49:50.202938', isError: false },
+      { text: 'first step', isError: false },
+      {
+        text: '[log cut short when it was loaded, so only the entries above are shown]',
+        isError: false
+      }
+    ])
+  })
+
   it('splits multi-line output across separate lines', () => {
     const lines = parseDeploymentLog(
       JSON.stringify([

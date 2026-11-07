@@ -1,0 +1,416 @@
+/* Lists: the thread panel, the projects reading of it, and the assistant panel.
+
+   These rules are the design's own row grammar. A row is a mark, a name, the one
+   line that says who and what state it is in, and its age. Separators start on
+   the text column rather than the screen edge, so the marks stand clear and the
+   eye runs down the names. */
+
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  /* The dock floats over the list, so the last row can still be reached. */
+  padding-bottom: 5.5rem;
+  animation: list-in 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.section {
+  padding-top: 0;
+}
+
+.section-label {
+  margin: 0;
+  padding: 0.875rem var(--gutter) 0.375rem;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-dimmed);
+}
+
+/* ---- One row ----
+   The row is a flex line rather than a grid, because a flat row leads with a
+   project mark and a strip row leads with a state mark, and both leave the body
+   to take whatever width is left. */
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  width: 100%;
+  padding: 0.75rem var(--gutter);
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 120ms ease-out;
+}
+
+.row + .row::before {
+  content: '';
+  position: absolute;
+  left: var(--row-inset);
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: var(--color-border);
+}
+
+.row:hover,
+.row:active {
+  background: var(--color-elevated);
+}
+
+.body-cell {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.row-title {
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: -0.012em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-title.unread {
+  font-weight: 500;
+}
+
+.row-line {
+  display: block;
+  margin-top: 0.125rem;
+  font-size: 0.875rem;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.row-project {
+  font-weight: 400;
+}
+
+.row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-top: 0.3125rem;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex: none;
+}
+
+.age {
+  flex: none;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A state dot and its count read as one token. */
+.dot {
+  flex: none;
+  width: 0.3125rem;
+  height: 0.3125rem;
+  background: currentColor;
+}
+
+.dot[data-tone='working'] {
+  background: var(--color-info);
+}
+
+.dot[data-tone='needs'] {
+  background: var(--color-warning);
+}
+
+.dot[data-tone='error'] {
+  background: var(--color-danger);
+}
+
+.dot[data-tone='spec'] {
+  background: var(--color-thread-spec);
+}
+
+.dot[data-tone='done'] {
+  background: var(--color-success);
+}
+
+/* ---- The state mark and its spine ----
+   The design's own vocabulary: the triangle means parked on the person, the
+   open ring means working, the nib means a spec is ready. The dashed line under
+   the mark joins a run that is still going to the row beneath it, which is the
+   spine that makes a project read as one continuous piece of work. */
+.tmark {
+  flex: none;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  width: 1rem;
+  min-height: 1rem;
+}
+
+.tmark svg {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex: none;
+}
+
+.tmark i {
+  flex: 1;
+  width: 0;
+  border-left: 1px dashed currentColor;
+  opacity: 0.5;
+}
+
+.tmark[data-rail='none'] i {
+  display: none;
+}
+
+/* A flat row closes with its state mark, so the mark centres itself on the row
+   instead of stretching the spine through it. */
+.row.flat > .tmark {
+  align-self: center;
+  min-height: 0;
+}
+
+/* ---- Threads read as projects ----
+   One foldable strip per project, exactly as the desktop sidebar draws it: the
+   strip carries the project's mark and name, the states that exist right now
+   under the name, and the threads inside it when it is open. A phone has no
+   hover, so the strip's own state stands open rather than being revealed. */
+.strip {
+  border-bottom: 1px solid var(--color-border);
+}
+
+.strip + .strip {
+  padding-top: 0.25rem;
+}
+
+.strip-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 3.5rem;
+  padding: 0.25rem calc(var(--gutter) - 0.75rem) 0.25rem var(--gutter);
+}
+
+.strip-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.125rem;
+  min-width: 0;
+  flex: 1;
+  min-height: 2.75rem;
+  padding: 0.375rem 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.strip-id {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.strip-name {
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.strip-caret {
+  flex: none;
+  width: 0.875rem;
+  height: 0.875rem;
+  color: var(--ink-meta);
+  transition: transform 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.strip[data-open='false'] .strip-caret {
+  transform: rotate(-90deg);
+}
+
+/* The state line sits under the name, on the same column the name starts on. */
+.strip-state {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding-left: calc(0.875rem + 0.5rem + 1.75rem);
+  font-size: 0.75rem;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-meta);
+}
+
+.strip-state > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.strip-body {
+  padding-bottom: 0.5rem;
+}
+
+/* A row inside a strip sits under the project name, so its own mark is the
+   thread's state, never the project's icon: the strip already said the project. */
+.strip .row {
+  padding-left: calc(var(--gutter) + 1.5rem);
+}
+
+.strip .row + .row::before {
+  left: calc(var(--gutter) + 1.5rem);
+}
+
+.project-empty {
+  margin: 0;
+  padding: 0.5rem var(--gutter) 0.75rem calc(var(--gutter) + 2.5rem);
+  font-size: 0.875rem;
+  color: var(--color-muted);
+}
+
+/* ---- Assistants ----
+   A scheduled assistant folds open to what it does; a manual one has no schedule
+   to explain, so it stays a row. */
+.chev {
+  flex: none;
+  align-self: flex-start;
+  margin-top: 0.1875rem;
+  color: var(--color-muted);
+  transition: transform 160ms cubic-bezier(0.215, 0.61, 0.355, 1);
+}
+
+.row[aria-expanded='true'] .chev {
+  transform: rotate(180deg);
+}
+
+.detail {
+  padding: 0 var(--gutter) 0.75rem var(--row-inset);
+  overflow: hidden;
+}
+
+.run {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4375rem 0;
+  font-size: 0.8125rem;
+  color: var(--color-muted);
+}
+
+.run + .run {
+  border-top: 1px solid var(--color-border);
+}
+
+.run span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run em {
+  flex: none;
+  font-style: normal;
+  font-size: 0.75rem;
+  color: var(--ink-meta);
+}
+
+/* Filters are three quiet words with a gold underline on the current one. */
+.tabs {
+  flex: none;
+  display: flex;
+  gap: 1.25rem;
+  padding: 0 var(--gutter) 0 calc(var(--gutter) - 0.625rem);
+  background: var(--color-app);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  position: relative;
+  flex: none;
+  padding: 0.6875rem 0.625rem 0.8125rem;
+  margin: 0 -0.625rem;
+  border: 0;
+  background: transparent;
+  color: var(--ink-meta);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color 120ms ease-out;
+}
+
+.tab:hover {
+  color: var(--color-muted);
+}
+
+.tab[aria-pressed='true'] {
+  color: var(--color-foreground);
+  font-weight: 400;
+}
+
+.tab[aria-pressed='true']::after {
+  content: '';
+  position: absolute;
+  left: 0.625rem;
+  right: 0.625rem;
+  bottom: 0.375rem;
+  height: 2px;
+  background: var(--color-accent);
+}
+
+.skeleton-row {
+  padding: 0.875rem var(--gutter);
+}
+
+.skeleton-row span {
+  display: block;
+  height: 2.25rem;
+  background: var(--color-elevated);
+}
+
+.retry-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--gutter) 1rem;
+}

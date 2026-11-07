@@ -9,7 +9,11 @@ import { realpathSync } from 'node:fs'
 import { DESIGN_EXPORT_FORMATS } from '../../lib/design/design-export'
 import { DESIGN_REVIEW_RUBRIC } from '../../lib/design/design-review'
 import { isAbsolute, relative, resolve, sep } from 'node:path'
-import { DEFAULT_WORK_ROOTS, workRootForKind } from '../../lib/design/work-roots'
+import {
+  DEFAULT_WORK_ROOTS,
+  isAgentScratchDirectory,
+  workRootForKind
+} from '../../lib/design/work-roots'
 import type {
   AuthoredWorkKind,
   DesignCheckpointResult,
@@ -47,9 +51,17 @@ import { openVideoPreview } from '../video/video-preview-session'
 import { readCompositionManifest } from '../video/video-manifest'
 import { listProjectWorkFolders } from './design-listing'
 import { listDesignScreens } from './design-screens'
-import { readScreenCanvasState, readScreenCanvas, screenCanvasScreen } from './screen-canvas-page'
+import { readScreenCanvas, screenCanvasScreen, screenCanvasStateOf } from './screen-canvas-page'
+import { ensureScreenStates } from './design-states-discovery'
 import { DesignHistoryService, type DesignHistoryTarget } from './design-history-service'
+import {
+  resolveDesignRevisionId,
+  summarizeDesignHistory,
+  type DesignHistoryCapabilityResult,
+  type DesignRestoreCapabilityResult
+} from './design-history-capability'
 import { openDesignPreview } from './design-preview-session'
+import { PreviewTargetRegistry } from './preview-target-registry'
 import {
   currentWorkRoot,
   currentWorkRoots,
@@ -285,6 +297,15 @@ export class DesignService {
   private readonly screenShots = new Map<string, DesignScreenShot>()
   /** The sweep in flight per thread, so starting another one supersedes the first. */
   private readonly screenSweeps = new Map<string, number>()
+  /**
+   * Which tab and which preview server each screen, canvas and live preview was
+   * given, remembered across a restart.
+   *
+   * Owned here because this service is what opens a design for the user: the
+   * board, the capability's preview and every capture go through `serveWork`, so
+   * one record keeps a screen's tab and its folder's port from drifting apart.
+   */
+  private readonly previewTargets = new PreviewTargetRegistry()
 
   constructor(private readonly options: DesignServiceOptions) {
     this.designs = new DesignRepo(options.database)
@@ -511,6 +532,9 @@ export class DesignService {
           projectScope: !scope.appOwned,
           onRelocated: (moves) => {
             this.followRelocatedFolders(projectId, details.kind, moves)
+            // A moved folder is a new directory, so the tab and port remembered
+            // for every screen under the old name are stale by definition.
+            for (const move of moves) void this.previewTargets.forgetFolder(projectId, move.from)
             this.options.onWorkRelocated?.(projectId, moves)
           },
           list: async () => (await this.projectWork(projectId, threadId))[details.kind],
@@ -658,6 +682,99 @@ export class DesignService {
     })
   }
 
+  /**
+   * The design capability's `history`: the folder's timeline, as an agent reads it.
+   *
+   * Reading captures whatever is on disk first, so a state the app has not seen
+   * becomes a revision before the timeline is answered, and the rewind therefore
+   * has a point to return to. The board reads the same timeline; this is the
+   * agent's own door to it, so a turn that broke a screen can go back without the
+   * user doing it by hand.
+   */
+  async historyCapability(
+    projectId: string,
+    threadId: string,
+    input: Record<string, unknown>
+  ): Promise<DesignHistoryCapabilityResult> {
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(
+        projectId,
+        threadId,
+        await this.historyDirectory(threadId, input['directory'])
+      )
+      const state = await this.history.state(target, 'agent')
+      const page = input['page']
+      if (typeof page !== 'string' || !page.trim()) return summarizeDesignHistory(state)
+      return summarizeDesignHistory(state, await this.history.pageState(target, requirePath(page)))
+    })
+  }
+
+  /**
+   * The design capability's `restore`: the board's Undo, reachable by an agent.
+   *
+   * Whole folder, or one page when `page` is named, exactly as the two timeline
+   * buttons do. The current state is captured before anything is written, so a
+   * rewind is a step of its own and never a loss.
+   */
+  async restoreCapability(
+    projectId: string,
+    threadId: string,
+    input: Record<string, unknown>
+  ): Promise<DesignRestoreCapabilityResult> {
+    const page = input['page'] === undefined ? undefined : requirePath(input['page'])
+    return withWorkRegistryLock(projectId, async () => {
+      const target = await this.historyTarget(
+        projectId,
+        threadId,
+        await this.historyDirectory(threadId, input['directory'])
+      )
+      const before = await this.history.state(target, 'agent')
+      if (before.gitBacked) {
+        throw new Error(
+          'Git already tracks this folder, so the app keeps no timeline to rewind. Read and rewind this folder with Git.'
+        )
+      }
+      const revisionId = resolveDesignRevisionId(before.revisions, input['revision'])
+      if (!revisionId) {
+        throw new Error(
+          `No revision named "${String(input['revision'] ?? '')}" in ${target.directory}. Call the history operation for this folder to read the points it holds, then pass one revision number or revisionId.`
+        )
+      }
+      const point = before.revisions.find((revision) => revision.id === revisionId)
+      const sequence = point?.sequence ?? 0
+      if (page) {
+        const result = await this.history.restoreFile(target, revisionId, page)
+        this.options.onHistoryChanged?.(projectId, target.directory)
+        return {
+          directory: target.directory,
+          restored: { revision: sequence, revisionId, page },
+          history: summarizeDesignHistory(result.history, result.page)
+        }
+      }
+      const restored = await this.history.restore(target, revisionId)
+      this.options.onHistoryChanged?.(projectId, target.directory)
+      return {
+        directory: target.directory,
+        restored: { revision: sequence, revisionId },
+        history: summarizeDesignHistory(restored)
+      }
+    })
+  }
+
+  /**
+   * The folder a history or restore call is about.
+   *
+   * An agent that names no folder means the design this thread is working in, not
+   * the root every design lives under: snapshotting the root would put every
+   * other design in the same timeline as this one. The root remains the answer
+   * for a thread that has previewed nothing yet.
+   */
+  private async historyDirectory(threadId: string, directory: unknown): Promise<unknown> {
+    if (directory !== undefined) return directory
+    const current = await this.designs.forThreadViaWorker(threadId)
+    return current?.directory
+  }
+
   /** One page's own line through a folder's history. */
   async historyPage(
     projectId: string,
@@ -745,6 +862,7 @@ export class DesignService {
     // Dropping the generation is what stops a sweep still in flight for this
     // thread: its next screen finds a generation that is no longer its own.
     this.screenSweeps.delete(threadId)
+    void this.releasePreviewTargets(this.previewTargets.forgetThread(threadId))
   }
 
   /**
@@ -756,6 +874,13 @@ export class DesignService {
    * did design or video work even when the folder is gone. A thread works on one
    * folder at a time, so a later preview re-points the row instead of adding a
    * second one.
+   *
+   * A composition previewed out of the app's scratch tree is the exception: that
+   * folder is a delivery the agent is about to export and render inline, not a
+   * composition the user can open and edit, and a session recorded for it would
+   * leave the thread holding a video board over work nobody is editing. It is
+   * served either way, because a delivery is watched before it is exported; what
+   * it does not do is put the thread in an editing session.
    */
   recordPreview(input: {
     projectId: string
@@ -764,6 +889,7 @@ export class DesignService {
     entry: string | null
     kind: AuthoredWorkKind
   }): void {
+    if (input.kind === 'video' && isAgentScratchDirectory(input.directory)) return
     this.designs.upsert(input)
     // The capability previews inside a session the tag already opened, but the
     // mirror is unconditional so the row's marker never depends on which of the
@@ -925,6 +1051,25 @@ export class DesignService {
     this.history.forgetProject(projectId)
     for (const key of [...this.screenShots.keys()]) {
       if (key.startsWith(`${projectId}|`)) this.screenShots.delete(key)
+    }
+    void this.releasePreviewTargets(this.previewTargets.forgetProject(projectId))
+  }
+
+  /**
+   * Stop the preview servers nothing names any more.
+   *
+   * A server belongs to a folder and outlives any one screen, so forgetting a
+   * screen never stops it. What the registry answers here is only the folders no
+   * remaining record names, which is a session that has ended: the project or
+   * the thread that was looking at them is gone, so the port and the watcher
+   * behind it go with it rather than waiting for the least-recently-used sweep.
+   */
+  private async releasePreviewTargets(abandoned: Promise<string[]>): Promise<void> {
+    const roots = await abandoned.catch(() => [])
+    for (const root of roots) {
+      await this.options.previews.close(root).catch((error: unknown) => {
+        Logger.dev('A preview server left behind could not be stopped:', error)
+      })
     }
   }
 
@@ -1195,12 +1340,22 @@ export class DesignService {
     // screen it frames: its picture therefore goes stale exactly when the canvas
     // it pictures would have changed, with no stamp of its own to keep.
     const listed = await listDesignScreens(folder.absolute)
-    const canvas =
+    const canvasRead =
       listed.length === 0
         ? null
-        : screenCanvasScreen(
-            await readScreenCanvas({ folderAbsolute: folder.absolute, screens: listed })
-          )
+        : await readScreenCanvas({ folderAbsolute: folder.absolute, screens: listed })
+    const canvas = canvasRead === null ? null : screenCanvasScreen(canvasRead)
+    if (canvasRead !== null) {
+      // The sweep is the other moment a design is looked at, so it keeps the
+      // discovered states current too: a screen rewritten since the last read gets
+      // its state frames on the next canvas load without the user asking twice.
+      ensureScreenStates({
+        folderAbsolute: folder.absolute,
+        stamp: canvasRead.stamp,
+        screens: listed,
+        previews: this.options.previews
+      })
+    }
     const screens = canvas === null ? listed : [canvas, ...listed]
     const shotWidth = Math.min(
       MAX_THUMBNAIL_WIDTH,
@@ -1290,10 +1445,20 @@ export class DesignService {
     const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
     const folder = resolveServedFolder(scope.path, directory, currentWorkRoot('design', projectId))
     const screens = await listDesignScreens(folder.absolute)
-    return readScreenCanvasState({
+    // Reading the canvas is what starts discovery of the states its screens
+    // declare: the board asks for a canvas before the user opens one, so by the
+    // time the page is asked for, its state frames are usually already known.
+    const read = await readScreenCanvas({ folderAbsolute: folder.absolute, screens })
+    ensureScreenStates({
       folderAbsolute: folder.absolute,
+      stamp: read.stamp,
+      screens,
+      previews: this.options.previews
+    })
+    return screenCanvasStateOf({
+      plan: read.plan,
       directory: folder.display,
-      screens
+      metadataError: read.metadataError
     })
   }
 
@@ -1430,7 +1595,6 @@ export class DesignService {
      */
     posterSeconds?: number
   }): Promise<ServedWork> {
-    const deps = { previews: this.options.previews, browser: this.options.browser }
     const target = {
       projectPath: input.projectPath,
       projectId: input.projectId,
@@ -1444,14 +1608,24 @@ export class DesignService {
     }
     const result =
       input.kind === 'video'
-        ? await openVideoPreview(deps, {
-            ...target,
-            mode: input.tab === 'board' ? ('board' as const) : ('thread' as const)
-          })
-        : await openDesignPreview(deps, {
-            ...target,
-            tab: input.tab === 'screen' ? ('screen' as const) : ('thread' as const)
-          })
+        ? await openVideoPreview(
+            { previews: this.options.previews, browser: this.options.browser },
+            {
+              ...target,
+              mode: input.tab === 'board' ? ('board' as const) : ('thread' as const)
+            }
+          )
+        : await openDesignPreview(
+            {
+              previews: this.options.previews,
+              browser: this.options.browser,
+              targets: this.previewTargets
+            },
+            {
+              ...target,
+              tab: input.tab === 'screen' ? ('screen' as const) : ('thread' as const)
+            }
+          )
     return {
       directory: result.directory,
       entry: result.entry,

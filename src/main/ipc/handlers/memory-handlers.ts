@@ -1,3 +1,5 @@
+import { findHarness } from '../../agents/harness-registry'
+import { acpHarnessName } from '../../drivers/acp/acp-agents-store'
 import { dialog } from '../../system/file-dialogs'
 import { BrowserWindow } from 'electron'
 import { readFile, writeFile } from 'fs/promises'
@@ -42,20 +44,12 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
       SPEC_IMPLEMENT_SYSTEM_PROMPT,
       MERMAID_OUTPUT_INSTRUCTION
     } = await import('../../chat/chat-engine')
+    // One source of truth plus the user's own ACP agents, so a custom harness
+    // names itself in the prompt instead of being reported as OpenCode.
     const driverName =
-      thread?.settings?.harnessId === 'claude-code'
-        ? 'Claude Code'
-        : thread?.settings?.harnessId === 'codex'
-          ? 'Codex'
-          : thread?.settings?.harnessId === 'cline'
-            ? 'Cline'
-            : thread?.settings?.harnessId === 'pi'
-              ? 'Pi'
-              : thread?.settings?.harnessId === 'antigravity'
-                ? 'Antigravity'
-                : thread?.settings?.harnessId === 'muse'
-                  ? 'Muse Code'
-                  : 'OpenCode'
+      findHarness(thread?.settings?.harnessId ?? '')?.name ??
+      acpHarnessName(thread?.settings?.harnessId ?? '') ??
+      'OpenCode'
     const harnessId = thread?.settings?.harnessId ?? DEFAULT_HARNESS
     const driverInfo = {
       id: harnessId,
@@ -85,7 +79,8 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
         : undefined,
       safeProjectId === INBOX_PROJECT_ID ? 'standalone-chat' : 'project-thread',
       'full',
-      thread?.assistantId
+      thread?.assistantId,
+      thread?.scopeBucketId
     )
   })
   ipcMain.handle('memory:getRaw', (_, projectId?: unknown, threadId?: unknown) =>
@@ -144,6 +139,7 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
           typeof opts.source === 'string' ? (opts.source as MemoryEntry['source']) : undefined,
         modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
+        scopeBucketId: optionalMemoryEntityId(opts.scopeBucketId, 'Scope bucket ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID'),
         assistantId: optionalMemoryEntityId(opts.assistantId, 'Assistant ID')
       })
@@ -202,6 +198,7 @@ export function registerMemoryHandlers(ctx: IpcHandlerContext): void {
         scopes: Array.isArray(opts.scopes) ? (opts.scopes as MemoryScope[]) : undefined,
         modelKeys: Array.isArray(opts.modelKeys) ? (opts.modelKeys as string[]) : undefined,
         projectId: optionalMemoryEntityId(opts.projectId, 'Project ID'),
+        scopeBucketId: optionalMemoryEntityId(opts.scopeBucketId, 'Scope bucket ID'),
         threadId: optionalMemoryEntityId(opts.threadId, 'Thread ID'),
         assistantId: optionalMemoryEntityId(opts.assistantId, 'Assistant ID')
       })

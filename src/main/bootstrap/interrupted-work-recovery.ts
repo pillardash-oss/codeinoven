@@ -20,24 +20,28 @@
  *   process that knows no other instance is driving it, because only then is it
  *   certain nothing else owns that work.
  *
- * A launch deliberately does *not* skip reconciliation when a sibling is live.
- * Doing so assumed the sibling would adopt the crashed work, but a sibling only
- * adopts what it notices: it can miss the crash entirely (a new instance that
- * registers before the survivor sees the death permanently cancels its take-over
- * pass), and it may not own the work at all. The observed result was crashed
- * threads stuck on `planning`/`executing`   a sidebar still showing "working"
- * with no live stream   until the user sent a prompt by hand. Ownership is the
- * precise signal, so a launch with a live sibling narrows to the orphaned turns
- * instead of settling or skipping everything.
+ * A launch next to a live instance touches nothing at all. The earlier policy
+ * narrowed a launch to "turns whose owner is gone", on the theory that a live
+ * sibling would not adopt work it never noticed. The theory under-rated how
+ * easily a live instance looks gone: a heartbeat write that fails while the disk
+ * is full, or a pause longer than the staleness window, is enough for a second
+ * instance to treat a running turn as an orphan, settle its checkpoint, rewrite
+ * its status and start its own run of the same session. The owner then reads that
+ * as its own work and the two processes interleave. Ownership of a *live*
+ * instance is therefore absolute: a launch that finds one leaves every thread,
+ * checkpoint and workflow to it, and this process only shows them.
  *
- * The second half of the story is {@link watchForInstanceTakeOver}: the shutdown
- * pipeline deliberately leaves a sibling's harness processes and in-flight turns
- * alone ("a surviving instance can continue them"), so this is the listener that
- * actually continues them once the sibling is gone.
+ * The second half of the story is {@link watchForInstanceTakeOver}: a take-over
+ * runs after a sibling has genuinely exited, so it settles what that process left
+ * behind. It resumes ordinary conversations and never Engineering work (see
+ * {@link startsEngineeringWork}): an Assignment owns worker dispatch, API
+ * capability tokens and its coordinator loop, and only the process that was
+ * driving it, or a deliberate resume by the user, may continue it.
  */
 
 import { broadcastThreadUpdate } from '../chat/thread-events'
 import type { Database } from '../database/database'
+import type { Thread } from '../../lib/types'
 import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
 import type { RestartRecoveryResult } from '../system/restart-recovery-service'
@@ -66,21 +70,28 @@ export async function reconcileInterruptedWork(
   database: Database,
   reason: ReconciliationReason
 ): Promise<void> {
-  // A launch that finds a sibling running cannot settle every active row: the
-  // sibling's live turn and an orphan look identical by status alone, and a
-  // harness owned by another process is invisible to this one's busy probes.
-  // Ownership resolves that, so the pass narrows to the turns whose owning
-  // process is gone rather than skipping reconciliation altogether. Settling a
-  // live turn would finalize its checkpoint, overwrite the shared status, and
-  // send a hidden `Continue` that starts a second concurrent harness run for a
-  // session already at work.
-  const adoptOnlyOrphans = reason === 'take-over' || instanceRegistry.hasOtherLiveInstance()
-  if (reason === 'launch' && adoptOnlyOrphans) {
-    Logger.info('Restart recovery adopting only turns whose owner is gone', {
-      pid: process.pid
-    })
+  // A second instance never touches the work of one that is running.
+  //
+  // A launch next to a live sibling cannot tell a live turn from an orphan by
+  // status alone, and a harness owned by another process is invisible here, so
+  // the old policy narrowed to "turns whose owner is gone". That reading is too
+  // weak in practice: a sibling that is only briefly unresponsive, or that lost
+  // a heartbeat while the disk was full, looks dead, and this pass then settles
+  // its checkpoints, overwrites its statuses and starts its turns from a second
+  // process. The owner reads those as its own runs and the two interleave on one
+  // harness session. Ownership is the only safe rule for a *launch*: if another
+  // instance is live, its threads are its own, whatever their status says.
+  if (reason === 'launch' && instanceRegistry.hasOtherLiveInstance()) {
+    Logger.info('Restart recovery left the live instance its own work', { pid: process.pid })
+    return
   }
 
+  // A take-over still adopts what a departed sibling left behind, because nobody
+  // runs it any more. It never adopts the sibling's Engineering work (see
+  // `startsEngineeringWork` below): that is a coordinator/worker graph with its
+  // own loop, API capabilities and worker dispatch, and handing it to a different
+  // process is how a running Assignment gets stopped from underneath its owner.
+  const adoptOnlyOrphans = reason === 'take-over'
   const { RestartRecoveryService } = await import('../system/restart-recovery-service')
   const service = new RestartRecoveryService(database)
   // The durable marker a deliberate shutdown left behind turns an orphaned turn
@@ -107,19 +118,46 @@ export async function reconcileInterruptedWork(
 
   reportRecovered(recovery)
 
+  // Engineering work belongs to the process that owns it. A take-over settles
+  // the departed sibling's Engineering threads as interrupted and stops there:
+  // resuming an Assignment from another process races its worker dispatch, its
+  // API capability tokens and its coordinator loop, and the user can resume it
+  // deliberately from the thread. Ordinary conversations still recover, so a
+  // crash does not leave them stuck.
+  const resumable =
+    reason === 'take-over'
+      ? recovery.recovered.filter((thread) => {
+          if (!startsEngineeringWork(thread)) return true
+          Logger.info('Engineering thread left stopped for its owner or the user', {
+            projectId: thread.projectId,
+            threadId: thread.id
+          })
+          return false
+        })
+      : recovery.recovered
+
   if (reason === 'take-over') {
-    // The launch pass restored the queues it could claim; a take-over adopts the
-    // ones the departed instance left behind.
-    await state.chatEngine?.restoreCoordinatorHandoffQueues()
+    // A queued coordinator handoff is Engineering work for the same reason, so a
+    // take-over leaves the departed instance's queue to the user rather than
+    // restarting it in a process the Assignment never belonged to.
+    Logger.info('Coordinator handoff queues left for the user after a take-over', {
+      pid: process.pid
+    })
   }
   // Work that carries no turn owner is started only by a process that knows no
   // sibling is running, so a second window can never resume what the first one
-  // is already driving. Each entry point enforces that on its own.
-  await state.chatEngine?.resumePendingWork()
+  // is already driving. Each entry point enforces that on its own, and it covers
+  // the persisted workflows (Assignment coordination, specification and
+  // Brainstorm generation, Achievement loops), so a take-over never runs them
+  // either: they are Engineering work and they stay with the instance they
+  // belong to until the user resumes them.
+  if (reason === 'launch') {
+    await state.chatEngine?.resumePendingWork()
+  }
   // Threads whose owner is gone are the exception: nobody is running them, so
   // resuming them here cannot collide with another instance.
-  if (recovery.recovered.length > 0) {
-    await state.chatEngine?.resumeRecoveredThreads(recovery.recovered)
+  if (resumable.length > 0) {
+    await state.chatEngine?.resumeRecoveredThreads(resumable)
   }
   // A remote Oven turn never stopped: its Oven kept running it while this app was
   // closed, so there is nothing to resume   only a binding to reattach. Reattach
@@ -173,6 +211,30 @@ export function watchForInstanceTakeOver(state: BootstrapState, database: Databa
     if (timer) clearTimeout(timer)
     stop()
   }
+}
+
+/**
+ * Whether a thread is driving Engineering work.
+ *
+ * These are the threads whose resumption starts something other than a
+ * conversation: an Assignment coordinator dispatching worker threads and holding
+ * its own API capabilities, an Assignment worker, an auditor, an Achievement
+ * loop. Only the process that owns the group may drive it, and a take-over   a
+ * different process adopting a sibling's leftovers   is exactly the case that
+ * must not.
+ */
+function startsEngineeringWork(thread: Thread): boolean {
+  return (
+    thread.engineering === true ||
+    thread.independentAudit === true ||
+    thread.independentAuditInitialized === true ||
+    thread.coordinatorThreadId !== undefined ||
+    thread.assignmentId !== undefined ||
+    thread.assignmentRole !== undefined ||
+    thread.achievementRole !== undefined ||
+    thread.auditState !== undefined ||
+    thread.auditorThreadId !== undefined
+  )
 }
 
 /** Push corrected thread snapshots so sidebar indicators stop showing stale work. */

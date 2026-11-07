@@ -72,6 +72,20 @@ export function deriveTitleFromText(text: string): string {
 }
 
 /**
+ * Strip the decorations a model adds around a title: leading markdown/quote
+ * markers, a `Title:` label, and wrapping quotes. The label goes before the
+ * quotes so a reply like `Title: "Fix the invoice"` does not keep the opening
+ * quote the quote pass already walked past.
+ */
+function stripTitleDecoration(raw: string): string {
+  return raw
+    .replace(/^[#>\-*\s`]+/, '')
+    .replace(/^title\s*[: -]\s*/i, '')
+    .replace(/^["'“”]+|["'“”]+$/g, '')
+    .trim()
+}
+
+/**
  * Normalize a raw model response into a usable title, or null when the
  * response is unusable (empty, multi-paragraph rambling, refusal-length).
  */
@@ -79,17 +93,11 @@ export function sanitizeGeneratedTitle(raw: string): string | null {
   const firstLine =
     raw
       .split('\n')
-      .map((line) =>
-        line
-          .replace(/^[#>\-*\s`]+/, '')
-          .replace(/^["'“”]+|["'“”]+$/g, '')
-          .trim()
-      )
+      .map(stripTitleDecoration)
       .find((line) => line.length > 0) ?? ''
   const collapsed = firstLine
     .replace(/\s+/g, ' ')
     .replace(/[`*_]/g, '')
-    .replace(/^title\s*[: -]\s*/i, '')
     .replace(/[.:;,]+$/, '')
     .trim()
   if (!collapsed) return null

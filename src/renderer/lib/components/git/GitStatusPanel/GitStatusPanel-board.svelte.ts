@@ -32,9 +32,12 @@ export class GitStatusPanel extends BoardState<GitStatusPanelSurfaceProps> {
   readonly effects = new GitStatusPanelEffects(this)
   constructor(readProps: () => GitStatusPanelSurfaceProps) {
     super(readProps)
+    // The saved view comes first: the two units below restore their own state
+    // from it, and it is the only place the panel's persisted tab and PR
+    // selection reach the remounted surface.
+    this.handlePrListAction.bindSavedView()
     this.confirmAcceptAllConflicts.bindChangesView()
     this.confirmPrMerge.bindPrListState()
-    this.handlePrListAction.bindSavedView()
     this.handlePrListAction.bindControllers()
     this.loadRepoState.bindControllers()
     this.effects.init()

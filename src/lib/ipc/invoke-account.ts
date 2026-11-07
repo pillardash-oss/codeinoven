@@ -41,6 +41,7 @@ export const invokeAccountContract = {
         source?: import('../types').MemorySource
         modelKeys?: string[]
         projectId?: string
+        scopeBucketId?: string
         threadId?: string
         assistantId?: string
       }
@@ -81,6 +82,7 @@ export const invokeAccountContract = {
         scopes?: import('../types').MemoryScope[]
         modelKeys?: string[]
         projectId?: string
+        scopeBucketId?: string
         threadId?: string
         assistantId?: string
       }

@@ -9,6 +9,7 @@ import { ovens } from '$lib/stores/ovens.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { threadScopeBucket } from '$lib/threads/thread-scope'
 import { LOCAL_OVEN_ID } from '$shared/ovens'
+import { resolveModelProvider } from '$shared/provider-identity'
 import type { Thread } from '$shared/types'
 
 /**
@@ -77,9 +78,15 @@ export function threadPaletteRow(input: ThreadPaletteRowInput): ActionDefinition
   )
   const providerId = thread.settings?.providerId ?? thread.providerId
   const providers = providerCatalog.cached(thread.projectId) ?? providerCatalog.allCached()
-  const providerName = providerId
-    ? (providers.find((provider) => provider.id === providerId)?.name ?? null)
-    : null
+  // The row draws the provider's brand beside the harness mark, so it resolves
+  // the way the sidebar does: by harness and provider, never by the model alone,
+  // which would wear another provider's mark when the model has several.
+  const providerName =
+    resolveModelProvider(providers, {
+      providerId,
+      harnessId: thread.settings?.harnessId,
+      modelId: thread.settings?.modelId
+    })?.name ?? null
   // Thread rows always surface the thread's last-activity time, never its
   // creation time, so freshly worked-on threads read as "1h" etc.
   const activityLabel = relativeThreadTime(thread.lastActivity)

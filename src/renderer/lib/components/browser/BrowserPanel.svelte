@@ -24,6 +24,7 @@
   import BrowserExtensionDropdown from './BrowserExtensionDropdown.svelte'
   import { openThreadBrowserExtensionMenu } from './browser-extension-bar-menus'
   import BrowserFindBar from './BrowserFindBar.svelte'
+  import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
@@ -32,6 +33,7 @@
   import { storeExtensionOfferForPage } from '$lib/stores/browser-extension-store-offer'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
+  import { browserAddressDrawer } from '$lib/stores/browser-address-drawer.svelte'
   import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -182,7 +184,13 @@
   }
   $effect(synchronizePageFrame)
 
-  let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect))
+  let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect, surface))
+
+  /** The history drawer this tab's address field has open, which this column
+   *  draws as a row under the toolbar so the live page shrinks to make room for
+   *  it instead of being parked (see `BrowserAddressBar`). */
+  const addressDrawer = $derived(browserAddressDrawer.forTab(tabId))
+
   /**
    * Whether this row is watching a picture the reader can see.
    *
@@ -231,6 +239,14 @@
   /** A blank tab has no address yet: show the empty state instead of a native page. */
   let isBlank = $derived(pageState.url === '' && !pageState.loading && !pageState.loadError)
   /**
+   * Whether this surface draws its own card in place of the page.
+   *
+   * A failed load and a tab that has not navigated yet both park the native view,
+   * so the card is what the browser is for the user and clicks land on the host
+   * below it rather than on Chromium.
+   */
+  let showsDomCard = $derived(pageState.loadError !== null || isBlank)
+  /**
    * Whether element inspection is armed on this tab.
    *
    * Read from the shared session, not owned here: the mode belongs to the tab,
@@ -251,16 +267,19 @@
    * the comment already written.
    */
   const designComment = $derived.by(() => {
-    const editing = browserInspector.editingFor(tabId)
-    if (!editing) return null
-    const reference = responseReferencesState
-      .forThread(tabProjectId, tabThreadId)
-      .find((candidate) => candidate.id === editing.referenceId)
-    if (!reference) return null
+    const open = browserInspector.commentFor(tabId)
+    if (!open) return null
+    const { reference } = open
     const named = (reference.text.split('\n')[0] ?? '').replace(/^Design element:\s*/u, '')
     return {
       referenceId: reference.id,
-      anchor: editing.anchor,
+      anchor: open.anchor,
+      reference,
+      // The conversation the tab belongs right now, which is the one the pick
+      // wrote its reference into. A panel whose tab snapshot predates a
+      // re-scope still edits the reference it is actually showing.
+      projectId: open.projectId,
+      threadId: open.threadId,
       elementName: named || reference.label,
       comment: reference.comment ?? ''
     }
@@ -444,6 +463,27 @@
   }
   $effect(synchronizeNativeFrame)
 
+  /**
+   * Keep the browser the surface that owns the input while its card stands in
+   * for the page.
+   *
+   * A parked page hands the keyboard back to the app window, and focus would
+   * otherwise rest on the document body, where no surface owns it: a history
+   * gesture or a browser key then takes the app's meaning instead of the
+   * browser's, and a swipe over this card navigates the app out from under it.
+   * Focusing the host is the same claim a click into a live page makes, because
+   * the sidebar's claim follows focus inside its own region. Focus only moves
+   * when nothing else holds it, so an address bar the user is still typing in
+   * keeps its caret.
+   */
+  $effect(() => {
+    if (!showsDomCard) return
+    if (!fullscreen && !panelVisible) return
+    const active = document.activeElement
+    if (active instanceof HTMLElement && active !== document.body) return
+    contentElement?.focus({ preventScroll: true })
+  })
+
   function contentBounds(): BrowserViewBounds | null {
     if (!contentElement) return null
     const rect = contentElement.getBoundingClientRect()
@@ -487,7 +527,7 @@
     // Ask the store directly instead of reading the template's `panelVisible`
     // derived: this also runs from ResizeObserver/rAF continuations, after the
     // effect that owns a component derived may have been torn down.
-    if (!browserVisibility.isVisible(tabId, bounds)) return
+    if (!browserVisibility.isVisible(tabId, bounds, surface)) return
     if (!bounds) return
     // A tab showing the error card has no page to place. The attachment is not
     // applied on that edge, but the resize observer and the sidebar's entry
@@ -517,7 +557,7 @@
       // it. Re-asking the store keeps the decision authoritative at the moment
       // the attach lands. A redundant hide is a no-op in the main process when
       // this tab is not the one attached.
-      if (!browserVisibility.isVisible(tabId, contentBounds())) {
+      if (!browserVisibility.isVisible(tabId, contentBounds(), surface)) {
         browserVisibility.detachUnlessAnotherSurfaceDisplays(tabId, surface)
       }
     } catch {
@@ -582,22 +622,37 @@
 
   /** Persist the in-progress text, so a closed bubble cannot discard a draft. */
   function draftDesignComment(referenceId: string, comment: string): void {
-    responseReferencesState.updateCommentDraft(tabProjectId, tabThreadId, referenceId, comment)
+    const open = designComment
+    responseReferencesState.updateCommentDraft(
+      open?.projectId ?? tabProjectId,
+      open?.threadId ?? tabThreadId,
+      referenceId,
+      comment
+    )
   }
 
   /** Land the comment on the element it was written for, and close the bubble. */
   function commitDesignComment(referenceId: string, comment: string): void {
-    responseReferencesState.updateComment(tabProjectId, tabThreadId, referenceId, comment)
+    const open = designComment
+    responseReferencesState.updateComment(
+      open?.projectId ?? tabProjectId,
+      open?.threadId ?? tabThreadId,
+      referenceId,
+      comment
+    )
     browserInspector.closeComment(tabId)
   }
 
   /** Detach the element, and the comment it carries, from the conversation. */
   function removeDesignComment(referenceId: string): void {
+    const open = designComment
+    const projectId = open?.projectId ?? tabProjectId
+    const threadId = open?.threadId ?? tabThreadId
     responseReferencesState.setForThread(
-      tabProjectId,
-      tabThreadId,
+      projectId,
+      threadId,
       responseReferencesState
-        .forThread(tabProjectId, tabThreadId)
+        .forThread(projectId, threadId)
         .filter((reference) => reference.id !== referenceId)
     )
     browserInspector.closeComment(tabId)
@@ -615,16 +670,12 @@
   function openDesignElementChat(mode: 'elaborate' | 'quick'): void {
     const open = designComment
     if (!open) return
-    const reference = responseReferencesState
-      .forThread(tabProjectId, tabThreadId)
-      .find((candidate) => candidate.id === open.referenceId)
-    if (!reference) return
     openAnnotationChat({
-      projectId: tabProjectId,
-      threadId: tabThreadId,
+      projectId: open.projectId,
+      threadId: open.threadId,
       mode,
-      selection: reference.text,
-      context: designElementChatContext(reference.directory, reference.designEntry)
+      selection: open.reference.text,
+      context: designElementChatContext(open.reference.directory, open.reference.designEntry)
     })
     browserInspector.closeComment(tabId)
   }
@@ -638,6 +689,11 @@
     // Claim the native view for this tab while this panel is mounted. The claim
     // is released with the component, so a destroyed panel can never keep the view.
     const releaseBrowserClaim = browserVisibility.claimTab(tabId, surface)
+    // A placement that ran before this claim was refused by the gate, so the claim
+    // itself asks for the page to be placed again. Without this the page waited for
+    // the next resize, and a tab switched to in the full screen browser kept the
+    // rectangle the sidebar had given it.
+    void tick().then(() => showAtCurrentBounds().catch(() => {}))
     // Downloads outlive the run that started them, so the project's records are
     // read back when the panel appears: the badge and the menu are how a download
     // the app stopped on its way out becomes visible again rather than silent.
@@ -841,7 +897,13 @@
           {/if}
         </button>
         {#if panelVisible}
-          <BrowserExtensionDropdown {tabId} anchor={extensionButton} />
+          <BrowserExtensionDropdown
+            {tabId}
+            projectId={tabProjectId}
+            threadId={tabThreadId}
+            boxId={tabBoxId}
+            anchor={extensionButton}
+          />
         {/if}
       </div>
       {#if authoredWork}
@@ -883,6 +945,33 @@
           {/if}
         </button>
       {/if}
+    </div>
+  {/if}
+  {#if panelVisible && !compositionPlayer && !isBlank && addressDrawer}
+    <!--
+      The address field's history drawer, drawn as a row of this column.
+
+      The page is a native view composited above every DOM node, so a drawer over
+      it could only be seen by parking the page, which blanked the browser for as
+      long as the user was typing an address. As a row it shrinks the content rect
+      instead, and the observers above place the live page under it, exactly as
+      the find bar does.
+
+      Gated on a real page: a blank tab has no native view to park and already
+      draws its own drawer in its empty state (`BrowserBlankTab`), so this row
+      would only duplicate it.
+    -->
+    <div class="shrink-0 border-b border-border bg-surface p-1.5">
+      <div class="max-h-[min(16rem,50vh)] overflow-y-auto">
+        <BrowserHistorySuggestions
+          listId={addressDrawer.listId}
+          suggestions={addressDrawer.entries}
+          highlight={addressDrawer.highlight}
+          compact
+          onHighlight={(index) => addressBar?.highlightSuggestion(index)}
+          onOpen={(entry) => addressBar?.openSuggestion(entry.url)}
+        />
+      </div>
     </div>
   {/if}
   {#if findOpen && panelVisible && !compositionPlayer}
@@ -967,6 +1056,7 @@
     {@attach attachContentElement}
     data-native-browser-content
     class="native-rail-gutter min-h-0 min-w-0 flex-1 bg-surface"
+    tabindex="-1"
     role={pageState.loadError ? undefined : 'document'}
     aria-label={pageState.loadError
       ? undefined
@@ -1014,7 +1104,7 @@
   -->
   <DesignElementCommentPopover
     hostId={`design-comment-${surface}-${tabId}`}
-    comment={panelVisible && browserVisibility.ownsSurface(tabId, surface) ? designComment : null}
+    comment={panelVisible ? designComment : null}
     targetId={`design-comment-${tabId}-${designComment?.referenceId ?? 'none'}`}
     scope={{ kind: 'project', projectId: tabProjectId }}
     onDraftChange={draftDesignComment}

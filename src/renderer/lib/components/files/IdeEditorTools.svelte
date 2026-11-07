@@ -82,7 +82,29 @@
   const floatingKey = $derived(`${projectId}:${scopeBucketId ?? ''}:${threadId ?? ''}`)
   const active = $derived(enabled && Boolean(projectId))
 
-  async function request(action: IdeAction, token?: IdeToken): Promise<IdeResponse> {
+  /**
+   * Which requests read the document itself.
+   *
+   * Only these carry the buffer. A project text search, a file lookup and every
+   * lifecycle request answer without it, so shipping the file body for them was
+   * a wasted multi-megabyte structured clone over IPC on every search keystroke,
+   * and a hard failure once the open file crossed the request's 2 MB limit. The
+   * editor already holds the same string as `value`, so nothing is lost for the
+   * requests that do need it.
+   */
+  const DOCUMENT_ACTIONS: ReadonlySet<IdeAction> = new Set<IdeAction>([
+    'sync',
+    'definition',
+    'references',
+    'hover',
+    'format'
+  ])
+
+  /** The largest body the IDE channel accepts; the main process refuses more. */
+  const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
+
+  async function request(action: IdeAction, token?: IdeToken, text?: string): Promise<IdeResponse> {
+    const body = text ?? (DOCUMENT_ACTIONS.has(action) ? value : undefined)
     return invoke(
       'projectFiles:ide',
       projectId,
@@ -90,7 +112,10 @@
         owner,
         action,
         path,
-        text: token?.text ?? value,
+        // A file past the channel's body limit is never sent: the worker reads
+        // it from disk, which is slower but answers, where a refused request
+        // left IDE Mode unusable for that file.
+        text: body !== undefined && body.length > MAX_DOCUMENT_BYTES ? undefined : body,
         line: token?.line,
         character: token?.character,
         query
@@ -98,6 +123,24 @@
       scopeBucketId,
       threadId
     )
+  }
+
+  /**
+   * Re-lay-out a document through the file's own language server.
+   *
+   * Returns `null` when nothing came back: IDE Mode is off, no server covering
+   * this file advertises formatting, the server answered with no edits, or the
+   * request failed. A failed format must never cost the user their save, so the
+   * caller keeps the text it already had.
+   */
+  export async function formatText(text: string): Promise<string | null> {
+    if (!active) return null
+    try {
+      const result = await request('format', undefined, text)
+      return result.text && result.text !== text ? result.text : null
+    } catch {
+      return null
+    }
   }
 
   interface SessionContext {
@@ -210,14 +253,26 @@
     }
   }
 
+  /**
+   * Drop the pending debounce and the marker of a search still running.
+   *
+   * Replacing a query needs no cancel round trip: the next `grep` kills the
+   * previous ripgrep process inside the editor worker. Sending a cancel per
+   * keystroke put two main-process round trips behind every character typed.
+   */
   function cancelSearch(): void {
     clearTimeout(searchTimer)
-    if (searchStarted) {
-      searchStarted = false
-      void invoke('projectFiles:ide', projectId, { owner, action: 'cancel', path: '' }).catch(
-        () => undefined
-      )
-    }
+    searchStarted = false
+  }
+
+  /** Stop a search that is already running; the modal closing and an emptied
+   *  search box both need it, a replaced query does not. */
+  function stopRunningSearch(): void {
+    if (!searchStarted) return
+    cancelSearch()
+    void invoke('projectFiles:ide', projectId, { owner, action: 'cancel', path: '' }).catch(
+      () => undefined
+    )
   }
 
   function closeModal(preserve = false): void {
@@ -225,7 +280,7 @@
     sequence++
     open = false
     busy = false
-    cancelSearch()
+    stopRunningSearch()
   }
 
   export function dismissHover(): void {
@@ -309,6 +364,41 @@
     )
     return items
   }
+  /**
+   * Open one of the two project searches without a token under the cursor.
+   *
+   * The viewer menu asks for exactly the search a right-click on a word offers,
+   * but it has no word to seed the query with, so it starts empty and the
+   * modal's own input takes the focus.
+   */
+  export function searchProjectText(seed = ''): boolean {
+    return openSearch('grep', seed)
+  }
+  export function findProjectFile(seed = ''): boolean {
+    return openSearch('files', seed)
+  }
+  function openSearch(
+    next: 'grep' | 'files',
+    seed: string,
+    at: { x: number; y: number } = { x: 16, y: 80 }
+  ): boolean {
+    if (!active) return false
+    clearTimeout(hoverLeaveTimer)
+    anchor = at
+    mode = next
+    query = seed
+    selectedIndex = 0
+    results = []
+    truncated = false
+    hover = null
+    open = true
+    error = ''
+    // The modal and its loading row are on screen before any work starts: the
+    // search is scheduled on the next task, never inside this one.
+    scheduleSearch(true)
+    return true
+  }
+
   export function handle(
     action: 'definition' | 'references' | 'documentation' | 'hover' | 'grep' | 'files',
     token: IdeToken
@@ -319,15 +409,10 @@
       anchor = { x: token.x || 16, y: (token.y || 64) + 12 }
     }
     if (action === 'grep' || action === 'files') {
-      mode = action
-      query = action === 'grep' ? token.word : ''
-      selectedIndex = 0
-      results = []
-      hover = null
-      open = true
-      error = ''
-      scheduleSearch()
-      return true
+      return openSearch(action, action === 'grep' ? token.word : '', {
+        x: anchor.x,
+        y: anchor.y
+      })
     }
     if (action === 'hover' && (!capabilities?.hover || open || busy)) return false
     const id = ++sequence
@@ -431,51 +516,64 @@
       location.character
     )
   }
-  function scheduleSearch(): void {
-    cancelSearch()
-    if (!active || !open || (mode !== 'grep' && mode !== 'files')) return
+  function scheduleSearch(immediate = false): void {
+    if (!active || !open || (mode !== 'grep' && mode !== 'files')) {
+      cancelSearch()
+      return
+    }
     const search = query.trim()
     const searchMode = mode
     const id = ++sequence
+    clearTimeout(searchTimer)
     selectedIndex = 0
     results = []
     truncated = false
     if (!search) {
+      // An emptied box must also stop the scan it already started.
+      stopRunningSearch()
       busy = false
       return
     }
+    // A replaced query keeps its cancel out of the typing path: the next `grep`
+    // kills the previous ripgrep process inside the editor worker.
+    searchStarted = false
+    // The loading state belongs to the frame that opens the modal, so it is set
+    // here, synchronously. Only the request itself waits.
     busy = true
-    searchTimer = setTimeout(() => {
-      searchStarted = searchMode === 'grep'
-      const pending: Promise<IdeResponse> =
-        searchMode === 'grep'
-          ? request('grep')
-          : invoke('projectFiles:search', projectId, search, 'all', scopeBucketId, threadId).then(
-              (entries) => ({
-                locations: entries
-                  .filter((entry) => entry.kind === 'file')
-                  .map((entry) => ({ path: entry.path, line: 1, character: 0 }))
-              })
-            )
-      void pending
-        .then((result) => {
-          if (!alive || id !== sequence) return
-          selectedIndex = 0
-          results = result.locations ?? []
-          truncated = result.truncated ?? false
-          error = ''
-        })
-        .catch((reason) => {
-          if (alive && id === sequence)
-            error = reason instanceof Error ? reason.message : String(reason)
-        })
-        .finally(() => {
-          if (id === sequence) {
-            busy = false
-            searchStarted = false
-          }
-        })
-    }, 180)
+    searchTimer = setTimeout(
+      () => {
+        searchStarted = searchMode === 'grep'
+        const pending: Promise<IdeResponse> =
+          searchMode === 'grep'
+            ? request('grep')
+            : invoke('projectFiles:search', projectId, search, 'all', scopeBucketId, threadId).then(
+                (entries) => ({
+                  locations: entries
+                    .filter((entry) => entry.kind === 'file')
+                    .map((entry) => ({ path: entry.path, line: 1, character: 0 }))
+                })
+              )
+        void pending
+          .then((result) => {
+            if (!alive || id !== sequence) return
+            selectedIndex = 0
+            results = result.locations ?? []
+            truncated = result.truncated ?? false
+            error = ''
+          })
+          .catch((reason) => {
+            if (alive && id === sequence)
+              error = reason instanceof Error ? reason.message : String(reason)
+          })
+          .finally(() => {
+            if (id === sequence) {
+              busy = false
+              searchStarted = false
+            }
+          })
+      },
+      immediate ? 0 : 180
+    )
   }
 </script>
 

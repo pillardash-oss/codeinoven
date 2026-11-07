@@ -14,14 +14,17 @@ import {
   APP_ARTIFACT_UTILITY_ID,
   APP_CITE_UTILITY_ID,
   APP_DESIGN_UTILITY_ID,
+  APP_FOLLOW_UP_UTILITY_ID,
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
+import { FOLLOW_UP_OPERATIONS } from '../../../lib/follow-up'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
   UtilityRegistryService
 } from '../utility-registry-service'
 import { CITE_ENTRY_LIMIT, CITE_OPERATIONS, CITE_PATH_LIMIT } from '../../../lib/cited-work'
+import { BROWSER_PLAYBOOK } from '../cio-browser-prompt'
 import { CUA_PLAYBOOK } from '../cio-cua-prompt'
 import { mcpCatalogPayload } from '../mcp-tool-catalog'
 import {
@@ -42,7 +45,7 @@ import {
   reanchorCuaAction,
   shapeCuaResult
 } from '../../../lib/cua-driver'
-import { type McpClient } from '../../agents/mcp-stdio-client'
+import { type McpClient, type McpTool } from '../../agents/mcp-stdio-client'
 import {
   WEB_TOOL_INPUT_SCHEMAS,
   WEB_TOOL_OUTPUT_SCHEMAS,
@@ -105,6 +108,32 @@ import type {
   VideoCapabilityExecutor
 } from '../utility-orchestration-service'
 import type { UtilityOrchestrationService } from '../utility-orchestration-service'
+
+/**
+ * Whether this turn carries the capability's playbook because a session was open,
+ * rather than because the agent activated it.
+ *
+ * The two authored-work capabilities travel as a skill bound to the session
+ * (`utility-orchestration-service-turn-runtime` pushes the design or video utility
+ * in as instructions only), so an activation in such a turn finds the entry
+ * already marked active and would otherwise answer without ever naming an
+ * operation.
+ */
+export function sessionCarriesCapability(
+  request: TurnState['request'],
+  utilityId: string
+): boolean {
+  const open = (session: string | undefined): boolean => session !== undefined && session !== 'off'
+  if (utilityId === APP_DESIGN_UTILITY_ID) return open(request.designSession)
+  if (utilityId === APP_VIDEO_UTILITY_ID) return open(request.videoSession)
+  return false
+}
+
+/** The operation catalog an authored-work session's capability offers this turn. */
+export function authoredWorkOperationTools(projectId: string, utilityId: string): McpTool[] {
+  const roots = currentWorkRoots(projectId)
+  return utilityId === APP_DESIGN_UTILITY_ID ? designUtilityTools(roots) : videoUtilityTools(roots)
+}
 
 /** UtilityOrchestrationService capability-invoke: one concern, moved verbatim from the composition root. */
 export class UtilityOrchestrationServiceCapabilityInvoke {
@@ -406,15 +435,28 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         kind: resolved.utility.kind,
         alreadyActive: true
       })
+      // A turn that carries an authored-work session is handed that capability's
+      // playbook as instructions only (`utility-orchestration-service-turn-runtime`
+      // pushes it in for the session, never as a typed operation catalog). So this
+      // entry is marked active by the session, not by an activation: nothing in the
+      // turn declares what `checkpoint` accepts, and a playbook that says to call it
+      // hands a model a step it cannot look up. Answer with the catalog then, and
+      // leave the instructions out because the prompt already carries them.
+      const sessionCarries = sessionCarriesCapability(state.request, utilityId)
       return {
         utility: {
           id: resolved.utility.id,
           name: resolved.utility.name,
           kind: resolved.utility.kind
         },
-        capability: {
-          note: 'Already active in this turn. Its capability description was returned by the earlier activation and is unchanged; invoke it directly. If compaction dropped that description from context, re-list it with cio_util_docs_lookup (or re-activate with input {"force": true}).'
-        }
+        capability: sessionCarries
+          ? {
+              note: 'This session already carries the playbook, so its instructions are not repeated. Its operation catalog follows: call these operations through cio_util_use and fill the fields their schemas declare.',
+              tools: authoredWorkOperationTools(state.request.projectId, utilityId)
+            }
+          : {
+              note: 'Already active in this turn. Its capability description was returned by the earlier activation and is unchanged; invoke it directly. If compaction dropped that description from context, re-list it with cio_util_docs_lookup (or re-activate with input {"force": true}).'
+            }
       }
     }
     state.activated.set(utilityId, resolved)
@@ -468,6 +510,12 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         tools: CITE_OPERATIONS
       }
     }
+    if (resolved.utility.id === APP_FOLLOW_UP_UTILITY_ID) {
+      return {
+        instructions: (resolved.utility.config as { instructions: string }).instructions,
+        tools: FOLLOW_UP_OPERATIONS
+      }
+    }
     if (resolved.utility.id === APP_ARTIFACT_UTILITY_ID) {
       return {
         instructions: (resolved.utility.config as { instructions: string }).instructions,
@@ -493,7 +541,10 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
     }
     if (resolved.utility.id === APP_BROWSER_UTILITY_ID) {
       if (!this.host.browserExecutor) throw new Error('The in-app browser is unavailable')
-      return { tools: BROWSER_UTILITY_TOOLS }
+      // The catalog is a list of single actions, so it travels with the contract
+      // that says how to drive a page in one call and how to stay in a live
+      // conversation until it is resolved.
+      return { instructions: BROWSER_PLAYBOOK, tools: BROWSER_UTILITY_TOOLS }
     }
     if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // The operation catalog travels with the playbook, because unlike the scope
@@ -729,6 +780,13 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
           ? undefined
           : requiredString(body, 'markdown', ASSISTANT_REPORT_BODY_LIMIT)
       result = await saveReport(title, markdown)
+    } else if (resolved.utility.id === APP_FOLLOW_UP_UTILITY_ID) {
+      const executor = this.host.followUpExecutor
+      if (!executor) throw new Error('Scheduled follow-ups are unavailable on this turn')
+      result = await executor(operation, operationInput, {
+        projectId: state.request.projectId,
+        threadId: state.request.threadId
+      })
     } else if (resolved.utility.id === APP_CITE_UTILITY_ID) {
       if (operation !== 'cite_report') {
         throw new Error('The cited-work capability exposes cite_report only')
@@ -761,12 +819,15 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
       })
     } else if (resolved.utility.id === APP_DESIGN_UTILITY_ID) {
       // One capability, operation groups with different owners: `preview`
-      // serves the design folder, `checkpoint` saves a named step, `delegate` runs
+      // serves the design folder, `checkpoint` saves a named step, `history` and
+      // `restore` read the folder's timeline and rewind it, `delegate` runs
       // the model the user assigned to text work, `generate` produces media with the model assigned to a media
       // craft, and `save-media` brings a generated asset in as a file.
       const executors = new Map<string, DesignCapabilityExecutor | null>([
         ['preview', this.host.designPreviewExecutor],
         ['checkpoint', this.host.designPreviewExecutor],
+        ['history', this.host.designPreviewExecutor],
+        ['restore', this.host.designPreviewExecutor],
         ['groups', this.host.designPreviewExecutor],
         ['organize-designs', this.host.designPreviewExecutor],
         ['read-contract', this.host.designPreviewExecutor],
@@ -803,6 +864,8 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
         ['preview', this.host.videoPreviewExecutor],
         ['critique', this.host.videoPreviewExecutor],
         ['checkpoint', this.host.videoPreviewExecutor],
+        ['history', this.host.videoPreviewExecutor],
+        ['restore', this.host.videoPreviewExecutor],
         ['generate', this.host.mediaGenerationExecutor],
         ...[
           'probe',

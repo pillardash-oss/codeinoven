@@ -1,13 +1,13 @@
-import { app, BrowserWindow, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, nativeTheme, shell } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
-import { APP_ID, APP_NAME, brandUserAgent } from '../lib/brand'
+import { APP_ID, APP_NAME, WEBSITE_URL, brandUserAgent } from '../lib/brand'
 import { isWindowsStorePackage } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
-import { installForceRestartMenu } from './system/force-restart'
+import { installApplicationMenu } from './system/app-menu'
 import { usageAnalytics } from './system/usage-analytics'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
@@ -18,10 +18,7 @@ import { registerHydrationIpcHandlers } from './ipc/hydration-ipc'
 import { registerFilePreviewScheme } from './editor/file-preview-protocol'
 import { WindowStateService } from './system/window-state'
 import { setNotificationService } from './chat/thread-events'
-import {
-  installProductionApplicationMenu,
-  lockDownProductionWindow
-} from './system/production-housekeeping'
+import { lockDownProductionWindow } from './system/production-housekeeping'
 import { getTrafficLightArg, warmTrafficLightDetection } from './system/titlebar'
 import { getBuildEnvironmentArg } from './system/build-environment'
 import { PrivilegedIpcValidator } from './ipc/ipc-validation'
@@ -37,6 +34,8 @@ import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
 import { registerAppControlHandlers } from './app-control/app-control-ipc'
+import { spawnNewInstance } from './system/new-instance'
+import { MAX_INSTANCE_SLOTS } from './system/instance-slots'
 import { PACKAGED_SMOKE_OUTPUT_ENV, writePackagedSmokeProof } from './system/packaged-smoke'
 import { sendToRenderer } from './ipc/renderer-delivery'
 import {
@@ -536,6 +535,8 @@ const backgroundLifecycle = new BackgroundLifecycleService({
   state,
   storage,
   openWindow: () => openMainWindow(),
+  openSettings: () => revealWindowAndSend('window:openSettings'),
+  newInstance: openNewInstance,
   destroyWindow: () => {
     const window = state.mainWindow
     if (window && !window.isDestroyed()) window.destroy()
@@ -598,6 +599,19 @@ function quitAppDirectly(): void {
   state.quitConfirmed = true
   app.quit()
 }
+
+/**
+ * How many times one window silently rebuilds its renderer before the stop is
+ * treated as unrecoverable.
+ *
+ * A single stop is a recoverable accident (a `kill`, a scripted stop of a process
+ * tree, the OS ending a helper): the workspace comes back from its durable stores
+ * in a second or two. A renderer that keeps dying is a real failure, and that is
+ * what the recovery dialog exists for.
+ */
+const RENDERER_RECOVERY_LIMIT = 2
+/** The window these rebuilds are counted in; a stop long after the last one is a new accident. */
+const RENDERER_RECOVERY_WINDOW_MS = 60_000
 
 /** Create the window, or bring the existing one forward. */
 function openMainWindow(): void {
@@ -696,6 +710,15 @@ function createWindow(): BrowserWindow {
       })
     }
   })
+  // A renderer that dies while this window is meant to be on screen used to leave
+  // the window standing over an empty page: `killed` with the SIGTERM exit code
+  // was read as "somebody ended it politely", so nothing rebuilt it and the
+  // workspace stayed blank until the app was restarted. The polite-stop judgment
+  // is about WHO ended it, and that is not the same question as whether the
+  // window still needs a renderer. The stamp records how often this window has
+  // rebuilt itself, so a renderer that keeps dying reaches the recovery dialog
+  // instead of reloading forever.
+  const rendererRecoveries: number[] = []
   window.webContents.on('render-process-gone', (_event, details) => {
     if (state.quitCleanupStarted) return
     // A renderer that left on its own, or one that was asked to stop, did not
@@ -709,18 +732,61 @@ function createWindow(): BrowserWindow {
     // dialog then held the dying process until something killed it.
     const stopped =
       details.reason === 'clean-exit' || (details.reason === 'killed' && details.exitCode === 15)
-    if (stopped) {
+    if (!stopped) {
+      void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
+        state,
+        database,
+        storage
+      })
+      return
+    }
+    // A window that is on its way out has no page to rebuild: parking tears the
+    // window down, and a quit or an update install is already taking the app
+    // with it. Those stops are exactly the ones the polite-stop judgment was
+    // written for.
+    const windowGone =
+      state.quitConfirmed ||
+      state.quitForUpdate ||
+      state.parkingForBackground ||
+      window.isDestroyed() ||
+      window.webContents.isDestroyed()
+    if (windowGone) {
       Logger.dev('Workspace renderer was stopped; the app is not asking for recovery', {
         reason: details.reason,
         exitCode: details.exitCode
       })
       return
     }
-    void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
-      state,
-      database,
-      storage
+    const now = Date.now()
+    while (
+      rendererRecoveries.length > 0 &&
+      now - (rendererRecoveries[0] ?? 0) > RENDERER_RECOVERY_WINDOW_MS
+    ) {
+      rendererRecoveries.shift()
+    }
+    rendererRecoveries.push(now)
+    if (rendererRecoveries.length > RENDERER_RECOVERY_LIMIT) {
+      void handleFatalStartup(new Error(`Workspace renderer stopped: ${details.reason}`), {
+        state,
+        database,
+        storage
+      })
+      return
+    }
+    // The page is gone but the window is not, so the workspace is rebuilt in
+    // place: the same window, a fresh renderer, and every piece of state that
+    // matters comes back from the app's durable stores. Reloading on the next
+    // tick leaves Chromium's own teardown of the dead renderer to finish first.
+    Logger.info('Rebuilding the workspace renderer after an unrequested stop', {
+      reason: details.reason,
+      exitCode: details.exitCode,
+      attempt: rendererRecoveries.length
     })
+    setTimeout(() => {
+      if (state.quitCleanupStarted || window.isDestroyed()) return
+      if (window.webContents.isDestroyed()) return
+      window.webContents.reload()
+    }, 0)
   })
   const floatingPanels = new NativeFloatingPanelWindow(window)
 
@@ -852,30 +918,42 @@ function createWindow(): BrowserWindow {
     }
   })
 
+  /**
+   * Walk history for a gesture the window received, on the surface the user is
+   * focused on.
+   *
+   * A browser page, or the browser's own toolbar, owns the gesture while it holds
+   * focus: it walks its own history and takes the input even at a history end.
+   * Only when no browser surface claims it does the app's own location history
+   * move, which is what keeps a swipe over a fullscreen browser page from
+   * navigating the app around it.
+   */
+  const navigateWindowHistory = (direction: 'back' | 'forward'): void => {
+    if (window.isDestroyed() || window.webContents.isDestroyed()) return
+    if (state.browserService?.navigateFocusedHistory(direction)) return
+    sendToRenderer(
+      window.webContents,
+      direction === 'back' ? 'window:historyBack' : 'window:historyForward'
+    )
+  }
+
   // Mouse side buttons (back/forward). Windows and Linux deliver them as app
   // commands; the renderer walks its own in-app navigation history because the
   // single-page window has no native browser history to navigate. On macOS no
   // app-command is emitted   the renderer handles the raw buttons directly.
   window.on('app-command', (_event, command) => {
-    if (window.isDestroyed() || window.webContents.isDestroyed()) return
-    if (command === 'browser-backward') {
-      sendToRenderer(window.webContents, 'window:historyBack')
-    } else if (command === 'browser-forward') {
-      sendToRenderer(window.webContents, 'window:historyForward')
-    }
+    if (command === 'browser-backward') navigateWindowHistory('back')
+    else if (command === 'browser-forward') navigateWindowHistory('forward')
   })
 
   // On macOS, Logitech Options can map the mouse's side buttons to native
-  // swipe gestures instead of renderer mouse events. Electron exposes those
-  // gestures on the window; a left swipe goes back and a right swipe goes
-  // forward through the app's navigation history.
+  // swipe gestures instead of renderer mouse events, and a trackpad swipe over a
+  // browser page arrives here rather than as wheel events the page can measure.
+  // Electron exposes those gestures on the window; a left swipe goes back and a
+  // right swipe goes forward.
   window.on('swipe', (_event, direction) => {
-    if (window.isDestroyed() || window.webContents.isDestroyed()) return
-    if (direction === 'left') {
-      sendToRenderer(window.webContents, 'window:historyBack')
-    } else if (direction === 'right') {
-      sendToRenderer(window.webContents, 'window:historyForward')
-    }
+    if (direction === 'left') navigateWindowHistory('back')
+    else if (direction === 'right') navigateWindowHistory('forward')
   })
 
   // Renderer freeze/crash diagnostics. On a slow machine (e.g. M1) the renderer
@@ -938,6 +1016,98 @@ function openThreadFromNotification(payload: ThreadClickedPayload): void {
     return
   }
   revealAndSend()
+}
+
+/**
+ * Reveal the app window and send it one event, creating the window when the app
+ * is parked in the menu bar. Menu actions share this: a native menu item must
+ * work whether or not a window happens to be open.
+ */
+function revealWindowAndSend(event: 'window:openSettings'): void {
+  // A quit is already in progress   never spawn a window mid-shutdown.
+  if (state.quitCleanupStarted) return
+  const window =
+    state.mainWindow && !state.mainWindow.isDestroyed() ? state.mainWindow : createWindow()
+
+  const reveal = (): void => {
+    if (window.isDestroyed()) return
+    if (window.isMinimized()) window.restore()
+    if (!window.isVisible()) window.show()
+    window.focus()
+    sendToRenderer(window.webContents, event)
+  }
+
+  if (window.webContents.isLoading()) {
+    window.webContents.once('did-finish-load', reveal)
+    return
+  }
+  reveal()
+}
+
+/**
+ * "Check for Updates" from the application menu.
+ *
+ * The menu bar icon already owns the whole check-download-install cycle, so the
+ * menu routes through it instead of running a second one. A build that cannot
+ * update itself (development, or a platform outside the packaged feed) says so
+ * rather than leaving a click with no visible outcome.
+ */
+function checkForUpdatesFromMenu(): void {
+  const updater = state.updaterService
+  if (!updater) return
+  if (!updater.status.canAutoUpdate) {
+    void explainUpdatesUnavailable()
+    return
+  }
+  const lifecycle = state.backgroundLifecycle
+  if (lifecycle) {
+    lifecycle.requestUpdateCheck()
+    return
+  }
+  void updater.updateInBackground().catch((error: unknown) => {
+    Logger.error('Update check from the application menu failed', error)
+  })
+}
+
+/** Tell the user this build updates by hand, and offer the download page. */
+async function explainUpdatesUnavailable(): Promise<void> {
+  try {
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'Check for Updates',
+      message: `${APP_NAME} does not update itself in this build`,
+      detail: 'Download the latest release from the website to update this copy.',
+      buttons: ['OK', 'Open download page'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true
+    })
+    if (response === 1) await shell.openExternal(`${WEBSITE_URL}/downloads`)
+  } catch (error: unknown) {
+    Logger.error('Could not explain the update state', error)
+  }
+}
+
+/** Open a second instance beside this one, sharing the same data. */
+function openNewInstance(): void {
+  const outcome = spawnNewInstance()
+  if (outcome.ok) return
+  const detail =
+    outcome.reason === 'limit'
+      ? `The maximum of ${MAX_INSTANCE_SLOTS} extra instances is already running. Close one and try again.`
+      : (outcome.detail ?? 'The new instance could not be started.')
+  void dialog
+    .showMessageBox({
+      type: 'warning',
+      title: 'New Instance',
+      message: `A second ${APP_NAME} could not be opened`,
+      detail,
+      buttons: ['OK'],
+      noLink: true
+    })
+    .catch((error: unknown) => {
+      Logger.error('Could not report the failed new instance', error)
+    })
 }
 
 let startupRecoveryTimer: ReturnType<typeof setTimeout> | null = null
@@ -1046,10 +1216,14 @@ void app
       })
     }
 
-    if (isProduction) {
-      installProductionApplicationMenu(APP_NAME)
-    }
-    installForceRestartMenu(quitAppDirectly)
+    installApplicationMenu({
+      appName: APP_NAME,
+      production: isProduction,
+      quitApp: quitAppDirectly,
+      checkForUpdates: checkForUpdatesFromMenu,
+      openSettings: () => revealWindowAndSend('window:openSettings'),
+      newInstance: openNewInstance
+    })
 
     // Storage and database warm-up are independent   run them concurrently.
     await Promise.all([
@@ -1344,12 +1518,13 @@ app.on('before-quit', (event) => {
     }
   }
 
-  void runShutdownPipeline({ state, windowStateService, database }).finally(() => {
-    // The pipeline has finished every disposal step; the quit it was guarding
-    // can no longer hang here, so its watchdog is done. The single armed timer
-    // from `armQuitFailsafe` is the one this clears   there used to be a second
-    // one assigned beside this pipeline, which nothing could ever clear.
-    disarmQuitFailsafe(state)
+  // Nothing disarms the timer on this path, on purpose. A pipeline that
+  // completes re-arms it as the teardown watchdog, which only the process
+  // exiting clears; a pipeline that throws never reached that handover, so the
+  // deadline armed before it stays the one that converges on exit. Clearing it
+  // here is what used to leave a stalled exit with no deadline at all.
+  void runShutdownPipeline({ state, windowStateService, database }).catch((error: unknown) => {
+    Logger.error('Shutdown pipeline failed', error)
   })
 })
 

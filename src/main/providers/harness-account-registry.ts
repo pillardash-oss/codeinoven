@@ -8,6 +8,7 @@ import type {
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import { escapeRegExp, isGeneratedAccountLabelFor } from '../../lib/account-label'
 import { harnessSupportsMultipleAccounts } from '../agents/harness-registry'
+import { isAcpAgentId } from '../drivers/acp/acp-agents-store'
 import { linkMacosLoginKeychain } from '../drivers/antigravity/antigravity-keychain'
 import type { StorageEngine } from '../storage/storage-engine'
 
@@ -56,6 +57,7 @@ export class HarnessAccountRegistry {
   constructor(private readonly storage: StorageEngine) {}
 
   async list(harnessId?: string): Promise<HarnessAccount[]> {
+    await this.forgetAcpAccounts()
     const stored = await this.read()
     const accounts = stored.accounts
       .filter(
@@ -66,6 +68,22 @@ export class HarnessAccountRegistry {
       .sort((left, right) => left.createdAt - right.createdAt)
     await this.repairContainerHomes(accounts)
     return accounts
+  }
+
+  /**
+   * Drop account rows belonging to ACP agents.
+   *
+   * An agent is a harness the user added, not a credential CodeInOven holds: it
+   * owns its own sign-in, so a row here would say the app can switch or remove a
+   * credential it never had. Rows written before this rule are removed on the
+   * next read, which is what clears the "Cursor agent" entries from Accounts.
+   */
+  private async forgetAcpAccounts(): Promise<void> {
+    const stored = await this.read()
+    if (!stored.accounts.some((account) => isAcpAgentId(account.harnessId))) return
+    await this.mutate(async (registry) => {
+      registry.accounts = registry.accounts.filter((account) => !isAcpAgentId(account.harnessId))
+    })
   }
 
   /** Mirror credentials from a harness's original home into provider-level account rows. */
@@ -162,6 +180,10 @@ export class HarnessAccountRegistry {
           (!harnessSupportsMultipleAccounts(harnessId) && existing?.isDefault)
             ? { isDefault: true }
             : {}),
+          // Hiding survives a credential refresh: the row is rebuilt from the
+          // harness's own store, which knows nothing about the user's choice to
+          // keep this account out of the pickers.
+          ...(existing?.hidden ? { hidden: true } : {}),
           createdAt: existing?.createdAt ?? now + index,
           updatedAt: existing?.updatedAt ?? now
         })
@@ -397,6 +419,25 @@ export class HarnessAccountRegistry {
     })
   }
 
+  /**
+   * Hide an account from the pickers that offer one, or restore it.
+   *
+   * Nothing about the credential changes: the container, its tokens and the
+   * harness's own store are untouched, so unhiding is the whole undo. Only the
+   * row's `hidden` flag moves, and a hidden account still answers every read
+   * that already names it.
+   */
+  async setHidden(accountId: string, hidden: boolean): Promise<HarnessAccount> {
+    return this.mutate(async (registry) => {
+      const account = registry.accounts.find((candidate) => candidate.id === accountId)
+      if (!account) throw new Error('Account not found.')
+      if (hidden) account.hidden = true
+      else delete account.hidden
+      account.updatedAt = Date.now()
+      return { ...account }
+    })
+  }
+
   /** Repair a pre-finalization-era managed row after its credential is discovered. */
   async adoptManagedCredential(
     accountId: string,
@@ -550,7 +591,12 @@ export class HarnessAccountRegistry {
 }
 
 /** Preferred default for a set of same-provider accounts: an explicitly marked
- *  account, else the earliest created (accounts arrive createdAt-sorted). */
+ *  account, else the earliest created (accounts arrive createdAt-sorted). A
+ *  hidden account is only default when nothing visible is left, so hiding the
+ *  marked default hands new picks to the next visible account instead of
+ *  quietly routing them through an account the user put out of sight. */
 function defaultAccountFor(accounts: HarnessAccount[]): HarnessAccount {
-  return accounts.find((account) => account.isDefault) ?? accounts[0]
+  const visible = accounts.filter((account) => !account.hidden)
+  const candidates = visible.length > 0 ? visible : accounts
+  return candidates.find((account) => account.isDefault) ?? candidates[0]
 }

@@ -152,13 +152,13 @@ export class AppEffects extends BoardUnit<App> {
         setCloseConfirmation: (payload) =>
           (this.root.settleCloseConfirmationThread.closeConfirmation = payload),
         confirmForceClose: this.root.settleCloseConfirmationThread.confirmForceClose,
-        parkWindow: this.root.settleCloseConfirmationThread.parkWindow,
         setInstanceRole: (role) => (this.root.state.instanceRole = role),
         settleCloseConfirmationThread:
           this.root.settleCloseConfirmationThread.settleCloseConfirmationThread,
         showStartAtLoginOffer: () => (this.root.updateConfig.startAtLoginOfferOpen = true),
         handleCloseShortcut: this.root.onKeydown.handleCloseShortcut,
         handleNewTerminalShortcut: this.root.state.handleNewTerminalShortcut,
+        openSettings: () => this.root.onKeydown.navigate('settings'),
         goBack: () => this.root.openAssistantFromSearch.handleMouseHistoryNavigation('back'),
         goForward: () => this.root.openAssistantFromSearch.handleMouseHistoryNavigation('forward'),
         handleOpenedPaths: (paths) =>

@@ -2,6 +2,7 @@ import CioBan from '@pdslng/cio-icon/CioBan.svelte'
 import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
 import CioClose from '@pdslng/cio-icon/CioClose.svelte'
 import CioDot from '@pdslng/cio-icon/CioDot.svelte'
+import CioMinusCircle from '@pdslng/cio-icon/CioMinusCircle.svelte'
 import type {
   PrAuthorAssociation,
   PrCommentKind,
@@ -854,12 +855,15 @@ export function checkIcon(check: PullRequestCheck): typeof CioCheck {
   if (check.status !== 'completed') return CioDot
   if (check.conclusion === 'success') return CioCheck
   if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return CioBan
+  // A cancelled check stopped; it did not fail, so it keeps the quiet mark.
+  if (check.conclusion === 'cancelled') return CioMinusCircle
   return CioClose
 }
 
 export function checkClass(check: PullRequestCheck): string {
   if (check.status !== 'completed') return 'text-warning'
   if (check.conclusion === 'success') return 'text-success'
+  if (check.conclusion === 'cancelled') return 'text-dimmed'
   if (check.conclusion === 'skipped' || check.conclusion === 'neutral') return 'text-dimmed'
   return 'text-danger'
 }
@@ -874,6 +878,7 @@ export function checkFailed(check: PullRequestCheck): boolean {
   return (
     check.conclusion !== 'success' &&
     check.conclusion !== 'skipped' &&
+    check.conclusion !== 'cancelled' &&
     check.conclusion !== 'neutral'
   )
 }

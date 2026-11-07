@@ -5,6 +5,7 @@ import { Logger } from '../system/logger'
 import type {
   BrowserDownload,
   CloseConfirmationProject,
+  UpdateBlockerSpeechPhase,
   UpdateBlockers,
   UpdaterChangelog,
   UpdaterStatus
@@ -15,7 +16,17 @@ import { isShippedBuild } from '../bootstrap/app-resources'
 import type { StorageEngine } from '../storage/storage-engine'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { markBackgroundRelaunch } from './updater-relaunch'
-import { UpdaterReleaseProvider } from './updater-release-provider'
+import {
+  UpdaterReleaseProvider,
+  setCachedReleaseFallback,
+  type CachedReleaseInfo
+} from './updater-release-provider'
+import {
+  CACHED_UPDATE_FILE,
+  cachedArtifactReady,
+  toCachedUpdateInfo,
+  toUpdateInfo
+} from './updater-cached-release'
 import {
   INSTALL_ATTEMPT_LIMIT,
   INSTALL_DISPATCH_FILE,
@@ -52,6 +63,17 @@ const DEFERRED_POLL_MS = 5_000
  * install surface spinning forever.
  */
 const INSTALL_QUIT_WATCHDOG_MS = 30_000
+/**
+ * Retries of Squirrel's localhost transfer after macOS cancels it.
+ *
+ * The hand-off is loopback, but Squirrel.Mac fetches it through NSURLSession,
+ * and that stack cancels its tasks whenever the device's network path changes.
+ * Losing Wi-Fi therefore drops an install that never needed the internet, and a
+ * single immediate retry lands inside the same transition. These delays let the
+ * socket take a new path before the same cached file is offered again; nothing
+ * is downloaded twice.
+ */
+const LOCAL_TRANSFER_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 30_000]
 const PENDING_INSTALL_FILE = 'updater/install-pending.json'
 /** GitHub release lookup by exact tag (public repo, no auth needed). */
 function githubReleaseTagUrl(tag: string): string {
@@ -109,6 +131,18 @@ export interface DownloadActivitySource {
   inFlightDownloads(): BrowserDownload[]
 }
 
+/**
+ * The dictation pipeline this process is running, as the install gate sees it.
+ *
+ * Supply-only, like the downloads: the speech service owns the open microphones
+ * and the transcription jobs, and the gate asks rather than keeping a second
+ * copy of that state.
+ */
+export interface DictationActivitySource {
+  /** Open microphones and unanswered transcriptions, right now. */
+  activity(): { recording: number; transcribing: number }
+}
+
 /** A download holds the unattended install back only while its bytes arrive. */
 function activelyDownloading(downloads: readonly BrowserDownload[]): BrowserDownload[] {
   // A download the user paused is not progressing: it keeps its bytes and
@@ -129,6 +163,8 @@ export class UpdaterService {
   private activitySources: SessionActivitySource[] = []
   /** The browser's live transfers, or null before the browser graph exists. */
   private downloadSource: DownloadActivitySource | null = null
+  /** The dictation pipeline, or null while speech is unavailable. */
+  private dictationSource: DictationActivitySource | null = null
   private timer: ReturnType<typeof setInterval> | null = null
   private _status: UpdaterStatus
   private statusListeners: Set<(status: UpdaterStatus) => void> = new Set()
@@ -178,8 +214,10 @@ export class UpdaterService {
   private installFailure: InstallFailureState | null = null
   /** True between handing the payload to the platform installer and its exit. */
   private installDispatched = false
-  /** One retry of Squirrel's localhost GET per install dispatch. */
-  private localTransferRetried = false
+  /** Local transfers Squirrel has cancelled for this install dispatch. */
+  private localTransferAttempts = 0
+  /** Pending re-issue of the local transfer after a network-path change. */
+  private localTransferRetryTimer: ReturnType<typeof setTimeout> | null = null
   /** Bounds how long a dispatched install may leave us running; see its arm site. */
   private installQuitWatchdog: ReturnType<typeof setTimeout> | null = null
   private installRecoveryPending = false
@@ -221,6 +259,9 @@ export class UpdaterService {
     }
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = false
+    // A fully downloaded build answers the next check itself, so an offline or
+    // relaunched app still offers (and installs) what it already has.
+    setCachedReleaseFallback(() => this.cachedUpdateInfo())
     if (this._status.canAutoUpdate) {
       autoUpdater.setFeedURL({ provider: 'custom', updateProvider: UpdaterReleaseProvider })
     }
@@ -287,6 +328,7 @@ export class UpdaterService {
 
     autoUpdater.on('update-downloaded', (info) => {
       Logger.dev('Updater: update downloaded', info)
+      this.persistCachedUpdate()
       this.updateState({
         state: 'downloaded',
         availableVersion: info.version,
@@ -298,32 +340,12 @@ export class UpdaterService {
     autoUpdater.on('error', (error) => {
       Logger.error('Updater error:', error.message)
       // Squirrel fetches the already verified ZIP from MacUpdater's localhost
-      // server at install time. A dropped connection here is not a failed
-      // internet download or a rejected build. Retry that GET once, keeping the
-      // existing quit-on-download listener instead of calling quitAndInstall
-      // again and registering another one.
-      const localTransferFailed =
-        process.platform === 'darwin' &&
-        this.installDispatched &&
-        (/network connection was lost/i.test(error.message) ||
-          ('code' in error && error.code === -1005))
-      if (localTransferFailed && !this.localTransferRetried) {
-        this.localTransferRetried = true
-        Logger.info('Updater: retrying the cached update transfer to the macOS installer')
-        queueMicrotask(() => {
-          if (!this.installDispatched) return
-          try {
-            nativeAutoUpdater.checkForUpdates()
-            if (this.installDispatched) {
-              this.armInstallQuitWatchdog(this._status.availableVersion)
-            }
-          } catch (retryError: unknown) {
-            autoUpdater.emit(
-              'error',
-              retryError instanceof Error ? retryError : new Error(String(retryError))
-            )
-          }
-        })
+      // server at install time. macOS cancels that transfer whenever the
+      // network path changes, which has nothing to do with the payload or the
+      // internet: re-issue it once the path settles instead of failing an
+      // install whose bytes are already on disk.
+      const cancelledLocalTransfer = this.isLocalTransferFailure(error)
+      if (cancelledLocalTransfer && this.scheduleLocalTransferRetry(error)) {
         return
       }
       this.forceUpdateInBackground = false
@@ -335,7 +357,8 @@ export class UpdaterService {
       if (failedDispatch) {
         this.installDispatched = false
         this.clearInstallQuitWatchdog()
-        if (localTransferFailed) {
+        this.clearLocalTransferRetry()
+        if (cancelledLocalTransfer) {
           // Preserve the valid payload and failure budget. No build was
           // installed or rejected, and sweeping staging would race Squirrel.
           void this.storage.remove(INSTALL_DISPATCH_FILE).catch((cause: unknown) => {
@@ -355,8 +378,8 @@ export class UpdaterService {
       if (failedDispatch) {
         this.updateState({
           state: 'error',
-          errorMessage: localTransferFailed
-            ? 'The update was downloaded and verified, but the local transfer to the macOS installer failed after retrying. Check for updates to retry the cached update.'
+          errorMessage: cancelledLocalTransfer
+            ? 'The update is downloaded and verified, but macOS kept cancelling the hand-off to its installer. Nothing needs downloading again: choose Install to retry from the cached update.'
             : `The update could not be installed: ${error.message}`
         })
         return
@@ -377,6 +400,134 @@ export class UpdaterService {
         errorMessage: error.message
       })
     })
+  }
+
+  /**
+   * Whether this failure is Squirrel dropping its own localhost transfer.
+   *
+   * Only a dispatched install on macOS can be in this state: the payload was
+   * already verified and handed to MacUpdater's proxy server, and the error is
+   * the network stack cancelling that loopback request (not a bad download and
+   * not a rejected build).
+   */
+  private isLocalTransferFailure(error: Error): boolean {
+    if (process.platform !== 'darwin' || !this.installDispatched) return false
+    const code = 'code' in error ? error.code : undefined
+    return (
+      /network connection was lost/i.test(error.message) ||
+      /internet connection appears to be offline/i.test(error.message) ||
+      code === -1005 ||
+      code === -1009
+    )
+  }
+
+  /**
+   * Re-issue the local hand-off after macOS cancelled it.
+   *
+   * Returns false when the retries are used up, so the caller reports the failed
+   * install with the cached payload preserved. Every retry re-requests the same
+   * verified file from the local proxy and re-arms the quit watchdog, so a
+   * transfer that is merely waiting out a network change never looks hung.
+   */
+  private scheduleLocalTransferRetry(error: Error): boolean {
+    // An error event and a rejected check promise can describe the same
+    // cancellation; never count it twice or reset the delay already waiting.
+    if (this.localTransferRetryTimer !== null) return true
+    if (this.localTransferAttempts >= LOCAL_TRANSFER_RETRY_DELAYS_MS.length) return false
+    const attempt = this.localTransferAttempts + 1
+    this.localTransferAttempts = attempt
+    const delay = LOCAL_TRANSFER_RETRY_DELAYS_MS[attempt - 1]
+    Logger.info(
+      `Updater: macOS cancelled the local update transfer (attempt ${attempt} of ${LOCAL_TRANSFER_RETRY_DELAYS_MS.length}: ${error.message}); retrying in ${delay}ms`
+    )
+    // The install is alive and waiting for the path to settle, not hung.
+    this.clearInstallQuitWatchdog()
+    this.clearLocalTransferRetry()
+    const timer = setTimeout(() => {
+      this.localTransferRetryTimer = null
+      if (!this.installDispatched) return
+      try {
+        const pending: unknown = nativeAutoUpdater.checkForUpdates()
+        // The native call can reject as well as emit; both mean the same
+        // cancelled hand-off, so both feed the same retry budget.
+        if (pending instanceof Promise) {
+          void pending.catch((cause: unknown) => {
+            if (!this.installDispatched) return
+            const failure = cause instanceof Error ? cause : new Error(String(cause))
+            if (this.scheduleLocalTransferRetry(failure)) return
+            autoUpdater.emit('error', failure)
+          })
+        }
+        if (this.installDispatched) {
+          this.armInstallQuitWatchdog(this._status.availableVersion)
+        }
+      } catch (retryError: unknown) {
+        autoUpdater.emit(
+          'error',
+          retryError instanceof Error ? retryError : new Error(String(retryError))
+        )
+      }
+    }, delay)
+    // Waiting out a network change must never keep the process alive on its own.
+    timer.unref()
+    this.localTransferRetryTimer = timer
+    return true
+  }
+
+  private clearLocalTransferRetry(): void {
+    if (this.localTransferRetryTimer === null) return
+    clearTimeout(this.localTransferRetryTimer)
+    this.localTransferRetryTimer = null
+  }
+
+  /**
+   * Name the build now sitting fully downloaded in the updater cache.
+   *
+   * electron-updater keeps the payload but not the feed entry that described it,
+   * so without this record an offline relaunch has no way to know which release
+   * the cached file belongs to. See `cachedUpdateInfo`.
+   */
+  private persistCachedUpdate(): void {
+    const info = this.pendingUpdateInfo
+    if (info === null) return
+    const cached = toCachedUpdateInfo(info)
+    if (cached === null) return
+    void this.storage.write(CACHED_UPDATE_FILE, cached).catch((error: unknown) => {
+      Logger.error('Updater: failed to record the cached update', error)
+    })
+  }
+
+  /**
+   * The build already downloaded on this machine, when its payload is complete.
+   *
+   * This is the offline answer to "is there an update": the feed cannot be
+   * reached and does not need to be, because the only step left is installing
+   * bytes that are already on disk and verified by electron-updater before use.
+   * A partial or missing payload returns null and falls through to the feed.
+   */
+  private async cachedUpdateInfo(): Promise<CachedReleaseInfo | null> {
+    try {
+      const raw = await this.storage.read<unknown>(CACHED_UPDATE_FILE)
+      const cached = toCachedUpdateInfo(raw)
+      if (cached === null) return null
+      const selection = selectUpdateArtifact(cached, process.platform, process.arch)
+      const location = resolveUpdaterCacheLocation()
+      if (selection === null || location === null) return null
+      if (!(await cachedArtifactReady(selection, location.pendingDir))) return null
+      return { ...toUpdateInfo(cached), tag: `v${cached.version}` }
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to read the cached update', error)
+      return null
+    }
+  }
+
+  /** The cached build is being installed or discarded; stop offering it. */
+  private async clearCachedUpdate(): Promise<void> {
+    try {
+      await this.storage.remove(CACHED_UPDATE_FILE)
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to clear the cached update record', error)
+    }
   }
 
   /**
@@ -428,6 +579,33 @@ export class UpdaterService {
   }
 
   /**
+   * Register dictation as a gate on the unattended install.
+   *
+   * A recording the user is still producing and a transcript the model has not
+   * answered yet are both lost by a quit, because the audio never reaches the
+   * caret. Only working threads, running downloads and dictation hold an update
+   * back; an open terminal does not.
+   */
+  setDictationActivitySource(source: DictationActivitySource | null): void {
+    this.dictationSource = source
+  }
+
+  /**
+   * Dictation the install is still waiting on, read once per decision.
+   *
+   * A source that fails is read as idle: the gate must never be wedged open by
+   * its own bookkeeping, and the transcript path reports its own failure.
+   */
+  private dictationActivity(): { recording: number; transcribing: number } {
+    try {
+      return this.dictationSource?.activity() ?? { recording: 0, transcribing: 0 }
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to read dictation activity', error)
+      return { recording: 0, transcribing: 0 }
+    }
+  }
+
+  /**
    * Downloads the unattended install is still waiting on, oldest first.
    * An explicit install (`installApproved`) and a tray-initiated one are direct
    * requests: they proceed, and the shutdown pipeline keeps every running
@@ -462,10 +640,15 @@ export class UpdaterService {
     // Read once: the count and the list must describe the same instant, or the
     // modal's wording disagrees with the rows under it.
     const downloads = this.blockingDownloads()
+    const dictation = this.dictationActivity()
+    const speechPhase: UpdateBlockerSpeechPhase | null =
+      dictation.recording > 0 ? 'recording' : dictation.transcribing > 0 ? 'transcribing' : null
     return {
       version: this._status.availableVersion ?? '',
-      activeCount: this.activeSessionCount() + downloads.length,
+      activeCount:
+        this.activeSessionCount() + dictation.recording + dictation.transcribing + downloads.length,
       projects,
+      speech: speechPhase ? { phase: speechPhase } : null,
       downloads
     }
   }
@@ -568,6 +751,7 @@ export class UpdaterService {
       this.timer = null
     }
     this.clearDeferredInstall()
+    this.clearLocalTransferRetry()
     this.clearInstallQuitWatchdog()
     // Persist a still-pending install so the next launch resumes it.
     if (this.installPending) {
@@ -592,6 +776,10 @@ export class UpdaterService {
       Logger.error('Updater: check-cycle hook failed', error)
     }
     if (!this._status.canAutoUpdate) return this.status
+    // An install that is already dispatched owns the updater: a check here
+    // would start a second download and could close the local transfer it is
+    // being retried from.
+    if (this.installDispatched) return this.status
     if (this.checkInFlight) return this.status
     this.explicitCheckInFlight = explicit
     this.checkInFlight = true
@@ -784,12 +972,15 @@ export class UpdaterService {
     }
     const artifact: ResolvedUpdateArtifact = {
       ...selection,
-      sources: await updateDownloadSources({
-        version: info.version,
-        channel: this.activeChannel,
-        githubBase: GITHUB_RELEASES_DOWNLOAD_URL,
-        artifact: selection
-      })
+      // Resolved only on a cache miss: a complete payload installs with no
+      // network request at all (see `seedUpdaterCache`).
+      sources: () =>
+        updateDownloadSources({
+          version: info.version,
+          channel: this.activeChannel,
+          githubBase: GITHUB_RELEASES_DOWNLOAD_URL,
+          artifact: selection
+        })
     }
     const seedProgress = (receivedBytes: number, totalBytes: number): void => {
       if (totalBytes <= 0) return
@@ -954,6 +1145,9 @@ export class UpdaterService {
           Logger.dev(`Updater: install of ${outcome.version} applied`)
         }
         await this.clearInstallFailure()
+        // The cached build is running now; a later offline launch must not offer
+        // to install it a second time.
+        await this.clearCachedUpdate()
         return
       }
       if (outcome.outcome === 'none') {
@@ -1031,6 +1225,9 @@ export class UpdaterService {
         appName: app.getName().toLowerCase()
       }
       await purgeAbandonedInstallStaging(context, { dropPendingPayload })
+      // The record names a payload that was just dropped, so it must not outlive
+      // it and offer an install with nothing to install.
+      if (dropPendingPayload) await this.clearCachedUpdate()
     } catch (error: unknown) {
       Logger.error('Updater: staging sweep failed', error)
     }
@@ -1088,17 +1285,21 @@ export class UpdaterService {
         (this.installRecoveryPending && !this.installApproved && !this.forceUpdateInBackground
           ? 1
           : 0)
-      // Downloads are read after the thread count because the read is too cheap
-      // to do on a path that is about to install anyway, and never for an
-      // install the user or the tray asked for directly.
-      const downloads = threadCount === 0 ? this.blockingDownloads() : []
-      if (threadCount === 0 && downloads.length === 0) {
+      // Dictation is read before downloads because a recording is the one piece
+      // of work here the user cannot get back, and every path below waits on it.
+      const dictation = this.dictationActivity()
+      const speechCount = dictation.recording + dictation.transcribing
+      // Downloads are read after the counts because the read is too cheap to do
+      // on a path that is about to install anyway, and never for an install the
+      // user or the tray asked for directly.
+      const downloads = threadCount === 0 && speechCount === 0 ? this.blockingDownloads() : []
+      if (threadCount === 0 && speechCount === 0 && downloads.length === 0) {
         this.quitAndInstallNow()
         return
       }
 
       this.updateState({ state: 'waiting' })
-      this.broadcastWaitingForWork(threadCount, downloads.length)
+      this.broadcastWaitingForWork(threadCount, downloads.length, speechCount)
 
       this.clearDeferredInstall()
       this.deferredInstallPoll = setInterval(() => {
@@ -1149,10 +1350,10 @@ export class UpdaterService {
     return count
   }
 
-  private broadcastWaitingForWork(threads: number, downloads: number): void {
+  private broadcastWaitingForWork(threads: number, downloads: number, speech: number): void {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
-        sendToRenderer(win.webContents, 'updater:waiting-for-work', threads, downloads)
+        sendToRenderer(win.webContents, 'updater:waiting-for-work', threads, downloads, speech)
       }
     }
   }
@@ -1192,7 +1393,8 @@ export class UpdaterService {
     // The quit this dispatch was driving is not happening, so the park gate goes
     // back to whatever it was before the install began.
     this.updateQuitHooks?.end()
-    this.localTransferRetried = false
+    this.localTransferAttempts = 0
+    this.clearLocalTransferRetry()
     this.installPending = false
     this.installApproved = false
     this.clearDeferredInstall()
@@ -1220,7 +1422,8 @@ export class UpdaterService {
   }
 
   private quitAndInstallNow(): void {
-    this.localTransferRetried = false
+    this.localTransferAttempts = 0
+    this.clearLocalTransferRetry()
     this.installPending = false
     this.installApproved = false
     this.updateState({ state: 'idle' })

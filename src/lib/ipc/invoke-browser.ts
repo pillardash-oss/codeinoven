@@ -30,6 +30,7 @@ import type {
   BrowserSiteDataScope,
   BrowserScrollbarTheme,
   BrowserTabDestroyReason,
+  BrowserAgentTabClaim,
   BrowserThreadBrowserPage,
   BrowserTransportCommand,
   BrowserSitePermissionState,
@@ -152,18 +153,26 @@ export const invokeBrowserContract = {
    *
    * A thread browser is the browser a conversation shares with its agent, so
    * this is what lets the agent's browser capability reach the page the user is
-   * reading rather than only a page it opened itself. The binding is keyed by the
-   * conversation scope the strip already groups its tabs by, and it is idempotent
-   * and survives a navigate, because it is a reference to a tab rather than to
-   * one address. Only the app reports it: no agent operation moves the thread
-   * browser to another tab or another box.
+   * reading rather than only a page it opened itself. The binding is filed per
+   * conversation, so a project's threads each keep the page they were given while
+   * they share one strip, and it is idempotent and survives a navigate because it
+   * is a reference to a tab rather than to one address. Only the app reports it:
+   * no agent operation moves the thread browser to another tab or another box.
    */
   'browser:bindThreadBrowserPage': {} as Contract<
-    [scopeId: string, page: BrowserThreadBrowserPage],
+    [projectId: string, threadId: string, page: BrowserThreadBrowserPage],
     void
   >,
   /** Drop that binding, for a conversation whose thread browser holds no page. */
-  'browser:unbindThreadBrowserPage': {} as Contract<[scopeId: string], void>,
+  'browser:unbindThreadBrowserPage': {} as Contract<[projectId: string, threadId: string], void>,
+  /**
+   * The tabs agents are working on, and the thread that holds each one.
+   *
+   * The tab strip reads this to name the thread behind a tab it did not open.
+   * Main pushes `browser:agentTabClaimsChanged` when the set moves, so the strip
+   * never polls for it.
+   */
+  'browser:agentTabClaims': {} as Contract<[], BrowserAgentTabClaim[]>,
   'browser:hide': {} as Contract<[tabId: string], void>,
   /**
    * Show an extension's own side panel in the rail.

@@ -5,6 +5,7 @@
   import CioCrossCircle from '@pdslng/cio-icon/CioCrossCircle.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioMinus from '@pdslng/cio-icon/CioMinus.svelte'
+  import CioMinusCircle from '@pdslng/cio-icon/CioMinusCircle.svelte'
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
   import CioRocket from '@pdslng/cio-icon/CioRocket.svelte'
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
@@ -551,6 +552,8 @@
                 <CioClock size={13} class="mt-0.5 shrink-0 text-warning" />
               {:else if run.conclusion === 'success'}
                 <CioCheckCircle size={13} class="mt-0.5 shrink-0 text-success" />
+              {:else if run.conclusion === 'cancelled'}
+                <CioMinusCircle size={13} class="mt-0.5 shrink-0 text-dimmed" />
               {:else if run.conclusion === 'skipped'}
                 <CioMinus size={13} class="mt-0.5 shrink-0 text-dimmed" />
               {:else}

@@ -43,6 +43,12 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
   /** Set by `bind()`: where the audit stands for this thread. */
   auditState = $state<Thread['auditState']>('offered')
 
+  /** An audit run ended in failure. Kept beside `auditError` because a failed
+   *  run is not a persisted audit state: the card has to report the failure with
+   *  its model picker, so the user can change the auditor's account right there
+   *  instead of hunting the auditor thread. */
+  auditFailed = $state(false)
+
   auditBusy = $state(false)
 
   auditReportActionsAvailable = $derived.by(() => {
@@ -58,14 +64,46 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     )
   })
 
+  /** The accepted report can be pulled back into review. Accepting a report
+   *  clears the thread's audit state and lands the thread on Done, so a thread
+   *  that still has a report but no audit state is exactly the accepted case. */
+  auditRetractAvailable = $derived.by(() => {
+    const report = this.root.contextUsage.auditReport
+    if (!report || this.auditReportActionsAvailable) return false
+    if (this.assignment) {
+      return this.assignment.auditCycle?.status === 'completed'
+    }
+    const thread = this.root.handleAgentEvent.thread
+    return thread.status === 'completed' && thread.auditState === undefined
+  })
+
+  /**
+   * The thread every Assignment call is keyed on.
+   *
+   * A worker thread presents its coordinator's Assignment, and the studio that
+   * edits task models and worker scope can be opened from that worker. The
+   * loaded document already names the coordinator it belongs to, so the mounted
+   * thread's own id is the wrong key there: the engine answers "Assignment not
+   * found" to a lookup done on a worker. Resolve from the document, and fall
+   * back to this view only before anything has been loaded.
+   */
+  assignmentOwner(): { projectId: string; threadId: string } {
+    const active = this.assignment
+    return {
+      projectId: active?.projectId ?? this.root.handleAgentEvent.thread.projectId,
+      threadId: active?.coordinatorThreadId ?? this.root.handleAgentEvent.thread.id
+    }
+  }
+
   async saveAssignment(content: AssignmentPlanContent): Promise<boolean> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
+      const owner = this.assignmentOwner()
       this.assignment = await invoke(
         'assignment:saveDraft',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        owner.projectId,
+        owner.threadId,
         content,
         {
           source: 'manual',
@@ -97,7 +135,16 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     }
   }
 
-  applyAnnotatedAssignment(updated: AssignmentPlan): AssignmentPlan {
+  /**
+   * Fold a plan the engine just returned into both copies the studio reads.
+   *
+   * The open panel renders the version list entry, not `assignment`, and a
+   * same-version write only moves `updatedAt`. Replacing `assignment` alone
+   * therefore left the panel on the plan as it was before the edit: the picker
+   * snapped back and the header still described the old plan. Every write that
+   * keeps the version goes through here.
+   */
+  applyAssignmentUpdate(updated: AssignmentPlan): AssignmentPlan {
     this.assignment = updated
     this.assignmentVersions = this.assignmentVersions.map((candidate) =>
       candidate.id === updated.id && candidate.version === updated.version ? updated : candidate
@@ -115,7 +162,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
-      return this.applyAnnotatedAssignment(
+      return this.applyAssignmentUpdate(
         await invoke(
           'assignment:addAnnotation',
           current.projectId,
@@ -142,7 +189,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
-      return this.applyAnnotatedAssignment(
+      return this.applyAssignmentUpdate(
         await invoke(
           'assignment:updateAnnotation',
           current.projectId,
@@ -167,7 +214,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
-      return this.applyAnnotatedAssignment(
+      return this.applyAssignmentUpdate(
         await invoke(
           'assignment:resolveAnnotation',
           current.projectId,
@@ -193,12 +240,15 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
-      this.assignment = await invoke(
-        'assignment:updateUnlinkedWorkerModel',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
-        taskId,
-        selection
+      const owner = this.assignmentOwner()
+      this.applyAssignmentUpdate(
+        await invoke(
+          'assignment:updateUnlinkedWorkerModel',
+          owner.projectId,
+          owner.threadId,
+          taskId,
+          selection
+        )
       )
     } catch (error) {
       this.assignmentError =
@@ -208,16 +258,44 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     }
   }
 
+  async updateAssignmentPhaseModel(
+    phaseId: string,
+    selection: AssignmentModelSelection
+  ): Promise<void> {
+    this.assignmentBusy = true
+    this.assignmentError = ''
+    try {
+      const owner = this.assignmentOwner()
+      this.applyAssignmentUpdate(
+        await invoke(
+          'assignment:updateUnlinkedPhaseModel',
+          owner.projectId,
+          owner.threadId,
+          phaseId,
+          selection
+        )
+      )
+    } catch (error) {
+      this.assignmentError =
+        error instanceof Error ? error.message : 'The phase model could not be updated.'
+    } finally {
+      this.assignmentBusy = false
+    }
+  }
+
   async updateAssignmentTaskScope(taskId: string, scope: ScopeChoice): Promise<void> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
-      this.assignment = await invoke(
-        'assignment:updateUnlinkedWorkerScope',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
-        taskId,
-        scope
+      const owner = this.assignmentOwner()
+      this.applyAssignmentUpdate(
+        await invoke(
+          'assignment:updateUnlinkedWorkerScope',
+          owner.projectId,
+          owner.threadId,
+          taskId,
+          scope
+        )
       )
     } catch (error) {
       this.assignmentError =
@@ -236,11 +314,9 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentBusy = true
     this.assignmentError = ''
     try {
-      this.assignment = await invoke(
-        'assignment:updateWorkerScope',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
-        scope
+      const owner = this.assignmentOwner()
+      this.applyAssignmentUpdate(
+        await invoke('assignment:updateWorkerScope', owner.projectId, owner.threadId, scope)
       )
     } catch (error) {
       this.assignmentError =
@@ -255,11 +331,12 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     this.assignmentError = ''
     try {
       await this.root.sources.assignmentSeniorSettingsPersistence
+      const owner = this.assignmentOwner()
       if (!this.assignment || JSON.stringify(this.assignment.content) !== JSON.stringify(content)) {
         this.assignment = await invoke(
           'assignment:saveDraft',
-          this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id,
+          owner.projectId,
+          owner.threadId,
           content,
           {
             source: 'manual',
@@ -284,15 +361,8 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
           )
         ).state
       }
-      this.assignment = await invoke(
-        'agent:startAssignment',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id
-      )
-      if (
-        this.root.handleAgentEvent.engineeringLifecycle?.autopilot &&
-        this.root.handleAgentEvent.engineeringLifecycle.activeStage === 'assignment'
-      ) {
+      this.assignment = await invoke('agent:startAssignment', owner.projectId, owner.threadId)
+      if (this.root.handleAgentEvent.engineeringLifecycle?.activeStage === 'assignment') {
         this.root.handleAgentEvent.engineeringLifecycle = await invoke(
           'engineeringLifecycle:complete',
           this.root.handleAgentEvent.thread.projectId,
@@ -308,17 +378,14 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
       )
       this.selectedAssignmentVersion = this.assignment.version
       this.root.studioTemporaryChatContext.specReadyToolVisible = false
-      this.root.loadOlderMessages.settings = this.root.handleAgentEvent.engineeringLifecycle
-        ?.autopilot
-        ? {
-            ...this.root.loadOlderMessages.settings,
-            assignmentMode: true,
-            loopMode: true
-          }
-        : {
-            ...this.root.loadOlderMessages.settings,
-            assignmentMode: false
-          }
+      this.root.loadOlderMessages.settings = {
+        ...this.root.loadOlderMessages.settings,
+        assignmentMode: hasSelectedStage(
+          this.root.handleAgentEvent.engineeringLifecycle,
+          'assignment'
+        ),
+        loopMode: hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'achievement')
+      }
       this.root.sources.commitSettings(this.root.loadOlderMessages.settings)
     } catch (error) {
       this.assignmentError =
@@ -413,7 +480,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
       this.root.submitBrainstormDecision.coordinatorErrorMatchesAssignmentWorker
     void invoke('agent:resumeAssignmentAttention', current.projectId, current.coordinatorThreadId)
       .then(async (updated) => {
-        this.assignment = updated
+        this.applyAssignmentUpdate(updated)
         if (clearBubbledCoordinatorError) {
           this.root.handleAgentEvent.errorMessage = ''
           this.root.handleAgentEvent.providerStatus = null
@@ -441,12 +508,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
         current.projectId,
         current.coordinatorThreadId
       )
-      this.assignment = stoppedAssignment
-      this.assignmentVersions = this.assignmentVersions.map((candidate) =>
-        candidate.id === stoppedAssignment.id && candidate.version === stoppedAssignment.version
-          ? stoppedAssignment
-          : candidate
-      )
+      this.applyAssignmentUpdate(stoppedAssignment)
     } catch (error) {
       this.assignmentError =
         error instanceof Error ? error.message : 'The Assignment could not be stopped.'
@@ -467,12 +529,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
         current.projectId,
         current.coordinatorThreadId
       )
-      this.assignment = resumedAssignment
-      this.assignmentVersions = this.assignmentVersions.map((candidate) =>
-        candidate.id === resumedAssignment.id && candidate.version === resumedAssignment.version
-          ? resumedAssignment
-          : candidate
-      )
+      this.applyAssignmentUpdate(resumedAssignment)
     } catch (error) {
       this.assignmentError =
         error instanceof Error ? error.message : 'The Assignment could not be resumed.'
@@ -501,7 +558,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
             this.root.handleAgentEvent.thread.projectId,
             coordinatorThreadId
           ).catch(() => null)
-          if (refreshedAssignment) this.assignment = refreshedAssignment
+          if (refreshedAssignment) this.applyAssignmentUpdate(refreshedAssignment)
         }
         if (this.root.handleAgentEvent.engineeringLifecycle?.activeStage === 'achievement') {
           this.root.handleAgentEvent.engineeringLifecycle = await invoke(
@@ -530,7 +587,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
           this.root.handleAgentEvent.thread.projectId,
           this.auditWorkflowThreadId()
         ).catch(() => null)
-        if (refreshedAssignment) this.assignment = refreshedAssignment
+        if (refreshedAssignment) this.applyAssignmentUpdate(refreshedAssignment)
       }
       this.auditState = undefined
       await this.root.submitBrainstormDecision.reconcileReadySpec()
@@ -539,6 +596,36 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
     } catch (error) {
       this.root.buildSpecActionPrompt.auditError =
         error instanceof Error ? error.message : 'The feature could not be completed.'
+    } finally {
+      this.auditBusy = false
+    }
+  }
+
+  /** Undo an accepted audit report: the report returns to review on `spec` with
+   *  its audit state restored, so Rework and Complete are offered again. */
+  async retractAudit(): Promise<void> {
+    if (this.auditBusy) return
+    this.auditBusy = true
+    this.root.buildSpecActionPrompt.auditError = ''
+    try {
+      const updatedThread = await invoke(
+        'audit:retract',
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )
+      scopeState.updateThread(updatedThread)
+      this.auditState = updatedThread.auditState
+      if (this.assignment) {
+        this.assignment = await invoke(
+          'assignment:getActive',
+          this.root.handleAgentEvent.thread.projectId,
+          this.auditWorkflowThreadId()
+        ).catch(() => null)
+      }
+      await this.root.submitBrainstormDecision.reconcileReadySpec()
+    } catch (error) {
+      this.root.buildSpecActionPrompt.auditError =
+        error instanceof Error ? error.message : 'The audit report could not be retracted.'
     } finally {
       this.auditBusy = false
     }
@@ -648,8 +735,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
         const lifecycleSpecApproval =
           (this.root.handleAgentEvent.engineeringLifecycle?.activeStage === 'spec' ||
             this.root.handleAgentEvent.engineeringLifecycle?.humanGate === 'spec_approval') &&
-          (hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'spec') ||
-            this.root.handleAgentEvent.engineeringLifecycle?.autopilot)
+          hasSelectedStage(this.root.handleAgentEvent.engineeringLifecycle, 'spec')
         if (lifecycleSpecApproval) {
           if (
             this.root.handleAgentEvent.engineeringLifecycle?.humanGate === 'spec_approval' &&
@@ -690,10 +776,6 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
             this.root.handleAgentEvent.thread.id,
             'spec'
           )
-          if (this.root.handleAgentEvent.engineeringLifecycle.autopilot) {
-            await this.generateAssignmentDraft()
-            return
-          }
           const nextEngineeringSettings = this.root.harnessUsage.settingsForEngineeringState(
             this.root.handleAgentEvent.engineeringLifecycle
           )

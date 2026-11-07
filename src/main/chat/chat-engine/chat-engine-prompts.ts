@@ -11,7 +11,8 @@ import {
 import {
   BRAINSTORM_DOCUMENT_TOOL_NAME,
   ENGINEERING_SPEC_TOOL_NAME,
-  ASSIGNMENT_PLAN_TOOL_NAME
+  ASSIGNMENT_PLAN_TOOL_NAME,
+  PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME
 } from '../../../lib/agent-tools'
 import {
   UTILITY_ACTIVATE_TOOL_NAME,
@@ -608,6 +609,30 @@ export const BRAINSTORM_DISCUSSION_SYSTEM_PROMPT = [
   SKILL_OUTPUT_INSTRUCTION
 ].join(' ')
 
+/**
+ * Product discovery turn: the agent either submits the complete PRD or asks
+ * the unresolved product questions. Application-owned, so it is not an
+ * editable Behavior tab.
+ */
+export const PRD_DISCUSSION_SYSTEM_PROMPT = [
+  'You are the product lead for this thread and you own the product requirements document.',
+  `First decide whether the user's message, the conversation, and any finalized Brainstorm give you enough to write the complete PRD. When they do, submit it through ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}: title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions, every section present and every entry concrete.`,
+  'When they do not, ask only the unresolved product questions through the question tool and end your turn on those questions. Never submit a partial or invented document, and never ask about something the conversation or the finalized Brainstorm already answers.',
+  'Use finalized Brainstorm material when present, inspect the project read-only, and do not generate an engineering specification, assign work, implement, or mutate project files.',
+  CITATION_SYSTEM_INSTRUCTION,
+  QUESTION_TOOL_INSTRUCTION,
+  SKILL_OUTPUT_INSTRUCTION
+].join(' ')
+
+/** Disposable PRD serialization turn: generation only, never explanation. */
+export const PRD_DOCUMENT_SYSTEM_PROMPT = [
+  `Create a reviewable PRD through ${PRODUCT_REQUIREMENTS_DOCUMENT_TOOL_NAME}. Include title, summary, Problem, Goals, Non-goals, Users and Use Cases, Product Requirements, Experience Flow, Acceptance Criteria, Dependencies, Risks, and Open Questions. Open Questions may be empty, but every section must be present.`,
+  'Use finalized Brainstorm material when available. Do not generate an engineering specification or implement.',
+  CITATION_SYSTEM_INSTRUCTION,
+  DIAGRAM_OUTPUT_RULE,
+  SKILL_OUTPUT_INSTRUCTION
+].join(' ')
+
 export const asEditableTemplate = (prompt: string): string =>
   prompt
     .replaceAll(APP_NAME, '{{APP_NAME}}')
@@ -615,57 +640,15 @@ export const asEditableTemplate = (prompt: string): string =>
     .replaceAll(ASSIGNMENT_PLAN_TOOL_NAME, '{{CIO_ASSIGNMENT_TOOL}}')
     .replaceAll(BRAINSTORM_DOCUMENT_TOOL_NAME, '{{CIO_BRAINSTORM_DOC_TOOL}}')
 
+/**
+ * Behavior is the only editable layer now. Every lifecycle stage prompt is an
+ * application-owned tool contract, so only the standing work ethics is
+ * registered as a user-editable default.
+ */
 registerCioPromptDefault(
   'work-ethics',
   DEFAULT_AGENT_BEHAVIOR_PROMPT.replaceAll(APP_NAME, '{{APP_NAME}}')
 )
-
-registerCioPromptDefault('chat', asEditableTemplate(CHAT_SYSTEM_PROMPT))
-
-registerCioPromptDefault('file-system-chat', asEditableTemplate(FILE_SYSTEM_CHAT_SYSTEM_PROMPT))
-
-registerCioPromptDefault('temporary-chat', asEditableTemplate(TEMPORARY_CHAT_SYSTEM_PROMPT))
-
-registerCioPromptDefault(
-  'brainstorm-discussion',
-  asEditableTemplate(BRAINSTORM_DISCUSSION_SYSTEM_PROMPT)
-)
-
-registerCioPromptDefault(
-  'brainstorm-document',
-  asEditableTemplate(BRAINSTORM_GENERATION_SYSTEM_PROMPT)
-)
-
-registerCioPromptDefault('engineering-spec', asEditableTemplate(SPEC_GENERATION_SYSTEM_PROMPT))
-
-registerCioPromptDefault(
-  'engineering-implementation',
-  asEditableTemplate(SPEC_IMPLEMENT_SYSTEM_PROMPT)
-)
-
-registerCioPromptDefault(
-  'assignment-discussion',
-  asEditableTemplate(ASSIGNMENT_DISCUSSION_SYSTEM_PROMPT)
-)
-
-registerCioPromptDefault(
-  'assignment-plan',
-  asEditableTemplate(EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT)
-)
-
-registerCioPromptDefault(
-  'achievement-implementation',
-  asEditableTemplate(ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT)
-)
-
-registerCioPromptDefault('audit-report', asEditableTemplate(AUDIT_GENERATION_SYSTEM_PROMPT))
-
-registerCioPromptDefault(
-  'independent-audit-report',
-  asEditableTemplate(INDEPENDENT_AUDIT_SYSTEM_PROMPT)
-)
-
-registerCioPromptDefault('audit-repair', asEditableTemplate(AUDIT_REPAIR_SYSTEM_PROMPT))
 
 export function buildSpecRevisionSystemPrompt(
   specPath: string,

@@ -39,6 +39,9 @@ export interface AchievementCoordinatorPanelProps {
   reportAvailable?: boolean
   /** The achievement loop verified the goal and closed itself; no further work remains. */
   achievementReached?: boolean
+  /** When this run first started working (spec approval, or the auditor thread
+   *  of a plain implementation audit). Absent hides the run timer. */
+  runStartedAt?: number
   selectedThreadId: string
   auditorSettings: ThreadSettings
   providers: ProviderCatalog[]
@@ -114,4 +117,12 @@ export interface DesignCoordinatorPanelProps {
    * not record the viewing thread as being in it.
    */
   kind?: AuthoredWorkKind
+  /**
+   * Whether the project's rail opened this board to browse the project's work.
+   *
+   * A session's board leads with nothing until the thread writes work of its own, so
+   * a design another thread made is never put in front of a session that has none.
+   * The rail's board browses, so it puts the newest one in front instead.
+   */
+  projectBoard?: boolean
 }

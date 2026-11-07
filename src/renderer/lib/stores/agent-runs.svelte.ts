@@ -306,17 +306,23 @@ class AgentRunsStore {
   }
 
   /**
-   * Forget the trace state a visit left behind.
+   * Forget the trace state a settled visit left behind.
    *
    * Opening a trace is a gesture inside one visit, not a preference: a settled
    * thread must never come back with an old turn's trace expanded, so every
-   * mount of a thread view starts from the fold the turn itself asks for. A
-   * still-running turn re-opens on its own (see `setBusy`, and the busy effect
-   * inside the trace), so nothing live is lost by clearing this.
+   * mount of a thread view starts from the fold the turn itself asks for.
+   *
+   * A run that is still live is the exception, and it is why this guard exists.
+   * Clearing its trace does not lose the fold for a later frame: the mount path
+   * only resets a run state that is not live, so a live run stays busy, and
+   * `setBusy` opens the trace only on the transition *into* a turn. A trace
+   * folded here therefore never re-opens while the turn keeps working, which is
+   * how leaving a working thread and coming back to it closed live work.
    */
   resetTraceView(projectId: string, threadId: string): void {
     const entry = this.runs.get(threadKey(projectId, threadId))
     if (!entry) return
+    if (entry.busy && entry.live) return
     if (!entry.traceOpen && !entry.traceUserOpened && !entry.traceUserFolded) return
     entry.traceOpen = false
     entry.traceUserOpened = false

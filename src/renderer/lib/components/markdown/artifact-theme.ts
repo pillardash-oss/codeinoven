@@ -1,9 +1,41 @@
 /// <reference types="vite/client" />
 import { createSubscriber } from 'svelte/reactivity'
-import appCss from '../../../app.css?raw'
 
-// Discover names from the canonical stylesheet rather than copying a palette.
-const tokenNames = [...new Set(appCss.match(/--[\w-]+(?=\s*:)/gu) ?? [])]
+/**
+ * The token names the canonical stylesheet declares, read from its parsed rules.
+ *
+ * The stylesheet is already loaded and parsed by the browser to render the app,
+ * so its `:root` and theme blocks are enumerated here instead of importing a raw
+ * copy of `app.css`. That raw copy put ~90 kB into the initial closure to obtain
+ * one list of names, a first-screen cost every user pays to theme a card most of
+ * them never open.
+ */
+function collectStylesheetTokenNames(): Set<string> {
+  const names = new Set<string>()
+  const visit = (rules: CSSRuleList | undefined): void => {
+    if (!rules) return
+    for (const rule of rules) {
+      const declaration = (rule as Partial<CSSStyleRule>).style
+      if (declaration) {
+        for (let index = 0; index < declaration.length; index += 1) {
+          const name = declaration.item(index)
+          if (name.startsWith('--')) names.add(name)
+        }
+      }
+      // @media, @supports, @layer and @container hold the theme's own rules.
+      visit((rule as Partial<CSSGroupingRule>).cssRules)
+    }
+  }
+  for (const sheet of document.styleSheets) {
+    try {
+      visit(sheet.cssRules)
+    } catch {
+      // Cross-origin stylesheets cannot be inspected. App styles are bundled.
+    }
+  }
+  return names
+}
+
 let cachedStyles: string | undefined
 
 const subscribe = createSubscriber((update) => {
@@ -37,7 +69,7 @@ export function artifactThemeStyles(): string {
   if (cachedStyles !== undefined) return cachedStyles
   const root = getComputedStyle(document.documentElement)
   const body = getComputedStyle(document.body)
-  const names = new Set(tokenNames)
+  const names = collectStylesheetTokenNames()
   // Include runtime/custom-theme tokens as well as stylesheet declarations.
   for (let index = 0; index < body.length; index++) {
     const name = body.item(index)

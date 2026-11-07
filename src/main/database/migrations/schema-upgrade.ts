@@ -9,6 +9,10 @@ import type { DatabaseMigration, LedgerMigrationHost } from './migration'
 import { versionTwoMigration } from './v002'
 import { versionThreeMigration } from './v003'
 import { versionFourMigration } from './v004'
+import { versionFiveMigration } from './v005'
+import { versionSixMigration } from './v006'
+import { versionSevenMigration } from './v007'
+import { versionEightMigration } from './v008'
 
 /**
  * Every migration this build ships, one file per schema version, ascending.
@@ -23,7 +27,11 @@ import { versionFourMigration } from './v004'
 export const DATABASE_MIGRATIONS: readonly DatabaseMigration[] = [
   versionTwoMigration,
   versionThreeMigration,
-  versionFourMigration
+  versionFourMigration,
+  versionFiveMigration,
+  versionSixMigration,
+  versionSevenMigration,
+  versionEightMigration
 ]
 
 /**

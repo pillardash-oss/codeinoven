@@ -12,6 +12,7 @@ interface MemoryLocation {
   projectId?: string
   threadId?: string
   entryProjectId?: string
+  entryScopeBucketId?: string
   entryThreadId?: string
   entryAssistantId?: string
 }
@@ -33,29 +34,35 @@ export function groupByCategory(entries: MemoryEntry[]): Record<MemoryPriority, 
  * The file a scope set addresses, plus the ids the entry must carry to live
  * there. Audience-level sets land in their audience's own file (or the root
  * file when the set covers several audiences or every audience), located sets
- * land in the file of the place they name, and assistant memory shares the
- * assistant container's file and is filtered by its assistant id.
+ * land in the file of the place they name, and both assistant and feature-scope
+ * memory share a container file (the assistant space, the project) and are
+ * filtered by their own id.
  */
 export function locationForScopes(
   scopes: readonly MemoryScope[],
   projectId?: string,
   threadId?: string,
-  assistantId?: string
+  assistantId?: string,
+  scopeBucketId?: string
 ): MemoryLocation {
   const safeProjectId =
     projectId === undefined ? undefined : optionalEntityId(projectId, 'Project ID')
   const safeThreadId = threadId === undefined ? undefined : optionalEntityId(threadId, 'Thread ID')
   const safeAssistantId =
     assistantId === undefined ? undefined : optionalEntityId(assistantId, 'Assistant ID')
+  const safeScopeBucketId =
+    scopeBucketId === undefined ? undefined : optionalEntityId(scopeBucketId, 'Scope bucket ID')
   const expected = memoryLocationForScopes(scopes, {
     projectId: safeProjectId,
     threadId: safeThreadId,
-    assistantId: safeAssistantId
+    assistantId: safeAssistantId,
+    scopeBucketId: safeScopeBucketId
   })
   return {
     projectId: expected.projectId,
     threadId: expected.threadId,
     entryProjectId: expected.projectId,
+    entryScopeBucketId: expected.scopeBucketId,
     entryThreadId: expected.threadId,
     entryAssistantId: expected.assistantId
   }
@@ -80,7 +87,8 @@ export function normalizeEntriesForLocation(
       entry.scopes,
       entry.projectId,
       entry.threadId,
-      entry.assistantId
+      entry.assistantId,
+      entry.scopeBucketId
     )
     if (expected.projectId !== actualProjectId || expected.threadId !== actualThreadId) {
       throw new TypeError(`Memory entry "${entry.label}" does not belong in this storage scope`)
@@ -88,6 +96,7 @@ export function normalizeEntriesForLocation(
     return {
       ...entry,
       projectId: expected.entryProjectId,
+      scopeBucketId: expected.entryScopeBucketId,
       threadId: expected.entryThreadId,
       assistantId: expected.entryAssistantId
     }
@@ -99,9 +108,13 @@ export function entryMatchesContext(
   entry: MemoryEntry,
   projectId?: string,
   threadId?: string,
-  assistantId?: string
+  assistantId?: string,
+  scopeBucketId?: string
 ): boolean {
-  return memoryScopesMatchContext(entry, contextFor(projectId, threadId, assistantId))
+  return memoryScopesMatchContext(
+    entry,
+    contextFor(projectId, threadId, assistantId, undefined, scopeBucketId)
+  )
 }
 
 /** Whether an entry is sent to the agent for one thread's context. */
@@ -110,20 +123,26 @@ export function entryAppliesToContext(
   projectId?: string,
   threadId?: string,
   modelKey?: string,
-  assistantId?: string
+  assistantId?: string,
+  scopeBucketId?: string
 ): boolean {
-  return scopesApplyToContext(entry, contextFor(projectId, threadId, assistantId, modelKey))
+  return scopesApplyToContext(
+    entry,
+    contextFor(projectId, threadId, assistantId, modelKey, scopeBucketId)
+  )
 }
 
 function contextFor(
   projectId?: string,
   threadId?: string,
   assistantId?: string,
-  modelKey?: string
+  modelKey?: string,
+  scopeBucketId?: string
 ): MemoryContext {
   return {
     audience: memoryAudienceForContainer(projectId),
     projectId,
+    scopeBucketId,
     threadId,
     assistantId,
     modelKey

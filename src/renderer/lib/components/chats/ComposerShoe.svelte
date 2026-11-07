@@ -24,6 +24,12 @@
     bucket: ScopeBucket
     /** New threads can reassign the scope; existing ones toggle the scope view. */
     isNewThread: boolean
+    /**
+     * The scope is stated, not chosen. A bound assistant task's scope is its
+     * binding, which the task's own picker changes, so the shoe must not offer
+     * the composer's project-scope reassignment for it.
+     */
+    readOnly?: boolean
     /** Opens the projects/threads scope view for this thread (existing threads). */
     onOpenScopeView?: () => void | Promise<void>
   }
@@ -65,10 +71,9 @@
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import { trackEscapeMenu } from '$lib/overlay-close.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { moveThreadToScope } from '$lib/stores/thread-scope-move'
   import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
-  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { projectRemotes } from '$lib/stores/project-remotes.svelte'
-  import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { projectIdentityTitle } from '$lib/project-location'
@@ -111,8 +116,18 @@
   let threadId = $derived(shoe.scope?.threadId ?? '')
   let bucket = $derived(shoe.scope?.bucket)
   let isNewThread = $derived(shoe.scope?.isNewThread ?? false)
+  let scopeReadOnly = $derived(shoe.scope?.readOnly ?? false)
   let isWorking = $derived(shoe.isWorking ?? false)
-  let project = $derived(shoe.identity.kind === 'project' ? shoe.identity.project : undefined)
+  // A project thread names its project, and a bound assistant task carries the
+  // checkout it works in, so the branch pill states a real branch in both cases
+  // from the same row.
+  let project = $derived(
+    shoe.identity.kind === 'project' ||
+      shoe.identity.kind === 'task' ||
+      shoe.identity.kind === 'assistant'
+      ? shoe.identity.project
+      : undefined
+  )
   /** Worker reporting is the one control the shoe states besides the identity. */
   let report = $derived(shoe.report)
 
@@ -149,11 +164,9 @@
     bucketId: string
   ): Promise<void> {
     try {
-      const updated = await invoke('thread:update', targetProjectId, targetThreadId, {
-        scopeBucketId: bucketId
-      })
-      workspaceState.updateThread(updated)
-      scopeState.updateThread(updated)
+      // A refusal (a working thread in a worktree scope) is toasted by the
+      // helper itself, so it is user feedback rather than a reported error.
+      if (!(await moveThreadToScope(targetProjectId, targetThreadId, bucketId))) return
       closeMenu()
     } catch (error) {
       reportError(error, 'The scope could not be changed.')
@@ -414,15 +427,34 @@
     void document.fonts?.ready.then(() => {
       if (!disposed) measure()
     })
+    /**
+     * The read above writes the row's own stage, and that write resizes the row and
+     * the card hugging it, which is exactly what the observer watches. Running the
+     * read inside the delivery therefore reschedules layout the browser had no frame
+     * left to report, and Chromium logs it as "ResizeObserver loop completed with
+     * undelivered notifications" on ordinary composer work. One queued frame
+     * collapses however many reports arrive into a single read once the layout has
+     * settled, and the stage write is idempotent, so it stops after one pass.
+     */
+    let pendingFrame = 0
+    function schedule(): void {
+      if (disposed || pendingFrame !== 0) return
+      pendingFrame = requestAnimationFrame(() => {
+        pendingFrame = 0
+        if (!disposed) measure()
+      })
+    }
     // The composer's own width is the room, and the card is what reports the row
     // outgrowing it. Observing the card alone never reports the room coming back: a
     // card that hugs a truncated row keeps its width while the composer grows around
     // it, which is how a figure stayed hidden after the composer had space for it.
-    const observer = new ResizeObserver(measure)
+    const observer = new ResizeObserver(schedule)
     observer.observe(wrapper)
     observer.observe(card)
     return () => {
       disposed = true
+      if (pendingFrame !== 0) cancelAnimationFrame(pendingFrame)
+      pendingFrame = 0
       observer.disconnect()
     }
   }
@@ -447,7 +479,7 @@
         onclick={toggleMenu}
         oncontextmenu={(event: MouseEvent) => {
           event.preventDefault()
-          if (isWorking) return
+          if (isWorking || scopeReadOnly) return
           changeScopeOpen = true
         }}
         aria-disabled={isWorking}

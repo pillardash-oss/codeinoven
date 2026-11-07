@@ -22,8 +22,14 @@ export const ORG_SLUG = 'pillardash'
  * Advertise the actual Chromium version using the standard Chrome/Safari
  * sequence. Extra Electron or app product tokens make sites such as WhatsApp
  * reject an otherwise supported browser, so omit them from remote requests.
+ *
+ * Chrome reduced its own user agent in M111 and now sends `Chrome/<major>.0.0.0`
+ * there, keeping the real build number in the `Sec-CH-UA-Full-Version-List` hint.
+ * Sending the full build in the user agent makes a Chrome string that no Chrome
+ * ever sends, so the reduction is mirrored here and the hints keep the truth.
  */
 export function brandUserAgent(userAgent: string, chromeVersion: string): string {
+  const [major = chromeVersion] = chromeVersion.split('.')
   const tokens = userAgent
     .split(' ')
     .filter(
@@ -34,7 +40,7 @@ export function brandUserAgent(userAgent: string, chromeVersion: string): string
         !token.startsWith('Chrome/')
     )
   const safariIndex = tokens.findIndex((token) => token.startsWith('Safari/'))
-  tokens.splice(safariIndex === -1 ? tokens.length : safariIndex, 0, `Chrome/${chromeVersion}`)
+  tokens.splice(safariIndex === -1 ? tokens.length : safariIndex, 0, `Chrome/${major}.0.0.0`)
   return tokens.join(' ')
 }
 

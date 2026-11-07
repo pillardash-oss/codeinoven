@@ -62,6 +62,8 @@
   let visibleDownloads = $derived(downloads.slice(0, VISIBLE_DOWNLOADS))
   let remainingDownloadCount = $derived(Math.max(0, downloads.length - VISIBLE_DOWNLOADS))
   let hasDownloads = $derived(downloads.length > 0)
+  /** This close parks the window in the menu bar instead of quitting. */
+  let isPark = $derived(payload?.park === true)
 
   /**
    * What closing now costs the user, in the order the sections above list it.
@@ -89,11 +91,16 @@
 
   /** The closing question with what it costs appended, as one string so the
    *  spacing never depends on where the markup happens to wrap. */
-  let closeSentence = $derived(
-    closeCosts.length === 0
+  let closeSentence = $derived.by(() => {
+    if (isPark) {
+      return closeCosts.length === 0
+        ? ''
+        : closeCosts
+    }
+    return closeCosts.length === 0
       ? 'Are you sure you want to close?'
       : `Are you sure you want to close? ${closeCosts}.`
-  )
+  })
 
   /**
    * What closing does to the downloads above. It is the one consequence that is
@@ -105,11 +112,32 @@
     const many = downloads.length > 1
     return `Closing ${many ? 'pauses them' : 'pauses it'} and keeps the bytes already downloaded. On a server that supports resuming, ${many ? 'they continue' : 'it continues'} where ${many ? 'they left' : 'it left'} off the next time you open the app.`
   })
+
+  /**
+   * What a park costs, which is the whole reason this prompt is shown even when
+   * nothing is pending.
+   *
+   * The app keeps running in the menu bar, so work continues; the window is what
+   * does not survive. The renderer process is destroyed with it and the browser
+   * service, the shell and every preview are released, so the surfaces that only
+   * exist inside the window are gone until it is reopened.
+   */
+  let parkNote = $derived(
+    "The app keeps running in the menu bar, so threads that are still working carry on. What lives in the window goes: the app's browser stops driving pages for the agent, previews and terminals stop with it, and open editors close. It all comes back when you open the app again from the menu bar."
+  )
 </script>
 
-<Modal open={payload !== null} title="Close application?" onClose={onDismiss}>
+<Modal
+  open={payload !== null}
+  title={isPark ? 'Close the window?' : 'Close application?'}
+  onClose={onDismiss}
+>
   {#if payload}
     <div class="space-y-4">
+      {#if isPark}
+        <p class="text-sm leading-relaxed text-muted">{parkNote}</p>
+      {/if}
+
       {#if hasThreads}
         <WorkingThreadList projects={payload.projects} />
       {/if}
@@ -186,8 +214,9 @@
   {#snippet footer()}
     <button
       type="button"
+      data-modal-dismiss
       class="shrink-0 whitespace-nowrap px-3 py-2 text-sm text-muted transition-colors hover:bg-elevated"
-      title="Keep the app open"
+      title={isPark ? 'Keep the window open' : 'Keep the app open'}
       onclick={onDismiss}
     >
       Dismiss
@@ -196,19 +225,32 @@
       <button
         type="button"
         class="shrink-0 whitespace-nowrap bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
-        title="Save all unsaved files and close the application"
+        title={isPark
+          ? 'Save all unsaved files and close the window'
+          : 'Save all unsaved files and close the application'}
         onclick={() => void onConfirmSave()}
       >
         Save &amp; close
       </button>
     {/if}
-    <button
-      type="button"
-      class="shrink-0 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90"
-      title="Close the application and interrupt working threads"
-      onclick={() => void onConfirm()}
-    >
-      Close application
-    </button>
+    {#if isPark}
+      <button
+        type="button"
+        class="shrink-0 whitespace-nowrap bg-primary px-4 py-2 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover"
+        title="Close the window and keep the app running in the menu bar"
+        onclick={() => void onConfirm()}
+      >
+        Close window
+      </button>
+    {:else}
+      <button
+        type="button"
+        class="shrink-0 whitespace-nowrap bg-danger px-4 py-2 text-sm font-medium text-on-danger transition-colors hover:bg-danger/90"
+        title="Close the application and interrupt working threads"
+        onclick={() => void onConfirm()}
+      >
+        Close application
+      </button>
+    {/if}
   {/snippet}
 </Modal>

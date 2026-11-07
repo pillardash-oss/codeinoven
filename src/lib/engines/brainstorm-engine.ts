@@ -5,6 +5,7 @@ import type { StorageEngine } from '../../main/storage/storage-engine'
 import { exportBrainstormMarkdown } from '../brainstorm/brainstorm-markdown'
 import { parseGeneratedBrainstormContent } from '../brainstorm/brainstorm-validation'
 import { ensureFeatureSlug, requireLocalProject } from '../project-artifacts'
+import { markThreadEngineeringEngaged } from './engineering-engagement'
 import type {
   BrainstormAnnotation,
   BrainstormContent,
@@ -611,6 +612,10 @@ export class BrainstormEngine {
       document.createdAt,
       document.updatedAt
     )
+    // The version now exists, so the thread owns a Brainstorm and the view must
+    // read it: the marker is what lets the card and the Studio control appear
+    // for a Brainstorm an agent created on a plain conversation.
+    markThreadEngineeringEngaged(this.db, document.projectId, document.threadId)
     const featureSlug = await ensureFeatureSlug(this.db, document.projectId, document.threadId)
     const project = requireLocalProject(this.db, document.projectId)
     const markdown = exportBrainstormMarkdown(document)

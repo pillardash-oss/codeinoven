@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { access, mkdir } from 'node:fs/promises'
 import { delimiter, join, resolve, win32 } from 'node:path'
 import type { HarnessExecutionTarget } from '../../lib/types'
@@ -11,6 +11,7 @@ import {
   resolveExecutablePath
 } from './cli-environment'
 import { spawnInUtilityHost } from './harness-utility-host'
+import { ensureAcpAgentsLoaded, findAcpAgent, isAcpAgentId } from './acp/acp-agents-store'
 import { appResourcesRoot } from '../bootstrap/app-resources'
 import { Logger } from '../system/logger'
 
@@ -62,18 +63,37 @@ export function bundledPiVendorDir(): string | undefined {
   return existsSync(vendor) ? vendor : undefined
 }
 
+/**
+ * Version of the bundled Pi harness, read from the file the harness build writes
+ * beside it.
+ *
+ * Asking the bundle itself (a `--version` child) meant spawning a whole Electron
+ * run-as-node process that had to parse the entire harness bundle just to print
+ * one line. On a low-end machine that probe was the heaviest thing the Harnesses
+ * page did, and it ran even though the answer is a constant shipped with the app.
+ */
+function bundledPiVersion(): string | undefined {
+  try {
+    const value = readFileSync(join(appResourcesRoot(), 'harnesses/pi/.version'), 'utf8').trim()
+    return value.length > 0 ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** The bundled Pi runtime, spawned via Electron's own embedded Node. */
 function bundledPiRuntime(command: string, entry: BundledPiEntry = 'rpc'): HarnessRuntime | null {
   if (command !== 'pi') return null
   const resolvedPath = bundledPiEntryPath(entry)
-  return resolvedPath
-    ? {
-        command,
-        executable: process.execPath,
-        resolvedPath,
-        target: { kind: 'bundled' }
-      }
-    : null
+  if (!resolvedPath) return null
+  const version = bundledPiVersion()
+  return {
+    command,
+    executable: process.execPath,
+    resolvedPath,
+    target: { kind: 'bundled' },
+    ...(version ? { version } : {})
+  }
 }
 
 /**
@@ -100,6 +120,28 @@ export async function isHarnessCommandAvailableAsync(
     (await resolveExecutablePathAsync(command, env)) !== undefined ||
     bundledPiRuntime(command) !== null
   )
+}
+
+/**
+ * Whether a harness can actually run on this machine right now.
+ *
+ * Most harnesses are available when their fixed binary resolves. The ACP
+ * harness has no fixed binary: it is available when the user configured an
+ * agent command and that command resolves, which is what lets any ACP-speaking
+ * harness be used without a dedicated driver.
+ */
+export async function isHarnessAvailableAsync(
+  id: string,
+  command: string | undefined,
+  env?: NodeJS.ProcessEnv
+): Promise<boolean> {
+  if (isAcpAgentId(id)) {
+    await ensureAcpAgentsLoaded()
+    const agent = await findAcpAgent(id)
+    if (!agent || agent.enabled === false) return false
+    return isHarnessCommandAvailableAsync(agent.command, env)
+  }
+  return command !== undefined && (await isHarnessCommandAvailableAsync(command, env))
 }
 
 /**
@@ -141,6 +183,12 @@ export interface HarnessRuntime {
   executable: string
   resolvedPath: string
   target: HarnessExecutionTarget
+  /**
+   * Version the runtime reports without being asked. Only the bundled Pi has one
+   * (the app ships it, so the build already knows), which is what lets a probe
+   * answer for it without spawning the harness at all.
+   */
+  version?: string
 }
 
 export interface PreparedHarnessInvocation {

@@ -42,6 +42,8 @@
   import BrowserTabRow from './BrowserTabRow.svelte'
   import BrowserNewTabMenu from './BrowserNewTabMenu.svelte'
   import BrowserGroupModal from './BrowserGroupModal.svelte'
+  import { foldSlide } from '$lib/components/shared/card-motion'
+  import { slide } from 'svelte/transition'
   import BrowserTabModal from './BrowserTabModal.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import { browserGroupAccent, browserGroupIconUrl } from './browser-group-appearance'
@@ -905,7 +907,7 @@
               </div>
             </div>
             {#if !group.collapsed}
-              <div class="mt-0.5 ml-2 border-l pl-1.5">
+              <div transition:slide={foldSlide()} class="mt-0.5 ml-2 border-l pl-1.5">
                 {#each tabsFor(group.id) as tab (tab.id)}
                   <BrowserTabRow
                     {tab}

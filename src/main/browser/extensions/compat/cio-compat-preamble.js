@@ -629,6 +629,31 @@
     }
   }
 
+  // The same for the two window events this app is the author of, for the reason
+  // the window itself exists: Electron has no extension window, so the app hands
+  // the extension one (`chrome.windows.create` answers with it from below) and the
+  // app is the only side that can report it gone. A password manager waits on
+  // `onRemoved` to abandon the passkey prompt that window was showing, so a window
+  // that closes without this event leaves the page's ceremony pending forever.
+  const windowEvents = {}
+  for (const name of ['onCreated', 'onRemoved', 'onFocusChanged', 'onBoundsChanged']) {
+    const dispatcher = makeRealEvent()
+    windowEvents[name] = dispatcher
+    for (const root of roots) {
+      const windowsApi = root && root.windows
+      if (!windowsApi) continue
+      try {
+        Object.defineProperty(windowsApi, name, {
+          value: dispatcher,
+          configurable: true,
+          writable: true
+        })
+      } catch (error) {
+        state.errors.push('windows-' + name + ': ' + String(error))
+      }
+    }
+  }
+
   // The same for the two runtime events the app synthesizes.
   const runtimeEvents = {}
   for (const name of ['onStartup', 'onInstalled']) {
@@ -1901,6 +1926,10 @@
     }
     return tabActivity.replayGate
   }
+  // The ids this app lends an extension: the same two numbers the app reports a
+  // window ending under, and the same pair `src/lib/browser/browser-extension-window.ts`
+  // documents. They are a contract, not a preference: a different number here is a
+  // window the extension never hears is gone.
   const HOSTED_POPUP_WINDOW_ID = 2147483646
   const HOSTED_POPUP_TAB_ID = 2147483645
   const hostedPopout = { url: null, focused: false }
@@ -1949,9 +1978,14 @@
     }
   }
 
-  const routePopupWindowRequest = (kind, url) => {
-    const tabId = tabActivity.activeTabId
-    if (typeof tabId !== 'number' || !Number.isFinite(tabId) || tabId < 0) return false
+  // The tab id a request carries when the app, not the worker, is the side that
+  // knows which page it belongs to. A worker shared by a whole jar has one notion
+  // of "the tab I act for", and a jar whose page is not the one on screen leaves it
+  // with none at all: the app answers with the page the user is on.
+  const UNNAMED_TAB_ID = -1
+  const routePopupWindowRequest = (kind, url, tabId = tabActivity.activeTabId) => {
+    if (typeof tabId !== 'number' || !Number.isFinite(tabId)) return false
+    if (tabId < 0 && tabId !== UNNAMED_TAB_ID) return false
     const request = { seq: ++actionPopupRequestSeq, tabId, kind }
     if (typeof url === 'string') request.url = url
     actionPopupRequests.push(request)
@@ -1980,7 +2014,12 @@
   const routeRequestWhenTabKnown = async (kind, url) => {
     if (routePopupWindowRequest(kind, url)) return true
     await waitForTabReplay()
-    return routePopupWindowRequest(kind, url)
+    if (routePopupWindowRequest(kind, url)) return true
+    // The fallback matters more than the exact tab: an extension window that is
+    // never asked for is a prompt the page waits on forever, and the app can place
+    // it beside the page the user is actually on. It only reaches a runtime with no
+    // windows at all if this is skipped.
+    return routePopupWindowRequest(kind, url, UNNAMED_TAB_ID)
   }
 
   const hostedWindow = (id, focused) => ({
@@ -2163,6 +2202,53 @@
 
   for (const root of roots) wrapWindowsApi(root && root.windows)
 
+  /**
+   * `chrome.tabs.create`, which this runtime cannot honour from a worker either.
+   *
+   * A page an extension opens is the same rule as a window on the web: there is no
+   * second window here, because a browser window is the app's own, so the address
+   * becomes a tab of the browser the extension is acting in. A password manager's
+   * "launch" from a notification or an overlay is exactly this call, and the stub
+   * below answered it with nothing, so the click opened no page at all.
+   *
+   * Only an absolute `http(s)` address is routed; anything else   a page of the
+   * extension's own, which is a window rather than a tab   keeps the runtime's own
+   * answer. A request that cannot be routed falls through to it as well.
+   */
+  const wrapTabsApi = (api) => {
+    if (!api || typeof api !== 'object') return
+    const create = typeof api.create === 'function' ? api.create : noop
+    if (create.__cioOpenTabWrapped) return
+    const wrapped = function () {
+      const args = Array.prototype.slice.call(arguments)
+      const data = args[0] && typeof args[0] === 'object' ? args[0] : {}
+      const requested = Array.isArray(data.url) ? data.url[0] : data.url
+      const url = webWindowUrl(requested)
+      if (!url) return create.apply(this, args)
+      const callback = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : null
+      return routeRequestWhenTabKnown('open-tab', url).then(
+        (routed) => {
+          if (!routed) return create.apply(this, args)
+          // The tab is the app's to create, so the caller is answered without an
+          // id it could not be given: what it asked for was that the page opens.
+          return answerWith(callback, undefined)
+        },
+        (error) => {
+          state.errors.push('tabs-create-route: ' + String(error))
+          return create.apply(this, args)
+        }
+      )
+    }
+    wrapped.__cioOpenTabWrapped = true
+    try {
+      Object.defineProperty(api, 'create', { value: wrapped, configurable: true, writable: true })
+    } catch (error) {
+      state.errors.push('tabs-create-wrap: ' + String(error))
+    }
+  }
+
+  for (const root of roots) wrapTabsApi(root && root.tabs)
+
   const handleBridgeCommand = (command) => {
     if (!command || typeof command !== 'object') return
     state.bridgeCommands = (state.bridgeCommands || 0) + 1
@@ -2202,6 +2288,18 @@
       )
     } else if (command.kind === 'dark-reader-tab-policy') {
       applyDarkReaderPolicy(command)
+    } else if (command.kind === 'window') {
+      const args = Array.isArray(command.args) ? command.args : []
+      // A window this app handed the extension is gone. It is forgotten here first,
+      // so `chrome.tabs.query` and `runtime.getContexts` stop reporting a window
+      // whose page no longer exists, and the extension's own listeners then hear it
+      // under the id they were given.
+      if (command.name === 'onRemoved' && args[0] === HOSTED_POPUP_WINDOW_ID) {
+        hostedPopout.url = null
+        hostedPopout.focused = false
+      }
+      const dispatcher = windowEvents[command.name]
+      if (dispatcher) emitRecorded(command.name, dispatcher, args)
     } else if (command.kind === 'tab') {
       const args = Array.isArray(command.args) ? command.args : []
       if (command.name === 'onActivated') {

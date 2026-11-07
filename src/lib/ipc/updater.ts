@@ -31,6 +31,22 @@ export interface UpdaterChangelog {
 }
 
 /**
+ * Stage of the renderer's voice pipeline that an install must not interrupt.
+ *
+ * `recording` covers the microphone being open and the capture being finalized;
+ * `transcribing` covers the model working and the transcript being pasted into
+ * its field, which is the last step of the flow. A transcript parked for a field
+ * that is off screen is deliberately not a stage: it is not being pasted, and it
+ * waits for the user, so holding an update back on it would hold it back forever.
+ */
+export type UpdateBlockerSpeechPhase = 'recording' | 'transcribing'
+
+/** The voice work a pending install is waiting on, for the force-install modal. */
+export interface UpdateBlockerSpeech {
+  phase: UpdateBlockerSpeechPhase
+}
+
+/**
  * Everything standing between the app and the update it is waiting to install,
  * as the force-install modal needs to show it.
  *
@@ -50,6 +66,14 @@ export interface UpdateBlockers {
   activeCount: number
   /** Working threads, grouped by project and most active first. */
   projects: CloseConfirmationProject[]
+  /**
+   * The voice pipeline that has not finished, or null when dictation is idle.
+   *
+   * Reported by the renderer, which owns the microphone, the recorder and the
+   * insertion of the transcript: a quit during any of those stages loses a
+   * recording the user has not been given yet.
+   */
+  speech: UpdateBlockerSpeech | null
   /**
    * Browser downloads in flight, oldest first.
    *
@@ -74,4 +98,6 @@ export interface UpdaterWaitingWork {
   threads: number
   /** Browser downloads whose bytes are still arriving. */
   downloads: number
+  /** Voice pipelines (recording, transcribing or pasting) still running. */
+  speech: number
 }

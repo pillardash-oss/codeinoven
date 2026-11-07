@@ -45,11 +45,17 @@ export const PANEL_KEYS = {
   debugger: 'panel:debugger',
   sources: 'panel:sources',
   cloudDeployment: 'panel:cloud-deployment',
+  display: 'panel:display',
   temporaryChat: 'panel:temporary-chat',
+  // The run receipt and the task scope picker are opened by an action, so they
+  // load on demand instead of riding the initial bundle: the receipt only exists
+  // after a bound run settles, and the picker only after the task's row asks for it.
+  runReceipt: 'panel:run-receipt',
+  taskScopePicker: 'panel:task-scope-picker',
   assistantKnowledge: 'panel:assistant-knowledge',
   assignmentCoordinator: 'panel:assignment-coordinator',
   achievementCoordinator: 'panel:achievement-coordinator',
-  orchestrateCoordinator: 'panel:orchestrate-coordinator',
+  delegationCoordinator: 'panel:delegation-coordinator',
   designCoordinator: 'panel:design-coordinator',
   independentAuditCoordinator: 'panel:independent-audit-coordinator',
   memory: 'panel:memory',

@@ -9,7 +9,11 @@ import type {
   BrowserInspectorTheme
 } from '$shared/ipc-contract'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { designElementReference, designEntryFromUrl } from '$lib/design-element-reference'
+import {
+  designElementReference,
+  designEntryFromUrl,
+  designPageIdentity
+} from '$lib/design-element-reference'
 import { contextSidebarState } from './context-sidebar.svelte'
 import {
   mergeReferenceById,
@@ -59,12 +63,99 @@ interface TabOwner {
   threadId: string
 }
 
+/**
+ * A set of tab ids the session remembers, kept out of Svelte's reactive graph.
+ *
+ * These flags answer questions the session asks itself while publishing, so a
+ * reactive collection here would make every read retrigger the effect that does
+ * the asking. Nothing renders from them, so they are plain records with the
+ * three operations the session needs.
+ */
+class TabFlags {
+  private readonly flags: Record<string, true> = {}
+
+  has(tabId: string): boolean {
+    return this.flags[tabId] === true
+  }
+
+  add(tabId: string): void {
+    this.flags[tabId] = true
+  }
+
+  delete(tabId: string): void {
+    delete this.flags[tabId]
+  }
+
+  ids(): string[] {
+    return Object.keys(this.flags)
+  }
+}
+
+/** One tab's design page: the folder it is served from, and the entry it shows. */
+interface ObservedDesignPage {
+  design: BrowserDesignTab
+  /** The page's own URL, which names the entry inside the folder. */
+  url: string
+}
+
+/**
+ * The design page each tab is serving, also kept out of the reactive graph.
+ *
+ * The page is kept rather than only its folder because a tab is one entry of a
+ * design: the thread's own tab moves through the work, and a screen tab shows a
+ * single file. The entry is what lets a comment written on one tab be drawn on
+ * the same page when it is opened in another.
+ */
+class DesignMirror {
+  private readonly pages: Record<string, ObservedDesignPage> = {}
+
+  has(tabId: string): boolean {
+    return this.pages[tabId] !== undefined
+  }
+
+  get(tabId: string): ObservedDesignPage | undefined {
+    return this.pages[tabId]
+  }
+
+  set(tabId: string, design: BrowserDesignTab, url: string): void {
+    this.pages[tabId] = { design, url }
+  }
+
+  /** Whether a record was removed, which is what tells a caller it went away. */
+  delete(tabId: string): boolean {
+    if (this.pages[tabId] === undefined) return false
+    delete this.pages[tabId]
+    return true
+  }
+}
+
+/**
+ * The number a pin shows, taken from the composer's own label.
+ *
+ * The composer renumbers a conversation's design notes, and the pin has to agree
+ * with the chip beside it. A label that is not one of those (a reference written
+ * before design notes were numbered) falls back to its place in this page's own
+ * list.
+ */
+function markerNumber(reference: ResponseReferenceAnchor, fallback: number): number {
+  const match = /^Design element (\d+)$/u.exec(reference.label)
+  const parsed = match === null ? Number.NaN : Number(match[1])
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
+}
+
 class BrowserInspectorSession {
   /** Tabs whose page is armed for picking. */
   private readonly armed = new SvelteSet<string>()
-  /** The design each tab is serving, mirrored from `browser:state`. A tab that
-   *  is not serving a design is not inspectable, and never gets pins. */
-  private readonly designs = new SvelteMap<string, BrowserDesignTab>()
+  /**
+   * The design each tab is serving, mirrored from `browser:state`.
+   *
+   * Deliberately ordinary collections rather than reactive ones: this is
+   * bookkeeping the session reads while deciding what to publish, and a reactive
+   * collection read inside the session's own effect made every read retrigger
+   * that effect. Nothing renders from these; the pins and the bubble are told to
+   * change instead of deriving from them.
+   */
+  private readonly designs = new DesignMirror()
   /**
    * The comment bubble each tab has open: the reference it belongs to, and where
    * the element was when the reader picked or reopened it.
@@ -89,9 +180,35 @@ already have come and gone, which is why the list is watched rather than read
    * created) is deliberately *not* recorded here, so the next change of the list
    * asks again instead of the session going blind.
    */
-  private readonly statesRead = new SvelteSet<string>()
-  /** Reads in flight, so one tab is never asked about twice at once. */
-  private readonly reading = new SvelteSet<string>()
+  private readonly statesRead = new TabFlags()
+  /**
+   * Tabs whose state has been read once more after they became the page on
+   * screen.
+   *
+   * A restored tab's design report can arrive before this session was started,
+   * and the broadcast is the only other way it would ever be seen. Asking again
+   * when the reader actually shows the tab closes that gap without polling: one
+   * extra question per tab per session, on the first time it is looked at.
+   */
+  private readonly activeRead = new TabFlags()
+  /**
+   * The pin set last handed to each tab, kept out of the reactive graph.
+   *
+   * A reference changes on every keystroke of a comment draft, and a tab showing
+   * the same design page under another conversation is now republished too. The
+   * serialised set is what keeps that from being an IPC call per key: nothing is
+   * sent unless the pins actually changed. A tab whose page moved has a new
+   * design and publishes a different set, so the record cannot outlive its use.
+   */
+  private readonly publishedMarkers = new Map<string, string>()
+  /**
+   * Reads in flight, so one tab is never asked about twice at once.
+   *
+   * The promise is kept rather than a plain flag because a caller that needs an
+   * answer from after now has to wait for the question already sent, and a flag
+   * could only tell it to give up.
+   */
+  private readonly reading = new Map<string, Promise<void>>()
 
   /**
    * Whether {@link start} has wired the session. Inspection is a browser-only
@@ -111,7 +228,7 @@ already have come and gone, which is why the list is watched rather than read
   start(): void {
     if (this.started) return
     this.started = true
-    subscribe('browser:state', (state) => this.notePageState(state.tabId, state.design))
+    subscribe('browser:state', (state) => this.notePageState(state.tabId, state.design, state.url))
     subscribe('browser:inspector', (tabId, event) => this.onPageEvent(tabId, event))
     // A tab reports its state when it loads, and a restored or preloaded tab can
     // load before this session was started (the browser is lazy, and this is the
@@ -155,39 +272,149 @@ already have come and gone, which is why the list is watched rather than read
     return this.armed.has(tabId)
   }
 
-  /** The pins this tab's page draws, in the composer's own numbering. */
+  /**
+   * The pins this tab's page draws, in the composer's own numbering.
+   *
+   * A comment is pinned to the design page it was written on, not to the tab
+   * that happened to be showing it. The same page can be opened in a thread's
+   * own tab by the agent, in its screen's tab from the board, or in a tab the
+   * app had to create again, and each of those has a different tab id. Matching
+   * only on the id left a comment with no pin the moment its page was opened
+   * another way, which is why the page itself is asked for as well.
+   *
+   * The conversation that owns the tab is listed first, because its own
+   * renumbering is what its composer shows; every other conversation with a
+   * comment on the same page follows. A reference is drawn once even when both
+   * passes name it.
+   */
   markersFor(tabId: string): BrowserInspectorMarker[] {
-    const owner = this.ownerOf(tabId)
-    if (!owner) return []
-    return this.markersForOwner(owner, tabId)
+    const tab = this.tabOf(tabId)
+    const owner = tab ? { projectId: tab.projectId, threadId: tab.threadId } : null
+    const groups: {
+      projectId: string
+      threadId: string
+      references: ResponseReferenceAnchor[]
+    }[] = []
+    const seenGroups = new TabFlags()
+    if (owner) {
+      groups.push({
+        ...owner,
+        references: responseReferencesState.forThread(owner.projectId, owner.threadId)
+      })
+      seenGroups.add(`${owner.projectId}\u0000${owner.threadId}`)
+    }
+    for (const group of responseReferencesState.entries()) {
+      const key = `${group.projectId}\u0000${group.threadId}`
+      if (seenGroups.has(key)) continue
+      seenGroups.add(key)
+      groups.push(group)
+    }
+    const markers: BrowserInspectorMarker[] = []
+    const seen = new TabFlags()
+    for (const group of groups) {
+      for (const reference of group.references) {
+        if (seen.has(reference.id)) continue
+        if (!this.referenceOnTab(group.projectId, reference, tabId)) continue
+        seen.add(reference.id)
+        markers.push({
+          id: reference.id,
+          number: markerNumber(reference, markers.length + 1),
+          comment: reference.comment ?? '',
+          selector: reference.selector ?? '',
+          ...(reference.frame ? { frame: reference.frame } : {})
+        })
+      }
+    }
+    return markers
   }
 
-  /** The pins one conversation's references draw on one tab. */
-  private markersForOwner(owner: TabOwner, tabId: string): BrowserInspectorMarker[] {
-    return responseReferencesState
-      .forThread(owner.projectId, owner.threadId)
-      .flatMap((reference, index) =>
-        reference.kind === 'design' && reference.tabId === tabId
-          ? [
-              {
-                id: reference.id,
-                number: index + 1,
-                comment: reference.comment ?? '',
-                selector: reference.selector ?? '',
-                ...(reference.frame ? { frame: reference.frame } : {})
-              }
-            ]
-          : []
-      )
+  /**
+   * Whether one comment belongs on the page a tab is showing.
+   *
+   * The tab it was written in is the first answer, because that is exact. A tab
+   * showing the same design page is the second, and is what survives the page
+   * being opened again under another tab: the design's folder and entry name the
+   * page, and a comment picked inside a canvas frame names that frame instead.
+   */
+  private referenceOnTab(
+    projectId: string,
+    reference: ResponseReferenceAnchor,
+    tabId: string
+  ): boolean {
+    if (reference.kind !== 'design') return false
+    if (reference.tabId === tabId) return true
+    const tab = this.tabOf(tabId)
+    const page = this.designs.get(tabId)
+    if (!tab || !page || !reference.directory) return false
+    // A folder path is project-relative, so the same design in another project
+    // is a different page even though it is spelled the same.
+    if (tab.projectId !== projectId) return false
+    if (page.design.directory !== reference.directory) return false
+    const currentEntry = designEntryFromUrl(page.url, page.design.origin)
+    const currentId = designPageIdentity(page.design.directory, currentEntry)
+    if (reference.designId) {
+      if (reference.designId === currentId) return true
+    } else if ((reference.designEntry ?? '') === (currentEntry ?? '')) {
+      return true
+    }
+    // A comment picked inside a canvas frame names the screen it was picked on,
+    // so opening that screen in a tab of its own is the same element's page.
+    return reference.frame !== undefined && reference.frame === currentEntry
+  }
+
+  /** The tab the sidebar knows, which is where its project and thread come from. */
+  private tabOf(tabId: string): { projectId: string; threadId: string } | null {
+    const tab = contextSidebarState.browserTabs.find((candidate) => candidate.id === tabId)
+    return tab && tab.kind === 'browser'
+      ? { projectId: tab.projectId, threadId: tab.threadId }
+      : null
   }
 
   toggle(tabId: string): void {
     this.setArmed(tabId, !this.armed.has(tabId))
   }
 
-  /** The comment bubble this tab has open, and where the element sits. */
-  editingFor(tabId: string): { referenceId: string; anchor: BrowserInspectorRect } | null {
-    return this.editing.get(tabId) ?? null
+  /**
+   * The open comment on a tab, resolved against the conversation that owns the
+   * tab right now.
+   *
+   * The reference a pick writes and the reference the bubble reads have to come
+   * from one owner. Reading it here, from the tab the session already knows,
+   * keeps the bubble alive when the panel's own snapshot of the tab is older than
+   * the list (a tab re-scoped to another thread, a restored tab) instead of the
+   * comment silently vanishing because a lookup used a stale thread id.
+   */
+  commentFor(tabId: string): {
+    referenceId: string
+    anchor: BrowserInspectorRect
+    projectId: string
+    threadId: string
+    reference: ResponseReferenceAnchor
+  } | null {
+    const editing = this.editing.get(tabId)
+    if (!editing) return null
+    const owner = this.ownerOf(tabId)
+    const reference = owner
+      ? responseReferencesState
+          .forThread(owner.projectId, owner.threadId)
+          .find((candidate) => candidate.id === editing.referenceId)
+      : undefined
+    // The tab can have been re-scoped to another conversation since the comment
+    // was written (a screen tab's id is derived from the screen, so one screen
+    // opened twice is one tab). The comment belongs to the conversation that
+    // wrote it, and that is the one its edit has to land in, so a miss against
+    // the owner falls back to wherever the reference actually lives rather than
+    // closing a bubble the reader is looking at.
+    const held = reference ? null : responseReferencesState.findById(editing.referenceId)
+    const found = reference ?? held?.reference
+    if (!found) return null
+    return {
+      referenceId: editing.referenceId,
+      anchor: editing.anchor,
+      projectId: owner && reference ? owner.projectId : (held?.projectId ?? owner?.projectId ?? ''),
+      threadId: owner && reference ? owner.threadId : (held?.threadId ?? owner?.threadId ?? ''),
+      reference: found
+    }
   }
 
   /** Close this tab's comment bubble. The comment itself is left alone. */
@@ -242,17 +469,34 @@ already have come and gone, which is why the list is watched rather than read
    * being unknown until its page reloads.
    */
   private readTabStates(): void {
-    const open = new SvelteSet<string>()
+    const open = new TabFlags()
+    const activeId = contextSidebarState.sidebarActiveTabId
     for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
       open.add(tab.id)
-      if (this.designs.has(tab.id) || this.statesRead.has(tab.id)) continue
+      if (this.designs.has(tab.id)) continue
+      // The page the reader is actually looking at is asked again once, even if
+      // its state was already read: the design mark may have been published
+      // before this session existed, and no later broadcast would carry it.
+      //
+      // Checked before the read already in flight is, because that read may have
+      // been asked before the tab was shown: moving the pointer away from it
+      // would let a question that came back too early stand in for this one and
+      // the re-read would be lost with the reader already looking at the page.
+      if (tab.id === activeId) {
+        if (this.activeRead.has(tab.id)) continue
+        this.activeRead.add(tab.id)
+        void this.readPageStateAgain(tab.id)
+        continue
+      }
       if (this.reading.has(tab.id)) continue
+      if (this.statesRead.has(tab.id)) continue
       void this.readPageState(tab.id)
     }
+    for (const id of this.activeRead.ids()) if (!open.has(id)) this.activeRead.delete(id)
     // A closed tab's record goes with it, so a long session does not keep the id
     // of every tab it ever showed.
-    for (const id of this.statesRead) if (!open.has(id)) this.statesRead.delete(id)
+    for (const id of this.statesRead.ids()) if (!open.has(id)) this.statesRead.delete(id)
   }
 
   /**
@@ -262,9 +506,35 @@ already have come and gone, which is why the list is watched rather than read
    * than waited for: that report is a broadcast, and a listener that starts after
    * the page loaded never receives it.
    */
-  private async readPageState(tabId: string): Promise<void> {
-    if (this.reading.has(tabId)) return
-    this.reading.add(tabId)
+  private readPageState(tabId: string): Promise<void> {
+    const inFlight = this.reading.get(tabId)
+    // One question per tab at a time, and the answer on its way is the answer to
+    // this one: asking again would only put two reports of the same page in
+    // flight against each other.
+    if (inFlight) return inFlight
+    const read: Promise<void> = this.fetchPageState(tabId).finally(() => {
+      if (this.reading.get(tabId) === read) this.reading.delete(tabId)
+    })
+    this.reading.set(tabId, read)
+    return read
+  }
+
+  /**
+   * Ask again, once whatever read is already in flight for the tab lands.
+   *
+   * For the callers that need a report from *now*: the page the reader just
+   * showed, or the page a comment is about to be pinned to. The question in
+   * flight may predate either, so it is awaited and then the page is asked about
+   * again, which keeps one tab to one question at a time without spending the
+   * re-read on an answer that came back too early to count.
+   */
+  private readPageStateAgain(tabId: string): Promise<void> {
+    const inFlight = this.reading.get(tabId)
+    return inFlight ? inFlight.then(() => this.readPageState(tabId)) : this.readPageState(tabId)
+  }
+
+  /** The question {@link readPageState} deduplicates and {@link reading} tracks. */
+  private async fetchPageState(tabId: string): Promise<void> {
     try {
       const state = await invoke('browser:pageState', tabId)
       // No report means main has no page for this tab yet, which is the answer a
@@ -272,11 +542,9 @@ already have come and gone, which is why the list is watched rather than read
       // change of the tab list asks again rather than treating it as answered.
       if (!state) return
       this.statesRead.add(tabId)
-      this.notePageState(state.tabId, state.design)
+      this.notePageState(state.tabId, state.design, state.url)
     } catch (failure: unknown) {
       logRendererError("A browser tab's page state could not be read.", failure)
-    } finally {
-      this.reading.delete(tabId)
     }
   }
 
@@ -293,33 +561,92 @@ already have come and gone, which is why the list is watched rather than read
    * different page.
    */
   revealComment(projectId: string, threadId: string, reference: ResponseReferenceAnchor): void {
+    void this.reveal(projectId, threadId, reference)
+  }
+
+  /**
+   * Bring a comment's page and pin in front of the reader.
+   *
+   * The page is looked for by what it is rather than by the tab it was written
+   * in, because the same screen is shown in a thread's own tab by an agent and
+   * in a screen tab by the board. A tab that says it is open but has already
+   * gone in main is not a reason to fail the jump: its page is opened again the
+   * way the board opens it, which is exactly what the reader asked to see.
+   */
+  private async reveal(
+    projectId: string,
+    threadId: string,
+    reference: ResponseReferenceAnchor
+  ): Promise<void> {
     const tabId = reference.tabId
+    let failed: string | undefined
+    // The tab the comment was written in is the most direct answer while it is
+    // still open and still serving a design.
     if (tabId && this.isOpenDesignTab(tabId)) {
-      this.focusComment(tabId, reference.id)
-      return
+      if (await this.tryFocus(tabId, projectId, threadId, reference)) return
+      failed = tabId
+    }
+    // The same design page can be open in another tab: the thread's own tab by
+    // an agent, the screen's tab by the board. The page is what matters, not the
+    // tab it happened to be written in.
+    if (reference.directory) {
+      const shown = this.openTabShowing(reference, reference.directory, projectId, failed)
+      if (shown && (await this.tryFocus(shown, projectId, threadId, reference))) return
+      failed = shown ?? failed
     }
     // The tab can still be open and serving the design even though this session
     // does not know it yet (its report arrived before the session was started),
     // so an unknown tab is read before the comment is declared unrecoverable.
-    if (tabId && !reference.directory && this.isOpenBrowserTab(tabId)) {
-      void this.readPageState(tabId).then(() => {
-        if (tabId && this.isOpenDesignTab(tabId)) {
-          this.focusComment(tabId, reference.id)
-          return
-        }
-        this.revealOnStoredDesign(projectId, threadId, this.withDesignFolder(tabId, reference))
-      })
+    if (tabId && !failed && this.isOpenBrowserTab(tabId)) {
+      await this.readPageState(tabId)
+      if (
+        this.isOpenDesignTab(tabId) &&
+        (await this.tryFocus(tabId, projectId, threadId, reference))
+      )
+        return
+      failed = tabId
+      await this.revealOnStoredDesign(
+        projectId,
+        threadId,
+        this.withDesignFolder(tabId, reference),
+        failed
+      )
       return
     }
-    this.revealOnStoredDesign(projectId, threadId, reference)
+    await this.revealOnStoredDesign(projectId, threadId, reference, failed)
   }
 
-  /** The part of {@link revealComment} that needs a known design folder. */
-  private revealOnStoredDesign(
+  /**
+   * Focus one comment on one tab, and report whether the tab could still do it.
+   *
+   * A sidebar can list a tab main has already destroyed (a closed window, a
+   * restored list that outran the browser), and that tab must not swallow the
+   * jump: the caller opens the page again instead.
+   */
+  private async tryFocus(
+    tabId: string,
     projectId: string,
     threadId: string,
     reference: ResponseReferenceAnchor
-  ): void {
+  ): Promise<boolean> {
+    try {
+      await this.restoreAndFocus(tabId, reference.id, { projectId, threadId })
+      contextSidebarState.focus(tabId)
+      return true
+    } catch (failure: unknown) {
+      logRendererError('A design annotation tab could not be focused; reopening its page.', failure)
+      return false
+    }
+  }
+
+  /** The part of {@link reveal} that needs a known design folder. */
+  private async revealOnStoredDesign(
+    projectId: string,
+    threadId: string,
+    reference: ResponseReferenceAnchor,
+    /** A tab this jump already failed on, which must not be chosen again. */
+    avoidTabId?: string
+  ): Promise<void> {
     const tabId = reference.tabId
     const directory = reference.directory
     if (!directory) {
@@ -334,21 +661,21 @@ already have come and gone, which is why the list is watched rather than read
     // The same screen can already be open in another tab (the reader reopened it
     // themselves, or the thread's own tab is showing it), and a second copy of one
     // page would be a page the comment is not drawn on.
-    const shown = this.openTabShowing(reference, directory)
+    const shown = this.openTabShowing(reference, directory, projectId, avoidTabId)
     if (shown) {
-      if (tabId && tabId !== shown) this.rebindReferences(projectId, threadId, tabId, shown)
-      contextSidebarState.focus(shown)
-      this.focusComment(shown, reference.id)
-      return
-    }
-    void this.reopenAndFocus(projectId, threadId, reference, directory, tabId).catch(
-      (failure: unknown) => {
-        logRendererError('The design a comment was made on could not be reopened.', failure)
-        toast.error('The design this comment was made on is no longer in this project.', {
-          description: directory
-        })
+      if (await this.tryFocus(shown, projectId, threadId, reference)) {
+        if (tabId && tabId !== shown) this.rebindReferences(projectId, threadId, tabId, shown)
+        return
       }
-    )
+    }
+    try {
+      await this.reopenAndFocus(projectId, threadId, reference, directory, tabId)
+    } catch (failure: unknown) {
+      logRendererError('The design a comment was made on could not be reopened.', failure)
+      toast.error('The design this comment was made on is no longer in this project.', {
+        description: directory
+      })
+    }
   }
 
   /**
@@ -362,16 +689,16 @@ already have come and gone, which is why the list is watched rather than read
     tabId: string,
     reference: ResponseReferenceAnchor
   ): ResponseReferenceAnchor {
-    const design = this.designs.get(tabId)
-    if (!design) return reference
-    const entry = designEntryFromUrl(
-      contextSidebarState.browserTabs.find((tab) => tab.id === tabId)?.url ?? '',
-      design.origin
-    )
+    const page = this.designs.get(tabId)
+    if (!page) return reference
+    const entry = designEntryFromUrl(page.url, page.design.origin)
     return {
       ...reference,
-      directory: design.directory,
-      ...(reference.designEntry || !entry ? {} : { designEntry: entry })
+      directory: page.design.directory,
+      ...(reference.designEntry || !entry ? {} : { designEntry: entry }),
+      ...(reference.designId || !page.design.directory
+        ? {}
+        : { designId: designPageIdentity(page.design.directory, entry) })
     }
   }
 
@@ -387,12 +714,23 @@ already have come and gone, which is why the list is watched rather than read
    * folder and showing that entry is the same page even though it is a different
    * tab: the element is on it, and focusing it is what the reader asked for.
    */
-  private openTabShowing(reference: ResponseReferenceAnchor, directory: string): string | null {
+  private openTabShowing(
+    reference: ResponseReferenceAnchor,
+    directory: string,
+    projectId: string,
+    /** A tab this jump already failed on, which must not be chosen again. */
+    avoidTabId?: string
+  ): string | null {
     for (const tab of contextSidebarState.browserTabs) {
-      const design = this.designs.get(tab.id)
-      if (!design || design.directory !== directory) continue
-      if (!reference.designEntry) return tab.id
-      if (designEntryFromUrl(tab.url, design.origin) === reference.designEntry) return tab.id
+      if (tab.kind !== 'browser' || tab.id === avoidTabId || tab.projectId !== projectId) continue
+      const page = this.designs.get(tab.id)
+      if (!page || page.design.directory !== directory) continue
+      const entry = designEntryFromUrl(page.url, page.design.origin)
+      if (reference.designId === designPageIdentity(directory, entry)) return tab.id
+      if (!reference.designEntry || entry === reference.designEntry) return tab.id
+      // A comment picked inside the canvas names the screen's own entry as its
+      // frame, so that screen's tab is the same page to the reader.
+      if (reference.frame !== undefined && reference.frame === entry) return tab.id
     }
     return null
   }
@@ -461,27 +799,32 @@ already have come and gone, which is why the list is watched rather than read
   private async restoreAndFocus(
     tabId: string,
     referenceId: string,
-    owner: TabOwner | null
+    _owner: TabOwner | null
   ): Promise<void> {
     this.armed.add(tabId)
     const theme = this.themeTokens()
     await invoke('browser:inspectSetArmed', tabId, true, theme ?? undefined)
-    // A reopened page's tab can be newer than the sidebar's own tab list, so the
-    // pins come from the conversation the caller named rather than from a lookup
-    // of the tab. Without an owner there is nothing to publish and the pins arrive
-    // with the page's own state report.
-    if (owner) await invoke('browser:inspectMarkers', tabId, this.markersForOwner(owner, tabId))
+    // The pins come from every place a comment on this tab can live, not only from
+    // the conversation that owns the tab now: a screen tab keeps its id across a
+    // re-scope, the comment being focused was written by another conversation, and
+    // a tab main has just opened is not in the sidebar list yet. Markers the
+    // session can name at all are published here, so a reopened page never waits
+    // for a state report to draw them.
+    const markers = this.markersFor(tabId)
+    this.publishedMarkers.set(tabId, JSON.stringify(markers))
+    await invoke('browser:inspectMarkers', tabId, markers)
     await invoke('browser:inspectFocus', tabId, referenceId, true)
   }
 
   /** Mirror the design a tab is serving, and end the session when it stops. */
-  private notePageState(tabId: string, design: BrowserDesignTab | null): void {
+  private notePageState(tabId: string, design: BrowserDesignTab | null, url: string): void {
     if (design) {
-      this.designs.set(tabId, design)
+      this.designs.set(tabId, design, url)
       this.publishMarkers(tabId)
       return
     }
     if (!this.designs.delete(tabId)) return
+    this.publishedMarkers.delete(tabId)
     // The tab left its design folder, so the element a comment was pinned to is
     // gone with the document that held it: the border has nothing left to outline
     // and the bubble has nothing left to sit beside.
@@ -515,29 +858,30 @@ already have come and gone, which is why the list is watched rather than read
       return
     }
     const owner = this.ownerOf(tabId)
-    if (!owner) return
-    const { projectId, threadId } = owner
     if (event.kind === 'open') {
-      // The bubble is drawn beside the element, and the element is in the tab the
-      // reader is looking at, so reveal that tab and the thread it belongs to.
+      // A pin belongs to the comment written on it, which can be held by another
+      // conversation than the one the tab now belongs to. The bubble edits the
+      // reference, so the conversation that owns that reference is revealed, not
+      // whichever thread happens to own the tab.
+      const held = responseReferencesState.findById(event.id)
+      const target = held ? { projectId: held.projectId, threadId: held.threadId } : owner
+      if (!target) return
       this.editing.set(tabId, { referenceId: event.id, anchor: event.anchor })
       void import('$lib/threads/open-thread-by-id')
         .then(async ({ openThreadById }) => {
-          await openThreadById(projectId, threadId)
+          await openThreadById(target.projectId, target.threadId)
           contextSidebarState.focus(tabId)
         })
         .catch(() => {})
       return
     }
-    const reference = designElementReference(
-      event.id,
-      event.target,
-      this.designs.get(tabId) ?? null,
-      {
-        id: tabId,
-        url: contextSidebarState.browserTabs.find((tab) => tab.id === tabId)?.url ?? ''
-      }
-    )
+    if (!owner) return
+    const { projectId, threadId } = owner
+    const page = this.designs.get(tabId)
+    const reference = designElementReference(event.id, event.target, page?.design ?? null, {
+      id: tabId,
+      url: page?.url ?? contextSidebarState.browserTabs.find((tab) => tab.id === tabId)?.url ?? ''
+    })
     // A pick's id is the id of the page marker it created, so the same pick can
     // only ever name one reference. Folding it in by id keeps a repeated report
     // of one pick from adding a second entry with the same key.
@@ -554,25 +898,53 @@ already have come and gone, which is why the list is watched rather than read
    * comment, or a removal made from the composer moves the pins, and an open
    * comment whose reference is gone closes with it.
    */
-  private onReferencesChanged(projectId: string, threadId: string): void {
-    const references = responseReferencesState.forThread(projectId, threadId)
+  private onReferencesChanged(_projectId: string, _threadId: string): void {
+    // A comment belongs to a design page, so any tab showing that page has to be
+    // told again, not only the tab of the conversation that changed: the same
+    // screen is opened by an agent in the thread's tab and by the board in its
+    // own. `publishMarkers` drops the calls whose pins did not change, so this
+    // stays one comparison per open tab instead of an IPC call per keystroke.
     for (const tab of contextSidebarState.browserTabs) {
       if (tab.kind !== 'browser') continue
-      if (tab.projectId !== projectId || tab.threadId !== threadId) continue
-      if (!this.designs.has(tab.id)) continue
-      // An open bubble whose reference is gone (removed from the composer) closes
-      // with it, exactly as the page's own card used to.
-      const editing = this.editing.get(tab.id)
-      if (editing && !references.some((reference) => reference.id === editing.referenceId)) {
-        this.editing.delete(tab.id)
-      }
       this.publishMarkers(tab.id)
+    }
+    // An open bubble whose reference is gone (removed from the composer) closes
+    // with it, exactly as the page's own card used to. Asked of every
+    // conversation rather than of the tab's owner, because a tab that moved on
+    // from the conversation that wrote the comment must still close when that
+    // comment is removed there.
+    for (const tabId of [...this.editing.keys()]) {
+      const editing = this.editing.get(tabId)
+      if (editing && !responseReferencesState.findById(editing.referenceId)) {
+        this.editing.delete(tabId)
+      }
     }
   }
 
+  /**
+   * Hand one tab's pins to the page.
+   *
+   * Deliberately not gated on the mirrored design: the pins are a function of
+   * the conversation's references and the tab's id, and a design mark this
+   * session has not heard about yet (a restored tab, a report published before
+   * the session started) must not cost the reader the pins their comments
+   * already own. A tab that cannot be resolved is skipped, so an unknown tab is
+   * never asked about.
+   */
   private publishMarkers(tabId: string): void {
-    if (!this.designs.has(tabId)) return
-    void invoke('browser:inspectMarkers', tabId, this.markersFor(tabId)).catch(() => {})
+    const markers = this.markersFor(tabId)
+    // A tab with no owner and no comments for it is not published at all, so an
+    // unknown tab is never asked about; one the sidebar can still answer for, or
+    // one whose comments live in another conversation, is.
+    if (!this.ownerOf(tabId) && markers.length === 0) return
+    const serialized = JSON.stringify(markers)
+    if (this.publishedMarkers.get(tabId) === serialized) return
+    this.publishedMarkers.set(tabId, serialized)
+    void invoke('browser:inspectMarkers', tabId, markers).catch(() => {
+      // The tab may have gone since it was listed; forget the set so a reopened
+      // tab with the same pins is published rather than suppressed by it.
+      this.publishedMarkers.delete(tabId)
+    })
   }
 
   /** Re-theme every overlay currently on screen after the app theme changed. */

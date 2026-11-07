@@ -10,7 +10,12 @@ import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { listHarnesses } from '../../agents/harness-registry'
 import { buildProcessEnvironmentAsync } from '../../drivers/cli-environment'
-import { isHarnessCommandAvailableAsync } from '../../drivers/harness-runtime'
+import { isHarnessAvailableAsync } from '../../drivers/harness-runtime'
+import {
+  acpHarnessDescriptors,
+  currentAcpAgents,
+  ensureAcpAgentsLoaded
+} from '../../drivers/acp/acp-agents-store'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { SHARED_GLOBAL_SKILL_PATH, harnessGlobalSkillPath } from '../../../lib/native-skill-paths'
@@ -154,7 +159,13 @@ export async function filterInstalledProviderCatalogs(
   const env = await buildProcessEnvironmentAsync()
   const installed = new Set<string>()
   for (const harness of listHarnesses()) {
-    if (await isHarnessCommandAvailableAsync(harness.command, env)) installed.add(harness.id)
+    if (await isHarnessAvailableAsync(harness.id, harness.command, env)) installed.add(harness.id)
+  }
+  // ACP agents are the user's own records, not registry entries, and their
+  // catalogs must survive exactly like a native harness's catalog does.
+  await ensureAcpAgentsLoaded()
+  for (const agent of acpHarnessDescriptors(currentAcpAgents())) {
+    if (await isHarnessAvailableAsync(agent.id, agent.command, env)) installed.add(agent.id)
   }
   return catalogs.filter((catalog) => installed.has(catalog.harnessId))
 }
@@ -579,8 +590,16 @@ export function validateAssignmentAuditExecutionEvidence(input: {
   const normalizeCommandEvidence = (value: string): string =>
     value
       .normalize('NFKC')
-      .replace(/\\(["'$`])/gu, '$1')
-      .replace(/\\+/gu, '\\')
+      // A shell wrapper re-escapes whatever it hands to the shell (`\"`, `\.`,
+      // `\[`, `\'`), and the report records the command the auditor meant to
+      // run, so an escaped character is the same character here. Removing only
+      // the quote escapes left the tables and brackets a regex carries escaped
+      // on one side and bare on the other, and no real command could match the
+      // search it reported. The wrapper can add a second layer (`\\.` for the
+      // `\.` it means), so unescape until the text stops changing. Quote
+      // stripping below still handles the wrapper itself.
+      .replace(/\\(.)/gu, '$1')
+      .replace(/\\(.)/gu, '$1')
       .replace(/["']/gu, '')
       .replace(/\s+/gu, ' ')
       .trim()
@@ -633,10 +652,15 @@ export function validateAssignmentAuditExecutionEvidence(input: {
     [...value.matchAll(/(?:^|[;&|]\s*)cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)/gu)]
       .map((match) => match[1].replace(/["']/gu, '').replace(/\/+$/u, '').trim())
       .filter((directory) => /[\p{L}\p{N}]/u.test(directory))
+  // A command an auditor ran is evidence whether or not it succeeded. Harnesses
+  // disagree about what a non-zero exit means: pi and opencode complete the tool
+  // call and report the exit code in its output, while codex marks the whole
+  // `command_execution` part `error`. Accepting only `completed` parts therefore
+  // made every *failing* check   and a failing test is what an audit is usually
+  // looking at   read as a command the auditor never ran, which is why a codex
+  // audit always came back with its test facts awaiting validation.
   const observedCommands = observedTools
-    .filter(
-      (part) => part.state.status === 'completed' && /bash|command|shell|exec/iu.test(part.tool)
-    )
+    .filter((part) => /bash|command|shell|exec/iu.test(part.tool))
     .map((part) => {
       const invocation = [part.tool, part.state.title, JSON.stringify(part.state.input)]
         .filter((value): value is string => Boolean(value))
@@ -972,6 +996,12 @@ export function isSecretQuestion(question: AgentQuestion): boolean {
 
 /** Placeholder recorded for a secret request so nothing sensitive is persisted. */
 export const SECRET_ANSWER_PLACEHOLDER = '[secret set]'
+
+/**
+ * What the decision rail records for a secret entry the user had already filled
+ * in when the card expired. It names the fact, never the value.
+ */
+export const PARTIAL_SECRET_ANSWER_MARKER = 'Provided before the deadline'
 
 /**
  * Validate a `cio_ask_secret` submission against its pending request. Every

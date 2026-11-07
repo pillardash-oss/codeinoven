@@ -49,9 +49,10 @@ export interface AutoAnswerItem {
    */
   taskId?: string
   /**
-   * The assistant that owns the task, when the task belongs to one. An assistant's
-   * decisions surface on any of its threads, so the panel is keyed to what the
-   * gate concerns rather than to the window it happened to land in.
+   * The assistant that owned the task when the gate settled. Provenance only: it
+   * is kept on the record for reference and never keys where the decision shows,
+   * because an assistant owns many tasks and a gate settled in one of them is not
+   * news on the others.
    */
   assistantId?: string
   /** Epoch ms the gate was resolved. */
@@ -63,23 +64,23 @@ export interface AutoAnswerItem {
 
 /**
  * The identity a decision is keyed to, resolved from a thread row. Only the
- * fields the scope test needs, so a run thread, its task, and the task's assistant
- * all match without loading the whole thread graph.
+ * fields the scope test needs, so the thread a gate settled on and the task
+ * thread it ran for both match without loading the whole thread graph.
  */
 export interface AutoAnswerThreadScope {
   id: string
   projectId: string
-  assistantId?: string
-  assistantTaskId?: string
 }
 
 /**
  * Whether a decision concerns the given thread.
  *
- * A gate belongs to the conversation it settled on, and through that
- * conversation to the assistant task it ran for and the assistant that owns that
- * task. It is shown wherever any of those is open, so an unattended decision is
- * visible exactly where the user would look for it.
+ * A gate belongs to the one conversation that settled it, and to the assistant
+ * task that conversation ran for: a run thread is transient and gets evicted, so
+ * the task thread is the only other place the decision may surface. It never
+ * widens to the assistant that owns the task, because one assistant holds many
+ * tasks and a gate settled inside one of them would otherwise light the rail on
+ * every thread of that assistant.
  */
 export function autoAnswerConcernsThread(
   item: AutoAnswerItem,
@@ -87,11 +88,5 @@ export function autoAnswerConcernsThread(
 ): boolean {
   if (item.projectId !== thread.projectId) return false
   if (item.threadId === thread.id) return true
-  if (
-    item.taskId !== undefined &&
-    (item.taskId === thread.id || item.taskId === thread.assistantTaskId)
-  ) {
-    return true
-  }
-  return item.assistantId !== undefined && item.assistantId === thread.assistantId
+  return item.taskId !== undefined && item.taskId === thread.id
 }

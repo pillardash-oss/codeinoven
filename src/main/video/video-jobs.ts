@@ -22,6 +22,7 @@ export class VideoJobs {
     projectId: string,
     threadId: string,
     operation: string,
+    root: string,
     run: (context: VideoJobContext) => Promise<{ files: string[]; result?: unknown }>
   ): VideoJob {
     if ([...this.jobs.values()].some((job) => job.record.state === 'running'))
@@ -37,7 +38,8 @@ export class VideoJobs {
       state: 'running',
       stage: 'Starting',
       progress: 0,
-      files: []
+      files: [],
+      root
     }
     const controller = new AbortController()
     this.jobs.set(record.id, { record, controller })

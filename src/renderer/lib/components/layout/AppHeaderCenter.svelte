@@ -84,58 +84,21 @@
   )
 
   /**
-   * Whether a studio is the surface on screen.
-   *
-   * A studio takes the pane the conversation was in, so there is no conversation
-   * column left to sit on and nothing on the right that shrinks it either: the name
-   * belongs in the middle of the bar, and it stays there while panels open and close
-   * around it. Closing the studio returns it to the reading column it was on.
-   */
-  let studioOpen = $derived(!onSettings && workspaceState.specStudioOpen)
-
-  /** The pane the studio owns, so its title centres on that pane and not on the
-   *  window: a context panel beside the studio narrows it. */
-  let studioPane = $derived(studioOpen ? layoutPanelState.studioPaneBox : null)
-
-  /**
-   * How the name is placed in the bar.
-   *
-   * Over a studio the block leaves the flow and sits on the middle of the studio's
-   * pane: the pane is what the user is looking at, and a context panel beside it
-   * moves that middle without the window changing. Its own width stays bounded by
-   * the pane, so a long name truncates inside the pane instead of running under the
-   * chrome or the trailing controls. Until the pane has been measured the block
-   * simply centres in the room the bar leaves it.
-   */
-  let titleLayout = $derived(
-    studioPane
-      ? 'absolute inset-y-0 -translate-x-1/2 justify-center'
-      : studioOpen
-        ? 'relative flex-1 justify-center'
-        : 'relative flex-1 justify-start'
-  )
-  let titleLeft = $derived(
-    studioPane ? `${studioPane.left + Math.round(studioPane.width / 2)}px` : undefined
-  )
-  /**
    * How wide the column the thread's name belongs to is.
    *
-   * The name is bounded by the page it names: it ends where that page ends, so a
-   * long title truncates at the conversation's right edge instead of running on
-   * over a panel beside it or into the window's own corner. Zero until the
-   * conversation has measured itself, and never applied over a studio, whose own
-   * pane is the bound there.
+   * The name is bounded by the page it names, whichever page is on screen: the
+   * conversation's reading column, or the document a studio is showing, which
+   * reports its own column for exactly this reason. It ends where that page ends,
+   * so a long title truncates at the page's right edge instead of running on over
+   * a panel beside it or into the window's own corner. Zero until a reading
+   * surface has measured itself.
    */
   let readingColumnWidth = $derived(
-    !studioOpen && layoutPanelState.contentVisible ? layoutPanelState.readingColumnWidth : 0
+    layoutPanelState.contentVisible ? layoutPanelState.readingColumnWidth : 0
   )
 
   let titleMaxWidth = $derived(
-    studioPane
-      ? `${studioPane.width}px`
-      : readingColumnWidth > 0
-        ? `${Math.max(titleInset, 8) + readingColumnWidth}px`
-        : undefined
+    readingColumnWidth > 0 ? `${Math.max(titleInset, 8) + readingColumnWidth}px` : undefined
   )
 
   /**
@@ -156,20 +119,21 @@
   )
 </script>
 
-<!-- The title block belongs to the thread column, not to the middle of the bar:
-     it starts exactly where the header's chrome cluster ends, which is the
-     thread panel's edge, and takes the room the trailing controls leave. A studio
-     is the exception: it replaces the conversation, so the name centres in the bar
-     while it is open and comes back here when it closes. -->
+<!-- The title block belongs to the page the reader is looking at, not to the
+     middle of the bar: it starts exactly where that page's text starts and ends
+     where it ends. That page is the conversation, or the document a studio is
+     showing, which reports its own column; the bar's chrome and the window's own
+     controls are never anything the name may be placed under. -->
 <!-- Never flush against the end of the chrome: the thread block keeps its own
-     gutter even when it is aligned to the conversation column, and that gap is
+     gutter even when it is aligned to the reading column, and that gap is
      the smallest one it will take. -->
 <div
-  class="flex min-w-0 items-center pr-2 {titleLayout}"
-  style:left={titleLeft}
+  class={[
+    'relative flex min-w-0 flex-1 items-center justify-start pr-2',
+    { 'pl-2': titleInset <= 0 }
+  ]}
   style:max-width={titleMaxWidth}
-  style:padding-left={!studioOpen && titleInset > 0 ? `${Math.max(titleInset, 8)}px` : undefined}
-  class:pl-2={!studioOpen && titleInset <= 0}
+  style:padding-left={titleInset > 0 ? `${Math.max(titleInset, 8)}px` : undefined}
 >
   {#if onSettings}
     <div class="pointer-events-none">

@@ -3,7 +3,8 @@ import type {
   AgentRateLimitWindow,
   AgentTokenUsage,
   NormalizedUsage,
-  SessionAgentEvent
+  SessionAgentEvent,
+  UsagePricingProvenance
 } from '../../../lib/types'
 import { Logger } from '../../system/logger'
 import type { PersistentCliSession } from '../persistent-cli-driver'
@@ -91,6 +92,40 @@ function mapPiCost(value: unknown): number | undefined {
   if (typeof cost?.['total'] === 'number') return cost['total']
   if (typeof usage?.['total'] === 'number') return usage['total']
   return undefined
+}
+
+/**
+ * Whether the dollar figure in a Pi usage object is the amount the provider
+ * billed, rather than Pi's own estimate from its model catalog.
+ *
+ * Pi states it as `cost.totalFromProvider` (1.5.0): true when the provider
+ * reported the charge, absent when the total came from catalog rates. Only the
+ * provider flag is trusted, so a total without one is read as an estimate   the
+ * app must never present a catalog figure as money actually spent.
+ */
+export function piCostIsProviderReported(value: unknown): boolean {
+  const cost = record(record(value)?.['cost'])
+  return cost?.['totalFromProvider'] === true
+}
+
+/**
+ * Provenance for a cost Pi derived from its own model catalog.
+ *
+ * Pi hands back the dollar amount but not the rates behind it, so the entry
+ * records what can be defended: the catalog that priced it and the moment the
+ * reading was taken. The ledger reads `model_catalog` as an estimate, which is
+ * what a reader has to know before trusting the number as a charge.
+ */
+export function piCatalogCostProvenance(
+  modelId: string | undefined,
+  capturedAt: number
+): UsagePricingProvenance {
+  return {
+    source: 'model_catalog',
+    ...(modelId ? { sourceId: modelId } : {}),
+    currency: 'USD',
+    capturedAt
+  }
 }
 
 /**

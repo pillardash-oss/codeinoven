@@ -1,6 +1,7 @@
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { Logger } from '../system/logger'
 import type { RendererLogEntry, RendererLogLevel, RendererLogSource } from '../../lib/ipc-contract'
+import { isBenignRendererErrorMessage } from '../../lib/renderer-error-classification'
 
 const MAX_MESSAGE_CHARS = 8000
 const MAX_STACK_CHARS = 16000
@@ -8,18 +9,14 @@ const MAX_STACK_CHARS = 16000
 /**
  * Engine warnings that reach `window.onerror` but describe browser bookkeeping.
  *
- * Chromium raises "ResizeObserver loop completed with undelivered notifications"
- * whenever an observer's callback schedules more layout than a frame allows.
- * There is nothing to fix on the app side, it fires from ordinary panel layout,
- * and on 2026-10-27 it accounted for 8 of the 16 error lines in one day folder.
- * It is still recorded, at `dev`, so a layout loop someone is actually chasing
- * stays in `main.jsonl` while `error.log` keeps describing failures.
+ * The patterns live in `lib/renderer-error-classification` because the
+ * renderer's own Errors panel applies the same rule. Here they are still
+ * recorded, at `dev`, so a layout loop someone is actually chasing stays in
+ * `main.jsonl` while `error.log` keeps describing failures.
  */
-const BENIGN_RENDERER_ERRORS = [/^ResizeObserver loop (?:completed|limit exceeded)/u]
-
 function isBenignRendererError(entry: RendererLogEntry): boolean {
   if (entry.level !== 'error') return false
-  return BENIGN_RENDERER_ERRORS.some((pattern) => pattern.test(entry.message))
+  return isBenignRendererErrorMessage(entry.message)
 }
 
 /**

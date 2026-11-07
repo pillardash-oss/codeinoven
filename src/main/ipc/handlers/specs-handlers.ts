@@ -175,6 +175,19 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
     }
   )
   ipcMain.handle(
+    'assignment:updateUnlinkedPhaseModel',
+    (_, projectId: unknown, coordinatorThreadId: unknown, phaseId: unknown, model: unknown) => {
+      const safeModel = validateAssignmentModel(model, 'Assignment phase model')
+      if (!safeModel) throw new TypeError('Assignment phase model is required')
+      return assignmentEngine.updateUnlinkedPhaseModel(
+        validateEntityId(projectId, 'Project ID'),
+        validateEntityId(coordinatorThreadId, 'Coordinator thread ID'),
+        validateEntityId(phaseId, 'Assignment phase ID'),
+        safeModel
+      )
+    }
+  )
+  ipcMain.handle(
     'assignment:updateUnlinkedWorkerScope',
     (_, projectId: unknown, coordinatorThreadId: unknown, taskId: unknown, scope: unknown) =>
       assignmentEngine.updateUnlinkedWorkerScope(
@@ -417,10 +430,7 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
         ...(lifecycle.activeStage === 'brainstorm' ? { completedStage: 'brainstorm' } : {}),
         terminal: true
       })
-      ctx.engineeringLifecycleEngine.select(safeProjectId, safeThreadId, {
-        stages: [],
-        autopilot: false
-      })
+      ctx.engineeringLifecycleEngine.select(safeProjectId, safeThreadId, { stages: [] })
       await threadManager.updateThread(safeProjectId, safeThreadId, {
         implementationBrainstorm: { id: finalized.id, version: finalized.version }
       })
@@ -937,6 +947,30 @@ export function registerSpecHandlers(ctx: IpcHandlerContext): void {
       await threadManager.setStatus(validProjectId, validThreadId, 'completed')
     }
     return threadManager.setAuditState(validProjectId, validThreadId, undefined)
+  })
+  ipcMain.handle('audit:retract', async (_, projectId: unknown, threadId: unknown) => {
+    const validProjectId = validateEntityId(projectId, 'Project ID')
+    const validThreadId = validateEntityId(threadId, 'Thread ID')
+    const assignment = assignmentEngine.getActive(validProjectId, validThreadId)
+    if (assignment?.status === 'completed' && assignment.auditCycle?.status === 'completed') {
+      await assignmentEngine.retractAuditCycle(validProjectId, validThreadId)
+    }
+    const report = auditEngine.getActive(validProjectId, validThreadId)
+    if (!report && assignment?.auditCycle?.status !== 'available') {
+      throw new Error('This thread has no accepted audit report to retract')
+    }
+    // The exact inverse of `audit:complete`: the accepted report goes back under
+    // review on `spec`, where Rework and Complete are offered again.
+    const thread = await threadManager.getThread(validProjectId, validThreadId)
+    if (thread && thread.status === 'completed') {
+      await threadManager.setStatus(validProjectId, validThreadId, 'spec')
+    }
+    return threadManager.setAuditState(
+      validProjectId,
+      validThreadId,
+      report ? 'report_ready' : 'offered',
+      report ? { id: report.id, version: report.version } : undefined
+    )
   })
   ipcMain.handle('audit:dismiss', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')

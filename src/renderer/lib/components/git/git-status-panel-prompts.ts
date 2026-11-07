@@ -404,8 +404,8 @@ export function prCheckAssignmentPrompt(
 /**
  * The first message the conflict-resolution agent receives. The agent resolves
  * and stages; on a merge it stops there, because the merge commit is the
- * user's step (Complete merge writes it, and pushes the resolution and deletes
- * the temporary branch when a pull request is involved). A rebase stop has no
+ * user's step (Complete merge writes it, pushes the resolution, merges the pull
+ * request and deletes the temporary branch when one is involved). A rebase stop has no
  * such step in this panel, so that brief still asks for the commit.
  */
 export function conflictResolutionPrompt(
@@ -426,7 +426,7 @@ export function conflictResolutionPrompt(
     integration === 'merge'
       ? [
           'Then stage exactly the files you resolved, one `git add <path>` per file   never `git add -A`.',
-          `Do NOT commit and do NOT push   the user completes the merge from the Git panel, which writes the merge commit${pullRequest ? ', pushes the resolution back to the pull request, and deletes the temporary branch' : ''}.`
+          `Do NOT commit and do NOT push   the user completes the merge from the Git panel, which writes the merge commit${pullRequest ? ', pushes the resolution back to the pull request, merges that pull request, and deletes the temporary branch' : ''}.`
         ]
       : [
           'Then stage and commit the resolutions:',

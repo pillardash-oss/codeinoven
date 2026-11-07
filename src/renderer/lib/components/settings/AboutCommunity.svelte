@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { FEEDBACK_URL, GITHUB_URL, SUPPORT_EMAIL } from '$shared/brand'
   import type { AppConfig, AppConfigPatch } from '$shared/types'
   import { onMount } from 'svelte'
@@ -44,7 +45,13 @@
 
   async function open(url: string): Promise<void> {
     try {
-      await invoke('shell:openExternal', url)
+      // Feedback is a mailto: address, so it always belongs to the user's mail
+      // application; every web link follows the app's link preference instead.
+      if (url.startsWith('mailto:')) {
+        await invoke('shell:openExternal', url)
+        return
+      }
+      await openInBrowser(url, 'global')
     } catch {
       toast.error('Could not open the link')
     }

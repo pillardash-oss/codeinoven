@@ -35,13 +35,19 @@ import {
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
   gateCuaDriverBehaviorPrompt
 } from '../../../lib/agent-behavior'
-import type { CioPromptId } from '../../../lib/cio-prompts'
+import { ASSISTANT_BEHAVIOR_PROMPT } from '../../../lib/assistant-behavior-prompt'
 import { isUsageResetWaitIssue } from '../../../lib/provider-issue'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { attributionModeFor } from './chat-engine-constants'
-import { MERMAID_OUTPUT_INSTRUCTION, formatOpenAnnotations } from './chat-engine-prompts'
+import {
+  MERMAID_OUTPUT_INSTRUCTION,
+  formatOpenAnnotations,
+  SPEC_GENERATION_SYSTEM_PROMPT,
+  SPEC_IMPLEMENT_SYSTEM_PROMPT,
+  ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT
+} from './chat-engine-prompts'
 import { formatAttachedImageDescriptions, isImagePromptAttachment } from './chat-engine-images'
 import { turnStreamPath } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
@@ -55,10 +61,6 @@ export class ChatEngineTurnsDispatch {
     return resolvedId.startsWith(legacyHarnessAccountId(harnessId))
       ? this.host.drivers.get(harnessId)
       : this.host.state.accountDrivers.get(resolvedId)
-  }
-
-  cioPrompt(id: CioPromptId): Promise<string> {
-    return this.host.storage.getCioPrompt(id)
   }
 
   async getBehaviorPrompt(
@@ -81,9 +83,7 @@ export class ChatEngineTurnsDispatch {
       // An assistant task does not inherit the engineering work-ethics prompt:
       // the assistant is its own class and the app owns its standing behavior.
       const behaviorPrompt =
-        executionScope === 'assistant'
-          ? await this.cioPrompt('assistant')
-          : config.agentBehaviorPrompt
+        executionScope === 'assistant' ? ASSISTANT_BEHAVIOR_PROMPT : config.agentBehaviorPrompt
       // Trimmed modes get a compact scope guard instead of the full workspace
       // block; pure inbox chat and image description (no project scope) omit it.
       const workspaceScope: WorkspaceScopeMode =
@@ -113,8 +113,8 @@ export class ChatEngineTurnsDispatch {
           : null,
         '',
         {
-          SPEC_BRAINSTORM_SYSTEM_PROMPT: await this.cioPrompt('engineering-spec'),
-          SPEC_IMPLEMENT_SYSTEM_PROMPT: await this.cioPrompt('engineering-implementation'),
+          SPEC_BRAINSTORM_SYSTEM_PROMPT: SPEC_GENERATION_SYSTEM_PROMPT,
+          SPEC_IMPLEMENT_SYSTEM_PROMPT,
           MERMAID_OUTPUT_INSTRUCTION
         },
         mode,
@@ -124,7 +124,8 @@ export class ChatEngineTurnsDispatch {
           : undefined,
         executionScope,
         workspaceScope,
-        thread?.assistantId
+        thread?.assistantId,
+        thread?.scopeBucketId
       )
       tokenUsageAttribution.recordPromptAttribution(
         episodeFromPieces({
@@ -325,7 +326,18 @@ export class ChatEngineTurnsDispatch {
       if (!thread) return
       markNotificationAborting(projectId, threadId)
       this.host.units['thread-lifecycle'].releaseParkedThreadGates(projectId, threadId)
+      // The descriptor may be mid-vision-call for this thread while its first
+      // prompt is still being composed, which is exactly when no session id is
+      // bound yet; cancel by conversation so the Stop reaches it too.
+      await this.host.units['media-visual'].abortThreadImageDescriptorWork(projectId, threadId)
       await this.host.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
+      // A thread stopped before its session was bound has no idle finalization
+      // to release its ledger row either, so the stop settles it here too.
+      if (options.reason !== 'transfer') {
+        await this.host.checkpointManager
+          .markActiveUserStopped(projectId, threadId)
+          .catch((error) => Logger.dev('Stopped turn settle failed:', error))
+      }
       clearNotificationAborting(projectId, threadId)
       return
     }
@@ -365,6 +377,11 @@ export class ChatEngineTurnsDispatch {
     // runs so the thread stops notifying at all. Capture the failure, finish the
     // teardown, then report it so the caller still learns the harness refused.
     let abortFailure: unknown = null
+    // A stop ends every piece of work the thread started, and the image
+    // descriptor's disposable vision session is one of them: aborting only the
+    // thread's own session left the vision call streaming (and billing) until
+    // its inactivity deadline, long after the thread reported itself idle.
+    await this.host.units['media-visual'].abortImageDescriptorWork(thread.sessionId, threadId)
     try {
       await driver.abort(projectPath, thread.sessionId)
     } catch (error) {
@@ -417,6 +434,18 @@ export class ChatEngineTurnsDispatch {
       threadId,
       thread.sessionId
     )
+    // The ledger row and its `active` checkpoint are the shared answer to "is
+    // this still running", and the idle finalization that settles them belongs
+    // to the harness session a stop is tearing down. A stop is exactly when
+    // that report may never arrive   and a turn adopted from a departed
+    // instance has no harness here at all   so the stop settles it itself.
+    // Otherwise the row outlives the run: thread, workers and Assignment all
+    // stopped, while every surface reading the ledger still claims live work.
+    if (options.reason !== 'transfer') {
+      await this.host.checkpointManager
+        .markActiveUserStopped(projectId, threadId)
+        .catch((error) => Logger.dev('Stopped turn settle failed:', error))
+    }
     await this.host.threadManager.setStatus(projectId, threadId, 'interrupted', { read: true })
     if (projectId === GLOBAL_BROWSER_PROJECT_ID) {
       await this.host.storage.drainRaw(turnStreamPath(projectId, threadId))
@@ -436,7 +465,7 @@ export class ChatEngineTurnsDispatch {
       `Achievement audit ${iteration} found required corrections.`,
       'Act as the primary implementation agent. Address every actionable finding against the approved specification.',
       'Inspect the cited evidence, implement the corrections, run all relevant scoped checks, and report concrete verification evidence. Do not stop at recommendations.',
-      await this.cioPrompt('achievement-implementation'),
+      ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
       `Audit report: ${auditPath}`,
       `Open audit annotations:\n${formatOpenAnnotations(report.annotations)}`
     ].join('\n\n')

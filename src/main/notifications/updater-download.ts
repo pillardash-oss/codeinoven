@@ -45,8 +45,12 @@ export interface ResolvedUpdateArtifact extends SelectedUpdateArtifact {
   /**
    * Ordered download URLs of the same artifact, fastest source first with the
    * fallback last. The file name, sha512 and size are identical for all of them.
+   *
+   * Lazy on purpose: a payload that is already complete in the cache installs
+   * with no internet at all, so the sources (and the mirror manifest lookup they
+   * start with) must not be resolved until bytes are actually missing.
    */
-  sources: readonly ResolvedDownloadSource[]
+  sources: readonly ResolvedDownloadSource[] | (() => Promise<readonly ResolvedDownloadSource[]>)
 }
 
 /**
@@ -366,8 +370,11 @@ export async function seedUpdaterCache(
     resumeFromBytes = 0
   }
   let lastCause: unknown = new Error('The update artifact has no download source.')
-  for (const [index, source] of artifact.sources.entries()) {
-    const isLastSource = index === artifact.sources.length - 1
+  // Only a cache miss needs the network, so the sources are resolved here.
+  const sources =
+    typeof artifact.sources === 'function' ? await artifact.sources() : artifact.sources
+  for (const [index, source] of sources.entries()) {
+    const isLastSource = index === sources.length - 1
     try {
       const received = await downloadFileResumable({
         url: source.url,

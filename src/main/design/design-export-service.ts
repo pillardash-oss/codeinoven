@@ -4,6 +4,7 @@ import { mkdir, realpath, writeFile } from 'node:fs/promises'
 import { join, relative, isAbsolute, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import createExportWorker from './design-export-worker.ts?nodeWorker'
+import { trackQuitWorker } from '../system/quit-worker-sweep'
 import { listDesignScreens } from './design-screens'
 import { resolveServedFolder, resolveServedEntry, servedFileUrl } from '../preview/served-folder'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
@@ -93,9 +94,11 @@ export async function exportDesign(
       }
     } else {
       files = await new Promise<string[]>((resolve, reject) => {
-        const worker = createExportWorker({
-          workerData: { root: canonicalFolder, output, entries, format }
-        })
+        const worker = trackQuitWorker(
+          createExportWorker({
+            workerData: { root: canonicalFolder, output, entries, format }
+          })
+        )
         let settled = false
         const finish = (error: Error | null, result: string[] = []): void => {
           if (settled) return
@@ -116,7 +119,7 @@ export async function exportDesign(
         })
       })
     }
-    return { directory: outputRelative, files }
+    return { directory: outputRelative, files, root: projectRoot }
   } finally {
     exporting = false
   }

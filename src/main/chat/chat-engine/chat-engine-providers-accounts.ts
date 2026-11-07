@@ -5,6 +5,11 @@ import { CodexDriver } from '../../drivers/codex-driver'
 import { AntigravityDriver } from '../../drivers/antigravity-driver'
 import { PiDriver } from '../../drivers/pi-driver'
 import { validateEntityId } from '../../ipc/ipc-validation'
+import {
+  ensureAcpAgentsLoaded,
+  findAcpAgent,
+  isAcpAgentId
+} from '../../drivers/acp/acp-agents-store'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import { isCodeInOvenCustomProviderId, underlyingProviderId } from '../../../lib/custom-provider-id'
@@ -94,8 +99,13 @@ export class ChatEngineProvidersAccounts {
       )
     if (account.containerKind === 'legacy-default') {
       const driver = this.host.drivers.get(harnessId)
-      if (!driver) throw new Error(`Harness driver "${harnessId}" is not available.`)
-      return driver
+      if (driver) return driver
+      // An ACP agent's driver comes from the user's record, not the harness
+      // registry, so a map built before that record list loaded can still
+      // produce the driver here instead of reporting the harness as missing.
+      const created = await this.createAcpDriver(harnessId)
+      if (created) return created
+      throw new Error(`Harness driver "${harnessId}" is not available.`)
     }
     const existing = this.host.state.accountDrivers.get(account.id)
     if (existing) return existing
@@ -106,6 +116,27 @@ export class ChatEngineProvidersAccounts {
     driver.setProcessObserver?.(this.host.state.agentProcesses)
     driver.onEvent((event) => this.host.handleDriverEvent(driver.id, event, driver))
     this.host.state.accountDrivers.set(account.id, driver)
+    return driver
+  }
+
+  /**
+   * Build and register one user-added ACP agent's driver on demand.
+   *
+   * The boot wiring seeds the map from the agent store, but the store loads
+   * asynchronously: any read that arrives first has to be able to create the
+   * driver rather than declare the harness missing.
+   */
+  private async createAcpDriver(harnessId: string): Promise<HarnessDriver | null> {
+    if (!isAcpAgentId(harnessId)) return null
+    const create = this.host.state.acpDriverFactory
+    if (!create) return null
+    await ensureAcpAgentsLoaded()
+    const agent = await findAcpAgent(harnessId)
+    if (!agent || agent.enabled === false) return null
+    const driver = create(agent)
+    driver.setProcessObserver?.(this.host.state.agentProcesses)
+    driver.onEvent((event) => this.host.handleDriverEvent(driver.id, event, driver))
+    this.host.drivers.set(agent.id, driver)
     return driver
   }
 

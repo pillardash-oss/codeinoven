@@ -39,7 +39,8 @@ export interface DeploymentProvider {
   getStatus(containerId: string): Promise<CloudDeploymentContainer | null>
   /**
    * List the most recent deployments/builds for a container, newest first.
-   * The UI shows a bounded window (e.g. the last ten).
+   * The UI shows a bounded window (e.g. the last ten). Records carry no log:
+   * the detail view asks for that one deployment's log through {@link getLogs}.
    */
   listDeployments(containerId: string): Promise<CloudDeploymentDeployment[]>
   /** Capped raw log text for a deployment, or the latest when no id is given. */

@@ -1,4 +1,5 @@
 import { resolve } from 'path'
+import { existsSync } from 'fs'
 import { Logger } from '../../system/logger'
 import { PERMISSION_EVENTS_LOG_FILE, dailyLogRelativePath } from '../../system/log-paths'
 import { PermissionPolicy } from '../../permissions/permission-policy'
@@ -18,7 +19,48 @@ import type { PendingPermissionInfo, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { permissionCommands } from './chat-engine-generated-artifacts'
 import { chatSkillPaths } from './chat-engine-pure'
+import { agentCreationTargets } from '../../permissions/agent-created-files'
+import { posixDirname } from '../../../lib/paths'
+import type { AgentPart } from '../../../lib/types'
 import type { ChatEngine } from '../chat-engine'
+
+/**
+ * The permission kinds that mean "an operation on a file". Every other kind is
+ * the chat's own work: its web access and the tools it was given.
+ */
+const FILE_SYSTEM_PERMISSIONS = new Set([
+  'read',
+  'write',
+  'edit',
+  'delete',
+  'move',
+  'bash',
+  'execute',
+  'file',
+  'files',
+  'bundled-pi-sensitive-files'
+])
+
+/**
+ * The app-owned gateway tool a request would run, if that is what it is.
+ *
+ * The app serves the turn's gateway MCP server itself, and every route behind it
+ * enforces its own permission, so a card for one of those calls asks the user to
+ * authorize the app to call the app.
+ */
+function appGatewayToolCall(metadata: Record<string, unknown>): string | undefined {
+  const input = metadata['input']
+  if (typeof input !== 'object' || input === null) return undefined
+  const record = input as Record<string, unknown>
+  const provider = record['providerIdentifier']
+  const tool = record['toolName']
+  if (typeof tool !== 'string' || !tool.startsWith('cio_')) return undefined
+  // `utilities` is the transport name the app gives its own gateway server. An
+  // agent that omits the provider still names the call in the app's namespace,
+  // which no user MCP server shares.
+  if (provider !== undefined && provider !== 'utilities') return undefined
+  return tool
+}
 
 /** ChatEngine permissions: one concern, moved verbatim from the composition root. */
 export class ChatEnginePermissions {
@@ -210,6 +252,14 @@ export class ChatEnginePermissions {
         { read: true }
       )
     }
+    // A rejection ends the work the gate was blocking, and the image descriptor
+    // runs its vision call in a disposable session of its own: without this it
+    // would keep streaming, and even retry on another model, after the turn the
+    // user just rejected is already gone.
+    await this.host.units['media-visual'].abortImageDescriptorWork(
+      sessionId,
+      pending.session.threadId
+    )
     await driver.abort(pending.session.projectPath, sessionId)
   }
 
@@ -345,10 +395,14 @@ export class ChatEnginePermissions {
       if (index > 0 && index % 8 === 0) await new Promise<void>((done) => setImmediate(done))
       const entry = pending[index]
       if (!entry || this.host.state.pendingPermissions.get(entry.request.id) !== entry) continue
+      const createdPaths = [
+        ...(this.host.state.agentCreatedFiles.get(entry.session.sessionId) ?? [])
+      ]
       entry.policy = new PermissionPolicy({
         projectRoot: entry.session.projectPath,
         mode: entry.session.permissionLevel ?? 'auto_review',
-        sensitiveFileProtectionEnabled: false
+        sensitiveFileProtectionEnabled: false,
+        ...(createdPaths.length > 0 ? { agentCreatedPaths: createdPaths } : {})
       }).evaluate({ permission: entry.request.permission, paths: entry.request.patterns })
       try {
         await this.replyPermissionRaw(entry, 'once', 'settings:sensitive-files-disabled')
@@ -380,6 +434,65 @@ export class ChatEnginePermissions {
     }
   }
 
+  /**
+   * Remember the files a session creates, from the tool parts every harness
+   * already streams. Auto Review uses the result to let an agent remove its own
+   * throwaway work without a card, so the ledger has to be exact: a target is
+   * only kept when it did not exist yet while the call was running, which is
+   * what separates a creation from an overwrite of the user's own file.
+   *
+   * A harness that never publishes the call's input before it runs simply adds
+   * nothing here, and the ordinary card keeps asking.
+   */
+  trackToolCreations(
+    sessionId: string,
+    part: Extract<AgentPart, { type: 'tool' }>,
+    projectPath: string
+  ): void {
+    const key = `${sessionId}:${part.callID}`
+    const status = part.state.status
+    if (status === 'pending' || status === 'running') {
+      // Snapshots arrive more than once. The first readable one decides.
+      if (this.host.state.pendingToolCreations.has(key)) return
+      const targets = agentCreationTargets(part.tool, part.state.input, projectPath)
+      if (targets.length === 0) return
+      const missing: string[] = []
+      for (const target of targets) {
+        if (existsSync(target)) continue
+        missing.push(target)
+        // A created directory brings its missing parents with it`mkdir -p
+        // a/b/c` creates all three), so removing the tree the agent made stays
+        // the agent's own cleanup.
+        let parent = posixDirname(target)
+        for (let depth = 0; depth < 16 && parent && !existsSync(parent); depth += 1) {
+          missing.push(parent)
+          const next = posixDirname(parent)
+          if (next === parent) break
+          parent = next
+        }
+      }
+      if (missing.length === 0) return
+      this.host.state.pendingToolCreations.set(key, [...new Set(missing)])
+      return
+    }
+    const created = this.host.state.pendingToolCreations.get(key)
+    this.host.state.pendingToolCreations.delete(key)
+    if (status !== 'completed' || created === undefined || created.length === 0) return
+    const existing = this.host.state.agentCreatedFiles.get(sessionId)
+    const paths = existing ?? new Set<string>()
+    for (const path of created) paths.add(path)
+    if (existing === undefined) this.host.state.agentCreatedFiles.set(sessionId, paths)
+  }
+
+  /** Drop the in-flight creation bookkeeping of a session that is going away. */
+  dropSessionCreations(sessionId: string): void {
+    this.host.state.agentCreatedFiles.delete(sessionId)
+    const prefix = `${sessionId}:`
+    for (const key of this.host.state.pendingToolCreations.keys()) {
+      if (key.startsWith(prefix)) this.host.state.pendingToolCreations.delete(key)
+    }
+  }
+
   /** Resolve a permission request per the thread's permission level. */
   async handlePermissionAsked(
     driverId: string,
@@ -403,12 +516,14 @@ export class ChatEnginePermissions {
       (await this.host.storage.getConfig()).bundledPiSensitiveFileProtectionEnabled !== false
     const { allowedPaths, scratchPaths, workspaceRoots, restrictToAllowed } =
       await this.chatPermissionScope(info)
+    const agentCreatedPaths = [...(this.host.state.agentCreatedFiles.get(info.sessionId) ?? [])]
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
       mode: restrictToAllowed ? 'auto_review' : level,
       sensitiveFileProtectionEnabled,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
+      ...(agentCreatedPaths.length > 0 ? { agentCreatedPaths } : {}),
       ...(workspaceRoots.length > 0 ? { workspaceRoots } : {}),
       ...(!settleBrowserAction && restrictToAllowed ? { restrictToAllowed } : {})
     }).evaluate({
@@ -420,6 +535,53 @@ export class ChatEnginePermissions {
         : {})
     })
     const thread = await this.host.threadManager.getThread(info.projectId, info.threadId)
+    // A chat is told to go to the web: its own system prompt makes search and
+    // fetch the first answer for anything it does not know, so a card for an
+    // outbound request contradicts the contract the same session just received
+    // and parks a run the user asked for. Only file access is the chat's gate;
+    // a project thread keeps the full policy, where an outbound request is a
+    // real decision about the project.
+    const chatScope =
+      info.projectId === INBOX_PROJECT_ID || info.projectId === GLOBAL_BROWSER_PROJECT_ID
+    // Two calls never need a card:
+    //  - a tool the app itself serves. The gateway the turn received is the app's
+    //    own MCP server, and its routes already carry their own permission
+    //    checks, so asking the user to approve `cio_util_find` asks them to
+    //    authorize CodeInOven to talk to CodeInOven.
+    //  - anything a chat does that is not file access. A chat's contract is that
+    //    the web is its first answer for what it does not know, and only file
+    //    access is the gate; a network or tool card there contradicts the prompt
+    //    the same session was given and parks a run the user asked for.
+    const appOwnedTool = appGatewayToolCall(request.metadata)
+    // What makes a request file access is what it acts on, not the word the
+    // harness used for it: a web search arrives labelled `read` from some agents,
+    // and a file read always carries the path it will open (a shell command
+    // always carries the command line).
+    const touchesFiles = request.patterns.length > 0 || commands.length > 0
+    const chatNonFile =
+      chatScope &&
+      !touchesFiles &&
+      request.permission !== 'bundled-pi-sensitive-files' &&
+      !FILE_SYSTEM_PERMISSIONS.has(request.permission)
+    if ((appOwnedTool !== undefined || chatNonFile) && !policy.approved) {
+      const reason =
+        appOwnedTool !== undefined
+          ? `Auto-approved: ${appOwnedTool} is an app-owned tool.`
+          : 'Auto-approved: a chat reaches the web and its tools directly; only file access asks.'
+      policy = {
+        ...policy,
+        approved: true,
+        decision: 'auto_review',
+        reason,
+        approval: { ...policy.approval, required: false, expiresAt: undefined },
+        ledger: {
+          ...policy.ledger,
+          decision: 'auto_review',
+          reason,
+          expiresAt: undefined
+        }
+      }
+    }
     // Only an app-owned browser call may supply this decision. Harness metadata
     // cannot turn an unclassified tool into an automatically approved action.
     const sensitiveFileApproval = request.permission === 'bundled-pi-sensitive-files'

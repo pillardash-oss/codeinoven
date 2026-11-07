@@ -252,6 +252,7 @@
        play, so the player leaves the pointer to the pen here. -->
   <VideoPlayer
     {src}
+    sourceKey={url}
     label={filename}
     {startAt}
     {autoPlay}

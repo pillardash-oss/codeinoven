@@ -7,6 +7,7 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import ThreadRow from './ThreadRow.svelte'
+  import CoordinatorRunTimer from './CoordinatorRunTimer.svelte'
   import type { IndependentAuditCoordinatorPanelProps, ThinkingLevel } from '$shared/types'
 
   let {
@@ -46,6 +47,13 @@
   /** The durable auditor records the failure on its own thread, so a failed
    *  run stays visible here until the next run starts. */
   let auditFailed = $derived(!running && auditThread?.status === 'failed')
+  /** The auditor thread is the run: it is created for the first audit and keeps
+   *  the report lineage, so its own clock is the run's clock. */
+  let runStartedAt = $derived(auditThread?.createdAt)
+  let runLive = $derived(running)
+  let runEndedAt = $derived(
+    !running && auditThread !== undefined ? auditThread.updatedAt : undefined
+  )
 
   let progress = $derived.by(() => {
     if (running) {
@@ -186,7 +194,17 @@
 
   <div class="min-h-0 flex-1 overflow-y-auto">
     <section class="border-b border-border p-4" aria-label="Independent audit progress">
-      <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Current state</p>
+      <div class="flex items-baseline justify-between gap-2">
+        <p class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">
+          Current state
+        </p>
+        <CoordinatorRunTimer
+          startedAt={runStartedAt}
+          endedAt={runEndedAt}
+          live={runLive}
+          label="Total run time of this audit"
+        />
+      </div>
       <div class="mt-2 flex items-start gap-2">
         <span class="mt-1.5 h-2 w-2 shrink-0 bg-current {progress.tone}" aria-hidden="true"></span>
         <div class="min-w-0">

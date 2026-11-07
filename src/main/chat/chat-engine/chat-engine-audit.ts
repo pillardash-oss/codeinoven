@@ -25,7 +25,7 @@ import { workflowActionPresentation } from '../../../lib/workflow-action-present
 import { ensureFeatureSlug, requireLocalProject } from '../../../lib/project-artifacts'
 import type { AssignmentAuditRepairManifest } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
-import { formatOpenAnnotations } from './chat-engine-prompts'
+import { ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT, formatOpenAnnotations } from './chat-engine-prompts'
 import { isRecord } from './chat-engine-generated-artifacts'
 import { auditRequiresRework } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
@@ -33,6 +33,34 @@ import type { ChatEngine } from '../chat-engine'
 /** ChatEngine audit: one concern, moved verbatim from the composition root. */
 export class ChatEngineAudit {
   constructor(private readonly host: ChatEngine) {}
+
+  /**
+   * Start a session that is not bound to the runtime the user just replaced.
+   *
+   * A parked provider reset belongs to the session that hit it, so changing the
+   * auditor's harness, model or account has to discard that session. Keeping it
+   * made an account switch do nothing: the next audit bounced off the same reset
+   * window and reported the previous provider's usage limit again.
+   */
+  private async resetAuditorRuntimeIfChanged(
+    projectId: string,
+    auditor: Thread,
+    nextSettings: ThreadSettings
+  ): Promise<void> {
+    const previous = auditor.settings
+    const runtimeChanged =
+      previous !== undefined &&
+      (previous.harnessId !== nextSettings.harnessId ||
+        previous.providerId !== nextSettings.providerId ||
+        previous.modelId !== nextSettings.modelId ||
+        (previous.accountId ?? '') !== (nextSettings.accountId ?? ''))
+    if (!auditor.sessionId || !(runtimeChanged || previous?.harnessId === undefined)) return
+    await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
+    this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
+    this.host.state.retryScheduler?.clear(auditor.sessionId)
+    this.host.state.retryScheduler?.dropThread(auditor.id)
+    await this.host.threadManager.clearSessionId(projectId, auditor.id)
+  }
 
   /**
    * Prepare the app utility gateway for one audit turn. Every audit dispatch
@@ -136,6 +164,7 @@ export class ChatEngineAudit {
         `Worker ${task?.workerName ?? task?.threadId ?? taskId} reported task “${task?.title ?? taskId}”.`,
         'Inspect the worker thread, project changes, audit-checklist.md, baseline.txt, and check.txt. Correctly audit every checklist item.',
         'Call the review-task API with pass, rework, or fail. If it passes, assign every newly ready task returned by the API. If you mark it fail, re-dispatch it immediately with assign-task so a fresh worker retries it   a failed task is not terminal.',
+        this.host.units['assignment'].coordinatorWaitingInstruction(),
         this.host.units['assignment-run'].assignmentApiInstructions(
           this.host.units['assignment-run'].assignmentApiCapability({
             role: 'coordinator',
@@ -157,6 +186,15 @@ export class ChatEngineAudit {
     threadId = validateEntityId(threadId, 'Thread ID')
     const settings = validateThreadSettings(request.settings)
     const thread = await this.host.threadManager.getThread(projectId, threadId)
+    // An independent (spec-less) audit is the thread's own contract, so it runs
+    // on its own path. Eligibility below belongs to the implementation audit,
+    // which needs an approved Engineering contract, and applying it here is what
+    // answered a Retry on an independent audit with "An approved Engineering
+    // implementation is required before audit"
+    if (thread?.independentAudit === true) {
+      return (await this.host.units['audit-run'].runIndependentAudit(projectId, threadId, settings))
+        .report
+    }
     if (!thread?.settings || !(await this.implementationAuditEligible(thread))) {
       throw new Error(
         'Implementation audits require Engineering, Achievement, or a completed Assignment'
@@ -260,15 +298,7 @@ export class ChatEngineAudit {
         userInputLocked: true
       })
     }
-    if (
-      auditor.sessionId &&
-      auditor.settings?.harnessId &&
-      auditor.settings.harnessId !== auditorSettings.harnessId
-    ) {
-      await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
-      this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
-      await this.host.threadManager.clearSessionId(projectId, auditor.id)
-    }
+    await this.resetAuditorRuntimeIfChanged(projectId, auditor, auditorSettings)
     await this.host.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.host.threadManager.updateThread(projectId, auditor.id, {
       achievementRole: 'auditor',
@@ -485,13 +515,23 @@ export class ChatEngineAudit {
         userInputLocked: true
       })
     }
-    if (
-      auditor.sessionId &&
-      auditor.settings?.harnessId &&
-      auditor.settings.harnessId !== auditorSettings.harnessId
-    ) {
+    // A reset the auditor's provider parked belongs to the session that hit the
+    // limit, so changing the auditor's model or account has to start a session
+    // that is not waiting on the old one. Keeping the old session made an account
+    // change do nothing: the next audit bounced off the same reset window and
+    // reported the old provider's limit again.
+    const previousSettings = auditor.settings
+    const runtimeChanged =
+      previousSettings !== undefined &&
+      (previousSettings.harnessId !== auditorSettings.harnessId ||
+        previousSettings.providerId !== auditorSettings.providerId ||
+        previousSettings.modelId !== auditorSettings.modelId ||
+        (previousSettings.accountId ?? '') !== (auditorSettings.accountId ?? ''))
+    if (auditor.sessionId && (runtimeChanged || auditor.settings?.harnessId === undefined)) {
       await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
       this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
+      this.host.state.retryScheduler?.clear(auditor.sessionId)
+      this.host.state.retryScheduler?.dropThread(auditor.id)
       await this.host.threadManager.clearSessionId(projectId, auditor.id)
     }
     await this.host.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
@@ -591,15 +631,7 @@ export class ChatEngineAudit {
         userInputLocked: true
       })
     }
-    if (
-      auditor.sessionId &&
-      auditor.settings?.harnessId &&
-      auditor.settings.harnessId !== auditorSettings.harnessId
-    ) {
-      await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
-      this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
-      await this.host.threadManager.clearSessionId(projectId, auditor.id)
-    }
+    await this.resetAuditorRuntimeIfChanged(projectId, auditor, auditorSettings)
     await this.host.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.host.threadManager.updateThread(projectId, auditor.id, {
       achievementRole: 'auditor',
@@ -634,15 +666,7 @@ export class ChatEngineAudit {
       coordinatorThreadId,
       auditorSettings
     )
-    if (
-      auditor.sessionId &&
-      auditor.settings?.harnessId &&
-      auditor.settings.harnessId !== auditorSettings.harnessId
-    ) {
-      await this.host.units['utilities'].cleanupTurnUtilities(auditor.sessionId)
-      this.host.units['turns-sessions'].retireSessionState(auditor.sessionId)
-      await this.host.threadManager.clearSessionId(projectId, auditor.id)
-    }
+    await this.resetAuditorRuntimeIfChanged(projectId, auditor, auditorSettings)
     await this.host.threadManager.updateSettings(projectId, auditor.id, auditorSettings)
     await this.host.threadManager.updateThread(projectId, auditor.id, { userInputLocked: true })
     return (await this.host.threadManager.getThread(projectId, auditor.id)) ?? auditor
@@ -870,9 +894,7 @@ export class ChatEngineAudit {
           achievement
             ? 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then allow Achievement to audit again.'
             : 'Digest every actionable finding, open audit annotation, and user note. Implement the corrections in this Sr. Engineer thread, run focused verification, then request a fresh audit when ready.',
-          ...(achievement
-            ? [await this.host.units['turns-dispatch'].cioPrompt('achievement-implementation')]
-            : []),
+          ...(achievement ? [ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT] : []),
           ...(report.brainstormId && report.brainstormVersion
             ? [
                 `Implementation contract: ${await this.host.units['media-artifacts'].artifactRef(projectId, coordinatorThreadId, join('versions', `${report.brainstormId}-v${report.brainstormVersion}-brainstorm.md`))}. Use this finalized Brainstorm for the corrections.`

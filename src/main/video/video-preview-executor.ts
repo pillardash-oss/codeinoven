@@ -26,6 +26,10 @@ export interface VideoPreviewExecutorOptions {
     threadId: string,
     input: Record<string, unknown>
   ) => Promise<unknown>
+  /** The folder's timeline, as the video capability's `history` operation answers it. */
+  history: (projectId: string, threadId: string, input: Record<string, unknown>) => Promise<unknown>
+  /** The board's Undo, as the video capability's `restore` operation runs it. */
+  restore: (projectId: string, threadId: string, input: Record<string, unknown>) => Promise<unknown>
   browser: () => BrowserService | null
   /**
    * How the preview becomes durable: the composition folder the agent chose is
@@ -62,6 +66,10 @@ export function createVideoPreviewExecutor(
       return options.studio(operation, input, context)
     if (operation === 'checkpoint')
       return options.checkpoint(context.projectId, context.threadId, input)
+    // A composition keeps the same folder timeline a design does, down to one
+    // file's own line, so an edit that wrecked a scene is recoverable here too.
+    if (operation === 'history' || operation === 'restore')
+      return options[operation](context.projectId, context.threadId, input)
     if (operation !== 'preview') {
       throw new Error(
         `The video capability's "preview" executor received the operation "${operation}".`

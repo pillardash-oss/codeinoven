@@ -7,6 +7,7 @@
   import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { listRowMove } from '$lib/motion'
+  import { openInBrowser } from '$lib/open-in-browser'
   import { speechSettingsStore as speech } from '$lib/stores/speech.svelte'
   import {
     describeSupportedFormatsForCapability,
@@ -363,6 +364,7 @@
 {/snippet}
 
 {#snippet artifactRow(artifact: SpeechModelArtifact)}
+  {@const sourceUrl = artifact.sourcePageUrl}
   {@const download = speech.downloads[artifact.id]}
   {@const isRetired = artifact.qualification.status === 'retired'}
   {@const progressing =
@@ -386,15 +388,17 @@
           {formatBytes(artifact.byteSize)} · {artifact.license}{#if artifact.languages.length}
             · {artifact.languages.join(', ')}{/if}
         </p>
-        {#if artifact.sourcePageUrl}
-          <a
-            href={artifact.sourcePageUrl}
-            target="_blank"
-            rel="noreferrer"
+        {#if sourceUrl}
+          <button
+            type="button"
+            data-external-url={sourceUrl}
+            title={`Open ${artifact.label} on Hugging Face`}
+            aria-label={`Open ${artifact.label} on Hugging Face`}
             class="mt-1 inline-flex items-center gap-1 text-[0.6875rem] text-primary hover:underline"
+            onclick={() => void openInBrowser(sourceUrl, 'global')}
           >
             Hugging Face <CioExternalLink size={10} aria-hidden="true" />
-          </a>
+          </button>
         {/if}
       </div>
       {#if canDownload}

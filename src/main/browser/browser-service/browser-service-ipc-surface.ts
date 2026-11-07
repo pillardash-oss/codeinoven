@@ -64,7 +64,6 @@ import {
   validateTabDestroyReason,
   validateTabId,
   validateThreadBrowserPage,
-  validateConversationScopeId,
   validateThreadId,
   validateToastOverlayAck,
   validateToastOverlayInteraction,
@@ -74,7 +73,9 @@ import {
 } from './browser-validation'
 import {
   EXTENSION_PAGE_COMMAND_CHANNEL,
-  EXTENSION_PAGE_TABS_CHANNEL
+  EXTENSION_PAGE_OPEN_TAB_CHANNEL,
+  EXTENSION_PAGE_TABS_CHANNEL,
+  type BrowserExtensionPageTabRequest
 } from '../extensions/browser-extension-page-tabs'
 import { validateBrowserFindRequest, validateBrowserFindStopAction } from './browser-find'
 import { liveContents, liveWindowContents } from './browser-view-contents'
@@ -137,6 +138,7 @@ export interface IpcSurfaceHost {
   readonly openExtensionPopup: BrowserService['openExtensionPopup']
   readonly openNewTabFor: BrowserService['openNewTabFor']
   readonly openOptionsPageFromPage: BrowserService['openOptionsPageFromPage']
+  readonly openTabFromExtensionPage: BrowserService['openTabFromExtensionPage']
   readonly openSideWindow: BrowserService['openSideWindow']
   readonly overlay: BrowserService['overlay']
   readonly parkTab: BrowserService['parkTab']
@@ -168,7 +170,9 @@ export interface IpcSurfaceHost {
   readonly tabHistory: BrowserService['tabHistory']
   readonly tabs: BrowserService['tabs']
   readonly targetUrl: BrowserService['targetUrl']
-  readonly threadBrowserPages: BrowserService['threadBrowserPages']
+  readonly agentTabClaims: BrowserService['agentTabClaims']
+  readonly bindConversationPage: BrowserService['bindConversationPage']
+  readonly unbindConversationPage: BrowserService['unbindConversationPage']
   readonly toastVisible: BrowserService['toastVisible']
   readonly toggleDevTools: BrowserService['toggleDevTools']
   readonly transport: BrowserService['transport']
@@ -191,6 +195,26 @@ export function replaceHandler(
 ): void {
   ipcMain.removeHandler(channel)
   ipcMain.handle(channel, listener)
+}
+
+/** The longest address an extension page may ask the app to open. */
+const MAX_EXTENSION_PAGE_TAB_URL = 4096
+
+/**
+ * One tab an extension page asked the app to open, as main will act on it.
+ *
+ * Every field is page-supplied and therefore untrusted. The address is bounded
+ * here and validated again against the tab's own jar before it loads, and the
+ * `active` flag is narrowed to a boolean so a caller cannot hand the tab layer
+ * something it does not expect.
+ */
+function toExtensionPageTabRequest(raw: unknown): BrowserExtensionPageTabRequest | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const url = Reflect.get(raw, 'url')
+  if (typeof url !== 'string' || url.length === 0) return null
+  if (url.length > MAX_EXTENSION_PAGE_TAB_URL) return null
+  const active = Reflect.get(raw, 'active')
+  return { url, active: active !== false }
 }
 
 export class BrowserServiceIpcSurface {
@@ -223,6 +247,21 @@ export class BrowserServiceIpcSurface {
       if (command !== 'open-options') return
       this.host.openOptionsPageFromPage(event.sender.id)
     })
+    // The same door, answered instead of only heard: `chrome.tabs.create` is the
+    // page asking the app for a tab, and the reply is the id of the one it opened.
+    // Only a document the app hosts for an extension can ask, and it can only ask
+    // for a page: the address is validated again with the tab's own jar before
+    // anything loads, exactly as a link click is.
+    replaceHandler(
+      EXTENSION_PAGE_OPEN_TAB_CHANNEL,
+      (event: Electron.IpcMainInvokeEvent, rawRequest: unknown): number | null => {
+        const frame = event.senderFrame
+        if (!frame || !frame.url.startsWith('chrome-extension://')) return null
+        const request = toExtensionPageTabRequest(rawRequest)
+        if (!request) return null
+        return this.host.openTabFromExtensionPage(event.sender.id, request)
+      }
+    )
     // Started here so the file exists long before the first extension popup or
     // panel is created; every path that can wait for it does.
     void this.host.ensureExtensionPageTabsPreload()
@@ -950,18 +989,26 @@ export class BrowserServiceIpcSurface {
     replaceHandler('browser:unbindAssistantPage', (_event, rawThreadId) => {
       this.host.assistantPageTabIds.delete(validateThreadId(rawThreadId))
     })
-    replaceHandler('browser:bindThreadBrowserPage', (_event, rawScopeId, rawPage) => {
-      // Binding is tolerant about the page: a tab restored from a previous launch
-      // has no view in this process until something shows it, and the binding is
-      // only read when an operation actually needs that page (see
-      // `conversationPageTab`).
-      this.host.threadBrowserPages.set(
-        validateConversationScopeId(rawScopeId),
-        validateThreadBrowserPage(rawPage)
+    replaceHandler(
+      'browser:bindThreadBrowserPage',
+      (_event, rawProjectId, rawThreadId, rawPage) => {
+        // Binding is tolerant about the page: a tab restored from a previous launch
+        // has no view in this process until something shows it, and the binding is
+        // only read when an operation actually needs that page (see
+        // `conversationPageTab`).
+        this.host.bindConversationPage(
+          validateProjectId(rawProjectId),
+          validateThreadId(rawThreadId),
+          validateThreadBrowserPage(rawPage)
+        )
+      }
+    )
+    replaceHandler('browser:agentTabClaims', () => this.host.agentTabClaims())
+    replaceHandler('browser:unbindThreadBrowserPage', (_event, rawProjectId, rawThreadId) => {
+      this.host.unbindConversationPage(
+        validateProjectId(rawProjectId),
+        validateThreadId(rawThreadId)
       )
-    })
-    replaceHandler('browser:unbindThreadBrowserPage', (_event, rawScopeId) => {
-      this.host.threadBrowserPages.delete(validateConversationScopeId(rawScopeId))
     })
     replaceHandler('browser:destroyThread', (_event, rawProjectId, rawThreadId) => {
       const projectId = validateProjectId(rawProjectId)

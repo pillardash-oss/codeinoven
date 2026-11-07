@@ -11,10 +11,12 @@ import { threadComposerTag } from '$lib/components/chats/composer-tag'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { taggedThreads } from '$lib/stores/tagged-threads.svelte'
 import { assistantAccentColor } from '$lib/assistant-icons'
-import { getVendorIconSvg } from '$lib/vendor-icons/registry'
+import { getVendorIconSvg } from '$shared/vendor-icons/registry'
 import { APP_NAME } from '$shared/brand'
 import { getAgentIcon } from '$lib/agent-icons/registry'
+import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
 import { fastBaseModelId, fastVariantForModelId } from '$shared/fast-inference'
+import { resolveModelProvider, catalogModelEntry } from '$shared/provider-identity'
 import { resolveDefaultThinkingLevel } from '$shared/thinking-presets'
 import { generatedTokens, type LiveGenerationRate } from '$lib/token-rate.svelte'
 import { recordedTokenRate } from '$shared/usage-rate'
@@ -40,12 +42,26 @@ import type {
  * is a pure function of a message plus the data needed to describe it.
  */
 
-/** Extract display text only; transport instructions never enter `parts`. */
+/**
+ * Extract display text only; transport instructions never enter `parts`.
+ *
+ * Parts are unique by id, and a body never repeats itself: two consecutive text
+ * parts carrying the exact same words are one answer the transcript folded
+ * twice (a live part plus the same part arriving again with its stored
+ * snapshot), so the second is dropped rather than printed twice.
+ */
 export function rawMessageText(msg: AgentMessage): string {
-  return msg.parts
-    .filter((p): p is Extract<AgentPart, { type: 'text' }> => p.type === 'text')
-    .map((p) => p.text)
-    .join('\n')
+  const seen = new Set<string>()
+  const lines: string[] = []
+  let previous: string | null = null
+  for (const part of msg.parts) {
+    if (part.type !== 'text' || seen.has(part.id)) continue
+    seen.add(part.id)
+    if (part.text === previous) continue
+    previous = part.text
+    lines.push(part.text)
+  }
+  return lines.join('\n')
 }
 
 export function explicitMessagePresentation(msg: AgentMessage): UserMessagePresentation | null {
@@ -301,30 +317,43 @@ export function inlineFileTagsForMessage(
   return tags
 }
 
-/** Provider catalog entry the message was answered through, when known. */
+/**
+ * Provider catalog entry the message was answered through, when known.
+ *
+ * The message's harness travels with the lookup because a provider id is only
+ * unique inside a harness, and the model is used only to pick between providers
+ * that share an id: matching on the model alone answered a message that ran
+ * through one gateway with the mark of another provider offering the same model.
+ */
 export function messageProvider(
   msg: AgentMessage,
   providers: readonly ProviderCatalog[]
 ): ProviderCatalog | undefined {
-  if (msg.providerId) {
-    const direct = providers.find((p) => p.id === msg.providerId)
-    if (direct) return direct
-  }
-  if (!msg.modelId) return undefined
-  return providers.find((p) => p.models.some((m) => m.id === msg.modelId))
+  return resolveModelProvider(providers, {
+    providerId: msg.providerId,
+    harnessId: msg.harnessId,
+    modelId: msg.modelId
+  })
 }
 
-/** Human model name: catalog display name, else the raw model id. */
+/**
+ * Human model name: catalog display name, else the raw model id.
+ *
+ * The message's own provider decides which catalog entry names it. When that
+ * entry is gone the model's id is only reused if every provider listing it
+ * names it the same, so a model offered by another provider under its own
+ * qualified name never labels this message.
+ */
 export function messageModelLabel(
   msg: AgentMessage,
   allModels: readonly ProviderModel[]
 ): string | null {
   if (!msg.modelId) return null
-  const model =
-    allModels.find(
-      (m) => m.id === msg.modelId && (!msg.providerId || m.providerId === msg.providerId)
-    ) ?? allModels.find((m) => m.id === msg.modelId)
-  if (model) return model.name
+  const entry = catalogModelEntry(allModels, {
+    providerId: msg.providerId,
+    modelId: msg.modelId
+  })
+  if (entry) return entry.name
   // Fast variants may be absent from harness catalogs: fall back to a derived label.
   return fastVariantForModelId(msg.modelId)?.label ?? msg.modelId
 }
@@ -336,8 +365,7 @@ export function resolveMessageHarnessId(msg: AgentMessage, fallbackHarnessId: st
 
 /** Display name for the harness that produced a message. */
 export function messageHarnessName(msg: AgentMessage, fallbackHarnessId: string): string {
-  const id = resolveMessageHarnessId(msg, fallbackHarnessId)
-  return getAgentIcon(id)?.name ?? id
+  return agentDisplayName(resolveMessageHarnessId(msg, fallbackHarnessId))
 }
 
 /**
@@ -354,7 +382,8 @@ export function harnessDisplayName(harnessId: string): string {
   if (harnessId === 'cline') return 'Cline'
   if (harnessId === 'pi') return 'Pi'
   if (harnessId === 'antigravity') return 'Antigravity'
-  return harnessId
+  if (harnessId.startsWith('acp-')) return agentDisplayName(harnessId)
+  return getAgentIcon(harnessId)?.name ?? harnessId
 }
 
 export interface MessageTokenRateSource {
@@ -391,11 +420,10 @@ export function messageThinkingLevel(
   allModels: readonly ProviderModel[]
 ): ThinkingLevel | null {
   if (!msg.modelId) return null
-  const modelId = fastBaseModelId(msg.modelId)
-  const model =
-    allModels.find(
-      (m) => m.id === modelId && (!msg.providerId || m.providerId === msg.providerId)
-    ) ?? allModels.find((m) => m.id === modelId)
+  const model = catalogModelEntry(allModels, {
+    providerId: msg.providerId,
+    modelId: fastBaseModelId(msg.modelId)
+  })
   const presets = model?.thinkingPresets ?? []
   // A model known not to reason never shows a thinking badge, even when a
   // generic level was stamped onto its rows.

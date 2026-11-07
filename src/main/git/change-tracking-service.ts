@@ -335,6 +335,22 @@ export class ChangeTrackingService {
     return { projectRoot, capturedAt: Date.now(), files }
   }
 
+  /**
+   * Capture one project-relative path as it is on disk right now.
+   *
+   * Completion normally compares two whole-project snapshots, but a file a tool
+   * provably just wrote can be missing from that diff while another turn keeps
+   * the project contested. Re-reading the single path the turn has evidence for
+   * is what keeps its real change on the card, and the same containment, size
+   * and blob rules apply as in a full snapshot.
+   */
+  async capturePath(projectPath: string, relativePath: string): Promise<CheckpointFile | null> {
+    const projectRoot = await this.resolveProjectRoot(projectPath)
+    const candidate = this.resolveTrackedPath(projectRoot, relativePath)
+    const observed = await this.observeFile(projectRoot, candidate, new Map())
+    return observed.kind === 'captured' ? observed.file : null
+  }
+
   /** Project-relative paths created, modified, or deleted between two fingerprints. */
   diffFingerprints(before: ProjectFingerprint, after: ProjectFingerprint): string[] {
     if (before.projectRoot !== after.projectRoot) {
@@ -394,13 +410,9 @@ export class ChangeTrackingService {
     after: ProjectCheckpoint,
     selectedPaths?: ReadonlySet<string>
   ): Promise<CheckpointChange[]> {
-    const projectRoot = await this.resolveProjectRoot(before.projectRoot)
-    if (projectRoot !== before.projectRoot || after.projectRoot !== before.projectRoot) {
-      throw new CheckpointSafetyError(
-        'Checkpoint project root does not match the current project root'
-      )
-    }
-    const changes = this.calculateChanges(before, after).filter(
+    const restored = await this.sameProjectRoot(before, after)
+    const projectRoot = restored.projectRoot
+    const changes = this.calculateChanges(restored.before, restored.after).filter(
       (change) => !selectedPaths || selectedPaths.has(change.path)
     )
     for (const change of changes) {
@@ -425,13 +437,9 @@ export class ChangeTrackingService {
     after: ProjectCheckpoint,
     selectedPaths?: ReadonlySet<string>
   ): Promise<CheckpointChange[]> {
-    const projectRoot = await this.resolveProjectRoot(after.projectRoot)
-    if (projectRoot !== before.projectRoot || after.projectRoot !== before.projectRoot) {
-      throw new CheckpointSafetyError(
-        'Checkpoint project root does not match the current project root'
-      )
-    }
-    const changes = this.calculateChanges(before, after).filter(
+    const restored = await this.sameProjectRoot(before, after)
+    const projectRoot = restored.projectRoot
+    const changes = this.calculateChanges(restored.before, restored.after).filter(
       (change) => !selectedPaths || selectedPaths.has(change.path)
     )
     for (const change of changes) {
@@ -447,6 +455,37 @@ export class ChangeTrackingService {
       await this.writeRestoredFile(projectRoot, target, content)
     }
     return changes
+  }
+
+  /**
+   * Both checkpoints as one project on disk, or a refusal.
+   *
+   * A captured checkpoint holds the canonical root the tracker resolved, while a
+   * checkpoint synthesized from a stored revision holds the root its caller held.
+   * The same folder can be spelled more than one way: Windows reports the on-disk
+   * case, which can differ from the case a project was saved with. Resolving both
+   * roots before comparing them is what keeps a restore of the very same project
+   * from being refused, and the shared root is what the diff is handed so it
+   * compares one project's paths.
+   */
+  private async sameProjectRoot(
+    before: ProjectCheckpoint,
+    after: ProjectCheckpoint
+  ): Promise<{ projectRoot: string; before: ProjectCheckpoint; after: ProjectCheckpoint }> {
+    const projectRoot = await this.resolveProjectRoot(before.projectRoot)
+    const currentRoot = await this.resolveProjectRoot(after.projectRoot)
+    if (projectRoot !== currentRoot) {
+      throw new CheckpointSafetyError(
+        'Checkpoint project root does not match the current project root'
+      )
+    }
+    if (before.projectRoot === projectRoot && after.projectRoot === projectRoot)
+      return { projectRoot, before, after }
+    return {
+      projectRoot,
+      before: { ...before, projectRoot },
+      after: { ...after, projectRoot }
+    }
   }
 
   private async resolveProjectRoot(projectPath: string): Promise<string> {

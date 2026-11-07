@@ -7,6 +7,10 @@
   import { NativeFloatingPanel } from '$lib/native-floating-panel.svelte'
   import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
+  import {
+    getSidebarPanelContext,
+    hasSidebarPanelContext
+  } from '$lib/components/layout/sidebar-panel-context'
 
   interface Props {
     /** Whether the search popover is currently open. */
@@ -105,6 +109,17 @@
     native.update(nativeArmed, open && box !== null, box ?? { x: 0, y: 0, width: 1, height: 1 })
   })
   $effect(() => browserVisibility.hideWhile(nativeId, 'fullscreen-surface', open && native.failed))
+
+  // Hold the panel this search was opened from for as long as the search is
+  // open. The popover portals to the body and lands beside the panel, so a
+  // floating sidebar sees the pointer leave the moment it moves onto the search
+  // and would close underneath the query being typed, taking the search with it.
+  const panel = hasSidebarPanelContext() ? getSidebarPanelContext() : null
+  $effect(() => {
+    if (!open || !panel) return
+    panel.hold()
+    return () => panel.releaseHold()
+  })
 
   const focusSearchInput: Attachment<HTMLInputElement> = (element) => {
     element.focus()

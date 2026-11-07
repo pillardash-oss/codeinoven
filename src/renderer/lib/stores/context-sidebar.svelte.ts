@@ -23,6 +23,8 @@ import {
   type ThreadNoteContextTab
 } from './context-sidebar-types'
 import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
+import type { DisplayTarget } from './context-sidebar-tabs.svelte'
+import { notificationPanelState } from './notification-panel.svelte'
 
 export type {
   ActionsContextTab,
@@ -40,6 +42,7 @@ export type {
   CoordinatorContextTab,
   DebuggerContextTab,
   DiffContextTab,
+  DisplayContextTab,
   FilesContextTab,
   GitContextTab,
   MemoryContextTab,
@@ -58,6 +61,13 @@ export { EXPLAIN_SELECTION_PROMPT, STICKY_NOTES_TAB } from './context-sidebar-ty
 
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
+/**
+ * How long a closed notification panel keeps the tab it was last on. Reopening
+ * inside this window shows the same section again, because the user stepped
+ * away from the panel rather than away from what it was showing; past it the
+ * panel opens on Attention, the one list of what is waiting right now.
+ */
+const NOTIFICATION_PANEL_TAB_GRACE_MS = 5 * 60 * 1000
 /**
  * The room the rail always leaves for the surface beside it.
  *
@@ -103,7 +113,29 @@ class ContextSidebarState {
    *  delegates to its coordinator, so the child opens the parent's tab context
    *  instead of an empty one. See `activeThreadRowId`. */
   private activeRowThreadId: string | null = $state(null)
-  private notificationsVisible = $state(false)
+  private notificationsVisibleState = $state(false)
+  /**
+   * When the notification panel was last closed, so reopening it can tell a user
+   * who stepped away for a moment from one coming back to it much later.
+   * `0` means this session never closed it, which always starts on Attention.
+   */
+  private notificationsHiddenAt = 0
+
+  /**
+   * Whether the notifications panel owns the shared sidebar region. Every close
+   * path (the toggle, `hide`, another rail surface taking the region, a tab
+   * close) writes through this setter, which is what records the moment it went
+   * away without each of those paths having to remember to.
+   */
+  get notificationsVisible(): boolean {
+    return this.notificationsVisibleState
+  }
+
+  private set notificationsVisible(visible: boolean) {
+    if (visible === this.notificationsVisibleState) return
+    this.notificationsVisibleState = visible
+    if (!visible) this.notificationsHiddenAt = Date.now()
+  }
   /** Global sticky notes share the right sidebar region with notifications. */
   private stickyNotesVisible = $state(false)
   /** The auto-resolved decision panel, held with the conversation it belongs to.
@@ -145,6 +177,10 @@ class ContextSidebarState {
   private tabContexts = new SidebarTabContexts({
     activeProjectId: () => this.activeProjectId,
     activeThreadId: () => this.activeRowThreadId ?? this.activeThreadId,
+    // The same conversation identity the browser tabs group by: a hidden
+    // conversation container's sidebar tabs follow the conversation on screen,
+    // so one assistant's own files never stand in the next one's panel.
+    threadScopeId: (projectId, threadId) => this.threadBrowserScopeId(projectId, threadId),
     terminalPlacement: () => this.terminalPlacement,
     hideBrowserForFocus: () => this.browser.hideForFocus(),
     clearNotifications: () => {
@@ -519,7 +555,7 @@ class ContextSidebarState {
     this.activeThreadId = threadId
     this.activeRowThreadId = rowThreadId ?? threadId
     const contextThreadId = this.activeRowThreadId
-    this.tabContexts.ensureProjectContext(projectId)
+    this.tabContexts.ensureProjectContext(projectId, contextThreadId)
     this.tabContexts.ensureContext(projectId, contextThreadId)
     this.tabContexts.rebindProjectTabs(projectId, contextThreadId)
     this.tabContexts.ensureActiveThreadPanel(projectId, contextThreadId, threadTitle)
@@ -820,11 +856,6 @@ class ContextSidebarState {
     return this.threadBrowserScopeId(projectId, threadId)
   }
 
-  /** Whether a browser surface still has a tab of the sidebar's browser docked. */
-  browserScopeIsLive(scope: string): boolean {
-    return this.browser.isScopeLive(scope)
-  }
-
   /** Opens the thread's note as a sidebar panel, creating one the first time
    *  it's visited so the panel is ready to write into even before a note
    *  exists. The body loads asynchronously onto the tab itself (not local
@@ -863,6 +894,25 @@ class ContextSidebarState {
 
   openCloudDeployments(projectId: string, threadId: string): void {
     this.tabContexts.openCloudDeployments(projectId, threadId)
+  }
+
+  /** Open (or focus) the chooser tab and report which tab it is, so a surface
+   *  that is showing one specific tab can follow it there. */
+  openDisplayChooser(projectId: string, threadId: string): string {
+    return this.tabContexts.openDisplayChooser(projectId, threadId)
+  }
+
+  openDisplayTarget(projectId: string, threadId: string, target: DisplayTarget): void {
+    this.tabContexts.openDisplayTarget(projectId, threadId, target)
+  }
+
+  applyDisplayTarget(
+    projectId: string,
+    threadId: string,
+    tabId: string,
+    target: DisplayTarget
+  ): void {
+    this.tabContexts.applyDisplayTarget(projectId, threadId, tabId, target)
   }
 
   /**
@@ -908,6 +958,15 @@ class ContextSidebarState {
   toggleNotifications(): void {
     this.notificationsVisible = !this.notificationsVisible
     if (this.notificationsVisible) {
+      // A panel the user closed a moment ago reopens on the same tab, so
+      // switching to Projects and coming straight back stays on Projects.
+      // Only a panel left closed for longer than the grace window, or one this
+      // session never closed at all, opens on Attention: it is the one list
+      // that says what is waiting on the user right now.
+      const hiddenFor = Date.now() - this.notificationsHiddenAt
+      if (this.notificationsHiddenAt === 0 || hiddenFor > NOTIFICATION_PANEL_TAB_GRACE_MS) {
+        notificationPanelState.setTab('attention')
+      }
       this.stickyNotesVisible = false
       if (this.browser.visible) this.browser.detachView()
       this.browser.visible = false
@@ -1060,6 +1119,20 @@ class ContextSidebarState {
       return
     }
     this.tabContexts.focusTab(id)
+  }
+
+  /**
+   * Close every browser tab a conversation owns, in main and in the strip.
+   *
+   * The rail menu's "close all tabs" uses this. Both halves run together on
+   * purpose: `browser:destroyThread` destroys the `WebContentsView` behind each
+   * tab (which is what releases its renderer process), and `removeForThread`
+   * drops the matching rows so the strip cannot show a page that no longer
+   * exists.
+   */
+  async closeBrowserTabsForThread(projectId: string, threadId: string): Promise<void> {
+    await invoke('browser:destroyThread', projectId, threadId)
+    this.browser.removeForThread(projectId, threadId)
   }
 
   close(id: string): void {

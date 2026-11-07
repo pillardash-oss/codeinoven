@@ -30,7 +30,12 @@ export function runtimeStatusLabel(status: CloudDeploymentStatus | undefined): s
   return 'Unknown'
 }
 
-/** Tone for the last deployment outcome. */
+/**
+ * Tone for the last deployment outcome.
+ *
+ * A cancelled deployment stays neutral: it reads quietly, the way it does
+ * everywhere else in the app, because it says nothing about the build's health.
+ */
 export function deploymentStatusTone(status: CloudDeploymentStatus | undefined): StatusTone {
   if (status === 'success') return 'success'
   if (status === 'failed') return 'danger'
@@ -42,6 +47,7 @@ export function deploymentStatusTone(status: CloudDeploymentStatus | undefined):
 export function deploymentStatusLabel(status: CloudDeploymentStatus | undefined): string {
   if (status === 'success') return 'Deployed'
   if (status === 'failed') return 'Deploy failed'
+  if (status === 'cancelled') return 'Deploy cancelled'
   if (status === 'building') return 'Deploying'
   return 'No deployment'
 }

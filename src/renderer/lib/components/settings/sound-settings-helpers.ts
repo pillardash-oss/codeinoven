@@ -34,12 +34,17 @@ export const modelSubTabs: ReadonlyArray<{ id: ModelSubTab; label: string; hint:
   { id: 'llm', label: 'LLM', hint: 'Cleanup models' }
 ]
 
+/**
+ * The unload windows this page still owns: the native speech workers.
+ *
+ * The cleanup model runs on llama.cpp, whose process and idle window belong to
+ * the Local AI page now, so its row moved there with the process.
+ */
 export const unloadItems = [
   { key: 'asrUnload', label: 'Speech-to-text (ASR)' },
-  { key: 'cleanupUnload', label: 'Cleanup LLM' },
   { key: 'ttsUnload', label: 'Text-to-speech (TTS)' }
 ] as const satisfies ReadonlyArray<{
-  key: keyof Pick<SpeechSettings, 'asrUnload' | 'cleanupUnload' | 'ttsUnload'>
+  key: keyof Pick<SpeechSettings, 'asrUnload' | 'ttsUnload'>
   label: string
 }>
 

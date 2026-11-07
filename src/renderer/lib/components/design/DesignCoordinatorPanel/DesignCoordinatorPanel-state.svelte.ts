@@ -72,16 +72,24 @@ export class DesignBoardState extends BoardUnit<DesignBoard> {
    * does not, and the way to reach another Oven when the design is on one.
    */
   /**
-   * Show the design folder in the project's file tree: it opens the files
-   * surface, expands the ancestors and selects the entry, so the design
-   * lands in the same tree every other path citation uses instead of a
-   * folder the user has to find again.
+   * Show the design folder in the file tree: it opens the files surface,
+   * expands the ancestors and selects the entry, so the design lands in the
+   * same tree every other path citation uses instead of a folder the user has
+   * to find again.
+   *
+   * The folder is relative to the board's own scope, which for a chat, an
+   * assistant task or a browser tab is that conversation's workspace and not
+   * the project root, so the board's thread has to name the tree to mount.
    */
   async revealDesignPath(directory: string): Promise<void> {
     if (directory === '') return
     try {
-      const { revealProjectFileFromAbsolutePath } = await import('$lib/reveal-file')
-      const revealed = await revealProjectFileFromAbsolutePath(this.root.props.projectId, directory)
+      const { revealScopeRelativePath } = await import('$lib/reveal-file')
+      const revealed = await revealScopeRelativePath(
+        this.root.props.projectId,
+        this.root.props.threadId,
+        directory
+      )
       if (!revealed) toast.error('The design could not be revealed in the file tree.')
     } catch (failure) {
       logRendererError('The design could not be revealed in the file tree.', failure)

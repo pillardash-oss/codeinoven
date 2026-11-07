@@ -1,9 +1,8 @@
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
-import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
+import { engineeringStudioVisible } from '$shared/engineering-generation'
 import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
 import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
 import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
-import CioMonogram from '$lib/components/icons/cio/CioMonogram.svelte'
 import { onDestroy, onMount, tick } from 'svelte'
 import { onVoiceComposerReset, onVoiceDraftLanded } from '../../../speech/voice-send'
 import { findNavState } from '$lib/stores/find-nav.svelte'
@@ -14,8 +13,7 @@ import { actionContext } from '$lib/stores/action-context.svelte'
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { chatDraft } from '$lib/stores/chat-draft'
-import { loadLifecycleIntent, loadIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
-import { onEngineeringLifecycleInherited } from '$lib/thread-settings-inheritance'
+import { loadIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
 import { modelRuntime } from '$lib/stores/model-runtime.svelte'
 import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -24,6 +22,8 @@ import {
   ORCHESTRATION_COORDINATOR_COMPONENTS
 } from '$lib/stores/coordinator-dock.svelte'
 import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
+import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
+import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
 import { publishDraftActivity, onRemoteDraftCleared } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
@@ -65,10 +65,11 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
    * so every effect here is owned by the component.
    */
   init(): void {
-    // A trace the reader expanded belongs to the visit that expanded it: opening
-    // this thread again starts from the fold each turn asks for, so a settled
-    // thread never returns with an old turn's work expanded. Only the running
-    // turn re-opens, which it does by itself once it is live.
+    // A trace the reader expanded on a settled turn belongs to the visit that
+    // expanded it: opening this thread again starts from the fold each turn asks
+    // for, so a settled thread never returns with an old turn's work expanded.
+    // A run that is still live keeps the trace it was showing, because coming
+    // back to a working thread must not fold the work in progress.
     agentRuns.resetTraceView(
       this.root.handleAgentEvent.thread.projectId,
       this.root.pollStreamParts.conversationId
@@ -186,38 +187,6 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     /**
-     * Where the studio's pane sits, so the header can centre the thread's name in it.
-     *
-     * A studio replaces the conversation and the context panel can stay open beside
-     * it, so the pane is narrower than the window: measuring this view is the only
-     * way the name lands in the middle of what the user is actually looking at. The
-     * box is watched rather than measured once, because a panel opening or closing
-     * moves it without the window changing.
-     */
-    $effect(() => {
-      if (!this.root.submitSpecDecision.showSpecStudio) {
-        layoutPanelState.clearStudioPane()
-        return
-      }
-      const element = this.root.state.threadViewElement
-      if (!element) return
-      const report = () => {
-        const box = element.getBoundingClientRect()
-        if (box.width <= 0) return
-        layoutPanelState.setStudioPane(Math.round(box.left), Math.round(box.width))
-      }
-      report()
-      const observer = new ResizeObserver(report)
-      observer.observe(element)
-      window.addEventListener('resize', report)
-      return () => {
-        observer.disconnect()
-        window.removeEventListener('resize', report)
-        layoutPanelState.clearStudioPane()
-      }
-    })
-
-    /**
      * Follow the selection while the menu is open.
      *
      * Shift and an arrow key extend or trim a selection without any pointer event,
@@ -276,17 +245,22 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     // A bubble is measured in viewport coordinates, so it has to be re-measured
-    // when the conversation changes width: a sidebar drag or a docked panel moves
-    // every highlight without firing a window resize. A height change is content,
-    // which the publish trigger already covers, and re-measuring on every
-    // streamed frame would force layout for nothing.
+    // when the conversation's own box changes: a sidebar drag or a docked panel
+    // moves every highlight without firing a window resize, and a card taking the
+    // composer's place shortens the reading area under every highlight already on
+    // screen, which left a bubble pinned where its passage used to be rather than
+    // where it now sits. This observes the scroll container itself, whose box only
+    // changes with layout: streamed content grows inside it, which the publish
+    // trigger already covers, so re-measuring every frame is not what this is.
     $effect(() => {
       const element = this.root.loadOlderMessages.scrollEl
       if (!element) return
       let lastWidth = element.clientWidth
+      let lastHeight = element.clientHeight
       const observer = new ResizeObserver(() => {
-        if (element.clientWidth === lastWidth) return
+        if (element.clientWidth === lastWidth && element.clientHeight === lastHeight) return
         lastWidth = element.clientWidth
+        lastHeight = element.clientHeight
         this.root.steerQueuedMessage.scheduleResponseBubbleUpdate()
       })
       observer.observe(element)
@@ -319,9 +293,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           ? 'Assignment coordinator'
           : kind === 'achievement'
             ? 'Achievement coordinator'
-            : kind === 'orchestrator'
-              ? 'Orchestrator'
-              : 'Audit coordinator'
+            : 'Audit coordinator'
       const panel = this.root.contextUsage.coordinatorPanel(kind)
       if (!panel) return
       // No unmount cleanup: publishing is a prop update for the row, and the
@@ -333,13 +305,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         threadId: this.root.currentWorkingTraceAttribution.coordinatorDockThreadId,
         label,
         icon:
-          kind === 'assignment'
-            ? CioNetwork
-            : kind === 'achievement'
-              ? CioTarget
-              : kind === 'orchestrator'
-                ? CioMonogram
-                : CioShieldCheck,
+          kind === 'assignment' ? CioNetwork : kind === 'achievement' ? CioTarget : CioShieldCheck,
         panel
       })
       // Docks itself the first time a thread starts coordinating, unless the user
@@ -362,6 +328,47 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       }
     })
 
+    /**
+     * Keep the delegation board docked on the row that started real work.
+     *
+     * The board lists threads this one created, and only threads: a pawn it spawned
+     * for itself, which is hidden from the thread list, and a run it dispatched into
+     * any project. A nested sub-agent is not one of them, so it neither docks this
+     * board nor appears in it: a sub-agent has no thread of its own and is reached
+     * from the trace of the turn that spawned it.
+     *
+     * Both kinds are published from data the row already holds, which is what makes
+     * the board appear the moment the work exists and survive a reopen without a
+     * second read. A row that carries a workflow board keeps it: one row docks one
+     * coordinator, and the workflow board is the more specific of the two.
+     */
+    $effect(() => {
+      if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
+      const thread = this.root.handleAgentEvent.thread
+      const rowThreadId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+      const hasPawns = pawnAgentsState.hasWorkers(rowThreadId)
+      if (!hasPawns && !orchestrationCoordinatorState.hasDispatches(thread.projectId, rowThreadId))
+        return
+      coordinatorDockState.register({
+        projectId: thread.projectId,
+        threadId: rowThreadId,
+        label: 'Spawned agents',
+        icon: CioSubagent,
+        panel: {
+          component: 'delegation',
+          props: { projectId: thread.projectId, threadId: rowThreadId }
+        }
+      })
+      // Docks itself the first time a thread starts work of its own, unless the user
+      // closed it before; later work is a no-op because the tab already exists.
+      if (
+        coordinatorDockState.canAutoOpen(thread.projectId, rowThreadId) &&
+        !contextSidebarState.hasCoordinator(thread.projectId, rowThreadId)
+      ) {
+        contextSidebarState.openCoordinator(thread.projectId, rowThreadId, 'Spawned agents')
+      }
+    })
+
     /** A mount that settles without a coordinator withdraws its row's dock, so a
      *  panel can never outlive the coordination it belonged to. Runs only after
      *  the mount settles, which is what lets the entering view of a thread switch
@@ -377,6 +384,23 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       )
         return
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
+      // A worker or auditor view never owns its row's board: the Sr. Engineer
+      // publishes it and is the only view that may withdraw it. A plain
+      // engineering auditor names no coordinator kind of its own, and withdrawing
+      // from here dropped the board the moment the user stepped into the auditor,
+      // leaving the sidebar saying "Coordinator unavailable".
+      if (this.root.currentWorkingTraceAttribution.orchestrationChild) return
+      // A row that started real work has a coordinator of its own: the delegation
+      // board. A nested sub-agent does not dock one, so it does not hold it open.
+      const ownedRowId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
+      if (
+        pawnAgentsState.hasWorkers(ownedRowId) ||
+        orchestrationCoordinatorState.hasDispatches(
+          this.root.handleAgentEvent.thread.projectId,
+          ownedRowId
+        )
+      )
+        return
       // Only the orchestration boards this view publishes. An authored-work board on
       // the same row belongs to the design store and must survive this cleanup.
       coordinatorDockState.withdraw(
@@ -547,11 +571,20 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.submitBrainstormDecision.spec !== null ||
         this.root.submitSpecDecision.assignment !== null ||
         this.root.contextUsage.auditReport !== null
-      workspaceState.specStudioAvailable =
-        !this.root.props.chatMode && (hasStudioDocument || this.root.abortRun.specStudioRetryable)
+      // A tool call that started a stage is enough to offer the studio: the agent
+      // is already working, and the reader must be able to look while the
+      // document is still being prepared.
+      const generationInFlight = this.root.sources.generationInFlight
+      workspaceState.specStudioAvailable = engineeringStudioVisible({
+        chatMode: this.root.props.chatMode === true,
+        hasDocument: hasStudioDocument,
+        retryable: this.root.abortRun.specStudioRetryable,
+        generationInFlight
+      })
       workspaceState.specStudioOpen = this.root.submitSpecDecision.showSpecStudio
       workspaceState.specStudioBusy = this.root.abortRun.specBusy
-      workspaceState.specStudioFormulating = this.root.harnessUsage.specFormulating
+      workspaceState.specStudioFormulating =
+        this.root.harnessUsage.specFormulating || generationInFlight !== null
       workspaceState.specStudioError = this.root.abortRun.specError
       workspaceState.specStudioRetryable = this.root.abortRun.specStudioRetryable
       if (!this.root.submitSpecDecision.showSpecStudio) {
@@ -584,6 +617,12 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           this.root.editVideoNote.openBrainstormStudio()
         } else if (this.root.abortRun.specStudioRetryable) {
           void this.root.abortRun.openSpecStudio()
+        } else if (this.root.sources.generationInFlight !== null) {
+          // Nothing exists yet, and the agent is still generating it: open the
+          // studio on its pending state instead of leaving the toggle inert.
+          this.root.harnessUsage.studioDocument =
+            this.root.sources.generationInFlight === 'assignment' ? 'assignment' : 'spec'
+          this.root.submitSpecDecision.showSpecStudio = true
         }
       }
       return () => {
@@ -693,21 +732,20 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       const content = el?.firstElementChild
       if (!el || !(content instanceof Element)) return
       const observer = new ResizeObserver(() => {
-        if (
-          !this.root.loadOlderMessages.scrollEl ||
-          !mayReanchorToLatest(this.root.loadOlderMessages.userScrolledAway)
-        )
+        const scroller = this.root.loadOlderMessages.scrollEl
+        if (!scroller) return
+        if (!mayReanchorToLatest(this.root.loadOlderMessages.userScrolledAway)) {
+          // The reader owns the viewport here. Hold the block they are reading
+          // where it was, so work that mounts, folds, reveals or measures above
+          // them (a trace body, a first-paint batch, a history page, a picture
+          // finding its height) can never slide the transcript under them.
+          this.root.loadOlderMessages.holdReaderPlace()
           return
+        }
         // Re-anchor only when the viewport actually drifted from the bottom
         // a no-op write here would fire a pointless scroll event per resize.
-        if (
-          this.root.loadOlderMessages.scrollEl.scrollHeight -
-            this.root.loadOlderMessages.scrollEl.scrollTop -
-            this.root.loadOlderMessages.scrollEl.clientHeight >
-          1
-        ) {
-          this.root.loadOlderMessages.scrollEl.scrollTop =
-            this.root.loadOlderMessages.scrollEl.scrollHeight
+        if (scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight > 1) {
+          scroller.scrollTop = scroller.scrollHeight
         }
       })
       observer.observe(content)
@@ -853,43 +891,11 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           })
       }
       if (!this.root.props.chatMode) {
-        // Staged choices are local intent, not durable Engineering state: a thread
-        // that has not engaged Engineering yet still has to show the switches the
-        // user staged on it, so this restore stays outside the hydration gate.
-        //
-        // Restore a staged (not-yet-sent) Toolbox selection from a previous
-        // session or thread switch so the switches keep the user's last choice.
-        const stagedIntent = loadLifecycleIntent(mountedProjectId, mountedThreadId)
-        if (stagedIntent) this.root.harnessUsage.pendingLifecycleSelection = stagedIntent
-        // Same for a staged (not-yet-sent) Independent Audit toggle.
+        // A staged (not-yet-sent) Independent Audit toggle is restored here.
         const stagedAuditIntent = loadIndependentAuditIntent(mountedProjectId, mountedThreadId)
         if (stagedAuditIntent !== null)
           this.root.currentWorkingTraceAttribution.pendingIndependentAudit = stagedAuditIntent
       }
-      // A sibling thread may inherit its Engineering lifecycle after this view
-      // already hydrated (the inheritance write is async). Re-read once the
-      // inheritance lands so the inherited switches show as on.
-      this.root.state.unsubscribeLifecycleInheritance = onEngineeringLifecycleInherited(
-        (inheritedThreadId) => {
-          if (
-            !this.root.loadOlderMessages.alive ||
-            inheritedThreadId !== this.root.handleAgentEvent.thread.id ||
-            this.root.props.chatMode
-          ) {
-            return
-          }
-          void invoke(
-            'engineeringLifecycle:get',
-            this.root.handleAgentEvent.thread.projectId,
-            this.root.handleAgentEvent.thread.id
-          )
-            .then((state) => {
-              if (this.root.loadOlderMessages.alive)
-                this.root.handleAgentEvent.engineeringLifecycle = state
-            })
-            .catch(() => {})
-        }
-      )
       this.root.steerQueuedMessage.scheduleResponseHighlightRestore(
         this.root.steerQueuedMessage.annotationReferences
       )
@@ -1109,7 +1115,6 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.state.unsubscribe?.()
         this.root.state.unsubscribeThreadUpdated?.()
         this.root.state.unsubscribeRemoteEvents?.()
-        this.root.state.unsubscribeLifecycleInheritance?.()
         unsubscribeVoiceSend()
         unsubscribeVoiceDraft()
         window.removeEventListener('resize', onResize)

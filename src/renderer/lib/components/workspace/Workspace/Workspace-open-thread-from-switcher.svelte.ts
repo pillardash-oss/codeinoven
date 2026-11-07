@@ -7,7 +7,9 @@ import { browserAddressFocus } from '$lib/stores/browser-address-focus'
 import { contextSidebarState, type ContextSidebarTab } from '$lib/stores/context-sidebar.svelte'
 import { coordinatorDockState } from '$lib/stores/coordinator-dock.svelte'
 import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
@@ -22,6 +24,7 @@ import {
   threadTracksReadStatus,
   usesThreadWorkspaceMount
 } from '$shared/types'
+import { isThreadBusyStatus, settledThreadReadsUnread } from '$shared/thread-status-policy'
 import { tick } from 'svelte'
 import type { ProjectFamilyLanding } from '../../layout/AppHeaderNavigationController.svelte'
 import { type ContextDockItem } from '../../layout/ContextDock.svelte'
@@ -120,7 +123,6 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
     // project root (a chat's artifact directory, an assistant task's working
     // directory); the mount must be registered before the root listing.
     if (usesThreadWorkspaceMount(this.selectedThread.projectId)) {
-      projectFilesWorkspace.ensureState(this.selectedThread.projectId)
       projectFilesWorkspace.setThreadMount(this.selectedThread.projectId, this.selectedThread.id)
       await projectFilesWorkspace.loadDirectory(this.selectedThread.projectId, '')
       contextSidebarState.openFiles(this.selectedThread.projectId, this.selectedThread.id)
@@ -265,7 +267,7 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
 
   /** Rail badge for the coordinator dock item, mirroring the auditor's live
    *  state so a hidden context sidebar still reports working / error / done. */
-  coordinatorRailBadge = $derived.by((): ContextDockItem['badge'] => {
+  private auditorRailBadge = $derived.by((): ContextDockItem['badge'] => {
     if (!this.selectedThread) return undefined
     const auditor = this.auditorThread
     if (auditor?.status === 'failed') return 'error'
@@ -290,6 +292,93 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
       return 'working'
     }
     return undefined
+  })
+
+  /**
+   * The runs this thread dispatched, which the rail has to speak for.
+   *
+   * A dispatched run is a thread of another project, so its own sidebar row is
+   * nowhere near the thread that asked for it: if it is waiting on a permission
+   * or a question, or it failed, or it finished with a result nobody has read,
+   * the rail icon is the only surface that can say so without the user opening
+   * the board.
+   */
+  private orchestrationRuns = $derived.by(() => {
+    const thread = this.selectedThread
+    if (!thread) return []
+    return orchestrationCoordinatorState.rowsFor(
+      thread.projectId,
+      activeThreadRowId(thread) ?? thread.id
+    )
+  })
+
+  /** What the rail must say about those runs, most urgent first. */
+  private orchestrationRailState = $derived.by(
+    (): 'attention' | 'error' | 'working' | 'unread' | null => {
+      const runs = this.orchestrationRuns
+      if (runs.length === 0) return null
+      if (runs.some((run) => run.status === 'awaiting_approval')) return 'attention'
+      if (runs.some((run) => run.status === 'failed')) return 'error'
+      if (runs.some((run) => isThreadBusyStatus(run.status))) return 'working'
+      if (runs.some((run) => settledThreadReadsUnread(run, run.read))) return 'unread'
+      return null
+    }
+  )
+
+  /** The tone the orchestration runs alone justify, or undefined for unread, which
+   *  has no status tone of its own. */
+  private orchestrationRailTone = $derived.by((): ContextDockItem['badge'] => {
+    switch (this.orchestrationRailState) {
+      case 'attention':
+      case 'error':
+      case 'working':
+        return this.orchestrationRailState
+      default:
+        return undefined
+    }
+  })
+
+  /** The coordinator rail badge: the auditor's state first, because the auditor is
+   *  the selected thread's own child, then what the thread dispatched elsewhere. */
+  coordinatorRailBadge = $derived(this.auditorRailBadge ?? this.orchestrationRailTone)
+
+  /** The unread accent, which has no status tone. A real tone always wins, so an
+   *  attention badge can never be hidden behind the unread colour. */
+  coordinatorRailBadgeColor = $derived.by((): string | undefined => {
+    if (this.coordinatorRailBadge) return undefined
+    return this.orchestrationRailState === 'unread' ? 'var(--color-thread-unread)' : undefined
+  })
+
+  /** What the badge above means, in words a tooltip can show. */
+  coordinatorRailBadgeTitle = $derived.by((): string | undefined => {
+    if (this.auditorRailBadge) {
+      switch (this.auditorRailBadge) {
+        case 'working':
+          return 'Auditor working'
+        case 'working-paused':
+          return 'Auditor waiting to retry'
+        case 'error':
+          return 'Auditor failed'
+        case 'attention':
+          return 'Auditor needs attention'
+        case 'done':
+          return 'Audit report ready'
+        default:
+          return undefined
+      }
+    }
+    switch (this.orchestrationRailState) {
+      case 'attention':
+        return 'A dispatched run needs attention'
+      case 'error':
+        return 'A dispatched run failed'
+      case 'working':
+        return 'Dispatched work is still running'
+      case 'unread':
+        return 'A dispatched run finished with a result you have not read'
+      default:
+        return undefined
+    }
   })
 
   openCoordinatorTab(): void {
@@ -406,10 +495,24 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
 
   browserFullscreenTabId = $state<string | null>(null)
 
+  /** The display tab shown fullscreen, if any. A phone-sized preview is exactly
+   *  what a dock-width panel cannot show, so the panel owns the same surface the
+   *  terminal and browser do. */
+  displayFullscreenTabId = $state<string | null>(null)
+
   /** Close a tab from a fullscreen strip without tearing the fullscreen down
    *  unless it was the last tab of that kind. */
-  closeFullscreenTab(kind: 'terminal' | 'browser', tabId: string): void {
+  closeFullscreenTab(kind: 'terminal' | 'browser' | 'display', tabId: string): void {
     this.closeContextTab(tabId)
+    if (kind === 'display') {
+      // The fullscreen surface needs a tab to show, so it follows the last one
+      // left of its own kind instead of pointing at the tab that just closed.
+      const remaining = contextSidebarState.tabs.filter(
+        (tab) => tab.kind === 'display' && tab.id !== tabId
+      )
+      this.displayFullscreenTabId = remaining.at(-1)?.id ?? null
+      return
+    }
     if (kind === 'terminal') {
       // Nothing left of that kind: the surface has no tab to show, so the record
       // has to go with it rather than point at the tab that just closed.
@@ -446,15 +549,30 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
    *  opening one closes the other kind instead of leaving two full screen dialogs
    *  stacked, where the lower one's suppression block would blank the browser's
    *  native view. */
+  /** Open another display tab, which starts as the target chooser. Returns the tab
+   *  so a fullscreen surface can switch to it. */
+  openDisplayChooser(): string | null {
+    const thread = this.selectedThread
+    if (!thread) return null
+    return contextSidebarState.openDisplayChooser(thread.projectId, thread.id)
+  }
+
   openTabFullscreen(tabId: string): void {
     const tab = contextSidebarState.tabs.find((candidate) => candidate.id === tabId)
     if (tab?.kind === 'browser') {
       this.root.switcherPanelTabs.browserFullscreenThreadId = this.selectedThread?.id ?? null
       this.browserFullscreenTabId = tabId
       this.terminalFullscreenTabId = null
+      this.displayFullscreenTabId = null
     }
     if (tab?.kind === 'terminal') {
       this.terminalFullscreenTabId = tabId
+      this.browserFullscreenTabId = null
+      this.displayFullscreenTabId = null
+    }
+    if (tab?.kind === 'display') {
+      this.displayFullscreenTabId = tabId
+      this.terminalFullscreenTabId = null
       this.browserFullscreenTabId = null
     }
   }
@@ -494,6 +612,9 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
       this.terminalFullscreenTabId = null
     }
     contextSidebarState.close(id)
+    if (tab.kind === 'display' && this.displayFullscreenTabId === tab.id) {
+      this.displayFullscreenTabId = null
+    }
     if (tab.kind === 'browser' && this.browserFullscreenTabId === tab.id) {
       this.browserFullscreenTabId = contextSidebarState.activeBrowserTabId
     }
@@ -534,25 +655,36 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
   }
 
   async deleteProject(projectId: string, deleteFolder = false): Promise<void> {
-    if (this.root.createThreadInProject.projectDialogs.deletingProjectId !== null) return
+    if (projectDeletionState.isPending(projectId)) return
     const project = this.root.createThreadInProject.projects.find((p) => p.id === projectId)
     if (!project) return
-    this.root.createThreadInProject.projectDialogs.deletingProjectId = projectId
 
-    // Deletion is transactional: the backend either deletes everything or
-    // nothing (folder erasure runs first and gates every other step). The UI
-    // mirrors the change only after the backend confirms success, so a failed
-    // deletion leaves the sidebar, threads, and icon exactly as they were.
+    // The row must react before anything is deleted, not after: the main process
+    // accepts the job and answers at once, then reports every stage on the
+    // `project:deletion` event. `begin` is what greys the row and makes it inert
+    // immediately, so twenty deletions can be accepted in a row while the work
+    // drains in the background, one project at a time.
+    projectDeletionState.begin(projectId)
     try {
       await invoke('project:delete', projectId, { deleteFolder })
     } catch (error) {
+      // The request was refused before it was queued (invalid id, unknown
+      // project), so nothing is running and the row becomes usable again.
+      projectDeletionState.settle(projectId)
       reportError(error, 'The project could not be deleted.')
-      return
-    } finally {
-      this.root.createThreadInProject.projectDialogs.deletingProjectId = null
     }
+  }
 
-    // Backend deletion succeeded; now mirror it in the UI state.
+  /**
+   * Mirror a finished deletion in the UI state.
+   *
+   * Driven by the main process's `project:deletion` event rather than by a
+   * returned promise, so the row leaves the sidebar the moment the deletion
+   * really completed and every window drops it   including windows that never
+   * asked for the deletion.
+   */
+  applyProjectDeleted(projectId: string): void {
+    projectDeletionState.settle(projectId)
     const browserTabIds = contextSidebarState.removeProjectBrowsers(projectId)
     if (this.browserFullscreenTabId && browserTabIds.includes(this.browserFullscreenTabId)) {
       this.browserFullscreenTabId = null
@@ -574,6 +706,12 @@ export class WorkspaceOpenThreadFromSwitcher extends BoardUnit<Workspace> {
     // Best-effort teardown of the project's browser sessions. The project is
     // already gone backend-side, so a failure here must not roll the UI back.
     void invoke('browser:destroyProject', projectId).catch(() => {})
+  }
+
+  /** Put a project the deletion could not finish back in the user's hands. */
+  applyProjectDeletionFailed(projectId: string, message: string): void {
+    projectDeletionState.settle(projectId)
+    reportError(new Error(message), 'The project could not be deleted.')
   }
 
   openThread(thread: Thread): void {

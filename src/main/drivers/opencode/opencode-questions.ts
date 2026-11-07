@@ -1,4 +1,5 @@
 import type { AgentQuestion, AgentQuestionOption, AgentQuestionRequest } from '../../../lib/types'
+import { normalizeQuestionVisual } from '../../../lib/question-visual'
 import { recordFromUnknown, recordValue, stringValue } from './opencode-values'
 
 /** Extract the question text from the tool input, tolerating several field names. */
@@ -34,18 +35,19 @@ export function extractQuestionOptions(input: Record<string, unknown>): {
       if (typeof o === 'string') return null
       const opt = o as Record<string, unknown>
       const label = stringValue(opt['label'])
-      return label
-        ? {
-            label,
-            description: stringValue(opt['description']),
-            ...((stringValue(opt['instruction']) ?? stringValue(opt['instructions']))
-              ? { instruction: stringValue(opt['instruction']) ?? stringValue(opt['instructions']) }
-              : {}),
-            ...(opt['recommended'] === true || /\(recommended\)/iu.test(label)
-              ? { recommended: true }
-              : {})
-          }
-        : null
+      if (!label) return null
+      const visual = normalizeQuestionVisual(opt['visual'])
+      return {
+        label,
+        description: stringValue(opt['description']),
+        ...((stringValue(opt['instruction']) ?? stringValue(opt['instructions']))
+          ? { instruction: stringValue(opt['instruction']) ?? stringValue(opt['instructions']) }
+          : {}),
+        ...(visual ? { visual } : {}),
+        ...(opt['recommended'] === true || /\(recommended\)/iu.test(label)
+          ? { recommended: true }
+          : {})
+      }
     })
     .filter((o): o is NonNullable<typeof o> => o !== null)
 

@@ -17,6 +17,39 @@ import type {
   UsagePricingProvenance
 } from './usage'
 
+/**
+ * A picture the agent drew to make one option judgeable.
+ *
+ * A question about something that does not exist yet (a new mark on a card, a
+ * layout, a flow) cannot be answered from words alone: the user is asked to
+ * choose between things they cannot see. The agent therefore creates the
+ * smallest picture that shows what an option means and pastes it into that
+ * option, and the card offers it behind the option's eye button.
+ *
+ * The eye is the alternative to the walkthrough (the copyable instruction): the
+ * same option, two ways to understand the same choice. When an option carries
+ * both, the card draws the two buttons side by side, divided by a rule.
+ *
+ * Exactly one of the fields is set, in this precedence order:
+ *
+ *  - `html`   a self-contained HTML document (no scripts, inline styles only)
+ *  - `svg`    raw SVG markup drawn as an image
+ *  - `image`  markup that renders as an image, e.g. an agent-generated picture
+ *  - `mermaid` a Mermaid diagram, for an agent that can draw nothing else
+ */
+export interface AgentQuestionVisual {
+  /** Self-contained HTML drawn in a sandboxed frame. */
+  html?: string
+  /** Raw SVG markup, rendered as a themed image. */
+  svg?: string
+  /** An image the agent generated or a picture reference it named. */
+  image?: string
+  /** Mermaid source, rendered by the app's own diagram renderer. */
+  mermaid?: string
+  /** One short line naming what the picture shows. */
+  caption?: string
+}
+
 /** A selectable option within an agent question. */
 export interface AgentQuestionOption {
   label: string
@@ -29,6 +62,11 @@ export interface AgentQuestionOption {
   instruction?: string
   /** Explicit provider recommendation, or inferred from a “(Recommended)” label. */
   recommended?: boolean
+  /**
+   * A picture of what picking this option produces, shown behind the option's
+   * eye button. Never sent back to the agent.
+   */
+  visual?: AgentQuestionVisual
 }
 
 /**
@@ -73,6 +111,32 @@ export interface AgentUtilitySuggestionEntry {
   utilities: AgentUtilitySuggestionUtility[]
 }
 
+/**
+ * One remote MCP server that asked to be authorized before it will answer.
+ *
+ * The card is the app's, not the agent's: the agent only ever sees the tool call
+ * resume once the server accepts the grant, and this is everything the card needs
+ * to name the server, explain what the server wants, and say how far the grant
+ * reaches. It never carries a token, a code, or a client secret.
+ */
+export interface AgentMcpSignInTarget {
+  /** Installed MCP utility the grant belongs to. */
+  utilityId: string
+  /** The server's own name, as Utilities shows it. */
+  name: string
+  /** Where the server lives: its URL, or its launch command for a local server. */
+  endpoint?: string
+  /** Host the card resolves the server's icon from, when it has one. */
+  iconHost?: string
+  /**
+   * How far the grant reaches once it lands. A global utility is authorized for
+   * the whole app; a project- or thread-scoped one only where it is installed.
+   */
+  grantScope: 'global' | 'project' | 'thread'
+  /** What the agent was doing when the server refused, in the user's terms. */
+  reason?: string
+}
+
 /** A structured question the agent is asking the user. */
 export interface AgentQuestion {
   /** OpenCode question request id (used to submit the answer via the question API). */
@@ -107,6 +171,12 @@ export interface AgentQuestion {
    * app installs the proposal only when the user picks the install option.
    */
   utilitySuggestion?: AgentUtilitySuggestionEntry
+  /**
+   * The question is the app's MCP sign-in card. It renders as a card with the
+   * server's name and icon and a single Sign in action, and the canonical
+   * question submission settles the tool call waiting on it.
+   */
+  mcpSignIn?: AgentMcpSignInTarget
   /** The user's submitted answer text. */
   answer?: string
   /** Raw tool input payload, preserved for debugging schema drift. */
@@ -123,6 +193,24 @@ export interface AgentQuestionRequest {
   metadata?: Record<string, unknown>
 }
 
+/**
+ * One entry of a secret card the user is filling in.
+ *
+ * A card with several secrets is filled over minutes, often with a trip to
+ * another thread or another app in between, so what has been typed so far is
+ * held for the request instead of inside the mounted card. The draft lives only
+ * while the request is pending: it is dropped the moment the request settles, so
+ * a value never outlives the answer it belongs to.
+ */
+export interface AgentSecretDraft {
+  /** The pasted value, kept out of the transcript and never persisted. */
+  value?: string
+  /** An instruction that reuses a value the device already holds. */
+  alternative?: string
+  /** The entry is answered with an instruction instead of a pasted value. */
+  alternativeMode?: boolean
+}
+
 /** Authoritative pending request metadata owned by the main process. */
 export interface PendingAgentQuestionRequest extends AgentQuestionRequest {
   projectId: string
@@ -131,6 +219,12 @@ export interface PendingAgentQuestionRequest extends AgentQuestionRequest {
   activeQuestionIndex: number
   answers: string[][]
   interactedQuestionIndexes: number[]
+  /**
+   * Progress of a secret card, aligned with `questions`. Held only while the
+   * request is pending and cleared with it, and never written to `answers` so
+   * a value can never reach the transcript, the provider, or a durable record.
+   */
+  secretDrafts?: AgentSecretDraft[]
   expiresAt?: number
 }
 
@@ -262,6 +356,11 @@ export type AgentPart =
       kind: 'file' | 'directory'
       /** Last modification time of the entry on disk. */
       modifiedAt: number
+      /**
+       * The authored work this folder is, when it is one: a design or a
+       * composition opens served in the browser rather than as a file tree.
+       */
+      work?: 'design' | 'video'
     }
 
 /** A generated image that can be previewed from a conversation or its context sidebar. */

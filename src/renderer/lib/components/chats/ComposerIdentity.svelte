@@ -50,12 +50,23 @@
          *  but writes nothing and expires on its own. */
         temporary?: boolean
       }
-    | { kind: 'assistant'; assistant: Assistant }
+    | {
+        kind: 'assistant'
+        assistant: Assistant
+        /**
+         * The project checkout a bound task works in, so the shoe states the
+         * branch beside the scope exactly as it does for a project thread.
+         * Absent for an unbound assistant thread.
+         */
+        project?: ComposerProject
+      }
     | {
         kind: 'task'
         task: ComposerTaskIdentity
         /** Assistant accent tinting a custom task mark; the shared fallback otherwise. */
         color?: string
+        /** The project checkout a bound task works in; absent when unbound. */
+        project?: ComposerProject
       }
     | { kind: 'browser-agent' }
 </script>

@@ -15,7 +15,13 @@
   import { slide } from 'svelte/transition'
   import { foldSlide } from '$lib/components/shared/card-motion'
   import { isCioToolName, isCodeModeToolName } from '$shared/agent-interactions'
-  import { ACTION_SUMMARY_INPUT_KEY, isOpaqueId } from '$shared/tool-action-label'
+  import {
+    ACTION_SUMMARY_INPUT_KEY,
+    isOpaqueId,
+    resolveToolCall,
+    toolActionLabel,
+    toolTitleLabelsCall
+  } from '$shared/tool-action-label'
   import type { AgentPart } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
@@ -123,7 +129,11 @@
   )
   const failed = $derived(part.state.status === 'error')
 
-  const inputPreview = $derived(formatInput(part.state.input))
+  /** The tool the call actually reached. A harness that routes every MCP call
+   *  through one meta-tool reports the wrapper, and the real tool sits in the
+   *  arguments, so the glyph, the label and the row's subject all read here. */
+  const call = $derived(resolveToolCall(part.tool, part.state.input))
+
   /** The tool-kind glyph: washed out with the row, brighter on hover. */
   const kindIconClass = 'shrink-0 text-dimmed transition-colors group-hover/tool:text-muted'
   const toolKind = $derived.by(() => {
@@ -132,12 +142,12 @@
     // them must not be read as the tool's subject. `cio_todo_write` is not a
     // file write, and the reader should see the app's mark on the call rather
     // than a glyph that says otherwise.
-    if (isCioToolName(part.tool)) return 'cio'
+    if (isCioToolName(call.tool)) return 'cio'
     // Code mode outranks the name heuristics: a call a script made can carry
     // any inner tool name (read, bash, an MCP call), and it belongs to the
     // code-mode glyph wherever the harness reports it as such.
     if (part.codeMode === true || isCodeModeToolName(part.tool)) return 'code'
-    const name = part.tool.toLowerCase().replace(/[-_\s]/g, '')
+    const name = call.tool.toLowerCase().replace(/[-_\s]/g, '')
     if (name.includes('websearch') || name.includes('webfetch')) return 'web'
     if (
       name.includes('search') ||
@@ -175,18 +185,67 @@
     return ''
   }
 
+  /**
+   * True when the harness title only restates one of the call's arguments.
+   *
+   * Such a title is the row's subject, not its label: codex puts the shell
+   * command in `title`, and reading it as the headline printed the command where
+   * the action belongs (`Shell : <command>` is the row a reader wants).
+   */
+  const titleIsSubject = $derived(
+    !!part.state.title?.trim() &&
+      (part.state.titleIsSubject === true ||
+        !toolTitleLabelsCall(part.state.title, part.tool, part.state.input))
+  )
+
+  /**
+   * The row's action label.
+   *
+   * Normally the snapshot the main process stamped when the call was first seen.
+   * A row recorded before that snapshot existed has none, so it is derived here.
+   * The harness title is handed to the deriver, which keeps a title that labels
+   * the call and names the action for one that only restates an argument.
+   */
+  const actionLabel = $derived(
+    part.actionLabel ??
+      toolActionLabel({
+        tool: part.tool,
+        input: part.state.input,
+        title: part.state.title,
+        titleIsSubject: part.state.titleIsSubject,
+        output: part.state.output,
+        codeMode: part.codeMode
+      })
+  )
+
   const codeModeLabel = $derived(
     firstSpoken(
-      part.state.title,
-      part.actionLabel,
+      titleIsSubject ? undefined : part.state.title,
+      actionLabel,
       toolKind === 'code' ? 'Code mode' : undefined,
       part.tool
     )
   )
 
+  /**
+   * The row's subject: the call's own first argument, or the harness title when
+   * that title is what names the thing the call acted on.
+   *
+   * An agent protocol client titles a call with its subject and sends no
+   * arguments at all (Cursor titles a shell call with the command itself), so a
+   * row that dropped the title showed the action and lost what it acted on.
+   */
+  const inputPreview = $derived(
+    formatInput(call.input) || (titleIsSubject ? `: ${part.state.title?.trim() ?? ''}` : '')
+  )
+
   /** True when the row's label describes the action rather than repeating the
    *  tool's own name, which is what the expanded card spells out. */
   const labeled = $derived(codeModeLabel !== part.tool)
+
+  /** The row's label reduced to its letters and digits, so the subject beside it
+   *  can skip a value the label already names. */
+  const labelKey = $derived(codeModeLabel.toLowerCase().replace(/[^a-z0-9]/gu, ''))
 
   /** Bound on the collapsed row's input preview. The row truncates to the
    *  width it actually has in CSS, so this only stops a pathological first
@@ -206,12 +265,23 @@
    * argument a reader can actually use.
    */
   function formatInput(input: Record<string, unknown>): string {
-    for (const [name, value] of Object.entries(input)) {
-      // The label field IS the row's label, so repeating it as the subject
-      // would make the row say the same words twice.
-      if (name === ACTION_SUMMARY_INPUT_KEY) continue
+    // The label field IS the row's label, so repeating it as the subject would
+    // make the row say the same words twice.
+    const entries = Object.entries(input).filter(([name]) => name !== ACTION_SUMMARY_INPUT_KEY)
+    // A bare number names nothing beside the label: antigravity lists a read's
+    // line range before its path, and `Read : 100` is not the file that was
+    // read. Numbers are only the subject when the call has nothing else.
+    const ordered = [
+      ...entries.filter(([, value]) => typeof value !== 'number'),
+      ...entries.filter(([, value]) => typeof value === 'number')
+    ]
+    for (const [, value] of ordered) {
       const text = typeof value === 'string' ? value : (JSON.stringify(value) ?? '')
       if (!text || (typeof value === 'string' && isOpaqueId(value))) continue
+      // A value the label already names is the same words twice: `Used the
+      // Frontend Design skill` needs no `: frontend-design` beside it.
+      const valueKey = text.toLowerCase().replace(/[^a-z0-9]/gu, '')
+      if (valueKey.length >= 3 && labelKey.includes(valueKey)) continue
       const preview =
         text.length > PREVIEW_MAX_CHARS ? `${text.slice(0, PREVIEW_MAX_CHARS)}…` : text
       return `: ${preview}`

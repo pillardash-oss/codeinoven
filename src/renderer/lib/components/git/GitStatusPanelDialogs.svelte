@@ -35,6 +35,8 @@
     mergeAwaitsCompletion: boolean
     mergePending: boolean
     prResolveBranch: string | null
+    /** A `pr-<n>` merge is pending but no recorded pull request session was found. */
+    prResolveLost: boolean
     completeMergeBusy: boolean
     pushRecoverMode: 'merge' | 'rebase' | null
     localBranches: GitBranchInfo[]
@@ -104,6 +106,7 @@
     mergeAwaitsCompletion,
     mergePending,
     prResolveBranch,
+    prResolveLost,
     completeMergeBusy,
     pushRecoverMode,
     localBranches,
@@ -452,12 +455,21 @@
 {#if completeMergeOpen && mergeAwaitsCompletion}
   <Modal open title="Complete merge" onClose={() => (completeMergeOpen = false)}>
     <div class="space-y-2">
-      {#if mergePending}
+      {#if prResolveLost}
+        <p class="text-[0.6875rem] leading-relaxed text-muted">
+          Every conflict is resolved and staged on a temporary
+          <span class="font-mono text-foreground">{status?.branch}</span> branch, but no pull request
+          session was found for it. Completing the merge only commits here: nothing is pushed, and the
+          pull request keeps its conflicts. Push the branch to the pull request yourself, or start the
+          resolution again from the pull request.
+        </p>
+      {:else if mergePending}
         <p class="text-[0.6875rem] leading-relaxed text-muted">
           Every conflict is resolved and staged. Completing the merge commits it{#if prResolveBranch},
-            pushes the resolution back to the pull request, restores your previous branch, and
-            deletes the temporary <span class="font-mono text-foreground">{prResolveBranch}</span> branch{/if}.
-          Add a message below, or leave it empty to generate one.
+            pushes the resolution back to the pull request, merges that pull request, restores your
+            previous branch, and deletes the temporary <span class="font-mono text-foreground"
+              >{prResolveBranch}</span
+            > branch{/if}. Add a message below, or leave it empty to generate one.
         </p>
         <input
           class="h-8 w-full border border-border bg-elevated px-2.5 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed focus:border-primary"
@@ -474,8 +486,8 @@
         <p class="text-[0.6875rem] leading-relaxed text-muted">
           The resolution is committed on the temporary <span class="font-mono text-foreground"
             >{prResolveBranch}</span
-          > branch. Completing the merge pushes it back to the pull request, restores your previous branch,
-          and deletes that temporary branch.
+          > branch. Completing the merge pushes it back to the pull request, merges that pull request,
+          restores your previous branch, and deletes that temporary branch.
         </p>
       {/if}
     </div>
@@ -498,7 +510,7 @@
           {#if completeMergeBusy}<CioSpinner size={11} class="animate-spin" />{:else}<CioMerge
               size={11}
             />{/if}
-          Complete merge
+          {prResolveLost ? 'Commit merge' : 'Complete merge'}
         </button>
       </div>
     {/snippet}
@@ -518,9 +530,11 @@
     <button
       type="button"
       class="flex h-7 flex-1 cursor-pointer items-center justify-center gap-1.5 bg-foreground text-[0.625rem] font-semibold text-app transition-opacity hover:opacity-90 disabled:cursor-default disabled:opacity-50"
-      title={mergePending
-        ? `Commit the resolved files to complete the merge${prResolveBranch ? `, then push the resolution to the pull request and delete ${prResolveBranch}` : ''}`
-        : `Push the resolution to the pull request, restore your previous branch, and delete ${prResolveBranch}`}
+      title={prResolveLost
+        ? `Commit the resolved files. This ${status?.branch} branch has no pull request session, so nothing will be pushed`
+        : mergePending
+          ? `Commit the resolved files to complete the merge${prResolveBranch ? `, push the resolution to the pull request, and merge it` : ''}`
+          : `Push the resolution to the pull request, merge it, restore your previous branch, and delete ${prResolveBranch}`}
       disabled={completeMergeBusy}
       onclick={openCompleteMerge}
     >
@@ -529,7 +543,7 @@
       {:else}
         <CioMerge size={11} />
       {/if}
-      Complete merge
+      {prResolveLost ? 'Commit merge' : 'Complete merge'}
     </button>
   </div>
 {/if}

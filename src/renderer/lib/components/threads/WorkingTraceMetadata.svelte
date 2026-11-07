@@ -53,6 +53,17 @@
     if (!id) return false
     return [providerName, providerId].some((name) => vendorMatches(id, name ?? ''))
   })
+
+  // An account badge explains which of several credentials paid for the run. An
+  // ACP agent has no accounts at all (it signs in through its own CLI), and a
+  // blank or default label names nothing, so neither case gets a badge: a person
+  // icon with no account behind it reads as a second, unexplained account.
+  const accountBadge = $derived.by(() => {
+    const label = accountLabel?.trim() ?? ''
+    if (label === '' || label === 'Default') return ''
+    if (harnessId?.startsWith('acp-')) return ''
+    return label
+  })
 </script>
 
 <!-- The trace's attribution, read left to right: harness, model, then the
@@ -93,14 +104,14 @@
       {thinkingLevel}
     </span>
   {/if}
-  {#if accountLabel && accountLabel !== 'Default'}
+  {#if accountBadge}
     <span
       class={CONVERSATION_METADATA_BADGE_CLASS}
-      title={`Account: ${accountLabel ?? 'Default'}`}
-      aria-label={`Account: ${accountLabel ?? 'Default'}`}
+      title={`Account: ${accountBadge}`}
+      aria-label={`Account: ${accountBadge}`}
     >
       <AccountMetadataIcon size={10} />
-      {accountLabel}
+      {accountBadge}
     </span>
   {/if}
   {#if ovenLabel}

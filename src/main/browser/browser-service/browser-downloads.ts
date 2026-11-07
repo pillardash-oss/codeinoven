@@ -372,7 +372,8 @@ export class BrowserDownloadManager {
   }
 
   /** The project's downloads, oldest first; every surface renders them reversed
-   *  so the most recent download is on top. */
+   *  so the most recent download is on top (see {@link showMenu}, which reverses
+   *  them as it builds the native popup). */
   list(projectId: string): BrowserDownload[] {
     const downloads: BrowserDownload[] = []
     for (const record of this.downloads.values()) {
@@ -519,7 +520,10 @@ export class BrowserDownloadManager {
     const window = this.deps.window()
     if (!window || window.isDestroyed()) return
     const menu = new Menu()
-    const downloads = this.list(projectId)
+    // `list` answers oldest first and every other surface reverses it, so this one
+    // does too: the newest download belongs at the top of the menu, right under the
+    // button that was just pressed, not at the end of a list nobody scrolls.
+    const downloads = this.list(projectId).reverse()
     if (downloads.length === 0) {
       menu.append(new MenuItem({ label: 'No downloads yet', enabled: false }))
       menu.popup({ window, x, y })

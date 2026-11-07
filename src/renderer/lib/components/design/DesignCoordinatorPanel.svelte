@@ -47,12 +47,20 @@
   import type { Props } from './DesignCoordinatorPanel/DesignCoordinatorPanel-types'
   import type { ScreenGroup } from '$shared/ipc-contract'
 
-  let { projectId, threadId, viewingThreadId, kind: forcedKind, active = true }: Props = $props()
+  let {
+    projectId,
+    threadId,
+    viewingThreadId,
+    kind: forcedKind,
+    projectBoard = false,
+    active = true
+  }: Props = $props()
   const board = createDesignBoard(() => ({
     projectId,
     threadId,
     viewingThreadId,
     kind: forcedKind,
+    projectBoard,
     active
   }))
   /**
@@ -230,7 +238,10 @@
     {@const copyLabel = board.gallery.video
       ? `Copy the path of this ${board.gallery.noun}`
       : `Copy ${board.gallery.noun} screen: ${screen.name}`}
-    <ContextMenu.Root bind:open={board.menus.menus.card}>
+    <ContextMenu.Root
+      open={board.menus.cardMenuEntry === screen.entry}
+      onOpenChange={(open) => board.menus.setCardMenu(screen.entry, open)}
+    >
       <ContextMenu.Trigger class={full ? 'col-span-full' : ''}>
         <div
           class="flex flex-col overflow-hidden border bg-elevated transition-colors hover:border-primary/60 {onScreen
@@ -627,7 +638,7 @@
         them, and a strip of tabs would only scroll them out of reach. Picking a row
         brings that design on screen, which is the whole gesture.
       -->
-      {#if board.gallery.items.length > 1}
+      {#if board.gallery.showSwitcher}
         <DropdownMenu.Root bind:open={board.menus.menus.list}>
           <DropdownMenu.Trigger
             class="group flex h-6 max-w-56 min-w-0 cursor-pointer items-center gap-1 px-1.5 transition-colors hover:bg-elevated data-[state=open]:bg-elevated"
@@ -1121,7 +1132,9 @@
                   <span class="px-4 text-center text-[0.6875rem]">
                     {board.gallery.items.length === 0
                       ? `The agent has not written a ${board.gallery.noun} yet. It will appear here when it does.`
-                      : 'No preview captured yet.'}
+                      : board.gallery.selected.directory === ''
+                        ? `This thread has not written its ${board.gallery.noun} yet. It will appear here when the agent does.`
+                        : 'No preview captured yet.'}
                   </span>
                 {/if}
               </div>

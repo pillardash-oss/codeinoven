@@ -382,7 +382,8 @@ across its tasks, and an assistant-less task lists only its own. Nothing appears
 until a run has actually been missed, so no tab or filter chrome exists by
 default:
 
-- the **Issues** tab of the assistant panel, present only when the panel's
+- the **Issues** tab of the assistant panel, and the Contents row that leads to it,
+  which appears only when the panel's
   assistant (or task) has a miss or a run problem;
 - the **missed badge** on the assistant row (when any child task has a miss) and on
   the specific missed task row;
@@ -726,7 +727,7 @@ has; turning it back on leaves the assistant re-authored rather than silently
 restoring a cadence the user may have forgotten. `assistantIsScheduled`
 (`src/lib/types/assistant.ts`) is the single rule every surface reads.
 
-A clock is agreed, never typed. The **Assistant** tab's Schedule card puts the
+A clock is agreed, never typed. The **Schedule** tab puts the
 switch on the section's own title and writes nothing when it is turned on: the panel
 holds the intent, says the clock has to be agreed, and offers **Schedule with
 <assistant>**, which opens the behavior thread and posts one app-owned turn
@@ -751,8 +752,8 @@ What the flag changes:
   null for a task of an unscheduled assistant, so `evaluateTask`, `nextDueAt`,
   `pruneStaleMisses` and the skip helpers all see nothing to fire, exactly as they
   already did for an assistant with no cadence.
-- **Every surface says so.** An assistant row, its hover popover, the panel's All
-  and Assistant tabs, the search results and the recap card all read the flag: a row
+- **Every surface says so.** An assistant row, its hover popover, the panel's All,
+  Behaviour and Schedule tabs, the search results and the recap card all read the flag: a row
   wears a small **Scheduled** / **Unscheduled** badge, and the schedule line reads
   **Runs on demand** instead of a cadence. The badge stays a neutral chip in both
   states: an on-demand assistant is a supported way to work, not an alert, so it
@@ -1137,27 +1138,46 @@ minimize with the browser, terminal and pull request reader, and the panel's
 sections become that strip's tabs. It is read-only where the app must own the
 value and editable where the user must.
 
-- **All** — pause or resume the assistant, plus one summary row per section with
-  the state in one line and a **More** button that opens that tab. An amber icon
-  marks each section that still needs setup. Under the pause toggle sits **Run
-  now**, which dispatches the assistant's tasks immediately regardless of its
-  schedule and pause state, so an assistant can be tested before its next fire;
-  beneath it are **Last run** and **Last success**. Last run is the last
+The strip in reading order is **All**, **Behaviour**, **Connections**, **Agents**,
+**Issues**, then the three sections that only earn a tab when they hold something:
+**Schedule** (only when a cadence is agreed and scheduling is switched on),
+**Wakes** (only when a thread of this assistant is armed) and **Reporting** (only
+once a channel or a priority is agreed). A quiet assistant therefore shows five
+tabs, and Issues stays next to the sections it reports on instead of being pushed
+to the far end. A hidden section keeps its row on **All**, so the state is still
+stated and the row still opens it: the body renders and no strip tab reads as
+active, rather than the panel snapping back to **All**.
+
+- **All** — pause or resume the assistant, plus one summary row per tab with
+  the state in one line and a way into that tab. An amber icon marks each section
+  that still needs setup. Above the rows sit **Last run**, **Last success**,
+  **Next run** and **Run now**, which dispatches the assistant's tasks
+  immediately regardless of its schedule and pause state, so an assistant can be
+  tested before its next fire. Last run is the last
   dispatch (`lastDispatchedAt`), kept apart from the scheduler's internal slot
   claim (`lastRunAt`, which a missed slot also writes) so a slot that never ran
   cannot read as a run; last success is stamped when a run's turn actually
   settles (`AssistantSchedulerService.settleRun` records `lastSuccessAt` only for a
   task the scheduler dispatched a run on, so a user's own chat never counts as a
   run). Both timestamps are read across the assistant's tasks.
-- **Assistant** — the saved knowledge, parsed into foldable sections by
-  `parseKnowledgeSections`. It recognises markdown headings and the ALL-CAPS title
+- **Behaviour** — the saved knowledge, parsed into foldable sections by
+  `assistantKnowledgeSections` over `parseKnowledgeSections`. It recognises
+  markdown headings and the ALL-CAPS title
   style the agent actually writes (`DRAIN PROCEDURE (0600 and 1800)` is a title;
   an indented numbered line is not), never splits inside a fenced code block, and
   round-trips through `serializeKnowledgeSections`. Each section is edited on its own
-  with `RichMarkdownEditor` and rendered with `MarkdownView`. The schedule appears
-  here as a read-only line: the agent sets it from the plan block the user
-  confirmed, so no manual
-  schedule editor exists anywhere in the app.
+  with `RichMarkdownEditor` and rendered with `MarkdownView`, and folding a section
+  hides its body outright rather than leaving a one-line summary in its place. The
+  instruction history lives here too, behind the undo control in the card's header.
+- **Schedule** — the clock, on its own tab: the on/off switch, the name, the
+  cadence, the next run and the missed-run policy. See
+  [Scheduled and on-demand](#scheduled-and-on-demand).
+- **Reporting** — where the assistant's output goes and how urgent it is, edited
+  here and summarised in **All**. See [Reporting](#reporting).
+- **Wakes** — every armed thread wake for this assistant's threads, with the time,
+  the countdown, the note behind it, and **Pause** / **Resume** and **Stop**.
+  A wake belongs to a thread, so pausing one holds it in place without touching the
+  others.
 - **Connections** — the assistant's utilities, resolved against the connection
   library by `resolveConnections`. Each row carries its kind and a **Ready / Off /
   Incomplete / Needs setup** state with the reason: a connection the library does
@@ -1216,9 +1236,7 @@ value and editable where the user must.
   seeds two empty fallback rows; more can be added and any row removed, so the
   set can shrink back to the primary alone. The agent points the user here in its
   post-save next-steps list.
-- **Reporting** — where the assistant's output goes and how urgent it is, shown as
-  one line in **All** and edited in the **Assistant** tab. See
-  [Reporting](#reporting).
+- **Issues** — missed runs, run problems and the unattended run history.
 
 ### How the model set is used at run time
 
@@ -1324,9 +1342,24 @@ nothing. It then publishes one app-owned row under the answer. The row is an
 asked to render travels on, so it is not part of the turn, never becomes the
 turn's closing statement, and never displaces the answer. Each entry is a typed
 `cited` part (name, path, file or folder, last modification time) and
-`CitedEntryCard.svelte` draws it: the file or folder glyph, its name, `Modified`
-on the 12-hour clock, and a right-anchored **Open file** or **Open folder** action
-that reveals the entry through the same citation reveal a clicked path uses.
+`CitedEntryCard.svelte` draws it: the glyph for what it is, its name, `Modified`
+on the 12-hour clock, and one right-anchored action.
+
+A turn that also changed files draws these rows inside its changes card
+(`RunChangesCard.svelte`), under a **Report** rule, so one turn's outcome is one
+surface instead of two cards describing the same turn; the folded card still says
+what the report holds. A turn that only cited work keeps a card of its own.
+
+The action follows the entry, because a design is not a folder to browse. A file
+opens in the file viewer and a folder in the file tree; a cited folder inside the
+project's own design or video root is marked as work at resolve time
+(`citedWorkKind` in `src/lib/cited-work.ts`, against `currentWorkRoots`) and its
+action is **Open design** or **Open composition**, which calls `design:open` for
+the thread the card is drawn in. That one call serves the folder (a preview server
+is minted only when the design has none), opens it in the browser (a tab already
+showing that design is reused rather than stacked) and reveals it, because
+clicking the card is the user asking to see the work. A folder whose work can no
+longer be served falls back to the file tree instead of failing silently.
 
 The filed report joins that row automatically, and only it: its path is app-owned
 (the app picks the file name and writes it after the turn ends), so the run cannot

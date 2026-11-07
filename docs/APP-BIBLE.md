@@ -458,6 +458,37 @@ authority for a repository root.
 See `docs/GIT-WORKTREES.md` for the full operator-facing lifecycle, setup
 structure, environment modes, health categories, and confirmations.
 
+### 4.7 One home per thread, and evidence lives with the checkout
+
+A thread has exactly one home and at most one workspace, and no surface may
+confuse the two.
+
+- `Thread.projectId` is **home**: the view that lists the thread. `Thread.boundScope`
+  is **workspace**: the project scope its runs read and write. They coincide for
+  every project thread, so only an assistant task ever carries both.
+- An assistant task bound to a project keeps its single home on the Assistant
+  view. It is never cross-listed onto that project's board: the board lists
+  project threads and orchestrated dispatches only, so one transcript appears on
+  exactly one board.
+- Every evidence surface (the per-thread right rail, its Changes, Git, Files and
+  terminal tabs, and the run receipt) resolves its project through
+  `src/lib/bound-scope.ts`. No caller decides where evidence lives by comparing
+  `thread.projectId` to `ASSISTANT_SPACE_ID`.
+- A run whose bound scope is unhealthy parks with a typed reason and the scope's
+  existing repair guidance. It never falls back to the assistant's storage
+  folder: a run that cannot prove its checkout must not start.
+- A project-board row an assistant dispatched wears a text badge above its title,
+  stating origin only, from an origin fact written once when the dispatch is
+  accepted. A thread's status stays the status indicator's job.
+- An assistant sidebar row states its short scope name only, never the repeated
+  project name, and an unbound task shows no scope line at all.
+- A settled run ends with a receipt computed from Git and from the commands it
+  executed. The receipt summarises; its actions open the rail. It never becomes a
+  second changes panel, and it never invents a number the model merely claimed.
+
+See `docs/bound-assistant-tasks.md` for the model, the park gate and the receipt
+data path.
+
 ---
 
 

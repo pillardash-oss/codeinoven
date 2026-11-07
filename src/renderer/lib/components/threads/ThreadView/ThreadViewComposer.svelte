@@ -7,6 +7,7 @@
   import { fly, slide } from 'svelte/transition'
   import ChatComposer from '../../chats/ChatComposer.svelte'
   import ForeignRunCard from '../ForeignRunCard.svelte'
+  import LockedOrchestrationCard from '../LockedOrchestrationCard.svelte'
   import CardButton from '../../shared/CardButton.svelte'
   import CardFoot from '../../shared/CardFoot.svelte'
   import CardFrame from '../../shared/CardFrame.svelte'
@@ -17,6 +18,7 @@
   import ComposerQueuedCard from '../ComposerQueuedCard.svelte'
   import AgentQuestionCard from '../AgentQuestionCard.svelte'
   import AgentSecretCard from '../AgentSecretCard.svelte'
+  import AgentMcpSignInCard from '../AgentMcpSignInCard.svelte'
   import PermissionRequestCard from '../PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from '../ImageDescriptorErrorCard.svelte'
   import AgentProviderStatusCard from '../AgentProviderStatusCard.svelte'
@@ -38,6 +40,7 @@
   import AssistantReadyCard from '$lib/components/assistant/AssistantReadyCard.svelte'
   import AssistantSessionQuestion from '$lib/components/assistant/AssistantSessionQuestion.svelte'
   import { rendererRecovery, publishDraftActivity } from '$lib/stores/renderer-recovery.svelte'
+  import { forkOrigins } from '$lib/stores/fork-origins.svelte'
   import { modelKey } from '$lib/model-keys'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { assistantIsScheduled } from '$shared/types'
@@ -57,10 +60,33 @@
     activeActions: ActionDefinition[]
     compactionFold: { readonly folded: boolean }
   } = $props()
+
+  /**
+   * The thread this conversation was forked from, shown above the composer the
+   * way an attached thread is shown. A fork's parent is not the user's
+   * attachment, so it cannot be detached and it is never written into the draft:
+   * the composer only draws it, and the send path itself tells the agent where
+   * the copied context came from.
+   */
+  const forkParentReference = $derived(
+    forkOrigins.referenceFor(
+      board.handleAgentEvent.thread.projectId,
+      board.handleAgentEvent.thread.id
+    )
+  )
+
+  $effect(() => {
+    forkOrigins.ensure(board.handleAgentEvent.thread.projectId, board.handleAgentEvent.thread.id)
+  })
 </script>
 
+<!-- The bottom chrome takes the composer's own rung (z-40). A card here answers
+     for the conversation below it, so it paints over what the transcript draws
+     across this band, including the comment bubbles pinned to annotated
+     passages: a bubble fixed at z-40 without this rung floated over an assistant
+     summary that covers the passage it belongs to. -->
 <div
-  class="bottom-chrome relative {board.composerScope.centeredComposer
+  class="bottom-chrome relative z-40 {board.composerScope.centeredComposer
     ? 'flex min-h-0 flex-1 flex-col justify-center'
     : 'shrink-0'}"
 >
@@ -131,7 +157,7 @@
 
     <!-- Provider status   between messages and composer, always visible. A
          matching bubbled worker error is replaced by the attributed card above. -->
-    {#if board.submitBrainstormDecision.visibleProviderStatus && !board.submitBrainstormDecision.coordinatorErrorMatchesAssignmentWorker}
+    {#if board.submitBrainstormDecision.visibleProviderStatus && !board.submitBrainstormDecision.coordinatorErrorMatchesAssignmentWorker && !board.currentWorkingTraceAttribution.independentAuditorChild}
       <div class="conversation-gutter shrink-0 px-6">
         <div class="mx-auto max-w-3xl">
           <AgentProviderStatusCard
@@ -448,7 +474,27 @@
               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         {/if}
-        {#if board.unmirroredTraceStartTime.isAssignmentAuditorThread}
+        {#if board.currentWorkingTraceAttribution.independentAuditorChild && board.buildSpecActionPrompt.auditorThreadCardState !== undefined}
+          <AuditGeneratedCard
+            state={board.buildSpecActionPrompt.auditorThreadCardState}
+            version={board.contextUsage.auditReport?.version}
+            error={board.buildSpecActionPrompt.auditorThreadCardError}
+            settings={board.loadOlderMessages.settings}
+            providers={board.currentWorkingTraceAttribution.providers}
+            projectId={board.handleAgentEvent.thread.projectId}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            busy={board.submitSpecDecision.auditBusy || board.switchProject.busy}
+            onRetry={board.buildSpecActionPrompt.startFreshIndependentAudit}
+            onModelChange={board.contextUsage.changeAuditModel}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onViewReport={board.contextUsage.openAuditStudio}
+          />
+        {:else if board.unmirroredTraceStartTime.isAssignmentAuditorThread && board.currentWorkingTraceAttribution.assignmentAuditorCardApplies}
           <AuditGeneratedCard
             state={board.buildSpecActionPrompt.assignmentAuditState}
             version={board.buildSpecActionPrompt.assignmentAuditState === 'running'
@@ -539,7 +585,14 @@
         {:else if board.handleAgentEvent.pendingQuestionRequests.length > 0 && !board.composerScope.assistantRecapSupersedesQuestion && (!board.submitBrainstormDecision.achievementAutonomous || board.handleAgentEvent.pendingQuestionRequests[0].questions.some((question) => question.secretRequest === true))}
           {@const pendingRequest = board.handleAgentEvent.pendingQuestionRequests[0]}
           {#key pendingRequest.requestId}
-            {#if pendingRequest.questions.some((question) => question.secretRequest === true)}
+            {#if pendingRequest.questions.some((question) => question.mcpSignIn !== undefined)}
+              <AgentMcpSignInCard
+                request={pendingRequest}
+                onSubmit={board.composerScope.handleMcpSignInSubmit}
+                onDismiss={board.unmirroredTraceStartTime.handleQuestionDismiss}
+                onPause={board.composerScope.handleSecretPause}
+              />
+            {:else if pendingRequest.questions.some((question) => question.secretRequest === true)}
               <AgentSecretCard
                 request={pendingRequest}
                 scope={{
@@ -552,6 +605,7 @@
                 onExplain={board.sources.handleQuestionExplain}
                 onQuickChat={board.sources.handleQuestionQuickChat}
                 onPause={board.composerScope.handleSecretPause}
+                onDraft={board.composerScope.handleSecretDraft}
               />
             {:else}
               <AgentQuestionCard
@@ -617,6 +671,26 @@
             onViewTrace={() => void board.currentWorkingTraceAttribution.openDurableAuditWork()}
             onViewReport={board.contextUsage.openAuditStudio}
           />
+        {:else if board.submitSpecDecision.auditFailed && board.currentWorkingTraceAttribution.independentAuditPanelActive && !board.currentWorkingTraceAttribution.orchestrationChild && !board.switchProject.busy && !board.submitBrainstormDecision.failureRetryVisible}
+          <AuditGeneratedCard
+            state="failed"
+            error={board.buildSpecActionPrompt.auditError}
+            settings={board.contextUsage.auditSettings}
+            providers={board.currentWorkingTraceAttribution.providers}
+            projectId={board.handleAgentEvent.thread.projectId}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            busy={board.submitSpecDecision.auditBusy}
+            retryLabel="Retry audit"
+            onRetry={board.buildSpecActionPrompt.startFreshIndependentAudit}
+            onModelChange={board.contextUsage.changeAuditModel}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onViewReport={board.contextUsage.openAuditStudio}
+          />
         {:else if board.buildSpecActionPrompt.assignmentAuditState === 'failed' && board.unmirroredTraceStartTime.assignmentAuditOwner && !board.switchProject.busy && !board.submitBrainstormDecision.achievementAutonomous && !board.submitBrainstormDecision.failureRetryVisible}
           <AuditGeneratedCard
             state="failed"
@@ -640,7 +714,7 @@
               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
             onViewReport={board.contextUsage.openAuditStudio}
           />
-        {:else if board.buildSpecActionPrompt.assignmentAuditState === 'partial' && board.contextUsage.auditReport && !board.switchProject.busy && !board.submitBrainstormDecision.achievementAutonomous && !board.unmirroredTraceStartTime.studioOnlyAuditWorkflow && !board.submitBrainstormDecision.failureRetryVisible}
+        {:else if board.buildSpecActionPrompt.assignmentAuditState === 'partial' && board.contextUsage.auditReport && !board.currentWorkingTraceAttribution.orchestrationChild && !board.switchProject.busy && !board.submitBrainstormDecision.achievementAutonomous && !board.unmirroredTraceStartTime.studioOnlyAuditWorkflow && !board.submitBrainstormDecision.failureRetryVisible}
           <AuditGeneratedCard
             state="partial"
             version={board.contextUsage.auditReport.version}
@@ -653,7 +727,9 @@
             recentModels={rendererRecovery.recentModels}
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
             busy={board.submitSpecDecision.auditBusy}
-            onRetry={board.buildSpecActionPrompt.generateDurableAssignmentAudit}
+            onRetry={board.currentWorkingTraceAttribution.independentAuditPanelActive
+              ? board.contextUsage.generateIndependentAudit
+              : board.buildSpecActionPrompt.generateDurableAssignmentAudit}
             onModelChange={board.contextUsage.changeAuditModel}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
@@ -837,6 +913,15 @@
                 projectId={board.handleAgentEvent.thread.projectId}
                 threadId={board.handleAgentEvent.thread.id}
               />
+            {:else if board.currentWorkingTraceAttribution.inputLockedForComposer}
+              <LockedOrchestrationCard
+                kind={board.currentWorkingTraceAttribution.coordinatedThreadKind}
+                threadId={board.handleAgentEvent.thread.id}
+                coordinatorTitle={board.currentWorkingTraceAttribution.coordinatorParentThread
+                  ?.title}
+                stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('locked')}
+                onOpenCoordinator={board.currentWorkingTraceAttribution.openCoordinatorParent}
+              />
             {:else if board.switchProject.assistantRecapInComposer && board.switchProject.assistantDraft}
               <!-- The recap card takes the composer's place rather than sitting on
                        top of it: it is asking for the one answer the composer would
@@ -890,7 +975,7 @@
                   placeholder={board.props.assistantMode &&
                   board.props.assistantName &&
                   !board.props.assistantKnowledgeComplete
-                    ? `Tell $assistantName={board.props.assistantName} what you want it to do…`
+                    ? `Tell ${board.props.assistantName} what you want it to do…`
                     : board.abortRun.assistantSetupThread && board.props.assistantKnowledgeComplete
                       ? 'Change its behavior, its times, or a connection…'
                       : board.submitBrainstormDecision.activePlanningEntry === 'brainstorm'
@@ -902,9 +987,9 @@
                             : board.harnessUsage.specFormulating
                               ? 'Formulating specification…'
                               : board.buildSpecActionPrompt.delegatedWorkBusy
-                                ? `$delegatedActivityLabel={board.switchProject.delegatedActivityLabel}   message the Sr. Engineer`
+                                ? `${board.switchProject.delegatedActivityLabel} · message the Sr. Engineer`
                                 : board.switchProject.busy
-                                  ? `${APP_NAME} is working   type to queue a message`
+                                  ? `${APP_NAME} is working · type to queue a message`
                                   : (board.props.composerPlaceholder ?? 'Send a message...')}
                   disabled={board.harnessUsage.specFormulating}
                   working={board.switchProject.busy}
@@ -912,17 +997,12 @@
                   autofocus
                   showEngineeringMode={!board.props.chatMode &&
                     !board.currentWorkingTraceAttribution.orchestrationChild}
-                  engineeringLifecycle={board.editVideoNote.pendingLifecycleDisplay}
-                  engineeringActive={board.submitBrainstormDecision.engineeringOn}
-                  onEngineeringLifecycleSelect={board.switchProject.selectEngineeringLifecycle}
                   independentAuditAvailable={board.currentWorkingTraceAttribution
                     .independentAuditAvailable}
                   independentAuditEnabled={board.currentWorkingTraceAttribution
                     .independentAuditDisplayEnabled}
                   onIndependentAuditToggle={board.currentWorkingTraceAttribution
                     .toggleIndependentAudit}
-                  engineeringToolboxHidden={board.currentWorkingTraceAttribution
-                    .independentAuditDisplayEnabled}
                   showChatModes={board.props.chatMode}
                   settings={board.loadOlderMessages.settings}
                   onSettingsChange={board.contextUsage.updateSettings}
@@ -992,6 +1072,7 @@
                     board.handleAgentEvent.thread.projectId,
                     board.handleAgentEvent.thread.id
                   )}
+                  {forkParentReference}
                   onValueChange={(value) => {
                     rendererRecovery.setDraft(
                       board.handleAgentEvent.thread.projectId,

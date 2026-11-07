@@ -30,6 +30,15 @@
  *   - `url` and `title` ride along only when the extension may read them   the `tabs`
  *     permission, or a host permission matching the page   which is the rule the
  *     runtime applies to the tabs it reports itself.
+ *
+ * The page also opens tabs, and that is the same repair in the other direction: a
+ * password manager's "launch" row is a `chrome.tabs.create` for the address the
+ * entry holds, this runtime has no second window to put a page in, and the call
+ * reaches a stub, so the click opens nothing at all. The app owns the tab strip, so
+ * the page asks it over the message channel `chrome.runtime.openOptionsPage` already
+ * uses and the preload forwards, and the answer is the new tab's id   its
+ * `WebContents` id, which is the id this runtime's own tab API answers with, so a
+ * caller that watches the tab it opened finds it again.
  */
 
 ;(() => {
@@ -305,6 +314,113 @@
     }
   }
 
+  // ── Opening a tab, which this runtime cannot do from a page ─────────────────
+
+  /** How long a page waits for the app to say it opened the tab. */
+  const OPEN_TAB_TIMEOUT_MS = 3000
+
+  /** The asks still waiting for the app's answer, keyed by their request number. */
+  const openRequests = new Map()
+  let openRequestSequence = 0
+
+  /**
+   * Whether an address is a web page a tab can be opened on.
+   *
+   * The app validates it again before anything loads, and it is the same rule a
+   * link click is held to. An extension asking for one of its own pages is not a
+   * tab of the browser, so it is not this channel's to open.
+   */
+  const isWebAddress = (url) => {
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
+      return parsed.username === '' && parsed.password === ''
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * The page as `chrome.tabs.create` answers with the tab it just opened.
+   *
+   * The app opens the page in the strip it owns, so the index, the window and the
+   * status are this browser's constants, and the address is the one the extension
+   * asked for   it already knows it, which is why Chromium reports it here too.
+   */
+  const openedTabEntry = (id, url, active) => ({
+    id,
+    index: 0,
+    windowId: 0,
+    active,
+    highlighted: active,
+    pinned: false,
+    incognito: false,
+    audible: false,
+    mutedInfo: { muted: false, reason: 'user' },
+    discarded: false,
+    autoDiscardable: false,
+    groupId: -1,
+    status: 'loading',
+    url,
+    title: ''
+  })
+
+  // The app's answer to each ask arrives on the same channel the page asks on,
+  // labelled so the wrappers here can tell it from a request of their own.
+  window.addEventListener('message', (event) => {
+    const data = event ? event.data : null
+    if (!data || typeof data !== 'object') return
+    const answer = data.__cioPageOpenedTab
+    if (!answer || typeof answer !== 'object') return
+    const request = openRequests.get(answer.requestId)
+    if (!request) return
+    openRequests.delete(answer.requestId)
+    clearTimeout(request.timer)
+    request.resolve(typeof answer.tabId === 'number' ? answer.tabId : null)
+  })
+
+  /**
+   * `chrome.tabs.create`, answered by the app that owns the tabs.
+   *
+   * A request the page cannot complete still settles: an address that is not a web
+   * page, or an app that never answers, resolves with no tab instead of a promise
+   * that hangs, because a button that waits forever is worse than one that failed.
+   */
+  const createTab = (createProperties, callback) => {
+    const properties =
+      createProperties && typeof createProperties === 'object' ? createProperties : {}
+    const requested = Array.isArray(properties.url) ? properties.url[0] : properties.url
+    const url = typeof requested === 'string' ? requested : ''
+    const active = typeof properties.active === 'boolean' ? properties.active : true
+    const opened = new Promise((resolve) => {
+      if (!url || !isWebAddress(url)) {
+        resolve(null)
+        return
+      }
+      const requestId = ++openRequestSequence
+      const timer = setTimeout(() => {
+        openRequests.delete(requestId)
+        resolve(null)
+      }, OPEN_TAB_TIMEOUT_MS)
+      openRequests.set(requestId, { resolve, timer })
+      try {
+        window.postMessage({ __cioPageCommand: 'open-tab', requestId, url, active }, '*')
+      } catch {
+        openRequests.delete(requestId)
+        clearTimeout(timer)
+        resolve(null)
+      }
+    }).then((tabId) => (tabId === null ? undefined : openedTabEntry(tabId, url, active)))
+    if (typeof callback === 'function') {
+      opened.then(
+        (tab) => callback(tab),
+        () => callback(undefined)
+      )
+      return undefined
+    }
+    return opened
+  }
+
   // Both roots, because they are two objects with the same namespaces in this
   // runtime and an extension may reach for either. They are deduplicated: a page
   // where `browser` is `chrome` is one namespace, not two.
@@ -339,5 +455,16 @@
       define(tabsApi, 'query', wrapped)
     }
     if (typeof tabsApi.getCurrent !== 'function') define(tabsApi, 'getCurrent', getCurrent)
+    // Replaced rather than ensured, and on both roots: the runtime either omits
+    // this member or answers it with a stub, and a launch button bound to a call
+    // that opens nothing is indistinguishable from a broken one.
+    const installedCreate = typeof tabsApi.create === 'function' ? tabsApi.create : null
+    if (!installedCreate || installedCreate.__cioPageTabs !== true) {
+      const wrappedCreate = function (createProperties, callback) {
+        return createTab(createProperties, callback)
+      }
+      wrappedCreate.__cioPageTabs = true
+      define(tabsApi, 'create', wrappedCreate)
+    }
   }
 })()

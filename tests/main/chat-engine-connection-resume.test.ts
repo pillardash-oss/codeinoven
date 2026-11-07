@@ -13,11 +13,19 @@ import { createTestDb, destroyTestDb } from './database/test-helper'
 import type { Database } from '../../src/main/database/database'
 import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
+import { TRANSIENT_PROVIDER_RETRY_MS } from '../../src/lib/provider-issue'
+import { RETRY_FIRE_GRACE_MS } from '../../src/main/chat/chat-engine/chat-engine-constants'
 import { ChatEngine } from '../../src/main/chat/chat-engine'
 import { RetrySchedulerService } from '../../src/main/system/retry-scheduler-service'
 import type { PendingRetryRecord } from '../../src/main/system/retry-scheduler-service'
 import type { ConnectivitySource } from '../../src/main/system/connectivity-service'
-import type { AgentProviderIssue, AgentSessionStatus, CreateThreadInput, Thread } from '../../src/lib/types'
+import type {
+  AgentMessage,
+  AgentProviderIssue,
+  AgentSessionStatus,
+  CreateThreadInput,
+  Thread
+} from '../../src/lib/types'
 
 /**
  * A device that loses its Wi-Fi takes its harness process with it, and the
@@ -142,7 +150,14 @@ async function setup(
   })
   // The turn's session is registered, but no driver backs it: a Wi-Fi drop is
   // exactly what takes the harness process away, and the wait must survive that.
-  internals(engine).registerSession(SESSION_ID, PROJECT_ID, thread.id, PROJECT_PATH, 'auto_review', 'pi')
+  internals(engine).registerSession(
+    SESSION_ID,
+    PROJECT_ID,
+    thread.id,
+    PROJECT_PATH,
+    'auto_review',
+    'pi'
+  )
   engine.attachConnectivity(connectivity)
   const scheduler = new RetrySchedulerService(storage)
   engine.attachRetryScheduler(scheduler)
@@ -177,7 +192,12 @@ describe('ChatEngine connection waits', () => {
     )
     await internals(engine).handleProviderFailure(
       SESSION_ID,
-      { kind: 'unknown', message: 'Harness process exited unexpectedly', harnessId: 'pi', retryable: false },
+      {
+        kind: 'unknown',
+        message: 'Harness process exited unexpectedly',
+        harnessId: 'pi',
+        retryable: false
+      },
       'Harness process exited unexpectedly'
     )
     await settle()
@@ -211,7 +231,12 @@ describe('ChatEngine connection waits', () => {
     )
     await internals(engine).handleProviderFailure(
       SESSION_ID,
-      { kind: 'authentication', message: 'Provider sign-in required', harnessId: 'pi', retryable: false },
+      {
+        kind: 'authentication',
+        message: 'Provider sign-in required',
+        harnessId: 'pi',
+        retryable: false
+      },
       'Provider sign-in required'
     )
     await settle()
@@ -244,5 +269,137 @@ describe('ChatEngine connection waits', () => {
     // longer owns, so it leaves the ledger instead of being retried forever.
     expect(sendPrompt).not.toHaveBeenCalled()
     expect(scheduler.getPendingRetry('sess-gone')).toBeUndefined()
+  })
+})
+
+/** Schedulers only need the driver to exist; the transient path never calls it. */
+function setPiDriver(engine: ChatEngine): void {
+  const drivers = (engine as unknown as { drivers: Map<string, unknown> }).drivers
+  drivers.set('pi', { loadMessages: async (): Promise<AgentMessage[]> => [] })
+}
+
+const ONE_MINUTE = 60 * 1_000
+const ONE_DAY = 24 * 60 * ONE_MINUTE
+
+/**
+ * The OpenCode Go incident of 2026-11-05: a transient upstream `[overloaded]`
+ * 429 was classified `provider_unavailable`, treated as an account usage
+ * window, and parked on the account's monthly reset. The thread sat paused for
+ * weeks with nothing to wait for. These lock in the rule that keeps every
+ * thread out of that trap: only a quota or rate limit may become a window wait.
+ */
+describe('ChatEngine transient provider waits', () => {
+  it('retries an overloaded provider in a minute instead of the account window', async () => {
+    const { engine, scheduler, threadId } = await setup(connectivitySource())
+    setPiDriver(engine)
+    // If this is ever consulted, the thread is back on the monthly reset.
+    const deriveUsageResetRetryAt = vi.spyOn(
+      engine.units['turns-dispatch'],
+      'deriveUsageResetRetryAt'
+    )
+    deriveUsageResetRetryAt.mockResolvedValue(Date.now() + 30 * ONE_DAY)
+
+    const handledAt = Date.now()
+    await internals(engine).handleProviderFailure(
+      SESSION_ID,
+      {
+        kind: 'provider_unavailable',
+        message:
+          '429: {"type":"server_error","message":"Upstream request failed: [overloaded], retry shortly"}',
+        harnessId: 'pi',
+        retryable: true
+      },
+      '429 overloaded'
+    )
+    await settle()
+
+    expect(deriveUsageResetRetryAt).not.toHaveBeenCalled()
+    const retained = scheduler.getPendingRetry(SESSION_ID)
+    expect(retained?.issueKind).toBe('provider_unavailable')
+    expect(retained?.retryAt).toBeGreaterThanOrEqual(
+      handledAt + TRANSIENT_PROVIDER_RETRY_MS - 1_000
+    )
+    expect(retained?.retryAt).toBeLessThanOrEqual(handledAt + TRANSIENT_PROVIDER_RETRY_MS + 5_000)
+    expect(retained?.resetAt).toBe(retained?.retryAt)
+    const thread = await internals(engine).threadManager.getThread(PROJECT_ID, threadId)
+    expect(thread?.status).toBe('working-paused')
+  })
+
+  it('ignores a usage reset attached to a transient outage and keeps the short backoff', async () => {
+    const { engine, scheduler } = await setup(connectivitySource())
+    setPiDriver(engine)
+    const handledAt = Date.now()
+
+    // The original poison in one shape: an account window leaking onto a
+    // provider-load failure. A window may only ever explain a quota or a rate
+    // limit, so this deadline must be discarded rather than obeyed.
+    await internals(engine).handleProviderFailure(
+      SESSION_ID,
+      {
+        kind: 'provider_unavailable',
+        message: '429: Upstream request failed: [overloaded]',
+        harnessId: 'pi',
+        retryable: true,
+        retryAt: handledAt + 30 * ONE_DAY
+      },
+      '429 overloaded'
+    )
+    await settle()
+
+    const retained = scheduler.getPendingRetry(SESSION_ID)
+    expect(retained?.issueKind).toBe('provider_unavailable')
+    expect(retained?.retryAt).toBeLessThanOrEqual(handledAt + TRANSIENT_PROVIDER_RETRY_MS + 5_000)
+    expect(retained?.retryAt).toBeGreaterThanOrEqual(
+      handledAt + TRANSIENT_PROVIDER_RETRY_MS - 1_000
+    )
+  })
+
+  it('still parks a genuine usage limit on the provider reset it named', async () => {
+    const { engine, scheduler } = await setup(connectivitySource())
+    setPiDriver(engine)
+    const resetAt = Date.now() + 5 * ONE_DAY
+
+    await internals(engine).handleProviderFailure(
+      SESSION_ID,
+      {
+        kind: 'quota',
+        message: 'Go usage limit exceeded',
+        harnessId: 'pi',
+        retryable: true,
+        retryAt: resetAt
+      },
+      'Go usage limit exceeded'
+    )
+    await settle()
+
+    const retained = scheduler.getPendingRetry(SESSION_ID)
+    expect(retained?.issueKind).toBe('quota')
+    // The window is the provider's own reset; the fire time clears the rollover
+    // by the grace window so the retry cannot race the reset second.
+    expect(retained?.resetAt).toBe(resetAt)
+    expect(retained?.retryAt).toBe(resetAt + RETRY_FIRE_GRACE_MS)
+  })
+
+  it('leaves a provider_unavailable the harness called terminal off the retry ledger', async () => {
+    const { engine, scheduler, threadId } = await setup(connectivitySource())
+    setPiDriver(engine)
+
+    await internals(engine).handleProviderFailure(
+      SESSION_ID,
+      {
+        kind: 'provider_unavailable',
+        message: 'The provider is not installed',
+        harnessId: 'pi',
+        retryable: false
+      },
+      'The provider is not installed'
+    )
+    await settle()
+
+    // Not every unavailable provider is worth retrying: a terminal verdict must
+    // fail visibly instead of waking up again and again.
+    expect(scheduler.getPendingRetry(SESSION_ID)).toBeUndefined()
+    const thread = await internals(engine).threadManager.getThread(PROJECT_ID, threadId)
+    expect(thread?.status).toBe('failed')
   })
 })

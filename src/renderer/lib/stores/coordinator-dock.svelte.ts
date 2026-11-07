@@ -3,9 +3,9 @@ import type { Component } from 'svelte'
 import type {
   AchievementCoordinatorPanelProps,
   AssignmentCoordinatorPanelProps,
+  DelegationCoordinatorPanelProps,
   DesignCoordinatorPanelProps,
-  IndependentAuditCoordinatorPanelProps,
-  OrchestrateCoordinatorPanelProps
+  IndependentAuditCoordinatorPanelProps
 } from '$shared/types'
 
 /**
@@ -40,10 +40,12 @@ export type CoordinatorDockPanel =
   | { component: 'assignment'; props: AssignmentCoordinatorPanelProps }
   | { component: 'achievement'; props: AchievementCoordinatorPanelProps }
   | { component: 'independent-audit'; props: IndependentAuditCoordinatorPanelProps }
-  /** The workstation board: every run this thread dispatched into any project, with
-   *  the machine, model and live status of each one. The props are the initiator's
-   *  ids only, because the board loads its own rows from the dispatch ledger. */
-  | { component: 'orchestrate'; props: OrchestrateCoordinatorPanelProps }
+  /**
+   * The delegation board: every real thread this one started, whether it spawned a
+   * helper agent for itself or dispatched a run into any project. A nested
+   * sub-agent has no thread, so it is not here and never docks this board.
+   */
+  | { component: 'delegation'; props: DelegationCoordinatorPanelProps }
   /** The authored-work coordinator: a thread's design or video composition, and the
    *  way back to it after a restart. Published for a thread that opened a session,
    *  whether or not any worker exists, because the work is what the user returns
@@ -71,7 +73,7 @@ export const ORCHESTRATION_COORDINATOR_COMPONENTS: readonly CoordinatorPanelComp
   'assignment',
   'achievement',
   'independent-audit',
-  'orchestrate'
+  'delegation'
 ]
 
 export interface CoordinatorDockRegistration {

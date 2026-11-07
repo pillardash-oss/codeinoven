@@ -314,11 +314,19 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
       this.root.submitSpecDecision.assignment?.auditCycle?.reportId !== undefined
   )
 
-  studioAssignment = $derived(
-    this.root.submitSpecDecision.assignmentVersions.find(
-      (candidate) => candidate.version === this.root.submitSpecDecision.selectedAssignmentVersion
-    ) ?? this.root.submitSpecDecision.assignment
-  )
+  /** The plan the studio renders. A same-version write keeps the version and
+   *  only moves `updatedAt`, so the live plan wins whenever it is the version
+   *  under review; any older version still comes from the stored list. */
+  studioAssignment = $derived.by(() => {
+    const decision = this.root.submitSpecDecision
+    const active = decision.assignment
+    if (active && decision.selectedAssignmentVersion === active.version) return active
+    return (
+      decision.assignmentVersions.find(
+        (candidate) => candidate.version === decision.selectedAssignmentVersion
+      ) ?? active
+    )
+  })
 
   /** Current activity label   shows agent status only in Engineering. */
   loopAuditing = $derived(
@@ -616,12 +624,10 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
   async openAssignmentInEditor(content: AssignmentPlanContent): Promise<void> {
     this.root.submitSpecDecision.assignmentError = ''
     try {
-      await invoke(
-        'assignment:openInEditor',
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
-        content
-      )
+      // The Assignment belongs to its coordinator, which a worker thread's view
+      // presents; key the call on the document's owner, never the mounted thread.
+      const owner = this.root.submitSpecDecision.assignmentOwner()
+      await invoke('assignment:openInEditor', owner.projectId, owner.threadId, content)
     } catch (error) {
       this.root.submitSpecDecision.assignmentError =
         error instanceof Error ? error.message : 'The assignment could not be opened.'

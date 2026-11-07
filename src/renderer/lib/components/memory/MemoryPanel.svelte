@@ -8,6 +8,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import {
     ASSISTANT_SPACE_ID,
+    DEFAULT_SCOPE_BUCKET_ID,
     GLOBAL_BROWSER_PROJECT_ID,
     INBOX_PROJECT_ID,
     type MemoryCategory,
@@ -42,7 +43,7 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
 
-  import type { Thread } from '$shared/types'
+  import type { ScopeBucket, Thread } from '$shared/types'
 
   interface Props {
     variant?: 'settings' | 'sidebar'
@@ -145,11 +146,17 @@
   let resolvedAssistantId = $state<string | undefined>(undefined)
   let effectiveAssistantId = $derived(assistantId ?? resolvedAssistantId)
 
+  /** The feature scope the open project thread works in, resolved from the
+   *  thread itself. A thread with no recorded bucket belongs to the project's
+   *  Default scope, which is the board's own fallback. */
+  let resolvedScopeBucketId = $state<string | undefined>(undefined)
+
   /** What this panel is and where it sits, the single value every visibility
    *  check (load, save, add) reads from. */
   let surfaceContext = $derived<MemorySurfaceContext>({
     surface,
     projectId,
+    scopeBucketId: surface === 'sidebar-projects' ? resolvedScopeBucketId : undefined,
     threadId,
     assistantId: effectiveAssistantId
   })
@@ -172,7 +179,7 @@
           ? 'Global, all browser chats, and this chat’s preferences.'
           : projectId === ASSISTANT_SPACE_ID
             ? 'Global, assistant, and task preferences active in this conversation.'
-            : 'Global, project, and thread preferences active in this conversation.'
+            : 'Global, project, scope, and thread preferences active in this conversation.'
   )
 
   /** The audience named in the "memory is disabled" notice. It names the config
@@ -266,10 +273,15 @@
     loading = true
     error = ''
     try {
-      // An assistant entry is only visible through its own assistant, so resolve the
-      // task's assistant before filtering when the caller did not supply it.
-      if (surface === 'sidebar-assistant' && !assistantId && projectId && threadId) {
-        resolvedAssistantId = (await invoke('thread:get', projectId, threadId))?.assistantId
+      // An assistant entry is only visible through its own assistant, and a
+      // feature-scope entry only inside its own bucket, so both are resolved from
+      // the thread before anything is filtered.
+      const needsAssistant = surface === 'sidebar-assistant' && !assistantId
+      const needsScope = surface === 'sidebar-projects'
+      if (projectId && threadId && (needsAssistant || needsScope)) {
+        const thread = await invoke('thread:get', projectId, threadId)
+        if (needsAssistant) resolvedAssistantId = thread?.assistantId
+        if (needsScope) resolvedScopeBucketId = thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
       }
       const config = await invoke('config:get')
       loadedProjectEnabled = config.memory.enabled
@@ -581,15 +593,31 @@
         const scopes = value as MemoryScope[]
         const location = locationForScopeChange(
           scopes,
-          { projectId: entry.projectId, threadId: entry.threadId, assistantId: entry.assistantId },
+          {
+            projectId: entry.projectId,
+            scopeBucketId: entry.scopeBucketId,
+            threadId: entry.threadId,
+            assistantId: entry.assistantId
+          },
           surfaceContext
         )
         return {
           ...entry,
           scopes,
           projectId: location.projectId,
+          scopeBucketId: location.scopeBucketId,
           threadId: location.threadId,
           assistantId: location.assistantId,
+          updatedAt: Date.now()
+        }
+      }
+      // A scope belongs to one project, so moving the entry to another project
+      // drops the bucket instead of carrying a foreign id into this project's file.
+      if (field === 'projectId' && value !== entry.projectId) {
+        return {
+          ...entry,
+          projectId: value as string,
+          scopeBucketId: undefined,
           updatedAt: Date.now()
         }
       }
@@ -648,6 +676,18 @@
     return memoryScopeOptions.isLoading(entryThreadProjectId(entry))
   }
 
+  /** The feature scopes offered to a scope-scoped entry. */
+  function scopeBucketsFor(entry: MemoryEntry): ScopeBucket[] {
+    if (locationScopeOf(entry.scopes) !== 'scope') return []
+    return memoryScopeOptions.bucketsFor(entry.projectId ?? projectId)
+  }
+
+  function scopeBucketsLoadingFor(entry: MemoryEntry): boolean {
+    if (locationScopeOf(entry.scopes) !== 'scope') return false
+    const target = entry.projectId ?? projectId
+    return Boolean(target) && scopeBucketsFor(entry).length === 0
+  }
+
   function showActive(): void {
     if (variant === 'settings') settingsSection = 'active'
     else activeSection = 'active'
@@ -661,31 +701,59 @@
     activeSection = 'proposed'
   }
 
-  /** Within a container, only the conversation's own file needs re-reading. */
+  /**
+   * Switch conversations inside one container.
+   *
+   * The project file is re-read on the project surface as well as the thread
+   * file, because a feature-scope memory lives there and which of its entries
+   * apply depends on the bucket the new thread belongs to, not on the thread
+   * file. Every re-read entry is filtered by the same visibility rule the panel
+   * shows with, so another scope's memory can never leak into this view.
+   */
   async function loadThreadEntries(contextKey: string): Promise<void> {
     const project = projectId
-    const thread = threadId
-    if (!project || !thread) return
+    const containerThread = threadId
+    if (!project || !containerThread) return
     const request = ++loadRequest
     loading = true
     error = ''
     try {
-      const threadEntries = await invoke('memory:getEntries', project, thread)
+      const isProjectSurface = surface === 'sidebar-projects'
+      const [thread, projectEntries, threadEntries] = await Promise.all([
+        isProjectSurface
+          ? invoke('thread:get', project, containerThread)
+          : Promise.resolve(undefined),
+        isProjectSurface
+          ? invoke('memory:getEntries', project)
+          : Promise.resolve<MemoryEntry[]>([]),
+        invoke('memory:getEntries', project, containerThread)
+      ])
       if (request !== loadRequest || contextKey !== currentContextKey()) return
-      const isConversationMemory = (entry: MemoryEntry): boolean => {
+      const scopeBucketId = isProjectSurface
+        ? (thread?.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+        : undefined
+      if (isProjectSurface) resolvedScopeBucketId = scopeBucketId
+      const nextContext: MemorySurfaceContext = {
+        surface,
+        projectId: project,
+        scopeBucketId,
+        threadId: containerThread,
+        assistantId: effectiveAssistantId
+      }
+      const reReadLocations = isProjectSurface
+        ? new Set<MemoryScope>(['project', 'scope', 'thread', 'task'])
+        : new Set<MemoryScope>(['thread', 'task'])
+      const isReRead = (entry: MemoryEntry): boolean => {
         const location = locationScopeOf(entry.scopes)
-        return location === 'thread' || location === 'task'
+        return location !== null && reReadLocations.has(location)
       }
       const nextBaseline = [
-        ...loadedEntries.filter((entry) => !isConversationMemory(entry)),
-        ...threadEntries
+        ...loadedEntries.filter((entry) => !isReRead(entry)),
+        ...projectEntries.filter((entry) => entryVisibleOnSurface(entry, nextContext)),
+        ...threadEntries.filter((entry) => entryVisibleOnSurface(entry, nextContext))
       ]
       const draft = restoreMemoryDraft(contextKey, nextBaseline)
-      entries =
-        draft?.entries ??
-        [...entries.filter((entry) => !isConversationMemory(entry)), ...threadEntries].sort(
-          (a, b) => b.updatedAt - a.updatedAt
-        )
+      entries = draft?.entries ?? [...nextBaseline].sort((a, b) => b.updatedAt - a.updatedAt)
       loadedEntries = nextBaseline
       lastAddedId = draft?.expandedId ?? null
       loadedContextKey = contextKey
@@ -714,15 +782,20 @@
 
   $effect(loadForContext)
 
-  /** Keep the Thread picker's list warm for the projects an entry can choose. */
+  /** Keep the Thread and Scope pickers' lists warm for the projects an entry can choose. */
   function warmThreadPickers(): void {
     if (surface !== 'sidebar-projects') return
-    // `ensureThreads` dedupes in-flight loads and caches per project, so asking
-    // once per entry is cheap and needs no local bookkeeping.
+    // `ensureThreads` and `ensureBuckets` dedupe in-flight loads and cache per
+    // project, so asking once per entry is cheap and needs no local bookkeeping.
     if (projectId) void memoryScopeOptions.ensureThreads(projectId)
+    if (projectId) void memoryScopeOptions.ensureBuckets(projectId)
     for (const entry of entries) {
-      if (locationScopeOf(entry.scopes) !== 'thread') continue
-      void memoryScopeOptions.ensureThreads(entryThreadProjectId(entry))
+      if (locationScopeOf(entry.scopes) === 'thread') {
+        void memoryScopeOptions.ensureThreads(entryThreadProjectId(entry))
+      }
+      if (locationScopeOf(entry.scopes) === 'scope') {
+        void memoryScopeOptions.ensureBuckets(entry.projectId ?? projectId)
+      }
     }
   }
 
@@ -1038,6 +1111,8 @@
             projects={pickerProjects}
             threads={threadsForEntry(entry)}
             threadsLoading={threadsLoadingForEntry(entry)}
+            scopeBuckets={scopeBucketsFor(entry)}
+            scopeBucketsLoading={scopeBucketsLoadingFor(entry)}
             assistants={memoryScopeOptions.assistants}
             assistantIconUrls={memoryScopeOptions.assistantIconUrls}
             initiallyExpanded={entry.id === lastAddedId}

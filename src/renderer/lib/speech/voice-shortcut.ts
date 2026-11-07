@@ -6,7 +6,7 @@ import {
   normalizeVoiceRecordingShortcut,
   type VoiceRecordingShortcut
 } from '../../../lib/speech/types'
-import { triggerPreferredVoiceHost } from './voice-trigger-registry'
+import { armPreferredVoiceHost, triggerPreferredVoiceHost } from './voice-trigger-registry'
 
 /** How quickly the double-tap variant must be repeated to fire. */
 const DOUBLE_TAP_WINDOW_MS = 500
@@ -92,6 +92,11 @@ const handleKeydown = (event: KeyboardEvent): void => {
     }
     return
   }
+
+  // The gesture is a recording one: open the microphone now, so the press that
+  // actually starts the take never waits for CoreAudio. It is a no-op once the
+  // recorder is already armed or recording.
+  armPreferredVoiceHost()
 
   if (binding.doubleTap && MODIFIER_KEY_CODES.has(binding.code)) {
     // Keep a lone modifier press from moving focus (menu bar on Windows/Linux).

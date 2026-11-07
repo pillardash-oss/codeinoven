@@ -1,9 +1,11 @@
-import type { ScopeSlice } from './scope'
+import type { BoundScopeRebind, ScopeSlice } from './scope'
+import type { ScopeWorktreeHealthCategory } from './scope-worktree'
 import type { AuthoredWorkKind } from '../ipc/design'
 import type { ThreadSettings } from './agent'
 import { workerReportsToCoordinator } from './agent'
 import type { ThreadContextUsage } from './usage'
 import type { AssistantSchedule } from './schedule'
+import type { RunBaseRecord } from './receipt'
 import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from './project'
 
 /** Placeholder title for threads that have not been auto-titled yet. */
@@ -33,6 +35,58 @@ export function scopeSliceForStatus(status: ThreadStatus): ScopeSlice {
 }
 
 export type ThreadTitleSource = 'default' | 'auto' | 'manual'
+
+/**
+ * The project scope a thread runs in, when that differs from its home.
+ *
+ * The definition lives beside `ScopeTarget`, because it is the same pair; this
+ * alias only keeps the name earlier call sites imported.
+ */
+export type ThreadBoundScope = BoundScopeRebind
+
+/**
+ * The assistant that dispatched a project thread into existence, recorded once
+ * when the dispatch is accepted.
+ *
+ * The project board is where an orchestrated run actually lands, and its row
+ * states origin from this record rather than from a colour or an inferred
+ * status. Written once and never rewritten by a later run, so a thread cannot
+ * drift away from the dispatch that created it.
+ */
+export interface ThreadDispatchOrigin {
+  /** Assistant whose turn made the dispatch, when an assistant made it. */
+  assistantId?: string
+  assistantName?: string
+  initiatorProjectId: string
+  initiatorThreadId: string
+  at: number
+}
+
+/**
+ * Why a run was parked instead of started.
+ *
+ * Typed rather than a string so the row and the receipt can offer the exact
+ * repair the app already guides (`isScopeWorktreeHealthRepairable`) instead of
+ * matching prose. `message` is the guidance string main already produces, kept
+ * so a surface that can only render text still tells the user what to do.
+ */
+export interface ThreadParkReason {
+  category: ScopeWorktreeHealthCategory
+  message: string
+  projectId: string
+  scopeBucketId: string
+}
+
+/**
+ * The answer to a scope change: the moved thread, or the sentence explaining
+ * why the app refused to move it.
+ *
+ * A refusal travels as data rather than as a rejected invoke, because Electron
+ * logs every rejected `ipcMain.handle` call and refusing a move into a working
+ * worktree thread is user feedback, not an app failure. The renderer toasts the
+ * sentence and nothing reaches a log.
+ */
+export type ThreadScopeMoveResult = { ok: true; thread: Thread } | { ok: false; refusal: string }
 
 export interface Thread {
   id: string
@@ -85,6 +139,32 @@ export interface Thread {
   authoredWorkKinds?: AuthoredWorkKind[]
   /** User-defined feature bucket used by the project's Scope board. */
   scopeBucketId?: string
+  /**
+   * The project scope this thread actually works in, when it works in a real
+   * checkout that is not its home.
+   *
+   * `projectId` answers two questions at once, and this field separates them.
+   * Home (where the thread appears) stays `projectId`; workspace (which
+   * checkout the session runs in, what the file tree mounts, what Changes and
+   * Git read) becomes this. An assistant task bound to a project carries both.
+   *
+   * Absent keeps today's behaviour exactly: the home container's own
+   * app-storage directory (`assistant-cwd/<assistantId>`, `chats-cwd/<threadId>`,
+   * `browser-cwd/<threadId>`), or the project root for a real project thread.
+   * Assistant-space only: a project thread already names its own scope.
+   */
+  boundScope?: BoundScopeRebind
+  /**
+   * The commit a run started from, recorded once when the run begins so its
+   * receipt answers "what did this run do" rather than "what is in this
+   * checkout now". Absent means no base was ever recorded, which the receipt
+   * reports instead of borrowing today's state.
+   */
+  runBase?: RunBaseRecord
+  /** Assistant origin of an orchestrated dispatch, written once at creation. */
+  dispatchOrigin?: ThreadDispatchOrigin
+  /** Set while a run is parked on its bound scope's health; cleared on repair. */
+  parkReason?: ThreadParkReason
   /** Per-thread agent configuration (harness, model, thinking, permissions). */
   settings?: ThreadSettings
   /** Distinct agent harnesses used across this thread's session, newest first. */
@@ -288,6 +368,42 @@ export function isOrchestrationChildThread(
   )
 }
 
+/**
+ * Whether a thread is a pawn agent, and optionally one spawned by a given
+ * thread.
+ *
+ * A pawn is the app's agent-owned worker thread: it carries its spawner in
+ * `coordinatorThreadId` and no Assignment or Achievement role, which is what
+ * tells it apart from an orchestration worker of those workflows. The user's
+ * threads never carry a coordinator, so this predicate is what every surface
+ * reads when it has to know "this thread owns pawn agents" or "this thread IS a
+ * pawn agent".
+ *
+ * Input lock is part of the identity, not decoration. A pawn refuses user-origin
+ * prompts, and it is the one field an Assignment worker never carries: older
+ * worker rows lost their `assignmentRole`/`assignmentId` (partial writes, a
+ * version before roles existed) while keeping the coordinator, and without the
+ * lock those orphans read as pawns on every board that lists them.
+ */
+export function isPawnWorkerThread(
+  thread: Pick<
+    Thread,
+    | 'coordinatorThreadId'
+    | 'assignmentRole'
+    | 'achievementRole'
+    | 'assignmentId'
+    | 'userInputLocked'
+  >,
+  spawnerThreadId?: string
+): boolean {
+  const spawner = thread.coordinatorThreadId
+  if (spawner === undefined) return false
+  if (spawnerThreadId !== undefined && spawner !== spawnerThreadId) return false
+  if (thread.userInputLocked !== true) return false
+  if (thread.assignmentRole !== undefined || thread.achievementRole !== undefined) return false
+  return thread.assignmentId === undefined
+}
+
 /** A harness is actively producing work for this persisted thread. */
 export function isThreadWorking(thread: Thread): boolean {
   return isThreadExecutionActiveStatus(thread.status)
@@ -362,20 +478,28 @@ export function coordinatorHasActiveDelegates(
   // though its parent is a plain thread without a coordinator role: the parent
   // row must still pulse while that auditor works.
   const isIndependentAuditParent = coordinator.independentAudit === true
-  if (!isOrchestrationCoordinator && !isIndependentAuditParent) {
-    return false
+  if (
+    (isOrchestrationCoordinator || isIndependentAuditParent) &&
+    coordinator.auditState === 'running'
+  ) {
+    return true
   }
-  if (coordinator.auditState === 'running') return true
-  return threads.some(
-    (candidate) =>
-      candidate.id !== coordinator.id &&
-      isThreadWorking(candidate) &&
-      (candidate.coordinatorThreadId === coordinator.id ||
-        coordinator.auditorThreadId === candidate.id ||
-        (coordinator.assignmentId !== undefined &&
-          candidate.assignmentId === coordinator.assignmentId &&
-          isOrchestrationChildThread(candidate)))
-  )
+  // A pawn agent is a thread of its own, so the thread that spawned it has
+  // delegated work running even though its own harness turn is idle between
+  // hand-offs. That is every thread's rule, not only a coordinator's: any thread
+  // can own pawns.
+  return threads.some((candidate) => {
+    if (candidate.id === coordinator.id || !isThreadWorking(candidate)) return false
+    if (isPawnWorkerThread(candidate, coordinator.id)) return true
+    if (!isOrchestrationCoordinator && !isIndependentAuditParent) return false
+    return (
+      candidate.coordinatorThreadId === coordinator.id ||
+      coordinator.auditorThreadId === candidate.id ||
+      (coordinator.assignmentId !== undefined &&
+        candidate.assignmentId === coordinator.assignmentId &&
+        isOrchestrationChildThread(candidate))
+    )
+  })
 }
 
 /**
@@ -420,6 +544,12 @@ export interface CreateThreadInput {
   assistantGettingStarted?: boolean
   /** Set when creating a run thread: the assistant task it runs. */
   assistantTaskId?: string
+  /** Project scope this thread works in when it is not its home container. */
+  boundScope?: BoundScopeRebind
+  /** Commit the run starts from, recorded once by whoever starts it. */
+  runBase?: RunBaseRecord
+  /** Assistant origin of an orchestrated dispatch, written once at creation. */
+  dispatchOrigin?: ThreadDispatchOrigin
 }
 
 /** Where a thread search match was found. */

@@ -66,6 +66,7 @@
   import { DropdownMenu } from 'bits-ui'
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
+  import DisplaySourceIcon from '../display/DisplaySourceIcon.svelte'
 
   const failedPopupIcons = new SvelteSet<string>()
 
@@ -103,6 +104,8 @@
      *  "+"; temporary chats are tabbed but are only ever opened from a thread. */
     onNewTerminal?: () => void
     onNewBrowser?: () => void
+    /** Open another display tab, which starts as the target chooser. */
+    onNewDisplay?: () => void
     /** Close all visible popup windows, including extension action pages. */
     onClosePopups?: () => void
     /**
@@ -137,6 +140,7 @@
     onTerminalDockToggle,
     onNewTerminal,
     onNewBrowser,
+    onNewDisplay,
     onClosePopups,
     tabPresentation
   }: Props = $props()
@@ -188,7 +192,8 @@
     'temporary-chat',
     'browser-agent',
     'subagent',
-    'popup-window'
+    'popup-window',
+    'display'
   ])
 
   // These tools are opened and closed from their own rail icon, and each one
@@ -273,6 +278,9 @@
   )
   /** Terminals alone own the placement toggle, fullscreen and the "+". */
   let terminalMode = $derived(activeTab?.kind === 'terminal')
+  /** A display tab is a preview: it owns the "+" that opens another target and
+   *  the fullscreen a phone-sized picture needs on a dock-sized panel. */
+  let displayMode = $derived(activeTab?.kind === 'display')
   let browserMode = $derived(activeTab?.kind === 'browser')
   /** A popup window's page. Its tabs are the windows the page opened, so the tool
    *  is tabbed like a terminal and still owns a close-all control of its own. */
@@ -293,6 +301,7 @@
    *  rendering it anyway would leave a stray divider on the right edge. */
   let showHeaderControls = $derived(
     terminalMode ||
+      displayMode ||
       browserMode ||
       popupMode ||
       (activeTab !== null && !tabbedMode && !RAIL_DISMISSED_KINDS.has(activeTab.kind))
@@ -467,6 +476,12 @@
       <CioDiff size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'terminal'}
       <CioTerminal size={ICON_SIZE.row} class="shrink-0" />
+    {:else if tab.kind === 'display'}
+      {#if tab.iconUrl}
+        <img src={tab.iconUrl} alt="" class="h-3 w-3 shrink-0 object-contain" aria-hidden="true" />
+      {:else}
+        <DisplaySourceIcon kind={tab.sourceKind} size={ICON_SIZE.row} class="shrink-0" />
+      {/if}
     {:else if tab.kind === 'actions'}
       <CioActions size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'browser'}
@@ -767,6 +782,25 @@
                 <CioPlus size={13} />
               </button>
             {/if}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Fullscreen"
+              title="Fullscreen"
+              onclick={() => activeTabId && onFullscreenTab?.(activeTabId)}
+            >
+              <CioMaximize size={13} />
+            </button>
+          {:else if displayMode}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Mirror another target"
+              title="Mirror another target"
+              onclick={() => onNewDisplay?.()}
+            >
+              <CioPlus size={13} />
+            </button>
             <button
               type="button"
               class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"

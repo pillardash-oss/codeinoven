@@ -1,0 +1,1311 @@
+/* The composer, its menus and the shoe under it.
+
+   Every value here is the design's own, held at phone width: the field with its
+   prompt gutter, the toolbar that carries the plus menu, the permission level,
+   the model with its thinking and account chips, the microphone and the send
+   plate, and the shoe that states where the message runs and what the context
+   has left. The desktop's composer is the same object, so a control reads the
+   same on both clients. */
+
+.composer-box {
+  position: relative;
+  /* The composer is its own container: the toolbar's narrow tier is measured
+     against the composer, exactly as the app measures it, so the phone frame
+     reads the same at any window width. */
+  container: composer / inline-size;
+  z-index: 1;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  transition:
+    border-color 160ms ease-out,
+    box-shadow 420ms ease-out;
+}
+
+.composer-box:focus-within {
+  /* The app's own focus: one step of border and a soft lift, never a hard ring. */
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0.5rem 1.5rem -0.75rem rgba(0, 0, 0, 0.18);
+}
+
+.queue-wrap + .composer-box {
+  border-top: 0;
+}
+
+/* The field keeps a gutter on its left, the way the app's editor does: the prompt
+   marker lives in it, every wrapped line clears it, and the compose control sits
+   under the marker without ever covering the writing. */
+.composer-field {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  padding: 0.75rem 0.75rem 0.375rem;
+}
+
+.composer-prompt {
+  position: absolute;
+  top: 0.75rem;
+  left: 0.5rem;
+  font-weight: 700;
+  line-height: 1.25rem;
+  color: var(--color-accent-hover);
+  opacity: 0.55;
+  pointer-events: none;
+  transition:
+    opacity 220ms ease,
+    transform 220ms ease;
+}
+
+.composer-box:focus-within .composer-prompt {
+  opacity: 1;
+  transform: translateX(0.125rem);
+}
+
+.composer-field textarea {
+  flex: 1 1 auto;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 2.5rem;
+  max-height: 10rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 0 0 1.375rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  /* 16px on the field, never below it: iOS zooms the page when a focused field
+     is smaller, and that zoom is the most disruptive thing a phone composer does. */
+  font-size: 1rem;
+  line-height: 1.25rem;
+  resize: none;
+  outline: none;
+}
+
+.composer-field textarea::placeholder {
+  color: var(--ink-meta);
+}
+
+/* The attachments this message carries: the field's own row, so the files belong
+   to the box being written rather than to a second panel above it. */
+.composer-files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0.5rem 0.75rem 0;
+}
+
+.file-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 100%;
+  padding: 0.125rem 0.25rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-elevated);
+  color: var(--color-muted);
+  font-size: 0.6875rem;
+}
+
+.file-chip svg {
+  flex: none;
+  width: 0.6875rem;
+  height: 0.6875rem;
+  color: var(--color-dimmed);
+}
+
+.file-chip .file-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-chip.pending {
+  color: var(--ink-meta);
+  font-style: italic;
+}
+
+.file-drop {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-meta);
+  cursor: pointer;
+}
+
+.file-drop:hover {
+  background: var(--color-overlay);
+  color: var(--color-foreground);
+}
+
+.file-drop svg {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+/* A failed write is a line of its own, above the toolbar, because it is news
+   about the last action rather than part of the row the person is reading. */
+.composer-error {
+  margin: 0;
+  padding: 0 0.75rem 0.25rem;
+  color: var(--color-danger);
+  font-size: 0.6875rem;
+  line-height: 1.25rem;
+}
+
+/* The toolbar: + menu, permission, model and thinking, then voice and send. It
+   is separated by the same dashed rule the app draws under its editor. */
+.composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.125rem;
+  padding: 0.25rem 0.375rem 0.375rem;
+  border-top: 1px dashed var(--color-border-strong);
+}
+
+.cpanel-holder {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Permission and the model group travel together on the left, with the app's own
+   gap-3 between them. */
+.toolbar-group {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+/* Everything after this is pinned right: the mic and the send never ride on the
+   model picker, they sit at the far end of the row. */
+.toolbar-spacer {
+  flex: 1 1 auto;
+  min-width: 0.25rem;
+}
+
+.tool-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+  transition:
+    background 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.tool-btn:hover,
+.tool-btn[aria-expanded='true'] {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.tool-btn svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+  transition: transform 180ms ease-out;
+}
+
+.tool-btn[aria-expanded='true'] svg {
+  transform: rotate(45deg);
+}
+
+/* Full access is the one level that states itself in warning ink, and it is the
+   control the menu drops out of: the panel is anchored to this button. */
+.perm-btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 2rem;
+  min-width: 0;
+  padding: 0 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-warning);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 120ms ease-out;
+}
+
+.perm-btn:hover,
+.perm-btn[aria-expanded='true'] {
+  background: var(--color-elevated);
+}
+
+.perm-btn[data-level='auto_review'] {
+  color: var(--color-muted);
+  font-weight: 500;
+}
+
+.perm-btn svg {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+/* At phone width the permission label drops out and the shield stays: the app's
+   own narrow tier gives the room to the model, which is the fact the user reads
+   on every message. The level is still stated by the icon's ink and its title,
+   and the menu states it in words. */
+@container composer (max-width: 32.5rem) {
+  .perm-btn span,
+  .account-chip span {
+    display: none;
+  }
+
+  .perm-btn,
+  .account-chip {
+    padding: 0 0.375rem;
+  }
+
+  .account-chip {
+    margin-right: 0.125rem;
+  }
+}
+
+/* The model the message runs on, with its thinking level beside it as the small
+   chip the app draws: the chip is a separate control and its own menu. */
+.model-btn {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 2rem;
+  min-width: 0;
+  padding: 0 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.6875rem;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease-out;
+}
+
+.model-btn:hover,
+.model-btn[aria-expanded='true'] {
+  background: var(--color-elevated);
+}
+
+.model-btn .vendor-mark {
+  flex: none;
+  color: var(--color-muted);
+}
+
+.model-btn span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.think-chip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.375rem;
+  padding: 0 0.375rem;
+  border: 0;
+  background: var(--color-elevated);
+  color: var(--ink-meta);
+  font: inherit;
+  font-size: 0.625rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.think-chip:hover,
+.think-chip[aria-expanded='true'] {
+  background: var(--color-overlay);
+  color: var(--color-foreground);
+}
+
+.think-chip svg {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+/* The account chip the picker carries beside the thinking chip. */
+.account-chip {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.375rem;
+  min-width: 0;
+  margin-right: 0.25rem;
+  padding: 0 0.375rem;
+  border: 0;
+  background: var(--color-elevated);
+  color: var(--ink-meta);
+  font: inherit;
+  font-size: 0.625rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.account-chip:hover,
+.account-chip[aria-expanded='true'] {
+  background: var(--color-overlay);
+  color: var(--color-foreground);
+}
+
+.account-chip svg {
+  flex: none;
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+.account-chip span {
+  min-width: 0;
+  max-width: 5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Send / voice: the two trailing controls of the row. */
+.composer-toolbar > .tool-btn,
+.composer-toolbar > .send {
+  margin-left: 0.25rem;
+}
+
+/* The send control only exists once there is something to send: it widens out of
+   the row and fades in, so the mic slides instead of the row snapping. */
+.send {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 0;
+  min-width: 0;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  background: var(--color-accent);
+  color: var(--color-on-accent);
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  cursor: pointer;
+  transition:
+    width 200ms cubic-bezier(0.215, 0.61, 0.355, 1),
+    opacity 150ms ease-out,
+    background 140ms ease-out;
+}
+
+.composer-box[data-has-text='true'] .send {
+  width: 2rem;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.send:hover {
+  background: var(--color-accent-hover);
+}
+
+.send svg {
+  width: 0.9375rem;
+  height: 0.9375rem;
+}
+
+/* ---- The compose control ----
+   The app grows the field once the writing passes two lines, and this is how the
+   user asks for it: it sits in the gutter under the prompt, grows the editor to
+   the app's expanded height and lets the box take the pane's width. */
+.composer-expand {
+  position: absolute;
+  top: 2.5rem;
+  left: 0.375rem;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-meta);
+  cursor: pointer;
+  transition:
+    background 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.composer-expand:hover {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+/* The two marks share one box and crossfade, so expanding reads as one gesture
+   becoming its inverse rather than as an icon being swapped. */
+.expand-glyphs {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.composer-expand svg {
+  position: absolute;
+  inset: 0;
+  width: 0.875rem;
+  height: 0.875rem;
+  transition:
+    opacity 140ms ease-out,
+    transform 180ms ease-out;
+}
+
+.composer-expand .g-min {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
+.composer-box[data-expanded='true'] .composer-expand .g-max {
+  opacity: 0;
+  transform: scale(0.6);
+}
+
+.composer-box[data-expanded='true'] .composer-expand .g-min {
+  opacity: 1;
+  transform: none;
+}
+
+/* Expanded, the field takes the app's expanded floor and cap, and the box grows
+   into the pane's own gutter. The phone's width is the ceiling, so the extra room
+   goes where a phone can spend it: upward. */
+.composer-box[data-expanded='true'] {
+  margin-inline: -0.75rem;
+}
+
+.composer-box[data-expanded='true'] .composer-field textarea {
+  min-height: 10rem;
+  max-height: min(30rem, 60dvh);
+}
+
+/* ---- The composer's menus ----
+   Every panel is anchored to the control that owns it and opens upward, clear of
+   the field: the plus menu in the app's own 15rem, the permission menu in its
+   narrow 9rem, the model picker in its 18rem with the rail the product draws
+   beside the list. */
+.cpanel-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.125rem;
+  padding: 0.375rem 0.625rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cpanel-switch[aria-checked='true'] {
+  color: var(--color-foreground);
+}
+
+.cpanel-switch:hover {
+  background: var(--color-elevated);
+}
+
+.cpanel-switch .ms-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cpanel-switch .ms-name svg {
+  flex: none;
+  width: 0.8125rem;
+  height: 0.8125rem;
+  color: var(--color-dimmed);
+}
+
+.cpanel-switch[aria-checked='true'] .ms-name svg {
+  color: var(--color-info);
+}
+
+/* The switch inside a menu row is the app's track at menu scale. */
+.cpanel-switch .sw {
+  position: relative;
+  flex: none;
+  width: 1.75rem;
+  height: 1rem;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-app);
+}
+
+.cpanel-switch .sw::after {
+  content: '';
+  position: absolute;
+  top: 0.0938rem;
+  left: 0.0938rem;
+  width: 0.8125rem;
+  height: 0.8125rem;
+  background: var(--color-muted);
+  transition:
+    transform 160ms ease-out,
+    background 160ms ease-out;
+}
+
+.cpanel-switch[aria-checked='true'] .sw::after {
+  background: var(--color-foreground);
+  transform: translateX(0.75rem);
+}
+
+.cpanel-sep {
+  margin: 0.25rem 0.5rem;
+  border-top: 1px solid var(--color-border);
+}
+
+.cpanel-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.125rem;
+  padding: 0.375rem 0.625rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.cpanel-item:hover {
+  background: var(--color-elevated);
+}
+
+.cpanel-item:disabled {
+  color: var(--ink-meta);
+  cursor: default;
+}
+
+.cpanel-item svg {
+  flex: none;
+  width: 0.8125rem;
+  height: 0.8125rem;
+  color: var(--color-dimmed);
+}
+
+.cpanel-caption {
+  margin: 0;
+  padding: 0.375rem 0.5rem;
+  font-size: 0.6875rem;
+  color: var(--ink-meta);
+}
+
+.plus-menu {
+  width: 15rem;
+  padding: 0.25rem;
+}
+
+/* The permission panel: two levels, the one in force stated in the row itself. */
+.perm-menu {
+  width: 9.5rem;
+  padding: 0.25rem;
+}
+
+.perm-menu button {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 1.875rem;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.perm-menu button:hover {
+  background: var(--color-elevated);
+}
+
+.perm-menu button svg {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.perm-menu button svg.info {
+  color: var(--color-info);
+}
+
+.perm-menu button svg.warn {
+  color: var(--color-warning);
+}
+
+.perm-menu button[aria-checked='true'] {
+  color: var(--color-foreground);
+  font-weight: 600;
+}
+
+.perm-menu button[aria-checked='true'][data-level='full_access'] {
+  color: var(--color-warning);
+  font-weight: 700;
+}
+
+/* ---- The model picker ----
+   The app's picker, at the width it is drawn: a section rail, a search row and
+   the grouped model list. */
+.model-menu {
+  display: flex;
+  width: 18rem;
+  max-width: calc(100vw - 1.5rem);
+  max-height: 22.75rem;
+  overflow: hidden;
+}
+
+.model-rail {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  width: 2.5rem;
+  padding: 0.5rem 0;
+  border-right: 1px solid var(--color-border);
+}
+
+.model-rail button {
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+.model-rail button:hover,
+.model-rail button[aria-current='true'] {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.model-rail button svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.model-rail .rail-sep {
+  width: 1.25rem;
+  margin: 0.25rem 0;
+  border-top: 1px solid var(--color-border);
+}
+
+.model-col {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.model-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.625rem;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.model-search > svg {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--ink-meta);
+}
+
+.model-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  outline: none;
+}
+
+.model-search input::placeholder {
+  color: var(--ink-meta);
+}
+
+.model-search button {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-meta);
+  cursor: pointer;
+}
+
+.model-search button svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.model-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.25rem;
+  overscroll-behavior: contain;
+}
+
+.model-section {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0.375rem 0.5rem 0.25rem;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-meta);
+}
+
+.model-section .n {
+  font-weight: 400;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.model-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.model-item:hover {
+  background: var(--color-elevated);
+}
+
+.model-item .mi-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-item.is-selected .mi-name {
+  color: var(--color-primary);
+}
+
+.model-item .mi-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--color-muted);
+}
+
+.model-item .mi-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--color-primary);
+}
+
+/* The account panel is the picker's own: a narrow list of the account this phone
+   runs as, the one in force checked and marked the default. */
+.account-menu {
+  right: 0;
+  left: auto;
+  width: 13rem;
+  padding: 0.25rem;
+}
+
+.account-item {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  width: 100%;
+  min-height: 1.875rem;
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.account-item:hover {
+  background: var(--color-elevated);
+}
+
+.account-item[aria-checked='true'] {
+  color: var(--color-primary);
+}
+
+.account-item .ac-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 0.6875rem;
+  height: 0.6875rem;
+  color: var(--color-primary);
+}
+
+.account-item .ac-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-item .ac-badge {
+  flex: none;
+  padding: 0 0.1875rem;
+  background: var(--color-elevated);
+  color: var(--color-muted);
+  font-size: 0.625rem;
+  font-weight: 500;
+}
+
+/* The thinking presets are the app's own seven, in its order. The panel takes
+   the chip's right edge rather than the model control's left one. */
+.think-menu {
+  right: 0;
+  left: auto;
+  width: 13rem;
+  padding: 0.25rem;
+}
+
+.think-menu button {
+  width: 100%;
+  padding: 0.375rem 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.think-menu button:hover {
+  background: var(--color-elevated);
+}
+
+.think-menu button[aria-checked='true'] {
+  color: var(--color-primary);
+}
+
+/* ---- The shoe ----
+   The line under the composer that states what the message writes into and what
+   the window has left: the scope, the Oven and the meter. The card hugs its
+   segments and sits centred under the composer. */
+.composer-shoe {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  z-index: 3;
+  padding: 0.25rem 0.25rem 0.25rem;
+}
+
+.composer-shoe-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.0625rem;
+  width: max-content;
+  max-width: 100%;
+  padding: 0.0625rem 0.125rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  box-shadow: 0 0.5rem 1.25rem -0.875rem rgba(0, 0, 0, 0.4);
+}
+
+.shoe-seg {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  height: 1.5rem;
+  min-width: 0;
+  flex: 0 0 auto;
+  padding: 0 0.1875rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.6875rem;
+  cursor: pointer;
+  transition:
+    background 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.shoe-seg:hover {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.shoe-scope {
+  cursor: default;
+}
+
+.shoe-seg svg {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+  color: var(--color-dimmed);
+}
+
+.shoe-seg span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shoe-sep {
+  flex: none;
+  width: 1px;
+  height: 0.75rem;
+  margin: 0 0.25rem;
+  background: var(--color-border-strong);
+}
+
+/* The oven segment names where the work runs, with the picker's short chevron so
+   it reads as a control rather than as a fact. */
+.shoe-oven .chev {
+  flex: none;
+  display: grid;
+  place-items: center;
+  color: var(--color-dimmed);
+  transition: transform 200ms ease-out;
+}
+
+.shoe-oven .chev svg {
+  width: 0.6875rem;
+  height: 0.6875rem;
+}
+
+.shoe-oven[aria-expanded='true'] .chev {
+  transform: rotate(180deg);
+}
+
+/* Panels raised from the shoe measure against the shoe itself, so a picker that
+   is wider than its segment still stays inside the phone. */
+.composer-shoe .cpanel-holder {
+  position: static;
+}
+
+/* The Oven picker: the app's shell over its segment, with a search row and one row
+   per Oven, centred on the bar it drops out of. */
+.oven-menu {
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  width: 18rem;
+  max-width: calc(100vw - 1.5rem);
+  padding: 0.375rem;
+}
+
+.oven-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.375rem 0.625rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-elevated);
+}
+
+.oven-search > svg {
+  flex: none;
+  width: 0.8125rem;
+  height: 0.8125rem;
+  color: var(--ink-meta);
+}
+
+.oven-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  outline: none;
+}
+
+.oven-search input::placeholder {
+  color: var(--ink-meta);
+}
+
+.oven-list {
+  max-height: 15rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.oven-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.375rem 0.625rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.oven-item:hover {
+  background: var(--color-elevated);
+}
+
+.oven-item[aria-checked='true'] {
+  color: var(--color-primary);
+}
+
+.oven-item > svg {
+  flex: none;
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.oven-item .ov-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.oven-item .ov-tag {
+  flex: none;
+  font-size: 0.625rem;
+  color: var(--ink-meta);
+}
+
+/* The meter: four cells that fill upward, then the exact reading. */
+.meter {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.5rem;
+  padding: 0 0.375rem;
+  border: 0;
+  background: transparent;
+  color: var(--color-muted);
+  font: inherit;
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition:
+    background 120ms ease-out,
+    color 120ms ease-out;
+}
+
+.meter:hover,
+.meter[aria-expanded='true'] {
+  background: var(--color-elevated);
+  color: var(--color-foreground);
+}
+
+.meter .cells {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.meter .cells i {
+  display: block;
+  width: 0.5rem;
+  height: 0.1875rem;
+  background: var(--color-border-strong);
+}
+
+.meter[data-level='ok'] .cells i[data-fill='true'] {
+  background: var(--color-info);
+}
+
+.meter[data-level='warn'] .cells i[data-fill='true'] {
+  background: var(--color-warning);
+}
+
+.meter[data-level='danger'] .cells i[data-fill='true'] {
+  background: var(--color-danger);
+}
+
+/* The usage panel: the reading rung of the composer, in the app's own frame. It
+   belongs to the meter in the shoe, so it opens just above that line. */
+.usage-panel {
+  right: 0;
+  bottom: calc(100% - 0.25rem);
+  left: auto;
+  width: 15rem;
+  padding: 0.625rem;
+}
+
+.usage-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.usage-ring {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: 2px solid var(--color-info);
+  border-radius: 50%;
+  color: var(--color-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-ring small {
+  font-size: 0.5rem;
+  font-weight: 500;
+}
+
+.usage-head-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.usage-head-text b {
+  font-size: 0.625rem;
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.usage-head-text span {
+  font-size: 0.625rem;
+  color: var(--ink-meta);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-panel dl {
+  margin: 0.5rem 0 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--color-border);
+  background: var(--color-app);
+}
+
+.usage-panel dl div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.125rem 0;
+  font-size: 0.625rem;
+}
+
+.usage-panel dt {
+  color: var(--ink-meta);
+}
+
+.usage-panel dd {
+  margin: 0;
+  color: var(--color-foreground);
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-reset {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  width: 100%;
+  height: 1.5rem;
+  margin-top: 0.5rem;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-foreground);
+  font: inherit;
+  font-size: 0.625rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.usage-reset:hover {
+  background: var(--color-elevated);
+}
+
+.usage-reset:disabled {
+  color: var(--ink-meta);
+  cursor: default;
+}
+
+.usage-reset svg {
+  width: 0.6875rem;
+  height: 0.6875rem;
+}

@@ -25,7 +25,9 @@ import { Logger } from '../system/logger'
 import type { WindowStateService } from '../system/window-state'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import type { BootstrapState } from './bootstrap-state'
-import { flushSessionStorage } from './quit-lifecycle'
+import { armTeardownWatchdog, flushSessionStorage, TEARDOWN_GRACE_MS } from './quit-lifecycle'
+import { sharedLocalAiRuntimeRegistry } from '../local-ai/local-ai-runtime-registry'
+import { terminateQuitWorkers } from '../system/quit-worker-sweep'
 
 export interface ShutdownContext {
   state: BootstrapState
@@ -61,7 +63,9 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
-    state.ptyService?.destroyAll()
+    // Awaited so the quit does not race the hangup: a server that is only signalled
+    // as the process exits keeps its port after the app is gone.
+    await state.ptyService?.destroyAll()
   } catch (error) {
     Logger.error('PTY cleanup failed during shutdown:', error)
   }
@@ -103,6 +107,17 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
     state.assistantScheduler?.dispose()
   } catch (error) {
     Logger.error('Assistant scheduler cleanup failed during shutdown:', error)
+  }
+
+  try {
+    state.stopFollowUpOwnershipListener?.()
+    state.stopFollowUpOwnershipListener = null
+    state.followUpService?.dispose()
+    // A wake armed moments before the quit must reach the file, or the next
+    // launch has no idea the user was promised one.
+    await state.followUpService?.flush()
+  } catch (error) {
+    Logger.error('Follow-up scheduler cleanup failed during shutdown:', error)
   }
 
   try {
@@ -190,6 +205,13 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   }
 
   try {
+    const { disposeDisplayRuntime } = await import('../display/display-runtime')
+    await disposeDisplayRuntime()
+  } catch (error) {
+    Logger.error('Display preview cleanup failed during shutdown:', error)
+  }
+
+  try {
     ipcMain.removeHandler('prototypePreview:getOrigin')
     state.chatEngine?.setPrototypePreviewRegistrar(null)
     await state.prototypePreviewService?.dispose()
@@ -221,6 +243,15 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
     state.searchService = null
   } catch (error) {
     Logger.error('Search service cleanup failed during shutdown:', error)
+  }
+
+  try {
+    // Every local inference server the app spawned is journaled, and this is
+    // where the journal is drained: the registry ends each process it still owns
+    // instead of leaving it to a kill on the next launch.
+    await sharedLocalAiRuntimeRegistry().dispose()
+  } catch (error) {
+    Logger.error('Local AI runtime cleanup failed during shutdown:', error)
   }
 
   // A take-over pass must never start while the process is shutting down.
@@ -286,6 +317,16 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
   // chance to write. The will-quit handler flushes again as a final guard.
   flushSessionStorage()
 
+  // A job worker still running is a referenced handle: it keeps this process's
+  // event loop alive, so Node's exit waits for it, and one left behind here is a
+  // teardown that cannot finish. Bounded and best-effort; whatever still refuses
+  // to stop is covered by the teardown watchdog armed below.
+  try {
+    await terminateQuitWorkers()
+  } catch (error) {
+    Logger.error('Quit-time worker sweep failed:', error)
+  }
+
   // A packaged smoke run has already proven what it came for (a real window, a
   // rendered frame, hydration, the feature graph, and this disposal pipeline),
   // so it ends here instead of handing the last step to Electron. Electron's
@@ -300,5 +341,19 @@ export async function runShutdownPipeline(context: ShutdownContext): Promise<voi
     return
   }
 
+  // Everything this process owned has been disposed by the lines above. What is
+  // left is Electron's own exit: window and renderer destruction, session
+  // flushes, and finally Node's `Environment::RunCleanup`. No code in this file
+  // runs again, so the log gets its last line and the process gets its last
+  // deadline before the handover.
+  //
+  // That deadline is the point: a handle that never closes inside the teardown
+  // parks the main thread with no CPU use and no JavaScript left to recover,
+  // which is exactly what a hang report captured after this pipeline completed.
+  Logger.info('Shutdown pipeline complete   entering process teardown', {
+    graceMs: TEARDOWN_GRACE_MS
+  })
+  await Logger.flush()
+  armTeardownWatchdog(state)
   app.quit()
 }

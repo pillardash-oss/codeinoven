@@ -877,9 +877,20 @@ export class PiDriver extends PersistentCliDriver {
       this.subagentStreams.settleChildStreams(sessionId, 'aborted')
       return
     }
-    void client.setAutoRetry(false).catch((error: unknown) => {
+    // Disarm pi's automatic retry before the abort, and wait for the answer. A
+    // fire-and-forget disarm lost the race: pi retried the request the user was
+    // stopping, and that retry resumed the run as though no stop had been asked
+    // for. The wait is bounded so a wedged process cannot hold the stop behind
+    // the RPC timeout; a disarm that never confirms is still caught by the
+    // post-abort probe below, which treats a pending retry as a live run.
+    try {
+      await withTimeout(
+        client.setAutoRetry(false).then(() => true),
+        PI_ABORT_PROBE_TIMEOUT_MS
+      )
+    } catch (error) {
       Logger.dev('Pi auto-retry disarm after stop failed:', error)
-    })
+    }
     try {
       const answered = await withTimeout(
         client.abort().then(() => true),
@@ -951,7 +962,21 @@ export class PiDriver extends PersistentCliDriver {
       }
       // A probe that timed out (null) cannot confirm the run ended, so it keeps
       // waiting and terminates at the end of the grace window instead.
-      if (state && state['isStreaming'] !== true && state['isCompacting'] !== true) return
+      //
+      // Pi's provider retry is a gap in the stream, not in the turn: `get_state`
+      // reports neither streaming nor compacting while pi sleeps before retrying
+      // the aborted request, and the run resumes the moment that retry lands.
+      // Reading only pi's own state declared such a session stopped, so the stop
+      // returned while the harness kept working. The driver's retry flag is the
+      // one signal that the turn is still alive in that gap, and a stop that
+      // leaves it set has not stopped anything.
+      if (
+        state &&
+        state['isStreaming'] !== true &&
+        state['isCompacting'] !== true &&
+        !this.turns.isProviderRetryPending(sessionId)
+      )
+        return
     }
     this.killStoppedSession(sessionId)
   }

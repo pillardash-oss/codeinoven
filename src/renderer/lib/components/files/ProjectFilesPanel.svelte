@@ -54,6 +54,7 @@
   import FileDiffView from './FileDiffView.svelte'
   import { FileDiffState } from './file-diff-state.svelte'
   import { wrapTextState } from '$lib/stores/wrap-text.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
   import { beautifyFileContent, fileBeautifyLabel } from '$lib/file-beautify'
   import FileImagePreview from './FileImagePreview.svelte'
   import FileMediaPreview from './FileMediaPreview.svelte'
@@ -133,6 +134,11 @@
   )
   /** Whether this tree is reading a checkout that lives on an Oven. */
   let ovenFile = $derived(Boolean(ovenRootThread(projectId)))
+  // Register the mount before any state is prepared, so this panel opens the
+  // conversation's own surface instead of creating a threadless one first. The
+  // effect below keeps it current if the mount changes while it stays mounted.
+  // svelte-ignore state_referenced_locally
+  projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   $effect(() => {
     projectFilesWorkspace.setThreadMount(projectId, mountThreadId)
   })
@@ -310,6 +316,34 @@
    * used to look broken the moment the document was not the raw file.
    */
   let editorFindAvailable = $derived(activeTab?.view === 'source')
+  /**
+   * Whether the dropdown can offer the two project-wide searches.
+   *
+   * They are the IDE Mode searches, so they only exist where the code editor
+   * that runs them is mounted: a working-tree source view with IDE Mode on.
+   * A preview, a diff, a deleted file or an Oven copy has no editor behind it,
+   * and the menu says so instead of offering a command that does nothing.
+   */
+  let projectSearchDisabled = $derived(
+    !projectState.ideModeEnabled ||
+      ovenFile ||
+      deletedAtCheckpoint ||
+      activeSession === null ||
+      activeTab?.view !== 'source' ||
+      activeTab?.origin !== 'working'
+  )
+  /** The reader mounts two editors, so the toolbar's command reaches whichever
+   *  one is on screen. */
+  let sidebarTextEditor = $state<ProjectTextEditor>()
+  let fullscreenTextEditor = $state<ProjectTextEditor>()
+  function searchProjectText(): void {
+    const editor = fullscreenOpen ? fullscreenTextEditor : sidebarTextEditor
+    editor?.searchProjectText()
+  }
+  function findProjectFile(): void {
+    const editor = fullscreenOpen ? fullscreenTextEditor : sidebarTextEditor
+    editor?.findProjectFile()
+  }
   let documentFindAvailable = $derived.by(() => {
     if (!activeTab) return false
     if (activeTab.view === 'annotate') return showAnnotateToggle && activeThreadId !== null
@@ -396,6 +430,20 @@
   /** An annotation is a composer reference, so there has to be a conversation
    *  open for it to attach to; the toolbar explains that instead of hiding. */
   let annotateDisabled = $derived(!activeThreadId || deletedAtCheckpoint)
+  /**
+   * The annotator is the only thing that can render the annotation view, so a
+   * document that lost it (no conversation open, no annotatable content, or a
+   * file deleted at the checkpoint) falls back to its rendered preview rather
+   * than an empty body. Markdown opens in the annotation view by default, which
+   * is why this repair can be reached without the reader ever pressing the
+   * toggle.
+   */
+  $effect(() => {
+    const tab = activeTab
+    if (!tab || tab.view !== 'annotate') return
+    if (showAnnotateToggle && !annotateDisabled) return
+    projectFilesWorkspace.setView(projectId, tab.id, showAnnotateToggle ? 'preview' : 'source')
+  })
   /** The active document as a read-aloud target. Read-aloud is offered for
    *  exactly the documents that carry annotations, the rendered Markdown whose
    *  text the viewer holds as plain source; the speaker control then hides
@@ -622,7 +670,8 @@
    *  a press with no draft left to write marks the file resolved, so one press
    *  cannot stage a file whose progress the scratch file has not seen. */
   async function saveActiveFile(): Promise<void> {
-    if (!activeTab) return
+    const tab = activeTab
+    if (!tab) return
     if (activeFileInMergeEditor) {
       if (conflictStep === 'draft') {
         await conflictController?.saveDraft()
@@ -631,7 +680,35 @@
       if (conflictStep === 'resolve') await conflictController?.save()
       return
     }
-    await projectFilesWorkspace.save(projectId, activeTab.path)
+    if (activeSession) await formatBeforeSave(tab, activeSession.draft)
+    await projectFilesWorkspace.save(projectId, tab.path)
+  }
+
+  /**
+   * Re-lay-out the active draft through its language server before it is written.
+   *
+   * Format on save is an IDE Mode behaviour, because the language server is what
+   * knows the file's conventions: it parsed this exact document for navigation,
+   * so a TypeScript file, a stylesheet, an HTML page and a Svelte component each
+   * keep their own layout instead of the editor guessing one. A formatter that
+   * answers with nothing, times out, or fails leaves the draft exactly as the
+   * user wrote it and the save still happens, so a broken server can never stop
+   * a write. The reformatted text is applied as an ordinary draft change, which
+   * keeps it one undo away and leaves the buffer dirty-free only because it is
+   * being saved in the same breath.
+   */
+  async function formatBeforeSave(tab: ProjectFileTab, draft: string): Promise<void> {
+    if (!projectState.ideModeEnabled || !appConfigState.ideFormatOnSave) return
+    if (tab.origin !== 'working' || tab.view !== 'source' || tab.path !== activeTab?.path) return
+    const editor = fullscreenOpen ? fullscreenTextEditor : sidebarTextEditor
+    if (!editor) return
+    const formatted = await editor.formatText(draft)
+    // The draft is compared again after the wait: the user may have typed while
+    // the server was answering, and their newer text must not be replaced by a
+    // layout of the older text.
+    if (formatted === null || formatted === draft) return
+    if (activeSession?.draft !== draft) return
+    projectFilesWorkspace.updateDraft(projectId, tab.path, formatted)
   }
 
   async function loadCheckpointPaths(
@@ -944,11 +1021,14 @@
   /**
    * A find belongs to the surface that was searched, so a view change puts it
    * away instead of leaving a bar aimed at text that is no longer on screen.
+   * The chosen view is remembered for Markdown, so the next document opens the
+   * way this one was left instead of snapping back to the default.
    */
   function changeView(view: ProjectFileView): void {
     if (!activeTab) return
     findNavState.closeFileDocumentFind()
     findNavState.closeEditorFind()
+    projectFilesWorkspace.rememberDocumentView(projectId, activeTab.path, view)
     projectFilesWorkspace.setView(projectId, activeTab.id, view)
   }
 
@@ -1151,6 +1231,9 @@
           replaceDisabled={!editorFindAvailable}
           onSearch={() => openReaderFind(false)}
           onSearchReplace={() => openReaderFind(true)}
+          {projectSearchDisabled}
+          onProjectTextSearch={searchProjectText}
+          onProjectFileFind={findProjectFile}
           onSetView={changeView}
           onInfo={() => void showActiveFileInfo()}
           infoDisabled={deletedAtCheckpoint}
@@ -1343,6 +1426,7 @@
       {:else if activeSession || deletedAtCheckpoint}
         {#key activeTab.id}
           <ProjectTextEditor
+            bind:this={sidebarTextEditor}
             ideStatusPortal={sidebarIdeStatusPortal}
             {projectName}
             {projectId}
@@ -1601,6 +1685,9 @@
           replaceDisabled={!editorFindAvailable}
           onSearch={() => openReaderFind(false)}
           onSearchReplace={() => openReaderFind(true)}
+          {projectSearchDisabled}
+          onProjectTextSearch={searchProjectText}
+          onProjectFileFind={findProjectFile}
           onSetView={changeView}
           onInfo={() => void showActiveFileInfo()}
           infoDisabled={deletedAtCheckpoint}
@@ -1728,6 +1815,7 @@
           {:else}
             {#key activeTab.id}
               <ProjectTextEditor
+                bind:this={fullscreenTextEditor}
                 {projectName}
                 ideStatusPortal={fullscreenIdeStatusPortal}
                 {projectId}

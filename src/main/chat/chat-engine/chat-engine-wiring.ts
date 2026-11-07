@@ -1,4 +1,4 @@
-import { BrowserWindow } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { Logger } from '../../system/logger'
 import { BrainstormAlignmentNotes } from '../brainstorm-alignment-notes'
 import { AssistantAuthoringCheckpoints } from '../assistant-authoring-checkpoints'
@@ -21,6 +21,7 @@ import { CodexDriver } from '../../drivers/codex-driver'
 import { ClineDriver } from '../../drivers/cline-driver'
 import { AntigravityDriver } from '../../drivers/antigravity-driver'
 import { MuseDriver } from '../../drivers/muse-driver'
+import { AcpDriver, configuredAcpAgents } from '../../drivers/acp-driver'
 import { PiDriver } from '../../drivers/pi-driver'
 import { OvenChat } from '../../ovens/oven-chat'
 import { CheckpointManager } from '../../storage/checkpoint-manager'
@@ -203,12 +204,18 @@ export function wireChatEngine(
       )
       return results
     })
-    // An agent can enter a design or a video session without the user typing the
-    // tag for it, by picking up the capability itself, and the session that opens
-    // is the same session: the memo the tag sets is set here, and the thread's row
-    // is written, which is what docks the coordinator board while the work is
-    // being made and what keeps the thread's later turns carrying the session's
-    // contract instead of leaving each turn to rediscover the tool mid-flight.
+    // An agent can enter a design session without the user typing the tag for it,
+    // by picking up the capability itself, and the session that opens is the same
+    // session: the memo the tag sets is set here, and the thread's row is written,
+    // which is what docks the coordinator board while the work is being made and
+    // what keeps the thread's later turns carrying the session's contract instead
+    // of leaving each turn to rediscover the tool mid-flight.
+    //
+    // A video is recorded by its work instead, on the first preview of a
+    // composition that lives where compositions live, because the video capability
+    // is also what makes the throwaway clip a conversation is handed: that clip is
+    // delivered inline and never edited, and recording the activation as a session
+    // left those threads holding a video editor over a film nobody opens.
     engine.state.utilityOrchestration.setAuthoredWorkSessionRecorder(
       ({ projectId, threadId, kind }) => {
         if (kind === 'design') engine.state.cioDesignThreads.set(threadId, true)
@@ -237,6 +244,13 @@ export function wireChatEngine(
     // promise with the decision, and only the gateway installs on acceptance.
     engine.state.utilityOrchestration.setUtilitySuggestionExecutor((entry, context) =>
       engine.requestUtilitySuggestion(entry, context)
+    )
+    // An MCP server that refuses for lack of authorization has to reach the user
+    // mid-turn, so the connection waits on a card. The card signs in through the
+    // same OAuth flow the Utilities page uses, and the gateway retries once the
+    // grant is stored, so the agent's tool call resumes instead of failing.
+    engine.state.utilityOrchestration.setMcpSignInExecutor((target, context) =>
+      engine.requestMcpSignIn(target, context)
     )
     // The workstation tools: reading the Ovens, harnesses, models and accounts,
     // and dispatching real work onto a chosen machine. The engine owns every
@@ -279,6 +293,9 @@ export function wireChatEngine(
     engine.state.assignmentEngine.setAuditCycleListener((plan) => {
       void engine.reannounceAssignmentAudit(plan)
     })
+    // A worker the plan replaces is not reused, so the engine asks the app to
+    // stop it and clear its scheduled retry instead of leaving it paused.
+    engine.units['assignment-workers'].installAssignmentWorkerRetirement()
     // Register available harness drivers. Order follows the harness registry
     // the single source of truth   so the model list and providers settings
     // page agree. Only harnesses with an integrated driver are instantiated.
@@ -299,6 +316,12 @@ export function wireChatEngine(
       const create = driverFactories[harness.id]
       if (create) engine.drivers.set(harness.id, create())
     }
+    // ACP agents are the user's own records, so their drivers are built from
+    // what they saved rather than from the harness registry.
+    for (const agent of configuredAcpAgents()) {
+      engine.drivers.set(agent.id, new AcpDriver(storage, agent, app.getVersion()))
+    }
+    engine.state.acpDriverFactory = (agent) => new AcpDriver(storage, agent, app.getVersion())
     // Remember which OpenCode transport the map was built for, so a runtime
     // install/upgrade can swap it without rebuilding the whole map.
     engine.state.openCodeDriverIsV2 = isOpenCodeV2Installed()

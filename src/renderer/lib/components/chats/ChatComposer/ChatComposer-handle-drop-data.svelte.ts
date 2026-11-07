@@ -670,28 +670,33 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
       return
     }
     const { files, urls } = readComposerDrop(dt)
-    if (files.length > 0) {
-      for (const file of files) {
-        try {
-          const filePath = await window.api.registerFileSelection(
-            file,
-            this.root.props.attachmentStorage
-          )
-          if (filePath) await this.addFileAttachment(filePath, file)
-        } catch {
-          // Not a local file (e.g., an image dragged from a web page); its link
-          // reading is handled above.
-        }
+    let attached = 0
+    for (const file of files) {
+      try {
+        const filePath = await window.api.registerFileSelection(
+          file,
+          this.root.props.attachmentStorage
+        )
+        if (!filePath) continue
+        await this.addFileAttachment(filePath, file)
+        attached += 1
+      } catch {
+        // Not a local file (e.g., an image dragged from a web page); its link
+        // reading is handled below.
       }
+    }
+    if (attached > 0) return
+    // A drag can hand over a file the app cannot take and the link to the same
+    // media, so the link is still worth reading when nothing was attached.
+    if (urls.length > 0) {
+      await this.attachRemoteMedia(urls)
       return
     }
-    if (urls.length === 0) {
+    if (files.length === 0) {
       // The drag looked attachable but named nothing this chat can take (an
       // inline `data:` image, say). Say so instead of swallowing the gesture.
       showToastWarning('Nothing in that drag can be attached.')
-      return
     }
-    await this.attachRemoteMedia(urls)
   }
 
   /** Fetch the links one drop named and attach each file that comes back. */
@@ -700,6 +705,8 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
       showToastWarning('This chat has nowhere to store an attachment.')
       return
     }
+    let attached = 0
+    let failure: unknown = null
     for (const url of urls) {
       try {
         const filePath = await invoke(
@@ -708,9 +715,16 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
           url
         )
         await this.addFileAttachment(filePath)
+        attached += 1
       } catch (error) {
-        showToastWarning(ipcErrorMessage(error, 'That link could not be attached.'))
+        failure ??= error
       }
+    }
+    // A drop that attached what the user aimed at is finished. Warning about an
+    // extra link the same drag named (the page an image sat inside) told the
+    // user their image was an HTML document while it sat attached in the strip.
+    if (attached === 0 && failure) {
+      showToastWarning(ipcErrorMessage(failure, 'That link could not be attached.'))
     }
   }
 

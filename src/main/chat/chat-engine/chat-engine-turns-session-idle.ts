@@ -79,6 +79,7 @@ export class ChatEngineTurnsSessionIdle {
     let assistantResponse = ''
     let memoryParentTurnId: string | null = null
     let turnUtilitiesCleaned = false
+    let userAborted = false
     let assignmentContinuation: {
       assignment: AssignmentPlan
       settings: ThreadSettings
@@ -225,7 +226,16 @@ export class ChatEngineTurnsSessionIdle {
       // proves nothing: persisted, it paints an error card over work that was
       // stopped on purpose and makes a worker stopped by a hand-off read as a
       // failed worker. The thread's own status already says `interrupted`.
-      const userAborted = this.host.state.userAbortedSessions.has(sessionId)
+      //
+      // The in-memory marker is only one witness: it is cleared when this very
+      // finalization ends, so a second idle from the harness would read the
+      // stopped turn as a turn that merely dropped its answer and re-prompt it.
+      // The persisted stop latch is the durable statement that no automatic
+      // work may revive this thread until the user prompts it again, so read
+      // both. Every engine-initiated continuation below is vetoed by this flag.
+      userAborted =
+        this.host.state.userAbortedSessions.has(sessionId) ||
+        (await this.host.threadManager.wasStoppedByUser(info.projectId, info.threadId))
       if (userAborted) stripAbortedRunErrors(merged)
       // A provider that answered "model at capacity" has not given this turn a
       // verdict: the engine claimed that failure for a silent continuation when
@@ -308,6 +318,7 @@ export class ChatEngineTurnsSessionIdle {
       if (contractCompleted) this.host.state.engineeringImplementationSessions.delete(sessionId)
       const missingFinalResponse =
         !capacityContinuation &&
+        !userAborted &&
         !failure &&
         !awaitingUser &&
         !suppressTerminalAnswer &&
@@ -316,6 +327,7 @@ export class ChatEngineTurnsSessionIdle {
             terminalAssistant.structuredOutput === undefined))
       const contractContinuationRequired =
         engineeringContractActive &&
+        !userAborted &&
         !failure &&
         !awaitingUser &&
         !missingFinalResponse &&
@@ -333,6 +345,7 @@ export class ChatEngineTurnsSessionIdle {
       let mermaidFailures: MermaidValidationFailure[] = []
       if (
         !capacityContinuation &&
+        !userAborted &&
         !failure &&
         !awaitingUser &&
         !suppressTerminalAnswer &&
@@ -541,6 +554,7 @@ export class ChatEngineTurnsSessionIdle {
       // scoped tool-shaped claims and personal possession denials). One nudge
       // per turn, shared with the tool-error path, so it cannot loop.
       if (
+        !userAborted &&
         !failure &&
         !awaitingUser &&
         !suppressTerminalAnswer &&
@@ -1245,6 +1259,7 @@ export class ChatEngineTurnsSessionIdle {
         )
       }
       if (
+        !userAborted &&
         !failure &&
         !awaitingUser &&
         !contractBlocked &&
@@ -1261,7 +1276,14 @@ export class ChatEngineTurnsSessionIdle {
           Logger.error('Initial specification generation failed:', error)
         }
       }
-      if (!failure && !awaitingUser && !contractBlocked && !revisedSpec && !revisedBrainstorm) {
+      if (
+        !userAborted &&
+        !failure &&
+        !awaitingUser &&
+        !contractBlocked &&
+        !revisedSpec &&
+        !revisedBrainstorm
+      ) {
         const [thread, activeSpec] = await Promise.all([
           this.host.threadManager.getThread(info.projectId, info.threadId),
           this.host.units['spec'].getActiveSpec(info.projectId, info.threadId)
@@ -1296,7 +1318,7 @@ export class ChatEngineTurnsSessionIdle {
       }
     } catch (error) {
       Logger.error('history mirror failed:', error)
-      if (this.host.state.userAbortedSessions.has(sessionId)) return
+      if (userAborted || this.host.state.userAbortedSessions.has(sessionId)) return
       const issue = historyMirrorIssue(error, info.driverId)
       // The app established this failure while it was already finalizing the
       // turn, so it may not be deferred to a driver registration.
@@ -1345,7 +1367,7 @@ export class ChatEngineTurnsSessionIdle {
         let dispatched = await this.host.units['assignment'].sendAssignmentCoordinatorPrompt(
           assignmentContinuation.assignment,
           assignmentContinuation.settings,
-          this.host.units['assignment'].coordinatorAssignmentPrompt(
+          await this.host.units['assignment'].coordinatorResumePrompt(
             assignmentContinuation.assignment
           )
         )
@@ -1375,7 +1397,7 @@ export class ChatEngineTurnsSessionIdle {
             dispatched = await this.host.units['assignment'].sendAssignmentCoordinatorPrompt(
               assignmentContinuation.assignment,
               assignmentContinuation.settings,
-              this.host.units['assignment'].coordinatorAssignmentPrompt(
+              await this.host.units['assignment'].coordinatorResumePrompt(
                 assignmentContinuation.assignment
               ),
               undefined,
@@ -1405,17 +1427,19 @@ export class ChatEngineTurnsSessionIdle {
         })
       }
     }
-    try {
-      await this.host.units['assignment'].drainCoordinatorHandoffQueue(
-        info.projectId,
-        info.threadId
-      )
-    } catch (error) {
-      Logger.error('Queued coordinator handoff dispatch failed', {
-        projectId: info.projectId,
-        threadId: info.threadId,
-        error: rawErrorMessage(error)
-      })
+    if (!userAborted) {
+      try {
+        await this.host.units['assignment'].drainCoordinatorHandoffQueue(
+          info.projectId,
+          info.threadId
+        )
+      } catch (error) {
+        Logger.error('Queued coordinator handoff dispatch failed', {
+          projectId: info.projectId,
+          threadId: info.threadId,
+          error: rawErrorMessage(error)
+        })
+      }
     }
     if (pendingMemory && assistantResponse && memoryParentTurnId) {
       const driver = this.host.units['turns-dispatch'].driverForRuntime(

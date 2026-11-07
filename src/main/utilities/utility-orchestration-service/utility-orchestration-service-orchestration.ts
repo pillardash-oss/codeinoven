@@ -11,7 +11,6 @@ import { isCuaDaemonTransportFailure } from '../cua-bridge-service'
 import { designGroupBriefing } from '../../design/design-group-service'
 import { designSessionBriefing } from '../cio-design-prompt'
 import { videoSessionBriefing } from '../cio-video-prompt'
-import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -33,6 +32,7 @@ import {
   APP_CONTROL_CATALOG_TOOL_NAME
 } from '../../../lib/app-control-tools'
 import {
+  CREATE_ACHIEVEMENT_TOOL_NAME,
   CREATE_ASSIGNMENT_TOOL_NAME,
   CREATE_BRAINSTORM_TOOL_NAME,
   CREATE_PRD_TOOL_NAME,
@@ -40,6 +40,7 @@ import {
   type EngineeringToolOperation
 } from '../../../lib/engineering-tools'
 import { PAWN_AGENT_TOOL_NAME } from '../../../lib/pawn-tools'
+import { EXT_SIMULATION_TOOL_NAME } from '../../../lib/simulation-tools'
 import { NO_EXPERTS, type EffectiveExperts } from '../../../lib/experts'
 import { currentWorkRoot, currentWorkRoots } from '../../design/work-roots-state'
 import { gatewayStructuredResult } from '../../../lib/image-payload'
@@ -194,8 +195,12 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.engineering(state, input, 'spec')
       case CREATE_ASSIGNMENT_TOOL_NAME:
         return (state, input) => this.engineering(state, input, 'assignment')
+      case CREATE_ACHIEVEMENT_TOOL_NAME:
+        return (state, input) => this.engineering(state, input, 'achievement')
       case PAWN_AGENT_TOOL_NAME:
         return (state, input) => this.pawn(state, input)
+      case EXT_SIMULATION_TOOL_NAME:
+        return (state, input) => this.simulation(state, input)
       default:
         return null
     }
@@ -244,6 +249,30 @@ export class UtilityOrchestrationServiceOrchestration {
       projectPath: state.request.projectPath,
       sessionId: state.request.sessionId,
       harnessId: state.request.harnessId
+    })
+  }
+
+  /**
+   * Put the device this turn is working on in front of the user.
+   *
+   * The call is a notification, never device control: the panel is told which
+   * target to mirror and how to name it in the answer, and the agent keeps driving
+   * the device with its own tools. The display module is imported here rather than
+   * at the top so a session that never mirrors anything never loads a capture
+   * adapter.
+   */
+  async simulation(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const platform = input.platform
+    if (platform !== 'android' && platform !== 'ios') {
+      throw new Error('ext_simulation needs platform "android" or "ios"')
+    }
+    const device = typeof input.device === 'string' ? input.device.trim() : ''
+    const { displayRequests } = await import('../../display/display-requests')
+    if (input.close === true) return displayRequests.release(state.request.threadId)
+    return displayRequests.request({
+      platform,
+      ...(device.length > 0 ? { device } : {}),
+      threadId: state.request.threadId
     })
   }
 
@@ -693,6 +722,16 @@ export class UtilityOrchestrationServiceOrchestration {
     const cuaUtility = state.eligible.get(CUA_UTILITY_ID)
     if (cuaUtility && !next.has(CUA_UTILITY_ID)) next.set(CUA_UTILITY_ID, cuaUtility)
     state.eligible = next
+    // An activated utility keeps the definition it was activated with, so an
+    // edit made while the turn runs (re-pointed URL, another header) has to be
+    // carried into that entry too: invocation reads it before the eligible map,
+    // and a stale copy there would keep the old settings in force until the turn
+    // ended. Dropping the client is `ensureMcpClient`'s job, which compares the
+    // settings each connection was opened with.
+    for (const utilityId of state.activated.keys()) {
+      const fresh = next.get(utilityId)
+      if (fresh) state.activated.set(utilityId, fresh)
+    }
     // A refresh lists only what is eligible now, so an activated utility missing
     // from it was disabled, deleted, or moved out of scope while this turn ran.
     // Dropping it here is what lands that change mid-turn: the call the transcript
@@ -734,6 +773,14 @@ export class UtilityOrchestrationServiceOrchestration {
       // The next search must re-read the registry instead of serving the set this
       // turn built before the change.
       state.eligibilityRefreshedAt = 0
+      // Re-read it now rather than waiting for a search. A capability that was
+      // only edited (a re-pointed URL, another header) is still eligible, and
+      // leaving it forgotten until the agent searched again made the edit read
+      // as the utility having disappeared mid-turn. A disabled or deleted one
+      // stays out of the fresh list, so this cannot resurrect it.
+      await this.refreshEligible(state, { force: true }).catch((error: unknown) =>
+        Logger.dev('Eligible utilities could not be re-read after a registry change:', error)
+      )
       if (wasReachable) await this.audit(state, 'utility.registry_changed', { utilityId })
     }
   }
@@ -749,6 +796,7 @@ export class UtilityOrchestrationServiceOrchestration {
     const client = state.clients.get(utilityId)
     state.cuaSessionIds.delete(utilityId)
     state.clients.delete(utilityId)
+    state.clientSignatures.delete(utilityId)
     if (!client) return
     if (sessionId) {
       await client.callTool('end_session', { session: sessionId }).catch(() => undefined)
@@ -759,27 +807,31 @@ export class UtilityOrchestrationServiceOrchestration {
   /**
    * Tell the app that this turn entered an authored-work session.
    *
-   * Only the two app-owned authored-work capabilities count as entering one:
-   * picking up any other utility is neither a design nor a composition. Reported
-   * on the real activation and not on the already-active no-op, because the
-   * first activation is the moment the agent entered the session. Best-effort,
-   * because the record is how the user watches the work rather than the work
-   * itself, and a failed write must never fail the activation that was asked
-   * for.
+   * Only the app-owned authored-work capabilities count as entering one: picking
+   * up any other utility is neither a design nor a composition. Reported on the
+   * real activation and not on the already-active no-op, because the first
+   * activation is the moment the agent entered the session. Best-effort, because
+   * the record is how the user watches the work rather than the work itself, and
+   * a failed write must never fail the activation that was asked for.
+   *
+   * A video is the one exception, because picking the capability up is not the
+   * same act for it. A design capability is only ever used to make a design, so
+   * activating it is entering that session. The video capability also makes every
+   * throwaway clip a conversation is handed, and that work is delivered inline as
+   * an artifact rather than edited: an activation recorded as a session would dock
+   * a video editor over a film nobody is going to open, and keep it there for the
+   * rest of the thread's life. The session is therefore recorded by the work
+   * itself, on the first preview of a composition that lives where compositions
+   * live (see `recordPreview`), which is the same fact for a thread the agent
+   * started and one the user opened with the tag.
    */
   noteAuthoredWorkSession(state: TurnState, utilityId: string): void {
-    const kind: AuthoredWorkKind | null =
-      utilityId === APP_DESIGN_UTILITY_ID
-        ? 'design'
-        : utilityId === APP_VIDEO_UTILITY_ID
-          ? 'video'
-          : null
-    if (!kind) return
+    if (utilityId !== APP_DESIGN_UTILITY_ID) return
     try {
       this.host.authoredWorkSessionRecorder?.({
         projectId: state.request.projectId,
         threadId: state.request.threadId,
-        kind
+        kind: 'design'
       })
     } catch (error) {
       Logger.error('Authored-work session record failed:', error)
@@ -905,6 +957,7 @@ export class UtilityOrchestrationServiceOrchestration {
     const utilityId = resolved.utility.id
     if (state.clients.get(utilityId) === client) {
       state.clients.delete(utilityId)
+      state.clientSignatures.delete(utilityId)
       if (this.isComputerUseUtility(resolved)) state.cuaSessionIds.delete(utilityId)
     }
     await client.close().catch(() => undefined)

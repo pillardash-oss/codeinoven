@@ -532,6 +532,15 @@ export class ChatEngineTurns {
     // Any live harness activity means the session's project is doing work
     // keep its idle-server clock reset until the stream goes quiet.
     const eventOwner = this.host.sessionRegistry.get(event.sessionId)
+    if (eventOwner && event.type === 'message.part.updated' && event.part.type === 'tool') {
+      // Permissions need to know which files this session made itself, so an
+      // agent can clean up its own throwaway work without a card.
+      this.host.units['permissions'].trackToolCreations(
+        event.sessionId,
+        event.part,
+        eventOwner.projectPath
+      )
+    }
     if (eventOwner) {
       this.host.state.projectIdleSince.delete(eventOwner.projectId)
       this.host.state.releasedProjects.delete(eventOwner.projectId)

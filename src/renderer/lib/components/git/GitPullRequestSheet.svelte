@@ -14,6 +14,7 @@
   import { classifyProviderIssue, providerIssueTitle } from '$shared/provider-issue'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { agentAssist } from '../assist/agent-assist-store.svelte'
+  import { openAgentThread } from './git-status-panel-agent-actions'
   import {
     prLifecycleStore,
     type PrDraftSeed,
@@ -177,6 +178,14 @@
   let createErrorIsNoCommits = $state(false)
   /** Which recovery action is running ('merge' | 'rebase'), to disable buttons. */
   let recoverMode = $state<'merge' | 'rebase' | null>(null)
+  /**
+   * The thread this sheet's divergence handoff minted, once it exists.
+   *
+   * The handoff is a request, not a navigation: the thread is created inside it
+   * and this sheet keeps the id it is handed, so "Resolve with agent" leaves a
+   * way back into that conversation instead of only a run in the background.
+   */
+  let divergenceThreadId = $state<string | null>(null)
   /** True while the panel is collapsed into its dock row (local fallback). */
   let localMinimized = $state(false)
   const minimized = $derived(minimizedProp ?? localMinimized)
@@ -629,6 +638,9 @@
       // diverged branch is resolved in that worktree, not the project root.
       scopeBucketId,
       scopeLocked: true,
+      onThread: (threadId) => {
+        divergenceThreadId = threadId
+      },
       prepare: async ({ project, settings }) => {
         const thread = await invoke('thread:create', {
           projectId,
@@ -997,6 +1009,12 @@
           {recoverMode}
           onRecover={(mode) => void recoverPush(mode)}
           onResolveWithAgent={resolveDivergenceWithAgent}
+          agentThreadId={divergenceThreadId}
+          onOpenAgentThread={() => {
+            const threadId = divergenceThreadId
+            if (!threadId) return
+            void openAgentThread(projectId, threadId)
+          }}
         />
       {/if}
 

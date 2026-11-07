@@ -27,7 +27,9 @@ import {
   DEFAULT_SCOPE_BUCKET_ID,
   scopeSliceForStatus,
   type ScopeSlice,
+  type BoundScopeRebind,
   type Thread,
+  type Project,
   type CreateThreadInput,
   type ThreadStatus,
   type ThreadSettings,
@@ -39,6 +41,7 @@ import {
   type UserMessageSummary,
   isOrchestrationChildThread,
   isAssistantSetupThread,
+  usesThreadWorkspaceMount,
   ASSISTANT_SPACE_ID
 } from '../types'
 import {
@@ -53,6 +56,7 @@ import {
   type ThreadListOptions
 } from './thread-manager-capacity'
 import { buildThreadDeletionStatements, placeholdersFor } from './thread-manager-deletion'
+import { assertScopeSwapAllowed } from './thread-manager-scope-swap'
 import { assistantRunDescendants, orchestrationDescendants } from './thread-manager-lineage'
 import { ThreadForkService } from './thread-manager-fork'
 import { ThreadSearchService, type IntentSearchProvider } from './thread-manager-search'
@@ -141,6 +145,18 @@ export interface ThreadScopeRootProvider {
    * local project. Throws when a managed scope root is unhealthy.
    */
   resolveCompatibilityRoot(projectId: string, scopeBucketId?: string): Promise<string | null>
+}
+
+/**
+ * The project row a thread sweep resolves its scratch directories against.
+ * Narrow on purpose: only the source and path decide where a thread's files live.
+ */
+export type ThreadDeletionProject = Pick<Project, 'source' | 'path'> | null
+
+/** What a project-wide thread sweep removed, and what it could not. */
+export interface ThreadSweepSummary {
+  swept: number
+  unresolved: number
 }
 
 export class ThreadManager {
@@ -351,6 +367,12 @@ export class ThreadManager {
       settings: input.settings,
       featureSlug: input.featureSlug,
       scopeBucketId: input.scopeBucketId,
+      // A bound scope is part of the created row itself for the same reason the
+      // assistant fields are: the creation broadcast carries this object, and a
+      // binding written afterwards would be wiped by that payload.
+      boundScope: input.boundScope,
+      runBase: input.runBase,
+      dispatchOrigin: input.dispatchOrigin,
       assignmentId: input.assignmentId,
       assignmentRole: input.assignmentRole,
       assignmentTaskId: input.assignmentTaskId,
@@ -391,6 +413,10 @@ export class ThreadManager {
       if (!project) {
         throw new Error(`Project not found: ${input.projectId}`)
       }
+      // A binding names a checkout, so both halves must still exist: an unknown
+      // project or a bucket that has left the board would resolve to nothing and
+      // silently point every evidence surface at no repository at all.
+      if (input.boundScope) await this.assertBoundScopeTarget(input.boundScope)
       const scopedBuckets = scopedBucketIdsFromBoard(
         await this.scopeManager.getBoardSnapshot(input.projectId)
       )
@@ -413,6 +439,13 @@ export class ThreadManager {
       // The new thread lands first so the optimistic create always yields a
       // persisted row; the bounded bucket delete is best-effort cleanup that
       // must never roll back the creation it is making room for.
+      // A bound task's directory is its bound scope's, resolved by the same
+      // authority every project thread uses. The home container never wins:
+      // falling back to assistant storage is exactly the behaviour the park
+      // gate exists to prevent.
+      if (input.boundScope) {
+        await this.resolveBoundCompatibilityRoot(input.boundScope, thread)
+      }
       await this.resolveCompatibilityRoot(input.projectId, input.scopeBucketId, thread)
       await this.threadRepo.upsertViaWorker(thread)
       if (evictionCandidateIds.length > 0) {
@@ -459,13 +492,58 @@ export class ThreadManager {
    * authoritative root. Renderer-supplied directories never win when the
    * scope resolves; unhealthy managed scopes fail closed.
    */
+  /**
+   * Assert that a bound scope names a project that exists and a bucket that is
+   * still on that project's board.
+   *
+   * Shape validation happens at the IPC boundary; existence is a database
+   * question and belongs where both repos are already in hand. A removed scope
+   * is rejected rather than accepted and followed to the Default scope, because
+   * a binding is a user's explicit choice of checkout.
+   */
+  private async assertBoundScopeTarget(boundScope: BoundScopeRebind): Promise<void> {
+    const project = await this.projectRepo.getViaWorker(boundScope.projectId)
+    if (!project) {
+      throw new Error(`Project not found: ${boundScope.projectId}`)
+    }
+    const board = await this.scopeManager.getBoardSnapshot(boundScope.projectId)
+    if (!board.buckets.some((bucket) => bucket.id === boundScope.scopeBucketId)) {
+      throw new Error(`Scope ${boundScope.scopeBucketId} is not on project ${boundScope.projectId}`)
+    }
+  }
+
   private async resolveCompatibilityRoot(
     projectId: string,
     scopeBucketId: string | undefined,
     thread: Thread
   ): Promise<void> {
     if (!this.scopeRoots || !scopeBucketId) return
+    // A conversation container mounts its own app-storage workspace
+    // (`chats-cwd/`, `assistant-cwd/`, `browser-cwd/`) and owns no repository
+    // scope, so no bucket on it can ever name a checkout. Resolving one made a
+    // create in the assistant space fail closed after the row was already
+    // announced, and the thread was deleted seconds after it appeared.
+    if (usesThreadWorkspaceMount(projectId)) return
     const resolved = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
+    if (resolved) thread.workingDirectory = resolved
+  }
+
+  /**
+   * A bound task's compatibility directory comes from its bound scope.
+   *
+   * Fail-closed on purpose: an unhealthy managed scope throws out of the
+   * provider, and the caller parks the run with that reason instead of letting
+   * the thread keep whatever directory it had.
+   */
+  private async resolveBoundCompatibilityRoot(
+    boundScope: BoundScopeRebind,
+    thread: Thread
+  ): Promise<void> {
+    if (!this.scopeRoots) return
+    const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+      boundScope.projectId,
+      boundScope.scopeBucketId
+    )
     if (resolved) thread.workingDirectory = resolved
   }
 
@@ -491,6 +569,17 @@ export class ThreadManager {
   async getThreadViaWorker(projectId: string, threadId: string): Promise<Thread | null> {
     const thread = await this.threadRepo.getViaWorker(threadId)
     return thread?.projectId === projectId ? thread : null
+  }
+
+  /**
+   * A thread by id, whatever project it lives in.
+   *
+   * A fork records the id of the thread it came from, and that thread may sit in
+   * another project (a chat continued inside a project, an assistant task handed
+   * off). Resolving it through the worker keeps the seek off the main thread.
+   */
+  async getThreadById(threadId: string): Promise<Thread | null> {
+    return this.threadRepo.getViaWorker(threadId)
   }
 
   /**
@@ -701,6 +790,7 @@ export class ThreadManager {
         | 'authoredWorkKinds'
         | 'implementationBrainstorm'
         | 'scopeBucketId'
+        | 'boundScope'
         | 'lastActivity'
         | 'read'
         | 'assignmentId'
@@ -727,6 +817,16 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
+    // Only an assistant task has a home and a workspace that can differ. A
+    // project thread already names its own scope, so accepting a binding for
+    // one would create a second, contradictory answer to the same question.
+    if (input.boundScope !== undefined) {
+      if (existing.projectId !== ASSISTANT_SPACE_ID) {
+        throw new Error('Only an assistant task can be bound to a project scope')
+      }
+      if (input.boundScope) await this.assertBoundScopeTarget(input.boundScope)
+    }
+
     // Moving a thread to a different scope counts as activity on it: the
     // thread jumps to the top of the destination scope instead of arriving
     // with a stale timestamp (which would also make it the immediate
@@ -734,6 +834,16 @@ export class ThreadManager {
     const movedScopes =
       input.scopeBucketId !== undefined &&
       input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+
+    // A working thread inside a worktree scope may not be reassigned: its run
+    // lives in that checkout, and the move would repoint it mid-turn.
+    if (movedScopes && input.scopeBucketId !== undefined) {
+      await assertScopeSwapAllowed({
+        thread: existing,
+        targetBucketId: input.scopeBucketId,
+        boardFor: (projectId) => this.scopeManager.getBoardSnapshot(projectId)
+      })
+    }
 
     const updated: Thread = {
       ...existing,
@@ -750,6 +860,9 @@ export class ThreadManager {
       authoredWorkKind: input.authoredWorkKind ?? existing.authoredWorkKind,
       authoredWorkKinds: input.authoredWorkKinds ?? existing.authoredWorkKinds,
       scopeBucketId: input.scopeBucketId ?? existing.scopeBucketId,
+      // A rebind is an explicit user action, so it replaces the pair outright;
+      // omitting the field leaves the existing binding untouched.
+      boundScope: input.boundScope !== undefined ? input.boundScope : existing.boundScope,
       read: input.read ?? existing.read,
       assignmentId: input.assignmentId ?? existing.assignmentId,
       assignmentRole: input.assignmentRole ?? existing.assignmentRole,
@@ -782,6 +895,21 @@ export class ThreadManager {
       updatedAt: Date.now()
     }
 
+    // Rebinding a task re-derives its directory from the destination scope, on
+    // the same rule a scope move follows, before anything can act on it.
+    if (
+      this.scopeRoots &&
+      input.boundScope !== undefined &&
+      input.workingDirectory === undefined &&
+      (input.boundScope?.projectId ?? null) !== (existing.boundScope?.projectId ?? null)
+    ) {
+      const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+        input.boundScope.projectId,
+        input.boundScope.scopeBucketId
+      )
+      if (resolved) updated.workingDirectory = resolved
+    }
+
     // Moving a thread between scopes re-derives its compatibility working
     // directory from the destination scope before anything can act on it.
     if (
@@ -794,7 +922,16 @@ export class ThreadManager {
         projectId,
         updated.scopeBucketId
       )
-      if (resolved) updated.workingDirectory = resolved
+      if (resolved) {
+        // The recorded branch names the checkout the thread used to run in, and
+        // a move between scopes can swap that checkout (a managed scope has its
+        // own worktree and branch). A label from the previous scope is never the
+        // destination's branch, so it is dropped here and settled again for the
+        // new root instead of being shown by the row, the composer and the Git
+        // panel until the next run.
+        if (resolved !== existing.workingDirectory) updated.branch = undefined
+        updated.workingDirectory = resolved
+      }
     }
 
     await this.threadRepo.upsertViaWorker(updated)
@@ -832,9 +969,43 @@ export class ThreadManager {
     })
   }
 
-  /** Set the git branch associated with this thread. */
-  async setBranch(projectId: string, threadId: string, branch: string): Promise<Thread> {
+  /**
+   * Record the commit a run started from, once.
+   *
+   * Idempotent by design: a resumed run keeps the base of the attempt that
+   * actually did the work, so the receipt never loses what already happened.
+   */
+  async setRunBase(
+    projectId: string,
+    threadId: string,
+    base: NonNullable<Thread['runBase']>
+  ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
+    if (existing.runBase) return existing
+    const updated: Thread = { ...existing, runBase: base, updatedAt: Date.now() }
+    await this.threadRepo.upsertViaWorker(updated)
+    return updated
+  }
+
+  /** Set the git branch associated with this thread. */
+  async setBranch(
+    projectId: string,
+    threadId: string,
+    branch: string,
+    expectedWorkingDirectory?: string
+  ): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+
+    // A settle reads the branch from one checkout and writes it later. If the
+    // thread moved scopes in between, that read describes a root it no longer
+    // uses, so it must be dropped instead of relabelling the new scope with the
+    // previous checkout's branch.
+    if (
+      expectedWorkingDirectory !== undefined &&
+      existing.workingDirectory !== expectedWorkingDirectory
+    ) {
+      return existing
+    }
 
     const updated: Thread = {
       ...existing,
@@ -870,6 +1041,23 @@ export class ThreadManager {
       ...orchestrationDescendants(projectThreads, threadId),
       thread
     ]
+    await this.deleteThreadOrder(projectId, deletionOrder)
+  }
+
+  /**
+   * The body of a thread deletion, given the exact rows it sweeps.
+   *
+   * Split out so a project-wide sweep can reuse one project thread snapshot for
+   * every thread it removes. The alternative   reading the whole project's
+   * threads again per thread   is quadratic in a project with hundreds of
+   * threads, and that is exactly the deletion that used to freeze the app.
+   */
+  private async deleteThreadOrder(
+    projectId: string,
+    deletionOrder: Thread[],
+    project?: ThreadDeletionProject | null
+  ): Promise<void> {
+    if (deletionOrder.length === 0) return
     const assignmentIds = await this.assignmentIdsFor(deletionOrder)
     for (const candidate of deletionOrder) {
       await this.onDelete?.(candidate)
@@ -887,23 +1075,72 @@ export class ThreadManager {
     for (const candidate of deletionOrder) {
       this.transcripts.forgetUserMessages(projectId, candidate.id)
     }
-    await this.removeThreadDiskArtifacts(deletionOrder)
+    await this.removeThreadDiskArtifacts(deletionOrder, project)
     await this.onDeleted?.(deletionOrder)
   }
 
   /**
-   * Delete every thread in a project through the same path as
-   * `deleteThread` (session teardown, DB row cleanup, disk artifacts), so
-   * project deletion never has to duplicate or fall behind that logic.
+   * Delete every thread in a project through the same path as `deleteThread`
+   * (session teardown, DB row cleanup, disk artifacts), so project deletion
+   * never has to duplicate or fall behind that logic.
+   *
    * Only walks coordinator/standalone threads   orchestration children are
-   * swept as part of their coordinator's deletion.
+   * swept as part of their coordinator's deletion. One snapshot serves the
+   * whole sweep, each thread is removed as its own small step, and the loop
+   * yields to the event loop between threads so a large project cannot starve
+   * painting, IPC, or an agent stream while it drains. A thread whose teardown
+   * throws is logged and skipped instead of aborting the rest of the project,
+   * and a second pass picks up any row the first pass could not remove.
    */
-  async deleteAllThreadsInProject(projectId: string): Promise<void> {
+  async deleteAllThreadsInProject(
+    projectId: string,
+    onProgress?: (done: number, total: number) => void
+  ): Promise<ThreadSweepSummary> {
     const projectThreads = await this.threadRepo.listForDeletionViaWorker(projectId)
+    const project = await this.projectRepo.getViaWorker(projectId)
     const roots = projectThreads.filter((thread) => !isOrchestrationChildThread(thread))
+    const sweptIds = new Set<string>()
+    let swept = 0
+    let done = 0
     for (const root of roots) {
-      await this.deleteThread(projectId, root.id)
+      if (sweptIds.has(root.id)) continue
+      const order = [
+        ...assistantRunDescendants(projectThreads, root.id),
+        ...orchestrationDescendants(projectThreads, root.id),
+        root
+      ].filter((candidate) => !sweptIds.has(candidate.id))
+      for (const candidate of order) sweptIds.add(candidate.id)
+      try {
+        await this.deleteThreadOrder(projectId, order, project)
+        swept += order.length
+      } catch (error) {
+        Logger.dev('A thread survived a project deletion sweep', {
+          projectId,
+          threadId: root.id,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+      done += 1
+      onProgress?.(done, roots.length)
+      await new Promise<void>((resolve) => setImmediate(resolve))
     }
+    // A retry pass removes whatever the first pass left behind: a row whose
+    // teardown threw, or a descendant that arrived while the sweep ran.
+    const leftovers = await this.threadRepo.listForDeletionViaWorker(projectId)
+    for (const thread of leftovers) {
+      try {
+        await this.deleteThreadOrder(projectId, [thread], project)
+        swept += 1
+      } catch (error) {
+        Logger.dev('A leftover thread survived a project deletion sweep', {
+          projectId,
+          threadId: thread.id,
+          error: error instanceof Error ? error.message : String(error)
+        })
+      }
+    }
+    const unresolved = (await this.threadRepo.listForDeletionViaWorker(projectId)).length
+    return { swept, unresolved }
   }
 
   /** All non-archived threads whose scope bucket equals `bucketId`, read on the
@@ -1020,10 +1257,14 @@ export class ThreadManager {
   }
 
   /** Remove app-owned scratch directories a deleted thread wrote to. Best-effort. */
-  private async removeThreadDiskArtifacts(threads: Thread[]): Promise<void> {
+  private async removeThreadDiskArtifacts(
+    threads: Thread[],
+    project?: ThreadDeletionProject | null
+  ): Promise<void> {
     for (const thread of threads) {
-      const project = await this.projectRepo.getViaWorker(thread.projectId)
-      const dirs = threadOwnedDirectories(project, thread.projectId, thread.id, thread.assistantId)
+      const owner =
+        project === undefined ? await this.projectRepo.getViaWorker(thread.projectId) : project
+      const dirs = threadOwnedDirectories(owner, thread.projectId, thread.id, thread.assistantId)
       for (const dir of dirs) {
         await rm(dir, { recursive: true, force: true }).catch(() => {})
       }
@@ -1063,6 +1304,39 @@ export class ThreadManager {
       if (typeof assignmentId === 'string') assignmentIds.add(assignmentId)
     }
     return assignmentIds
+  }
+
+  /**
+   * Park a run on a typed reason until the user repairs its scope.
+   *
+   * The status is `working-paused` rather than `failed`, because nothing went
+   * wrong with the work: the checkout it needs is not usable yet, and the
+   * repair action is the user's next step. The reason is stored whole so the
+   * row and the receipt can name the category and repeat the app's own guidance
+   * after a restart.
+   */
+  async parkThread(
+    projectId: string,
+    threadId: string,
+    reason: NonNullable<Thread['parkReason']>
+  ): Promise<Thread> {
+    const existing = this.requireOwnedThread(projectId, threadId)
+    const now = Date.now()
+    const updated: Thread = {
+      ...existing,
+      status: 'working-paused',
+      lastOutcome: 'parked',
+      parkReason: reason,
+      lastError: reason.message,
+      lastErrorAt: now,
+      updatedAt: now,
+      lastActivity: now,
+      sortOrder: undefined,
+      scopeSortOrder: undefined
+    }
+    await this.threadRepo.upsertViaWorker(updated)
+    await this.announce(updated)
+    return updated
   }
 
   async setStatus(
@@ -1105,9 +1379,16 @@ export class ThreadManager {
             ? 'parked'
             : existing.lastOutcome
 
+    // A resumed run is no longer parked: the reason belongs to the attempt that
+    // refused to start, so a turn that does start clears it.
+    const clearedPark =
+      existing.parkReason !== undefined &&
+      (status === 'executing' || status === 'completed' || status === 'failed')
+
     const updated: Thread = {
       ...existing,
       status,
+      ...(clearedPark ? { parkReason: undefined } : {}),
       scopeSortOrder:
         scopeSliceForStatus(existing.status) === scopeSliceForStatus(status)
           ? existing.scopeSortOrder

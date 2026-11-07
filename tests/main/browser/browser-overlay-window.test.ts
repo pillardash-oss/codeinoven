@@ -144,6 +144,14 @@ describe('native browser overlay window', () => {
       expect.objectContaining({ id: request.id, revision: request.revision })
     ])
   })
+  it('tells the app a document that will never load is gone instead of letting panels wait', () => {
+    const { parent, host } = setup()
+    expect(host.applyDock(request.id, request)).toBe(true)
+    const popup = windows[1]
+    popup.webContents.emit('did-fail-load', {}, -105, 'NAME_NOT_RESOLVED', 'app://overlay', true)
+    expect(mocks.send).toHaveBeenCalledWith(parent.webContents, 'browser:overlay:failed')
+    expect(popup.destroy).toHaveBeenCalled()
+  })
   it('keeps tooltips click-through and gives only a modal keyboard ownership', () => {
     stubPlatform('darwin')
     const { host, parent } = setup()

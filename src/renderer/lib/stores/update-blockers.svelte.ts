@@ -27,12 +27,15 @@ class UpdateBlockersState {
 
   /**
    * How long a force install may stay unconfirmed before the button must stop
-   * pretending it is working. The main process bounds its own dispatch at 30s
-   * and reports a failure, so this is the backstop for the case where even that
-   * report never arrives (a wedged main process). Without a bound, a click that
-   * the platform installer silently drops leaves this surface spinning forever.
+   * pretending it is working. The main process bounds its own dispatch and
+   * reports a failure, but a cancelled local transfer is retried with backoff
+   * for about 90s before that report, so this backstop has to outlast every
+   * retry to avoid declaring a failed install that is still succeeding. What it
+   * still catches is the case where even that report never arrives (a wedged
+   * main process). Without a bound, a click that the platform installer silently
+   * drops leaves this surface spinning forever.
    */
-  private static readonly FORCE_INSTALL_BACKSTOP_MS = 45_000
+  private static readonly FORCE_INSTALL_BACKSTOP_MS = 150_000
   private backstop: ReturnType<typeof setTimeout> | null = null
 
   init(): void {

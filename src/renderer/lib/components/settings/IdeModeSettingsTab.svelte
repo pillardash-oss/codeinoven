@@ -78,6 +78,17 @@
   let importText = $state('')
   let error = $state('')
   let busy = $state(false)
+  /** Format on save is on unless the user turned it off; it only ever runs
+   *  where IDE Mode itself is on, so the default costs nothing elsewhere. */
+  let formatOnSave = $derived(config.ideFormatOnSave !== false)
+  async function setFormatOnSave(enabled: boolean): Promise<void> {
+    error = ''
+    try {
+      await updateConfig({ ideFormatOnSave: enabled })
+    } catch (reason) {
+      error = reason instanceof Error ? reason.message : String(reason)
+    }
+  }
   let checking = $state<Record<string, boolean>>({})
   let installing = $state<Record<string, boolean>>({})
   let status = $state<Record<string, string>>({})
@@ -294,6 +305,26 @@
     >
   </div>
   {#if error && !importing}<p class="mb-4 text-xs text-danger" role="alert">{error}</p>{/if}
+  <div class="mb-5">
+    <SettingsEntry>
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <h2 class="text-sm font-semibold">Format on save</h2>
+          <p class="mt-1 max-w-2xl text-xs leading-relaxed text-muted">
+            Re-lay-out a file through its language server when a file viewer saves it with IDE Mode
+            on. A file whose server has no formatter, or whose formatter cannot answer, is saved
+            exactly as written.
+          </p>
+        </div>
+        <Switch
+          checked={formatOnSave}
+          onchange={(enabled) => void setFormatOnSave(enabled)}
+          title="Format files on save"
+          aria-label="Format files on save"
+        />
+      </div>
+    </SettingsEntry>
+  </div>
   <div class="space-y-3">
     {#each servers as server (server.id)}
       {@const installation = installations[server.id]}

@@ -33,6 +33,8 @@ export const MAX_LLAMA_CPP_PORT = 65_535
  */
 export interface LlamaCppServerEntry {
   id: string
+  /** Engine this server belongs to. Only llama.cpp is launched by the app. */
+  runtime: LocalAiRuntimeId
   name: string
   /** Absolute path of an imported local `.gguf` file. */
   modelPath: string
@@ -189,15 +191,63 @@ export function tokenizeLlamaCppFlags(value: string): string[] {
 }
 
 /**
+ * The model id llama-server advertises in `/v1/models`, and the id a custom
+ * provider must store to be selectable as `provider/model`.
+ *
+ * Without an alias llama.cpp names the model after the absolute `-m` path, so a
+ * provider saved from that list carries an id no selection can address, and the
+ * same model is called one thing on the card and another in the picker. The
+ * alias is the label the app already shows, reduced to characters a model id can
+ * hold.
+ */
+export function llamaCppModelAlias(entry: LlamaCppServerEntry): string {
+  const label = llamaCppModelLabel(entry)
+  const alias = label
+    .replace(/[^A-Za-z0-9._-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 96)
+  return alias || 'llama.cpp'
+}
+
+/**
+ * The id to record for a model an OpenAI-compatible endpoint reports.
+ *
+ * llama.cpp answers `/v1/models` with the absolute `.gguf` path it was started
+ * with. That path is not a model id: a selection is written as
+ * `provider/model`, so it would carry the user's home directory into every
+ * request. A GGUF path is reduced to its file name; every other id is kept as
+ * served, since `org/model` and `org/model@q4` are real ids elsewhere.
+ */
+export function llamaCppAddressableModelId(id: string): string {
+  const absolute = id.startsWith('/') || /^[a-zA-Z]:[\\/]/u.test(id)
+  if (!absolute || !/\.gguf$/iu.test(id)) return id
+  const segments = id.split(/[\\/]/u)
+  return segments[segments.length - 1] || id
+}
+
+/**
  * The argv `llama-server` is launched with. The model selector comes first so
  * the generated command reads the same as the one the user would type.
+ *
+ * `logFile` is where the app asks the server to write its log as well, so a
+ * server that outlives the app still has a log to read afterwards. It is left
+ * out of the copyable command: that path belongs to the app, not the user.
  */
-export function buildLlamaServerArgs(entry: LlamaCppServerEntry): string[] {
+export function buildLlamaServerArgs(entry: LlamaCppServerEntry, logFile?: string): string[] {
   const source = llamaCppModelSource(entry)
   if (!source) return []
   const args = source.kind === 'local' ? ['-m', source.path] : huggingFaceArgs(source.reference)
   args.push('--host', entry.host.trim(), '--port', String(entry.port))
-  args.push(...tokenizeLlamaCppFlags(entry.extraFlags))
+  const flags = tokenizeLlamaCppFlags(entry.extraFlags)
+  // An alias the user set in the extra flags wins; the generated one only keeps
+  // the served id addressable when they gave none.
+  if (!flags.some((flag) => flag === '-a' || flag.startsWith('--alias'))) {
+    args.push('--alias', llamaCppModelAlias(entry))
+  }
+  if (logFile && !flags.some((flag) => flag.startsWith('--log-file'))) {
+    args.push('--log-file', logFile)
+  }
+  args.push(...flags)
   return args
 }
 
@@ -268,40 +318,118 @@ export function nextFreeLlamaCppPort(entries: readonly LlamaCppServerEntry[]): n
   return port
 }
 
-/** True when another saved row already binds this port. */
-export function llamaCppPortConflict(
-  entries: readonly LlamaCppServerEntry[],
-  candidate: Pick<LlamaCppServerEntry, 'id' | 'host' | 'port'>
-): LlamaCppServerEntry | null {
-  const host = candidate.host.trim().toLowerCase()
-  const wildcard = host === '0.0.0.0' || host === '::'
-  return (
-    entries.find((entry) => {
-      if (entry.id === candidate.id || entry.port !== candidate.port) return false
-      const other = entry.host.trim().toLowerCase()
-      if (other === host) return true
-      // A wildcard bind claims every interface on that port.
-      return wildcard || other === '0.0.0.0' || other === '::'
-    }) ?? null
-  )
+/** The `host:port` a row binds, as one string to compare and show. */
+export function llamaCppServerAddress(entry: Pick<LlamaCppServerEntry, 'host' | 'port'>): string {
+  return `${entry.host.trim() || DEFAULT_LLAMA_CPP_HOST}:${entry.port}`
 }
 
-/** Why a row cannot be saved, or null when it can. */
-export function llamaCppEntryProblem(
-  entry: LlamaCppServerEntry,
+/** One server on this machine and every saved model that opens on its address. */
+export interface LlamaCppServerGroup {
+  /** `host:port`, the identity of the server. */
+  address: string
+  host: string
+  port: number
+  /** Saved models that load on this address, in saved order. */
+  entries: LlamaCppServerEntry[]
+}
+
+/**
+ * Group saved rows into servers.
+ *
+ * An address is the server: one host and port can hold several saved models,
+ * and exactly one of them runs at a time because `llama-server` loads one model
+ * per process. Two rows on one address are therefore two models of one server,
+ * never two servers.
+ */
+export function groupLlamaCppServers(
   entries: readonly LlamaCppServerEntry[]
-): string | null {
+): LlamaCppServerGroup[] {
+  const groups = new Map<string, LlamaCppServerGroup>()
+  for (const entry of entries) {
+    const address = llamaCppServerAddress(entry)
+    const existing = groups.get(address)
+    if (existing) {
+      existing.entries.push(entry)
+      continue
+    }
+    groups.set(address, { address, host: entry.host.trim(), port: entry.port, entries: [entry] })
+  }
+  return [...groups.values()]
+}
+
+/**
+ * Why a row cannot be saved, or null when it can.
+ *
+ * Two rows may name the same address on purpose: one port serves one model at a
+ * time, and the user is allowed to keep several saved models pointed at it, then
+ * start whichever one they want. Starting one while another is bound there asks
+ * before the running model is stopped, so this validation must not refuse it.
+ */
+/** How one engine's model is named in the editor and on the row. */
+export interface LocalAiModelCopy {
+  /** What the local source is called, e.g. "Local GGUF file". */
+  localTitle: string
+  localHint: string
+  localPlaceholder: string
+  /** Placeholder for the Hugging Face reference, when the engine takes one. */
+  referencePlaceholder: string
+  /** Whether this engine can pull a model from a Hugging Face reference. */
+  huggingFace: boolean
+  /** Pick dialog title, so the OS dialog names the right thing. */
+  pickTitle: string
+}
+
+/**
+ * The words one engine's model uses.
+ *
+ * An MLX server loads a model folder of safetensors, and a Core ML server loads a
+ * compiled `.mlpackage`; neither has anything to do with GGUF, and saying so in
+ * the editor is how a user ends up pointing an engine at a file it cannot read.
+ */
+export function localAiModelCopy(runtime: LocalAiRuntimeId): LocalAiModelCopy {
+  if (runtime === 'mlx') {
+    return {
+      localTitle: 'Local MLX model',
+      localHint: 'A model folder holding the weights and the tokenizer.',
+      localPlaceholder: '/path/to/mlx-model',
+      referencePlaceholder: 'mlx-community/Qwen3-4B-4bit',
+      huggingFace: true,
+      pickTitle: 'Choose an MLX model folder'
+    }
+  }
+  if (runtime === 'coreml') {
+    return {
+      localTitle: 'Local Core ML model',
+      localHint: 'A compiled .mlpackage or .mlmodelc folder.',
+      localPlaceholder: '/path/to/Model.mlpackage',
+      referencePlaceholder: '',
+      huggingFace: false,
+      pickTitle: 'Choose a Core ML model'
+    }
+  }
+  return {
+    localTitle: 'Local GGUF file',
+    localHint: 'A file already on this machine, referenced where it lives.',
+    localPlaceholder: '/path/to/model.gguf',
+    referencePlaceholder: 'LiquidAI/LFM2.5-2.6B-GGUF:Q5_K_M',
+    huggingFace: true,
+    pickTitle: 'Choose a GGUF model'
+  }
+}
+
+export function llamaCppEntryProblem(entry: LlamaCppServerEntry): string | null {
   const name = entry.name.trim()
   if (name.length === 0) return 'Give the server a name'
   if (name.length > LLAMA_CPP_NAME_MAX_LENGTH) return 'The name is too long'
-  if (llamaCppModelSource(entry) === null)
-    return 'Choose a local .gguf file or a Hugging Face reference'
+  if (llamaCppModelSource(entry) === null) {
+    const copy = localAiModelCopy(entry.runtime)
+    return copy.huggingFace
+      ? 'Choose a local model or a Hugging Face reference'
+      : `Choose a ${copy.localTitle.toLowerCase()}`
+  }
   if (!isLlamaCppHostValid(entry.host)) return 'Enter a host such as 127.0.0.1'
   if (!isLlamaCppPortValid(entry.port)) return 'Enter a port between 1 and 65535'
   if (entry.extraFlags.length > LLAMA_CPP_FLAGS_MAX_LENGTH) return 'The extra flags are too long'
-  const conflict = llamaCppPortConflict(entries, entry)
-  if (conflict)
-    return `Port ${entry.port} is already used by ${conflict.name.trim() || 'another server'}`
   return null
 }
 
@@ -321,6 +449,11 @@ function boundedString(value: unknown, max: number): string | null {
  * rather than failing the launch, matching how the other tolerant config lists
  * are read.
  */
+/** The engine an entry belongs to; an older save without one is llama.cpp. */
+function readEntryRuntime(value: unknown): LocalAiRuntimeId {
+  return value === 'mlx' || value === 'coreml' ? value : 'llama.cpp'
+}
+
 export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
   if (!Array.isArray(value)) throw new TypeError('Llama.cpp servers must be a list')
   if (value.length > MAX_LLAMA_CPP_SERVERS) {
@@ -342,6 +475,7 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
     const port = typeof raw.port === 'number' ? raw.port : Number.NaN
     const entry: LlamaCppServerEntry = {
       id,
+      runtime: readEntryRuntime(raw.runtime),
       name,
       modelPath,
       modelReference,
@@ -349,11 +483,82 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
       port: isLlamaCppPortValid(port) ? port : DEFAULT_LLAMA_CPP_PORT,
       extraFlags
     }
-    if (llamaCppEntryProblem(entry, entries) !== null) continue
+    if (llamaCppEntryProblem(entry) !== null) continue
     ids.add(id)
     entries.push(entry)
   }
   return entries
+}
+
+/**
+ * The local inference runtimes the app can drive.
+ *
+ * `llama.cpp` runs as a `llama-server` process the app spawns, while `mlx` and
+ * `coreml` are bound into the speech workers. All three are listed together on
+ * the Local AI page, which is the one place a local model's memory policy is set.
+ */
+export type LocalAiRuntimeId = 'llama.cpp' | 'mlx' | 'coreml'
+
+/** One runtime row on the Local AI page. */
+export interface LocalAiRuntimeSummary {
+  id: LocalAiRuntimeId
+  label: string
+  available: boolean
+  /** Version and path when available, the reason it is not when it is not. */
+  detail: string
+  /** The jobs the app runs on this runtime. */
+  uses: string[]
+}
+
+/**
+ * How long a resident local model stays loaded after its last use.
+ *
+ * One window for every local server the app owns: the same model is held for
+ * speech cleanup and for search embeddings, so two windows would only decide
+ * which subsystem re-loads it first. `keep` pins it for the rest of the session.
+ */
+export const LOCAL_AI_UNLOAD_OPTIONS = ['5m', '10m', '20m', '30m', 'keep'] as const
+
+/** What "Unload now" released, so the page can name it instead of saying "done". */
+export interface LocalAiUnloadResult {
+  /** Servers that were resident and stopped. */
+  stopped: number
+  /** Model files those servers had loaded. */
+  models: string[]
+}
+
+export type LocalAiUnloadOption = (typeof LOCAL_AI_UNLOAD_OPTIONS)[number]
+
+/** 30 minutes: long enough to stay warm across a working session. */
+export const DEFAULT_LOCAL_AI_UNLOAD_OPTION: LocalAiUnloadOption = '30m'
+
+const LOCAL_AI_UNLOAD_MS: Readonly<Record<Exclude<LocalAiUnloadOption, 'keep'>, number>> = {
+  '5m': 5 * 60_000,
+  '10m': 10 * 60_000,
+  '20m': 20 * 60_000,
+  '30m': 30 * 60_000
+}
+
+export const LOCAL_AI_UNLOAD_LABELS: Readonly<Record<LocalAiUnloadOption, string>> = {
+  '5m': '5 minutes',
+  '10m': '10 minutes',
+  '20m': '20 minutes',
+  '30m': '30 minutes',
+  keep: 'Never unload'
+}
+
+export function isLocalAiUnloadOption(value: unknown): value is LocalAiUnloadOption {
+  return typeof value === 'string' && LOCAL_AI_UNLOAD_OPTIONS.some((option) => option === value)
+}
+
+/** A stored value that is no longer a valid option falls back to the default. */
+export function readLocalAiUnloadOption(value: unknown): LocalAiUnloadOption {
+  return isLocalAiUnloadOption(value) ? value : DEFAULT_LOCAL_AI_UNLOAD_OPTION
+}
+
+/** How long the window lasts, or null when the user pinned the model. */
+export function localAiUnloadMs(option: LocalAiUnloadOption): number | null {
+  return option === 'keep' ? null : LOCAL_AI_UNLOAD_MS[option]
 }
 
 /** What the binary card states about the machine it is running on. */
@@ -373,6 +578,19 @@ export interface LlamaCppRuntimeStatus {
   latestVersion: string
   /** One sentence the card shows under the status. */
   detail: string
+}
+
+/**
+ * Where a row's log comes from, and what the file already holds.
+ *
+ * `pty` means the process is still attached to the terminal that started it, so
+ * its output arrives over the PTY channels. `file` means the row reads the
+ * server's own `--log-file` instead, which is all that is left once the app
+ * instance that launched it is gone.
+ */
+export interface LlamaCppLogStream {
+  source: 'pty' | 'file'
+  lines: string[]
 }
 
 /** The readiness answer for a started server. */

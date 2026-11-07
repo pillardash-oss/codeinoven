@@ -50,6 +50,7 @@ import { MlxSpeechBackend } from './backends/mlx-backend'
 import { CoreMlSpeechBackend } from './backends/coreml-backend'
 import { LlamaServerSpeechBackend, setLlamaServerBinary } from './backends/llama-backend'
 import { LlamaRuntimeService, sharedLlamaRuntimeService } from './llama-runtime-service'
+import { sharedLocalAiRuntimeRegistry } from '../local-ai/local-ai-runtime-registry'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
 import { SpeechCleanupService } from './speech-cleanup-service'
@@ -68,6 +69,13 @@ import { SpeechArtifactDownloader } from './speech-service/speech-artifact-downl
 import { toSpeechError } from './speech-service/speech-error-mapping'
 
 export { speechResult } from './speech-service/speech-error-mapping'
+
+/**
+ * How far a finished native take may fall short of its recorded length before
+ * it counts as lost audio rather than conversion jitter. A clean take is within
+ * a few milliseconds; the one that prompted this fix kept 13 s of 160 s.
+ */
+const NATIVE_CAPTURE_SHORTFALL_MS = 2_000
 
 interface InstalledArtifactIndex {
   version: 1
@@ -173,6 +181,15 @@ export class SpeechService {
    * then pays the whole model load after the user hits send.
    */
   private readonly openCaptures = new Set<string>()
+  /**
+   * Transcriptions whose transcript has not been handed back yet: the model and
+   * any cleanup pass are still working on words the user already spoke.
+   *
+   * Counted from the moment the renderer asks for the transcription until the
+   * answer is returned, because a restart in that window loses a recording the
+   * user has no way to recover.
+   */
+  private dictationTranscriptions = 0
   private readonly eviction: SpeechRuntimeEviction
   private readonly playground = new SpeechPlaygroundStore()
 
@@ -196,10 +213,10 @@ export class SpeechService {
       ['coreml', new CoreMlSpeechBackend(paths.coremlWorkerPath)],
       [
         'gguf',
-        new LlamaServerSpeechBackend(
-          (pid, command, cwd) => this.llamaRuntime.registerServerProcess(pid, command, cwd),
-          (pid) => this.llamaRuntime.unregisterServerProcess(pid),
-          (pid, command, cwd) => this.trackProcess?.(pid, command, cwd)
+        // The local AI runtime registry owns this backend's server process, so
+        // the backend only carries the request shape and the lesson prompts.
+        new LlamaServerSpeechBackend(sharedLocalAiRuntimeRegistry(), (pid, command, cwd) =>
+          this.trackProcess?.(pid, command, cwd)
         )
       ]
     ])
@@ -230,19 +247,61 @@ export class SpeechService {
       JSON.parse(await readFile(this.paths.catalogPath, 'utf8'))
     )
     await this.loadInstalledIndex()
-    // Warm the native capture worker so the first recording after a launch does
-    // not pay process and audio-unit init. The warmup opens CoreAudio's input
-    // path, which is exactly what makes macOS show its microphone prompt, so it
-    // is gated on a decision that already exists: a user who has recorded before
-    // starts instantly, while a fresh install is left untouched until the first
-    // recording asks for access. It is skipped entirely while a sibling instance
-    // is recording, because opening the input device from a second process can
-    // make the device renegotiate under that live capture.
+    // Spawn the capture worker now, without touching the microphone. The first
+    // press used to pay process launch (Swift runtime and dyld, up to a second)
+    // and everything said during it was lost. Spawning opens no audio device, so
+    // this is safe on a fresh install where no microphone decision exists yet.
+    void this.nativeCapture.ping().catch((error) => {
+      Logger.dev('Native speech capture could not be started ahead of time:', error)
+    })
+    // Wait for the boot to settle before opening the microphone once. Priming
+    // builds the engine, installs the tap and resolves the device at launch, so
+    // the first press of the session costs tens of milliseconds like every other
+    // one; it is a one-off warmup and must not compete with the boot itself.
     if (microphoneAccessGranted() && !(await this.storage.anotherInstanceIsRecording())) {
-      void this.nativeCapture.warm().catch((error) => {
-        Logger.dev('Native speech capture warmup failed (non-fatal):', error)
-      })
+      this.scheduleCaptureWarmup()
     }
+  }
+
+  private captureWarmupTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * Reads the `voiceRecordingEnabled` setting, the second way a user can have a
+   * mic on screen (the first is an installed ASR model). Wired by the boot
+   * sequence and only read when deciding whether the microphone may be opened
+   * ahead of a press.
+   */
+  private dictationSettingEnabled: (() => Promise<boolean>) | null = null
+
+  /** Let the capture gate see the audio-to-LLM setting. */
+  setDictationSettingSource(source: () => Promise<boolean>): void {
+    this.dictationSettingEnabled = source
+  }
+
+  /**
+   * Prime the native microphone once the application has rendered and booted.
+   *
+   * The microphone stays released until the user actually records (the engine is
+   * started once and stopped again, with the device object retained), so this is
+   * invisible apart from a brief device open. Warming here rather than on the
+   * first press is what makes a shortcut recording start on the press: a
+   * shortcut never hovers a mic, so a gesture-driven warmup cannot help it.
+   */
+  private scheduleCaptureWarmup(delayMs = 1_500): void {
+    if (this.captureWarmupTimer) clearTimeout(this.captureWarmupTimer)
+    this.captureWarmupTimer = setTimeout(() => {
+      this.captureWarmupTimer = null
+      if (this.openCaptures.size > 0) return
+      if (!microphoneAccessGranted()) return
+      void (async () => {
+        // Gate the warmup exactly like the mic control it exists for: a user
+        // with no usable model and the audio-to-LLM setting off has no mic on
+        // screen, and the microphone must not open for them.
+        if (!(await this.dictationAvailable())) return
+        await this.nativeCapture.warm().catch((error) => {
+          Logger.dev('Native speech capture warmup failed (non-fatal):', error)
+        })
+      })()
+    }, delayMs)
   }
 
   /**
@@ -375,7 +434,60 @@ export class SpeechService {
     return value
   }
 
-  async beginNativeCapture(scope: SpeechScope): Promise<SpeechCaptureSessionInfo> {
+  /**
+   * Open the microphone before the user presses record.
+   *
+   * The mic surface arms this as soon as the pointer is over it, so the device
+   * open (150-800 ms) has already happened when the press arrives and the take
+   * starts with the press instead of a second later. It never runs before a
+   * microphone decision exists, because opening the input device is what makes
+   * macOS ask for permission.
+   */
+  async armNativeCapture(): Promise<void> {
+    if (this.openCaptures.size > 0) return
+    if (!microphoneAccessGranted()) return
+    // The same gate that decides whether a mic is shown at all: a hidden mic
+    // never opens the microphone.
+    if (!(await this.dictationAvailable())) return
+    if (await this.storage.anotherInstanceIsRecording()) return
+    await this.nativeCapture.arm()
+  }
+
+  /**
+   * Whether this user can record at all, by the same rule the renderer uses to
+   * show a mic control: an installed, available speech-to-text model, or the
+   * audio-to-LLM setting.
+   *
+   * The microphone is a privacy surface, so nothing on the capture side may open
+   * it for a user who has no mic on screen.
+   */
+  private async dictationAvailable(): Promise<boolean> {
+    if (this.hasInstalledAsrArtifact()) return true
+    if (!this.dictationSettingEnabled) return false
+    return this.dictationSettingEnabled().catch(() => false)
+  }
+
+  /** Mirrors the renderer's `hasInstalledAsr`: an ASR model that can be used. */
+  private hasInstalledAsrArtifact(): boolean {
+    const catalog = this.catalog
+    return this.installed.artifacts.some((artifact) => {
+      if (!artifact.available) return false
+      if (artifact.capability) return artifact.capability === 'asr'
+      const entry = catalog?.artifacts.find((item) => item.id === artifact.artifactId)
+      return entry?.capability === 'asr' && entry.qualification.status !== 'retired'
+    })
+  }
+
+  /** Release an armed microphone that was never pressed. */
+  async disarmNativeCapture(): Promise<void> {
+    if (this.openCaptures.size > 0) return
+    await this.nativeCapture.disarm()
+  }
+
+  async beginNativeCapture(
+    scope: SpeechScope,
+    pressedAt?: number
+  ): Promise<SpeechCaptureSessionInfo> {
     if (!(await this.nativeCapture.available())) {
       throw new Error('Native microphone recording is unavailable on this device.')
     }
@@ -386,7 +498,11 @@ export class SpeechService {
     if (!access.granted) throw new Error(access.message ?? 'Microphone access is unavailable.')
     const started = await this.storage.beginNativeCapture(scope)
     try {
-      await this.nativeCapture.start(started.sessionId, started.stagingPath)
+      // `pressedAt` is the instant of the gesture, not of this line: the take
+      // keeps the buffered audio the armed microphone captured from the press
+      // onwards, and drops what it heard while the pointer was merely over the
+      // button.
+      await this.nativeCapture.start(started.sessionId, started.stagingPath, pressedAt)
     } catch (cause) {
       await this.storage.failCapture(
         started.sessionId,
@@ -436,8 +552,23 @@ export class SpeechService {
     durationMs: number
   ): Promise<SpeechRecordingAttempt> {
     this.releaseCapture(sessionId)
-    await this.nativeCapture.stop(sessionId)
-    const attempt = await this.storage.finalizeCapture(sessionId, durationMs)
+    const report = await this.nativeCapture.stop(sessionId)
+    const attempt = await this.storage.finalizeCapture(sessionId, durationMs, report)
+    const shortfall = durationMs - (attempt.capturedMs ?? durationMs)
+    if (report.warning || shortfall > NATIVE_CAPTURE_SHORTFALL_MS) {
+      // A take that lost its microphone used to be finished and transcribed as
+      // if it were whole, which is exactly how 2m40s of speech became a 13s
+      // transcript. The attempt now carries what it really captured, and the
+      // renderer tells the user instead of letting the fragment pass as whole.
+      Logger.error('Native voice recording captured less audio than it recorded.', {
+        attemptId: attempt.id,
+        durationMs,
+        capturedMs: attempt.capturedMs ?? null,
+        shortfallMs: shortfall,
+        warning: report.warning ?? null,
+        engineRestarts: report.engineRestarts
+      })
+    }
     this.emit({
       kind: 'capture',
       capture: { state: 'stopping', sessionId, attemptId: attempt.id }
@@ -454,7 +585,11 @@ export class SpeechService {
 
   async failNativeCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
     await this.nativeCapture.stop(sessionId).catch(() => undefined)
-    return this.failCapture(sessionId, message)
+    const attempt = await this.failCapture(sessionId, message)
+    // A failed take can leave the recorder dead or cold. Prime it again so the
+    // retry starts on a microphone that is already open.
+    if (microphoneAccessGranted()) this.scheduleCaptureWarmup(500)
+    return attempt
   }
 
   async markAttemptFailure(attemptId: string, message: string): Promise<SpeechRecordingAttempt> {
@@ -528,6 +663,7 @@ export class SpeechService {
         state: this.queue.state(queued.id) ?? { state: 'queued', position: 1 }
       }
     })
+    this.dictationTranscriptions += 1
     try {
       const rawTranscript = (await queued.result).trim()
       if (rawTranscript.length === 0) {
@@ -587,6 +723,8 @@ export class SpeechService {
         attempt.errors.push({ stage: 'transcribing', error, occurredAt: Date.now() })
       })
       throw cause
+    } finally {
+      this.dictationTranscriptions -= 1
     }
   }
 
@@ -986,6 +1124,11 @@ export class SpeechService {
       existing.available = true
       if (capability) existing.capability = capability
       await this.persistInstalledIndex()
+      // The mic appears as soon as an ASR model is usable, so the recorder is
+      // primed for it now rather than on the first press.
+      if (existing.capability === 'asr' && microphoneAccessGranted()) {
+        this.scheduleCaptureWarmup(0)
+      }
       this.emit({ kind: 'history', attemptId: existing.artifactId, stage: 'completed' })
       return structuredClone(existing)
     }
@@ -1001,6 +1144,7 @@ export class SpeechService {
     }
     this.installed.artifacts.push(artifact)
     await this.persistInstalledIndex()
+    if (capability === 'asr' && microphoneAccessGranted()) this.scheduleCaptureWarmup(0)
     this.emit({ kind: 'history', attemptId: artifact.artifactId, stage: 'completed' })
     return structuredClone(artifact)
   }
@@ -1256,6 +1400,42 @@ export class SpeechService {
     this.touch('asr')
   }
 
+  /**
+   * Forget every open microphone, for a renderer that went away mid-recording.
+   *
+   * A reload or a dead renderer takes the recorder, the audio it was still
+   * uploading and the ability to finish the attempt with it. The capture can
+   * never be completed, and a session left in this set would read as "someone is
+   * still speaking" forever, holding an update install back for a microphone
+   * that no longer exists.
+   */
+  abandonOpenCaptures(): void {
+    if (this.openCaptures.size === 0) return
+    const sessionIds = [...this.openCaptures]
+    this.openCaptures.clear()
+    for (const sessionId of sessionIds) {
+      // A native capture keeps recording in its own worker, outside the renderer
+      // that asked for it, so it is stopped rather than only forgotten.
+      void this.nativeCapture.stop(sessionId).catch(() => undefined)
+    }
+    this.touch('asr')
+  }
+
+  /**
+   * ASR work an app restart would destroy right now: microphones that are still
+   * open and transcriptions that have not answered yet.
+   *
+   * Read by the update gate, which must never quit through a recording the user
+   * is still producing. The renderer pastes the transcript the moment this
+   * answers, so the wait ends with the transcript rather than with the caret.
+   */
+  dictationActivity(): { recording: number; transcribing: number } {
+    return {
+      recording: this.openCaptures.size,
+      transcribing: this.dictationTranscriptions
+    }
+  }
+
   private isCapabilityBusy(capability: SpeechCapability): boolean {
     // An open microphone is ASR work in progress: the user is about to hand this
     // capability a recording, so a warmed model must survive the wait.
@@ -1283,6 +1463,10 @@ export class SpeechService {
   }
 
   async dispose(): Promise<void> {
+    if (this.captureWarmupTimer) {
+      clearTimeout(this.captureWarmupTimer)
+      this.captureWarmupTimer = null
+    }
     this.eviction.dispose()
     this.downloader.abortAll()
     const activeNativeSession = this.nativeCapture.activeSessionId
@@ -1620,6 +1804,9 @@ export class SpeechService {
       capability: artifact.capability
     })
     await this.persistInstalledIndex()
+    // A model that just became usable is the moment the mic appears for a user
+    // who had none, so this is when the recorder is primed for it.
+    if (artifact.capability === 'asr' && microphoneAccessGranted()) this.scheduleCaptureWarmup(0)
   }
 
   private installedIndexPath(): string {

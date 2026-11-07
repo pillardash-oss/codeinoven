@@ -412,6 +412,12 @@ export class ChatEngineTurnsSteer {
       projectPath,
       steerSettings
     )
+    // A user message into the live turn supersedes a stop the user requested
+    // earlier (the account-mismatch branch above latches one before its
+    // stop-and-resend). Leaving the latch set discarded every event of the turn
+    // this steer joined, so the message read as delivered and nothing it
+    // produced ever reached the thread.
+    this.host.state.userAbortedSessions.delete(activeSessionId)
     const steerOptions = {
       sessionId: activeSessionId,
       text: driverText,

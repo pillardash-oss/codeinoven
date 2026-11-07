@@ -9,6 +9,7 @@
   import { motionDuration, slideWidth } from '$lib/motion'
   import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import SidebarResizeHandle from '$lib/components/layout/SidebarResizeHandle.svelte'
+  import { setSidebarPanelContext } from '$lib/components/layout/sidebar-panel-context'
 
   interface Props {
     /** Sidebar header title, e.g. "Projects" or "Chats". */
@@ -144,6 +145,14 @@
   let overlayHovered = $state(false)
   let hideTimeout: ReturnType<typeof setTimeout> | undefined
 
+  /* A control this panel hosts that opens a popover outside it (a row's search)
+     takes a hold so the floating overlay does not read the pointer moving onto
+     that popover as the user walking away. */
+  setSidebarPanelContext({
+    hold: () => sidebarState.hold(),
+    releaseHold: () => sidebarState.releaseHold()
+  })
+
   let docked = $derived(pinned || sidebarState.docked)
 
   /** The panel never narrows past the width the header's own chrome needs: the
@@ -186,10 +195,12 @@
   function onOverlayEnter(): void {
     clearTimeout(hideTimeout)
     overlayHovered = true
+    sidebarState.reportPointer(true)
   }
 
   function onOverlayLeave(): void {
     overlayHovered = false
+    sidebarState.reportPointer(false)
     hideTimeout = setTimeout(() => {
       if (overlayHovered) return
       // A native host draws the panel above this window, so it takes the pointer
@@ -197,6 +208,10 @@
       // the user walking away. Whether the pointer is still on the panel is the
       // host's report to make, and it closes on its own schedule when it goes.
       if (holdOpen?.()) return
+      // Content portaled out of the panel (a search popover) is still the
+      // panel's own interaction: the pointer moved onto what the panel opened,
+      // not away from the panel. The hold releases when that interaction ends.
+      if (sidebarState.held) return
       sidebarState.hoverOpen = false
     }, 260)
   }
@@ -281,8 +296,10 @@
     onmouseenter={onEdgeEnter}
   ></div>
 
-  <!-- Floating overlay -->
-  {#if sidebarState.hoverOpen}
+  <!-- Floating overlay. It stays on screen while an interaction it started (a
+       search popover) holds it, even though the pointer is on that popover
+       rather than on the panel itself. -->
+  {#if sidebarState.hoverOpen || sidebarState.held}
     <aside
       {@attach panel}
       class="fixed top-12 bottom-0 left-0 z-50 flex flex-col bg-surface shadow-2xl"

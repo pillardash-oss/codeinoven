@@ -41,6 +41,7 @@ import { formatConversationTranscript } from './chat-engine-message-text'
 import { COORDINATOR_HANDOFF_QUEUE_DIR, MAX_COORDINATOR_HANDOFFS } from './chat-engine-constants'
 import {
   CONVERSATION_ASSIGNMENT_INSTRUCTION,
+  EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
   PROMPT_READ_ONLY_TOOLS,
   engineeringArtifactBoundaryInstruction,
   formatOpenAnnotations
@@ -64,6 +65,23 @@ export class ChatEngineAssignment {
     coordinatorThreadId: string
   ): Promise<AssignmentPlan> {
     this.host.units['messages'].touchUserActivity()
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    const assignment = this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (!assignment) throw new AssignmentEngineError('not_found', 'Assignment not found')
+    // An explicit resume re-arms automatic work, but every prompt dispatched here
+    // is internal. Clearing the durable stop latch is what tells the idle
+    // finalizer this run is allowed to continue itself; the automatic recovery
+    // path below never clears it, so a stopped thread still stays stopped.
+    const resumedThreadIds = new Set<string>([
+      coordinatorThreadId,
+      ...assignment.content.tasks.flatMap((task) => (task.threadId ? [task.threadId] : []))
+    ])
+    await Promise.all(
+      [...resumedThreadIds].map((threadId) =>
+        this.host.threadManager.clearStoppedByUser(projectId, threadId)
+      )
+    )
     return this.resumeAssignmentAttentionInternal(projectId, coordinatorThreadId)
   }
 
@@ -125,7 +143,7 @@ export class ChatEngineAssignment {
       await this.sendAssignmentCoordinatorPrompt(
         assignment,
         coordinator.settings,
-        this.coordinatorAssignmentPrompt(assignment),
+        await this.coordinatorResumePrompt(assignment),
         { action: 'Resume Assignment coordination' },
         true
       )
@@ -505,19 +523,36 @@ export class ChatEngineAssignment {
         this.host.state.stoppedAssignmentSessions.delete(sessionId)
       }
     }
+    // The settings snapshot predates the resume, so it still carries the Stop
+    // latch. Internal prompts persist their settings verbatim, so strip the flag
+    // here as well: a stale copy would restore the latch the resume just cleared.
+    const { stoppedByUserAt: _stoppedByUserAt, ...resumedCoordinatorSettings } =
+      coordinator.settings
     const settings: ThreadSettings = {
-      ...coordinator.settings,
+      ...resumedCoordinatorSettings,
       assignmentMode: false,
       loopMode: assignment.loopModeBeforeStop === true
     }
     await this.host.threadManager.updateSettings(projectId, coordinatorThreadId, settings)
+    // Resuming an Assignment is an explicit user decision, but every prompt this
+    // path dispatches is internal. The settings write above is built from the
+    // pre-resume thread, so clear the durable stop latch after it; otherwise the
+    // resumed run reads as a turn the user had stopped and refuses its own
+    // continuations, dying on its first idle.
+    await Promise.all(
+      resumedThreads.map((thread) =>
+        thread
+          ? this.host.threadManager.clearStoppedByUser(projectId, thread.id)
+          : Promise.resolve()
+      )
+    )
     await this.host.units['assignment-run'].ensureAssignmentApi()
 
     if (['approved', 'running', 'attention'].includes(assignment.status)) {
       await this.sendAssignmentCoordinatorPrompt(
         assignment,
         settings,
-        this.coordinatorAssignmentPrompt(assignment),
+        await this.coordinatorResumePrompt(assignment),
         { action: 'Resume Assignment' },
         true
       )
@@ -540,7 +575,7 @@ export class ChatEngineAssignment {
       await this.sendAssignmentCoordinatorPrompt(
         assignment,
         settings,
-        this.coordinatorAssignmentPrompt(assignment),
+        await this.coordinatorResumePrompt(assignment),
         { action: 'Resume Assignment' },
         true
       )
@@ -674,6 +709,45 @@ export class ChatEngineAssignment {
     return assignment.content.tasks.some((task) => task.status !== 'completed')
   }
 
+  /**
+   * The rule every coordinator prompt must carry: waiting is the app's job.
+   *
+   * The report-driven flow is already automatic. A worker that reports wakes the
+   * coordinator through `promptCoordinatorForAudit`, a worker that finishes
+   * without reporting is handed over by the unreported-completion path, and a
+   * worker that dies leaves an attention task that resumes the coordinator. A
+   * coordinator that does not know any of that invents its own wait: it runs
+   * `curl` in a `for i in $(seq ...)` loop against `/v1/assignments/get`, which
+   * keeps its turn open for minutes, burns tokens, and holds the thread busy
+   * while the report it is waiting for has nowhere to land.
+   */
+  coordinatorWaitingInstruction(): string {
+    return [
+      "Waiting for a worker is the application's job, not yours.",
+      'When every task you can act on is dispatched and the rest are workers still running, end your turn: the application starts a new coordinator turn the moment a worker reports, finishes without reporting, or leaves an attention task, and that turn carries the report.',
+      'Never poll, sleep, or loop on /v1/assignments/get or any other endpoint to wait for a worker: a waiting loop keeps this thread busy, delays the report you are waiting for, and the report reaches you as a new turn anyway. Call get only to read state you are about to act on right now.'
+    ].join(' ')
+  }
+
+  /**
+   * The rule every coordinator prompt must carry: the worker's protocol is the app's job.
+   *
+   * A worker prompt is assembled here, not by the coordinator: `workerReportInstruction`
+   * puts the Assignment API contract and the report instruction into every worker prompt,
+   * and `steerAssignmentWorker` appends that same contract to every forwarded update. A
+   * coordinator that does not know this repeats the protocol inside its own steer
+   * instruction, so the worker reads two reporting contracts, the first one hand-written
+   * from memory and the second one authoritative. The hand-written one is where a stale
+   * status value or a misspelled endpoint comes from, and it buries the actual change the
+   * steer was sent to deliver.
+   */
+  coordinatorSteeringInstruction(): string {
+    return [
+      'A worker already carries the full Assignment API contract and the instruction to report when its work is done: the application writes both into every worker prompt and appends them to every update you forward.',
+      'Write a steer instruction as the change in the work and nothing else. Never restate the protocol: no endpoint names, no report status values, no evidence submission steps, and no operationId. The application supplies those after your instruction.'
+    ].join(' ')
+  }
+
   coordinatorAssignmentPrompt(assignment: AssignmentPlan): string {
     const actionableTasks = assignment.content.tasks.filter(
       (task) => task.status !== 'completed' && task.status !== 'blocked'
@@ -681,7 +755,9 @@ export class ChatEngineAssignment {
     return [
       'You are the Sr. Engineer coordinating an approved Assignment. This is a live user-facing coordinator thread: the user can steer or stop you at any time.',
       'Assign ready tasks using the deterministic local API. For a worker task, the API creates and prompts its durable worker thread. For a Sr. Engineer task, the API returns the task and you perform it in this coordinator thread.',
+      this.coordinatorWaitingInstruction(),
       'When the user changes direction, use the steer-worker or stop-worker endpoint for any affected worker before continuing.',
+      this.coordinatorSteeringInstruction(),
       'The approved Assignment may include user annotations. Treat every open annotation as a signed correction to its anchored section and incorporate it before dispatching affected work.',
       'Do not assign blocked tasks. When a worker reports, audit its checklist and evidence, then call the review endpoint. A passing review unblocks dependent tasks. A rework review automatically returns the same approved task and your complete review findings to its worker; do not create a replacement Assignment or ask the user to sign off again.',
       'Senior-owned tasks are already approved work. Complete them in this coordinator thread without asking the user for assistant implementation permission. Submit baseline and check evidence with this coordinator thread ID, report the task, and review it before continuing.',
@@ -711,6 +787,59 @@ export class ChatEngineAssignment {
     ].join('\n\n')
   }
 
+  /**
+   * The delta prompt for a coordinator that was already briefed.
+   *
+   * Every resume turn reopened with the complete brief: the static rules, the
+   * Assignment API contract and the full task list, roughly 8k characters. The
+   * coordinator has all of that in its own conversation, and the snapshot claim
+   * only lets a turn through when the durable state changed, so the repeat spent
+   * context without adding a decision. The delta carries the two rules a turn
+   * must never break as a reminder, then the one thing that is new: the
+   * actionable task state.
+   */
+  coordinatorContinuationPrompt(assignment: AssignmentPlan): string {
+    const actionableTasks = assignment.content.tasks.filter(
+      (task) => task.status !== 'completed' && task.status !== 'blocked'
+    )
+    return [
+      'Continue coordinating the approved Assignment. Your coordinator brief, the Assignment API contract and the full task list are already in this thread, so do not reopen the work from them.',
+      `Waiting is the application's job: end this turn instead of polling when every remaining task is a running worker. ${this.coordinatorSteeringInstruction()}`,
+      'Act on the current state below. Assign ready tasks, review reported or attention tasks, and perform any Sr. Engineer task that is yours.',
+      'Actionable Assignment state:',
+      JSON.stringify(
+        {
+          id: assignment.id,
+          version: assignment.version,
+          scopeBucketId: assignment.scopeBucketId,
+          annotations: (assignment.annotations ?? []).filter(
+            (annotation) => annotation.status === 'open'
+          ),
+          actionableTasks
+        },
+        null,
+        2
+      )
+    ].join('\n\n')
+  }
+
+  /**
+   * The prompt that resumes coordination. The full brief belongs to the turn
+   * that starts execution in a fresh session (the approval path clears the
+   * coordinator's planning session before it sends it). Every later resume runs
+   * in that same session, whose conversation already holds the brief, so it gets
+   * the delta instead of a second copy.
+   */
+  async coordinatorResumePrompt(assignment: AssignmentPlan): Promise<string> {
+    const coordinator = await this.host.threadManager.getThread(
+      assignment.projectId,
+      assignment.coordinatorThreadId
+    )
+    return coordinator?.sessionId
+      ? this.coordinatorContinuationPrompt(assignment)
+      : this.coordinatorAssignmentPrompt(assignment)
+  }
+
   async assignmentCoordinatorUserTurnPrompt(
     thread: Thread | null,
     origin: 'user' | 'internal'
@@ -735,6 +864,7 @@ export class ChatEngineAssignment {
       'For an untagged but unambiguous targeted task that already has a worker thread, forward the user’s instruction with steer-worker by default. Do not implement the task in the coordinator thread merely because the user addressed you.',
       'Work on that linked worker task yourself only when the user explicitly says that the Sr. Engineer or coordinator should personally perform the work instead of the assigned worker.',
       'Preserve the user’s intent when forwarding, include any relevant tagged-task context, and never claim that a worker was updated until steer-worker returns successfully.',
+      this.coordinatorSteeringInstruction(),
       'After a successful steer, tell the user exactly which worker and task were updated and that its live progress is visible in the Assignment coordinator panel, where the worker row opens its thread.',
       'If a targeted task has no worker thread, use the normal dependency and assignment rules; do not call steer-worker without a linked thread.',
       this.host.units['assignment-run'].assignmentApiInstructions(token),
@@ -987,7 +1117,7 @@ export class ChatEngineAssignment {
       await ensureFeatureSlug(this.host.database, projectId, coordinatorThreadId)
     )
     const assignmentSystemPrompt = [
-      await this.host.units['turns-dispatch'].cioPrompt('assignment-plan'),
+      EXISTING_SPEC_ASSIGNMENT_SYSTEM_PROMPT,
       engineeringArtifactBoundaryInstruction(artifactDirectory)
     ].join('\n\n')
     // The specification branch reads the persisted spec by path; the

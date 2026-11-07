@@ -6,6 +6,7 @@ import type { AuxiliaryModelCandidate } from '../../drivers/driver.interface'
 import type { ResolvedImageEntry } from '../../providers/image-descriptor-provider'
 import type { AgentSecretResolution } from '../../utilities/agent-secret-service'
 import type { UtilitySuggestionResolution } from '../../../lib/utility-suggestion'
+import type { AgentMcpSignInResolution } from '../../../lib/mcp-sign-in'
 import type {
   FileChangeSource,
   AgentMessage,
@@ -382,6 +383,13 @@ export interface PendingQuestionInfo {
   settleUtilitySuggestion?: (resolution: UtilitySuggestionResolution) => void
   /** The suggestion card was answered, dismissed, or timed out. */
   resumeUtilitySuggestionAfterSettlement?: boolean
+  /**
+   * Set for an app-owned MCP sign-in card. The gateway connection that hit the
+   * server's OAuth refusal is still open, so the user's answer settles here
+   * instead of travelling to a harness: the grant itself is written by the
+   * shared OAuth service, and the gateway retries once it reports a sign-in.
+   */
+  settleMcpSignIn?: (resolution: AgentMcpSignInResolution) => void
 }
 
 /**
@@ -417,6 +425,28 @@ export interface PendingImageDescriptorDecision {
   /** Thread status to restore once the decision resolves. */
   resumeStatus: Extract<ThreadStatus, 'planning' | 'executing'>
   timer?: ReturnType<typeof setTimeout>
+}
+
+/**
+ * One live image-descriptor vision session.
+ *
+ * The descriptor runs in a disposable session of its own, so nothing else in
+ * the engine would reach it once the turn that asked for a description is
+ * stopped, rejected, or finishes without answering. Recording it here is what
+ * lets a stop cancel the provider request instead of leaving it streaming (and
+ * billing) in the background after the turn is gone.
+ */
+export interface ImageDescriptorSessionRecord {
+  /** The disposable session the vision call runs in. */
+  sessionId: string
+  /** The session whose turn (or gateway tool call) asked for the description. */
+  parentSessionId: string
+  projectId: string
+  threadId: string
+  projectPath: string
+  driverId: string
+  accountId?: string
+  isolated?: IsolatedSessionHandle
 }
 
 export interface SessionCompletionWaiter {

@@ -13,6 +13,7 @@ import type {
   ThreadContextUsage,
   ThreadMessageCursor,
   ThreadMessagePage,
+  ThreadScopeMoveResult,
   ThreadSettings,
   ThreadStatus,
   ThreadTransferResult,
@@ -22,6 +23,20 @@ import type {
   UserMessageSummary
 } from '../types'
 import type { Contract } from './contract-helpers'
+
+/**
+ * The thread a fork was copied from, resolved for the renderer.
+ *
+ * A fork records its parent in its own branch metadata, so this is the one read
+ * that lets any surface show that parent the way an attached thread is shown: by
+ * project, id and title. Null when the thread was not forked, or when the parent
+ * no longer exists.
+ */
+export interface ForkOriginReference {
+  parentProjectId: string
+  parentThreadId: string
+  parentTitle: string
+}
 
 export const invokeThreadContract = {
   'taskManager:list': {} as Contract<[], TaskManagerSnapshot>,
@@ -139,6 +154,10 @@ export const invokeThreadContract = {
       targetProjectId?: string
     ],
     Thread
+  >,
+  'thread:forkOrigin': {} as Contract<
+    [projectId: string, threadId: string],
+    ForkOriginReference | null
   >,
   'thread:get': {} as Contract<[projectId: string, threadId: string], Thread | null>,
   'thread:list': {} as Contract<[projectId: string], Thread[]>,
@@ -259,7 +278,7 @@ export const invokeThreadContract = {
           | 'titleSource'
           | 'providerId'
           | 'workingDirectory'
-          | 'scopeBucketId'
+          | 'boundScope'
           | 'lastActivity'
           | 'read'
           | 'assistantGettingStarted'
@@ -267,6 +286,19 @@ export const invokeThreadContract = {
       >
     ],
     Thread
+  >,
+  /**
+   * Move a thread into another scope.
+   *
+   * Its own channel because the move can be refused: a working thread inside an
+   * app-managed worktree may not be reassigned while its run lives in that
+   * checkout. The refusal comes back as `{ ok: false, refusal }` instead of a
+   * rejected invoke, so Electron's handler log never records a sentence the UI
+   * is already toasting.
+   */
+  'thread:moveScope': {} as Contract<
+    [projectId: string, threadId: string, scopeBucketId: string],
+    ThreadScopeMoveResult
   >,
   'thread:updateSettings': {} as Contract<
     [projectId: string, threadId: string, settings: ThreadSettings],

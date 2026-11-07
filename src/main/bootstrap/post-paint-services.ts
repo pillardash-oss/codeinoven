@@ -39,6 +39,7 @@ import {
 } from '../chat/thread-events'
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
 import { instanceEventBus } from '../system/instance-event-bus'
+import { instanceRegistry } from '../system/instance-registry'
 import type { ThreadCreationCoordinator } from '../chat/thread-creation-coordinator'
 import type { ThreadDeletionCoordinator } from '../chat/thread-deletion-coordinator'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -47,6 +48,7 @@ import { ThreadRepo } from '../database/repositories/thread-repo'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
+import { acpAgentStore } from '../drivers/acp/acp-agents-store'
 import { startupTelemetry } from '../system/startup-telemetry'
 import { BrowserService } from '../browser/browser-service'
 import { BrowserAgentCursorAppearance } from '../browser/browser-service/browser-agent-cursor-appearance'
@@ -56,6 +58,7 @@ import { SearchService } from '../search/search-service'
 import { registerSearchSettingsIpc } from '../ipc/search-settings-ipc'
 import { getLlamaServerBinary } from '../speech/backends/llama-backend'
 import { sharedLlamaRuntimeService } from '../speech/llama-runtime-service'
+import { sharedLocalAiRuntimeRegistry } from '../local-ai/local-ai-runtime-registry'
 import type { BootstrapState } from './bootstrap-state'
 
 /**
@@ -214,12 +217,13 @@ export interface PostPaintBootContext {
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
   if (state.chatEngine || state.featuresReady) return
-  // This independent prerequisite must not hold the feature graph, a first
-  // message, or terminal creation behind a download/extraction promise.
-  if (process.platform === 'win32')
-    void import('../drivers/windows-git-runtime')
-      .then(({ startWindowsGitPreparation }) => startWindowsGitPreparation())
-      .catch((error: unknown) => Logger.error('Windows Git startup preparation failed', error))
+  // Windows Git preparation is deliberately NOT started at boot. Its first
+  // step is a GitHub lookup, then a ~50 MB PortableGit download and extract,
+  // and a fresh install with no projects needs none of it. On a low-end
+  // machine that began under the first paint and competed with everything the
+  // user was trying to do. The interactive paths that actually need Git start
+  // it through `prepareWindowsGitRuntime` (terminal launch, harness spawn,
+  // Oven SSH), so it is prepared when it is about to be used.
   const [
     { registerIpcHandlers },
     { ProjectManager },
@@ -253,7 +257,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { SecretVault },
     { GitHubAuthService },
     { CioCleanupService },
-    { broadcastCioCleanupProgress, broadcastCioCleanupState }
+    { broadcastCioCleanupProgress, broadcastCioCleanupState },
+    { FollowUpService },
+    { FollowUpStore },
+    { createFollowUpExecutor },
+    { broadcastFollowUpsChanged }
   ] = await Promise.all([
     import('../ipc/ipc-handlers'),
     import('../../lib/engines/project-manager'),
@@ -282,7 +290,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../storage/secret-vault'),
     import('../git/github-auth-service'),
     import('../cio-cleanup/cio-cleanup-service'),
-    import('../cio-cleanup/cio-cleanup-events')
+    import('../cio-cleanup/cio-cleanup-events'),
+    import('../follow-ups/follow-up-service'),
+    import('../follow-ups/follow-up-store'),
+    import('../follow-ups/follow-up-executor'),
+    import('../follow-ups/follow-up-ipc')
   ])
 
   const projectManager = new ProjectManager(database)
@@ -601,6 +613,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       (pid, command, cwd) =>
         state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
     )
+    // The capture gate needs the audio-to-LLM setting to know whether the user
+    // has a mic at all, so the recorder is never primed behind a hidden mic.
+    speechService.setDictationSettingSource(async () => {
+      const current = await storage.getConfig()
+      return current.sound.voiceRecordingEnabled
+    })
     await speechService.initialize()
     state.speechService = speechService
     state.unregisterSpeechIpc = registerSpeechIpc(
@@ -611,7 +629,16 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     state.speechService = null
     Logger.error('Speech services unavailable; dictation stays disabled', error)
   }
-  // Initialize auto-evict timers from persisted sound settings
+  // A recording still being produced, and a transcript the model has not
+  // answered yet, are lost by a restart, so dictation holds an unattended
+  // install back exactly like a working thread. Read from the speech service's
+  // own capture and job state, which is the same state its progress events
+  // report, so nothing has to be sent over for the gate to know.
+  state.updaterService?.setDictationActivitySource({
+    activity: () => state.speechService?.dictationActivity() ?? { recording: 0, transcribing: 0 }
+  })
+  // Initialize auto-evict timers from persisted sound settings, and the one idle
+  // window the local AI registry unloads every local server on.
   try {
     const cfg = await storage.getConfig()
     state.speechService?.updateUnloadOptions({
@@ -619,19 +646,18 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       cleanup: cfg.sound.cleanupUnload,
       tts: cfg.sound.ttsUnload
     })
+    sharedLocalAiRuntimeRegistry().setUnloadOption(cfg.llamaCppUnload)
   } catch {
     // defaults already applied
   }
-  // Intent search shares the one local llama.cpp runtime with speech, so both
-  // draw from the same discovered/downloaded binary and the same process journal.
+  // Intent search draws the same discovered/downloaded binary through the local
+  // AI runtime registry as speech, which owns the process, its idle window, and
+  // its journal entry.
   state.searchService = new SearchService(database, {
     subscribeCorpus: subscribeThreadCorpus,
     summarizeThread: (input) => state.chatEngine!.summarizeSearchThread(input),
     llamaServerPath: () => getLlamaServerBinary(),
-    runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild(),
-    registerProcess: (pid, command, cwd) =>
-      sharedLlamaRuntimeService().registerServerProcess(pid, command, cwd),
-    unregisterProcess: (pid) => sharedLlamaRuntimeService().unregisterServerProcess(pid)
+    runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild()
   })
   // A runtime that will not start disables semantic search and nothing else:
   // this used to abort the whole feature boot, which left every feature channel
@@ -815,6 +841,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       database,
       checkpoint: (projectId, threadId, input) =>
         designService.checkpoint(projectId, threadId, input, 'design'),
+      history: (projectId, threadId, input) =>
+        designService.historyCapability(projectId, threadId, input),
+      restore: (projectId, threadId, input) =>
+        designService.restoreCapability(projectId, threadId, input),
       browser: () => state.browserService,
       record: (input) => designService.recordPreview(input),
       announceWorkGroups
@@ -869,6 +899,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     }
   })
   videoStudio.registerIpc()
+  // The display panel is not part of a launch: its rail item appears only after an
+  // agent starts or attaches to a display target, and its capture modules load on
+  // the first frame someone asks for. What is registered here is the thin IPC
+  // boundary plus the presence watch that decides when the panel exists at all.
+  const { registerDisplayIpc } = await import('../display/display-ipc')
+  registerDisplayIpc({ window: () => state.mainWindow })
   state.chatEngine.setVideoPreviewExecutor(
     createVideoPreviewExecutor({
       studio: videoStudio.execute,
@@ -876,6 +912,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       database,
       checkpoint: (projectId, threadId, input) =>
         designService.checkpoint(projectId, threadId, input, 'video'),
+      history: (projectId, threadId, input) =>
+        designService.historyCapability(projectId, threadId, input),
+      restore: (projectId, threadId, input) =>
+        designService.restoreCapability(projectId, threadId, input),
       browser: () => state.browserService,
       record: (input) => designService.recordPreview(input)
     })
@@ -940,6 +980,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     heartbeatScheduler: state.heartbeatScheduler,
     assistantManager: state.assistantManager ?? undefined,
     assistantScheduler: state.assistantScheduler ?? undefined,
+    cancelThreadFollowUps: (threadId) => {
+      state.followUpService?.cancelForThread(threadId)
+    },
     cioCleanup: state.cioCleanup ?? undefined,
     autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
@@ -993,6 +1036,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   {
     const { registerCustomVendorIpc } = await import('../providers/custom-vendor-ipc')
     registerCustomVendorIpc(storage)
+  }
+  // The armed set of thread wakes, readable before the scheduler that owns it is
+  // built: a row badge asks once, then follows `followUps:changed`.
+  {
+    const { registerFollowUpHandlers } = await import('../follow-ups/follow-up-ipc')
+    registerFollowUpHandlers(() => state.followUpService)
   }
   await (async () => {
     const [
@@ -1062,6 +1111,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       void state.chatEngine?.invalidateProviderCatalogs()
       state.chatEngine?.refreshOpenCodeHarness()
     })
+    // ACP agents are the user's own records: their list has to be in memory
+    // before the first harness probe and before the model picker asks for a
+    // catalog, because neither reads the harness registry for them. The drivers
+    // are then built from that list, once it has actually loaded: the chat
+    // engine is wired earlier in startup, when the store is still empty, so a
+    // boot with existing agents would otherwise have no ACP driver at all and
+    // publish no models for them.
+    void acpAgentStore(storage)
+      .list()
+      .then(() => state.chatEngine?.refreshAcpHarnesses())
+      .catch(() => undefined)
     state.openCodeV2Service = new OpenCodeV2Service()
     state.harnessUpdateService = new HarnessUpdateService(state.providerConnection)
     state.harnessAutoUpdateService = new HarnessAutoUpdateService(storage)
@@ -1122,16 +1182,37 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
     const { registerLlamaCppIpc } = await import('../llama-cpp/llama-cpp-ipc')
+    const { registerLocalAiIpc } = await import('../local-ai/local-ai-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
     registerProviderAccountIpc(storage, undefined, (accountId) =>
       state.chatEngine!.removeHarnessAccount(accountId)
     )
+    const { registerAcpAgentIpc } = await import('../providers/acp-agent-ipc')
+    registerAcpAgentIpc(storage, {
+      onAgentsChanged: async () => {
+        // Only the cheap derivations are awaited: the drivers have to exist
+        // before the answer returns so the picker and the next turn see the
+        // agent. A probe pass spawns one process per harness and used to hold
+        // the save response for seconds, which is what made Save look stuck.
+        await state.chatEngine?.refreshAcpHarnesses()
+        await state.chatEngine?.invalidateProviderCatalogs()
+        void state.providerConnection?.checkAll(true).catch(() => undefined)
+      },
+      ensureDrivers: async () => {
+        await state.chatEngine?.refreshAcpHarnesses()
+      }
+    })
     registerBaseUrlProviderIpc(storage)
     // Local servers never touch the provider registry: a custom base-URL
     // provider is the user's to create, and starting or stopping a server here
     // must leave it exactly as it was.
-    registerLlamaCppIpc()
+    registerLlamaCppIpc({
+      hasPtySession: (terminalId) => state.ptyService?.hasSession(terminalId) ?? false
+    })
+    // The Local AI page lists every runtime the app can drive beside the
+    // llama.cpp rows, and owns the one unload window they all share.
+    registerLocalAiIpc()
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,
@@ -1227,6 +1308,68 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     } catch (error) {
       Logger.error('Assistant scheduler startup failed (non-fatal):', error)
+    }
+
+    try {
+      // Agent-scheduled wakes: one clock for the whole app, armed only while a
+      // wake is pending, resuming the thread it was scheduled on.
+      const followUps = new FollowUpService({
+        store: new FollowUpStore(storage),
+        // Exactly one live instance wakes a thread, the same rule the assistant
+        // scheduler follows. Without it two open windows fired one wake twice.
+        isOwner: () => instanceRegistry.isIncumbentInstance(),
+        findThread: (threadId) => {
+          const thread = new ThreadRepo(database).get(threadId)
+          if (!thread) return null
+          return {
+            projectId: thread.projectId,
+            status: thread.status,
+            settings: thread.settings,
+            title: thread.title
+          }
+        },
+        sendPrompt: async ({ projectId, threadId, settings, text, visible }) => {
+          if (!state.chatEngine) throw new Error('The chat engine is not available')
+          await state.chatEngine.sendPrompt(
+            projectId,
+            threadId,
+            settings,
+            text,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            'internal',
+            undefined,
+            undefined,
+            visible
+          )
+        }
+      })
+      state.followUpService = followUps
+      state.chatEngine?.setFollowUpExecutor(createFollowUpExecutor(followUps))
+      // The row badge reads the armed set, so every change to it is pushed
+      // instead of polled, and a window opened later reads the same set once.
+      followUps.attachChangeListener(() => broadcastFollowUpsChanged(followUps))
+      await followUps.start()
+      // The schedule moves with the user, not with the process: when another
+      // instance becomes the main instance this clock stands down, and when this
+      // one takes it back the wakes it was holding come due here.
+      state.stopFollowUpOwnershipListener = instanceRegistry.onOwnershipChanged(() => {
+        if (instanceRegistry.isIncumbentInstance()) {
+          void followUps
+            .takeOver()
+            .catch((error) => Logger.error('Follow-up take-over failed:', error))
+        } else {
+          followUps.standDown()
+        }
+        broadcastFollowUpsChanged(followUps)
+      })
+      broadcastFollowUpsChanged(followUps)
+    } catch (error) {
+      Logger.error('Follow-up scheduler startup failed (non-fatal):', error)
     }
 
     try {

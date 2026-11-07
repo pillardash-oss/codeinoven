@@ -30,8 +30,6 @@ export interface ComposerKeydownContext {
   getHistoryMessages(): string[]
   onHistoryNavigateStart(): void
   onValueChange(value: string): void
-  getShowEngineeringMode(): boolean
-  openEngineeringToolbox(): void
   getWorking(): boolean
   hasStop(): boolean
   confirmStop(): void
@@ -160,19 +158,6 @@ export function handleComposerKeydown(e: KeyboardEvent, ctx: ComposerKeydownCont
       }
       return
     }
-  }
-  // Global-on-thread toggle: works regardless of what has focus (composer,
-  // toolbox panel, or elsewhere on the thread)   like the voice shortcut.
-  // The toolbox panel handles Cmd/Ctrl+E itself while open and prevents
-  // default, so this won't immediately re-open it.
-  if (
-    keymapState.matches('chat-engineering-mode', e) &&
-    !e.defaultPrevented &&
-    ctx.getShowEngineeringMode()
-  ) {
-    e.preventDefault()
-    ctx.openEngineeringToolbox()
-    return
   }
   // While the agent runs, the first Escape arms the stop button with a
   // visible "Stop?" state and the second confirms the abort. A running agent

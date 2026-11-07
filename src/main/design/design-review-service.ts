@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { relative, isAbsolute, join } from 'node:path'
 import createReviewWorker from './design-review-worker.ts?nodeWorker'
+import { trackQuitWorker } from '../system/quit-worker-sweep'
 import { currentWorkRoot } from './work-roots-state'
 import type { Database } from '../database/database'
 import { authoredWorkRoot } from './authored-work-root'
@@ -59,7 +60,7 @@ export async function runDesignReview(
     craft = { hash: source.sha256, findings: [] }
   } else
     craft = await new Promise<DesignCraftReport>((resolve, reject) => {
-      const worker = createReviewWorker({ workerData: file })
+      const worker = trackQuitWorker(createReviewWorker({ workerData: file }))
       let settled = false
       const finish = (error: Error | null, result?: DesignCraftReport): void => {
         if (settled) return

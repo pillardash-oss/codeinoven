@@ -12,6 +12,16 @@ export type BackgroundIoRequest =
   | { kind: 'credential-read'; databasePath: string; values: boolean }
   | { kind: 'credential-delete'; databasePath: string; candidates: string[] }
   /**
+   * Erase whole directory trees off the main thread.
+   *
+   * A project folder, its browser profile, and its app-owned scratch data can be
+   * gigabytes across hundreds of thousands of entries, and every directory entry
+   * is a syscall plus a promise callback on the thread that issued the walk.
+   * Removing them here keeps that work on the worker so a project deletion never
+   * stalls painting, IPC, or an agent stream.
+   */
+  | { kind: 'remove-trees'; paths: string[]; force: boolean }
+  /**
    * Rebuild the newest turn of a durable working-trace log.
    *
    * The log is append-only and thread-wide, so its newest turn sits behind the

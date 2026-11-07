@@ -28,10 +28,15 @@
   import SpeechPlaybackButton from '../../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../../speech/speech-controller.svelte'
   import WorkingTrace from '../WorkingTrace.svelte'
+  import TraceActivityLine from '../TraceActivityLine.svelte'
+  import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
+  import { runReceiptState } from '$lib/stores/run-receipt.svelte'
+  import { isBoundAssistantTask } from '$shared/bound-scope'
   import ThinkingOrb from '$lib/thinking-orb/ThinkingOrb.svelte'
   import InlineMediaFigure from '../InlineMediaFigure.svelte'
   import InlineImageFigure from '../InlineImageFigure.svelte'
   import CitedEntryCard from '../CitedEntryCard.svelte'
+  import type { CitedEntry } from '$shared/cited-work'
   import RunChangesCard from '../RunChangesCard.svelte'
   import AuditGeneratedCard from '../AuditGeneratedCard.svelte'
   import DeferredMarkdownView from '../../markdown/DeferredMarkdownView.svelte'
@@ -50,15 +55,17 @@
   import { modelKey } from '$lib/model-keys'
   import { promptArrive } from '$lib/motion'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
+  import { logRendererDev } from '$lib/system/renderer-logger'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import type { AgentPart, TurnStreamCompletedTurn } from '$shared/types'
+  import type { AgentMessage, AgentPart, TurnStreamCompletedTurn } from '$shared/types'
   import { formatTokenRate } from '$lib/token-rate.svelte'
   import {
     auditReportForTurn,
     changesBeforeSteer,
     getTurnFinalText,
-    isActivityOnlyUserMessage
+    isActivityOnlyUserMessage,
+    type TraceSegmentLayout
   } from '../thread-turn-parts'
   import {
     explicitMessagePresentation,
@@ -78,6 +85,52 @@
   let { board }: { board: ThreadViewBoard } = $props()
 
   /**
+   * The run thread a receipt belongs to, when this conversation is one.
+   *
+   * A receipt describes what *a run* did, so only a bound run thread carries one:
+   * an ordinary project thread's work is already shown by the rail's Changes, and
+   * an assistant task without a binding has no checkout to describe.
+   */
+  let receiptThread = $derived.by(() => {
+    const thread = board.handleAgentEvent.thread
+    return isBoundAssistantTask(thread) && thread.assistantTaskId ? thread : null
+  })
+
+  /**
+   * The receipt is read once per range. A running run reads its state, and a run
+   * that settles re-reads exactly once, which is the app's own settle signal
+   * doing the invalidation instead of a timer. The store owns the dedupe, so this
+   * body only reports what the thread looks like right now.
+   */
+  $effect(() => {
+    const thread = receiptThread
+    const bound = thread?.boundScope
+    if (!thread || !bound) return
+    const settled =
+      thread.status === 'completed' ||
+      thread.status === 'failed' ||
+      thread.status === 'working-paused'
+    runReceiptState.sync(bound.projectId, thread.id, bound.scopeBucketId, settled, thread.updatedAt)
+  })
+
+  /**
+   * Decide, once per distinct state, whether the transcript's final turn drew
+   * its file-changes card.
+   *
+   * "The card is not showing" cannot be answered from the database or from the
+   * index alone: both can be right while the branch that draws it never renders.
+   * This reports the gate exactly as the markup evaluates it for the last
+   * message, so the next report names the condition that failed.
+   */
+  let lastCardReport = ''
+  function reportTailCard(state: Record<string, unknown>): void {
+    const key = JSON.stringify(state)
+    if (key === lastCardReport) return
+    lastCardReport = key
+    logRendererDev(`Turn cards: gate ${key}`)
+  }
+
+  /**
    * The column the header's thread name aligns to, when this surface is the one
    * the header names.
    *
@@ -90,6 +143,81 @@
   const readingColumn = $derived(
     board.props.ownsReadingColumn ? board.state.conversationColumn.attachment : noopAttachment
   )
+
+  /**
+   * The newest message that carries cited work, and what it cites.
+   *
+   * A turn's report is published as its own app-owned row once the turn settles,
+   * which lands after the turn's own messages. When that same turn also changed
+   * files, the row belongs *inside* the turn's changes card instead of floating
+   * under it, so the reader sees one outcome rather than two surfaces that
+   * describe the same turn.
+   */
+  const citedTail = $derived.by(() => {
+    const messages = board.loadOlderMessages.messages
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (!message?.inlineArtifact) continue
+      const entries: CitedEntry[] = []
+      for (const part of message.parts) {
+        if (part.type !== 'cited') continue
+        entries.push({
+          name: part.name,
+          path: part.path,
+          kind: part.kind,
+          modifiedAt: part.modifiedAt,
+          ...(part.work ? { work: part.work } : {})
+        })
+      }
+      if (entries.length === 0) continue
+      return { messageId: message.id, index, entries }
+    }
+    return null
+  })
+
+  /** Whether the changes card of a turn is drawn at this message index. */
+  function changesCardAt(absIndex: number): boolean {
+    if (board.props.chatMode) return false
+    const index = board.pollStreamParts.transcriptIndex
+    const checkpoint = index.checkpoint[absIndex] ?? null
+    if (!checkpoint || checkpoint.changes.length === 0) return false
+    return index.checkpointCard[absIndex] ?? false
+  }
+
+  /**
+   * The cited entries a changes card at `absIndex` should draw itself.
+   *
+   * Only the turn that closed after the card: a cited row earlier in the
+   * transcript belongs to a turn of its own, and a user message in between means
+   * the reader asked something new, so that row keeps its own card.
+   */
+  function citedForCard(absIndex: number): CitedEntry[] {
+    const tail = citedTail
+    if (!tail || tail.index <= absIndex) return []
+    const between = board.loadOlderMessages.messages.slice(absIndex + 1, tail.index)
+    if (between.some((message) => message.role === 'user')) return []
+    return tail.entries
+  }
+
+  /**
+   * Whether the changes card of the turn that produced this cited row drew it.
+   *
+   * The row is hidden only when a card above it actually took the rows: a turn
+   * that cited work without changing files has no card, and its report must keep
+   * its own.
+   */
+  function citedRowAbsorbed(messageId: string): boolean {
+    const tail = citedTail
+    if (!tail || tail.messageId !== messageId) return false
+    const messages = board.loadOlderMessages.messages
+    for (let index = tail.index - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (!message) continue
+      if (message.role === 'user') return false
+      if (changesCardAt(index)) return true
+    }
+    return false
+  }
 </script>
 
 <div
@@ -286,6 +414,193 @@
           formatOutput={board.abortRun.assistantAuthoringOutput}
         />
       {/snippet}
+      <!-- One slice of a turn's working trace. A turn the reader answered is cut
+           at that answer, so the work that led to the question, the answer card,
+           and the work the answer unblocked read in the order they happened. -->
+      {#snippet turnTraceSegment(segment: TraceSegmentLayout, traceMsg: AgentMessage)}
+        {@const turnStart = segment.turnStart}
+        {@const turnDone = board.pollStreamParts.transcriptIndex.turnCompleted[turnStart] ?? false}
+        {@const isTraceTurnLatest =
+          turnStart === board.buildSpecActionPrompt.latestTurnInfo.startIndex}
+        {@const isCurrentAssistantTurn =
+          isTraceTurnLatest &&
+          board.buildSpecActionPrompt.latestTurnInfo.active &&
+          !board.buildSpecActionPrompt.pendingLiveTurn}
+        {@const traceIsLive =
+          board.unmirroredTraceStartTime.threadWorking &&
+          isCurrentAssistantTurn &&
+          !turnDone &&
+          !board.unmirroredTraceStartTime.brainstormReportRefreshing}
+        {@const traceIsRestored =
+          board.buildSpecActionPrompt.restoredBusy &&
+          isCurrentAssistantTurn &&
+          !board.unmirroredTraceStartTime.liveBusy &&
+          !turnDone}
+        {@const traceRunIsForeign = foreignRuns.isForeign(
+          board.handleAgentEvent.thread.projectId,
+          board.handleAgentEvent.thread.id
+        )}
+        {@const turnEndIndex =
+          board.pollStreamParts.transcriptIndex.turnEnd[turnStart] ?? turnStart}
+        {@const turnClosingText = getTurnFinalText(
+          board.loadOlderMessages.messages,
+          turnEndIndex,
+          board.pollStreamParts.isTransparentTurnMessage
+        )}
+        {@const turnClosingVisible = board.pollStreamParts.closingStatementVisible(
+          turnEndIndex,
+          turnEndIndex === board.loadOlderMessages.messages.length - 1
+        )}
+        {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
+        {@const traceIsLiveTurn = isCurrentAssistantTurn || traceIsLive || traceIsRestored}
+        {@const turnClosingTextId =
+          turnClosingVisible && turnClosingText ? turnClosingText.id : null}
+        {@const turnParts = board.pollStreamParts.segmentTraceParts(
+          segment,
+          traceIsLiveTurn,
+          turnClosingTextId,
+          traceHoldsClosingText
+        )}
+        {@const segmentIsLast = segment.segmentIndex === segment.boundaries.length}
+        {@const segmentBusy = traceIsLive && segmentIsLast}
+        {@const segmentDone = segmentIsLast ? turnDone : true}
+        {@const segmentStartTime =
+          segment.segmentIndex === 0
+            ? isTraceTurnLatest
+              ? (board.composerScope.getTurnStartTime(turnStart) ??
+                board.studioTemporaryChatContext.activeTurnStartTime)
+              : board.composerScope.getTurnStartTime(turnStart)
+            : segment.answerIndex === null
+              ? undefined
+              : board.loadOlderMessages.messages[segment.answerIndex]?.createdAt}
+        {@const useSegmentLiveAttribution =
+          isTraceTurnLatest &&
+          board.buildSpecActionPrompt.latestTurnInfo.active &&
+          board.unmirroredTraceStartTime.liveBusy}
+        {@const segmentProvider = messageProvider(
+          traceMsg,
+          board.currentWorkingTraceAttribution.providers
+        )}
+        {@const segmentModelLabel = messageModelLabel(
+          traceMsg,
+          board.currentWorkingTraceAttribution.allModels
+        )}
+        {@const segmentThinking = messageThinkingLevel(
+          traceMsg,
+          board.currentWorkingTraceAttribution.allModels
+        )}
+        {@const segmentOvenAppearance =
+          traceMsg.ovenAppearance ??
+          board.currentWorkingTraceAttribution.ovenAppearanceForId(traceMsg.ovenId)}
+        {@const segmentOvenLabel =
+          traceMsg.ovenLabel ??
+          board.currentWorkingTraceAttribution.ovenLabelForId(traceMsg.ovenId)}
+        {@const segmentOvenIsLocal = traceMsg.ovenId
+          ? traceMsg.ovenId === LOCAL_OVEN_ID
+          : traceMsg.ovenLabel === undefined || traceMsg.ovenLabel === 'Local'}
+        {@const segmentFastVariant = traceMsg.modelId
+          ? fastVariantForModelId(traceMsg.modelId)
+          : null}
+        {@const segmentHarnessId = resolveMessageHarnessId(
+          traceMsg,
+          board.unmirroredTraceStartTime.messageHarnessFallback
+        )}
+        {@const segmentHarnessName = messageHarnessName(
+          traceMsg,
+          board.unmirroredTraceStartTime.messageHarnessFallback
+        )}
+        {@const segmentCheckpoint =
+          board.pollStreamParts.transcriptIndex.checkpoint[turnStart] ?? null}
+        {#if shouldMountWorkingTrace(turnParts.length, segmentBusy)}
+          <WorkingTrace
+            parts={turnParts}
+            open={isCurrentAssistantTurn || traceIsLive}
+            busy={segmentBusy}
+            done={segmentDone}
+            rehydrated={traceIsRestored && segmentIsLast}
+            foreignRun={traceRunIsForeign}
+            active={board.props.active}
+            olderPartsAvailable={isCurrentAssistantTurn &&
+              segmentIsLast &&
+              board.pollStreamParts.streamTrace.hasOlder}
+            onLoadOlderParts={isCurrentAssistantTurn && segmentIsLast
+              ? board.pollStreamParts.loadOlderStreamParts
+              : undefined}
+            totalSteps={isCurrentAssistantTurn && segmentIsLast
+              ? board.pollStreamParts.streamTrace.totalSteps
+              : undefined}
+            startTime={segmentStartTime}
+            modelLabel={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.modelLabel
+              : segmentModelLabel}
+            thinkingLevel={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.thinkingLevel
+              : segmentThinking}
+            providerName={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.providerName
+              : segmentProvider?.name}
+            providerId={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.providerId
+              : segmentProvider?.id}
+            harnessId={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.harnessId
+              : segmentHarnessId}
+            harnessName={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.harnessName
+              : segmentHarnessName}
+            accountLabel={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.accountLabel
+              : traceMsg.accountLabel}
+            accountId={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.accountId
+              : traceMsg.accountId}
+            ovenLabel={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.ovenLabel
+              : segmentOvenLabel}
+            ovenIsLocal={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.ovenIsLocal
+              : segmentOvenIsLocal}
+            ovenAppearance={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.ovenAppearance
+              : segmentOvenAppearance}
+            isFast={useSegmentLiveAttribution
+              ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.isFast
+              : segmentFastVariant !== null}
+            initialOpen={isCurrentAssistantTurn &&
+              agentRuns.isTraceOpen(
+                board.handleAgentEvent.thread.projectId,
+                board.handleAgentEvent.thread.id
+              )}
+            initialUserOpened={isCurrentAssistantTurn &&
+              agentRuns.isTraceUserOpened(
+                board.handleAgentEvent.thread.projectId,
+                board.handleAgentEvent.thread.id
+              )}
+            initiallyFolded={isCurrentAssistantTurn &&
+              agentRuns.isTraceUserFolded(
+                board.handleAgentEvent.thread.projectId,
+                board.handleAgentEvent.thread.id
+              )}
+            projectId={board.handleAgentEvent.thread.projectId}
+            threadId={board.handleAgentEvent.thread.id}
+            checkpointId={segmentCheckpoint?.id ?? null}
+            checkpointPaths={segmentCheckpoint?.changes.map((change) => change.path) ?? []}
+            onToggle={(open, userOpened, userFolded) => {
+              if (isCurrentAssistantTurn) {
+                agentRuns.setTraceOpen(
+                  board.handleAgentEvent.thread.projectId,
+                  board.handleAgentEvent.thread.id,
+                  open,
+                  userOpened,
+                  userFolded
+                )
+              }
+            }}
+            onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
+            onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
+          />
+        {/if}
+      {/snippet}
       {#each board.composerScope.visibleMessages as msg, msgIndex (msg.id)}
         {@const absIndex =
           msgIndex +
@@ -301,7 +616,13 @@
         {#if absIndex === board.buildSpecActionPrompt.heldSteerAbsIndex && !board.pollStreamParts.turnAboveHasAssistantRow(absIndex)}
           {@render liveTurnTrace(board.composerScope.unmirroredTraceParts, true)}
         {/if}
-        {#if msg.inlineArtifact}
+        {@const citedParts = msg.parts.filter(
+          (part): part is Extract<AgentPart, { type: 'cited' }> => part.type === 'cited'
+        )}
+        {#if msg.inlineArtifact && citedRowAbsorbed(msg.id)}
+          <!-- The turn's report rows are drawn by its changes card above, so this
+               row has nothing left of its own to say. -->
+        {:else if msg.inlineArtifact}
           <div id={`msg-${msg.id}`} class="message-block min-w-0 w-full space-y-2">
             {#each msg.parts as part (part.id)}
               {#if part.type === 'text'}
@@ -339,15 +660,17 @@
                   filename={part.filename ?? 'Media'}
                   onExpand={() => board.editVideoNote.openMessageViewer(msg, part)}
                 />
-              {:else if part.type === 'cited'}
+              {:else if part.type === 'cited' && citedParts[0]?.id === part.id}
                 <CitedEntryCard
-                  entry={{
-                    name: part.name,
-                    path: part.path,
-                    kind: part.kind,
-                    modifiedAt: part.modifiedAt
-                  }}
+                  entries={citedParts.map((cited) => ({
+                    name: cited.name,
+                    path: cited.path,
+                    kind: cited.kind,
+                    modifiedAt: cited.modifiedAt,
+                    ...(cited.work ? { work: cited.work } : {})
+                  }))}
                   projectId={board.handleAgentEvent.thread.projectId}
+                  threadId={board.handleAgentEvent.thread.id}
                 />
               {/if}
             {/each}
@@ -647,11 +970,8 @@
             </div>
           {/if}
         {:else}
-          <!-- Assistant message   single WorkTrace per turn containing ALL parts -->
-          {@const isTurnStart =
-            board.pollStreamParts.transcriptIndex.isTurnStart[absIndex] ?? false}
+          <!-- Assistant message   one WorkTrace slice per answer the turn crossed -->
           {@const isTurnEnd = board.pollStreamParts.transcriptIndex.isTurnEnd[absIndex] ?? false}
-          {@const isLatestTurn = absIndex === board.buildSpecActionPrompt.latestTurnInfo.startIndex}
           {@const provider = messageProvider(msg, board.currentWorkingTraceAttribution.providers)}
           {@const modelLabel = messageModelLabel(
             msg,
@@ -670,23 +990,12 @@
             ? msg.ovenId === LOCAL_OVEN_ID
             : msg.ovenLabel === undefined || msg.ovenLabel === 'Local'}
           {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
-          {@const harnessId = resolveMessageHarnessId(
-            msg,
-            board.unmirroredTraceStartTime.messageHarnessFallback
-          )}
-          {@const harnessName = messageHarnessName(
-            msg,
-            board.unmirroredTraceStartTime.messageHarnessFallback
-          )}
-          {@const useLiveAttribution =
-            isLatestTurn &&
-            board.buildSpecActionPrompt.latestTurnInfo.active &&
-            board.unmirroredTraceStartTime.liveBusy}
           {@const isLatest = absIndex === board.loadOlderMessages.messages.length - 1}
           {@const questionParts = msg.parts.filter(
             (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
           )}
           {@const turnDuration = board.pollStreamParts.transcriptIndex.duration[absIndex] ?? null}
+          {@const traceSegmentsAbove = board.pollStreamParts.segmentsAbove(absIndex)}
           {@const turnCheckpoint =
             board.pollStreamParts.transcriptIndex.checkpoint[absIndex] ?? null}
           {@const turnAuditReport =
@@ -698,154 +1007,11 @@
                 )
               : null}
 
-          {#if isTurnStart || questionParts.length > 0 || isTurnEnd}
+          {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || isTurnEnd}
             <div class="group mb-6 flex min-w-0 flex-col">
-              {#if isTurnStart}
-                {@const turnDone =
-                  board.pollStreamParts.transcriptIndex.turnCompleted[absIndex] ?? false}
-                {@const isCurrentAssistantTurn =
-                  isLatestTurn &&
-                  board.buildSpecActionPrompt.latestTurnInfo.active &&
-                  !board.buildSpecActionPrompt.pendingLiveTurn}
-                {@const traceIsLive =
-                  board.unmirroredTraceStartTime.threadWorking &&
-                  isCurrentAssistantTurn &&
-                  !turnDone &&
-                  !board.unmirroredTraceStartTime.brainstormReportRefreshing}
-                {@const traceIsRestored =
-                  board.buildSpecActionPrompt.restoredBusy &&
-                  isCurrentAssistantTurn &&
-                  !board.unmirroredTraceStartTime.liveBusy &&
-                  !turnDone}
-                {@const traceRunIsForeign = foreignRuns.isForeign(
-                  board.handleAgentEvent.thread.projectId,
-                  board.handleAgentEvent.thread.id
-                )}
-                {@const turnEndIndex =
-                  board.pollStreamParts.transcriptIndex.turnEnd[absIndex] ?? absIndex}
-                {@const turnClosingText = getTurnFinalText(
-                  board.loadOlderMessages.messages,
-                  turnEndIndex,
-                  board.pollStreamParts.isTransparentTurnMessage
-                )}
-                {@const turnClosingVisible = board.pollStreamParts.closingStatementVisible(
-                  turnEndIndex,
-                  turnEndIndex === board.loadOlderMessages.messages.length - 1
-                )}
-                {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
-                {@const traceIsLiveTurn = isCurrentAssistantTurn || traceIsLive || traceIsRestored}
-                {@const turnClosingTextId =
-                  turnClosingVisible && turnClosingText ? turnClosingText.id : null}
-                {@const turnParts = board.pollStreamParts.turnTraceParts(
-                  absIndex,
-                  traceIsLiveTurn,
-                  turnClosingTextId,
-                  traceHoldsClosingText
-                )}
-                {#if shouldMountWorkingTrace(turnParts.length, traceIsLive)}
-                  <WorkingTrace
-                    parts={turnParts}
-                    open={isCurrentAssistantTurn || traceIsLive}
-                    busy={traceIsLive}
-                    done={turnDone}
-                    rehydrated={traceIsRestored}
-                    foreignRun={traceRunIsForeign}
-                    active={board.props.active}
-                    olderPartsAvailable={isCurrentAssistantTurn &&
-                      board.pollStreamParts.streamTrace.hasOlder}
-                    onLoadOlderParts={isCurrentAssistantTurn
-                      ? board.pollStreamParts.loadOlderStreamParts
-                      : undefined}
-                    totalSteps={isCurrentAssistantTurn
-                      ? board.pollStreamParts.streamTrace.totalSteps
-                      : undefined}
-                    startTime={isLatestTurn
-                      ? (board.composerScope.getTurnStartTime(absIndex) ??
-                        board.studioTemporaryChatContext.activeTurnStartTime)
-                      : board.composerScope.getTurnStartTime(absIndex)}
-                    modelLabel={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .modelLabel
-                      : modelLabel}
-                    thinkingLevel={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .thinkingLevel
-                      : msgThinking}
-                    providerName={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .providerName
-                      : provider?.name}
-                    providerId={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .providerId
-                      : provider?.id}
-                    harnessId={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .harnessId
-                      : harnessId}
-                    harnessName={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .harnessName
-                      : harnessName}
-                    accountLabel={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .accountLabel
-                      : msg.accountLabel}
-                    accountId={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .accountId
-                      : msg.accountId}
-                    ovenLabel={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .ovenLabel
-                      : (msg.ovenLabel ??
-                        board.currentWorkingTraceAttribution.ovenLabelForId(msg.ovenId))}
-                    ovenIsLocal={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .ovenIsLocal
-                      : msgOvenIsLocal}
-                    ovenAppearance={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
-                          .ovenAppearance
-                      : msgOvenAppearance}
-                    isFast={useLiveAttribution
-                      ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.isFast
-                      : fastVariant !== null}
-                    initialOpen={isCurrentAssistantTurn &&
-                      agentRuns.isTraceOpen(
-                        board.handleAgentEvent.thread.projectId,
-                        board.handleAgentEvent.thread.id
-                      )}
-                    initialUserOpened={isCurrentAssistantTurn &&
-                      agentRuns.isTraceUserOpened(
-                        board.handleAgentEvent.thread.projectId,
-                        board.handleAgentEvent.thread.id
-                      )}
-                    initiallyFolded={isCurrentAssistantTurn &&
-                      agentRuns.isTraceUserFolded(
-                        board.handleAgentEvent.thread.projectId,
-                        board.handleAgentEvent.thread.id
-                      )}
-                    projectId={board.handleAgentEvent.thread.projectId}
-                    threadId={board.handleAgentEvent.thread.id}
-                    checkpointId={turnCheckpoint?.id ?? null}
-                    checkpointPaths={turnCheckpoint?.changes.map((change) => change.path) ?? []}
-                    onToggle={(open, userOpened, userFolded) => {
-                      if (isCurrentAssistantTurn) {
-                        agentRuns.setTraceOpen(
-                          board.handleAgentEvent.thread.projectId,
-                          board.handleAgentEvent.thread.id,
-                          open,
-                          userOpened,
-                          userFolded
-                        )
-                      }
-                    }}
-                    onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
-                    onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
-                  />
-                {/if}
-              {/if}
+              {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                {@render turnTraceSegment(segment, msg)}
+              {/each}
 
               {#if isTurnEnd}
                 <!-- Final text output + footer   hide only on the active in-progress turn -->
@@ -948,12 +1114,27 @@
                     </div>
                   {/if}
 
+                  {#if absIndex === board.loadOlderMessages.messages.length - 1}
+                    {reportTailCard({
+                      threadId: board.handleAgentEvent.thread.id,
+                      absIndex,
+                      messages: board.loadOlderMessages.messages.length,
+                      visible: board.composerScope.visibleMessages.length,
+                      msgId: msg.id,
+                      isTurnEnd,
+                      chatMode: board.props.chatMode,
+                      checkpoint: turnCheckpoint?.id ?? null,
+                      changes: turnCheckpoint?.changes.length ?? -1,
+                      card: board.pollStreamParts.transcriptIndex.checkpointCard[absIndex] ?? false
+                    })}
+                  {/if}
                   {#if !board.props.chatMode && turnCheckpoint && turnCheckpoint.changes.length > 0 && (board.pollStreamParts.transcriptIndex.checkpointCard[absIndex] ?? false)}
                     <div class="mt-3">
                       <RunChangesCard
                         checkpoint={turnCheckpoint}
                         projectId={board.handleAgentEvent.thread.projectId}
                         threadId={board.handleAgentEvent.thread.id}
+                        cited={citedForCard(absIndex)}
                         onRevealFile={(path) =>
                           board.unmirroredTraceStartTime.revealCheckpointFile(
                             turnCheckpoint.id,
@@ -1204,6 +1385,12 @@
             </div>
           {/if}
         {/if}
+        {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
+          {@render turnTraceSegment(
+            segment,
+            board.loadOlderMessages.messages[segment.turnStart] ?? msg
+          )}
+        {/each}
       {/each}
 
       {#if (board.buildSpecActionPrompt.pendingLiveTurn && board.buildSpecActionPrompt.heldSteerAbsIndex === -1) || board.pollStreamParts.settledTurnParts.length > 0}
@@ -1234,6 +1421,29 @@
           startTime={board.sources.assignmentGenerationTraceStartedAt}
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
+        />
+      {/if}
+
+      {#if receiptThread}
+        {@const receipt = runReceiptState.receiptFor(receiptThread.id)}
+        {#if receipt}
+          {#await loadCachedPanelModule(PANEL_KEYS.runReceipt, () => import('../RunReceipt.svelte'))}
+            <!-- The receipt loads after a run settles, so the wait is a blank line
+                 rather than a placeholder that would claim a receipt exists. -->
+            <div class="h-4" aria-hidden="true"></div>
+          {:then { default: RunReceiptBlock }}
+            <RunReceiptBlock thread={receiptThread} {receipt} />
+          {:catch}
+            <!-- A receipt that cannot load leaves the conversation exactly as it
+                 was: it is evidence, never a requirement. -->
+          {/await}
+        {/if}
+      {/if}
+
+      {#if board.pollStreamParts.conversationBusy}
+        <TraceActivityLine
+          parts={board.pollStreamParts.latestTurnRenderableParts}
+          onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
         />
       {/if}
 

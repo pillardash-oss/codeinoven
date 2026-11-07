@@ -1,4 +1,4 @@
-import { DEFAULT_SCOPE_BUCKET_ID, DEFAULT_THREAD_TITLE, type Thread } from '$shared/types'
+import { ASSISTANT_SPACE_ID, DEFAULT_THREAD_TITLE, type Thread } from '$shared/types'
 import { invoke } from '$lib/ipc.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -49,8 +49,19 @@ export function openPassageInNewThread(projectId: string, threadId: string, pass
         workingDirectory: thread.workingDirectory,
         settings: thread.settings,
         // Inherit the source thread's scope so the spun-off thread stays in the
-        // same bucket instead of dropping to the default one.
-        scopeBucketId: thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
+        // same bucket instead of dropping to the default one, and inherit only
+        // what the source actually has. A conversation container (an assistant
+        // task, a chat) owns no repository scope, so inventing the default
+        // bucket there asked the create to resolve a scope root that can never
+        // exist and the new thread was rolled back and removed.
+        ...(thread.scopeBucketId ? { scopeBucketId: thread.scopeBucketId } : {}),
+        // A passage taken out of an assistant's thread becomes another task of
+        // that same assistant: without it the new row would sit in the assistant
+        // space owned by no assistant, and it starts off the assistant's clock
+        // exactly as a task created from the assistant panel does.
+        ...(projectId === ASSISTANT_SPACE_ID && thread.assistantId
+          ? { assistantId: thread.assistantId, scheduled: false }
+          : {})
       })
       rendererRecovery.setDraft(created.projectId, created.id, quotedPassageDraft(passage))
       // The passage came out of that conversation, so the new thread starts with

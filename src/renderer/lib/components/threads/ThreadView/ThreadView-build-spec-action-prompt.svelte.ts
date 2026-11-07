@@ -22,6 +22,7 @@ import {
   pendingTurnAnchorIndex
 } from '../thread-turn-parts'
 import type { AssignmentAuditDisplayState } from './ThreadView-types'
+import { providerIssueTitle } from '$shared/provider-issue'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
@@ -369,6 +370,35 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
     })
   }
 
+  /**
+   * The audit card an auditor thread reports through.
+   *
+   * An auditor thread's own run state is the audit's state, so its usage limit
+   * or provider error belongs on the audit card with the model picker and the
+   * retry, not on a chat status card above it. Undefined means there is nothing
+   * to report yet and the coordinated-thread card is the only surface.
+   */
+  auditorThreadCardState = $derived.by<'failed' | 'partial' | 'report_ready' | undefined>(() => {
+    if (
+      this.root.submitBrainstormDecision.visibleProviderStatus !== null ||
+      this.root.handleAgentEvent.errorMessage !== ''
+    ) {
+      return 'failed'
+    }
+    const report = this.root.contextUsage.auditReport
+    if (!report) return undefined
+    return report.evidenceValidation === 'partial' ? 'partial' : 'report_ready'
+  })
+
+  /** The failure an auditor thread reports on its audit card. */
+  auditorThreadCardError = $derived.by(() => {
+    if (this.root.handleAgentEvent.errorMessage !== '')
+      return this.root.handleAgentEvent.errorMessage
+    const status = this.root.submitBrainstormDecision.visibleProviderStatus
+    if (!status) return this.auditError
+    return `${providerIssueTitle(status.issue.kind, status.state === 'waiting')}: ${status.issue.message}`
+  })
+
   async generateAudit(selected: ThreadSettings): Promise<void> {
     if (this.root.submitSpecDecision.assignment?.status === 'completed') {
       await this.generateDurableAssignmentAudit(selected)
@@ -386,6 +416,15 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
       await this.retryAssignmentAuditFromAuditor(selected)
       return
     }
+    // An independent (spec-less) audit belongs to its own runner. The
+    // implementation audit demands an approved Engineering contract and refuses
+    // exactly the thread the independent switch produced, which is how a Retry on
+    // an independent audit answered "An approved Engineering implementation is
+    // required before audit".
+    if (this.root.currentWorkingTraceAttribution.independentAuditPanelActive) {
+      await this.root.contextUsage.generateIndependentAudit(selected)
+      return
+    }
     await this.root.contextUsage.generateDurableImplementationAudit(selected)
   }
 
@@ -398,7 +437,8 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
   async startFreshIndependentAudit(selected: ThreadSettings): Promise<void> {
     this.root.submitSpecDecision.auditBusy = true
     this.auditError = ''
-    this.root.handleAgentEvent.errorMessage = ''
+    this.root.submitSpecDecision.auditFailed = false
+    this.root.submitSpecDecision.auditState = 'running'
     this.root.contextUsage.auditSettings = selected
     rendererRecovery.addRecentModel(
       modelKey(selected.harnessId, selected.providerId, selected.modelId)
@@ -407,7 +447,9 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
       const result = await invoke(
         'agent:startFreshIndependentAudit',
         this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id,
+        // The audit belongs to the coordinator. Run from an auditor's own view,
+        // the owner is the thread it audits, not the auditor itself.
+        this.root.submitSpecDecision.auditWorkflowThreadId(),
         {
           settings: selected
         }
@@ -423,11 +465,11 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
       )
     } catch (error) {
       const rawError = error instanceof Error ? error.message : 'The new audit could not start.'
-      this.root.handleAgentEvent.errorMessage = rawError.replace(
-        /^Error invoking remote method '[^']+': Error:\s*/u,
-        ''
-      )
-      this.auditError = this.root.handleAgentEvent.errorMessage
+      // Same contract as a first run: the audit card reports the failure so the
+      // model picker beside it can change the auditor's account there.
+      this.auditError = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      this.root.submitSpecDecision.auditFailed = true
+      this.root.submitSpecDecision.auditState = 'offered'
       // The previous auditor is gone and the failed run still created a fresh
       // one, so resolve it instead of leaving a deleted thread on screen.
       this.root.contextUsage.durableAuditThread = await invoke(
@@ -571,6 +613,14 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.thread.projectId,
       this.root.handleAgentEvent.thread.coordinatorThreadId
     )
+    // An independent (spec-less) audit's Retry must reach its own runner. The
+    // implementation audit needs an approved Engineering contract, so routing
+    // there answered "An approved Engineering implementation is required before
+    // audit" for a thread that audits itself.
+    if (coordinator?.independentAudit === true) {
+      await this.root.contextUsage.generateIndependentAudit(selected)
+      return
+    }
     if (coordinator?.settings?.loopMode === true) {
       await this.generateDurableAchievementAudit(
         selected,

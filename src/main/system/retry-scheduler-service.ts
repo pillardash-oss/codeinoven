@@ -2,6 +2,10 @@ import { Logger } from './logger'
 import { instanceRegistry } from './instance-registry'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { AgentProviderIssueKind } from '../../lib/types'
+import {
+  TRANSIENT_PROVIDER_RETRY_MAX_MS,
+  TRANSIENT_PROVIDER_RETRY_MS
+} from '../../lib/provider-issue'
 
 /** One thread awaiting provider reset or device connection recovery. */
 export interface PendingRetryRecord {
@@ -305,8 +309,9 @@ export class RetrySchedulerService {
     }
     if (!Array.isArray(saved)) return
     for (const raw of saved) {
-      const record = this.validateSavedRecord(raw)
-      if (record) this.pending.set(record.sessionId, record)
+      const validated = this.validateSavedRecord(raw)
+      if (!validated) continue
+      this.pending.set(validated.sessionId, this.repairTransientRecord(validated))
     }
     if (this.pending.size > 0) {
       Logger.info('Auto-resume restored pending retries after restart', {
@@ -362,6 +367,28 @@ export class RetrySchedulerService {
       ...(typeof attempt === 'number' && Number.isFinite(attempt) ? { attempt } : {}),
       ...(typeof rawError === 'string' ? { rawError } : {})
     }
+  }
+
+  /**
+   * A transient provider-load wait is short by definition. Records written
+   * before the fixed backoff (see `scheduleAutomaticRetry`) captured the
+   * account's monthly reset for a 429 `overloaded`, parking a recoverable
+   * thread weeks out. Clamp those on load so the fix also releases threads that
+   * are already stuck instead of waiting for their saved deadline.
+   */
+  private repairTransientRecord(record: PendingRetryRecord): PendingRetryRecord {
+    if (record.issueKind !== 'provider_unavailable' || record.retryAt === undefined) return record
+    const now = Date.now()
+    if (record.retryAt - now <= TRANSIENT_PROVIDER_RETRY_MAX_MS) return record
+    const retryAt = now + TRANSIENT_PROVIDER_RETRY_MS
+    Logger.info('Repaired a transient provider wait parked beyond its backoff', {
+      sessionId: record.sessionId,
+      projectId: record.projectId,
+      threadId: record.threadId,
+      savedRetryAt: new Date(record.retryAt).toISOString(),
+      retryAt: new Date(retryAt).toISOString()
+    })
+    return { ...record, retryAt, resetAt: retryAt }
   }
 
   private persist(): Promise<void> {

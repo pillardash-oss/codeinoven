@@ -287,6 +287,18 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
 
   assignmentGenerationTraceStartedAt = $state<number | undefined>()
 
+  /**
+   * The Engineering artifact a tool started that is still being generated, or
+   * null when nothing is in flight. A tool call can take minutes before its
+   * document exists, which is exactly the window where the studio has nothing
+   * to show yet even though the agent is already working.
+   */
+  generationInFlight = $derived.by((): 'spec' | 'assignment' | null => {
+    if (this.specGenerationTraceActive) return 'spec'
+    if (this.assignmentGenerationTraceActive) return 'assignment'
+    return null
+  })
+
   specTracePartStart(part: AgentPart): number | undefined {
     if (part.type === 'reasoning') return part.time?.start
     if (part.type === 'tool') return part.state.time?.start
@@ -402,6 +414,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       return {
         ...this.root.loadOlderMessages.settings,
         ...inheritedAuditor,
+        ...(rendererRecovery.auditAccountId ? { accountId: rendererRecovery.auditAccountId } : {}),
         loopMode: false
       }
     }
@@ -410,20 +423,28 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       : { ...this.root.loadOlderMessages.settings }
   }
 
+  /**
+   * The model a worker dispatched from this thread right now would run on.
+   *
+   * It must resolve exactly like `AssignmentWorkerSelection.workerSettings`:
+   * the configured worker default laid over the thread settings, so an account
+   * pinned on either one survives. Dropping `accountId` here made every
+   * inherited phase/task model render the provider's default account (leo-1)
+   * while the worker was actually dispatched on the thread's account (cio-5).
+   */
   workerModelForThread(): AssignmentModelSelection {
+    const settings = this.root.loadOlderMessages.settings
+    const selected = this.agentDefaults.worker
+      ? { ...settings, ...this.agentDefaults.worker }
+      : settings
     return {
-      harnessId:
-        this.agentDefaults.worker?.harnessId ?? this.root.loadOlderMessages.settings.harnessId,
-      providerId:
-        this.agentDefaults.worker?.providerId ?? this.root.loadOlderMessages.settings.providerId,
-      modelId: this.agentDefaults.worker?.modelId ?? this.root.loadOlderMessages.settings.modelId,
-      thinkingLevel: this.root.loadOlderMessages.settings.thinkingLevel,
-      inferenceMode: this.agentDefaults.worker
-        ? this.agentDefaults.worker.inferenceMode
-        : this.root.loadOlderMessages.settings.inferenceMode,
-      contextWindow: this.agentDefaults.worker
-        ? this.agentDefaults.worker.contextWindow
-        : this.root.loadOlderMessages.settings.contextWindow
+      harnessId: selected.harnessId,
+      providerId: selected.providerId,
+      modelId: selected.modelId,
+      accountId: selected.accountId,
+      thinkingLevel: selected.thinkingLevel,
+      inferenceMode: selected.inferenceMode,
+      contextWindow: selected.contextWindow
     }
   }
 

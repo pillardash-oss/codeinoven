@@ -484,7 +484,9 @@ class ScopeState {
 
   /** Dock to a scope from the scope board: open the scoped-threads sidebar for
    *  the active project with that bucket current and no thread focused, so the
-   *  conversation screen shows its empty state until the user opens a thread. */
+   *  conversation screen shows its empty state until the user opens a thread.
+   *  The slice lands where the scope's threads are, so docking an empty Todo
+   *  column does not hide a scope whose work sits in Done or Unread. */
   dockScope(bucketId: string): void {
     const projectId = this.activeProjectId
     if (!projectId) return
@@ -492,7 +494,7 @@ class ScopeState {
     this.sidebarContext = {
       projectId,
       bucketId,
-      stage: 'todo',
+      stage: this.threads.stageForBucketSwitch(bucketId, 'todo'),
       threadId: ''
     }
     this.lastBucketByProject.set(projectId, bucketId)
@@ -513,7 +515,8 @@ class ScopeState {
 
   setSidebarBucket(bucketId: string): void {
     if (!this.sidebarContext) return
-    this.sidebarContext = { ...this.sidebarContext, bucketId }
+    const stage = this.threads.stageForBucketSwitch(bucketId, this.sidebarContext.stage)
+    this.sidebarContext = { ...this.sidebarContext, bucketId, stage }
     if (this.activeProjectId) this.lastBucketByProject.set(this.activeProjectId, bucketId)
     persistScopeSnapshot({
       activeProjectId: this.activeProjectId,
@@ -583,6 +586,11 @@ class ScopeState {
     kinds: readonly AuthoredWorkKind[]
   ): void {
     this.threads.patchAuthoredWorkKind(projectId, threadId, kind, kinds)
+  }
+
+  /** Patch one thread's settled branch in place (light broadcast). */
+  patchThreadBranch(projectId: string, threadId: string, branch: string | undefined): void {
+    this.threads.patchBranch(projectId, threadId, branch)
   }
 
   /** Fold a list of thread snapshots into the scope store in one pass. See

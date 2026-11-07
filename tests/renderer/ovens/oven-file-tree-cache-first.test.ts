@@ -46,6 +46,7 @@ function mount(options: { oven?: boolean } = {}): {
   const host: ProjectFilesExplorerHost = {
     stateFor: () => state,
     existingState: () => state,
+    stateKeyFor: () => 'oven-state-key',
     scopeFor: () => 'oven-scope-key',
     threadArg: () => THREAD,
     mountKeyFor: () => 'oven-mount-key',

@@ -1,7 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import { GLOBAL_BROWSER_PROJECT_ID, type AuthoredWorkKind } from '$shared/ipc-contract'
-import { threadStage, type ScopeSidebarContext, type ThreadStage } from './scope-board'
+import { STAGE_ORDER, threadStage, type ScopeSidebarContext, type ThreadStage } from './scope-board'
 import {
   isOrchestrationChildThread,
   DEFAULT_SCOPE_BUCKET_ID,
@@ -248,6 +248,30 @@ export class ScopeThreads {
     })
   }
 
+  /**
+   * The slice a scope switch lands on.
+   *
+   * A scope is opened to look at the threads in it, so an empty slice is only
+   * ever chosen when the scope really holds nothing: the open thread's own slice
+   * when it lives in that scope, then the slice already showing if it still has
+   * threads, then the first slice of the rail that does, and Todo when the scope
+   * is empty. Picking `todo` blind left every scope whose threads sat in Done or
+   * Unread showing "No threads in this slice" until the user clicked through the
+   * rail to find them.
+   */
+  stageForBucketSwitch(bucketId: string, currentStage: ThreadStage): ThreadStage {
+    const contextThreadId = this.host.currentSidebarContext()?.threadId ?? null
+    if (contextThreadId !== null) {
+      const open = this.allScopeThreads.find(
+        (thread) => thread.id === contextThreadId && this.bucketForThread(thread) === bucketId
+      )
+      if (open !== undefined) return this.stageForThread(open)
+    }
+    if (this.threadsFor(bucketId, currentStage).length > 0) return currentStage
+    const populated = STAGE_ORDER.find((stage) => this.threadsFor(bucketId, stage).length > 0)
+    return populated ?? 'todo'
+  }
+
   async reorderThreads(
     bucketId: string,
     slice: ThreadStage,
@@ -313,17 +337,40 @@ export class ScopeThreads {
   }
 
   /**
+   * Patch one thread's settled branch in place.
+   *
+   * `thread:branchUpdated` is a light event, so a row that was drawn without a
+   * branch (a scope move drops the previous checkout's label before the new one
+   * settles) gains it here without a list rebuild or a transcript reconcile.
+   */
+  patchBranch(projectId: string, threadId: string, branch: string | undefined): void {
+    const thread = this.allScopeThreads.find(
+      (candidate) => candidate.projectId === projectId && candidate.id === threadId
+    )
+    if (thread === undefined) return
+    thread.branch = branch
+  }
+
+  /**
    * The sidebar context a refreshed row hands back, or null when the context
    * already describes that row as it is now.
    *
    * The docked scope and its visible slice are the user's selection, so a row
    * refresh may only move the fields that still mirror the row: the scope the
-   * user switched to, and the slice the user picked, are theirs to keep. Each
-   * field is mirrored from the row only while the context was still holding the
-   * row's own previous value for it, which keeps the follow faithful (an agent
-   * moving the open thread into another scope still takes the sidebar with it)
-   * without letting a background status tick pull the pane back to the open
-   * thread's scope seconds after the user switched scopes.
+   * user switched to is theirs to keep, and a slice they picked by hand survives
+   * a tick that leaves the row in place. Each field is mirrored from the row
+   * only while the context was still holding the row's own previous value for
+   * it, which keeps the follow faithful (an agent moving the open thread into
+   * another scope still takes the sidebar with it) without letting a background
+   * status tick pull the pane back to the open thread's scope seconds after the
+   * user switched scopes.
+   *
+   * The slice is the one field a status change has to win: when the refresh
+   * itself moves the row to another slice (working to done, unread to done, a
+   * retry parking the row), the pane has to show where the open thread is now,
+   * or the row silently leaves the visible list and the user has to click
+   * through the rail to find the conversation still on screen. A tick that does
+   * not move the row never touches a hand-picked slice.
    */
   private nextSidebarContextForRow(
     context: ScopeSidebarContext,
@@ -332,15 +379,18 @@ export class ScopeThreads {
   ): ScopeSidebarContext | null {
     const previousBucket = previous === undefined ? null : this.bucketForThread(previous)
     const followsBucket = previousBucket !== null && context.bucketId === previousBucket
-    // The slice follows the row only while the pane still shows the row's own
-    // scope. Browsing another scope makes the open thread's slice irrelevant to
-    // the pane, and a slice the user picked by hand is never theirs to lose.
+    // The slice follows the row while the pane still shows the row's own scope,
+    // and always when this refresh moved the row to another slice: a status
+    // change is the row answering "where do I belong now", and browsing the
+    // open thread's own scope is the one place that answer applies.
     const previousStage = previous === undefined ? null : this.stageForThread(previous)
-    const followsStage = followsBucket && context.stage === previousStage
+    const updatedStage = this.stageForThread(updated)
+    const rowMovedSlice = previousStage !== null && previousStage !== updatedStage
+    const followsStage = followsBucket && (context.stage === previousStage || rowMovedSlice)
     const next: ScopeSidebarContext = {
       projectId: updated.projectId,
       bucketId: followsBucket ? this.bucketForThread(updated) : context.bucketId,
-      stage: followsStage ? this.stageForThread(updated) : context.stage,
+      stage: followsStage ? updatedStage : context.stage,
       threadId: updated.id
     }
     if (

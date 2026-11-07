@@ -2,6 +2,7 @@
  *  base URL + credentials for 24 hours so switching harnesses or reopening
  *  the editor doesn't refire the request on every render. */
 import type { DiscoveredBaseUrlModel } from '../../lib/types'
+import { llamaCppAddressableModelId } from '../../lib/llama-cpp'
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10_000
@@ -77,10 +78,11 @@ function parseModelsResponse(body: unknown): DiscoveredBaseUrlModel[] {
     if (models.length >= MAX_DISCOVERED_MODELS) break
     if (typeof entry !== 'object' || entry === null) continue
     const raw = entry as Record<string, unknown>
-    const id = typeof raw['id'] === 'string' ? raw['id'] : undefined
+    const id = typeof raw['id'] === 'string' ? llamaCppAddressableModelId(raw['id']) : undefined
     if (!id || seen.has(id)) continue
     seen.add(id)
-    const name = typeof raw['name'] === 'string' && raw['name'] ? raw['name'] : id
+    const name =
+      typeof raw['name'] === 'string' && raw['name'] ? llamaCppAddressableModelId(raw['name']) : id
     const contextWindow = positiveInteger(
       raw['context_length'] ?? raw['context_window'] ?? raw['contextWindow'] ?? ctxFromMeta(raw)
     )

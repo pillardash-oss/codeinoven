@@ -118,9 +118,16 @@ Three rules keep that from drifting again:
   `scripts/check-bun-version.ts` fails the run when they disagree.
 - **The installer formats a release publishes are owned by
   `scripts/release-artifacts.ts`.** Add a format there, not in a `find` filter.
-- **The promotion-skip rule lives in the `policy` job** of `quality.yml` and
-  `security.yml`, because a composite action cannot set a job-level `if`. Give a
-  heavy job `needs: [policy]` and `if: needs.policy.outputs.skip != 'true'`.
+- **The promotion-skip rule lives in the `policy` job** of `quality.yml`,
+  because a composite action cannot set a job-level `if`. Give a heavy job
+  `needs: [policy]` and `if: needs.policy.outputs.skip != 'true'`.
+- **Two status contexts are pinned by branch protection and must never be
+  renamed.** The classic protection on `dev` and `nightly` requires
+  `Release verification`, and the promotion rulesets require
+  `Release promotion policy`. A rename does not produce a red check, it produces
+  no check at all, and auto-merge then parks every promotion PR as `BLOCKED`
+  with the whole suite green. Change the ruleset in the same pull request, or
+  leave the name alone.
 
 `scripts/ci-local.ts` mirrors these stages locally, so `bun run ci:local` runs
 the host-appropriate set before you push.
@@ -159,15 +166,15 @@ some changes get extra review scrutiny:
   `overrides` entry in `package.json` that lifts the vulnerable package to a
   patched release, and add an advisory to that script only when no patched
   release exists anywhere on the path. Every accepted advisory and its removal
-  condition is recorded in the `audit` job comment in
-  `.github/workflows/security.yml`; say why there when you add one. See the
-  `audit` job in that workflow for the mechanism.
+  condition is recorded in the `Audit dependencies` step of the `suite` job in
+  `.github/workflows/quality.yml`; say why there when you add one. See that step
+  for the mechanism.
 
 ---
 
 ## Git and pull requests
 
-- **Work on a branch** (or fork) and open a pull request against `main`. The quality workflow (check + lint + test + production build) runs on every PR and must pass before merge.
+- **Work on a branch** (or fork) and open a pull request against `main`. The quality workflow runs on every PR type check, lint, tests, the Gitleaks scan, `bun audit`, the macOS, Windows and Linux runtime jobs and the bundle budgets and must pass before merge.
 - **Commit contextually.** One unit of work per commit, scoped to the files you changed. Never `git commit .` or `git commit -A`.
 - **Never commit ignored files** (`.cio/`, `out/`, `dist/`, `.env`, logs).
 - **Write clear commit messages** that describe the change and why.

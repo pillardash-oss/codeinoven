@@ -1,6 +1,7 @@
 import { unarchivedSubtreeSql, unarchivedThreadSql } from '../../../lib/archives'
 import { ledgerContextUsageSql } from '../thread-context-usage-sql'
 import type { Database } from '../database'
+import { queryConcepts } from '../../../lib/search/query-evidence'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import {
   isAuthoredWorkKind,
@@ -43,6 +44,12 @@ interface ThreadRow {
   authored_work_kind: string | null
   authored_work_kinds: string | null
   scope_bucket_id: string | null
+  bound_scope_project_id: string | null
+  bound_scope_scope_id: string | null
+  bound_scope_home_project_id: string | null
+  run_base: string | null
+  dispatch_origin: string | null
+  park_reason: string | null
   settings: string | null
   context_usage: string | null
   session_id: string | null
@@ -170,6 +177,90 @@ function authoredWorkKindsFromRow(row: ThreadRow): AuthoredWorkKind[] | undefine
 }
 
 /** Parse a raw thread row into a display-facing Thread. */
+/**
+ * The bound scope a row carries, reconstructed from its columns.
+ *
+ * Project and scope together or nothing: a half-written pair cannot name a
+ * scope, and reading one would resolve a checkout nobody chose. The home
+ * container is optional, so an unbind still knows where the thread came from.
+ */
+function threadBoundScopeFromRow(row: ThreadRow): Thread['boundScope'] {
+  if (!row.bound_scope_project_id || !row.bound_scope_scope_id) return undefined
+  return {
+    projectId: row.bound_scope_project_id,
+    scopeBucketId: row.bound_scope_scope_id,
+    ...(row.bound_scope_home_project_id ? { homeProjectId: row.bound_scope_home_project_id } : {})
+  }
+}
+
+/** A run's recorded base, parsed defensively: a corrupt value means no base. */
+function threadRunBaseFromRow(row: ThreadRow): Thread['runBase'] {
+  if (!row.run_base) return undefined
+  const parsed = parseStoredJson(row.run_base)
+  if (!parsed || typeof parsed !== 'object') return undefined
+  const record = parsed as Record<string, unknown>
+  if (
+    typeof record['sha'] !== 'string' ||
+    typeof record['projectId'] !== 'string' ||
+    typeof record['scopeBucketId'] !== 'string' ||
+    typeof record['recordedAt'] !== 'number'
+  ) {
+    return undefined
+  }
+  return {
+    sha: record['sha'],
+    projectId: record['projectId'],
+    scopeBucketId: record['scopeBucketId'],
+    recordedAt: record['recordedAt']
+  }
+}
+
+/** A park reason, parsed defensively so a corrupt row renders no guidance. */
+function threadParkReasonFromRow(row: ThreadRow): Thread['parkReason'] {
+  if (!row.park_reason) return undefined
+  const parsed = parseStoredJson(row.park_reason)
+  if (!parsed || typeof parsed !== 'object') return undefined
+  const record = parsed as Record<string, unknown>
+  if (
+    typeof record['category'] !== 'string' ||
+    typeof record['message'] !== 'string' ||
+    typeof record['projectId'] !== 'string' ||
+    typeof record['scopeBucketId'] !== 'string'
+  ) {
+    return undefined
+  }
+  return {
+    category: record['category'] as NonNullable<Thread['parkReason']>['category'],
+    message: record['message'],
+    projectId: record['projectId'],
+    scopeBucketId: record['scopeBucketId']
+  }
+}
+
+/** A dispatch origin, parsed defensively so a corrupt row renders no badge. */
+function threadDispatchOriginFromRow(row: ThreadRow): Thread['dispatchOrigin'] {
+  if (!row.dispatch_origin) return undefined
+  const parsed = parseStoredJson(row.dispatch_origin)
+  if (!parsed || typeof parsed !== 'object') return undefined
+  const record = parsed as Record<string, unknown>
+  if (
+    typeof record['initiatorProjectId'] !== 'string' ||
+    typeof record['initiatorThreadId'] !== 'string' ||
+    typeof record['at'] !== 'number'
+  ) {
+    return undefined
+  }
+  return {
+    initiatorProjectId: record['initiatorProjectId'],
+    initiatorThreadId: record['initiatorThreadId'],
+    at: record['at'],
+    ...(typeof record['assistantId'] === 'string' ? { assistantId: record['assistantId'] } : {}),
+    ...(typeof record['assistantName'] === 'string'
+      ? { assistantName: record['assistantName'] }
+      : {})
+  }
+}
+
 function rowToThread(row: ThreadRow): Thread {
   return {
     id: row.id,
@@ -192,6 +283,10 @@ function rowToThread(row: ThreadRow): Thread {
       : undefined,
     authoredWorkKinds: authoredWorkKindsFromRow(row),
     scopeBucketId: row.scope_bucket_id ?? undefined,
+    boundScope: threadBoundScopeFromRow(row),
+    runBase: threadRunBaseFromRow(row),
+    dispatchOrigin: threadDispatchOriginFromRow(row),
+    parkReason: threadParkReasonFromRow(row),
     settings: row.settings
       ? (sanitizeThreadSettings(JSON.parse(row.settings)) as ThreadSettings)
       : undefined,
@@ -255,14 +350,18 @@ const FTS_QUERY_TOKEN_LIMIT = 32
 const SNIPPET_BEFORE = 60
 const SNIPPET_AFTER = 120
 
-/** Build a safe FTS5 MATCH expression from free-form input (prefix per word). */
+/**
+ * Build a safe FTS5 MATCH expression from free-form input (prefix per word).
+ *
+ * Filler words are dropped first: requiring "the" next to the words that carry
+ * the question is what made an all-term query match long messages that happened
+ * to contain every word somewhere. The concepts still have to appear together,
+ * so precision is unchanged for the words that mean something.
+ */
 function toFtsQuery(raw: string): string {
-  const tokens = raw.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []
+  const tokens = queryConcepts(raw).slice(0, FTS_QUERY_TOKEN_LIMIT)
   if (tokens.length === 0) return ''
-  return tokens
-    .slice(0, FTS_QUERY_TOKEN_LIMIT)
-    .map((token) => `"${token}"*`)
-    .join(' ')
+  return tokens.map((token) => `"${token}"*`).join(' ')
 }
 
 /** Escape LIKE wildcards so user input matches literally. */
@@ -438,7 +537,9 @@ interface MessageMatchRow {
 const THREAD_UPSERT_SQL = `INSERT INTO threads(
   id, project_id, provider_id, title, title_source, status,
   pinned, pinned_at, bookmarked, sort_order, scope_sort_order, archived, read,
-  branch, feature_slug, authored_work_kind, authored_work_kinds, scope_bucket_id, settings, context_usage,
+  branch, feature_slug, authored_work_kind, authored_work_kinds, scope_bucket_id,
+  bound_scope_project_id, bound_scope_scope_id, bound_scope_home_project_id,
+  run_base, dispatch_origin, park_reason, settings, context_usage,
   session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
@@ -450,7 +551,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -468,6 +569,12 @@ ON CONFLICT(id) DO UPDATE SET
   authored_work_kind=excluded.authored_work_kind,
   authored_work_kinds=excluded.authored_work_kinds,
   scope_bucket_id=excluded.scope_bucket_id,
+  bound_scope_project_id=excluded.bound_scope_project_id,
+  bound_scope_scope_id=excluded.bound_scope_scope_id,
+  bound_scope_home_project_id=excluded.bound_scope_home_project_id,
+  run_base=excluded.run_base,
+  dispatch_origin=excluded.dispatch_origin,
+  park_reason=excluded.park_reason,
   settings=excluded.settings,
   context_usage=COALESCE(threads.context_usage, excluded.context_usage),
   session_id=excluded.session_id,
@@ -527,6 +634,12 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.authoredWorkKind ?? null,
     serializeAuthoredWorkKinds(thread.authoredWorkKinds),
     thread.scopeBucketId ?? null,
+    thread.boundScope?.projectId ?? null,
+    thread.boundScope?.scopeBucketId ?? null,
+    thread.boundScope?.homeProjectId ?? null,
+    thread.runBase ? JSON.stringify(thread.runBase) : null,
+    thread.dispatchOrigin ? JSON.stringify(thread.dispatchOrigin) : null,
+    thread.parkReason ? JSON.stringify(thread.parkReason) : null,
     thread.settings ? JSON.stringify(thread.settings) : null,
     thread.contextUsage ? JSON.stringify(thread.contextUsage) : null,
     thread.sessionId ?? null,
@@ -1526,7 +1639,8 @@ export function buildThreadSearchSql(
   raw: string,
   options: ThreadSearchOptions = {},
   useSearchMeta = false,
-  messageQuery?: string
+  messageQuery?: string,
+  snippetTokens = 64
 ): ThreadSearchSql {
   const limit = Math.max(1, Math.min(options.limit ?? 20, 100))
   const trimmed = raw.trim()
@@ -1551,7 +1665,7 @@ export function buildThreadSearchSql(
         FROM (
           SELECT m.rowid AS msg_rowid, m.thread_id AS msg_thread_id, m.role AS role,
                  m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank,
-                 snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text
+                 snippet(agent_messages_fts, 0, '', '', ' … ', ?) AS snippet_text
           FROM agent_messages_fts
           JOIN agent_message_search_meta m ON m.rowid = agent_messages_fts.rowid
           JOIN threads st ON st.id = m.thread_id
@@ -1564,11 +1678,11 @@ export function buildThreadSearchSql(
         ) meta
         JOIN threads t ON t.id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
-          params: [ftsQuery, ...metaScope.params, messageLimit]
+          params: [snippetTokens, ftsQuery, ...metaScope.params, messageLimit]
         }
       : {
           sql: `SELECT t.*, am.role AS match_role,
-              snippet(agent_messages_fts, 0, '', '', ' … ', 64) AS snippet_text,
+              snippet(agent_messages_fts, 0, '', '', ' … ', ?) AS snippet_text,
               am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
         FROM agent_messages_fts
         JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
@@ -1578,7 +1692,7 @@ export function buildThreadSearchSql(
           AND am.visibility = 'conversation'
           AND ${legacyScope.sql}
         ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
-          params: [ftsQuery, ...legacyScope.params]
+          params: [snippetTokens, ftsQuery, ...legacyScope.params]
         }
     : null
   return { title, fts, limit }

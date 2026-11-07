@@ -20,6 +20,7 @@
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { designCoordinatorState } from '$lib/stores/design-coordinator.svelte'
+  import { displayAvailability } from '$lib/stores/display-availability.svelte'
   import { captureActivities } from '$shared/media-activity'
   import { browserAudio } from '$lib/stores/browser-audio.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
@@ -34,7 +35,7 @@
   import { threadChangesState } from '$lib/stores/thread-changes.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import type { Project } from '$shared/types'
+  import type { AutoAnswerThreadScope, Project } from '$shared/types'
   import { activeThreadRowId, ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
   import { cubicOut } from 'svelte/easing'
   import { SvelteSet } from 'svelte/reactivity'
@@ -76,9 +77,10 @@
     updateConfig
   }))
   /**
-   * Dock contents, grouped: history, then workspace tools, then session tools.
-   * Every entry is a toggle   the rail itself is always visible, only the
-   * panel (or, for history, the floating jump menu) comes and goes.
+   * Dock contents, grouped: history (which also carries the thread note and, on
+   * an assistant task, the assistant's behavior), then workspace tools, then
+   * session tools. Every entry is a toggle   the rail itself is always visible,
+   * only the panel (or, for history, the floating jump menu) comes and goes.
    */
   board.switcherPanelTabs.setContextGroups(() => dockGroups)
   let dockGroups = $derived.by((): ContextDockItem[][] => {
@@ -98,6 +100,48 @@
     // Before the first message it falls back to a plain history icon: there's
     // no count worth showing yet, and "0" reads as a stuck/broken badge.
     const hasMessages = workspaceState.messageCount > 0
+
+    // The thread note rides in history's own group, right after it: the two are
+    // always reached together, so they read as one pair instead of the note
+    // sitting far down the rail behind its own hairline. It is always present
+    //   not just once a note exists   so it also doubles as the "add a note"
+    // entry point; the amber tone only kicks in once there is something written
+    // to draw attention to.
+    const hasThreadNote = threadNotesState.has(selectedThread.id)
+    const threadNoteEntry: ContextDockItem = {
+      id: 'note',
+      label: hasThreadNote
+        ? `${feature('thread-note').name} available`
+        : `Add a ${feature('thread-note').name.toLowerCase()}`,
+      icon: feature('thread-note').icon,
+      active: board.switcherPanelTabs.dockKindActive('thread-note'),
+      tone: hasThreadNote ? 'warning' : undefined,
+      onSelect: () =>
+        board.switcherPanelTabs.toggleDockPanel('thread-note', () =>
+          contextSidebarState.openThreadNote(
+            selectedThread.projectId,
+            selectedThread.id,
+            selectedThread.title
+          )
+        )
+    }
+
+    // An assistant task's own authoring surface rides the same group, right
+    // after the note: history, the note and the assistant's behavior are the
+    // three panels of one thread's identity.
+    const assistantBehaviorEntry: ContextDockItem | null = isAssistantThread
+      ? {
+          id: 'assistant-knowledge',
+          label: 'Assistant behavior',
+          icon: AssistantKnowledgeIcon,
+          active: board.switcherPanelTabs.dockKindActive('assistant-knowledge'),
+          onSelect: () =>
+            board.switcherPanelTabs.toggleDockPanel('assistant-knowledge', () =>
+              board.mergeThreadsInList.openAssistantKnowledgeForTask(selectedThread)
+            )
+        }
+      : null
+
     const history: ContextDockItem[] = [
       {
         id: 'history',
@@ -110,25 +154,10 @@
         menu: board.jumpToHistoryMessage.showHistoryMenu ? historyMenu : undefined,
         onSelect: () =>
           (board.jumpToHistoryMessage.showHistoryMenu = !board.jumpToHistoryMessage.showHistoryMenu)
-      }
+      },
+      threadNoteEntry,
+      ...(assistantBehaviorEntry ? [assistantBehaviorEntry] : [])
     ]
-
-    // The knowledge panel is an assistant task's own authoring surface: it sits
-    // right under history, above the workspace tools.
-    const assistantTools: ContextDockItem[] = isAssistantThread
-      ? [
-          {
-            id: 'assistant-knowledge',
-            label: 'Assistant behavior',
-            icon: AssistantKnowledgeIcon,
-            active: board.switcherPanelTabs.dockKindActive('assistant-knowledge'),
-            onSelect: () =>
-              board.switcherPanelTabs.toggleDockPanel('assistant-knowledge', () =>
-                board.mergeThreadsInList.openAssistantKnowledgeForTask(selectedThread)
-              )
-          }
-        ]
-      : []
 
     const workspaceTools: ContextDockItem[] = []
     if (selectedThread.settings?.ovenId && selectedThread.settings.ovenId !== 'local') {
@@ -371,6 +400,7 @@
               icon: board.openThreadFromSwitcher.coordinator.icon,
               active: board.switcherPanelTabs.dockKindActive('coordinator'),
               badge: board.openThreadFromSwitcher.coordinatorRailBadge,
+              badgeColor: board.openThreadFromSwitcher.coordinatorRailBadgeColor,
               badgeTitle: board.switcherPanelTabs.coordinatorRailBadgeTitle,
               onSelect: () =>
                 board.switcherPanelTabs.toggleDockPanel(
@@ -382,36 +412,39 @@
           ]
         : authoredWork
 
-    // The thread-note indicator sits below its own hairline. It's always
-    // present   not just once a note exists   so it also doubles as the "add a
-    // note" entry point; the amber tone only kicks in once there's something
-    // written to draw attention to.
-    const hasThreadNote = threadNotesState.has(selectedThread.id)
-    const threadNote: ContextDockItem[] = [
-      {
-        id: 'note',
-        label: hasThreadNote
-          ? `${feature('thread-note').name} available`
-          : `Add a ${feature('thread-note').name.toLowerCase()}`,
-        icon: feature('thread-note').icon,
-        active: board.switcherPanelTabs.dockKindActive('thread-note'),
-        tone: hasThreadNote ? 'warning' : undefined,
+    // The display panel is not a tool to browse to: it exists because an agent
+    // started or attached to a device (an emulator it launched, a simulator it
+    // booted, a phone it drives over adb, wired or wireless). So the item appears
+    // once that has happened, and an open tab keeps it there for as long as the
+    // tab lives. Nothing here loads a capture until a device is actually being
+    // worked on.
+    const showsDisplay =
+      displayAvailability.available ||
+      contextSidebarState.tabs.some((tab) => tab.kind === 'display')
+    if (showsDisplay) {
+      coordination.push({
+        id: 'display',
+        label: board.switcherPanelTabs.dockKindActive('display')
+          ? `Hide ${feature('display').name}`
+          : `Show ${feature('display').name}`,
+        icon: feature('display').icon,
+        active: board.switcherPanelTabs.dockKindActive('display'),
         onSelect: () =>
-          board.switcherPanelTabs.toggleDockPanel('thread-note', () =>
-            contextSidebarState.openThreadNote(
-              selectedThread.projectId,
-              selectedThread.id,
-              selectedThread.title
-            )
+          board.switcherPanelTabs.toggleDockPanel('display', () =>
+            contextSidebarState.openDisplayChooser(selectedThread.projectId, selectedThread.id)
           )
-      }
-    ]
+      })
+    }
+
+    // Browser tabs keep their own hairline-separated group: they are live pages,
+    // not a written aside, so they do not ride with history.
+    const browserTabs: ContextDockItem[] = []
     if (board.state.browserTabs.length > 0) {
       const name =
         board.state.browserTabs.length === 1
           ? (board.state.browserTabs.at(-1)?.title ?? 'Browser')
           : `${board.state.browserTabs.length} browser tabs`
-      threadNote.push({
+      browserTabs.push({
         id: 'browser',
         label: board.switcherPanelTabs.dockKindActive('browser') ? `Hide ${name}` : `Show ${name}`,
         icon: CioThreadBrowser,
@@ -440,7 +473,10 @@
           board.switcherPanelTabs.browser.menuOpen = false
           board.switcherPanelTabs.toggleDockPanel('browser', board.state.focusBrowser)
         },
-        onContextMenu: board.switcherPanelTabs.browser.openContextMenu
+        // Wrapped rather than passed by reference: the controller's handler reads
+        // `this`, and the dock calls whatever it was given without a receiver, so a
+        // bare method reference threw before it could open the menu.
+        onContextMenu: (event: MouseEvent) => board.switcherPanelTabs.browser.openContextMenu(event)
       })
     }
 
@@ -466,17 +502,10 @@
     // Auto-resolved gates sit at the very bottom of the rail: they are the
     // app's own record of what it decided while the user was away, not a
     // workspace tool. The item is keyed to the open conversation, so it appears
-    // only on the thread a decision concerns (or on its task, or on any thread
-    // of its assistant), and disappears once that scope has nothing unread.
-    const attentionScope = selectedThread
-      ? {
-          id: selectedThread.id,
-          projectId: selectedThread.projectId,
-          ...(selectedThread.assistantId ? { assistantId: selectedThread.assistantId } : {}),
-          ...(selectedThread.assistantTaskId
-            ? { assistantTaskId: selectedThread.assistantTaskId }
-            : {})
-        }
+    // only on the thread a decision concerns (or on the task it ran for), and
+    // disappears once that scope has nothing unread.
+    const attentionScope: AutoAnswerThreadScope | null = selectedThread
+      ? { id: selectedThread.id, projectId: selectedThread.projectId }
       : null
     const attentionItems = attentionScope ? attentionState.unreadFor(attentionScope) : []
     const autoAnswerTools: ContextDockItem[] =
@@ -499,15 +528,50 @@
 
     return [
       history,
-      assistantTools,
       workspaceTools,
       sessionTools,
       temporaryChats,
       coordination,
-      threadNote,
+      browserTabs,
       subagents,
       autoAnswerTools
     ]
+  })
+
+  /**
+   * Open the device the agent asked to mirror, on the thread the person is
+   * standing in.
+   *
+   * The offer comes from `ext_simulation`, which the agent calls with the device it
+   * is working on, so the panel appears on that device rather than on the last one
+   * opened. Focusing a tab already mirroring it is what makes an agent that moves
+   * between devices follow it here.
+   */
+  $effect(() => {
+    const offer = displayAvailability.pendingTarget
+    const thread = selectedThread
+    if (!offer || !thread) return
+    contextSidebarState.openDisplayTarget(thread.projectId, thread.id, offer.target)
+    displayAvailability.clearPendingTarget(offer.at)
+  })
+
+  /**
+   * Report what the panel is mirroring, and on which thread, so the watch stops
+   * looking for a device and that thread's row says its screen is on display.
+   */
+  $effect(() => {
+    const mirrored = contextSidebarState.tabs.find(
+      (candidate) => candidate.kind === 'display' && candidate.sourceKind && candidate.sourceId
+    )
+    displayAvailability.notePanelTarget(
+      mirrored?.kind === 'display' && mirrored.sourceKind && mirrored.sourceId
+        ? {
+            kind: mirrored.sourceKind,
+            sourceId: mirrored.sourceId,
+            threadId: mirrored.threadId
+          }
+        : null
+    )
   })
 
   /**
@@ -655,6 +719,7 @@
             gitPanelVisible={board.openThreadFromSwitcher.gitPanelVisible}
             terminalFullscreenTabId={board.openThreadFromSwitcher.terminalFullscreenTabId}
             browserFullscreenTabId={board.openThreadFromSwitcher.browserFullscreenTabId}
+            displayFullscreenTabId={board.openThreadFromSwitcher.displayFullscreenTabId}
             {activeProject}
             {selectedThread}
             projectIcons={board.createThreadInProject.projectIcons}
@@ -711,6 +776,7 @@
                 contextSidebarState.setTerminalPlacement(placement)}
               onNewTerminal={board.openThreadFromSwitcher.openNewTerminal}
               onNewBrowser={() => board.openThreadFromSwitcher.openNewBrowserTab()}
+              onNewDisplay={board.openThreadFromSwitcher.openDisplayChooser}
               onTabContextMenu={(id, event) =>
                 void board.switcherPanelTabs.browser.openTabMenu(
                   id,
@@ -760,6 +826,7 @@
               contextSidebarState.setTerminalPlacement(placement)}
             onTerminalDockToggle={() => contextSidebarState.toggleTerminalDock()}
             onNewTerminal={board.openThreadFromSwitcher.openNewTerminal}
+            onNewDisplay={board.openThreadFromSwitcher.openDisplayChooser}
           />
         </div>
       {/if}
@@ -843,6 +910,16 @@
       onTabIdChange={(id) => (board.openThreadFromSwitcher.terminalFullscreenTabId = id)}
       onNewTerminal={board.openThreadFromSwitcher.openNewTerminal}
       onCloseTab={(id) => board.openThreadFromSwitcher.closeFullscreenTab('terminal', id)}
+    />
+  {/await}
+{/if}
+{#if board.openThreadFromSwitcher.displayFullscreenTabId}
+  {#await import('./WorkspaceFullscreenDisplay.svelte') then { default: WorkspaceFullscreenDisplay }}
+    <WorkspaceFullscreenDisplay
+      tabId={board.openThreadFromSwitcher.displayFullscreenTabId}
+      onTabIdChange={(id) => (board.openThreadFromSwitcher.displayFullscreenTabId = id)}
+      onNewTarget={() => board.openThreadFromSwitcher.openDisplayChooser()}
+      onCloseTab={(id) => board.openThreadFromSwitcher.closeFullscreenTab('display', id)}
     />
   {/await}
 {/if}

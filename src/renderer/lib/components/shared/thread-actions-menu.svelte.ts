@@ -165,7 +165,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
       ...(knowledgeThread
         ? [
             {
-              label: 'Hide assistant behavior thread',
+              label: 'Hide getting started',
               icon: CioEyeOff,
               onClick: () => config.onHideKnowledge?.(thread)
             }

@@ -1,0 +1,14 @@
+/* CodeInOven mobile.
+
+   This file is the composition root of the phone's stylesheet: tokens and
+   primitives first, then one module per surface. Each module owns a concern, so a
+   change to the dock never reaches the transcript and no single file grows into
+   everything at once. */
+@import './lib/styles/base.css';
+@import './lib/styles/panel.css';
+@import './lib/styles/list.css';
+@import './lib/styles/dock.css';
+@import './lib/styles/conversation.css';
+@import './lib/styles/composer.css';
+@import './lib/styles/sheet.css';
+@import './lib/styles/settings.css';

@@ -41,6 +41,7 @@ import { BRAINSTORM_GENERATION_TIMEOUT_MS, traceLeanAgent } from './chat-engine-
 import {
   BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT,
   BRAINSTORM_DOCUMENT_WRITE_TOOLS,
+  BRAINSTORM_GENERATION_SYSTEM_PROMPT,
   BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT,
   BRAINSTORM_RESEARCH_ALLOWED_TOOLS,
   brainstormDocumentWriteEnabled
@@ -111,11 +112,10 @@ export class ChatEngineBrainstormGenerate {
     const brainstormWriteRoute = brainstormDocumentWriteEnabled(driverId, driver.capabilities)
     let revisionPathInstruction = ''
     let featureSlug: string | undefined
-    const lifecycle = this.host.state.engineeringLifecycleEngine.get(projectId, threadId)
     // Historical discussion and annotations are context, not a new prototype
-    // request. Only the explicit prototype action (or opted-in autopilot) owns it.
+    // request. Only the explicit prototype action owns it.
     const prototypeFidelity: BrainstormPrototypeFidelity | undefined =
-      options.prototypeOverride?.fidelity ?? (lifecycle?.autopilot === true ? 'lofi' : undefined)
+      options.prototypeOverride?.fidelity
     const requestedPrototypeCount = options.prototypeOverride?.count
     const prototypeBatches =
       prototypeFidelity && prototypeFidelity !== undefined
@@ -309,11 +309,10 @@ export class ChatEngineBrainstormGenerate {
       try {
         const brainstormSystemPrompt = [
           useStructuredOutput
-            ? await this.host.units['turns-dispatch'].cioPrompt('brainstorm-document')
-            : [
-                await this.host.units['turns-dispatch'].cioPrompt('brainstorm-document'),
-                BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT
-              ].join('\n\n'),
+            ? BRAINSTORM_GENERATION_SYSTEM_PROMPT
+            : [BRAINSTORM_GENERATION_SYSTEM_PROMPT, BRAINSTORM_JSON_FALLBACK_SYSTEM_PROMPT].join(
+                '\n\n'
+              ),
           BRAINSTORM_DECISION_INTEGRITY_SYSTEM_PROMPT,
           prototypeBatches.length > 0 && !skipPrototypeGeneration
             ? 'Prototype content is part of this Brainstorm. Include only the requested prototype entries.'

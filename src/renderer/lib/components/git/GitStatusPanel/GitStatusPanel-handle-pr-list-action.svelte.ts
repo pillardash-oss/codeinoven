@@ -131,9 +131,22 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
     })
   }
 
-  /** Reads the view the panel was left on, once the board is bound. */
+  /**
+   * Reads the view the panel was left on, once the board is bound.
+   *
+   * The `$state` fields below are initialised before this board exists, so they
+   * can only be seeded from defaults. Seeding them again here is what actually
+   * restores the saved view on a remount (hiding the sidebar destroys this
+   * component, and so does navigating away from the project): without it a
+   * pending direct PR navigation such as "View PR" lands on an empty Changes
+   * tab, because the persisted `pulls` tab and its selected pull request are
+   * overwritten by those defaults.
+   */
   bindSavedView(): void {
     this.savedView = this.root.confirmAcceptAllConflicts.initialViewState()
+    this.activeTab = this.savedView.activeTab
+    this.selectedCommit = this.savedView.selectedCommit
+    this.selectedPullRequest = this.savedView.selectedPullRequest
   }
 
   /** Builds the controllers that read sibling units. */
@@ -351,8 +364,8 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
    * Resolve a PR's online conflicts with the agent's help: check out the PR head
    * and merge the base in (so conflicts land in the tree), then hand the agent a
    * thread to resolve the conflict markers. The agent never pushes   the user
-   * finishes with Complete merge, which pushes the resolution to the PR and
-   * deletes the temporary branch.
+   * finishes with Complete merge, which pushes the resolution to the PR, merges
+   * that PR, and deletes the temporary branch.
    */
   async startConflictResolution(pr: PullRequestSummary): Promise<void> {
     await resolvePrConflictsWithAgent(
@@ -364,6 +377,9 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
       () => {
         this.selectedPullRequest = null
         this.activeTab = 'changes'
+      },
+      (threadId) => {
+        this.root.loadRepoState.agentConflictThreadId = threadId
       }
     )
   }

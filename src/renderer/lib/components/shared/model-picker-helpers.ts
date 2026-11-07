@@ -1,10 +1,12 @@
 import CioClock from '@pdslng/cio-icon/CioClock.svelte'
 import CioStar from '@pdslng/cio-icon/CioStar.svelte'
 import { getAgentIcon } from '$lib/agent-icons/registry'
+import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
 import { modelKey } from '$lib/model-keys'
 import { providerStore } from '$lib/stores/providers.svelte'
 import { visionModels } from '$lib/stores/vision-models.svelte'
-import { getVendorSlug } from '$lib/vendor-icons/registry'
+import { getVendorSlug } from '$shared/vendor-icons/registry'
+import { resolveModelProvider } from '$shared/provider-identity'
 import type { ModelProfileSettings } from '$shared/model-profiles'
 import type { ModelProfile, ProviderCatalog, ProviderModel } from '$shared/types'
 
@@ -199,7 +201,7 @@ export function searchWords(value: string): string[] {
 }
 
 export function harnessName(harnessId: string): string {
-  return getAgentIcon(harnessId)?.name ?? harnessId
+  return agentDisplayName(harnessId)
 }
 
 /** Canonical registry rank of a harness; unknown ids sort last. */
@@ -279,17 +281,14 @@ export function findModelEntry(
   currentHarnessId: string,
   keyHarnessId?: string
 ): ModelEntry | null {
-  let provider: ProviderCatalog | undefined
-  if (keyHarnessId) {
-    provider = catalogs.find(
-      (candidate) => candidate.harnessId === keyHarnessId && candidate.id === providerId
-    )
-  } else {
-    provider =
-      catalogs.find(
-        (candidate) => candidate.id === providerId && candidate.harnessId === currentHarnessId
-      ) ?? catalogs.find((candidate) => candidate.id === providerId)
-  }
+  // A key names its harness, so it resolves strictly there; a bare provider id is
+  // read against this harness first and never against a model id alone, which can
+  // belong to a different provider offering the same model.
+  const provider = keyHarnessId
+    ? catalogs.find(
+        (candidate) => candidate.harnessId === keyHarnessId && candidate.id === providerId
+      )
+    : resolveModelProvider(catalogs, { providerId, harnessId: currentHarnessId, modelId })
   if (!provider) return null
   const model = provider.models.find((candidate) => candidate.id === modelId)
   return model ? { provider, model } : null

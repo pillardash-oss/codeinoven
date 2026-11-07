@@ -10,6 +10,7 @@ import { withActionSummaryAdvice, withActionSummarySchema } from '../../../lib/t
 import { workRootForKind, type WorkRoots } from '../../../lib/design/work-roots'
 import { GATEWAY_UTILITY_ID_PREFIX } from '../../../lib/utility-ids'
 import type { McpTool } from '../../agents/mcp-stdio-client'
+import { BROWSER_WAIT_MAX_TIMEOUT_MS } from '../../browser/browser-service/browser-agent-page'
 import { videoStudioTools } from '../../video/video-studio-tools'
 
 export const BRIDGE_SCRIPT_PATH = 'runtime/utility-gateway/bridge.mjs'
@@ -101,7 +102,7 @@ const PAGE_TARGET_FIELD = {
   type: 'string',
   enum: ['user', 'strip', 'agent'],
   description:
-    'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser resolved for you (it stays yours while the tab lives, even when the user or another conversation moves the browser elsewhere), "strip" for whatever that browser is showing right now. Defaults to your own page when you have one, and to page "user" otherwise.'
+    'Which page to work on: "agent" for a page you opened, "user" for the page this conversation\u2019s thread browser resolved for you (it stays yours while the tab lives, even when the user or another conversation moves the browser elsewhere), "strip" for whatever that browser is showing right now. "strip" follows the user\u2019s own tab switches, so it can move between two calls and the result says so when it did; open a page of your own and use "agent" when the work must survive that. Defaults to your own page when you have one, and to page "user" otherwise.'
 }
 
 /** The element an action addresses, by the reference a snapshot reported. */
@@ -121,7 +122,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
+      'Open an http(s) URL in a browser tab owned by this project and thread, inside the box (cookie jar) this conversation\u2019s thread browser is using, so a session the user signed in there is the one the page runs in. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -140,7 +141,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'viewport',
     description:
-      'Set the viewport this thread browser tab is laid out at while it runs offscreen, for checking responsive layouts. Give a preset or explicit width and height. A tab the user is currently viewing keeps the on-screen size and uses this viewport once it is offscreen again.',
+      'Set the viewport this thread browser tab is laid out at while it runs offscreen, for checking responsive layouts. Give a preset or explicit width and height. A tab the user is currently viewing keeps the on-screen size and uses this viewport once it is offscreen again. The page the user is on is laid out at the width of their browser panel while they watch it, which is narrow, so a console or gallery whose desktop layout only exists at desktop widths (a store console and its screenshot editor, for example) is incomplete there until you set a desktop viewport: that size then holds for as long as the tab is offscreen, however wide or narrow the user had it, until you change it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -208,7 +209,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'type',
     description:
-      'Fill an input, textarea, or editable element, and report the value the page actually kept. This is what a framework-controlled form (React and friends) needs: it goes through the field\u2019s own value setter and emits beforeinput/input/change, so component state updates exactly as it does for a person. Replaces the value unless append is true. Pass submit true to press Enter afterwards.',
+      'Type into an input, textarea, or editable element, and report the value the page actually kept. The text arrives as real keystrokes, down, character and up through the browser\u2019s own input pipeline, so a page\u2019s keydown handlers, a search-as-you-type box and a rich editor all see it. Replaces the value unless append is true. Text longer than 200 characters, or text with a line break (Enter would submit the form), is inserted in one step instead, and the result says which happened. Pass submit true to press Enter afterwards.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -367,22 +368,31 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'wait',
     description:
-      'Wait, in the page, until a condition holds or the time is up: an element appears, an element goes away, text appears, or the address changes. Reading state is easier than guessing with a fixed pause, and a timeout answers with what the page looked like rather than failing the call.',
+      "Wait, in the page, until a condition holds or the time is up: an element appears, an element goes away, text appears, the address changes, or the visible text changes from what it is now. Reading state is easier than guessing with a fixed pause, and a timeout answers with what the page looked like rather than failing the call. changed with a selector waits for that element's text to change, which is how you poll a live conversation for a reply.",
     inputSchema: {
       type: 'object',
       properties: {
         selector: {
           type: 'string',
-          description: 'Wait for this element to be present and visible.'
+          description:
+            'Wait for this element to be present and visible. With changed, the element whose text must change.'
         },
         gone: { type: 'boolean', description: 'With selector: wait for it to disappear.' },
         visible: {
           type: 'boolean',
           description: 'false with selector: wait for it to exist even if hidden.'
         },
+        changed: {
+          type: 'boolean',
+          description:
+            'Wait for the visible text to become different from what it was when the wait started, on the whole page or on the selector. Use it to wait for the next message in a chat.'
+        },
         text: { type: 'string', description: 'Wait for this text to appear in the page.' },
         urlIncludes: { type: 'string', description: 'Wait for the address to contain this.' },
-        timeoutMs: { type: 'number', description: 'Up to 30000. Defaults to 5000.' },
+        timeoutMs: {
+          type: 'number',
+          description: `Up to ${BROWSER_WAIT_MAX_TIMEOUT_MS}. Defaults to 5000.`
+        },
         page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
@@ -580,6 +590,52 @@ export function designUtilityTools(roots: WorkRoots): McpTool[] {
     generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {
+      name: 'history',
+      description:
+        "Read a design folder's timeline: the points it has held, what each one changed, which point the folder sits at now, and each page's own line. Read it before rewinding, and whenever the user asks what changed or wants to go back. Reading captures whatever is on disk, so the current state is a point to return to before you overwrite it.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: `Project-relative design folder. Defaults to the design this thread is working in, or ${designRoot} when the thread has none.`
+          },
+          page: {
+            type: 'string',
+            description:
+              "Optional screen entry relative to that folder, such as index.html, to read that page's own line through the history rather than the whole folder's."
+          }
+        },
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'restore',
+      description:
+        'Rewind a design folder, or one page of it, to a point its own history already holds: the same Undo the board offers the user. Use it when your own edit broke a screen and the timeline holds the state that worked, instead of rebuilding old markup from memory. The state you are about to overwrite is captured first, so a rewind is itself undoable. Say which point you restored.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: `Project-relative design folder. Defaults to the design this thread is working in, or ${designRoot} when the thread has none.`
+          },
+          revision: {
+            type: ['number', 'string'],
+            description:
+              'The point to return to: the revision number or the revisionId the history operation returned.'
+          },
+          page: {
+            type: 'string',
+            description:
+              'Optional screen entry relative to that folder. When set, only that page is rewritten and every other screen stays where it is.'
+          }
+        },
+        required: ['revision'],
+        additionalProperties: false
+      }
+    },
+    {
       name: 'preview',
       description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab. The folder's own scripts and stylesheets run, so an HTML design renders as written, and the tab is mounted offscreen at a real viewport whether or not the user is looking at it. Aim it at the folder holding the design's entry file, and name \`entry\` to turn it to one of that design's screens.`,
       inputSchema: {
@@ -738,6 +794,52 @@ export function videoUtilityTools(roots: WorkRoots): McpTool[] {
     generateMediaTool(roots),
     authoredWorkCheckpointTool(),
     {
+      name: 'history',
+      description:
+        "Read a composition folder's timeline: the points it has held, what each one changed, which point the folder sits at now, and each file's own line. Read it before rewinding, and whenever the user asks what changed or wants a scene back. Reading captures whatever is on disk, so the current state is a point to return to before you overwrite it.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: `Project-relative composition folder. Defaults to the composition this thread is working in, or ${videoRoot} when the thread has none.`
+          },
+          page: {
+            type: 'string',
+            description:
+              "Optional file entry relative to that folder, such as index.html or composition.json, to read that file's own line through the history rather than the whole folder's."
+          }
+        },
+        additionalProperties: false
+      }
+    },
+    {
+      name: 'restore',
+      description:
+        'Rewind a composition folder, or one file of it, to a point its own history already holds: the same Undo the board offers the user. Use it when your own edit wrecked a scene and the timeline holds the version that worked, instead of rewriting it from memory. The state you are about to overwrite is captured first, so a rewind is itself undoable. Say which point you restored.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          directory: {
+            type: 'string',
+            description: `Project-relative composition folder. Defaults to the composition this thread is working in, or ${videoRoot} when the thread has none.`
+          },
+          revision: {
+            type: ['number', 'string'],
+            description:
+              'The point to return to: the revision number or the revisionId the history operation returned.'
+          },
+          page: {
+            type: 'string',
+            description:
+              'Optional file entry relative to that folder. When set, only that file is rewritten and every other file stays where it is.'
+          }
+        },
+        required: ['revision'],
+        additionalProperties: false
+      }
+    },
+    {
       name: 'preview',
       description: `Serve a project folder on the app's own loopback origin and open it in this project and thread's browser tab, where the composition runs and is watched. The tab refreshes itself shortly after a file changes, so preview again only when you move to a different folder. Aim it at the folder holding the composition's index.html.`,
       inputSchema: {
@@ -849,8 +951,29 @@ export function buildUtilityGatewayScript(
   const callCapMs = GATEWAY_BRIDGE_CALL_CAP_MS
   const callCapEnv = GATEWAY_BRIDGE_CALL_CAP_ENV
   return String.raw`import readline from 'node:readline'
+import { readFile } from 'node:fs/promises'
 
 const baseUrl = process.env.CODEINOVEN_UTILITY_BRIDGE_URL
+const tokenFile = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN_FILE
+
+/** The turn token, re-read per call when the app keeps it in a file.
+ *
+ * A harness that spawns this server once and keeps it for a whole session (an
+ * ACP agent launches its MCP servers at session creation) would otherwise hold
+ * the token of the turn that created it, and every call after that turn would
+ * be refused. The file is rewritten each turn, so the same server stays live.
+ */
+async function currentToken() {
+  if (tokenFile) {
+    try {
+      const value = (await readFile(tokenFile, 'utf8')).trim()
+      if (value) return value
+    } catch {
+      // Fall through to the token the launch carried.
+    }
+  }
+  return process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
+}
 const token = process.env.CODEINOVEN_UTILITY_BRIDGE_TOKEN
 const configuredCapMs = Number(process.env.${callCapEnv})
 const callCapMs =
@@ -891,6 +1014,7 @@ function resultContent(result) {
 }
 
 async function callUtility(request, controller) {
+  const token = await currentToken()
   if (!baseUrl || !token) throw new Error('Utility bridge environment is unavailable')
   const name = request.params?.name
   const args = request.params?.arguments || {}

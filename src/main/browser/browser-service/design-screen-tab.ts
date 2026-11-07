@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { previewTargetId, type PreviewTarget } from '../../../lib/design/preview-target'
 
 /**
  * The tab one design screen is shown in, named from what the screen is.
@@ -11,23 +12,15 @@ import { createHash } from 'node:crypto'
  * also survives a restart, where a minted id would come back as a second copy of
  * a tab the user still has open.
  *
- * The thread is part of the identity, not just the project: two threads may work
- * in the same project folder, and each is looking at its own page.
+ * The identity itself lives in `preview-target`, shared with the registry that
+ * remembers which tab and server each target was given: the app must derive the
+ * tab a screen gets and remember the tab it was shown in by the same rule, or the
+ * two disagree about what "the same screen" means.
  *
  * Kept out of the browser service so the rule is a pure function that can be
  * exercised on its own, and so a caller that only wants to know the id does not
  * need a browser window to ask.
  */
-export function designScreenTabId(input: {
-  projectId: string
-  threadId: string
-  /** Project-relative folder of the design, with forward slashes. */
-  directory: string
-  /** Entry file of the screen, as a URL path, or null for the folder listing. */
-  entry: string | null
-}): string {
-  const identity = [input.projectId, input.threadId, input.directory, input.entry ?? ''].join(
-    '\u0000'
-  )
-  return `browser:screen:${createHash('sha256').update(identity).digest('hex').slice(0, 32)}`
+export function designScreenTabId(target: PreviewTarget): string {
+  return `browser:screen:${createHash('sha256').update(previewTargetId(target)).digest('hex').slice(0, 32)}`
 }

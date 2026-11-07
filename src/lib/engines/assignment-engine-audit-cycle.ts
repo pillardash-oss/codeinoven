@@ -137,6 +137,24 @@ export class AssignmentAuditCycleBook {
     })
   }
 
+  /** Undo an accepted audit: the report goes back under review so the user can
+   *  submit rework notes or accept it again. A cycle accepted straight from the
+   *  offer (no report generated) returns to `available` instead. */
+  async retract(projectId: string, coordinatorThreadId: string): Promise<AssignmentPlan> {
+    const active = requireActivePlan(this.repo, projectId, coordinatorThreadId)
+    if (active.status !== 'completed' || active.auditCycle?.status !== 'completed') {
+      throw new AssignmentEngineError(
+        'invalid_transition',
+        'Assignment audit cannot be retracted from its current state'
+      )
+    }
+    return this.save(active, {
+      ...active.auditCycle,
+      status: active.auditCycle.reportId ? 'report_ready' : 'available',
+      completedAt: undefined
+    })
+  }
+
   /** Hide the offered audit from the composer without giving it up: the cycle
    *  stays `available` so the coordinator panel and studios can still start it.
    *  Only the offer itself is required: a plan whose tasks were reopened after

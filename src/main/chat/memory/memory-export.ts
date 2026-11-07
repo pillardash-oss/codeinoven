@@ -136,6 +136,7 @@ export function entryBelongsToAudience(entry: MemoryEntry, audience: MemoryAudie
   }
   switch (location) {
     case 'project':
+    case 'scope':
     case 'thread':
       return audience === 'projects'
     case 'routine':
@@ -150,9 +151,14 @@ export function importDestinationFor(
   options: { kind: MemoryExportKind; projectId?: string }
 ): { projectId?: string; threadId?: string } | null {
   const location = locationScopeOf(entry.scopes)
-  if (location === 'project' || location === 'thread') {
+  if (location === 'project' || location === 'scope' || location === 'thread') {
     const projectId = options.kind === 'project' ? options.projectId : entry.projectId
     if (!projectId) return null
+    if (location === 'scope') {
+      if (!entry.scopeBucketId) return null
+      // Feature-scope memory lives in the project's own file.
+      return { projectId }
+    }
     if (location === 'thread') {
       if (!entry.threadId) return null
       return { projectId, threadId: entry.threadId }
@@ -171,9 +177,9 @@ export function importDestinationFor(
   return { projectId: expected.projectId, threadId: expected.threadId }
 }
 
-/** Dedupe identity: scope set + normalized content (the user-chosen merge rule). */
+/** Dedupe identity: scope set + scope bucket + normalized content (the user-chosen merge rule). */
 export function dedupeKey(entry: MemoryEntry): string {
-  return `${orderMemoryScopes(entry.scopes).join(',')}\0${normalizeText(entry.content)}`
+  return `${orderMemoryScopes(entry.scopes).join(',')}\0${entry.scopeBucketId ?? ''}\0${normalizeText(entry.content)}`
 }
 
 export function dedupeEntriesById(entries: MemoryEntry[]): MemoryEntry[] {

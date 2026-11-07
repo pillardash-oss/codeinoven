@@ -2,7 +2,7 @@ import {
   composerConversationPane,
   expandedComposerWidth,
   measureComposerExpansion
-} from './chat-composer-expand'
+} from '$shared/composer-expand'
 
 export interface ComposerExpansionOptions {
   /** The composer root element, resolved lazily: it mounts after the

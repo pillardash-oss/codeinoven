@@ -3,6 +3,8 @@ import { appConfirm } from '$lib/stores/app-confirm.svelte'
 import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
+import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { isThreadExecutionActiveStatus } from '$shared/thread-status-policy'
 import {
   captureError,
   errorHeadline,
@@ -15,6 +17,7 @@ import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
 import { isWorkspaceCovered } from '$lib/stores/page-surface.svelte'
 import { pipState } from '$lib/stores/pip.svelte'
+import { displayAvailability } from '$lib/stores/display-availability.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { scopeConfirmations } from '$lib/stores/scope-confirmations.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -24,9 +27,12 @@ import { skillUpdateState } from '$lib/stores/skill-updates.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+import { browserAgentClaims } from '$lib/stores/browser-agent-claims.svelte'
+import { followUpsState } from '$lib/stores/follow-ups.svelte'
 import { updaterState } from '$lib/stores/updater.svelte'
 import { updateBlockers } from '$lib/stores/update-blockers.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { openThreadById } from '$lib/threads/open-thread-by-id'
 import {
   DEFAULT_THREAD_TITLE,
   type InstanceRole,
@@ -51,14 +57,14 @@ export interface AppIpcSubscriptionDeps {
   ) => Promise<void>
   setCloseConfirmation: (payload: CloseConfirmationPayload | null) => void
   confirmForceClose: () => Promise<void>
-  /** Park the window (destroy it, keep the backend alive) instead of quitting. */
-  parkWindow: () => Promise<void>
   setInstanceRole: (role: InstanceRole) => void
   /** Raise the one-time start-at-login offer (raised after an assistant's first knowledge). */
   showStartAtLoginOffer: () => void
   settleCloseConfirmationThread: (thread: Thread) => void
   handleCloseShortcut: () => void
   handleNewTerminalShortcut: () => void
+  /** A native menu asked for Settings; the shell owns the navigation. */
+  openSettings: () => void
   goBack: () => Promise<void>
   goForward: () => Promise<void>
   handleOpenedPaths: (paths: OpenedPath[]) => Promise<void>
@@ -223,12 +229,22 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     // The renderer owns the unsaved-file editor state, so it computes the
     // pending files here. Downloads arrive with the payload: main is the one
     // download owner, and its list is already the truth. With nothing pending
-    // the close proceeds right away as a park when background mode keeps the
-    // backend alive, otherwise a quit.
+    // a quit proceeds right away.
+    //
+    // A park is never answered here. Parking tears the window down while the
+    // backend keeps running, so it owes the user a message even when nothing is
+    // pending: the app's browser, its previews, its terminals and its editors go
+    // with the window and only come back when it is reopened. That is the user's
+    // call to make, so the prompt is always shown.
     const files = [...projectFilesWorkspace.getUnsavedFiles(), ...standaloneFiles.getUnsavedFiles()]
     const park = payload.park === true
-    if (payload.projects.length === 0 && files.length === 0 && payload.downloads.length === 0) {
-      void (park ? deps.parkWindow() : deps.confirmForceClose())
+    if (
+      !park &&
+      payload.projects.length === 0 &&
+      files.length === 0 &&
+      payload.downloads.length === 0
+    ) {
+      void deps.confirmForceClose()
       return
     }
     deps.setCloseConfirmation({
@@ -254,8 +270,29 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
       clearDraftLabelCookie(thread.id)
     }
     scopeState.updateThread(thread)
-    if (workspaceState.selectedThread?.id === thread.id) {
+    // A persisted status that no longer means a turn in flight is the one fact
+    // that settles this window's run entry: the turn finalizer writes it when
+    // the turn ends, so an idle event this window never received (a rebound or
+    // replaced session id, a background step that owned the entry, a part that
+    // re-armed busy after the terminal event) must not leave a finished turn
+    // reading as work in progress on the row, the header and the rail. A parked
+    // retry keeps its own entry so its clock survives, and `completeSession`
+    // still yields the entry to a background workflow that owns it.
+    if (
+      thread.status !== 'working-paused' &&
+      !isThreadExecutionActiveStatus(thread.status) &&
+      agentRuns.isBusy(thread.projectId, thread.id)
+    ) {
+      agentRuns.completeSession(thread.projectId, thread.id)
+    }
+    const selected = workspaceState.selectedThread
+    const onScreen = selected?.projectId === thread.projectId && selected.id === thread.id
+    if (onScreen) {
       workspaceState.updateThread(thread)
+      // The thread is the one the user is looking at, so whatever this update
+      // announced has already been read in the conversation itself. Its notice
+      // leaves the panel with it instead of waiting to be dismissed by hand.
+      notificationPanelState.acknowledgeOpenThread(thread)
     }
     // Reconcile the thread's notices on every status update: a needs-attention
     // notice stays while the thread is parked (reading it answers nothing) and
@@ -290,10 +327,34 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     }
   )
   const unsubscribeThreadDeleted = subscribeGuarded('thread:deleted', (projectId, threadId) => {
+    // An auditor is a child of the Sr. Engineer thread it audits, so closing it
+    // (New Audit deletes and recreates it, retry does the same, a manual delete
+    // takes it away) must land on the thread that owns the work. Only the open
+    // thread matters here: a background deletion never moves the user. The
+    // coordinator id is read before the row is removed, because removal drops
+    // the only local copy of it.
+    const deleted =
+      workspaceState.selectedThread?.id === threadId ? workspaceState.selectedThread : null
     scopeState.removeThread(threadId)
     notificationPanelState.dismissForThread(projectId, threadId)
     temporaryChatUnread.clearThread(projectId, threadId)
-    if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+    if (!deleted) return
+    const coordinatorThreadId =
+      deleted.achievementRole === 'auditor' ? deleted.coordinatorThreadId : undefined
+    // Move to the coordinator first, without clearing the selection: clearing it
+    // deactivates the context sidebar, which is the panel that holds the way
+    // back to the Sr. Engineer, so the user came back to an auditor thread with
+    // its coordinator panel gone. Only a reveal that could not happen hands the
+    // shell back to the empty state it would have shown anyway.
+    if (coordinatorThreadId) {
+      void openThreadById(projectId, coordinatorThreadId).then((opened) => {
+        if (!opened && workspaceState.selectedThread?.id === threadId) {
+          workspaceState.clearThread()
+        }
+      })
+      return
+    }
+    workspaceState.clearThread()
   })
   // The spotlight's ranking by meaning is computed after its keyword rows land;
   // the open panel takes the merged ranking from here.
@@ -358,6 +419,9 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   const unsubscribeHistoryForward = subscribeGuarded('window:historyForward', () => {
     void deps.goForward()
   })
+  const unsubscribeOpenSettings = subscribeGuarded('window:openSettings', () => {
+    deps.openSettings()
+  })
   // OS hand-offs that arrive after mount; the queue drain below covers the
   // paths that were already waiting when the renderer started.
   const unsubscribeOpenedPaths = subscribeGuarded('openWith:paths', (paths: OpenedPath[]) => {
@@ -381,9 +445,18 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   // initialise the store here so the overlay's dynamic import can be gated on
   // `pipState.active` without ever missing a frame.
   pipState.init()
+  // Presence only: this is what turns the display rail item on when an agent
+  // starts a device. The panel's own module (and its capture code) loads when the
+  // item is actually opened.
+  displayAvailability.init()
   // Load which threads carry a user note so sidebar rows and the right-dock
   // indicator can react; the store keeps itself in sync via `note:changed`.
   threadNotesState.init()
+  // Which tabs agents are on, so a tab row can name the thread using it.
+  browserAgentClaims.init()
+  // Load which threads have an agent-scheduled wake so their rows can show it;
+  // the store keeps itself in sync via `followUps:changed`.
+  followUpsState.init()
   return () => {
     unsubscribeClick()
     unsubscribeShow()
@@ -404,6 +477,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     unsubscribeNewTerminalShortcut()
     unsubscribeHistoryBack()
     unsubscribeHistoryForward()
+    unsubscribeOpenSettings()
     unsubscribeOpenedPaths()
     updaterState.destroy()
     updateBlockers.destroy()

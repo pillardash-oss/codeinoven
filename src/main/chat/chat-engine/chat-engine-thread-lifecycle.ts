@@ -19,7 +19,11 @@ import {
   type TurnStreamLogRead
 } from '../turn-stream-log'
 import { backgroundIo } from '../../system/background-io'
-import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provider-issue'
+import {
+  classifyProviderIssue,
+  isUsageResetWaitIssue,
+  TRANSIENT_PROVIDER_RETRY_MS
+} from '../../../lib/provider-issue'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import {
   PROJECT_DATA_DIRECTORY,
@@ -412,6 +416,25 @@ export class ChatEngineThreadLifecycle {
     const thread = await this.host.threadManager.getThread(projectId, threadId)
     if (!thread) throw new Error(`Thread not found: ${threadId}`)
 
+    // A task bound to a project works in that project's scope, not in the
+    // assistant's own storage. The resolver is the same authority every project
+    // thread uses, and it fails closed: an unhealthy scope throws rather than
+    // silently leaving the run in `assistant-cwd`, which is the one outcome the
+    // app must never produce.
+    if (thread.boundScope) {
+      const bound = thread.boundScope
+      const resolved = await this.host.scopeRoots?.resolveCompatibilityRoot(
+        bound.projectId,
+        bound.scopeBucketId
+      )
+      if (!resolved) {
+        throw new Error(
+          `Scope ${bound.scopeBucketId} of project ${bound.projectId} has no usable checkout`
+        )
+      }
+      return resolved
+    }
+
     // An assistant behaves like a project, so every task in it works inside its own
     // `assistant-cwd/<assistantId>/` root and keeps its artifacts there. A
     // assistant-less task gets `assistant-cwd/<threadId>/` so it still lives under
@@ -740,7 +763,11 @@ export class ChatEngineThreadLifecycle {
               projectId: row.project_id,
               threadId: row.id,
               harnessId: thread.sessionHarnessId ?? thread.settings?.harnessId ?? 'unknown',
-              retryAt: Date.now() + USAGE_RESET_FALLBACK_RETRY_MS,
+              retryAt:
+                Date.now() +
+                (kind === 'provider_unavailable'
+                  ? TRANSIENT_PROVIDER_RETRY_MS
+                  : USAGE_RESET_FALLBACK_RETRY_MS),
               issueKind: kind,
               issueMessage: lastError
             })

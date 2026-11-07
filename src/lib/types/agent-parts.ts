@@ -12,6 +12,16 @@ export interface AgentToolState {
   status: AgentToolStatus
   input: Record<string, unknown>
   title?: string
+  /**
+   * True when `title` names what the call acted on, not what it did.
+   *
+   * An agent protocol client titles a call with its subject (Cursor titles a
+   * shell call with the command itself, a search with `Find `<pattern>``), so
+   * the title is the row's subject and the action is derived from the tool. A
+   * harness that titles a call with the action it performed leaves this unset,
+   * and its title stays the row's label.
+   */
+  titleIsSubject?: boolean
   output?: string
   error?: string
   metadata?: Record<string, unknown>
