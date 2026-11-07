@@ -16,6 +16,11 @@
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
+  /* The dock is the same two pieces on every panel, so it is named once and holds
+     its place while the screen above it changes: navigation is chrome, not page.
+     A screen reached from a panel has no dock, and it fades away with that screen
+     instead of travelling as if it were part of it. */
+  view-transition-name: dock;
 }
 
 .dock {

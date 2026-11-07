@@ -302,81 +302,172 @@ body {
 }
 
 /* ---- Screen changes ----
-   A conversation pushes in from the edge the row was on, and back returns the
-   way it came. The work list's two readings swap in place. The browser snapshots
-   both screens and animates them as images, so none of this runs on the main
-   thread and nothing in either screen can reflow. */
+   Every change of screen moves for a reason, and the reason is where the screen
+   came from. A conversation is one step under the list it was opened from, so it
+   arrives over that list while the list gives way a third of the width; going back
+   returns the list the same way it left. Two panels beside each other in the dock
+   travel together in the direction the dock reads. The two readings of the work
+   list turn in place, because the list did not move anywhere. Signing in settles
+   the app up over the frame, and signing out lays the frame back over it.
+
+   The browser snapshots both screens and animates the images, so none of this runs
+   on the main thread and nothing in either screen can reflow.
+
+   The animation names arrive as inherited custom properties rather than through a
+   selector: the view-transition pseudo-elements sit in the top layer, where no
+   ancestor-qualified selector such as `html[data-nav] ::view-transition-new(root)`
+   reaches them, so a data attribute on the document would leave the browser's own
+   crossfade running instead. A custom property does inherit into them. */
+
+:root {
+  --screen-ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
 ::view-transition {
   background: var(--color-app);
 }
 
 ::view-transition-old(root),
 ::view-transition-new(root) {
-  animation-duration: 220ms;
-  animation-timing-function: cubic-bezier(0.215, 0.61, 0.355, 1);
+  animation-duration: var(--screen-ms, 280ms);
+  animation-timing-function: var(--screen-ease, cubic-bezier(0.32, 0.72, 0, 1));
   animation-fill-mode: both;
+  /* The browser blends the two snapshots additively for its own crossfade, which
+     washes paper and ink out grey the moment a screen is moving. */
+  mix-blend-mode: normal;
 }
 
-html[data-nav='forward'] ::view-transition-old(root) {
-  animation-name: page-out-left;
+/* The dock belongs to the panels and outlives the screen above it, so it is drawn
+   as its own piece: it holds still while panels travel past it, and it is gone
+   early when a screen reached from a panel replaces it. */
+::view-transition-old(dock) {
+  animation-duration: 110ms;
 }
 
-html[data-nav='forward'] ::view-transition-new(root) {
-  animation-name: page-in-right;
+::view-transition-new(dock) {
+  animation-duration: 160ms;
 }
 
-html[data-nav='back'] ::view-transition-old(root) {
-  animation-name: page-out-right;
+::view-transition-old(root) {
+  animation-name: var(--screen-out);
 }
 
-html[data-nav='back'] ::view-transition-new(root) {
-  animation-name: page-in-left;
+::view-transition-new(root) {
+  animation-name: var(--screen-in);
 }
 
-html[data-nav='swap'] ::view-transition-old(root) {
-  animation-name: page-out-swap;
-}
-
-html[data-nav='swap'] ::view-transition-new(root) {
-  animation-name: page-in-swap;
-}
-
-@keyframes page-in-right {
+/* One step down: the screen arrives whole and the one it was opened from gives way
+   and dims, so the arrival reads as depth rather than as a dissolve. */
+@keyframes screen-in-right {
   from {
-    opacity: 0.35;
-    transform: translateX(1.5rem);
+    transform: translateX(100%);
   }
 }
 
-@keyframes page-out-left {
+@keyframes screen-out-left {
+  to {
+    opacity: 0.72;
+    transform: translateX(-30%);
+  }
+}
+
+/* One step back up: the same pair, time reversed. The conversation leaves to the
+   right and the list returns from the edge it had been pushed to. */
+@keyframes screen-in-left {
+  from {
+    opacity: 0.72;
+    transform: translateX(-30%);
+  }
+}
+
+@keyframes screen-out-right {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Two panels a dock square apart: both travel a full width, so the pair reads as
+   one strip being pulled rather than two screens trading places. */
+@keyframes panel-in-right {
+  from {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes panel-out-left {
+  to {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes panel-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes panel-out-right {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* The same list, read the other way: a short turn in place, which says the place
+   did not change, and the direction follows the menu that was used. */
+/* The same list, read the other way: a short turn in place, which says the place
+   did not change, and the direction follows the menu that was used. The arriving
+   reading stays opaque, so it covers the one it replaces rather than showing
+   through it. */
+@keyframes reread-in-up {
+  from {
+    transform: translateY(-1.25rem);
+  }
+}
+
+@keyframes reread-out-down {
   to {
     opacity: 0.35;
-    transform: translateX(-1.25rem);
+    transform: translateY(1rem);
   }
 }
 
-@keyframes page-in-left {
+@keyframes reread-in-down {
   from {
-    opacity: 0.35;
-    transform: translateX(-1.25rem);
+    transform: translateY(1.25rem);
   }
 }
 
-@keyframes page-out-right {
+@keyframes reread-out-up {
   to {
     opacity: 0.35;
-    transform: translateX(1.5rem);
+    transform: translateY(-1rem);
   }
 }
 
-@keyframes page-in-swap {
+/* The session: the app settles up over the sign-in frame on the way in, and sinks
+   back onto it on the way out. */
+@keyframes session-in {
   from {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.985);
+  }
+}
+
+@keyframes session-out {
+  to {
+    opacity: 0;
+    transform: translateY(0.5rem) scale(0.985);
+  }
+}
+
+@keyframes frame-out {
+  to {
     opacity: 0;
   }
 }
 
-@keyframes page-out-swap {
-  to {
+@keyframes frame-in {
+  from {
     opacity: 0;
   }
 }

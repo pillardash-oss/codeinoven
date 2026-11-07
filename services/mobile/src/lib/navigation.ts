@@ -63,3 +63,64 @@ export function trailTo(parent: Crumb | null): Crumb[] {
 export function settingsHref(from: string): string {
   return `/settings?from=${encodeURIComponent(from)}`
 }
+
+/** The two readings of the one work list. */
+const WORK_READINGS: ReadonlySet<string> = new Set(['/', '/threads', '/projects'])
+
+/**
+ * The dock's own order, left to right. A move between two panels that both sit in
+ * the dock runs the way the dock reads, so the screen arrives from the edge the
+ * square sits on instead of dissolving into place.
+ */
+const DOCK_ORDER: Readonly<Record<string, number>> = {
+  '/': 0,
+  '/threads': 0,
+  '/projects': 0,
+  '/chats': 1,
+  '/assistant': 2
+}
+
+/** How far from the sign-in frame a screen sits, counting the panels as the root. */
+export function screenDepth(pathname: string): number {
+  if (pathname === '/sign-in') return 0
+  if (isPanel(pathname)) return 1
+  return /^\/threads\/[^/]+$/.test(pathname) ? 2 : 3
+}
+
+/**
+ * What a change from one screen to another means, which is what decides how it
+ * moves:
+ *
+ * - `push` and `pop` are one step down or back up the ladder, so the screen that
+ *   arrives covers the one it came from and leaving it uncovers the same screen
+ *   again.
+ * - `next` and `prev` are two panels side by side in the dock, so both screens
+ *   travel together in the direction the dock reads.
+ * - `reread` is the same list read the other way, so it turns in place rather than
+ *   travelling anywhere, and `reread-back` is the same turn the other way.
+ * - `enter` and `leave` are the session itself opening or closing: the app rising
+ *   over the sign-in frame, and settling back onto it.
+ *
+ * `none` is a query change on the screen already shown, which must not move.
+ */
+export type ScreenMotion =
+  'none' | 'push' | 'pop' | 'next' | 'prev' | 'reread' | 'reread-back' | 'enter' | 'leave'
+
+export function screenMotion(from: string, to: string): ScreenMotion {
+  if (from === to) return 'none'
+  if (from === '/sign-in') return 'enter'
+  if (to === '/sign-in') return 'leave'
+  if (WORK_READINGS.has(from) && WORK_READINGS.has(to)) {
+    // Projects is the first reading in the list's own menu, so choosing it turns
+    // the list upward and choosing threads turns it back.
+    return to === '/projects' ? 'reread' : 'reread-back'
+  }
+
+  const fromRank = DOCK_ORDER[from]
+  const toRank = DOCK_ORDER[to]
+  if (fromRank !== undefined && toRank !== undefined) {
+    return toRank > fromRank ? 'next' : 'prev'
+  }
+
+  return screenDepth(to) > screenDepth(from) ? 'push' : 'pop'
+}
