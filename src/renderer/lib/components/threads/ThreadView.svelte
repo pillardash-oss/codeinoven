@@ -1231,8 +1231,11 @@
     <!-- Scrollable conversation area -->
     <ThreadParentLink
       parent={board.currentWorkingTraceAttribution.coordinatorParentThread}
-      parentProjectId={board.handleAgentEvent.thread.dispatchOrigin?.initiatorProjectId}
-      parentThreadId={board.handleAgentEvent.thread.dispatchOrigin?.initiatorThreadId}
+      parentProjectId={board.currentWorkingTraceAttribution.coordinatorParentId
+        ? board.handleAgentEvent.thread.projectId
+        : board.handleAgentEvent.thread.dispatchOrigin?.initiatorProjectId}
+      parentThreadId={board.currentWorkingTraceAttribution.coordinatorParentId ??
+        board.handleAgentEvent.thread.dispatchOrigin?.initiatorThreadId}
     />
     <ThreadViewConversation {board} />
 
