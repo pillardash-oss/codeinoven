@@ -988,29 +988,48 @@ export class ChatEngineAssignmentWorkers {
       settings: result.thread.settings,
       completion: 'When the work is complete'
     })
+    // A dispatch is a resumption whenever the worker's harness session already
+    // exists: the thread keeps its session across a rework, so the full task
+    // brief, scope policy and assignment rules are already in its conversation.
+    // Re-sending them (as a rework used to) spends the worker's whole context on
+    // a copy of a prompt it already follows. A fresh worker thread has no
+    // session yet, which is why it still receives the complete brief.
+    const resumingWorker = Boolean(result.thread.sessionId)
+    // The reporting contract is repeated to a fresh worker only. A resuming one
+    // already carries the endpoint and its bearer token from the brief, and its
+    // capability is the same, so it gets the reminder and the ids instead of the
+    // whole contract. Turning reporting off still replaces both with the explicit
+    // disabled instruction.
+    const workerReporting = workerReportsToCoordinator(result.thread.settings)
+    const reportingPrompt =
+      resumingWorker && workerReporting
+        ? `Reporting is unchanged: submit fresh baseline evidence before the correction and check evidence after verifying it, each with its own operationId, then POST report-task with assignmentId ${result.assignment.id}, taskId ${result.task.id}, and workerThreadId ${result.thread.id}.`
+        : reportInstruction
+    const taskPrompt = resumingWorker
+      ? [
+          `Continue Assignment task “${result.task.title}” in this thread. Its full brief, scope and the work already done are in your existing context, so do not start the task over from the beginning.`,
+          ...(reworkReview
+            ? [
+                '## Sr. Engineer rework review',
+                'Correct the existing approved task directly. Address every failed checklist item and the review notes below, then submit fresh baseline/check evidence and report the task again. No new user sign-off is required.',
+                JSON.stringify(
+                  {
+                    checklistResults: reworkReview.checklistResults,
+                    notes: reworkReview.notes,
+                    reviewedAt: reworkReview.reviewedAt
+                  },
+                  null,
+                  2
+                )
+              ]
+            : [])
+        ].join('\n\n')
+      : this.host.state.assignmentEngine.workerPrompt(result.assignment, result.task, featureSlug)
     await this.host.sendPrompt(
       result.assignment.projectId,
       result.thread.id,
       result.thread.settings,
-      [
-        this.host.state.assignmentEngine.workerPrompt(result.assignment, result.task, featureSlug),
-        ...(reworkReview
-          ? [
-              '## Sr. Engineer rework review',
-              'Correct the existing approved task directly. Address every failed checklist item and the review notes below, then submit fresh baseline/check evidence and report the task again. No new user sign-off is required.',
-              JSON.stringify(
-                {
-                  checklistResults: reworkReview.checklistResults,
-                  notes: reworkReview.notes,
-                  reviewedAt: reworkReview.reviewedAt
-                },
-                null,
-                2
-              )
-            ]
-          : []),
-        reportInstruction
-      ].join('\n\n'),
+      [taskPrompt, reportingPrompt].join('\n\n'),
       [],
       undefined,
       undefined,
@@ -1020,8 +1039,8 @@ export class ChatEngineAssignmentWorkers {
       'internal',
       undefined,
       undefined,
-      // The task that starts a worker is the first user turn of its thread, not
-      // an invisible orchestration prompt.
+      // The prompt that starts a worker, and the review that returns it to the
+      // same task, are user turns of its thread, not invisible orchestration.
       true
     )
   }

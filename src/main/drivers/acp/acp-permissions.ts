@@ -12,6 +12,9 @@ import {
   type AcpToolCallKind
 } from './acp-protocol'
 
+/** Titles that name work on the network rather than on a file. */
+const WEB_TOOL_TITLE = /\b(?:web|internet|http|url|browse|search|fetch|download|upload)\b/iu
+
 /** One `session/request_permission` awaiting the user's decision. */
 export interface AcpPendingPermission {
   requestId: string
@@ -25,6 +28,10 @@ export function acpPermissionCategory(
   kind: AcpToolCallKind | undefined,
   title: string | undefined
 ): string {
+  // An agent may label a web tool `read` (it reads the web) or leave the kind
+  // empty. The title is what says the request leaves this machine, and a
+  // mislabelled one reaches the app as file access and parks a chat on a card.
+  if (WEB_TOOL_TITLE.test(title ?? '')) return 'network'
   switch (kind) {
     case 'execute':
       return 'bash'
@@ -127,6 +134,14 @@ export function acpReplyOptionId(
   return fallback?.optionId ?? (reply === 'reject' ? 'reject_once' : 'allow_once')
 }
 
+/** Reduce a protocol id to the characters an app entity id allows. */
+function safePermissionIdPart(value: string): string {
+  return value
+    .replace(/[^A-Za-z0-9._-]+/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+    .slice(0, 96)
+}
+
 /** Bookkeeping for every permission the driver has surfaced and not yet answered. */
 export class AcpPermissionRegistry {
   private readonly pending = new Map<string, AcpPendingPermission>()
@@ -144,7 +159,12 @@ export class AcpPermissionRegistry {
     decision: Promise<AcpRequestPermissionResponse>
   } {
     this.sequence += 1
-    const requestId = `acp:${params.sessionId}:${params.toolCall.toolCallId || this.sequence}`
+    // The app validates a permission request id as an entity id (letters,
+    // numbers, dots, underscores, hyphens), and an ACP tool call id can carry a
+    // slash or a colon. Colons used to build this id, so every Allow press was
+    // rejected by that validator and the agent stayed blocked forever.
+    const toolRef = params.toolCall.toolCallId || String(this.sequence)
+    const requestId = `acp-${safePermissionIdPart(params.sessionId)}-${safePermissionIdPart(toolRef)}`
     const options = acpPermissionOptions(params)
     const decision = new Promise<AcpRequestPermissionResponse>((resolve) => {
       this.pending.set(requestId, {

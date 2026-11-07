@@ -1,10 +1,31 @@
-import type { CustomPublishOptions } from 'builder-util-runtime'
+import type { CustomPublishOptions, UpdateInfo } from 'builder-util-runtime'
 import type { OutgoingHttpHeaders } from 'node:http'
 import type { AppUpdater } from 'electron-updater'
 import { GitHubProvider } from 'electron-updater/out/providers/GitHubProvider.js'
 import type { ProviderRuntimeOptions } from 'electron-updater/out/providers/Provider.js'
 import { Logger } from '../system/logger'
 import { selectNightlyChannelRelease } from './updater-install-recovery'
+
+/**
+ * The update already downloaded on this machine, if any.
+ *
+ * Registering it here is what keeps a fully downloaded update installable with
+ * no internet at all: the check answers from disk instead of the feed, and
+ * electron-updater then validates the cached payload and hands it to the
+ * platform installer without a single network request.
+ */
+export interface CachedReleaseInfo extends UpdateInfo {
+  /** Release tag this build was published under, e.g. `v0.5.69-nightly.15`. */
+  tag: string
+}
+
+let cachedReleaseFallback: (() => Promise<CachedReleaseInfo | null>) | null = null
+
+export function setCachedReleaseFallback(
+  fallback: (() => Promise<CachedReleaseInfo | null>) | null
+): void {
+  cachedReleaseFallback = fallback
+}
 
 /**
  * Nightly is an opt-in to prereleases that also cross over to the stable
@@ -40,6 +61,18 @@ export class UpdaterReleaseProvider extends GitHubProvider {
   }
 
   override async getLatestVersion() {
+    if (cachedReleaseFallback !== null) {
+      try {
+        const cached = await cachedReleaseFallback()
+        if (cached !== null) {
+          Logger.dev('Updater: using the update already downloaded to this machine')
+          return cached
+        }
+      } catch (error: unknown) {
+        // A damaged record must never stop the normal feed lookup.
+        Logger.error('Updater: failed to read the cached update', error)
+      }
+    }
     if (!this.releaseUpdater.allowPrerelease || this.releaseUpdater.channel !== 'nightly') {
       return super.getLatestVersion()
     }

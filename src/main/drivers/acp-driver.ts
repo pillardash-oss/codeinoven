@@ -56,6 +56,8 @@ const GATEWAY_TOKEN_ENV = 'CODEINOVEN_UTILITY_BRIDGE_TOKEN'
 const GATEWAY_TOKEN_FILE_ENV = 'CODEINOVEN_UTILITY_BRIDGE_TOKEN_FILE'
 const TURN_TIMEOUT_MS = 60 * 60 * 1000
 const AUXILIARY_TIMEOUT_MS = 90_000
+/** How long an auxiliary run waits for a live turn before giving up on it. */
+const AUXILIARY_TURN_WAIT_MS = 20_000
 
 /** One CodeInOven session's binding to the ACP session that holds its context. */
 interface AcpSessionBinding {
@@ -152,10 +154,14 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     // abandons its current line of work and answers the new prompt in the same
     // session, and the answer streams into the turn already on screen.
     steering: true,
-    nativeResume: false,
+    // An ACP session lives on the agent and `session/load` replays it, so a
+    // binding can be restored after a restart instead of starting cold.
+    nativeResume: true,
     messageHistory: 'mirrored',
     interactivePermissions: true,
-    attachments: false,
+    // Prompt blocks carry images (and audio where the agent accepts it); the
+    // block builder degrades anything else to a reference line.
+    attachments: true,
     commands: true,
     providerCatalog: true,
     sessionStatus: true,
@@ -259,6 +265,13 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   ): void {
     this.transports.delete(projectPath)
     this.permissions.cancelAll()
+    // The new agent process knows none of the old session ids, so every binding
+    // for this project is stale. The app session keeps `nativeSessionId`, which
+    // is what lets the next turn reload the conversation instead of starting
+    // a second, empty one.
+    for (const [sessionId, binding] of this.bindings) {
+      if (binding.projectPath === projectPath) this.bindings.delete(sessionId)
+    }
     for (const [sessionId, turn] of this.activeTurns) {
       const binding = this.bindings.get(sessionId)
       if (binding?.projectPath !== projectPath) continue
@@ -537,6 +550,7 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   async restartRuntime(): Promise<void> {
     for (const transport of this.transports.values()) transport.stop()
     this.transports.clear()
+    this.bindings.clear()
     this.catalogs.clear()
   }
 
@@ -544,6 +558,9 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     this.transports.get(projectPath)?.stop()
     this.transports.delete(projectPath)
     this.catalogs.delete(projectPath)
+    for (const [sessionId, binding] of this.bindings) {
+      if (binding.projectPath === projectPath) this.bindings.delete(sessionId)
+    }
   }
 
   prepareForProcessCleanup(): void {
@@ -554,6 +571,7 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     this.closed = true
     for (const transport of this.transports.values()) transport.stop()
     this.transports.clear()
+    this.bindings.clear()
     this.permissions.cancelAll()
   }
 
@@ -567,23 +585,41 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
   ): Promise<AcpSessionBinding> {
     let binding = this.bindings.get(session.id)
     if (!binding) {
-      const servers = this.mcpServers.get(projectPath) ?? []
-      let opened: Awaited<ReturnType<AcpTransport['newSession']>>
-      try {
-        opened = await transport.newSession(servers)
-      } catch (error) {
-        if (servers.length === 0) throw error
-        // An agent that cannot parse the server list still has to be usable, and
-        // the tools are the only thing lost, never the conversation.
-        Logger.dev('The ACP agent refused the app MCP servers', error)
-        opened = await transport.newSession()
-      }
-      binding = {
-        projectPath,
-        acpSessionId: opened.sessionId,
-        commands: [],
-        promptCapabilities:
-          transport.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
+      const resumed = await this.resumeSession(transport, session)
+      if (resumed) {
+        binding = {
+          projectPath,
+          acpSessionId: resumed,
+          commands: [],
+          promptCapabilities:
+            transport.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
+        }
+      } else {
+        const servers = this.mcpServers.get(projectPath) ?? []
+        let opened: Awaited<ReturnType<AcpTransport['newSession']>>
+        try {
+          opened = await transport.newSession(servers)
+        } catch (error) {
+          if (servers.length === 0) throw error
+          // An agent that cannot parse the server list still has to be usable, and
+          // the tools are the only thing lost, never the conversation.
+          Logger.dev('The ACP agent refused the app MCP servers', error)
+          opened = await transport.newSession()
+        }
+        binding = {
+          projectPath,
+          acpSessionId: opened.sessionId,
+          commands: [],
+          promptCapabilities:
+            transport.agentCapabilities?.promptCapabilities ?? NO_PROMPT_CAPABILITIES
+        }
+        // The app session remembers the agent's own session id, so the next
+        // launch (or a reconnect after the agent process died) reloads the real
+        // conversation instead of starting a second, empty one.
+        if (session.nativeSessionId !== opened.sessionId) {
+          session.nativeSessionId = opened.sessionId
+          await this.persistSession(session).catch(() => undefined)
+        }
       }
       this.bindings.set(session.id, binding)
     }
@@ -601,6 +637,45 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
       }
     }
     return binding
+  }
+
+  /**
+   * Reattach to the agent's own session for this app session.
+   *
+   * A spec-conforming contract resumes, it does not restart: the agent holds the
+   * conversation and `session/load` replays it, so the thread keeps its native
+   * context across an app restart or a reconnect exactly like a native harness.
+   * Returns undefined when the agent cannot load sessions or no longer has this
+   * one, and the caller then opens a fresh session.
+   */
+  private async resumeSession(
+    transport: AcpTransport,
+    session: PersistentCliSession
+  ): Promise<string | undefined> {
+    const native = session.nativeSessionId
+    if (!native || transport.agentCapabilities?.loadSession !== true) return undefined
+    try {
+      await transport.loadSession(native)
+      return native
+    } catch (error) {
+      Logger.dev('The ACP agent could not resume its session', error)
+      session.nativeSessionId = undefined
+      await this.persistSession(session).catch(() => undefined)
+      return undefined
+    }
+  }
+
+  /** Wait, bounded, until no turn is streaming on this project's agent process. */
+  private async awaitTurnSettled(projectPath: string, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs
+    const busy = (): boolean =>
+      [...this.activeTurns.keys()].some((sessionId) => {
+        const binding = this.bindings.get(sessionId)
+        return binding === undefined || binding.projectPath === projectPath
+      })
+    while (busy() && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 250))
+    }
   }
 
   /** A probe session is not a conversation: close it when the agent allows that. */
@@ -795,6 +870,11 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     prompt: string,
     settings: ThreadSettings
   ): Promise<string | null> {
+    // One agent process serves every session in a project, and a second prompt
+    // racing a live turn is answered unreliably: the auxiliary run waits for the
+    // turn to settle (bounded) rather than starting a title job that then returns
+    // nothing. A turn still running after the wait is not worth a stuck title.
+    await this.awaitTurnSettled(projectPath, AUXILIARY_TURN_WAIT_MS)
     const sessionId = await this.createSession(projectPath, 'ACP one-shot')
     const transport = this.transportFor(projectPath)
     try {

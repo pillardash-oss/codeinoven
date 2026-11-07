@@ -356,6 +356,10 @@ export type BrowserTransportCommand =
  * The descriptor is what the model reads, so it carries identity (selector, id,
  * classes, ancestors), a little text, and a clipped opening tag: enough to find
  * the element in the source without shipping the whole subtree to the prompt.
+ * It also carries the page state the pick was made in through `page` and
+ * `presented`, so a comment about a cramped column or a broken state is read
+ * against the exact URL, scroll offset, zoom and framed layout it was written at
+ * rather than against whatever the design looks like when the agent opens it.
  */
 export interface BrowserInspectorTarget {
   /** CSS path from the nearest ancestor with a unique id, or from the body. */
@@ -390,12 +394,64 @@ export interface BrowserInspectorTarget {
    * cramped" as a phone-width problem instead of asking which size it was.
    */
   viewport: BrowserInspectorViewport
+  /**
+   * The document the element lives in, as the reader was looking at it.
+   *
+   * A selector says which element; this says which page state. Together with the
+   * scroll offset and the framed screen's presentation it is what makes a comment
+   * land on one exact render of one exact page instead of on a lookalike.
+   */
+  page: BrowserInspectorPage
+  /**
+   * How a framed screen is drawn inside the page that frames it, or null when the
+   * element is in the page itself.
+   *
+   * A Screen Canvas scales each screen to fit, so a comment about a button being
+   * too small can be about the screen's own layout or about the canvas drawing it
+   * at half size. The scale and the frame's box are what tell the two apart.
+   */
+  presented: BrowserInspectorPresentation | null
 }
 
 /** The page's viewport size in CSS pixels. */
 export interface BrowserInspectorViewport {
   width: number
   height: number
+}
+
+/**
+ * The page state one pick was made in.
+ *
+ * Everything here is read from the document the element belongs to, so a pick
+ * inside a Screen Canvas frame describes that screen's own page rather than the
+ * canvas around it.
+ */
+export interface BrowserInspectorPage {
+  /** Full URL of the document, query string and hash included. */
+  url: string
+  /** The document's title, which names a page a URL alone does not. */
+  title: string
+  /** The colour scheme the page was rendered in, which a contrast note depends on. */
+  scheme: 'light' | 'dark'
+  /** Scroll offset of the document at pick time, in CSS pixels. */
+  scroll: { x: number; y: number }
+  /** Full scrollable size of the document, so a scroll offset can be placed. */
+  extent: { width: number; height: number }
+  /**
+   * Device pixels per CSS pixel, which folds browser and page zoom into one
+   * number: 2 means the page was laid out at half the physical pixel width.
+   */
+  devicePixelRatio: number
+  /** Pinch-zoom scale of the visual viewport, 1 when the reader has not pinched. */
+  visualScale: number
+}
+
+/** How one framed screen is drawn inside the page that frames it. */
+export interface BrowserInspectorPresentation {
+  /** Scale the screen is drawn at, 1 when it is shown at its own size. */
+  scale: number
+  /** Where the screen's frame sits in the outer page, in CSS pixels. */
+  rect: BrowserInspectorRect
 }
 
 /** A viewport rectangle in CSS pixels. */

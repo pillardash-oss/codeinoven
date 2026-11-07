@@ -456,12 +456,19 @@
   style:top={dock.modal ? undefined : `${dock.bounds.y}px`}
   {@attach events}
 >
+  <!--
+    A dialog that arrives here takes over a panel the app window already painted
+    (see `ui/Modal.svelte`), so this copy has nothing to animate in: playing an
+    entrance meant the dialog blinked once as the app hid its own panel and this
+    one faded up from behind it. Only the departure is animated, which is the
+    one moment this document is the dialog's only presentation.
+  -->
   {#if dock.modal}
     <button
       type="button"
       tabindex={-1}
       data-native-modal-backdrop
-      transition:fade|global={{ duration: prefersReducedMotion.current ? 0 : 140 }}
+      out:fade|global={{ duration: prefersReducedMotion.current ? 0 : 140 }}
       class="absolute inset-0 h-full w-full cursor-default bg-overlay/70"
       aria-label="Dismiss dialog"
       title="Dismiss dialog"
@@ -475,7 +482,7 @@
     style:width={dock.modal ? `${dock.bounds.width}px` : undefined}
     style:height={dock.modal ? `${dock.bounds.height}px` : undefined}
     data-native-modal-panel={dock.modal || undefined}
-    transition:fly|global={{
+    out:fly|global={{
       duration: dock?.modal && !prefersReducedMotion.current ? 140 : 0,
       y: 4
     }}

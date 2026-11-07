@@ -1367,7 +1367,7 @@ export class ChatEngineTurnsSessionIdle {
         let dispatched = await this.host.units['assignment'].sendAssignmentCoordinatorPrompt(
           assignmentContinuation.assignment,
           assignmentContinuation.settings,
-          this.host.units['assignment'].coordinatorAssignmentPrompt(
+          await this.host.units['assignment'].coordinatorResumePrompt(
             assignmentContinuation.assignment
           )
         )
@@ -1397,7 +1397,7 @@ export class ChatEngineTurnsSessionIdle {
             dispatched = await this.host.units['assignment'].sendAssignmentCoordinatorPrompt(
               assignmentContinuation.assignment,
               assignmentContinuation.settings,
-              this.host.units['assignment'].coordinatorAssignmentPrompt(
+              await this.host.units['assignment'].coordinatorResumePrompt(
                 assignmentContinuation.assignment
               ),
               undefined,

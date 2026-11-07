@@ -1,10 +1,17 @@
+/**
+ * The word and position an IDE action was asked about.
+ *
+ * It deliberately carries no document text. Reading the buffer here meant a
+ * full copy of the file on every click, mousemove and keybinding, which froze
+ * the window on a heavy file before the action had even started, and the copy
+ * was the same string the editor already holds as its `value` prop.
+ */
 export interface IdeToken {
   line: number
   character: number
   word: string
   x: number
   y: number
-  text: string
 }
 export interface IdeMenuAction {
   label: string
