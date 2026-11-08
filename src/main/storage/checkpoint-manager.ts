@@ -1317,8 +1317,12 @@ export class CheckpointManager {
     const tracker = this.tracker(projectId)
     const before = change.before ? await tracker.readBlob(change.before.hash) : null
     const after = change.after ? await tracker.readBlob(change.after.hash) : null
-    if (change.before && !before) throw new Error(`Checkpoint blob is unavailable for ${path}`)
-    if (change.after && !after) throw new Error(`Checkpoint blob is unavailable for ${path}`)
+    // A recorded change whose content blob is gone can never be shown as a diff.
+    // Reporting the path and kind without fabricating the missing side keeps the
+    // reader honest and the hover popover working instead of failing the read.
+    if ((change.before && !before) || (change.after && !after)) {
+      return { path, kind: change.kind, binary: false, truncated: false, contentUnavailable: true }
+    }
     const window = decodeDiffWindow(before, after, MAX_DIFF_WINDOW_BYTES, DIFF_WINDOW_CONTEXT_BYTES)
     return {
       path,
@@ -1402,12 +1406,22 @@ export class CheckpointManager {
     const beforeFile = checkpoint.before.files[path]
     const tracker = this.tracker(projectId)
     const before = beforeFile ? await tracker.readBlob(beforeFile.hash) : null
-    if (beforeFile && !before) throw new Error(`Checkpoint blob is unavailable for ${path}`)
     let after: Uint8Array | null = null
     try {
       after = await readFile(absolutePath)
     } catch (error) {
       if (!isMissing(error)) throw error
+    }
+    // Same honest degradation as the persisted diff: report the path and kind
+    // when the baseline content is gone instead of failing the whole read.
+    if (beforeFile && !before) {
+      return {
+        path,
+        kind: after ? 'modified' : 'deleted',
+        binary: false,
+        truncated: false,
+        contentUnavailable: true
+      }
     }
     if (after !== null && isBinary(after)) {
       return { path, kind: beforeFile ? 'modified' : 'created', binary: true, truncated: false }
@@ -1557,10 +1571,30 @@ export class CheckpointManager {
       }
       return { ...snapshot, files }
     }
+    // A change rescued from this turn's own write evidence (a path the
+    // project-wide snapshot never listed, such as a file inside an excluded
+    // directory) carries a file entry the snapshot maps do not. Blob pruning
+    // and rollback both read the maps, so every change-referenced entry has to
+    // be written back into them or the content is collected while the change
+    // still claims it.
+    const withChangeFiles = (
+      snapshot: ProjectCheckpoint,
+      side: 'before' | 'after'
+    ): ProjectCheckpoint => {
+      const files = { ...snapshot.files }
+      let added = false
+      for (const change of checkpoint.changes) {
+        const file = change[side]
+        if (!file || files[change.path]) continue
+        files[change.path] = file
+        added = true
+      }
+      return added ? { ...snapshot, files } : snapshot
+    }
     return {
       ...checkpoint,
-      before: trimFiles(checkpoint.before),
-      ...(checkpoint.after ? { after: trimFiles(checkpoint.after) } : {})
+      before: withChangeFiles(trimFiles(checkpoint.before), 'before'),
+      ...(checkpoint.after ? { after: withChangeFiles(trimFiles(checkpoint.after), 'after') } : {})
     }
   }
 

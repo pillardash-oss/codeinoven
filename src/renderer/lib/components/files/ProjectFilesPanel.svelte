@@ -175,7 +175,10 @@
   let renderOnlyFile = $derived(activeMime !== null && hasNoTextSource(activeMime))
   let checkpointDiff = $derived(activeTab?.checkpointDiff ?? null)
   const diffComputation = new FileDiffState(() =>
-    activeTab?.view === 'diff' && checkpointDiff && !checkpointDiff.binary
+    activeTab?.view === 'diff' &&
+    checkpointDiff &&
+    !checkpointDiff.binary &&
+    !checkpointDiff.contentUnavailable
       ? {
           before: checkpointDiff.before,
           after: checkpointDiff.after,
@@ -1353,6 +1356,10 @@
       {:else if activeTab.view === 'diff' && checkpointDiff}
         {#if diffComputation.error}
           <p class="px-3 py-4 text-xs text-muted" role="note">{diffComputation.error}</p>
+        {:else if checkpointDiff.contentUnavailable}
+          <p class="px-3 py-4 text-xs text-muted" role="note">
+            The checkpoint no longer holds this file's content, so its diff cannot be shown.
+          </p>
         {:else if diffStats || checkpointDiff.binary}
           <FileDiffView diff={checkpointDiff} preparedDetails={diffStats} />
         {:else}
@@ -1757,6 +1764,10 @@
         {:else if activeTab?.view === 'diff' && checkpointDiff}
           {#if diffComputation.error}
             <p class="px-3 py-4 text-xs text-muted" role="note">{diffComputation.error}</p>
+          {:else if checkpointDiff.contentUnavailable}
+            <p class="px-3 py-4 text-xs text-muted" role="note">
+              The checkpoint no longer holds this file's content, so its diff cannot be shown.
+            </p>
           {:else if diffStats || checkpointDiff.binary}
             <FileDiffView diff={checkpointDiff} preparedDetails={diffStats} />
           {:else}

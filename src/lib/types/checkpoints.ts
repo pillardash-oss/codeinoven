@@ -96,4 +96,8 @@ export interface TurnCheckpointFileDiff {
   before?: string
   after?: string
   truncated: boolean
+  /** The checkpoint recorded this change but its content blob is gone (an
+   *  external cleanup, or a capture whose content could not be stored). The
+   *  path and kind stay honest; only the before/after text is missing. */
+  contentUnavailable?: boolean
 }

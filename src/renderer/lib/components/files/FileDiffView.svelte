@@ -151,7 +151,13 @@
   </div>
 {/snippet}
 
-{#if diff.binary}
+{#if diff.contentUnavailable}
+  <div class="flex h-full items-center justify-center px-6 text-center">
+    <p class="text-xs text-dimmed" role="note">
+      The checkpoint no longer holds this file's content, so its diff cannot be shown.
+    </p>
+  </div>
+{:else if diff.binary}
   <div class="flex h-full items-center justify-center px-6 text-center">
     <p class="text-xs text-dimmed">Binary file · content preview unavailable.</p>
   </div>

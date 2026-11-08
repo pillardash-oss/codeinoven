@@ -4,6 +4,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
 
   interface Props {
     projectId: string
@@ -50,7 +51,7 @@
     try {
       diff = await invoke('checkpoint:diff', projectId, threadId, checkpointId, path)
     } catch (reason) {
-      error = reason instanceof Error ? reason.message : 'The diff could not be loaded'
+      error = ipcErrorMessage(reason, 'The diff could not be loaded')
     } finally {
       loading = false
     }
