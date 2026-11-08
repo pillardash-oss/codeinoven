@@ -1,5 +1,29 @@
 import DOMPurify from 'dompurify'
 
+/**
+ * Escape markup-shaped text inside a document's `<style>` blocks.
+ *
+ * DOMPurify treats a literal-text element as a cross-site-scripting hazard when
+ * its text contains anything that reads like a tag (its probe is `<` followed by
+ * a word character, `/` or `!`), and it refuses the whole element rather than
+ * the offending character. A stylesheet whose comment merely names an element,
+ * as in `/* theme switching sets data-theme on the <html> element *\/`, is
+ * therefore dropped entire: every token it declared disappears with it and the
+ * preview renders with each `var(--token)` unresolved, which reads as a broken
+ * artifact rather than as a stripped comment.
+ *
+ * `\3c ` is CSS's own escape for `<`, so rewriting that one character inside
+ * the block leaves the stylesheet exactly as authored, comments included, while
+ * nothing tag-shaped remains for the sanitizer to trip on.
+ */
+export function escapeStyleMarkup(html: string): string {
+  return html.replace(
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style\s*>)/giu,
+    (_block: string, opening: string, css: string, closing: string) =>
+      `${opening}${css.replace(/</gu, '\\3c ')}${closing}`
+  )
+}
+
 /** How a preview document is laid out inside the frame it is given. */
 export interface HtmlPreviewFrameOptions {
   /**
@@ -39,7 +63,7 @@ export function htmlPreviewFrame(
   themeStyles?: string,
   options: HtmlPreviewFrameOptions = {}
 ): string {
-  const sanitized = DOMPurify.sanitize(html, {
+  const sanitized = DOMPurify.sanitize(escapeStyleMarkup(html), {
     FORBID_ATTR: ['ping', 'srcdoc', 'formaction'],
     FORBID_TAGS: ['base', 'link', 'meta', 'script'],
     WHOLE_DOCUMENT: true
@@ -69,7 +93,7 @@ export function htmlPreviewFrame(
  * chat-attachment document preview so previews look identical everywhere.
  */
 export function documentPreviewFrame(html: string): string {
-  const sanitized = DOMPurify.sanitize(html)
+  const sanitized = DOMPurify.sanitize(escapeStyleMarkup(html))
   return `<!doctype html>
 <html lang="en">
   <head>

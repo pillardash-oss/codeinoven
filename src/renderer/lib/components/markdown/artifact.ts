@@ -1,5 +1,5 @@
 import DOMPurify from 'dompurify'
-import { htmlPreviewFrame } from '../../document-preview-frame'
+import { escapeStyleMarkup, htmlPreviewFrame } from '../../document-preview-frame'
 
 /**
  * Inline artifact fences.
@@ -145,7 +145,7 @@ export interface HtmlArtifactDocument {
  * mounted in.
  */
 export function sanitizedHtmlArtifactDocument(code: string): HtmlArtifactDocument {
-  const sanitized = DOMPurify.sanitize(code, {
+  const sanitized = DOMPurify.sanitize(escapeStyleMarkup(code), {
     FORBID_ATTR: ['ping', 'srcdoc', 'formaction'],
     FORBID_TAGS: ['base', 'link', 'meta', 'script', 'form'],
     WHOLE_DOCUMENT: true
@@ -205,7 +205,7 @@ function scopeSelectorList(prelude: string): string {
  * insert into the document.
  */
 export function sanitizedSvgArtifact(code: string): string {
-  return DOMPurify.sanitize(code.trim(), {
+  return DOMPurify.sanitize(escapeStyleMarkup(code.trim()), {
     USE_PROFILES: { svg: true, svgFilters: true }
   })
 }

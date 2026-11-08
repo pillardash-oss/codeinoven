@@ -28,8 +28,16 @@ type PrimaryActionResolver = () => boolean
 
 const resolvers: PrimaryActionResolver[] = []
 
-/** Register a modal's primary-action resolver. Returns an unsubscribe function. */
-export function registerModalPrimaryAction(resolver: PrimaryActionResolver): () => void {
+/**
+ * Register a primary-action resolver on the shared stack. Returns an unsubscribe
+ * function.
+ *
+ * Modal overlays are the main user, but they are not the only surface with a
+ * primary action: a panel that shows its own Save button (the memory panel) uses
+ * this same stack, so one shortcut runs the action of whatever surface is in
+ * front, and a modal opened later still wins by being registered last.
+ */
+export function registerPrimaryAction(resolver: PrimaryActionResolver): () => void {
   resolvers.push(resolver)
   let removed = false
   return () => {
@@ -40,9 +48,14 @@ export function registerModalPrimaryAction(resolver: PrimaryActionResolver): () 
   }
 }
 
+/** Register a modal's primary-action resolver. Returns an unsubscribe function. */
+export function registerModalPrimaryAction(resolver: PrimaryActionResolver): () => void {
+  return registerPrimaryAction(resolver)
+}
+
 /**
- * Activate the topmost registered modal's primary action. Returns whether a
- * modal was found and its resolver claimed the shortcut.
+ * Activate the topmost registered surface's primary action. Returns whether a
+ * surface was found and its resolver claimed the shortcut.
  */
 export function activateTopModalPrimaryAction(): boolean {
   for (let index = resolvers.length - 1; index >= 0; index--) {
