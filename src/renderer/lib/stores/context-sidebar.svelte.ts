@@ -821,6 +821,11 @@ class ContextSidebarState {
     return this.browser.runtimeFor(tabId)
   }
 
+  /** Whether main last reported this browser tab's page as still loading. */
+  browserTabLoading(tabId: string): boolean {
+    return this.browser.loadingFor(tabId)
+  }
+
   /** Mute or unmute one browser tab's audio output. */
   toggleBrowserTabMute(tabId: string): void {
     this.browser.toggleMute(tabId)

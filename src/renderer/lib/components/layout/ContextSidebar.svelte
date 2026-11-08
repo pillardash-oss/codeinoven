@@ -33,6 +33,7 @@
   import CioPanelBottom from '@pdslng/cio-icon/CioPanelBottom.svelte'
   import CioPanelRight from '@pdslng/cio-icon/CioPanelRight.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
   import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
@@ -599,6 +600,8 @@
     {@const indicators = browserTabIndicators(runtime, browserStore()?.hasPeek(tab.id))}
     {@const conversation = badgeConversation(tab)}
     {@const agentThread = agentThreadFor(tab)}
+    {@const loading = tab.kind === 'browser' && contextSidebarState.browserTabLoading(tab.id)}
+    {@const closeTakesIcon = tab.kind === 'browser' && indicators.length === 0}
     <div
       class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
       tab.id
@@ -634,7 +637,9 @@
       ></div>
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
+        class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left {closeTakesIcon
+          ? 'pr-1.5'
+          : ''}"
         aria-current={activeTabId === tab.id ? 'page' : undefined}
         data-active-tab={activeTabId === tab.id ? 'true' : undefined}
         title={titleFor(tab)}
@@ -649,7 +654,23 @@
             aria-hidden="true"
           ></span>
         {:else}
-          {@render tabIcon(tab)}
+          <!-- The leading slot is a browser tab's one status surface: the page's
+               mark, a spinner while the page is still coming up, and the close
+               control while the pointer is on the row. The chip therefore spends
+               no width on a second button and the title keeps the rest. -->
+          <span class="flex w-3 shrink-0 items-center justify-center">
+            {#if loading}
+              <CioSpinner size={11} class="animate-spin text-dimmed" />
+            {:else}
+              <span
+                class="flex items-center justify-center transition-opacity duration-100 {closeTakesIcon
+                  ? 'group-hover:opacity-0'
+                  : ''}"
+              >
+                {@render tabIcon(tab)}
+              </span>
+            {/if}
+          </span>
         {/if}
         {#if renamingTabId === tab.id}
           <input
@@ -728,15 +749,31 @@
           ></span>
         {/if}
       </button>
-      <button
-        type="button"
-        class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-        aria-label={closeLabel(tab)}
-        title={closeLabel(tab)}
-        onclick={() => onClose(tab.id)}
-      >
-        <CioClose size={11} />
-      </button>
+      {#if closeTakesIcon}
+        <!-- Drawn over the tab's own mark, so closing a browser tab costs the
+             strip nothing: the control appears where the eye already is and goes
+             away with the pointer. A sibling of the select button, because a
+             button cannot nest a button. -->
+        <button
+          type="button"
+          class="absolute left-2.5 top-1/2 z-20 flex h-4 w-4 -translate-y-1/2 items-center justify-center text-dimmed opacity-0 transition-opacity duration-100 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+          aria-label={closeLabel(tab)}
+          title={closeLabel(tab)}
+          onclick={() => onClose(tab.id)}
+        >
+          <CioClose size={11} />
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+          aria-label={closeLabel(tab)}
+          title={closeLabel(tab)}
+          onclick={() => onClose(tab.id)}
+        >
+          <CioClose size={11} />
+        </button>
+      {/if}
       {#if indicators.length > 0}
         <!-- Painted over the tab's own icon slot. A sibling of the
              select button, because a button cannot nest a button. -->
