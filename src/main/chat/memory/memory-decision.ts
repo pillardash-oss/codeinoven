@@ -8,6 +8,7 @@ import type {
 } from '../../../lib/types'
 import type { StructuredMemoryProposal } from '../chat-engine/chat-engine-types'
 import { capText } from './memory-extraction'
+import { memoryTitleFrom } from './memory-title'
 import { MEMORY_EXTRACTION_LIMITS, MEMORY_LIMITS } from './memory-constants'
 
 /**
@@ -315,8 +316,9 @@ export function readMemoryDecision(input: {
   const scope = choiceValue(input.answers, 'scope')?.choice
   return {
     propose: true,
-    // The label is the memory's own words, shortened, never a fresh summary.
-    title: capText(content, MEMORY_LIMITS.maxLabelCharacters),
+    // The label is the memory's own words, a whole sentence or clause run of
+    // them, never a fresh summary and never a sliced-off fragment.
+    title: memoryTitleFrom(content),
     content,
     category: isCategory(category) ? category : 'preference',
     priority: isPriority(priority) ? priority : 'medium',

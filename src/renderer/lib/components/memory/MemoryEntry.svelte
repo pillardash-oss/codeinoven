@@ -2,6 +2,8 @@
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioChevronUp from '@pdslng/cio-icon/CioChevronUp.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import CioZap from '@pdslng/cio-icon/CioZap.svelte'
   import type {
@@ -103,6 +105,10 @@
   let selectedScopeProject = $derived(
     projects.find((project) => project.id === entry.projectId) ?? null
   )
+  /** What the source icon stands for, shown as its tooltip and read aloud. */
+  let sourceTitle = $derived(
+    entry.source === 'auto-detected' ? 'Suggested from a conversation' : 'Added by hand'
+  )
 
   const categoryOptions: { value: MemoryCategory; label: string }[] = [
     { value: 'behavioral', label: 'Behavioral' },
@@ -174,7 +180,7 @@
       >
         {getCategoryIcon(entry.category)}
       </span>
-      <span class="min-w-0 flex-1 break-words text-sm font-medium leading-5 text-foreground">
+      <span class="min-w-0 break-words text-sm font-medium leading-5 text-foreground">
         {entry.label || 'Untitled'}
       </span>
       {#if entry.source === 'auto-detected'}
@@ -414,18 +420,25 @@
         </div>
       {/if}
 
-      <div class="flex items-center gap-4 text-[0.6875rem] text-dimmed">
-        <span class="flex items-center gap-1">
-          <CioClock size={10} />
-          Updated {formatDate(entry.updatedAt)}
+      <div class="flex items-center gap-3 text-dimmed">
+        <span class="flex items-center" title="Updated {formatDate(entry.updatedAt)}">
+          <CioClock size={12} />
+          <span class="sr-only">Updated {formatDate(entry.updatedAt)}</span>
         </span>
         {#if entry.lastReinforced}
-          <span class="flex items-center gap-1">
-            <CioZap size={10} />
-            Reinforced {entry.frequency}x
+          <span class="flex items-center" title="Reinforced {entry.frequency}x">
+            <CioZap size={12} />
+            <span class="sr-only">Reinforced {entry.frequency}x</span>
           </span>
         {/if}
-        <span>Source: {entry.source}</span>
+        <span class="flex items-center" title={sourceTitle}>
+          {#if entry.source === 'auto-detected'}
+            <CioSparkles size={12} />
+          {:else}
+            <CioPencil size={12} />
+          {/if}
+          <span class="sr-only">{sourceTitle}</span>
+        </span>
       </div>
     </div>
   {/if}

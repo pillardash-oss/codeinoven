@@ -9,6 +9,7 @@ import {
   VALID_SOURCES,
   parseModelKeysMetadata
 } from './memory-validation'
+import { repairSlicedTitle } from './memory-title'
 
 function safeInteger(value: string | undefined, fallback: number): number {
   if (value === undefined || !/^\d+$/u.test(value)) return fallback
@@ -36,9 +37,9 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
   for (const [index, block] of blocks.entries()) {
     const match = block.match(/^\s*##\s+(.+?)\s*$/mu)
     if (!match) continue
-    const label = match[1].trim()
+    const storedLabel = match[1].trim()
     const body = block.replace(/^\s*##\s+(.+?)\s*$/mu, '').trim()
-    if (!label || !body) continue
+    if (!storedLabel || !body) continue
 
     const sections = body.split(/\r?\n\s*\r?\n/u)
     const metadata = new Map<string, string>()
@@ -52,6 +53,9 @@ export function parseMemoryMd(content: string): MemoryEntry[] {
     )
     const cleanBody = hasMetadata ? sections.slice(1).join('\n\n').trim() : body
     if (!cleanBody) continue
+    // Titles written by an earlier build are the content sliced at 80
+    // characters; re-derive a complete one from the content they were cut from.
+    const label = repairSlicedTitle(storedLabel, cleanBody)
     if (isRetiredPlaceholder(label, cleanBody)) continue
     const now = Date.now()
     const fallbackId = `memory-${createHash('sha256')

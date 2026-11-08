@@ -11,7 +11,10 @@ export const THREADS_DIR = 'threads'
 
 export const MEMORY_LIMITS = {
   maxEntries: 50,
-  maxLabelCharacters: 80,
+  // A title is the memory's opening sentence or clause run, so the cap has to be
+  // wide enough for a whole one. Titles are never sliced at this number: they are
+  // derived from the content, see memory-title.ts.
+  maxLabelCharacters: 120,
   maxEntryCharacters: 4_096,
   maxAggregateCharacters: 24_576,
   maxProposals: 20,

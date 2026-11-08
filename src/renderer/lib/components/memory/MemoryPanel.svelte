@@ -42,6 +42,8 @@
   import Switch from '../ui/Switch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
+  import { registerPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   import type { ScopeBucket, Thread } from '$shared/types'
 
@@ -782,6 +784,18 @@
 
   $effect(loadForContext)
 
+  // ⌘/Ctrl+Enter runs this panel's primary action, exactly as it does inside a
+  // modal. The resolver registers on the shared primary-action stack, so a modal
+  // opened above the panel registers later and keeps the shortcut; the panel only
+  // answers it when it has something to save.
+  $effect(() =>
+    registerPrimaryAction(() => {
+      if (saving || loading || !hasUnsavedChanges) return false
+      void save()
+      return true
+    })
+  )
+
   /** Keep the Thread and Scope pickers' lists warm for the projects an entry can choose. */
   function warmThreadPickers(): void {
     if (surface !== 'sidebar-projects') return
@@ -961,7 +975,9 @@
           <button
             class="memory-action-btn flex items-center gap-1.5 bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             disabled={saving || loading || !hasUnsavedChanges}
-            title={saved ? 'All memories saved' : 'Save all memory entries'}
+            title={saved
+              ? 'All memories saved'
+              : `Save all memory entries (${keymapState.labelFor('ui-modal-primary-action')})`}
             aria-label={saved ? 'All memories saved' : 'Save all memory entries'}
             type="button"
             onclick={() => void save()}
