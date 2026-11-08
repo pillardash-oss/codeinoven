@@ -36,6 +36,7 @@
   import { gitSyncJobs } from '$lib/stores/git-sync-jobs.svelte'
   import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
+  import { questionWalkthrough } from '$lib/stores/question-walkthrough.svelte'
   import { guideState } from '$lib/guide/guide-state.svelte'
   import { createApp } from './App/App-board.svelte'
   const board = createApp()
@@ -316,6 +317,15 @@
          opened from: the Git sidebar is behind the browser view when it lands. -->
     {#await import('$lib/components/git/GitHubSignInDock.svelte') then { default: GitHubSignInDock }}
       <GitHubSignInDock />
+    {/await}
+  {/if}
+
+  {#if questionWalkthrough.open}
+    <!-- The step-by-step text a question card handed the user. It floats above
+         every view because following it means leaving the app, and it outlives
+         the card that opened it. -->
+    {#await import('$lib/components/threads/QuestionWalkthroughDock.svelte') then { default: QuestionWalkthroughDock }}
+      <QuestionWalkthroughDock />
     {/await}
   {/if}
 

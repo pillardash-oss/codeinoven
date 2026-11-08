@@ -38,11 +38,11 @@
   } from '$shared/types'
   import EngineeringModelSwitch from '../shared/EngineeringModelSwitch.svelte'
   import AgentCardChatActions from './AgentCardChatActions.svelte'
-  import AgentQuestionWalkthroughModal from './AgentQuestionWalkthroughModal.svelte'
   import QuestionEntryActions from './QuestionEntryActions.svelte'
   import QuestionVisualModal from './QuestionVisualModal.svelte'
   import { questionVisualSource } from './question-visual-source'
   import { hasQuestionVisual } from '$shared/question-visual'
+  import { questionWalkthrough } from '$lib/stores/question-walkthrough.svelte'
   import { fitQuestionCard } from './question-card-fit'
 
   interface Props {
@@ -114,14 +114,6 @@
   let working = $state(false)
   let actionError = $state('')
   let folded = $state(false)
-  /**
-   * The walkthrough the user opened for copying.
-   *
-   * It belongs to one entry, never to the card: the question's own walkthrough
-   * argues for the whole choice, and an option's walkthrough argues for that
-   * option, so the modal names which one it is showing.
-   */
-  let walkthroughTarget = $state<{ subject: string; text: string } | null>(null)
   /**
    * The picture the user opened with the eye button.
    *
@@ -467,10 +459,15 @@
     }
   }
 
-  /** Opens the walkthrough that belongs to one entry, for copying. */
+  /**
+   * Opens the walkthrough that belongs to one entry, for copying.
+   *
+   * The panel itself lives at the app root (`questionWalkthrough`), so following
+   * the steps never depends on this card staying on screen.
+   */
   function openWalkthrough(subject: string, text: string | undefined): void {
     if (working || !text) return
-    walkthroughTarget = { subject, text }
+    questionWalkthrough.show(subject, text)
   }
 
   /** Opens the picture attached to one of the question's options. */
@@ -757,13 +754,6 @@
       </CardFoot>
     </div>
   {/if}
-
-  <AgentQuestionWalkthroughModal
-    open={walkthroughTarget !== null}
-    subject={walkthroughTarget?.subject ?? ''}
-    walkthrough={walkthroughTarget?.text ?? ''}
-    onClose={() => (walkthroughTarget = null)}
-  />
 
   <QuestionVisualModal
     open={visualTarget !== null}
