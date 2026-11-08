@@ -3,11 +3,16 @@
   import CioLockOpen from '@pdslng/cio-icon/CioLockOpen.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { Attachment } from 'svelte/attachments'
+  import { onDestroy, tick } from 'svelte'
+  import type { BrowserViewBounds } from '$shared/ipc-contract'
   import { resolveBrowserAddress } from '$shared/browser-search-engines'
+  import type { BrowserHistoryEntry } from '$shared/browser/browser-library'
+  import { NativeFloatingPanel } from '$lib/native-floating-panel.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
-  import { browserAddressDrawer } from '$lib/stores/browser-address-drawer.svelte'
   import { browserHistory } from '$lib/stores/browser-history.svelte'
   import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
+  import { browserVisibility, trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
+  import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
 
   interface Props {
     /** The address of the page on screen, which the field mirrors until the user
@@ -25,6 +30,13 @@
     secure: boolean
     /** Whether the page is loading. */
     loading: boolean
+    /**
+     * Whether a native page is on screen for this tab right now.
+     *
+     * The drawer is only ever covered by that page, so this is when it has to be
+     * drawn by the native host; with no page on screen the drawer is drawn here.
+     */
+    pageOnScreen: boolean
     /** Whether the site-settings popup is up, which the padlock reports. */
     siteMenuOpen: boolean
     /** Open the native site-settings menu under the padlock. */
@@ -41,6 +53,7 @@
     boxId,
     secure,
     loading,
+    pageOnScreen,
     siteMenuOpen,
     onOpenSiteMenu,
     onNavigate
@@ -67,24 +80,97 @@
    * so it is still offered after the thread browser is closed and reopened, and it
    * goes when the app quits.
    *
-   * The drawer is a row of the browser column rather than an overlay on the page.
-   * The page is a native view composed above every DOM surface, so a drawer drawn
-   * over it could only be seen by parking the page (`trackBrowserOcclusion`), and
-   * the user would watch their page blank while typing an address. The field
-   * publishes the open drawer to `browserAddressDrawer` instead, and the panel
-   * draws it under the toolbar, which shrinks the page's frame and lets the
-   * observers place the live page beneath it (`BrowserPanel.svelte`, the same
-   * answer `BrowserFindBar` gives).
+   * Over a live page the drawer is drawn by the shared native host, exactly as a
+   * dockable modal or the message history panel is: the page is a native view the
+   * compositor paints above every DOM node of this window, so a drawer drawn here
+   * could only be seen by parking the page and blanking the browser for as long as
+   * the user types an address. The host is asked for in its passive form
+   * (`takesFocus: false`), because a dropdown hangs under a field the user is typing
+   * in: activating its window would take the caret out of that field. With no page
+   * on screen   a blank tab, a failed load   nothing has to be drawn above, so the
+   * drawer stays here and costs nothing.
    */
 
   /** How many history rows are offered. A drawer is scanned, not read. */
   const SUGGESTION_LIMIT = 7
+  /** How long a blur waits for a press on a row drawn by the native host. */
+  const BLUR_CLOSE_MS = 160
 
   const listId = $props.id()
 
-  /** This field's claim on the tab's drawer, so the other copy of the same tab
-   *  (the sidebar's and the full screen's) can never take it away. */
-  const drawerOwner = Symbol('browser-address-drawer')
+  /**
+   * The live host that draws this drawer above a browser page.
+   *
+   * Passive on purpose: the drawer belongs to a field the user is typing in, so the
+   * host may be clicked but must never become the key window (`takesFocus: false`).
+   * It is armed only while a page is really on screen and a browser surface owns it,
+   * which is the one situation this window cannot draw the drawer itself; the
+   * drawer then stays here, where it was always faithful and free.
+   */
+  const native = new NativeFloatingPanel(`browser-address-drawer-${crypto.randomUUID()}`, {
+    takesFocus: false
+  })
+  const nativeMount: Attachment<HTMLElement> = (element) => native.mount(element)
+
+  /**
+   * The drawer's box in this window, in CSS pixels, which is what the host is
+   * placed and sized by.
+   *
+   * Two elements answer it, because the host adopts the drawer: the frame stays in
+   * this window and its rectangle places the host (`left-0 right-0` under the
+   * field), while its height comes from the drawer itself. Once the host has taken
+   * the drawer the frame is empty, so a height read from the frame would be zero;
+   * the drawer keeps its own height in the host window, and its row count changes
+   * with what the user types, so it is measured from the state that decides it.
+   */
+  let box = $state<BrowserViewBounds | null>(null)
+  let frameElement: HTMLElement | null = null
+  let drawerElement: HTMLElement | null = null
+
+  function measureDrawer(): void {
+    const frame = frameElement
+    const drawer = drawerElement
+    if (!frame || !drawer) return
+    const frameRect = frame.getBoundingClientRect()
+    const height = drawer.getBoundingClientRect().height
+    if (frameRect.width < 1 || height < 1) return
+    const current = box
+    if (
+      current &&
+      current.x === frameRect.x &&
+      current.y === frameRect.y &&
+      current.width === frameRect.width &&
+      current.height === height
+    ) {
+      return
+    }
+    box = { x: frameRect.x, y: frameRect.y, width: frameRect.width, height }
+  }
+
+  /** The frame is where the host is placed, so it is observed where it lives. */
+  const attachFrame: Attachment<HTMLElement> = (element) => {
+    frameElement = element
+    const observer = new ResizeObserver(measureDrawer)
+    observer.observe(element)
+    window.addEventListener('resize', measureDrawer)
+    measureDrawer()
+    return () => {
+      observer.disconnect()
+      window.removeEventListener('resize', measureDrawer)
+      if (frameElement === element) frameElement = null
+    }
+  }
+
+  const attachDrawer: Attachment<HTMLElement> = (element) => {
+    drawerElement = element
+    const observer = new ResizeObserver(measureDrawer)
+    observer.observe(element)
+    measureDrawer()
+    return () => {
+      observer.disconnect()
+      if (drawerElement === element) drawerElement = null
+    }
+  }
 
   let input = $state<HTMLInputElement | undefined>(undefined)
   /** The field's own element, captured as an attachment: the drawer's keyboard
@@ -108,6 +194,9 @@
   /** Whether the drawer has been asked for. It comes up with the first keystroke
    *  rather than with the click, so reading the address never covers the page. */
   let drawerOpen = $state(false)
+  /** Pending deferred blur close, so a press on a row drawn by the native host is
+   *  never cut short by the activation some platforms hand to that window. */
+  let blurClose: ReturnType<typeof setTimeout> | null = null
 
   const value = $derived(draft ?? url)
   const scope = $derived(browserHistory.scopeFor(projectId, threadId, boxId))
@@ -115,6 +204,16 @@
   /** Whether the drawer is actually on screen, which is when the field may claim
    *  it is expanded and point the screen reader at a highlighted row. */
   const drawerVisible = $derived(drawerOpen && suggestions.length > 0)
+  /** Whether the host draws this drawer: only while a page is really on screen and
+   *  a browser surface owns it, which is when this window cannot draw it itself. */
+  const hosted = $derived(
+    drawerVisible && pageOnScreen && browserVisibility.canUseNativeDock && !native.failed
+  )
+  /** Everything that changes the drawer's own height, so the host is re-measured
+   *  after the render that changed it. */
+  const drawerRevision = $derived(
+    `${drawerVisible ? 'open' : 'closed'}|${suggestions.length}|${highlight}|${native.live ? 'live' : 'idle'}`
+  )
   /**
    * The field's horizontal padding: the padlock's slot on the left whenever there
    * is an address, and a wider right inset while a load is in flight so the
@@ -161,6 +260,10 @@
    *  address. A blank tab keeps its shared draft, so leaving the field never
    *  discards text the fullscreen surface must continue. */
   function close(): void {
+    if (blurClose !== null) {
+      clearTimeout(blurClose)
+      blurClose = null
+    }
     if (tabId && url === '') {
       const stored = browserBlankDraft.get(tabId)?.text
       if (stored) {
@@ -177,34 +280,38 @@
 
   /** Handle blur without dropping a blank continuation. */
   function onBlur(): void {
-    highlight = -1
-    drawerOpen = false
-    if (tabId && url === '' && draft !== null && draft !== '') {
-      return
-    }
-    if (!(tabId && url === '' && browserBlankDraft.get(tabId))) {
-      draft = null
-    }
+    // A passive host never activates, so pressing a row does not blur this field.
+    // A platform that activates it anyway delivers that blur first, and closing
+    // here would hide the row the press started on; the short delay lets the press
+    // finish and `open` cancel it.
+    if (blurClose !== null) clearTimeout(blurClose)
+    blurClose = setTimeout(() => {
+      blurClose = null
+      highlight = -1
+      drawerOpen = false
+      if (tabId && url === '' && draft !== null && draft !== '') {
+        return
+      }
+      if (!(tabId && url === '' && browserBlankDraft.get(tabId))) {
+        draft = null
+      }
+    }, BLUR_CLOSE_MS)
+  }
+
+  function onFocus(): void {
+    if (blurClose === null) return
+    clearTimeout(blurClose)
+    blurClose = null
   }
 
   function open(target: string): void {
+    if (blurClose !== null) {
+      clearTimeout(blurClose)
+      blurClose = null
+    }
     if (tabId) browserBlankDraft.clear(tabId)
     close()
     onNavigate(target)
-  }
-
-  /**
-   * The row the panel draws is this field's own drawer, so it opens and
-   * highlights through the same state the keys drive. Exported because the panel
-   * column is not inside this component.
-   */
-  export function openSuggestion(url: string): void {
-    open(url)
-  }
-
-  /** Hovering a row and arrowing to it are one highlight. */
-  export function highlightSuggestion(index: number): void {
-    highlight = index
   }
 
   function submit(): void {
@@ -270,21 +377,26 @@
     submit()
   }
 
-  // The row that draws this drawer is a row of the browser column, not part of
-  // this field (see the drawer's note above), so the field hands the open drawer
-  // over for as long as it has one on this tab. The cleanup takes the row away
-  // with the field: a panel that unmounts mid-typing must not leave a drawer
-  // under the next toolbar.
+  // The drawer is only ever on screen while this field has it open, so its
+  // visibility here is the host's visibility. It stays hidden until its box is
+  // known, so the host is never built around a placeholder rectangle.
   $effect(() => {
-    const id = tabId
-    if (id === null) return
-    const shown = drawerVisible
-    browserAddressDrawer.publish(
-      id,
-      drawerOwner,
-      shown ? { listId, entries: suggestions, highlight } : null
-    )
-    return () => browserAddressDrawer.publish(id, drawerOwner, null)
+    native.update(hosted, drawerVisible && box !== null, box ?? { x: 0, y: 0, width: 1, height: 1 })
+  })
+
+  // The drawer's own height follows the rows it offers, and those follow what the
+  // user types. Measured after the render that changed them, never from the frame
+  // the host leaves empty.
+  $effect(() => {
+    const revision = drawerRevision
+    void tick().then(() => {
+      // A newer revision landed before this render settled; that one measures itself.
+      if (revision === drawerRevision) measureDrawer()
+    })
+  })
+
+  onDestroy(() => {
+    if (blurClose !== null) clearTimeout(blurClose)
   })
 </script>
 
@@ -329,6 +441,7 @@
     onclick={onCaretMove}
     onselect={onCaretMove}
     onkeydown={onKeydown}
+    onfocus={onFocus}
     onblur={onBlur}
   />
   <!--
@@ -348,4 +461,32 @@
       <CioSpinner size={13} class="animate-spin text-primary" />
     </span>
   {/if}
+  <!--
+    The drawer's frame is what the host is placed by; the drawer inside it is what
+    the host adopts. While the host is armed the frame takes no pointer and stays
+    invisible until the host is live, so the drawer arrives once instead of
+    arriving twice in two skins.
+  -->
+  <div
+    class="absolute top-full right-0 left-0 z-20 mt-1 {hosted ? 'pointer-events-none' : ''}"
+    class:hidden={!drawerVisible}
+    style:opacity={hosted && !native.live ? 0 : 1}
+    {@attach attachFrame}
+    {@attach hosted ? undefined : trackBrowserOcclusion}
+  >
+    <div
+      class="max-h-64 overflow-y-auto border border-border bg-surface p-1.5 shadow-lg"
+      {@attach attachDrawer}
+      {@attach nativeMount}
+    >
+      <BrowserHistorySuggestions
+        {listId}
+        {suggestions}
+        {highlight}
+        compact
+        onHighlight={(index) => (highlight = index)}
+        onOpen={(entry: BrowserHistoryEntry) => open(entry.url)}
+      />
+    </div>
+  </div>
 </div>
