@@ -180,7 +180,7 @@
       >
         {getCategoryIcon(entry.category)}
       </span>
-      <span class="min-w-0 break-words text-sm font-medium leading-5 text-foreground">
+      <span class="truncate text-sm font-medium text-foreground">
         {entry.label || 'Untitled'}
       </span>
       {#if entry.source === 'auto-detected'}

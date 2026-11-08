@@ -11,9 +11,9 @@
 </script>
 
 <article class="border-b border-border px-4 py-3">
-  <div class="flex items-start gap-2">
-    <CioMemory size={13} class="mt-0.5 shrink-0 text-primary" />
-    <p class="min-w-0 flex-1 break-words text-xs font-semibold text-foreground" title={entry.label}>
+  <div class="flex items-center gap-2">
+    <CioMemory size={13} class="shrink-0 text-primary" />
+    <p class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground" title={entry.label}>
       {entry.label}
     </p>
     <span
