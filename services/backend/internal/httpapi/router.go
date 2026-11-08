@@ -85,6 +85,7 @@ func (s *Server) Handler() http.Handler {
 
 	// Content.
 	mux.Handle("GET /v1/projects", s.requireSession(http.HandlerFunc(s.handleListProjects)))
+	mux.Handle("POST /v1/projects", s.requireSession(http.HandlerFunc(s.handleCreateProject)))
 	mux.Handle("GET /v1/projects/{id}", s.requireSession(http.HandlerFunc(s.handleGetProject)))
 	mux.Handle("GET /v1/assistants", s.requireSession(http.HandlerFunc(s.handleListAssistants)))
 	mux.Handle("GET /v1/models", s.requireSession(http.HandlerFunc(s.handleListModels)))
