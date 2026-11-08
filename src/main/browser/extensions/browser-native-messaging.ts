@@ -31,6 +31,19 @@ import { NativeHostProcess } from './browser-native-host-process'
  *  there to bound a worker that opens connections in a loop. */
 const MAX_PORTS_PER_EXTENSION = 8
 
+/**
+ * How long a host may leave one of the extension's messages unanswered before the
+ * app says the host stopped working.
+ *
+ * Native messaging is request/response, so a request with no reply is the only
+ * evidence there is that the program on the other end is stuck, and an extension
+ * that asked for an answer waits on it for as long as its own code allows: a
+ * password manager's encrypted-channel handshake has no timeout at all, so its
+ * popup spins until the app is told, or forever. The window is generous enough
+ * for a host that has to start a second process or prompt the user, and short
+ * enough that the notice arrives while the user is still looking at the spinner. */
+export const NATIVE_ANSWER_TIMEOUT_MS = 10_000
+
 /** What the app tells the worker about a native port. */
 export type NativeMessagingDelivery =
   | { kind: 'connect-result'; requestId: number; portId: string | null; error: string | null }
@@ -43,6 +56,14 @@ export interface BrowserExtensionNativeMessagingDeps {
   origin: string
   lookupOptions: NativeHostLookupOptions
   deliver: (delivery: NativeMessagingDelivery) => void
+  /**
+   * One message this extension wrote that its host never answered.
+   *
+   * Called at most once per silent stretch of one port, because the point is to
+   * tell the user once that the program on the other end has stopped responding,
+   * not to report every message that joins the queue behind it.
+   */
+  reportSilentHost?: (application: string, waitedMs: number) => void
 }
 
 interface OpenPort {
@@ -54,6 +75,15 @@ interface OpenPort {
 export class BrowserExtensionNativeMessaging {
   private readonly ports = new Map<string, OpenPort>()
   private disposed = false
+  /** The host name of a message still waiting for an answer, null when the last
+   *  message this extension wrote has been answered. */
+  private awaitingAnswer: string | null = null
+  /** The one timer that notices that answer never arriving. Armed by a write,
+   *  disarmed by the host's own words, so an idle extension costs nothing. */
+  private answerTimer: ReturnType<typeof setTimeout> | null = null
+  /** Whether this silent stretch has already been reported, so a host that stops
+   *  answering tells the user once instead of once per queued message. */
+  private reportedSilence = false
 
   constructor(private readonly deps: BrowserExtensionNativeMessagingDeps) {}
 
@@ -93,6 +123,8 @@ export class BrowserExtensionNativeMessaging {
     const portId = randomUUID()
     const host = new NativeHostProcess(lookup.host.path, {
       onMessage: (message) => {
+        // The host spoke, so nothing it was asked is unanswered any more.
+        this.clearAnswerWatch()
         traceNativeMessage('host-to-extension', application, message)
         this.deliver({ kind: 'message', portId, message })
       },
@@ -120,7 +152,9 @@ export class BrowserExtensionNativeMessaging {
     traceNativeMessage('extension-to-host', port.application, message)
     if (port.process.send(message) === false) {
       this.closePort(portId, 'the native messaging host could not be written to')
+      return
     }
+    this.watchForAnswer(port.application)
   }
 
   /** Close one port because the extension asked to, which is not an error. */
@@ -128,6 +162,7 @@ export class BrowserExtensionNativeMessaging {
     const port = this.ports.get(portId)
     if (!port) return
     this.ports.delete(portId)
+    if (this.ports.size === 0) this.clearAnswerWatch()
     port.process.kill()
   }
 
@@ -135,16 +170,59 @@ export class BrowserExtensionNativeMessaging {
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
+    this.clearAnswerWatch()
     for (const [portId, port] of [...this.ports]) {
       this.ports.delete(portId)
       port.process.kill()
     }
   }
 
+  /**
+   * Start noticing whether the host answers the message just written.
+   *
+   * The timer only exists while a message is outstanding: it is armed by the
+   * write, cleared by the first thing the host says, and never re-armed for a
+   * stretch that has already been reported, so an extension that holds a port
+   * open for hours costs one timer per exchange rather than a standing one.
+   */
+  private watchForAnswer(application: string): void {
+    this.awaitingAnswer = application
+    if (this.disposed || this.reportedSilence || this.answerTimer !== null) return
+    const timer = setTimeout(() => {
+      this.answerTimer = null
+      const pending = this.awaitingAnswer
+      if (pending === null || this.disposed) return
+      this.reportedSilence = true
+      // Dev level, and only the routing fields: the extension's own log carries
+      // the same moment, and a host's payloads can carry key material.
+      Logger.dev('Native messaging host left a message unanswered:', {
+        application: pending,
+        waitedMs: NATIVE_ANSWER_TIMEOUT_MS
+      })
+      this.deps.reportSilentHost?.(pending, NATIVE_ANSWER_TIMEOUT_MS)
+    }, NATIVE_ANSWER_TIMEOUT_MS)
+    // A stalled host must never be a reason for this process to stay alive.
+    timer.unref?.()
+    this.answerTimer = timer
+  }
+
+  /** Forget the outstanding message: the host answered, or there is no port left. */
+  private clearAnswerWatch(): void {
+    if (this.answerTimer !== null) {
+      clearTimeout(this.answerTimer)
+      this.answerTimer = null
+    }
+    this.awaitingAnswer = null
+    this.reportedSilence = false
+  }
+
   private closePort(portId: string, error: string | null): void {
     const port = this.ports.get(portId)
     if (!port) return
     this.ports.delete(portId)
+    // A host that went away is not left holding an unanswered message: the
+    // extension already has its disconnect, so there is nothing to report later.
+    if (this.ports.size === 0) this.clearAnswerWatch()
     if (this.disposed) return
     this.deliver({ kind: 'disconnect', portId, error })
   }

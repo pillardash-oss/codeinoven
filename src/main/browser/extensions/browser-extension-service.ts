@@ -152,6 +152,15 @@ export interface BrowserExtensionHost {
   publishActivity(update: BrowserExtensionActivityUpdate): void
   /** Report one install step to the renderer. */
   reportProgress(progress: BrowserExtensionProgress): void
+  /**
+   * One extension wrote to its companion's native messaging host and never got an
+   * answer, so the user is told to restart that program.
+   *
+   * The extension keeps waiting on its own promise (a password manager's encrypted
+   * channel has no timeout), so the app is the only side that can say out loud why
+   * its surface is stuck.
+   */
+  reportCompanionSilent(extensionId: string, extensionName: string, application: string): void
   /** The installed list changed. */
   publish(): void
   /** Raise one extension's side panel, loading the extension's own document in

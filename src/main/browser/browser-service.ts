@@ -664,6 +664,12 @@ export class BrowserService {
       resolveTabId: (_projectId, contentsId) => this.tabForContents(contentsId)?.id ?? null,
       tabReplay: (projectId, boxId) => this.extensionTabReplay(projectId, boxId),
       publishActivity: (update) => this.publishExtensionActivity(update),
+      reportCompanionSilent: (extensionId, extensionName, application) =>
+        this.extensionRuntimeUnit.publishExtensionCompanionSilent({
+          extensionId,
+          extensionName,
+          application
+        }),
       publish: () => this.publishExtensions(),
       releaseViews: (extensionId, projectId, boxId) => {
         const partition = browserPartitionFor(projectId, boxId)
