@@ -262,6 +262,11 @@ export const api = {
   projects: (input: ProjectQuery = {}, signal?: AbortSignal) =>
     page<Project>(`/v1/projects${query(input)}`, { signal }),
 
+  /** A project started on the phone. The name is all it needs: the desktop's
+   *  Oven fills in the checkout when it reports the project it works in. */
+  createProject: (input: { name: string }) =>
+    data<Project>('/v1/projects', { method: 'POST', body: input }),
+
   project: (id: string) => data<Project>(`/v1/projects/${id}`),
 
   threads: (input: ThreadQuery = {}, signal?: AbortSignal) =>

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { SvelteSet } from 'svelte/reactivity'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import NewProjectSheet from '#lib/components/NewProjectSheet.svelte'
   import PanelBar from '#lib/components/PanelBar.svelte'
   import Mark from '#lib/components/Mark.svelte'
   import ThreadRow from '#lib/components/ThreadRow.svelte'
@@ -28,6 +30,13 @@
 
   /** Which strips are open. Every project starts folded, as the desktop draws it. */
   let open = $state(new SvelteSet<string>())
+
+  /** The project sheet is one control on this screen: name it, then it exists. */
+  let projectSheetOpen = $state(false)
+
+  function startProject(): void {
+    projectSheetOpen = true
+  }
 
   let grouped = $derived.by(() => {
     const groups = new Map<string, Thread[]>()
@@ -80,6 +89,12 @@
     <p class="empty">{data.error}</p>
   {:else if data.projects.length === 0}
     <p class="empty">No projects yet.</p>
+    <div class="list-foot">
+      <button class="btn quiet with-icon" type="button" onclick={startProject}>
+        <CioPlus size={14} />
+        Start a project
+      </button>
+    </div>
   {:else}
     {#each data.projects as project (project.id)}
       <section class="strip" data-open={open.has(project.id)}>
@@ -122,5 +137,14 @@
         {/if}
       </section>
     {/each}
+
+    <div class="list-foot">
+      <button class="btn quiet with-icon" type="button" onclick={startProject}>
+        <CioPlus size={14} />
+        New project
+      </button>
+    </div>
   {/if}
 </div>
+
+<NewProjectSheet open={projectSheetOpen} onclose={() => (projectSheetOpen = false)} />

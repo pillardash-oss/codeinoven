@@ -194,7 +194,10 @@ export async function pruneUnusedBlobs(
     })
     // Collect referenced hashes in SQL   a full scan used to ship every
     // checkpoint JSON blob across the worker port, which crashed the process
-    // on large projects.
+    // on large projects. The change list is unioned in as well: a change
+    // rescued from this turn's write evidence can reference content the
+    // snapshot maps never listed, and deleting that blob would leave the
+    // change with no diff and no rollback source.
     let rows: Record<string, unknown>[]
     try {
       rows = await host.queryRows(
@@ -204,9 +207,14 @@ export async function pruneUnusedBlobs(
            UNION
            SELECT json_extract(je.value, '$.hash') AS hash
            FROM turn_checkpoints tc, json_each(tc.data, '$.after.files') je
-           WHERE tc.project_id = ?`,
-        [projectId, projectId],
-        100_000
+           WHERE tc.project_id = ?
+           UNION
+           SELECT json_extract(side.value, '$.hash') AS hash
+           FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je,
+                json_each(je.value) side
+           WHERE tc.project_id = ? AND json_extract(side.value, '$.hash') IS NOT NULL`,
+        [projectId, projectId, projectId],
+        200_000
       )
     } catch {
       // A malformed checkpoint row fails the whole extraction; preserving

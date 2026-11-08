@@ -2,6 +2,7 @@ import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { loadBrowser } from '$lib/stores/browser-access.svelte'
 import { browserAddressFocus } from '$lib/stores/browser-address-focus'
 import { invoke } from '$lib/ipc.svelte'
+import { copyText } from '$lib/copy-text'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
 import type { BrowserDownload } from '$shared/ipc-contract'
@@ -134,6 +135,11 @@ export class WorkspaceBrowserController {
       if (!choice || !contextSidebarState.tabs.some((candidate) => candidate.id === tabId)) return
       if (choice.action === 'close') {
         close(tabId)
+        return
+      }
+      if (choice.action === 'copyTabId') {
+        // The id an agent is pointed at, copied from the tab it names.
+        void copyText(tabId, 'Tab ID copied')
         return
       }
       if (choice.action === 'toggleBookmark') {

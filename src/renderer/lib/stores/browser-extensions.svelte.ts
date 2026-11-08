@@ -4,19 +4,35 @@ import type {
   BrowserExtension,
   BrowserExtensionActivity,
   BrowserExtensionActivityUpdate,
+  BrowserExtensionCompanionSilent,
   BrowserExtensionInjection,
   BrowserExtensionInstallInput,
   BrowserExtensionProgress
 } from '$shared/ipc-contract'
-import { reportError } from './app-errors.svelte'
+import { reportError, showToastWarning } from './app-errors.svelte'
 
 /** How one extension's action state is keyed in the two activity maps. */
 const ACTIVITY_SEPARATOR = '\u0000'
+
 function activityKey(boxId: string, extensionId: string): string {
   return `${boxId}${ACTIVITY_SEPARATOR}${extensionId}`
 }
 function activityTabKey(boxId: string, extensionId: string, tabId: string): string {
   return `${boxId}${ACTIVITY_SEPARATOR}${extensionId}${ACTIVITY_SEPARATOR}${tabId}`
+}
+
+/**
+ * The program behind one native messaging host name, in the words a user reads.
+ *
+ * A host name is reverse-DNS (`com.8bit.bitwarden`), which is the identity the
+ * extension asked for and nothing a person would look for in their dock, so the
+ * last segment is the product and is what the notice names. A name with no dots is
+ * already a program name and comes back unchanged.
+ */
+export function companionProgramLabel(application: string): string {
+  const segments = application.split('.').filter((segment) => segment.length > 0)
+  const last = segments[segments.length - 1] ?? application
+  return last.charAt(0).toUpperCase() + last.slice(1)
 }
 
 /**
@@ -281,7 +297,33 @@ class BrowserExtensionsState {
     subscribe('browser:extensionActivity', (update) => {
       this.applyActivity(update)
     })
+    // An extension wrote to the program it talks to natively and never got an
+    // answer. Nothing in the app can answer for that program, and the extension's
+    // own surface stays on a spinner until it does, so the user is told which one
+    // to restart instead of being left with a window that will never finish.
+    subscribe('browser:extensionCompanionSilent', (report) => {
+      this.noticeSilentCompanion(report)
+    })
     void this.refresh()
+  }
+
+  /**
+   * Tell the user that one extension's companion program stopped answering.
+   *
+   * A warning rather than an error: the app broke nothing, and the fix is a
+   * program outside it. Dev level logging carries the routing fields for whoever
+   * reads the log later, so the notice itself stays about the one action that
+   * helps.
+   */
+  private noticeSilentCompanion(report: BrowserExtensionCompanionSilent): void {
+    const program = companionProgramLabel(report.application)
+    showToastWarning(
+      `${report.extensionName} is waiting on ${program}, which stopped responding.`,
+      {
+        description: 'Close and reopen that app, then try again.',
+        duration: 12_000
+      }
+    )
   }
 
   /** Read the installed list from main. */

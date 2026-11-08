@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -9,6 +9,7 @@ import {
 } from '../../src/main/storage/checkpoint-manager'
 import type { Database } from '../../src/main/database/database'
 import type { FileChangeSource } from '../../src/lib/types'
+import { getConfigRoot } from '../../src/lib/utils'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 
 const temporaryPaths: string[] = []
@@ -188,6 +189,61 @@ describe('CheckpointManager', () => {
     expect(diff).toMatchObject({ kind: 'created', binary: false, truncated: true })
     expect(diff.after).toBe('a'.repeat(64 * 1024))
     expect(diff.before).toBeUndefined()
+  })
+
+  it('keeps the content of a rescued change out of blob pruning', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'tracked.txt'), 'before', 'utf-8')
+    const turn = await manager.beginTurn('project1', 'thread1', projectRoot, 'Scratch note', false)
+    await writeFile(join(projectRoot, 'tracked.txt'), 'after', 'utf-8')
+    // A file in the checkpoint-excluded scratch directory: the project-wide
+    // snapshot never lists it, so only the turn's own write evidence rescues it.
+    const scratchPath = '.cio/work/feature/progress.md'
+    await mkdir(join(projectRoot, '.cio/work/feature'), { recursive: true })
+    await writeFile(join(projectRoot, scratchPath), '# Progress', 'utf-8')
+
+    const completed = await manager.completeTurn(
+      'project1',
+      'thread1',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      { changeSources: new Map([[scratchPath, [claimedSource(scratchPath)]]]) }
+    )
+    expect(completed.changes.map((change) => change.path)).toContain(scratchPath)
+
+    await manager.pruneUnusedBlobs('project1')
+
+    // The rescued change is still served after its snapshot was compacted and
+    // every blob nobody references was collected.
+    await expect(
+      manager.getFileDiff('project1', 'thread1', turn.id, scratchPath)
+    ).resolves.toMatchObject({ kind: 'created', after: '# Progress' })
+  })
+
+  it('reports a diff whose content blob is gone instead of failing the read', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'existing.txt'), 'before', 'utf-8')
+    const turn = await manager.beginTurn('project1', 'thread1', projectRoot, 'Content gone', false)
+    await writeFile(join(projectRoot, 'existing.txt'), 'after-missing-blob', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'thread1',
+      turn.id,
+      projectRoot,
+      'completed'
+    )
+    const afterHash = completed.changes[0]?.after?.hash
+    if (!afterHash) throw new Error('Expected the completed change to record an after hash')
+    await rm(join(getConfigRoot(), 'projects', 'project1', 'blobs', afterHash), { force: true })
+
+    await expect(
+      manager.getFileDiff('project1', 'thread1', turn.id, 'existing.txt')
+    ).resolves.toMatchObject({ kind: 'modified', binary: false, contentUnavailable: true })
   })
 
   it('marks an active turn as interrupted for restart recovery', async () => {

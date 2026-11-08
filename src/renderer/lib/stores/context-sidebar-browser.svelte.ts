@@ -90,6 +90,15 @@ export class SidebarBrowserTabs {
    * a browser's own reopen history is cleared.
    */
   private closedTabs: ClosedSidebarBrowserTab[] = $state([])
+  /**
+   * Tabs whose page main reported as loading, by tab id.
+   *
+   * The strip's leading slot is the tab's only status surface, so a page that is
+   * still coming up has to say so there: without this a tab looks loaded from the
+   * moment its address is known. Main clears it on the state report that ends the
+   * load, and a tab that never reports is simply never loading.
+   */
+  private loading = new SvelteMap<string, boolean>()
 
   /**
    * Whether {@link start} has restored the stored tabs and wired the runtime.
@@ -500,6 +509,10 @@ export class SidebarBrowserTabs {
   applyPageState(state: BrowserPageState): void {
     const tab = this.tabs.find((candidate) => candidate.id === state.tabId)
     if (tab) {
+      // Only a tab this store owns has a strip slot to draw the state in, so a
+      // global profile tab's load is left to the global store's own strip.
+      if (state.loading) this.loading.set(state.tabId, true)
+      else this.loading.delete(state.tabId)
       browserAudio.reportCapture(state.tabId, tab.threadId, tab.projectId, state.capturing, state)
       // A document with no committed URL yet (a fresh tab, an about:blank
       // popup) reports an empty URL and must not erase the address on screen.
@@ -557,6 +570,11 @@ export class SidebarBrowserTabs {
    *  main has reported nothing for it. */
   runtimeFor(tabId: string): BrowserTabRuntime {
     return this.runtime.get(tabId) ?? IDLE_BROWSER_TAB_RUNTIME
+  }
+
+  /** Whether main last reported this tab's page as still loading. */
+  loadingFor(tabId: string): boolean {
+    return this.loading.get(tabId) ?? false
   }
 
   /**

@@ -12,6 +12,7 @@ import { getConfigRoot } from '../../../lib/utils'
 import { extensionJarIdFor } from '../../../lib/browser/browser-extension-jar'
 import type {
   BrowserExtensionActivityUpdate,
+  BrowserExtensionCompanionSilent,
   BrowserExtensionMenuRecord,
   BrowserExtensionProgress
 } from '../../../lib/ipc/browser'
@@ -134,6 +135,18 @@ export class BrowserServiceExtensionRuntime {
   publishExtensionActivity(update: BrowserExtensionActivityUpdate): void {
     if (!liveWindowContents(this.host.window)) return
     sendToRenderer(liveWindowContents(this.host.window), 'browser:extensionActivity', update)
+  }
+
+  /**
+   * One extension stopped hearing from the program it talks to natively.
+   *
+   * Main learns this from the port it owns, so it is the only side that can say
+   * why the extension's own popup sits on a spinner: the app cannot answer on the
+   * other program's behalf, and the user can restart it.
+   */
+  publishExtensionCompanionSilent(report: BrowserExtensionCompanionSilent): void {
+    if (!liveWindowContents(this.host.window)) return
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:extensionCompanionSilent', report)
   }
 
   // ─── Extensions beside a page ──────────────────────────────────────────────

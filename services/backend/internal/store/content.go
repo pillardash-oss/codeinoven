@@ -256,17 +256,47 @@ func (s *Store) ListProjects(
 	return out, more, nil
 }
 
-// ProjectByID returns one project with its rollup.
-func (s *Store) ProjectByID(ctx context.Context, schemaName, projectID string) (Project, error) {
-	query := `SELECT ` + projectColumns + `,
+// projectByIDQuery reads one project with its rollup inside a caller's
+// transaction, so a create and the row it returns share one statement of read.
+const projectByIDQuery = `SELECT ` + projectColumns + `,
 		(EXTRACT(EPOCH FROM COALESCE(r.last_activity, p.updated_at)) * 1000)::bigint AS activity_ms,
 		(EXTRACT(EPOCH FROM p.created_at) * 1000)::bigint AS created_ms
 		FROM projects p` + projectRollup + ` WHERE p.id = $1`
 
+func projectByID(ctx context.Context, tx pgx.Tx, projectID string) (Project, error) {
+	return scanProject(tx.QueryRow(ctx, projectByIDQuery, projectID))
+}
+
+// ProjectByID returns one project with its rollup.
+func (s *Store) ProjectByID(ctx context.Context, schemaName, projectID string) (Project, error) {
 	var project Project
 	err := s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
 		var err error
-		project, err = scanProject(tx.QueryRow(ctx, query, projectID))
+		project, err = projectByID(ctx, tx, projectID)
+		return err
+	})
+	if err != nil {
+		return Project{}, err
+	}
+	return project, nil
+}
+
+// CreateProject inserts one project that holds no threads yet and returns it as
+// the list would read it. A path is optional: a project created on the phone has
+// no checkout of its own, and the desktop fills it in when the Oven reports one.
+func (s *Store) CreateProject(
+	ctx context.Context, schemaName, projectID, name, path string,
+) (Project, error) {
+	var project Project
+	err := s.withSchema(ctx, schemaName, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO projects (id, name, path) VALUES ($1, $2, $3)`,
+			projectID, name, path,
+		); err != nil {
+			return err
+		}
+		var err error
+		project, err = projectByID(ctx, tx, projectID)
 		return err
 	})
 	if err != nil {

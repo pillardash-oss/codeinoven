@@ -1059,6 +1059,25 @@ export interface BrowserExtensionActivityUpdate {
 }
 
 /**
+ * One extension message its companion application never answered.
+ *
+ * An extension's native messaging host speaks request/response, so a message the
+ * extension wrote and nothing came back to is the shape of a companion that has
+ * stopped working: a password manager's desktop app frozen behind its own window
+ * looks, from inside the extension, exactly like a vault that will not unlock. The
+ * app cannot answer for that program, so it reports it and the user closes and
+ * reopens it.
+ */
+export interface BrowserExtensionCompanionSilent {
+  extensionId: string
+  /** The extension's name, so the notice names what stopped rather than an id. */
+  extensionName: string
+  /** The native messaging host name the extension asked for, e.g.
+   *  `com.8bit.bitwarden`, which is the program the user has to restart. */
+  application: string
+}
+
+/**
  * One menu item as an extension recorded it through `contextMenus.create`.
  *
  * The tree is forwarded to the native context menu of the page the extension

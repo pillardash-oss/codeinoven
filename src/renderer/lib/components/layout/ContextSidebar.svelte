@@ -33,6 +33,7 @@
   import CioPanelBottom from '@pdslng/cio-icon/CioPanelBottom.svelte'
   import CioPanelRight from '@pdslng/cio-icon/CioPanelRight.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
   import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
@@ -43,6 +44,8 @@
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import { browserAgentClaims } from '$lib/stores/browser-agent-claims.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -240,6 +243,33 @@
       return { projectId: tab.projectId, conversationId: tab.threadId }
     }
     return null
+  }
+
+  /**
+   * The conversation whose agent is working on one browser tab, when one is.
+   *
+   * A browser tab is an agent's work when main says so (`browser:agentTabClaims`),
+   * which covers both the tab an agent opened for itself and the page a
+   * conversation was assigned. The tab's own owner is the fallback for a page an
+   * agent opened before the claim arrived, so a strip never shows an agent tab as
+   * if the user had opened it. The name and mark are the thread's own, resolved
+   * from the thread list rather than from the tab, so the strip says which
+   * conversation holds the page instead of repeating the project.
+   */
+  function agentThreadFor(
+    tab: ContextSidebarTab
+  ): { title: string; iconUrl: string | null } | null {
+    if (tab.kind !== 'browser') return null
+    const claim = browserAgentClaims.claimFor(tab.id)
+    const threadId = claim?.threadId ?? (tab.id.startsWith('browser:agent:') ? tab.threadId : null)
+    if (!threadId) return null
+    const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
+    if (!thread) return null
+    const projectId = claim?.projectId ?? thread.projectId
+    return {
+      title: thread.title,
+      iconUrl: scopeState.projects.find((candidate) => candidate.id === projectId)?.iconUrl ?? null
+    }
   }
 
   /** Closing a popup rail tab destroys that popup page. */
@@ -569,6 +599,9 @@
     {@const runtime = contextSidebarState.browserRuntime(tab.id)}
     {@const indicators = browserTabIndicators(runtime, browserStore()?.hasPeek(tab.id))}
     {@const conversation = badgeConversation(tab)}
+    {@const agentThread = agentThreadFor(tab)}
+    {@const loading = tab.kind === 'browser' && contextSidebarState.browserTabLoading(tab.id)}
+    {@const closeTakesIcon = tab.kind === 'browser' && indicators.length === 0}
     <div
       class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
       tab.id
@@ -604,7 +637,9 @@
       ></div>
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
+        class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left {closeTakesIcon
+          ? 'pr-1.5'
+          : ''}"
         aria-current={activeTabId === tab.id ? 'page' : undefined}
         data-active-tab={activeTabId === tab.id ? 'true' : undefined}
         title={titleFor(tab)}
@@ -619,7 +654,23 @@
             aria-hidden="true"
           ></span>
         {:else}
-          {@render tabIcon(tab)}
+          <!-- The leading slot is a browser tab's one status surface: the page's
+               mark, a spinner while the page is still coming up, and the close
+               control while the pointer is on the row. The chip therefore spends
+               no width on a second button and the title keeps the rest. -->
+          <span class="flex w-3 shrink-0 items-center justify-center">
+            {#if loading}
+              <CioSpinner size={11} class="animate-spin text-dimmed" />
+            {:else}
+              <span
+                class="flex items-center justify-center transition-opacity duration-100 {closeTakesIcon
+                  ? 'group-hover:opacity-0'
+                  : ''}"
+              >
+                {@render tabIcon(tab)}
+              </span>
+            {/if}
+          </span>
         {/if}
         {#if renamingTabId === tab.id}
           <input
@@ -644,11 +695,34 @@
             ondragstart={(event) => event.preventDefault()}
           />
         {:else}
-          <span
-            class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
-              ? 'italic'
-              : ''}">{tab.title}</span
-          >
+          <span class="flex min-w-0 flex-col">
+            <span
+              class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
+                ? 'italic'
+                : ''}">{tab.title}</span
+            >
+            {#if agentThread}
+              <!-- Which conversation's agent is on this tab. It sits under the
+                   page title because the page is the tab and the agent is who is
+                   using it, and it is what makes a strip shared by a project's
+                   threads readable: the tab says whose work it is without opening
+                   it. -->
+              <span
+                class="flex min-w-0 items-center gap-1"
+                title={`Agent working here in ${agentThread.title}`}
+              >
+                {#if agentThread.iconUrl}
+                  <img
+                    src={agentThread.iconUrl}
+                    alt=""
+                    class="h-2.5 w-2.5 shrink-0 object-contain"
+                    aria-hidden="true"
+                  />
+                {/if}
+                <span class="truncate text-[0.625rem] text-dimmed">{agentThread.title}</span>
+              </span>
+            {/if}
+          </span>
           {#if tab.kind === 'popup-window' && tab.boxName}
             <span class="shrink-0 border-l border-border pl-1.5 text-[0.625rem] text-dimmed">
               {tab.boxName}
@@ -675,15 +749,31 @@
           ></span>
         {/if}
       </button>
-      <button
-        type="button"
-        class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-        aria-label={closeLabel(tab)}
-        title={closeLabel(tab)}
-        onclick={() => onClose(tab.id)}
-      >
-        <CioClose size={11} />
-      </button>
+      {#if closeTakesIcon}
+        <!-- Drawn over the tab's own mark, so closing a browser tab costs the
+             strip nothing: the control appears where the eye already is and goes
+             away with the pointer. A sibling of the select button, because a
+             button cannot nest a button. -->
+        <button
+          type="button"
+          class="absolute left-2.5 top-1/2 z-20 flex h-4 w-4 -translate-y-1/2 items-center justify-center text-dimmed opacity-0 transition-opacity duration-100 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+          aria-label={closeLabel(tab)}
+          title={closeLabel(tab)}
+          onclick={() => onClose(tab.id)}
+        >
+          <CioClose size={11} />
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+          aria-label={closeLabel(tab)}
+          title={closeLabel(tab)}
+          onclick={() => onClose(tab.id)}
+        >
+          <CioClose size={11} />
+        </button>
+      {/if}
       {#if indicators.length > 0}
         <!-- Painted over the tab's own icon slot. A sibling of the
              select button, because a button cannot nest a button. -->

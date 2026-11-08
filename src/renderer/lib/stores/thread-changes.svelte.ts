@@ -173,7 +173,7 @@ class ThreadChangesState {
             partial = true
             return
           }
-          if (diff.truncated) partial = true
+          if (diff.truncated || diff.contentUnavailable) partial = true
           if (!stillCurrent()) return
           const details = await diffDetailsAsync(
             { before: diff.before, after: diff.after },

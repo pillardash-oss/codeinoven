@@ -9,7 +9,10 @@ import type {
   InstanceRole,
   ProjectTextFile
 } from '../types'
-import type { NativeFloatingPanelBounds } from '../native-floating-panel'
+import type {
+  NativeFloatingPanelBounds,
+  NativeFloatingPanelOptions
+} from '../native-floating-panel'
 import type { RendererLogEntry } from './logging'
 import type { CustomIconImage } from '../custom-icon'
 import type { Contract } from './contract-helpers'
@@ -169,7 +172,7 @@ export const invokeAppContract = {
   /** Resolve website favicons for a list of hostnames. Returns a data URL per host, or null when none exists. */
   'web:favicon': {} as Contract<[hostnames: string[]], Record<string, string | null>>,
   'app:prepareFloatingPanel': {} as Contract<
-    [id: string, bounds: NativeFloatingPanelBounds],
+    [id: string, bounds: NativeFloatingPanelBounds, options: NativeFloatingPanelOptions],
     string
   >,
   'app:updateFloatingPanel': {} as Contract<
