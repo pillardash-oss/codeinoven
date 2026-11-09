@@ -39,7 +39,10 @@
       indicatorCount: browserTabIndicators(
         contextSidebarState.browserRuntime(tab.id),
         browserStore()?.hasPeek(tab.id)
-      ).length
+      ).length,
+      // The strip draws the load in the same slot as the page's mark, so a page
+      // that is still coming up never looks finished.
+      loading: contextSidebarState.browserTabLoading(tab.id)
     }))
   )
 
