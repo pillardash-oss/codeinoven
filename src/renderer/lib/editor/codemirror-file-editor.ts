@@ -223,6 +223,8 @@ export async function createFileEditor(
   let loadingCompletionKey: string | null = null
   /** The one-shot answer consumed by the retriggered completion source. */
   let readyCompletion: { key: string; items: IdeCompletionItem[] } | null = null
+  /** The popup drawn immediately by Ctrl+Space, before the server answers. */
+  let completionLoading: HTMLDivElement | null = null
   /** Last depth pair handed to `onHistoryChange`, so the toolbar is only told
    *  when something actually changed. `null` forces the creation report. */
   let reportedHistory: FileEditorHistoryState | null = null
@@ -446,6 +448,8 @@ export async function createFileEditor(
       maxRenderedOptions: 60
     }),
     api.EditorView.updateListener.of((update) => {
+      // A moved caret or an edited document invalidates the anchored wait.
+      if (update.docChanged || update.selectionSet) hideCompletionLoading()
       reportHistory(update.state)
       const conflictRangesChanged = update.transactions.some(
         (transaction) =>
@@ -565,6 +569,7 @@ export async function createFileEditor(
     if (readyCompletion?.key === key) {
       const { items } = readyCompletion
       readyCompletion = null
+      hideCompletionLoading()
       if (!items.length) return null
       return {
         from: word?.from ?? context.pos,
@@ -583,13 +588,14 @@ export async function createFileEditor(
     if (context.explicit) {
       if (loadingCompletionKey !== key) {
         loadingCompletionKey = key
+        showCompletionLoading()
         void options
           .getIdeCompletions(query)
           .then((items) => {
             loadingCompletionKey = null
             if (destroyed) return
             readyCompletion = { key, items }
-            // One painted frame of the loading row before the answer replaces
+            // One painted frame of the loading popup before the answer replaces
             // it: a source that resolves inside the same frame otherwise shows
             // no feedback at all, which is exactly the cold-start case.
             requestAnimationFrame(() => {
@@ -598,6 +604,7 @@ export async function createFileEditor(
           })
           .catch(() => {
             loadingCompletionKey = null
+            hideCompletionLoading()
             if (destroyed) return
             readyCompletion = { key, items: [] }
             requestAnimationFrame(() => {
@@ -605,25 +612,67 @@ export async function createFileEditor(
             })
           })
       }
-      return {
-        from: word?.from ?? context.pos,
-        filter: false,
-        options: [
-          {
-            label: 'Searching for suggestions…',
-            detail: 'Language server',
-            apply: () => undefined
-          }
-        ]
-      }
+      // The popup is already on screen, drawn synchronously by the keydown.
+      // Returning null keeps CodeMirror from opening its own empty list and
+      // flashing until the real answer exists.
+      return null
     }
     const items = await options.getIdeCompletions(query)
+    hideCompletionLoading()
     if (!items.length) return null
     return {
       from: word?.from ?? context.pos,
       options: completionChoices(items),
       validFor: /^[\w$]*$/u
     }
+  }
+  /**
+   * Draw the waiting state now, not after CodeMirror's query pipeline.
+   *
+   * CodeMirror schedules an explicit source after a short delay and only draws
+   * a tooltip once that source settles, so a cold language server used to leave
+   * Ctrl+Space looking broken for seconds. This popup is appended in the same
+   * keydown that asked for suggestions; the real dropdown replaces it when the
+   * answer exists.
+   */
+  function showCompletionLoading(): void {
+    hideCompletionLoading()
+    const doc = view.dom.ownerDocument
+    const win = doc.defaultView
+    const coords = view.coordsAtPos(view.state.selection.main.head)
+    if (!win || !coords) return
+    const popup = doc.createElement('div')
+    popup.className = 'cio-completion-loading'
+    popup.setAttribute('role', 'status')
+    popup.setAttribute('aria-live', 'polite')
+    popup.textContent = 'Searching for suggestions…'
+    popup.style.cssText = [
+      'position: fixed',
+      'z-index: 90',
+      'padding: 0.3rem 0.55rem',
+      'border: 1px solid var(--color-border)',
+      'background: var(--color-surface)',
+      'color: var(--color-muted)',
+      'font-family: var(--font-mono)',
+      'font-size: 0.75rem',
+      'line-height: 1.5',
+      'min-width: 220px',
+      'box-shadow: 0 12px 32px rgb(0 0 0 / 0.28)',
+      'pointer-events: none',
+      'white-space: nowrap',
+      `max-width: ${Math.max(220, Math.floor(host.clientWidth - 16))}px`
+    ].join(';')
+    doc.body.appendChild(popup)
+    const width = popup.getBoundingClientRect().width
+    const left = Math.max(8, Math.min(coords.left, win.innerWidth - width - 8))
+    const top = Math.max(8, Math.min(coords.bottom + 4, win.innerHeight - 32))
+    popup.style.left = `${left}px`
+    popup.style.top = `${top}px`
+    completionLoading = popup
+  }
+  function hideCompletionLoading(): void {
+    completionLoading?.remove()
+    completionLoading = null
   }
   function completionChoices(items: IdeCompletionItem[]): Completion[] {
     return items.map((item) => ({
@@ -668,7 +717,14 @@ export async function createFileEditor(
         // presses it expects.
         if (keymapState.matches('ide-complete', event)) {
           event.preventDefault()
-          return api.startCompletion(view)
+          showCompletionLoading()
+          const started = api.startCompletion(view)
+          if (!started) hideCompletionLoading()
+          return started
+        }
+        if (keymapState.matches('ide-info-close', event)) {
+          hideCompletionLoading()
+          return false
         }
         const commands = ['definition', 'references', 'documentation', 'grep', 'files'] as const
         const command = commands.find((action) => keymapState.matches(`ide-${action}`, event))
@@ -971,6 +1027,7 @@ export async function createFileEditor(
       clearTimeout(hoverTimer)
       unregisterIde()
       destroyed = true
+      hideCompletionLoading()
       completionWidth.disconnect()
       clearFlashTimer()
       view.destroy()
