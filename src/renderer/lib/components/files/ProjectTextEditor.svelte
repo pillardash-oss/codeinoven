@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { AppPanelPortal } from '$lib/app-panel-portal'
-  import IdeEditorTools from './IdeEditorTools.svelte'
+  import type IdeEditorTools from './IdeEditorTools.svelte'
   import { onMount } from 'svelte'
 
   import {
@@ -208,20 +208,22 @@
 ></div>
 
 {#if projectId && ideEnabled}
-  <IdeEditorTools
-    bind:this={ideTools}
-    {projectId}
-    {scopeBucketId}
-    {threadId}
-    {path}
-    {value}
-    enabled={ideEnabled}
-    {projectName}
-    statusPortal={ideStatusPortal}
-    onReplaceDocument={(text) => {
-      const current = controller
-      if (!current) return
-      current.replaceRange(0, current.getValue().length, text, 'ide.codeAction')
-    }}
-  />
+  {#await import('./IdeEditorTools.svelte') then { default: IdeEditorTools }}
+    <IdeEditorTools
+      bind:this={ideTools}
+      {projectId}
+      {scopeBucketId}
+      {threadId}
+      {path}
+      {value}
+      enabled={ideEnabled}
+      {projectName}
+      statusPortal={ideStatusPortal}
+      onReplaceDocument={(text) => {
+        const current = controller
+        if (!current) return
+        current.replaceRange(0, current.getValue().length, text, 'ide.codeAction')
+      }}
+    />
+  {/await}
 {/if}

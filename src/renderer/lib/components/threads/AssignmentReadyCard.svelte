@@ -4,7 +4,7 @@
   import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
   import CioSave from '@pdslng/cio-icon/CioSave.svelte'
   import { slide } from 'svelte/transition'
-  import AssignmentReviewContent from '../specs/AssignmentReviewContent.svelte'
+
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
   import CardFrame from '../shared/CardFrame.svelte'
@@ -117,28 +117,30 @@
           id={`assignment-review-${assignment.id}`}
           class="max-h-[32rem] overflow-y-auto px-3 py-2.5"
         >
-          <AssignmentReviewContent
-            content={draft}
-            {providers}
-            {projectId}
-            {harnessId}
-            {fallbackModel}
-            {seniorModel}
-            {favoriteModels}
-            {recentModels}
-            {onRemoveRecent}
-            compact
-            onChange={(content) => (draft = content)}
-            {onWorkerModelChange}
-            {onSeniorModelChange}
-            {onTaskScopeChange}
-            {onWorkerScopeChange}
-            {assignmentScopeBucketId}
-            {onToggleFavorite}
-            {onReorderFavorite}
-            {onOpenTaskThread}
-            {resolveTaskThread}
-          />
+          {#await import('../specs/AssignmentReviewContent.svelte') then { default: AssignmentReviewContent }}
+            <AssignmentReviewContent
+              content={draft}
+              {providers}
+              {projectId}
+              {harnessId}
+              {fallbackModel}
+              {seniorModel}
+              {favoriteModels}
+              {recentModels}
+              {onRemoveRecent}
+              compact
+              onChange={(content) => (draft = content)}
+              {onWorkerModelChange}
+              {onSeniorModelChange}
+              {onTaskScopeChange}
+              {onWorkerScopeChange}
+              {assignmentScopeBucketId}
+              {onToggleFavorite}
+              {onReorderFavorite}
+              {onOpenTaskThread}
+              {resolveTaskThread}
+            />
+          {/await}
 
           {#if error}
             <CardNotice tone="danger" class="mt-2">{error}</CardNotice>
