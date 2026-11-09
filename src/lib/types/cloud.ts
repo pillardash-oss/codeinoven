@@ -54,6 +54,21 @@ export interface CloudDeploymentDeployment {
   log?: string
 }
 
+/**
+ * One log stream inside a container mapping.
+ *
+ * A docker-compose deployment is a single provider resource that runs several
+ * containers, and each container has its own log. The provider reports those
+ * streams here so the panel can read them one at a time; a single-container
+ * deployment reports none and keeps its deployment log alone.
+ */
+export interface CloudDeploymentLogSource {
+  /** Provider-side stream identity, passed back to select it (a compose service name). */
+  id: string
+  /** Human-readable stream label (the compose service name). */
+  label: string
+}
+
 /** One provider-agnostic cloud deployment container/application mapping. */
 export interface CloudDeploymentContainer {
   /** Stable container identity the provider adapter can query by. */
@@ -92,6 +107,11 @@ export interface CloudDeploymentContainer {
   updatedAt?: number
   /** Capped raw log text for the latest deployment, when available. */
   log?: string
+  /**
+   * Per-container log streams for a multi-container (docker-compose) resource,
+   * when the provider reports more than one. Absent for a single container.
+   */
+  logSources?: CloudDeploymentLogSource[]
 }
 
 /**

@@ -326,8 +326,9 @@ export class CloudDeployState {
   }
 
   /**
-   * Load a container's (optionally deployment-specific) build log, serving cache
-   * first. Logs hold a longer TTL than the other caches.
+   * Load a container's log, serving cache first: one deployment's build log, or
+   *   when `serviceName` names one of the container's log sources   that compose
+   * container's runtime output. Logs hold a longer TTL than the other caches.
    */
   async ensureContainerLog(
     projectId: string,
@@ -335,11 +336,19 @@ export class CloudDeployState {
     containerId: string,
     deploymentId?: string,
     force = false,
-    accountId?: string
+    accountId?: string,
+    serviceName?: string
   ): Promise<{ containerId: string; deploymentId: string | null; log: string } | null> {
     if (this.handleNotImplemented(providerKind)) return null
     const key = CloudDeployState.containerKey(projectId, providerKind, containerId, accountId)
-    const logKey = deploymentId ? `${key}/${deploymentId}` : key
+    // The three log reads of one container never share a cache entry: the
+    // container's latest log, one deployment's log, and one compose service's
+    // runtime log are different payloads.
+    const logKey = serviceName
+      ? `${key}/service/${serviceName}`
+      : deploymentId
+        ? `${key}/${deploymentId}`
+        : key
     const cached = this.containerLogs[logKey]
     if (cached && !force) {
       if (Date.now() - cached.fetchedAt < LOG_CACHE_TTL_MS) return cached.value
@@ -351,7 +360,8 @@ export class CloudDeployState {
             containerId,
             logKey,
             deploymentId,
-            accountId
+            accountId,
+            serviceName
           )
         )
       }
@@ -359,7 +369,15 @@ export class CloudDeployState {
     }
     if (!force && this.coolingDown(logKey)) return cached?.value ?? null
     return this.dedupe(logKey, () =>
-      this.loadContainerLog(projectId, providerKind, containerId, logKey, deploymentId, accountId)
+      this.loadContainerLog(
+        projectId,
+        providerKind,
+        containerId,
+        logKey,
+        deploymentId,
+        accountId,
+        serviceName
+      )
     )
   }
 
@@ -398,7 +416,8 @@ export class CloudDeployState {
     containerId: string,
     key: string,
     deploymentId?: string,
-    accountId?: string
+    accountId?: string,
+    serviceName?: string
   ): Promise<{ containerId: string; deploymentId: string | null; log: string } | null> {
     try {
       const result = await invoke(
@@ -407,7 +426,8 @@ export class CloudDeployState {
         providerKind,
         containerId,
         deploymentId,
-        accountId
+        accountId,
+        serviceName
       )
       this.containerLogs = {
         ...this.containerLogs,

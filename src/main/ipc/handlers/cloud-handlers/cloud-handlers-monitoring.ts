@@ -430,6 +430,11 @@ export function registerCloudDeploymentMonitoringHandlers(
     }
   )
 
+  /**
+   * Read a container's log: one deployment's build log, or   when `serviceName`
+   * names one of the container's log sources   that compose service's runtime
+   * output.
+   */
   ipcMain.handle(
     'cloudDeploy:containerLog',
     async (
@@ -438,7 +443,8 @@ export function registerCloudDeploymentMonitoringHandlers(
       providerKind: unknown,
       containerId: unknown,
       deploymentId?: unknown,
-      accountId?: unknown
+      accountId?: unknown,
+      serviceName?: unknown
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
@@ -447,11 +453,13 @@ export function registerCloudDeploymentMonitoringHandlers(
         deploymentId === undefined ? undefined : requireString(deploymentId, 'Deployment ID')
       const safeAccountId =
         accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
+      const safeServiceName =
+        serviceName === undefined ? undefined : requireString(serviceName, 'Service name')
       const provider = resolveDeploymentProvider(
         kind,
         await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
       )
-      const log = await provider.getLogs(safeContainerId, safeDeploymentId)
+      const log = await provider.getLogs(safeContainerId, safeDeploymentId, safeServiceName)
       return { containerId: safeContainerId, deploymentId: safeDeploymentId ?? null, log }
     }
   )

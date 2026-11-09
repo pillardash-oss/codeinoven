@@ -865,7 +865,10 @@ export const invokeGitContract = {
     ],
     import('../types').CloudDeploymentDeployment[]
   >,
-  /** Capped raw log text for a container's latest deployment. */
+  /**
+   * Capped raw log text for a container: one deployment's build log, or one
+   * compose service's runtime output when `serviceName` is given.
+   */
   'cloudDeploy:containerLog': {} as Contract<
     [
       projectId: string,
@@ -873,7 +876,9 @@ export const invokeGitContract = {
       containerId: string,
       deploymentId?: string,
       /** Resolve through the container's bound account when present. */
-      accountId?: string
+      accountId?: string,
+      /** One of the container's `logSources` ids (a compose service name). */
+      serviceName?: string
     ],
     { containerId: string; deploymentId: string | null; log: string }
   >,
