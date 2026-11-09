@@ -486,16 +486,14 @@ export async function createFileEditor(
     return line.from + Math.min(position.character, line.length)
   }
   /**
-   * Insert an accepted completion, together with its auto-import edit.
+   * Insert an accepted completion, then add the edits its resolution reveals.
    *
-   * The insertion itself is CodeMirror's own from/to for the word being typed,
-   * so what the reader sees replaced is exactly the token the dropdown matched.
-   * Additional edits are the language server's own positions: they are what adds
-   * `import CioCircle from '...'` above the line the component was typed on.
-   *
-   * Resolution is asynchronous because tsserver only reveals those edits when
-   * the item is resolved, so both are applied in one transaction afterwards and
-   * one undo removes the completion and its import together.
+   * The insertion is CodeMirror's own from/to for the word being typed, so what
+   * the reader sees replaced is exactly the token the dropdown matched. It is
+   * committed before the item is resolved: a server can take seconds to answer
+   * `completionItem/resolve`, and a click or Enter that does nothing until then
+   * reads as a broken list. The auto-import edits are applied in a second
+   * transaction when the resolve answers.
    */
   async function applyIdeCompletion(
     target: EditorView,
@@ -504,37 +502,15 @@ export async function createFileEditor(
     from: number,
     to: number
   ): Promise<void> {
-    let resolved = item
-    if (item.data !== undefined && options.resolveIdeCompletion) {
-      try {
-        resolved = (await options.resolveIdeCompletion(item)) ?? item
-      } catch {
-        resolved = item
-      }
-    }
     if (destroyed || target !== view) return
     const doc = view.state.doc
-    const primary = resolved.textEdit?.newText ?? resolved.insertText ?? resolved.label
-    const changes: { from: number; to: number; insert: string }[] = [{ from, to, insert: primary }]
-    let shift = 0
-    for (const edit of resolved.additionalTextEdits ?? []) {
-      const start = offsetAt(doc, edit.range.start)
-      const end = offsetAt(doc, edit.range.end)
-      if (start === null || end === null || end < start) continue
-      // Overlapping the insertion would mean the server's two edits disagree
-      // about the same characters, so the import is dropped rather than applied
-      // on top of the completion.
-      if (start <= to && end >= from) continue
-      changes.push({ from: start, to: end, insert: edit.newText })
-      if (start <= from) shift += edit.newText.length - (end - start)
-    }
-    const delta = changes.reduce(
-      (total, change) => total + change.insert.length - (change.to - change.from),
-      0
+    const primary = item.textEdit?.newText ?? item.insertText ?? item.label
+    const cursor = Math.max(
+      0,
+      Math.min(from + primary.length, doc.length + primary.length - (to - from))
     )
-    const cursor = Math.max(0, Math.min(from + shift + primary.length, doc.length + delta))
     view.dispatch({
-      changes,
+      changes: { from, to, insert: primary },
       selection: { anchor: cursor },
       scrollIntoView: true,
       // The picked annotation tells CodeMirror this completion was accepted, so
@@ -542,6 +518,30 @@ export async function createFileEditor(
       annotations: api.pickedCompletion.of(completion),
       userEvent: 'input.complete'
     })
+    if (item.data === undefined || !options.resolveIdeCompletion) return
+    let resolved: IdeCompletionItem
+    try {
+      resolved = (await options.resolveIdeCompletion(item)) ?? item
+    } catch {
+      return
+    }
+    if (destroyed || target !== view) return
+    const edits = resolved.additionalTextEdits ?? []
+    if (!edits.length) return
+    const current = view.state.doc
+    const changes: { from: number; to: number; insert: string }[] = []
+    for (const edit of edits) {
+      const start = offsetAt(current, edit.range.start)
+      const end = offsetAt(current, edit.range.end)
+      if (start === null || end === null || end < start) continue
+      // A resolved edit that overlaps the text the completion just inserted
+      // disagrees with what is already on screen, so it is dropped instead of
+      // rewriting the symbol the reader accepted.
+      if (start < cursor && end > cursor) continue
+      changes.push({ from: start, to: end, insert: edit.newText })
+    }
+    if (!changes.length) return
+    view.dispatch({ changes, userEvent: 'input.complete.import' })
   }
   /**
    * The language server's completions as CodeMirror's dropdown.
