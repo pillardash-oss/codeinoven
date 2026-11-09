@@ -1449,6 +1449,19 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       Logger.error('Internal-attribution repair failed (non-fatal):', error)
     }
 
+    // One-time repair of file-change cards that recorded nothing while the turn
+    // did write files: their contested diff was filtered away and the write
+    // evidence for those paths was mis-parsed. Bounded, idempotent, and batched;
+    // a no-op once every candidate is repaired.
+    try {
+      const repaired = await new CheckpointManager(database).repairEvidenceDroppedCheckpoints()
+      if (repaired > 0) {
+        Logger.info(`Restored files for ${repaired} empty file-change checkpoints`)
+      }
+    } catch (error) {
+      Logger.error('Evidence repair failed (non-fatal):', error)
+    }
+
     try {
       state.notificationService.start()
       setNotificationService(state.notificationService)

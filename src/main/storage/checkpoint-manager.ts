@@ -38,6 +38,7 @@ import {
 } from './checkpoint/checkpoint-errors'
 import {
   pruneUnusedBlobs,
+  repairEvidenceDroppedCheckpoints,
   repairMisattributedInternalCheckpoints,
   repairTruncatedLineStats,
   type CheckpointMaintenanceHost
@@ -1096,6 +1097,12 @@ export class CheckpointManager {
 
   async repairMisattributedInternalCheckpoints(): Promise<number> {
     return repairMisattributedInternalCheckpoints(this.maintenanceHost())
+  }
+
+  /** Restore the real files of turns whose contested diff was filtered away
+   *  while their write evidence was mis-parsed, so an empty card becomes true. */
+  async repairEvidenceDroppedCheckpoints(): Promise<number> {
+    return repairEvidenceDroppedCheckpoints(this.maintenanceHost())
   }
 
   /** Re-open a recently completed checkpoint so late tool claims   edits that
