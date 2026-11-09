@@ -1608,6 +1608,18 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       Logger.error('Internal-attribution repair failed (non-fatal):', error)
     }
 
+    // One-time cleanup of cards that only hold another turn's abandoned work:
+    // a turn with no write evidence of its own cannot own a project-wide diff
+    // while a sibling turn was in flight in the same window.
+    try {
+      const repaired = await new CheckpointManager(database).dropUnprovenOverlappingChanges()
+      if (repaired > 0) {
+        Logger.info(`Cleared ${repaired} file-change checkpoints of unproven work`)
+      }
+    } catch (error) {
+      Logger.error('Unproven-change repair failed (non-fatal):', error)
+    }
+
     // One-time cleanup of cards that listed the app's scratch folder or build
     // output as the turn's work. Bounded, idempotent, and batched; a no-op once
     // every candidate is repaired.

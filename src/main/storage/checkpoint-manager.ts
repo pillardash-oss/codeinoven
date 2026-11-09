@@ -39,6 +39,7 @@ import {
 } from './checkpoint/checkpoint-errors'
 import {
   dropExcludedPathChanges,
+  dropUnprovenOverlappingChanges,
   pruneUnusedBlobs,
   repairEvidenceDroppedCheckpoints,
   repairMisattributedInternalCheckpoints,
@@ -175,6 +176,13 @@ export interface ForeignPaths {
  *  moment after the checkpoint row, so a young row is never declared ownerless. */
 const ABANDONED_CHECKPOINT_MIN_AGE_MS = 10 * 60_000
 const ABANDONED_CHECKPOINT_SCAN_LIMIT = 200
+
+/**
+ * How long a turn that never completed is still treated as having been in
+ * flight. A row left behind by a dead process has no end time, so without a
+ * bound it would make every later turn in the project look contested forever.
+ */
+const ORPHANED_TURN_GRACE_MS = 10 * 60 * 1000
 const ABANDONED_CHECKPOINT_SETTLE_LIMIT = 50
 const ABANDONED_CHECKPOINT_MESSAGE =
   'No process was left to finish this turn, so its checkpoint was closed without a file diff.'
@@ -403,6 +411,23 @@ export class CheckpointManager {
       const allChanges = tracker.calculateChanges(checkpoint.before, after)
       const foreign =
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
+      // A turn another thread had in flight during this window makes the diff
+      // ambiguous whether or not its process is still alive. The live
+      // `active_turns` row is removed when a session dies without finishing,
+      // and the files it wrote stay in the working tree: a read-only turn then
+      // reported them as its own. The stored checkpoints keep the window, so
+      // they are the durable record of who else was working here.
+      const overlapping =
+        options.contestedDiff || allChanges.length === 0
+          ? undefined
+          : await this.overlappingForeignThreadIds(
+              projectId,
+              threadId,
+              checkpoint.before.createdAt,
+              after.createdAt,
+              options.ownThreadIds
+            )
+      const contestedDiff = options.contestedDiff === true || (overlapping?.length ?? 0) > 0
       const precisePaths = options.precisePaths ?? new Set<string>()
       const excludedPaths = options.excludedPaths
       // A path this turn recorded write evidence for. Window evidence counts: a
@@ -420,7 +445,7 @@ export class CheckpointManager {
         // A concurrent turn elsewhere in this project poisons the project-wide
         // diff: a path it wrote looks exactly like a path this turn wrote. Only
         // this turn's own evidence may claim a path in that state.
-        if (options.contestedDiff && !claimedByThisTurn(path)) return false
+        if (contestedDiff && !claimedByThisTurn(path)) return false
         if (foreign === undefined) return true
         const precise = precisePaths.has(path)
         if (foreign.claimed.has(path) && !precise) return false
@@ -513,7 +538,8 @@ export class CheckpointManager {
           windowed: windowedElsewhere,
           borrowed: borrowedElsewhere,
           userOwned,
-          contested: options.contestedDiff === true,
+          contested: contestedDiff,
+          overlapping: overlapping?.slice(0, 3),
           claimFiltered: changedPaths !== undefined,
           // A contested diff is claimable only through this turn's own write
           // evidence, so this count is the first thing to read when a real
@@ -745,6 +771,51 @@ export class CheckpointManager {
     return new Set(
       rows.map((row) => row['thread_id']).filter((id): id is string => typeof id === 'string')
     )
+  }
+
+  /**
+   * Other threads whose turn window overlapped this one, from the durable
+   * checkpoints rather than the live table.
+   *
+   * `active_turns` only knows about processes that are still alive: a session
+   * that died mid-turn leaves its files in the working tree and no live row,
+   * so the next turn in the project swept them up as its own work. Only the
+   * turns that never completed count here, and only while they are recent: a
+   * turn that finished inside the window already claims its paths through the
+   * foreign-checkpoint scan, and an abandoned row older than the window has
+   * left its work in this turn's baseline rather than its diff.
+   */
+  private async overlappingForeignThreadIds(
+    projectId: string,
+    threadId: string,
+    turnStart: number,
+    turnEnd: number,
+    ownThreadIds?: ReadonlySet<string>
+  ): Promise<string[]> {
+    const rows = await this.queryRows(
+      `SELECT json_extract(data, '$.threadId') AS thread_id
+         FROM turn_checkpoints
+        WHERE project_id = ? AND thread_id != ?
+          AND json_extract(data, '$.createdAt') <= ?
+          AND json_extract(data, '$.completedAt') IS NULL
+          AND json_extract(data, '$.createdAt') >= ?
+        LIMIT ?`,
+      [
+        projectId,
+        threadId,
+        turnEnd,
+        turnStart - ORPHANED_TURN_GRACE_MS,
+        ABANDONED_CHECKPOINT_SCAN_LIMIT
+      ],
+      ABANDONED_CHECKPOINT_SCAN_LIMIT
+    )
+    const ids = new Set<string>()
+    for (const row of rows) {
+      const id = row['thread_id']
+      if (typeof id !== 'string' || ownThreadIds?.has(id)) continue
+      ids.add(id)
+    }
+    return [...ids]
   }
 
   /**
@@ -1116,6 +1187,11 @@ export class CheckpointManager {
 
   async repairMisattributedInternalCheckpoints(): Promise<number> {
     return repairMisattributedInternalCheckpoints(this.maintenanceHost())
+  }
+
+  /** Clear cards that only hold another turn's abandoned work. */
+  async dropUnprovenOverlappingChanges(): Promise<number> {
+    return dropUnprovenOverlappingChanges(this.maintenanceHost())
   }
 
   /** Drop scratch and build-output paths a card should never have listed. */
