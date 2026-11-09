@@ -323,6 +323,9 @@
           olderPartsAvailable={board.pollStreamParts.streamTrace.hasOlder}
           onLoadOlderParts={board.pollStreamParts.loadOlderStreamParts}
           totalSteps={board.pollStreamParts.streamTrace.totalSteps}
+          turnSubagentParts={board.pollStreamParts.streamTrace.subagentParts}
+          turnCompacted={board.pollStreamParts.streamTrace.turnCompacted}
+          turnSpan={board.pollStreamParts.streamTrace.turnSpan}
           startTime={board.unmirroredTraceStartTime.unmirroredTraceStartTime}
           modelLabel={board.currentWorkingTraceAttribution.currentWorkingTraceAttribution
             .modelLabel}
@@ -382,6 +385,9 @@
           done
           busy={false}
           totalSteps={turn.totalSteps}
+          turnSubagentParts={turn.subagentParts}
+          turnCompacted={turn.turnCompacted}
+          turnSpan={turn.turnSpan}
           startTime={turn.startTs}
           endTime={turn.endTs}
           active={board.props.active}
@@ -528,6 +534,15 @@
               : undefined}
             totalSteps={isCurrentAssistantTurn && segmentIsLast
               ? board.pollStreamParts.streamTrace.totalSteps
+              : undefined}
+            turnSubagentParts={isCurrentAssistantTurn && segmentIsLast
+              ? board.pollStreamParts.streamTrace.subagentParts
+              : undefined}
+            turnCompacted={isCurrentAssistantTurn && segmentIsLast
+              ? board.pollStreamParts.streamTrace.turnCompacted
+              : undefined}
+            turnSpan={isCurrentAssistantTurn && segmentIsLast
+              ? board.pollStreamParts.streamTrace.turnSpan
               : undefined}
             startTime={segmentStartTime}
             modelLabel={useSegmentLiveAttribution
