@@ -8,7 +8,7 @@
   import Switch from '../ui/Switch.svelte'
   import { ContextMenu } from 'bits-ui'
   import type { GitDiff, GitFileChange, TurnCheckpointFileDiff } from '$shared/types'
-  import FileDiffView from '../files/FileDiffView.svelte'
+  import FileDiffView from '../files/DeferredFileDiffView.svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
