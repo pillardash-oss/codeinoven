@@ -14,6 +14,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import type { AppPanelPortal } from '$lib/app-panel-portal'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
@@ -67,6 +68,15 @@
   let retryVersion = $state(0)
   let locationTitle = $state('Code locations')
   let truncated = $state(false)
+  /**
+   * Whether the project text search matches case.
+   *
+   * Off by default: a reader searching a project is looking for the text, not
+   * for its capitalisation, so an exact-case scan is the deliberate choice they
+   * turn on in the modal's footer. It outlives one search, because a reader who
+   * wants exact case wants it for the next query too.
+   */
+  let caseSensitive = $state(false)
   let hover = $state<{ text: string; x: number; y: number } | null>(null)
   /**
    * What the language servers themselves report doing, keyed by server and work
@@ -118,7 +128,8 @@
         text: body !== undefined && body.length > MAX_DOCUMENT_BYTES ? undefined : body,
         line: token?.line,
         character: token?.character,
-        query
+        query,
+        caseSensitive: action === 'grep' ? caseSensitive : undefined
       },
       scopeBucketId,
       threadId
@@ -620,48 +631,53 @@
 {/if}
 
 <svelte:window onkeydown={handleResultKey} onpointerdown={dismissOutside} />
-{#snippet resultRows()}
-  {#if error}<p class="px-2 py-1 text-xs text-danger" role="status">{error}</p>{/if}
-  {#if busy}<p class="flex items-center gap-2 px-2 py-1 text-xs text-muted" role="status">
-      <CioSpinner size={13} class="animate-spin" />Loading...
-    </p>{/if}
-  {#if mode === 'documentation' || hover}
-    <div class="min-h-0 overflow-auto px-2 py-1 text-xs text-foreground">
-      <DeferredMarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
-    </div>
-  {:else}
-    <div
-      class="max-h-96 min-h-0 overflow-auto"
-      {@attach (node) => {
-        resultList = node
-        return () => {
-          resultList = undefined
-        }
-      }}
-    >
-      {#each results as result, index (`${result.path}:${result.line}:${index}`)}
-        <button
-          type="button"
-          class={[
-            'block w-full border-b border-border px-2 py-1 text-left text-xs text-foreground hover:bg-elevated focus:bg-elevated',
-            index === selectedIndex && 'bg-elevated'
-          ]}
-          onfocus={() => (selectedIndex = index)}
-          data-modal-primary={index === selectedIndex ? '' : undefined}
-          onclick={() => void navigate(result)}
-        >
-          <span class="block truncate font-mono">{result.path}:{result.line}</span>
-          {#if result.preview}<span class="block truncate text-muted">{result.preview}</span>{/if}
-        </button>
-      {:else}{#if !busy && !error}<p class="px-2 py-1 text-xs text-muted">
-            {mode === 'locations'
-              ? `No ${locationTitle.toLowerCase()} found for this symbol.`
-              : query
-                ? 'No matches found.'
-                : 'Type to search.'}
-          </p>{/if}{/each}
-    </div>
-  {/if}
+{#snippet resultRows(fill = false)}
+  <div class="flex min-h-0 flex-1 flex-col {fill ? 'overflow-auto' : ''}">
+    {#if error}<p class="shrink-0 px-2 py-1 text-xs text-danger" role="status">{error}</p>{/if}
+    {#if busy}<p
+        class="flex shrink-0 items-center gap-2 px-2 py-1 text-xs text-muted"
+        role="status"
+      >
+        <CioSpinner size={13} class="animate-spin" />Loading...
+      </p>{/if}
+    {#if mode === 'documentation' || hover}
+      <div class="min-h-0 flex-1 overflow-auto px-2 py-1 text-xs text-foreground">
+        <DeferredMarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
+      </div>
+    {:else}
+      <div
+        class={fill ? '' : 'max-h-96 min-h-0 overflow-auto'}
+        {@attach (node) => {
+          resultList = node
+          return () => {
+            resultList = undefined
+          }
+        }}
+      >
+        {#each results as result, index (`${result.path}:${result.line}:${index}`)}
+          <button
+            type="button"
+            class={[
+              'block w-full border-b border-border px-2 py-1 text-left text-xs text-foreground hover:bg-elevated focus:bg-elevated',
+              index === selectedIndex && 'bg-elevated'
+            ]}
+            onfocus={() => (selectedIndex = index)}
+            data-modal-primary={index === selectedIndex ? '' : undefined}
+            onclick={() => void navigate(result)}
+          >
+            <span class="block truncate font-mono">{result.path}:{result.line}</span>
+            {#if result.preview}<span class="block truncate text-muted">{result.preview}</span>{/if}
+          </button>
+        {:else}{#if !busy && !error}<p class="px-2 py-1 text-xs text-muted">
+              {mode === 'locations'
+                ? `No ${locationTitle.toLowerCase()} found for this symbol.`
+                : query
+                  ? 'No matches found.'
+                  : 'Type to search.'}
+            </p>{/if}{/each}
+      </div>
+    {/if}
+  </div>
 {/snippet}
 {#if active && (hover || (open && (mode === 'locations' || mode === 'documentation')))}
   <div
@@ -854,6 +870,27 @@
     </div>
   </aside>
 {/if}
+<!--
+  The project search panel keeps one height for the whole search.
+
+  A results list that grows row by row resized the panel under the cursor while
+  the reader was still typing, so the surface itself now holds a fixed body: the
+  input, the scroll region and the truncation note are all pinned, and only the
+  rows inside move.
+-->
+{#snippet searchFooter()}
+  <Switch
+    class="mr-auto"
+    checked={caseSensitive}
+    label="Case sensitive"
+    title="Match uppercase and lowercase exactly"
+    aria-label="Case sensitive"
+    onchange={(next) => {
+      caseSensitive = next
+      if (mode === 'grep') scheduleSearch(true)
+    }}
+  />
+{/snippet}
 <Modal
   open={active && open && (mode === 'grep' || mode === 'files')}
   onClose={() => closeModal()}
@@ -865,23 +902,27 @@
         ? 'Documentation'
         : locationTitle}
   size="lg"
+  contentClass="flex flex-col overflow-y-auto p-6"
+  footer={mode === 'grep' ? searchFooter : undefined}
 >
-  {#if mode === 'grep' || mode === 'files'}
-    <input
-      class="w-full border border-border bg-app px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
-      aria-label={mode === 'grep'
-        ? `Search ${projectName || resolvedProjectName} text`
-        : 'Find project file'}
-      placeholder={mode === 'grep' ? 'Find text across files' : 'Find a file by name or path'}
-      value={query}
-      oninput={(event) => {
-        query = event.currentTarget.value
-        scheduleSearch()
-      }}
-    />
-  {/if}
-  {@render resultRows()}
-  {#if truncated}<p class="text-xs text-muted">
-      Results limited. Narrow your search to find more.
-    </p>{/if}
+  <div class="flex h-[20rem] min-h-0 flex-col gap-2">
+    {#if mode === 'grep' || mode === 'files'}
+      <input
+        class="w-full shrink-0 border border-border bg-app px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+        aria-label={mode === 'grep'
+          ? `Search ${projectName || resolvedProjectName} text`
+          : 'Find project file'}
+        placeholder={mode === 'grep' ? 'Find text across files' : 'Find a file by name or path'}
+        value={query}
+        oninput={(event) => {
+          query = event.currentTarget.value
+          scheduleSearch()
+        }}
+      />
+    {/if}
+    {@render resultRows(true)}
+    {#if truncated}<p class="shrink-0 text-xs text-muted">
+        Results limited. Narrow your search to find more.
+      </p>{/if}
+  </div>
 </Modal>

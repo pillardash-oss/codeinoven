@@ -773,6 +773,8 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
         value.text === undefined ? undefined : requireString(value.text, 'IDE text', true)
       const query =
         value.query === undefined ? undefined : requireString(value.query, 'IDE query', true)
+      if (value.caseSensitive !== undefined && typeof value.caseSensitive !== 'boolean')
+        throw new TypeError('Invalid IDE case sensitivity')
       if (
         (text?.length ?? 0) > 2 * 1024 * 1024 ||
         (query?.length ?? 0) > 1000 ||
@@ -809,6 +811,7 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
           path,
           text,
           query,
+          caseSensitive: value.caseSensitive === true,
           line: position(value.line),
           character: position(value.character)
         },

@@ -464,6 +464,8 @@ async function grep(
       [
         '--json',
         '--fixed-strings',
+        // Case-insensitive unless the reader asked for exact case.
+        ...(request.caseSensitive ? [] : ['--ignore-case']),
         '--max-count',
         '20',
         '--max-filesize',

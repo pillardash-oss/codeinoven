@@ -21,6 +21,9 @@ export interface IdeRequest {
   character?: number
   serverId?: string
   query?: string
+  /** Project text search only: match uppercase and lowercase exactly. Absent
+   *  or false is the case-insensitive default. */
+  caseSensitive?: boolean
 }
 export interface IdeLocation {
   path: string
