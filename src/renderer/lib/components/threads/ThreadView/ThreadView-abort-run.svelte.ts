@@ -14,7 +14,12 @@ import { revealFileInAppTree } from '$lib/reveal-file'
 import { toast } from 'svelte-sonner'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { assistantDeliveryLabel, assistantPriorityLabel } from '$shared/assistant-reporting'
-import { describeSchedule, isAssistantSetupThread, assistantIsScheduled } from '$shared/types'
+import {
+  assistantIsScheduled,
+  describeSchedule,
+  isAssistantSetupThread,
+  isGroupThread
+} from '$shared/types'
 import type {
   CapturableSpecContextType,
   EngineeringSpec,
@@ -477,6 +482,7 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
    */
   assistantAuthoringThread = $derived(
     this.root.props.assistantMode &&
+      !isGroupThread(this.root.props.thread) &&
       (!this.root.props.assistantKnowledgeComplete || this.assistantSetupThread)
   )
 
