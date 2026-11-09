@@ -90,7 +90,6 @@
   import { ovenRootThread } from '$lib/oven-root-target'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { usesThreadWorkspaceMount } from '$shared/types'
-  import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 
   interface Props {
     projectId: string
@@ -1203,10 +1202,7 @@
           ideStatusPortal={sidebarIdeStatusPortal}
           ideModeEnabled={projectState.ideModeEnabled}
           ideModeDisabled={ovenFile}
-          onIdeModeChange={(enabled) => {
-            projectState.ideModeEnabled = enabled
-            fileExplorerStore.update(projectId, { ideModeEnabled: enabled })
-          }}
+          onIdeModeChange={(enabled) => (projectState.ideModeEnabled = enabled)}
           {activeTab}
           {checkpointDiff}
           {diffStats}
@@ -1668,10 +1664,7 @@
         <ProjectFilesPanelToolbar
           ideModeEnabled={projectState.ideModeEnabled}
           ideModeDisabled={ovenFile}
-          onIdeModeChange={(enabled) => {
-            projectState.ideModeEnabled = enabled
-            fileExplorerStore.update(projectId, { ideModeEnabled: enabled })
-          }}
+          onIdeModeChange={(enabled) => (projectState.ideModeEnabled = enabled)}
           {activeTab}
           {checkpointDiff}
           {diffStats}

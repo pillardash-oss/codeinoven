@@ -28,10 +28,6 @@ export interface FileExplorerProjectState {
   selectedPaths: string[]
   explorerVisible: boolean
   width: number
-  /** Whether this project's file tree runs the language servers it opens. Kept
-   *  with the tree's own persisted position, so turning IDE mode on survives a
-   *  restart instead of silently reverting to a plain text editor. */
-  ideModeEnabled: boolean
   /** User choice to keep the automatically applied checkpoint filter off. */
   lastTurnAutoOverride: boolean
   /** View the reader last chose for a Markdown document, or null while they
@@ -58,7 +54,6 @@ export function emptyFileExplorerProjectState(): FileExplorerProjectState {
     selectedPaths: [],
     explorerVisible: true,
     width: FILE_EXPLORER_DEFAULT_WIDTH,
-    ideModeEnabled: false,
     lastTurnAutoOverride: false,
     markdownView: null
   }
@@ -115,7 +110,6 @@ function parseProjectState(value: unknown): FileExplorerProjectState | null {
     selectedPaths: parseSelectedPaths(value.selectedPaths),
     explorerVisible: value.explorerVisible !== false,
     width: parseWidth(value.width),
-    ideModeEnabled: value.ideModeEnabled === true,
     lastTurnAutoOverride: value.lastTurnAutoOverride === true,
     markdownView: parseMarkdownView(value.markdownView)
   }

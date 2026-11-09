@@ -127,7 +127,7 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     expandedDirectories: {},
     tabs: [],
     activeTabId: null,
-    ideModeEnabled: explorer.ideModeEnabled,
+    ideModeEnabled: false,
     explorerVisible: explorer.explorerVisible,
     explorerWidth: explorer.width,
     revealedPath: explorer.revealedPath,
