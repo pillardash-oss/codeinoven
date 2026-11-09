@@ -35,12 +35,19 @@ export const ORCHESTRATION_TARGETS_TOOL_NAME = 'cio_orchestrate_targets'
 export const ORCHESTRATION_DISPATCH_TOOL_NAME = 'cio_orchestrate_dispatch'
 /** Read the status and latest result of a thread this session dispatched. */
 export const ORCHESTRATION_STATUS_TOOL_NAME = 'cio_orchestrate_status'
+/**
+ * Answer what a dispatched thread is waiting for: a question, a secret, or a
+ * permission. It is how the decision a blocked thread needs gets back to it after
+ * the dispatcher has asked the user in its own conversation.
+ */
+export const ORCHESTRATION_ANSWER_TOOL_NAME = 'cio_orchestrate_answer'
 
 /** Every orchestration tool name, for gate checks and the Pi extension. */
 export const ORCHESTRATION_TOOL_NAMES: readonly string[] = [
   ORCHESTRATION_TARGETS_TOOL_NAME,
   ORCHESTRATION_DISPATCH_TOOL_NAME,
-  ORCHESTRATION_STATUS_TOOL_NAME
+  ORCHESTRATION_STATUS_TOOL_NAME,
+  ORCHESTRATION_ANSWER_TOOL_NAME
 ]
 
 /** Whether a gateway tool name belongs to the orchestration family. */
@@ -171,6 +178,64 @@ const STATUS_INPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false
 }
 
+const ANSWER_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    kind: {
+      type: 'string',
+      enum: ['question', 'secret', 'permission'],
+      description:
+        'What the blocked thread is waiting for, exactly as this conversation was told when it stopped.'
+    },
+    requestId: {
+      type: 'string',
+      description: 'The request id from the message that told you this thread stopped.'
+    },
+    threadId: {
+      type: 'string',
+      description: 'The blocked thread id, from the same message. Never invent one.'
+    },
+    projectId: {
+      type: 'string',
+      description: 'The project the blocked thread lives in, from the same message.'
+    },
+    answers: {
+      type: 'array',
+      description:
+        'kind "question": one entry per question, in the order they were asked. Each entry holds the answer the user gave for that question, as one or more strings (a single choice is a one-item array).',
+      items: {
+        type: 'array',
+        items: { type: 'string' }
+      }
+    },
+    secrets: {
+      type: 'array',
+      description:
+        'kind "secret": one entry per requested secret. The value itself never travels here: it stays in the vault and is read by the app.',
+      items: {
+        type: 'object',
+        properties: {
+          secretId: { type: 'string', description: 'The secret id the blocked thread asked for.' },
+          environmentVariable: {
+            type: 'string',
+            description:
+              'The variable you collected this value under with cio_ask_secret, in this conversation.'
+          }
+        },
+        required: ['secretId', 'environmentVariable'],
+        additionalProperties: false
+      }
+    },
+    permission: {
+      type: 'string',
+      enum: ['once', 'always', 'reject'],
+      description: 'kind "permission": the decision the user gave.'
+    }
+  },
+  required: ['kind', 'requestId', 'threadId', 'projectId'],
+  additionalProperties: false
+}
+
 export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
   {
     name: ORCHESTRATION_TARGETS_TOOL_NAME,
@@ -189,6 +254,16 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-dispatch',
     sentWhen: 'An @cio-hey turn once every dispatch field is resolved or confirmed'
+  },
+  {
+    name: ORCHESTRATION_ANSWER_TOOL_NAME,
+    description:
+      'Hand the user\'s decision back to a dispatched thread that stopped to ask for it. Use the ids from the message that told you the thread stopped, and the answer the user gave in this conversation, never one you chose for them. A question takes `answers`; a secret takes `secrets` naming the vault variable you collected it under, so the value never enters a conversation; a permission takes "once", "always" or "reject". The blocked thread continues on its own once the answer is accepted.',
+    inputSchema: ANSWER_INPUT_SCHEMA,
+    outputSchema: ORCHESTRATION_RESULT_SCHEMA,
+    route: '/orchestrate-answer',
+    sentWhen:
+      'A dispatched thread stopped on a question, a secret or a permission and the user answered here'
   },
   {
     name: ORCHESTRATION_STATUS_TOOL_NAME,

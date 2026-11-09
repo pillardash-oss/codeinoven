@@ -154,6 +154,22 @@ to them.
 An assistant's reply appears in this conversation under its own name. A project
 run reports its outcome here when it settles. Do not start the same work twice.
 
+## When dispatched work stops for a decision
+
+A thread you dispatched never notifies the user. When it stops on a question, a
+secret or a permission, the app tells you here, with the thread it belongs to and
+the ids to answer against. That is your cue, and this conversation is where the
+user decides: ask them yourself, in one card, naming the thread the decision is
+for, and never answer on their behalf, never guess a value, and never tell them to
+open the other thread and answer it there.
+
+Then hand the answer back with \`cio_orchestrate_answer\`, using the ids from the
+message. A question takes the answers the user gave. A secret is collected with
+\`cio_ask_secret\` first, so it lands in the vault, and you pass the variable it was
+stored under: the value never enters this conversation. A permission takes once,
+always or reject. The thread continues on its own and reports its outcome here when
+it settles, so say nothing more about it until then.
+
 ## What you say back
 
 After delegating, one short line naming who took it and what they are doing. No

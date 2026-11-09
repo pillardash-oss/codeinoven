@@ -6,6 +6,7 @@ import type { TypesafeDecisionStatus } from '../../../lib/types/typesafe'
 import { isUtilitySuggestionQuestion } from '../../../lib/utility-suggestion'
 import { isMcpSignInQuestion } from '../../../lib/mcp-sign-in'
 import type { AgentQuestionRequest, AgentQuestionResolution } from '../../../lib/types'
+import { delegatedQuestionDetail } from '../../../lib/delegated-attention'
 import type { PendingQuestionInfo, RankingGradeCandidate } from './chat-engine-types'
 import {
   inactiveQuestionDecision,
@@ -158,6 +159,19 @@ export class ChatEngineQuestions {
     this.host.pendingQuestions.set(request.requestId, pending)
     this.schedulePendingQuestion(pending)
     this.host.units['turns'].markProjectActive(projectId)
+    // A thread this app dispatched reports its blocked request to whatever
+    // conversation the user actually has open, instead of waiting to be found and
+    // instead of notifying them itself. A thread nobody dispatched reports nothing:
+    // its own card is already in front of the person who is there.
+    if (request.questions.length > 0) {
+      void this.host.units['turns-dispatch'].reportDelegatedAttention({
+        projectId,
+        threadId,
+        kind: request.questions.some((question) => question.secretRequest) ? 'secret' : 'question',
+        requestId: request.requestId,
+        detail: delegatedQuestionDetail(request.questions)
+      })
+    }
     return pending
   }
 

@@ -708,6 +708,13 @@ export class NotificationService {
     // is needed. Worker/auditor threads never notify, and the coordinator's
     // intermediate turn completions do not.
     if (this.isSuppressedOrchestration(thread)) return
+    // Work this app dispatched is never the user's to be interrupted by: its
+    // outcomes are reported into the conversation that asked for it, and the one
+    // thing a report cannot carry   a question, a secret or a permission   is
+    // reported there too, so the user is asked in the conversation they opened.
+    // Notifying here as well would put the same moment in front of them twice,
+    // once from work they never started by hand.
+    if (thread.dispatchOrigin?.initiatorThreadId) return
     if (this.isPrematureCoordinatorCompletion(thread)) return
     // A ready independent-audit report parks its thread on `spec` and is announced
     // by the audit card, which names the auditor's finding; the generic "spec is

@@ -671,6 +671,24 @@ export class ChatEnginePermissions {
       }
       if (this.host.state.pendingPermissions.get(request.id) !== pending) return
       this.host.broadcast({ ...event, permission: enrichedRequest })
+      // A thread this app dispatched does not wait to be found: the request goes
+      // to the conversation that dispatched it, which asks the user there and
+      // hands the decision back. The card on this thread stays, so either place
+      // can answer it.
+      void this.host.units['turns-dispatch'].reportDelegatedAttention({
+        projectId: info.projectId,
+        threadId: info.threadId,
+        kind: 'permission',
+        requestId: request.id,
+        detail: [
+          `The thread needs permission for "${request.permission}".`,
+          request.policy?.reason ? `Why it is asked: ${request.policy.reason}` : '',
+          request.patterns.length > 0 ? `What it would touch: ${request.patterns.join(', ')}` : '',
+          request.policy?.risk ? `Assessed risk: ${request.policy.risk}.` : ''
+        ]
+          .filter(Boolean)
+          .join('\n')
+      })
     }
     if (
       info.projectId === GLOBAL_BROWSER_PROJECT_ID &&

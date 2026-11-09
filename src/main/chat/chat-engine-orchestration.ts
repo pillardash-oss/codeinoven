@@ -1,7 +1,9 @@
 import type {
+  AgentSecretSubmission,
   HarnessAccount,
   ModelProfile,
   PermissionLevel,
+  PermissionReply,
   ProviderCatalog,
   ProviderModel,
   Thread,
@@ -146,6 +148,37 @@ export interface OrchestrationDeps {
    * dispatch into an error the agent has to explain, because the thread it
    * started is real and already running.
    */
+  /**
+   * Hand a decision back to a thread this conversation dispatched.
+   *
+   * The three answer paths are the app's own resolution APIs, so a decision taken
+   * here settles exactly like one taken on the blocked thread's own card: the
+   * waiting driver call returns and the turn continues.
+   */
+  answerQuestion: (input: {
+    projectId: string
+    threadId: string
+    requestId: string
+    /** One entry per question, each holding the selected answers for it. */
+    answers: string[][]
+  }) => Promise<unknown>
+  answerSecret: (input: {
+    projectId: string
+    threadId: string
+    requestId: string
+    secrets: AgentSecretSubmission[]
+  }) => Promise<unknown>
+  replyPermission: (input: {
+    projectId: string
+    requestId: string
+    reply: PermissionReply
+  }) => Promise<unknown>
+  /**
+   * Resolve a secret value the answering agent collected into the device vault,
+   * so a value never has to travel through a conversation to reach the thread that
+   * asked for it. Null when this conversation holds no such value.
+   */
+  resolveThreadSecret: (threadId: string, environmentVariable: string) => Promise<string | null>
   recordDispatch: (input: {
     initiatorProjectId: string
     initiatorThreadId: string
@@ -205,6 +238,8 @@ export function createOrchestrationExecutor(
         return dispatchWork(deps, dispatches, input, context, assistants.current)
       case 'status':
         return readStatus(deps, input, context)
+      case 'answer':
+        return answerDelegatedRequest(deps, input, context)
       default:
         throw new Error(`Unknown orchestration operation: ${operation}`)
     }
@@ -616,6 +651,119 @@ async function dispatchWork(
     note: assistant
       ? 'The assistant runs on its own thread and its reply appears in this conversation under its own name. Do not wait for it.'
       : 'The run has been accepted, not finished. The app reports its outcome into this conversation when the thread settles.'
+  }
+}
+
+/**
+ * Hand a decision back to a thread this conversation dispatched.
+ *
+ * The dispatcher only ever holds ids and a human's answer: a secret arrives as the
+ * name the value was collected under, so the app resolves it from the vault and the
+ * value never reaches either model's context. Every path is the app's own
+ * resolution API, so the blocked thread settles exactly as it would from its own
+ * card and its turn simply continues.
+ */
+async function answerDelegatedRequest(
+  deps: OrchestrationDeps,
+  input: Record<string, unknown>,
+  context: OrchestrationToolContext
+): Promise<unknown> {
+  const kind = optionalString(input, 'kind')
+  if (kind !== 'question' && kind !== 'secret' && kind !== 'permission') {
+    throw new Error('kind must be "question", "secret" or "permission".')
+  }
+  const requestId = requiredString(input, 'requestId')
+  const threadId = requiredString(input, 'threadId')
+  const projectId = requiredString(input, 'projectId')
+  // The decision is given to a real thread, so the ids have to name one that
+  // exists before anything is resolved against them.
+  const thread = await deps.getThread(projectId, threadId)
+  if (!thread) throw new Error(`No thread "${threadId}" in project "${projectId}".`)
+
+  if (kind === 'question') {
+    // One entry per question, each entry the selected answers for that question.
+    // A flat string is accepted as a one-choice answer, because a model that read
+    // a single-choice card naturally reports it that way.
+    const rawAnswers = Array.isArray(input['answers']) ? input['answers'] : []
+    const answers = rawAnswers
+      .map((entry) =>
+        Array.isArray(entry)
+          ? entry.filter((value): value is string => typeof value === 'string')
+          : typeof entry === 'string'
+            ? [entry]
+            : []
+      )
+      .filter((entry) => entry.length > 0)
+    if (answers.length === 0) {
+      throw new Error('An answer needs `answers`, one entry per question, as the user gave them.')
+    }
+    await deps.answerQuestion({ projectId, threadId, requestId, answers })
+    return {
+      status: 'answered',
+      kind,
+      threadId,
+      projectId,
+      requestId,
+      note: 'The thread accepted the answer and continues on its own. Its outcome is reported here when it settles.'
+    }
+  }
+
+  if (kind === 'permission') {
+    const reply = optionalString(input, 'permission')
+    if (reply !== 'once' && reply !== 'always' && reply !== 'reject') {
+      throw new Error('A permission answer needs `permission`: "once", "always" or "reject".')
+    }
+    await deps.replyPermission({ projectId, requestId, reply })
+    return {
+      status: 'answered',
+      kind,
+      threadId,
+      projectId,
+      requestId,
+      permission: reply,
+      note: 'The thread accepted the decision and continues on its own.'
+    }
+  }
+
+  const requested = Array.isArray(input['secrets']) ? input['secrets'] : []
+  if (requested.length === 0) {
+    throw new Error(
+      'A secret answer needs `secrets`: one entry per requested secret, carrying its secretId and the environmentVariable it was collected under.'
+    )
+  }
+  const submissions: AgentSecretSubmission[] = []
+  const unresolved: string[] = []
+  for (const entry of requested) {
+    if (!entry || typeof entry !== 'object') continue
+    const record = entry as Record<string, unknown>
+    const secretId = optionalString(record, 'secretId')
+    const environmentVariable = optionalString(record, 'environmentVariable')
+    if (!secretId || !environmentVariable) continue
+    // The value comes from this conversation's own vault entries, keyed by the
+    // variable the agent collected it under. Nothing here can read a value the
+    // user did not supply for this app.
+    const value = await deps.resolveThreadSecret(context.threadId, environmentVariable)
+    if (!value) {
+      unresolved.push(environmentVariable)
+      continue
+    }
+    submissions.push({ secretId, value })
+  }
+  if (submissions.length === 0) {
+    throw new Error(
+      `No value is stored under ${unresolved.join(', ') || 'that name'} in this conversation. Collect it with cio_ask_secret first, then answer with the variable it was stored under.`
+    )
+  }
+  await deps.answerSecret({ projectId, threadId, requestId, secrets: submissions })
+  return {
+    status: 'answered',
+    kind,
+    threadId,
+    projectId,
+    requestId,
+    delivered: submissions.map((entry) => entry.secretId),
+    ...(unresolved.length > 0 ? { unresolved } : {}),
+    note: 'The thread received the values directly from the vault and continues on its own. The values were never shown to either conversation.'
   }
 }
 

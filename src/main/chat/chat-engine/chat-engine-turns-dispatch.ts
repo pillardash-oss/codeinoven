@@ -39,6 +39,14 @@ import {
 } from '../chat-engine-don'
 import { modelKey } from '../../../lib/model-keys'
 import {
+  buildDelegatedAttentionPrompt,
+  type DelegatedAttentionKind
+} from '../../../lib/delegated-attention'
+
+/** Depth a dispatch chain is followed before a report gives up, so a chain that
+ *  loops can never walk for ever. */
+const DELEGATED_ATTENTION_MAX_HOPS = 5
+import {
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
   gateCuaDriverBehaviorPrompt
 } from '../../../lib/agent-behavior'
@@ -497,6 +505,79 @@ export class ChatEngineTurnsDispatch {
   /** The speaker as the app knows it now, when the handoff carries only a name. */
   private delegationAuthor(delegation: PendingDonDelegation): PendingDonDelegation['author'] {
     return this.host.don?.resolveAuthor?.(delegation.author.assistantId) ?? delegation.author
+  }
+
+  /**
+   * Tell the conversation that dispatched a thread that the thread is blocked.
+   *
+   * A dispatched thread never notifies the user: its finished and failed outcomes
+   * are reported into the thread that asked for the work, and this is the third
+   * case on the same path. A question, a secret or a permission cannot be answered
+   * by an agent, so the report goes to the nearest conversation a person actually
+   * opened: the dispatch chain is walked up until it reaches a thread nobody
+   * dispatched, and that agent is the one that puts the card in front of the user.
+   *
+   * The blocked thread keeps its own card too. This only decides where the human
+   * decision is asked for, never whether the request exists.
+   */
+  async reportDelegatedAttention(input: {
+    projectId: string
+    threadId: string
+    kind: DelegatedAttentionKind
+    requestId: string
+    detail: string
+  }): Promise<void> {
+    try {
+      const child = await this.host.threadManager.getThread(input.projectId, input.threadId)
+      const origin = child?.dispatchOrigin
+      if (!child || !origin) return
+      // Walk to the root of the dispatch chain, so a thread dispatched by another
+      // dispatched thread still reaches the conversation the user has open. The
+      // seen set is what keeps a chain that loops back on itself from reporting
+      // for ever.
+      let projectId = origin.initiatorProjectId
+      let threadId = origin.initiatorThreadId
+      const seen = new Set<string>([`${input.projectId}:${input.threadId}`])
+      for (let hop = 0; hop < DELEGATED_ATTENTION_MAX_HOPS; hop++) {
+        const key = `${projectId}:${threadId}`
+        if (seen.has(key)) return
+        seen.add(key)
+        const thread = await this.host.threadManager.getThread(projectId, threadId)
+        if (!thread) return
+        const next = thread.dispatchOrigin
+        if (!next) break
+        projectId = next.initiatorProjectId
+        threadId = next.initiatorThreadId
+      }
+      const target = await this.host.threadManager.getThread(projectId, threadId)
+      if (!target?.settings) return
+      await this.host.sendPrompt(
+        projectId,
+        threadId,
+        target.settings,
+        buildDelegatedAttentionPrompt({
+          kind: input.kind,
+          dispatcherProjectId: projectId,
+          dispatcherThreadId: threadId,
+          projectId: input.projectId,
+          threadId: input.threadId,
+          threadTitle: child.title,
+          requestId: input.requestId,
+          detail: input.detail
+        }),
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'internal'
+      )
+    } catch (error) {
+      // A report that cannot be sent never blocks the driver call that is already
+      // waiting: the blocked thread keeps its own card either way.
+      Logger.dev('Delegated attention report skipped:', error)
+    }
   }
 
   async reportDonDelegation(delegation: PendingDonDelegation, status: string): Promise<void> {

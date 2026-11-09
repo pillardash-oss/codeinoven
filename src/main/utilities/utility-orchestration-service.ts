@@ -415,7 +415,7 @@ export interface OrchestrationToolContext {
   harnessId: string
 }
 
-export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status'
+export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status' | 'answer'
 
 /** The two app-control operations, mirrored from the tool catalog. */
 export type AppControlOperation = 'catalog' | 'call'

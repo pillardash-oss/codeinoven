@@ -224,6 +224,23 @@ export class ChatEngineRuntimeWorkflows {
         return null
       },
       createThread: (input) => this.host.units['threads-create'].createOrchestrationThread(input),
+      // The decision a blocked thread is waiting for settles through the same
+      // APIs its own card uses, so the dispatcher never gets a second, weaker way
+      // to answer work it did not run.
+      answerQuestion: (input) =>
+        this.host.answerQuestion(input.projectId, input.threadId, input.requestId, input.answers),
+      answerSecret: (input) =>
+        this.host.answerSecret(input.projectId, input.threadId, input.requestId, input.secrets),
+      replyPermission: (input) =>
+        this.host.replyPermission(input.projectId, input.requestId, input.reply),
+      // A secret the dispatcher collected is read from the vault by the name it
+      // was stored under, so the value never enters a conversation to reach the
+      // thread that asked for it.
+      resolveThreadSecret: async (threadId, environmentVariable) => {
+        const service = this.host.state.agentSecrets
+        if (!service) return null
+        return service.resolveThreadSecret(threadId, environmentVariable)
+      },
       recordDispatch: async (input) => {
         await dispatchRepo.record(input)
         // The initiator's row wears the orchestrator mark, so the count it reads

@@ -52,6 +52,7 @@ import {
   ACTION_SUMMARY_SCHEMA_DESCRIPTION
 } from '../../lib/tool-action-label'
 import {
+  ORCHESTRATION_ANSWER_TOOL_NAME,
   ORCHESTRATION_DISPATCH_TOOL_NAME,
   ORCHESTRATION_STATUS_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME
@@ -87,6 +88,7 @@ const suggestTool = gatewayTool(UTILITY_SUGGEST_TOOL_NAME)
 const orchestrationTargetsTool = gatewayTool(ORCHESTRATION_TARGETS_TOOL_NAME)
 const orchestrationDispatchTool = gatewayTool(ORCHESTRATION_DISPATCH_TOOL_NAME)
 const orchestrationStatusTool = gatewayTool(ORCHESTRATION_STATUS_TOOL_NAME)
+const orchestrationAnswerTool = gatewayTool(ORCHESTRATION_ANSWER_TOOL_NAME)
 const appCatalogTool = gatewayTool(APP_CONTROL_CATALOG_TOOL_NAME)
 const appCallTool = gatewayTool(APP_CONTROL_CALL_TOOL_NAME)
 const createBrainstormTool = gatewayTool(CREATE_BRAINSTORM_TOOL_NAME)
@@ -702,6 +704,36 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       const result = await callGateway(${JSON.stringify(orchestrationStatusTool.route)}, {
         threadId: params.threadId,
         ...(params.projectId !== undefined ? { projectId: params.projectId } : {})
+      })
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(orchestrationAnswerTool.name)},
+    label: 'Answer a dispatched thread that is waiting',
+    description: ${JSON.stringify(orchestrationAnswerTool.description)},
+    parameters: Type.Object({
+      kind: Type.String({ description: 'question, secret or permission.' }),
+      requestId: Type.String({ description: 'Request id from the message that said the thread stopped.' }),
+      threadId: Type.String({ description: 'The blocked thread id, from the same message.' }),
+      projectId: Type.String({ description: 'The project the blocked thread lives in.' }),
+      answers: Type.Optional(Type.Array(Type.Array(Type.String()), { description: 'kind question: one entry per question, each holding the answer the user gave.' })),
+      secrets: Type.Optional(Type.Array(Type.Object({
+        secretId: Type.String({ description: 'The secret id the blocked thread asked for.' }),
+        environmentVariable: Type.String({ description: 'The variable this conversation collected the value under.' })
+      }), { description: 'kind secret: the values stay in the vault and are read by the app.' })),
+      permission: Type.Optional(Type.String({ description: 'kind permission: once, always or reject.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(${JSON.stringify(orchestrationAnswerTool.route)}, {
+        kind: params.kind,
+        requestId: params.requestId,
+        threadId: params.threadId,
+        projectId: params.projectId,
+        ...(params.answers !== undefined ? { answers: params.answers } : {}),
+        ...(params.secrets !== undefined ? { secrets: params.secrets } : {}),
+        ...(params.permission !== undefined ? { permission: params.permission } : {})
       })
       return textResult(result)
     }

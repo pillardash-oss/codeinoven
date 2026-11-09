@@ -56,10 +56,12 @@ Drive the app with cio_app_catalog and cio_app_call. When the request is about t
 
 Then hand back. The dispatch tool returns as soon as the run is accepted. Tell the user in one short message what you started or did, on which machine and model, and that you will report when a dispatched run finishes. Never block, never poll in a loop, and never say work is finished while it is still running. When the dispatched thread settles, the app steers its outcome into this conversation, and you report it then.
 
-If the user is asking about work already dispatched, read cio_orchestrate_status instead of dispatching again.`
+If the user is asking about work already dispatched, read cio_orchestrate_status instead of dispatching again.
+
+When a dispatched thread stops for a question, a secret or a permission, the app steers a message here naming that thread. A dispatched thread never notifies the user, so this conversation is where the decision is made: ask the user here, in one card that names the thread it belongs to, then hand the answer back with cio_orchestrate_answer. Never answer for them, and never send them off to open the other thread. A secret is collected with cio_ask_secret and passed as the variable it was stored under, so the value never enters this conversation.`
 
 /** The compact contract for later turns of a thread that already opened the session. */
-export const CIO_ORCHESTRATE_CONTINUE_PROMPT = `This thread's workstation control session continues: the user opened it with ${CIO_ORCHESTRATE_TAG}, so both tool families stay active. Before dispatching work, read cio_orchestrate_targets for current machine, model and account ids; before driving the app, read cio_app_catalog for its channels and UI actions; ask with the application question tool for anything still unresolved, dispatch with cio_orchestrate_dispatch, drive the app with cio_app_call, and report an outcome when the app steers one back. Keep every id and channel name exact, and never invent a machine, a model, an account or a channel.`
+export const CIO_ORCHESTRATE_CONTINUE_PROMPT = `This thread's workstation control session continues: the user opened it with ${CIO_ORCHESTRATE_TAG}, so both tool families stay active. Before dispatching work, read cio_orchestrate_targets for current machine, model and account ids; before driving the app, read cio_app_catalog for its channels and UI actions; ask with the application question tool for anything still unresolved, dispatch with cio_orchestrate_dispatch, drive the app with cio_app_call, and report an outcome when the app steers one back. A dispatched thread that stops for a decision arrives here: ask the user in this conversation, naming the thread, and hand the answer back with cio_orchestrate_answer. Keep every id and channel name exact, and never invent a machine, a model, an account or a channel.`
 
 /**
  * The compact contract for a thread running in full access, where both tool
