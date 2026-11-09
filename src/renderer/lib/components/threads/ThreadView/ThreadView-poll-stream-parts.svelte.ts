@@ -410,6 +410,21 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     return views
   })
 
+  /**
+   * Adopt everything a durable read states about the whole turn: the task list
+   * it was folded for, whether the turn compacted its context, the span its
+   * steps occupied, and (on a window) every sub-agent it delegated to.
+   *
+   * Each of these is a fact about the turn, not about the slice that crossed
+   * IPC, so they all travel with any read and the trace header stays correct
+   * whatever page happens to be mounted.
+   */
+  applyTurnSnapshot(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
+    this.applyTodoSnapshot(page)
+    this.streamTrace.adoptTraceMarkers(page)
+    if (page.kind === 'window') this.streamTrace.adoptSubagents(page.subagentParts)
+  }
+
   /** Adopt a durable read's task-list snapshot together with the turn it was
    *  folded for, so the card can reject it once the transcript moves on. */
   applyTodoSnapshot(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
@@ -756,7 +771,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
         this.streamTrace.setParts(mergeWorkingParts(this.streamTrace.parts, page.parts))
         this.streamTrace.hasOlder = page.hasOlder
         this.streamTrace.totalSteps = page.totalSteps
-        this.applyTodoSnapshot(page)
+        this.applyTurnSnapshot(page)
         this.streamTrace.cursor = page.cursor
         return
       }
@@ -770,7 +785,8 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
       this.streamTrace.turnStartTs = page.turnStartTs ?? this.streamTrace.turnStartTs
       this.streamTrace.cursor = page.cursor
       this.streamTrace.totalSteps = page.totalSteps
-      this.applyTodoSnapshot(page)
+      this.applyTurnSnapshot(page)
+      this.streamTrace.mergeTouchedSubagents(page.parts)
       // A fold that shrank under us with the same boundary belongs to a log
       // rewritten after the fact: remount the newest page instead of keeping
       // entries that no longer belong here.
@@ -821,7 +837,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
       this.streamTrace.setParts(mergeWorkingParts(this.streamTrace.parts, page.parts))
       this.streamTrace.hasOlder = page.hasOlder
       this.streamTrace.totalSteps = page.totalSteps
-      this.applyTodoSnapshot(page)
+      this.applyTurnSnapshot(page)
       this.streamTrace.cursor = page.cursor
     } catch {
       // Best-effort: the message cache still carries the checkoffs, and the
@@ -849,7 +865,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     this.streamTrace.setParts(page.parts)
     this.streamTrace.hasOlder = page.hasOlder
     this.streamTrace.totalSteps = page.totalSteps
-    this.applyTodoSnapshot(page)
+    this.applyTurnSnapshot(page)
     this.streamTrace.cursor = page.cursor
   }
 
@@ -892,6 +908,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     ])
     this.streamTrace.hasOlder = page.hasOlder
     this.streamTrace.totalSteps = page.totalSteps
+    this.applyTurnSnapshot(page)
     if (this.streamTrace.parts.length === mountedBefore) this.streamTrace.hasOlder = false
   }
 }

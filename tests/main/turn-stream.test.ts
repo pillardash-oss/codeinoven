@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { foldTurnStreamEvents, type TurnStreamEvent } from '../../src/main/chat/turn-stream'
-import { pageTurnStreamParts } from '../../src/main/chat/turn-stream-page'
+import { completedTurnWindow, pageTurnStreamParts } from '../../src/main/chat/turn-stream-page'
 import {
   readTurnStreamLog,
   readTurnStreamTail,
@@ -20,6 +20,20 @@ function tool(id: string): AgentPart {
     callID: `c-${id}`,
     tool: 'read',
     state: { status: 'completed', input: {}, output: 'ok' }
+  }
+}
+
+function subagentPart(id: string, status: 'pending' | 'running' | 'completed'): AgentPart {
+  return {
+    type: 'subagent',
+    id,
+    messageID: `m-${id}`,
+    activity: {
+      status,
+      agent: 'implementation',
+      description: 'Delegated task',
+      background: false
+    }
   }
 }
 
@@ -125,6 +139,80 @@ describe('pageTurnStreamParts', () => {
   it('reports no boundary on a thread with no prompt yet', () => {
     const page = pageTurnStreamParts([], [], { limit: 10 })
     expect(page.kind === 'window' && page.turnStartTs).toBeNull()
+  })
+
+  it('carries every sub-agent of the turn beside a window that holds none of them', () => {
+    // Regression: a long turn delegates early and streams hundreds of steps
+    // after it, so the newest page held no sub-agent row and the trace header
+    // reported a turn with no delegation at all.
+    const delegated = subagentPart('worker', 'running')
+    const folded: AgentPart[] = [
+      delegated,
+      ...Array.from({ length: 20 }, (_, index) => tool(`step-${index}`))
+    ]
+
+    const page = pageTurnStreamParts(folded, [], { limit: 5 })
+    expect(page.kind).toBe('window')
+    if (page.kind !== 'window') return
+    expect(page.parts.some((part) => part.type === 'subagent')).toBe(false)
+    expect(page.subagentParts.map((part) => part.id)).toEqual(['worker'])
+  })
+
+  it("carries the turn's sub-agents with a summary-only read", () => {
+    const turn = {
+      startTs: 1,
+      endTs: 2,
+      parts: [subagentPart('worker', 'running'), tool('after')] as readonly AgentPart[]
+    }
+    const summary = completedTurnWindow(turn, { summaryOnly: true })
+    expect(summary.parts).toEqual([])
+    expect(summary.subagentParts.map((part) => part.id)).toEqual(['worker'])
+  })
+
+  it('states the turn compaction and span beside a window that holds neither', () => {
+    // Regression: the header read the compaction mark and the duration from the
+    // mounted page, so a long turn reported no compaction at all and a duration
+    // covering only its newest minutes.
+    const early: AgentPart = {
+      type: 'reasoning',
+      id: 'early',
+      messageID: 'm-early',
+      text: 'start',
+      time: { start: 100, end: 200 }
+    }
+    const compaction: AgentPart = {
+      type: 'compaction',
+      id: 'compact',
+      messageID: 'm-compact',
+      auto: true
+    }
+    const late: AgentPart = {
+      type: 'tool',
+      id: 'late',
+      messageID: 'm-late',
+      callID: 'c-late',
+      tool: 'read',
+      state: { status: 'completed', input: {}, output: 'ok', time: { start: 500, end: 900 } }
+    }
+    const folded: AgentPart[] = [
+      early,
+      compaction,
+      ...Array.from({ length: 10 }, (_, index) => tool(`step-${index}`)),
+      late
+    ]
+
+    const page = pageTurnStreamParts(folded, [], { limit: 3 })
+    expect(page.kind).toBe('window')
+    if (page.kind !== 'window') return
+    expect(page.parts.some((part) => part.id === 'compact' || part.id === 'early')).toBe(false)
+    expect(page.turnCompacted).toBe(true)
+    expect(page.turnSpan).toEqual({ start: 100, end: 900 })
+
+    const change = pageTurnStreamParts(folded, [], { changedSince: 0 })
+    expect(change.kind).toBe('change')
+    if (change.kind !== 'change') return
+    expect(change.turnCompacted).toBe(true)
+    expect(change.turnSpan).toEqual({ start: 100, end: 900 })
   })
 })
 

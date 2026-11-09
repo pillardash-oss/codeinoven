@@ -1,9 +1,61 @@
 import type { AgentPart } from '$shared/types'
 import { isCodeModeToolName } from '$shared/agent-interactions'
+import { isCompactionPart, traceSpanOfParts, type TraceSpan } from '$shared/working-trace-span'
 import { subagentStatusIsTerminal } from './subagent-presentation'
 
 export type SubagentPart = Extract<AgentPart, { type: 'subagent' }>
 export type TraceTextPart = Extract<AgentPart, { type: 'text' }>
+
+/** True when a part is a sub-agent step, so a list can be narrowed in one pass. */
+export function isSubagentPart(part: AgentPart): part is SubagentPart {
+  return part.type === 'subagent'
+}
+
+/**
+ * The turn's delegation, from the durable fold plus whatever is mounted.
+ *
+ * The trace header may not learn about sub-agents from the mounted rows alone: a
+ * trace mounts one bounded page at a time and sub-agents are spawned near the
+ * start of a long turn, so the page on screen often holds none of them. The fold
+ * therefore carries every sub-agent step of the turn beside the window, and this
+ * merges it with the rows in view, keeping the fold's order.
+ *
+ * A mounted snapshot wins over the fold's copy, because the live stream is what
+ * advances a worker (running, then completed) between two window reads. The one
+ * exception is a finished worker: a stale `running` copy can never take back a
+ * status the other side already reported as terminal.
+ */
+export function mergeTurnSubagents(
+  turnWide: readonly SubagentPart[],
+  mounted: readonly SubagentPart[]
+): SubagentPart[] {
+  const byId = new Map<string, SubagentPart>()
+  const order: string[] = []
+  for (const part of turnWide) {
+    if (!byId.has(part.id)) order.push(part.id)
+    byId.set(part.id, part)
+  }
+  for (const part of mounted) {
+    const existing = byId.get(part.id)
+    if (existing === undefined) {
+      order.push(part.id)
+      byId.set(part.id, part)
+      continue
+    }
+    byId.set(part.id, subagentIsSettled(existing) ? existing : part)
+  }
+  const merged: SubagentPart[] = []
+  for (const id of order) {
+    const part = byId.get(id)
+    if (part) merged.push(part)
+  }
+  return merged
+}
+
+/** True once a sub-agent step reported a terminal lifecycle state. */
+function subagentIsSettled(part: SubagentPart): boolean {
+  return subagentStatusIsTerminal(part.activity.status) || part.activity.time?.end !== undefined
+}
 
 /**
  * Keep one renderable lifecycle state per part ID while preserving the order in
@@ -89,40 +141,17 @@ export function groupTraceIntoChains(parts: readonly AgentPart[]): TraceChain[] 
   return chains
 }
 
-/** Wall-clock window one step occupied, when the harness reported timestamps. */
-export interface TraceChainSpan {
-  start: number
-  end: number
-}
-
-function stepTime(part: AgentPart): { start?: number; end?: number } | undefined {
-  if (part.type === 'tool') return part.state.time
-  if (part.type === 'reasoning') return part.time
-  if (part.type === 'subagent') return part.activity.time
-  return undefined
-}
-
 /**
- * Earliest start and latest end across a set of parts, or null when none of
- * them reported a timestamp. The end falls back to the start so a span whose
- * entries never closed still has a stable duration to render instead of an
- * open range.
+ * Wall-clock window one step occupied, when the harness reported timestamps.
+ * The span itself lives in shared code: the main process measures the whole
+ * folded turn with the same helper, so the trace header and the rows under it
+ * can never disagree.
  */
-function spanOfParts(parts: readonly AgentPart[]): TraceChainSpan | null {
-  let start = Number.POSITIVE_INFINITY
-  let end = Number.NEGATIVE_INFINITY
-  for (const part of parts) {
-    const time = stepTime(part)
-    if (time?.start !== undefined) start = Math.min(start, time.start)
-    if (time?.end !== undefined) end = Math.max(end, time.end)
-  }
-  if (start === Number.POSITIVE_INFINITY) return null
-  return { start, end: end === Number.NEGATIVE_INFINITY ? start : Math.max(end, start) }
-}
+export type TraceChainSpan = TraceSpan
 
 /** The wall-clock span a chain's steps occupied, or null when none reported one. */
 export function traceChainSpan(chain: TraceChain): TraceChainSpan | null {
-  return spanOfParts(chain.steps)
+  return traceSpanOfParts(chain.steps)
 }
 
 /**
@@ -142,7 +171,7 @@ export function traceChainMarkers(chain: TraceChain): TraceChainMarkers {
   let subagentCount = 0
   let codeMode = false
   for (const step of chain.steps) {
-    if (step.type === 'compaction' || step.type === 'compaction-summary') compacted = true
+    if (isCompactionPart(step)) compacted = true
     else if (step.type === 'subagent') subagentCount += 1
     else if (step.type === 'tool' && (step.codeMode === true || isCodeModeToolName(step.tool))) {
       codeMode = true
@@ -158,7 +187,7 @@ export function traceChainMarkers(chain: TraceChain): TraceChainMarkers {
  * as one chain or several.
  */
 export function tracePartsSpan(parts: readonly AgentPart[]): TraceChainSpan | null {
-  return spanOfParts(parts)
+  return traceSpanOfParts(parts)
 }
 
 /**

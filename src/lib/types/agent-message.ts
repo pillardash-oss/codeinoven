@@ -16,6 +16,7 @@ import type {
   NormalizedUsage,
   UsagePricingProvenance
 } from './usage'
+import type { TraceSpan } from '../working-trace-span'
 
 /**
  * A picture the agent drew to make one option judgeable.
@@ -556,6 +557,23 @@ export interface TurnStreamCompletedTurn {
   endTs: number
   /** This turn's newest window of trace entries, oldest to newest. */
   parts: AgentPart[]
+  /**
+   * Every sub-agent step the whole turn delegated to, in fold order, whether or
+   * not it falls inside `parts`.
+   *
+   * Delegation rides beside the window for the same reason the task list does:
+   * a trace mounts one bounded page at a time, and the header has to state that
+   * the turn spawned sub-agents even while the step that did it sits on a page
+   * nobody has scrolled to.
+   */
+  subagentParts: AgentPart[]
+  /** True when any step of the whole turn compacted the conversation's context,
+   *  whether or not that step is inside `parts`. */
+  turnCompacted: boolean
+  /** Earliest start to latest end across the whole turn's steps, so the header
+   *  states how long the turn took without every page being mounted. Null when
+   *  no step reported a timestamp. */
+  turnSpan: TraceSpan | null
   /** Total trace entries the turn holds, whether or not all are mounted. */
   total: number
   /** Of `total`, the thinking and tool steps (text excluded). */
@@ -595,6 +613,24 @@ export interface TurnStreamPartsPage {
   /** Newest durable task-list tool parts for the turn, so the task card never
    *  depends on which trace page happens to be mounted. */
   todoParts: AgentPart[]
+  /**
+   * Every sub-agent step the whole turn delegated to, in fold order, whether or
+   * not it falls inside `parts`.
+   *
+   * The same out-of-band rule as `todoParts`: the header reports the turn's
+   * delegation from here, because a mounted page can easily hold none of them
+   * (sub-agents are spawned near the start of a long turn and the window opens
+   * on its newest entries). A change read does not need it: the entries that
+   * moved travel in `parts`, so a reader merges the sub-agent snapshots it finds
+   * there.
+   */
+  subagentParts: AgentPart[]
+  /** True when any step of the whole turn compacted the conversation's context,
+   *  whether or not that step is inside `parts`. */
+  turnCompacted: boolean
+  /** Earliest start to latest end across the whole turn's steps. See
+   *  `TurnStreamCompletedTurn.turnSpan`. */
+  turnSpan: TraceSpan | null
   /** Start time of the logical turn `todoParts` was folded for (the newest
    *  non-activity prompt in the mirror), or null on a thread with no such
    *  prompt. The card compares it against the transcript's own turn anchor: a
@@ -628,6 +664,13 @@ export interface TurnStreamPartsChange {
   cursor: number
   /** Newest durable task-list tool parts for the turn. */
   todoParts: AgentPart[]
+  /** True when any step of the whole turn compacted the conversation's context.
+   *  A change read reports it so the header's compaction mark can never depend
+   *  on which page happens to hold the compaction step. */
+  turnCompacted: boolean
+  /** Earliest start to latest end across the whole turn's steps. See
+   *  `TurnStreamCompletedTurn.turnSpan`. */
+  turnSpan: TraceSpan | null
   /** Start time of the logical turn `todoParts` was folded for, or null on a
    *  thread with no prompt yet. See `TurnStreamPartsPage.turnStartTs`. */
   turnStartTs: number | null
