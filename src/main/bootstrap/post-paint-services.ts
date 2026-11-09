@@ -29,7 +29,7 @@ import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
 import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
-import { isGroupThread } from '../../lib/types'
+import { assistantIsBuiltin, isGroupThread } from '../../lib/types'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -636,6 +636,22 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
             context.projectId,
             context.threadId
           )
+          // Hiring is the last resort, so the app holds the line the roster check
+          // is meant to hold: a teammate the team already has is never hired
+          // twice, and a model that skipped reading the roster is told where the
+          // work actually goes instead of quietly growing a second one.
+          const existing = assistantManager
+            .listAssistants()
+            .find(
+              (candidate) =>
+                !assistantIsBuiltin(candidate) &&
+                candidate.name.trim().toLowerCase() === input.name.trim().toLowerCase()
+            )
+          if (existing) {
+            throw new Error(
+              `There is already an assistant called ${existing.name}. Dispatch the work to it instead of hiring a second one.`
+            )
+          }
           const selection = modelSelectionFromThreadSettings(requesting?.settings)
           const assistant = assistantManager.createAssistant({
             name: input.name,

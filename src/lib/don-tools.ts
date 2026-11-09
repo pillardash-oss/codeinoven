@@ -129,7 +129,7 @@ export const DON_TOOLS: GatewayToolDefinition[] = [
   {
     name: DON_CREATE_ASSISTANT_TOOL_NAME,
     description:
-      'Create the teammate this request needs when nothing on the roster fits. It creates the assistant, gives it the name and the purpose you chose, and opens its Getting started conversation with the waiting request already in it, so the person only has to answer its first questions. Use it instead of asking the user to create an assistant themselves, and instead of doing work that belongs to a teammate. Say one line afterwards naming who was created and that the work is already with them.',
+      'Create the teammate this request needs, and only after the roster has answered. Read cio_orchestrate_targets on this turn and check every assistant first: hire only when the request is assistant-category work and not one assistant fits it, never when one plausibly fits, never for codebase work that belongs to a project, and never when the user has asked you not to create assistants. It gives the assistant the name and purpose you chose and opens its Getting started conversation with the waiting request already in it, so the person only answers its first questions. Say one line afterwards naming who was created and that the work is already with them.',
     inputSchema: CREATE_ASSISTANT_INPUT_SCHEMA,
     outputSchema: DON_RESULT_SCHEMA,
     route: '/don-create-assistant',
