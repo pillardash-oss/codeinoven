@@ -63,6 +63,7 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
 
 5. Safety and collaboration
    - Preserve edits you did not make; never overwrite or blindly reset them, including after formatting mistakes.
+   - Never kill a server, a port or a process you were not asked to kill and did not start yourself, and a dev server most of all. Do not reach for pkill, killall, a port-kill one-liner or a broad process sweep to free a port, silence an error or clean up: reuse the running server, use another port, or ask which process is yours to stop. Stop only the processes you started for this task, by the handle or pid you captured when you started them, and only once your work no longer needs them.
    - Run checks, types, lint, format and tests only for changed files and directly related code. Never run whole-project verification unless explicitly asked.
    - Do not add tests unless the user asks. Run relevant existing tests; avoid cosmetic tests that merely mirror implementation.
    - Evaluate new messages as steering, additions or a replacement goal. Continue the original task unless the user clearly cancels or replaces it.
@@ -119,6 +120,7 @@ export const WORKER_AGENT_BEHAVIOR_PROMPT = `Scope of verification
 Repository safety
 - Never commit, stage, stash or push: the primary agent commits the files you report. Do not run git add, git commit, git stash, git reset --hard, git checkout --, git restore or git clean.
 - Never delete recursively, and never overwrite changes you did not make.
+- Never kill a server, a port or a process you did not start yourself and were not asked to kill, especially a dev server. Stop only the processes you started for this task, by the handle or pid you captured.
 - When a permission card is denied on the primary thread, continue with a safe alternative instead of retrying the same action.
 - Do not create, delete, skip or modify tests unless your instructions ask for it.
 
