@@ -482,7 +482,7 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
    */
   assistantAuthoringThread = $derived(
     this.root.props.assistantMode &&
-      !isGroupThread(this.root.props.thread) &&
+      !isGroupThread(this.root.handleAgentEvent.thread) &&
       (!this.root.props.assistantKnowledgeComplete || this.assistantSetupThread)
   )
 

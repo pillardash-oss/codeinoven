@@ -122,7 +122,7 @@
    * a chat that is meant to be readable.
    */
   function conversationTraceOutput(text: string): string {
-    if (!board.props.assistantMode) return text
+    if (!board.props.assistantMode && !groupThread) return text
     if (board.abortRun.assistantAuthoringThread) return assistantDisplayText(text)
     return assistantResultText(text, false)
   }
@@ -1162,14 +1162,13 @@
                     absIndex,
                     isLatest
                   )}
-                  {@const deliveredClosingText = board.props.assistantMode
-                    ? board.abortRun.assistantAuthoringThread
-                      ? assistantDisplayText(turnClosingText?.text ?? messageText(msg))
-                      : assistantResultText(
-                          turnClosingText?.text ?? messageText(msg),
-                          !msg.completedAt
-                        )
-                    : (turnClosingText?.text ?? messageText(msg))}
+                  {@const rawClosingText = turnClosingText?.text ?? messageText(msg)}
+                  {@const deliveredClosingText =
+                    board.props.assistantMode || groupThread
+                      ? board.abortRun.assistantAuthoringThread
+                        ? assistantDisplayText(rawClosingText)
+                        : assistantResultText(rawClosingText, !msg.completedAt)
+                      : rawClosingText}
                   {#if turnClosingVisible && turnClosingText}
                     {@const isReadingThisTurn =
                       'messageId' in speechController.playback &&
