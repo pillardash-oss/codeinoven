@@ -579,7 +579,7 @@ function normalizeCompletion(
   const newText = text(edit.newText)
   const itemText = text(item.insertText) ?? text(item.label)
   const completion: IdeCompletionItem = { label: item.label, serverId }
-  const labelDetail = record(item.labelDetails).detail
+  const labelDetail = record(item.labelDetails).detail ?? record(item.labelDetails).description
   if (typeof labelDetail === 'string' && labelDetail) completion.labelDetail = labelDetail
   if (typeof item.detail === 'string' && item.detail) completion.detail = item.detail
   const docs = documentation(item.documentation).slice(0, 8_000)
@@ -677,7 +677,11 @@ async function completionsFor(
     if (answer.isIncomplete === true) isIncomplete = true
     const defaults = record(answer.itemDefaults)
     const serverId = providers[index].selection.server.id
-    for (const item of items.slice(0, 500)) {
+    // The whole answer is normalized, not a prefix of it: a server lists its
+    // auto-import items at the end (svelteserver put Widget at 1002 of 1039),
+    // so truncating before the prefix filter would drop exactly the item the
+    // reader is spelling.
+    for (const item of items.slice(0, 5_000)) {
       const normalized = normalizeCompletion(item, defaults, serverId)
       if (normalized) completions.push(normalized)
     }
@@ -691,16 +695,21 @@ async function completionsFor(
   // Keep the list small enough to cross the IPC boundary on every keystroke.
   // The typed prefix is filtered here, where the buffer is, so the item the
   // reader is spelling survives the cap instead of being dropped from page 40
-  // of an alphabetical list. Nothing matching keeps the whole list so
-  // CodeMirror's fuzzy matching still has something to show.
+  // of an alphabetical list. A prefix with no exact start keeps the whole list
+  // so CodeMirror's fuzzy matching still has something to show.
   const prefix = wordPrefixAt(text, request.line ?? 0, request.character ?? 0).toLowerCase()
   const matching = prefix
     ? completions.filter((item) => (item.filterText ?? item.label).toLowerCase().startsWith(prefix))
-    : []
-  return {
-    completions: (matching.length ? matching : completions).slice(0, 250),
-    isIncomplete
-  }
+    : completions
+  // The server's sortText is what puts an auto-import at the top: svelteserver
+  // marks a discovered component with "-1" while the plain globals use their
+  // own keys. Sorting after the filter (and before the cap) keeps that intent
+  // and keeps an explicit, empty-prefix request useful.
+  const shown = matching.length || !prefix ? matching : completions
+  const ordered = shown.sort((left, right) =>
+    (left.sortText ?? left.label).localeCompare(right.sortText ?? right.label)
+  )
+  return { completions: ordered.slice(0, 250), isIncomplete }
 }
 /** Resolve one completion, which is where tsserver attaches its auto-import. */
 async function resolveCompletion(
