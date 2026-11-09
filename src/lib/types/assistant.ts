@@ -51,6 +51,23 @@ export interface AssistantPriority {
 }
 
 /**
+ * The last thing said in an assistant's most recent conversation.
+ *
+ * The assistant list carries this one line so a row reads as a place with
+ * recent work in it rather than as a label, without the renderer loading a
+ * transcript per row. It is a bounded excerpt, never the message itself.
+ */
+export interface AssistantPreview {
+  assistantId: string
+  /** Who said it, so the row can mark an answer it is still waiting on. */
+  role: 'user' | 'assistant'
+  /** Flattened, whitespace-collapsed text, already shortened for a row. */
+  text: string
+  /** Epoch ms the message was written, so the newest thread wins a tie. */
+  at: number
+}
+
+/**
  * An Assistant is the top-level assistant grouping ("Triage CodeInOven PRs daily,
  * 9am and 5pm"). It owns the agent-authored knowledge that every task inside it
  * reuses, a default schedule that tasks may override, and the set of

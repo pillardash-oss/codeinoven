@@ -1,6 +1,7 @@
-import { ASSISTANT_SPACE_ID, type AgentMessage, type Thread } from '../../lib/types'
-import { DON_ADDRESS_QUESTION, DON_THREAD_TITLE, donAssistantSeed } from '../../lib/don-assistant'
+import { ASSISTANT_SPACE_ID, type Thread, type ThreadSettings } from '../../lib/types'
+import { DON_THREAD_TITLE, donAssistantSeed, donThreadSettings } from '../../lib/don-assistant'
 import { DON_ASSISTANT_ID } from '../../lib/types/assistant'
+import type { AgentModelSelection } from '../../lib/types/common'
 import type { AssistantManager } from '../../lib/engines/assistant-manager'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -8,6 +9,15 @@ import { Logger } from '../system/logger'
 
 /** The reserved thread id Don's one conversation is written under. */
 export const DON_THREAD_ID = 'don'
+
+/**
+ * The greeting earlier builds seeded as a plain message.
+ *
+ * Don now opens the conversation the way every other assistant does, with a
+ * real turn the model answers, so the static question is retired on launch for
+ * installs that already had it.
+ */
+const LEGACY_GREETING_ID = `${DON_THREAD_ID}-greeting`
 
 /** What the bootstrap touched, so the caller can broadcast exactly that. */
 export interface DonBootstrapResult {
@@ -17,34 +27,8 @@ export interface DonBootstrapResult {
   assistantCreated: boolean
   /** Whether this call is what created Don's thread. */
   threadCreated: boolean
-}
-
-/**
- * The greeting Don's thread opens with.
- *
- * It is written as an ordinary assistant message rather than asked by a model
- * turn: a fresh install should not spend a token before the user has said
- * anything, and the question has to be on screen the first time the thread is
- * opened. The message carries no model, provider or harness because no model
- * produced it, and the app's own transcript renders an author-less assistant
- * message as the thread's assistant.
- */
-function donGreeting(at: number): AgentMessage {
-  return {
-    id: `${DON_THREAD_ID}-greeting`,
-    role: 'assistant',
-    origin: 'assistant',
-    visibility: 'conversation',
-    parts: [
-      {
-        type: 'text',
-        id: `${DON_THREAD_ID}-greeting-part`,
-        messageID: `${DON_THREAD_ID}-greeting`,
-        text: DON_ADDRESS_QUESTION
-      }
-    ],
-    createdAt: at
-  }
+  /** Whether this call is what gave an existing thread its model settings. */
+  threadSettingsRepaired: boolean
 }
 
 /**
@@ -55,13 +39,18 @@ function donGreeting(at: number): AgentMessage {
  *   1. the assistant, under its reserved id, so the sidebar can always draw it and
  *      no import or rename can produce a second one;
  *   2. its single group thread, in the hidden assistant space, pinned so no
- *      eviction pass can take the one conversation delegated work reports into;
- *   3. the greeting that asks what to call the user, written once, before any
- *      model turn exists.
+ *      eviction pass can take the one conversation delegated work reports into,
+ *      and carrying the same thread settings every assistant task carries, so
+ *      the engine can actually run a turn on it;
+ *   3. nothing else. Don introduces itself the way every other assistant does,
+ *      with a real turn when the user first opens it, instead of a pre-written
+ *      question sitting in the transcript with no model behind it.
  *
  * Everything already present is left exactly as it is, so a user who changed Don's
- * model or connections keeps them across launches. Failure is logged and never
- * thrown: a broken orchestrator row must not stop the app from starting.
+ * model or connections keeps them across launches. The one repair is a thread
+ * seeded before settings were written: a model with no settings can never run,
+ * so a resolvable default is written once. Failure is logged and never thrown: a
+ * broken orchestrator row must not stop the app from starting.
  */
 export async function ensureDonOrchestrator(deps: {
   assistantManager: AssistantManager
@@ -74,35 +63,60 @@ export async function ensureDonOrchestrator(deps: {
     // Don inherits the model the user already works on, so it can answer the first
     // time it is opened instead of arriving incomplete. The panel's Agents tab
     // changes it later like any other assistant.
-    const primary = config.agentDefaults?.seniorEngineer
+    const primary: AgentModelSelection | undefined = config.agentDefaults?.seniorEngineer
     const seed = donAssistantSeed(primary ? { primary, fallbacks: [] } : undefined)
     const { created: assistantCreated } = assistantManager.ensureBuiltinAssistant(seed)
+    const settings = primary ? donThreadSettings(primary) : null
 
     const existing = await threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
-    if (existing) return { thread: existing, assistantCreated, threadCreated: false }
+    if (existing) {
+      await threadManager.deleteAppMessages(ASSISTANT_SPACE_ID, DON_THREAD_ID, [LEGACY_GREETING_ID])
+      let threadSettingsRepaired = false
+      if (!existing.settings && settings) {
+        await threadManager.updateSettings(ASSISTANT_SPACE_ID, DON_THREAD_ID, settingsFor(settings))
+        threadSettingsRepaired = true
+      }
+      const thread = await threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+      return {
+        thread: thread ?? existing,
+        assistantCreated,
+        threadCreated: false,
+        threadSettingsRepaired
+      }
+    }
 
     await threadManager.createThread({
       id: DON_THREAD_ID,
       projectId: ASSISTANT_SPACE_ID,
-      providerId: '',
+      providerId: settings?.providerId ?? '',
       title: DON_THREAD_TITLE,
       titleSource: 'default',
       workingDirectory: '',
       assistantId: DON_ASSISTANT_ID,
       groupParticipants: [DON_ASSISTANT_ID],
-      groupTitle: DON_THREAD_TITLE
+      groupTitle: DON_THREAD_TITLE,
+      ...(settings ? { settings: settingsFor(settings) } : {})
     })
     // Pinning is a user action everywhere else, so it is an explicit write here
     // rather than a creation flag: the one thread the front door lives on has to
     // survive every eviction pass.
     await threadManager.setPinned(ASSISTANT_SPACE_ID, DON_THREAD_ID, true)
-    await threadManager.upsertMessages(ASSISTANT_SPACE_ID, DON_THREAD_ID, [donGreeting(Date.now())])
     const thread = await threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
-    return { thread, assistantCreated, threadCreated: true }
+    return { thread, assistantCreated, threadCreated: true, threadSettingsRepaired: false }
   } catch (error) {
     Logger.error('Don bootstrap failed', {
       error: error instanceof Error ? error.message : String(error)
     })
-    return { thread: null, assistantCreated: false, threadCreated: false }
+    return {
+      thread: null,
+      assistantCreated: false,
+      threadCreated: false,
+      threadSettingsRepaired: false
+    }
   }
+}
+
+/** A copy, so a caller can never mutate the settings a caller handed over. */
+function settingsFor(settings: ThreadSettings): ThreadSettings {
+  return { ...settings }
 }

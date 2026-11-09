@@ -699,7 +699,12 @@
           iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
           ready={assistantReady(donAssistant)}
           onOpen={() => {
-            if (donThread) onOpenTask(donThread)
+            if (!donThread) return
+            // The first open is the one moment Don introduces itself. A failure
+            // here is not fatal: the thread is open and the user can write the
+            // first line themselves.
+            void assistantStore.startDonSetup().catch(() => undefined)
+            onOpenTask(donThread)
           }}
         />
       {/if}
@@ -744,6 +749,7 @@
           threadCount={threadsOfAssistant(assistant.id)}
           iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
           nextRunAt={assistantNextRun(assistant.id)}
+          preview={assistantStore.previews.get(assistant.id)?.text ?? null}
           searchOpen={searching}
           searchQuery={query}
           onToggle={toggleAssistant}

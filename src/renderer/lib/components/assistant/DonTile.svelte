@@ -1,15 +1,21 @@
 <script lang="ts">
-  import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import type { Assistant } from '$shared/types'
 
   /**
-   * Don, pinned as a square at the top of the assistant list.
+   * Don, pinned as a centred square at the top of the assistant list.
    *
    * Don is not a row like the others: it is the one thread every conversation can
    * reach without opening the assistant view, so it holds a slot of its own above
-   * the list. The tile is never draggable, never carries a menu that could rename,
-   * delete or repin it, and its square shape is the app's own rule for a control
-   * that is a place rather than an item.
+   * the list. The square is the app's own rule for a control that is a place
+   * rather than an item, and it is centred so the orchestrator reads as the door
+   * the list stands under.
+   *
+   * It wears the assistant mark itself   the face, not one of the job variants
+   *   because Don is the assistant, and the mark is what makes that true at a
+   * glance. The tile is never draggable and never carries a menu that could
+   * rename, delete or repin it.
    */
   interface Props {
     assistant: Assistant | null
@@ -25,46 +31,43 @@
   let { assistant, threadId, selected, iconUrl = null, ready, onOpen }: Props = $props()
 
   const name = $derived(assistant?.name?.trim() || 'Don')
-  const icon = $derived(assistant ? getAssistantIcon(assistant, iconUrl) : null)
-  const color = $derived(assistant?.color)
+  const accent = $derived(assistant?.color ?? 'var(--color-foreground)')
+  const title = $derived(
+    ready ? `Open ${name}, your orchestrator` : `${name} needs a model before it can take work`
+  )
 </script>
 
-<div class="border-b border-border px-2 py-2.5">
+<div class="flex justify-center border-b border-border px-3 py-3.5">
   <button
     type="button"
-    class="flex w-full flex-col items-center gap-1.5 px-2 py-2.5 transition-colors {selected
-      ? 'bg-elevated'
-      : 'hover:bg-elevated/60'}"
-    style={color ? `border-left: 2px solid ${color}` : ''}
-    title={ready
-      ? `Open ${name}, your orchestrator`
-      : `${name} needs a model before it can take work`}
-    aria-label={ready
-      ? `Open ${name}, your orchestrator`
-      : `${name} needs a model before it can take work`}
+    class="group flex flex-col items-center gap-2 outline-none"
+    {title}
+    aria-label={title}
     aria-current={selected ? 'page' : undefined}
     disabled={threadId === null}
     onclick={onOpen}
   >
-    <span class="flex size-12 items-center justify-center border border-border bg-surface">
-      {#if icon}
-        <img src={icon} alt="" aria-hidden="true" class="size-8 object-contain" />
+    <span
+      class="flex size-24 items-center justify-center border transition-colors {selected
+        ? 'border-primary bg-elevated'
+        : 'border-border bg-surface group-hover:border-border-strong group-hover:bg-elevated'}"
+    >
+      {#if iconUrl}
+        <img src={iconUrl} alt="" aria-hidden="true" class="size-14 object-contain" />
       {:else}
-        <AssistantDefaultIcon class="size-8" />
+        <AssistantIcon mark="mark" size={56} style="color: {accent}" />
       {/if}
     </span>
-    <span class="flex items-center gap-1 text-[0.75rem] font-medium text-foreground">
+    <span class="flex items-center gap-1 text-sm font-medium text-foreground">
       {name}
       {#if !ready}
-        <span
-          class="size-1.5 bg-warning"
+        <CioAttention
+          size={12}
+          class="text-warning"
           title={`${name} has no model yet`}
           aria-label={`${name} has no model yet`}
-        ></span>
+        />
       {/if}
-    </span>
-    <span class="text-[0.6875rem] leading-tight text-muted">
-      {ready ? 'Orchestrator' : 'Needs a model'}
     </span>
   </button>
 </div>

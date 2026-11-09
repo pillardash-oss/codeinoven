@@ -35,6 +35,7 @@ import {
   type ThreadSettings,
   type ThreadContextUsage,
   type AgentMessage,
+  type AssistantPreview,
   type ThreadMessageCursor,
   type ThreadMessagePage,
   type UsageBearingMessage,
@@ -1959,6 +1960,31 @@ export class ThreadManager {
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
     if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     return this.transcripts.loadUserMessages(projectId, threadId)
+  }
+
+  /**
+   * The newest conversation message per assistant, for the assistant list rows.
+   *
+   * Read straight from the message repo rather than through a transcript load:
+   * the sidebar needs one bounded line per row, not a conversation.
+   */
+  async listAssistantPreviews(projectId: string): Promise<AssistantPreview[]> {
+    return this.agentMessageRepo.latestAssistantPreviewsViaWorker(projectId)
+  }
+
+  /**
+   * Retire app-owned seed messages. The orchestrator bootstrap uses this when the
+   * app changes what it seeds, so an install that saw the earlier version does
+   * not keep a line the app no longer writes.
+   */
+  async deleteAppMessages(
+    projectId: string,
+    threadId: string,
+    ids: readonly string[]
+  ): Promise<void> {
+    if (ids.length === 0) return
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
+    this.agentMessageRepo.deleteByIds(threadId, ids)
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */

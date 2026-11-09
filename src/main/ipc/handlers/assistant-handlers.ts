@@ -47,6 +47,7 @@ import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import { validateCustomIconImage } from '../../../lib/custom-icon'
 import { ASSISTANT_SPACE_ID } from '../../../lib/types'
 import { DON_THREAD_ID } from '../../don/don-bootstrap'
+import { DON_FIRST_RUN_ACTION, DON_FIRST_RUN_PROMPT } from '../../../lib/don-assistant'
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const DELIVERY_CHANNELS = new Set<string>(ASSISTANT_DELIVERY_CHANNEL_IDS)
@@ -392,6 +393,16 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('assistant:list', () => assistantManager.listAssistants())
 
   /**
+   * One last-line excerpt per assistant for the assistant list.
+   *
+   * The query is bounded to the assistant space's threads and walks the message
+   * timeline index, so it stays a handful of seeks and never loads a transcript.
+   */
+  ipcMain.handle('assistant:previews', async () =>
+    ctx.threadManager.listAssistantPreviews(ASSISTANT_SPACE_ID)
+  )
+
+  /**
    * Don's one thread, or null while it has not been seeded yet.
    *
    * Every surface that hands the orchestrator a message without opening the
@@ -401,6 +412,49 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('assistant:donThread', async () => {
     const thread = await ctx.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
     return { threadId: thread?.id ?? null }
+  })
+
+  /**
+   * Open Don's first conversation, once, the way every assistant opens theirs.
+   *
+   * The orchestrator's thread is seeded without a transcript on purpose: its
+   * introduction is a real turn, so the user answers a person rather than a
+   * pre-written question. Opening it again with a conversation already in it is
+   * a no-op, and one call is in flight at a time so a double click never asks
+   * the same question twice.
+   */
+  let donFirstRunInFlight = false
+  ipcMain.handle('assistant:startDonSetup', async () => {
+    const chatEngine = ctx.chatEngine
+    if (!chatEngine || donFirstRunInFlight) return
+    donFirstRunInFlight = true
+    try {
+      const thread = await ctx.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+      if (!thread?.settings) return
+      const messages = await ctx.threadManager.loadMessages(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+      const alreadyStarted = messages.some(
+        (message) =>
+          message.visibility === 'conversation' &&
+          (message.role === 'user' || message.role === 'assistant')
+      )
+      if (alreadyStarted) return
+      await chatEngine.sendPrompt(
+        thread.projectId,
+        thread.id,
+        thread.settings,
+        DON_FIRST_RUN_PROMPT,
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        'user',
+        { action: DON_FIRST_RUN_ACTION }
+      )
+    } finally {
+      donFirstRunInFlight = false
+    }
   })
 
   ipcMain.handle('assistant:create', (_, input: unknown) => {

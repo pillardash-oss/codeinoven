@@ -9,6 +9,7 @@ import type {
   AgentMessageVisibility,
   AgentPart,
   AgentTokenUsage,
+  AssistantPreview,
   MessageAuthor,
   NormalizedUsage,
   ThinkingLevel,
@@ -75,6 +76,38 @@ export function partsToSearchText(parts: AgentPart[]): string {
     }
   }
   return chunks.join('\n')
+}
+
+/**
+ * The one-line excerpt the assistant list shows for a message.
+ *
+ * A user row already has a display summary that understands app actions, so it
+ * reuses that; an assistant row contributes only its spoken text, never its
+ * reasoning. Whitespace collapses to single spaces and the line is cut on a word
+ * boundary, because the row truncates by width and a half word reads as a bug.
+ */
+const PREVIEW_MAX_CHARACTERS = 140
+
+function previewText(partsJson: string, role: string): string {
+  let raw: string
+  try {
+    if (role === 'user') {
+      raw = summarizeUserMessage(partsJson).content
+    } else {
+      const parts = JSON.parse(partsJson) as AgentPart[]
+      raw = parts
+        .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+        .map((part) => part.text)
+        .join(' ')
+    }
+  } catch {
+    return ''
+  }
+  const flat = raw.replace(/\s+/g, ' ').trim()
+  if (flat.length <= PREVIEW_MAX_CHARACTERS) return flat
+  const cut = flat.slice(0, PREVIEW_MAX_CHARACTERS)
+  const boundary = cut.lastIndexOf(' ')
+  return `${(boundary > 60 ? cut.slice(0, boundary) : cut).trimEnd()}…`
 }
 
 /** Persisted column values that participate in a message's content identity. */
@@ -1119,6 +1152,63 @@ export class AgentMessageRepo {
     }
   }
 
+  /**
+   * The newest conversation message in each assistant's most recent thread.
+   *
+   * The assistant list draws one line per row from this, so it is one bounded
+   * query over the assistant space rather than a transcript load per row. The
+   * subquery walks the thread timeline index (`thread_id, session_id,
+   * created_at`), and the assistant space holds tens of threads, so the whole
+   * read is a handful of index seeks.
+   *
+   * Only conversation rows count: a working trace is the agent narrating itself,
+   * not what the assistant last said to its owner. The read runs on the worker's
+   * connection because it sits on the assistant list's display path, and a read
+   * there must never hold the Electron main thread.
+   */
+  async latestAssistantPreviewsViaWorker(projectId: string): Promise<AssistantPreview[]> {
+    const result = await this.db.queryViaWorker(
+      `SELECT t.assistant_id AS assistantId, m.role AS role, m.parts AS parts,
+              m.created_at AS createdAt
+       FROM threads t
+       JOIN agent_messages m ON m.id = (
+         SELECT m2.id FROM agent_messages m2
+         WHERE m2.thread_id = t.id
+           AND m2.session_id IS NULL
+           AND m2.visibility = 'conversation'
+           AND m2.role IN ('user', 'assistant')
+           AND m2.parts <> '[]'
+           AND (m2.role = 'user' OR m2.parts LIKE '%"type":"text"%')
+         ORDER BY m2.created_at DESC, m2.id DESC
+         LIMIT 1
+       )
+       WHERE t.project_id = ? AND t.assistant_id IS NOT NULL AND t.archived = 0`,
+      [projectId],
+      0
+    )
+    if (!result.ok) return []
+    const rows = result.rows as unknown as Array<{
+      assistantId: string
+      role: string
+      parts: string
+      createdAt: number
+    }>
+    const newest = new Map<string, AssistantPreview>()
+    for (const row of rows) {
+      const text = previewText(row.parts, row.role)
+      if (!text) continue
+      const current = newest.get(row.assistantId)
+      if (current && current.at >= row.createdAt) continue
+      newest.set(row.assistantId, {
+        assistantId: row.assistantId,
+        role: row.role === 'user' ? 'user' : 'assistant',
+        text,
+        at: row.createdAt
+      })
+    }
+    return [...newest.values()].sort((a, b) => b.at - a.at)
+  }
+
   /** Every user-authored conversation message, oldest to newest. */
   loadUserMessagesByThread(threadId: string): UserMessageSummary[] {
     const rows = this.db.all<UserMessageRow>(
@@ -1151,6 +1241,20 @@ export class AgentMessageRepo {
 
   deleteConversationByThread(threadId: string): void {
     this.db.run('DELETE FROM agent_messages WHERE thread_id = ? AND session_id IS NULL', threadId)
+  }
+
+  /**
+   * Remove specific messages by id, so an app-owned seed can be retired when the
+   * app itself changes what it seeds.
+   */
+  deleteByIds(threadId: string, ids: readonly string[]): void {
+    if (ids.length === 0) return
+    const placeholders = ids.map(() => '?').join(', ')
+    this.db.run(
+      `DELETE FROM agent_messages WHERE thread_id = ? AND id IN (${placeholders})`,
+      threadId,
+      ...ids
+    )
   }
 
   loadBySession(threadId: string, sessionId: string): AgentMessage[] {
