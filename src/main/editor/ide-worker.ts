@@ -12,7 +12,17 @@ import { realpath, readFile, stat } from 'node:fs/promises'
 import { delimiter, dirname, join, relative, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isWithinRoot, validateRelativePath } from './project-files/project-files-paths'
-import type { IdeRequest, IdeResponse, IdeLocation, IdeProgress } from '../../lib/editor-ide'
+import type {
+  IdeRequest,
+  IdeResponse,
+  IdeLocation,
+  IdeProgress,
+  IdeCompletionItem,
+  IdeCodeAction,
+  IdePosition,
+  IdeRange,
+  IdeTextEdit
+} from '../../lib/editor-ide'
 
 const port = parentPort!
 const MAX_BYTES = 2 * 1024 * 1024
@@ -53,6 +63,14 @@ class Session {
   /** The settings this session answers `workspace/configuration` from. */
   readonly settings: Record<string, unknown>
   readonly documents = new Map<string, { text: string; version: number }>()
+  /** The diagnostics the server last published for a document. Code actions
+   *  are asked for against them, which is how an unresolved icon gets an
+   *  "Import X from ..." quick fix instead of an empty menu. */
+  readonly diagnostics = new Map<string, unknown[]>()
+  /** A server's request to apply an edit on its behalf. Set only while an
+   *  execute-command is running, so a stray apply cannot land in another
+   *  action's result. */
+  applyEditHandler: ((edit: unknown) => void) | null = null
   /** Documents this session already paid its cold-start request for. */
   readonly warmed = new Set<string>()
   capabilities: Record<string, unknown> = {}
@@ -191,6 +209,11 @@ class Session {
           id: message.id,
           result: [{ uri: pathToFileURL(this.root).href, name: this.root }]
         })
+      } else if (message.method === 'workspace/applyEdit') {
+        // The app owns the buffers, so the edit is handed to the request that
+        // asked for it instead of being written behind the user's back.
+        this.applyEditHandler?.(record(message.params).edit)
+        this.send({ id: message.id, result: { applied: true } })
       } else if (
         message.method === 'client/registerCapability' ||
         message.method === 'window/workDoneProgress/create'
@@ -199,7 +222,7 @@ class Session {
       } else {
         this.send({
           id: message.id,
-          error: { code: -32601, message: 'This editor supports read-only language intelligence' }
+          error: { code: -32601, message: 'This editor does not support that request' }
         })
       }
       return
@@ -209,6 +232,12 @@ class Session {
     // a labelled progress bar instead of a silent wait.
     if (typeof message.method === 'string') {
       if (message.method === '$/progress') this.reportProgress(record(message.params))
+      if (message.method === 'textDocument/publishDiagnostics') {
+        const params = record(message.params)
+        const uri = params.uri
+        if (typeof uri === 'string' && Array.isArray(params.diagnostics))
+          this.diagnostics.set(uri, params.diagnostics.slice(0, 2000))
+      }
       return
     }
     if (typeof message.id !== 'number') return
@@ -373,10 +402,47 @@ async function sessionFor(
               // understands it. Declaring it is what turns a silent project load
               // into the labelled progress the IDE panel shows.
               window: { workDoneProgress: true },
-              workspace: { configuration: true, workspaceFolders: true },
+              workspace: { configuration: true, workspaceFolders: true, applyEdit: true },
               textDocument: {
                 hover: { contentFormat: ['plaintext', 'markdown'] },
                 definition: { linkSupport: true },
+                completion: {
+                  // No snippet support: this editor inserts plain text, so a
+                  // server must not answer with `${1:...}` placeholders.
+                  completionItem: {
+                    documentationFormat: ['plaintext', 'markdown'],
+                    labelDetailsSupport: true,
+                    // tsserver only attaches an auto-import edit when the item
+                    // is resolved, and it only resolves the fields listed here.
+                    resolveSupport: {
+                      properties: ['documentation', 'detail', 'additionalTextEdits']
+                    },
+                    insertReplaceSupport: true
+                  },
+                  contextSupport: true
+                },
+                codeAction: {
+                  codeActionLiteralSupport: {
+                    codeActionKind: {
+                      valueSet: [
+                        'quickfix',
+                        'refactor',
+                        'refactor.extract',
+                        'refactor.inline',
+                        'refactor.rewrite',
+                        'source',
+                        'source.addMissingImports',
+                        'source.organizeImports',
+                        'source.fixAll'
+                      ]
+                    }
+                  },
+                  isPreferredSupport: true,
+                  disabledSupport: true,
+                  dataSupport: true,
+                  resolveSupport: { properties: ['edit'] }
+                },
+                publishDiagnostics: { versionSupport: false },
                 synchronization: { dynamicRegistration: false, didSave: false }
               }
             }
@@ -450,6 +516,340 @@ function documentation(value: unknown): string {
   if (typeof value === 'string') return value
   if (Array.isArray(value)) return value.map(documentation).join('\n\n')
   return typeof record(value).value === 'string' ? String(record(value).value) : ''
+}
+
+/** One LSP position, refused when it is not a non-negative integer pair. */
+function lspPosition(value: unknown): IdePosition | null {
+  const position = record(value)
+  const line = Number(position.line)
+  const character = Number(position.character)
+  if (!Number.isInteger(line) || !Number.isInteger(character)) return null
+  if (line < 0 || character < 0) return null
+  return { line, character }
+}
+function lspRange(value: unknown): IdeRange | null {
+  const range = record(value)
+  const start = lspPosition(range.start)
+  const end = lspPosition(range.end)
+  return start && end ? { start, end } : null
+}
+/** A range, an InsertReplaceEdit or a completion's default edit range. */
+function rangeOf(value: unknown): IdeRange | null {
+  const entry = record(value)
+  return lspRange(entry.range ?? entry.replace ?? entry.insert ?? entry)
+}
+function normalizeEdits(value: unknown): IdeTextEdit[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const edits: IdeTextEdit[] = []
+  for (const item of value) {
+    const edit = record(item)
+    const range = rangeOf(edit.range)
+    if (typeof edit.newText !== 'string' || !range) continue
+    edits.push({ range, newText: edit.newText })
+  }
+  return edits.length ? edits : undefined
+}
+/**
+ * A snippet flattened to the text it stands for.
+ *
+ * Snippet support is deliberately not advertised, but a server that answers
+ * with a snippet anyway must never put `${1:...}` into the user's file, so the
+ * placeholders are unwrapped and the tab stops dropped.
+ */
+function plainSnippet(value: string): string {
+  return value
+    .replace(/\$\{\d+:([^}]*)\}/gu, '$1')
+    .replace(/\$\{\d+\}/gu, '')
+    .replace(/\$\d+/gu, '')
+}
+function normalizeCompletion(
+  value: unknown,
+  defaults: Record<string, unknown>,
+  serverId: string
+): IdeCompletionItem | null {
+  const item = record(value)
+  if (typeof item.label !== 'string' || !item.label) return null
+  const insertTextFormat = item.insertTextFormat ?? defaults.insertTextFormat
+  const text = (candidate: unknown): string | undefined => {
+    if (typeof candidate !== 'string') return undefined
+    return insertTextFormat === 2 ? plainSnippet(candidate) : candidate
+  }
+  const edit = record(item.textEdit)
+  const editRange = rangeOf(edit) ?? rangeOf(defaults.editRange)
+  const newText = text(edit.newText)
+  const itemText = text(item.insertText) ?? text(item.label)
+  const completion: IdeCompletionItem = { label: item.label, serverId }
+  const labelDetail = record(item.labelDetails).detail
+  if (typeof labelDetail === 'string' && labelDetail) completion.labelDetail = labelDetail
+  if (typeof item.detail === 'string' && item.detail) completion.detail = item.detail
+  const docs = documentation(item.documentation).slice(0, 8_000)
+  if (docs) completion.documentation = docs
+  if (typeof item.kind === 'number') completion.kind = item.kind
+  if (Array.isArray(item.tags)) completion.tags = item.tags.filter((tag) => tag === 1)
+  if (typeof item.sortText === 'string') completion.sortText = item.sortText
+  if (typeof item.filterText === 'string') completion.filterText = item.filterText
+  if (itemText) completion.insertText = itemText
+  if (editRange && newText !== undefined) completion.textEdit = { range: editRange, newText }
+  const additional = normalizeEdits(item.additionalTextEdits)
+  if (additional) completion.additionalTextEdits = additional
+  if (Array.isArray(item.commitCharacters))
+    completion.commitCharacters = item.commitCharacters.filter(
+      (character): character is string => typeof character === 'string'
+    )
+  if (item.data !== undefined) completion.data = item.data
+  return completion
+}
+/** The identifier the caret is inside, for a code action's own range. */
+function wordRangeAt(text: string, line: number, character: number): IdeRange {
+  const lines = text.split('\n')
+  const target = lines[Math.max(0, Math.min(line, lines.length - 1))] ?? ''
+  const caret = Math.max(0, Math.min(character, target.length))
+  const isWord = (value: string | undefined): boolean => value !== undefined && /[\w$]/u.test(value)
+  let from = caret
+  let to = caret
+  while (from > 0 && isWord(target[from - 1])) from--
+  while (to < target.length && isWord(target[to])) to++
+  const safeLine = Math.max(0, Math.min(line, lines.length - 1))
+  return {
+    start: { line: safeLine, character: from },
+    end: { line: safeLine, character: to }
+  }
+}
+function overlapsRange(value: unknown, range: IdeRange): boolean {
+  const diagnostic = lspRange(record(value).range)
+  if (!diagnostic) return false
+  return range.start.line <= diagnostic.end.line && range.end.line >= diagnostic.start.line
+}
+/**
+ * Every completion the file's servers offer at the caret.
+ *
+ * The renderer shows these in CodeMirror's own dropdown, so the answer is kept
+ * to plain serialisable data: the opaque `data` field travels back untouched
+ * when an item is resolved for its auto-import edit.
+ */
+async function completionsFor(
+  entries: { session: Session; selection: Selection }[],
+  uri: string,
+  request: IdeRequest
+): Promise<IdeResponse> {
+  const providers = entries.filter((entry) =>
+    Boolean(entry.session.capabilities.completionProvider)
+  )
+  if (!providers.length) return { completions: [] }
+  const position = { line: request.line ?? 0, character: request.character ?? 0 }
+  const context = {
+    triggerKind: request.triggerKind ?? 1,
+    ...(request.triggerCharacter ? { triggerCharacter: request.triggerCharacter } : {})
+  }
+  const results = await Promise.allSettled(
+    providers.map((entry) =>
+      entry.session.request(
+        'textDocument/completion',
+        { textDocument: { uri }, position, context },
+        INTELLIGENCE_TIMEOUT_MS
+      )
+    )
+  )
+  const completions: IdeCompletionItem[] = []
+  let isIncomplete = false
+  let rejection: unknown
+  for (const [index, result] of results.entries()) {
+    if (result.status === 'rejected') {
+      rejection ??= result.reason
+      continue
+    }
+    const answer = record(result.value)
+    const items = Array.isArray(result.value)
+      ? result.value
+      : Array.isArray(answer.items)
+        ? answer.items
+        : []
+    if (answer.isIncomplete === true) isIncomplete = true
+    const defaults = record(answer.itemDefaults)
+    const serverId = providers[index].selection.server.id
+    for (const item of items.slice(0, 500)) {
+      const normalized = normalizeCompletion(item, defaults, serverId)
+      if (normalized) completions.push(normalized)
+    }
+  }
+  if (
+    !completions.length &&
+    rejection !== undefined &&
+    results.every((r) => r.status === 'rejected')
+  )
+    throw rejection instanceof Error ? rejection : new Error(String(rejection))
+  return { completions: completions.slice(0, 500), isIncomplete }
+}
+/** Resolve one completion, which is where tsserver attaches its auto-import. */
+async function resolveCompletion(
+  entries: { session: Session; selection: Selection }[],
+  request: IdeRequest
+): Promise<IdeResponse> {
+  const payload = record(request.payload)
+  const serverId = typeof payload.serverId === 'string' ? payload.serverId : ''
+  const entry =
+    entries.find((candidate) => candidate.selection.server.id === serverId) ?? entries[0]
+  if (!entry || !entry.session.capabilities.completionProvider) return { completions: [] }
+  const resolved = await entry.session.request(
+    'completionItem/resolve',
+    payload,
+    INTELLIGENCE_TIMEOUT_MS
+  )
+  const completion = normalizeCompletion(resolved, {}, entry.selection.server.id)
+  return { completions: completion ? [completion] : [] }
+}
+/**
+ * The actions the file's servers offer for the code under the caret.
+ *
+ * Imports and quick fixes are the useful half of this: an unresolved icon has
+ * no meaning until its module is imported, so the context menu lists the
+ * server's own "Import ..." action beside Go to Definition.
+ */
+async function codeActionsFor(
+  entries: { session: Session; selection: Selection }[],
+  uri: string,
+  request: IdeRequest,
+  text: string
+): Promise<IdeResponse> {
+  const providers = entries.filter((entry) =>
+    Boolean(entry.session.capabilities.codeActionProvider)
+  )
+  if (!providers.length) return { codeActions: [] }
+  const range = wordRangeAt(text, request.line ?? 0, request.character ?? 0)
+  const diagnostics = providers.flatMap((entry) =>
+    (entry.session.diagnostics.get(uri) ?? []).filter((item) => overlapsRange(item, range))
+  )
+  const results = await Promise.allSettled(
+    providers.map((entry) =>
+      entry.session.request(
+        'textDocument/codeAction',
+        {
+          textDocument: { uri },
+          range,
+          context: { diagnostics, triggerKind: 1, only: undefined }
+        },
+        INTELLIGENCE_TIMEOUT_MS
+      )
+    )
+  )
+  const actions: IdeCodeAction[] = []
+  const seen = new Set<string>()
+  for (const [index, result] of results.entries()) {
+    if (result.status !== 'fulfilled' || !Array.isArray(result.value)) continue
+    const serverId = providers[index].selection.server.id
+    for (const raw of result.value.slice(0, 60)) {
+      const action = record(raw)
+      if (typeof action.title !== 'string' || !action.title || seen.has(action.title)) continue
+      seen.add(action.title)
+      actions.push({
+        title: action.title,
+        ...(typeof action.kind === 'string' ? { kind: action.kind } : {}),
+        ...(action.isPreferred === true ? { isPreferred: true } : {}),
+        ...(action.disabled !== undefined
+          ? { disabled: Boolean(record(action.disabled).reason) }
+          : {}),
+        action: raw,
+        serverId
+      })
+    }
+  }
+  // Preferred actions first; the sort is stable, so each server's own order holds.
+  actions.sort(
+    (left, right) => Number(right.isPreferred === true) - Number(left.isPreferred === true)
+  )
+  return { codeActions: actions.slice(0, 40) }
+}
+/** Group a WorkspaceEdit's edits by document URI. */
+function workspaceEdits(edit: unknown): Map<string, IdeTextEdit[]> {
+  const grouped = new Map<string, IdeTextEdit[]>()
+  const add = (uri: unknown, edits: unknown): void => {
+    if (typeof uri !== 'string' || !Array.isArray(edits)) return
+    const normalized = normalizeEdits(edits)
+    if (!normalized) return
+    grouped.set(uri, [...(grouped.get(uri) ?? []), ...normalized])
+  }
+  const collection = record(edit)
+  for (const [uri, edits] of Object.entries(record(collection.changes))) add(uri, edits)
+  if (Array.isArray(collection.documentChanges))
+    for (const change of collection.documentChanges) {
+      const entry = record(change)
+      add(record(entry.textDocument).uri, entry.edits)
+    }
+  return grouped
+}
+/**
+ * Apply a code action, or its command, and return the re-laid-out document.
+ *
+ * Only the document the editor holds is written. An action that also wants to
+ * change other files reports them instead, because dropping those edits
+ * silently would leave the project half-changed with no way to know.
+ */
+async function applyCodeAction(
+  entries: { session: Session; selection: Selection }[],
+  root: string,
+  uri: string,
+  request: IdeRequest,
+  text: string
+): Promise<IdeResponse> {
+  const payload = record(request.payload)
+  const raw = record(payload.action)
+  if (!Object.keys(raw).length) throw new Error('This action carried no edit')
+  const serverId = typeof payload.serverId === 'string' ? payload.serverId : ''
+  const entry =
+    entries.find((candidate) => candidate.selection.server.id === serverId) ?? entries[0]
+  if (!entry) throw new Error('The language server is no longer available')
+  let resolved = raw
+  const provider = record(entry.session.capabilities.codeActionProvider)
+  if (raw.data !== undefined && provider.resolveProvider === true)
+    resolved = record(
+      await entry.session.request('codeAction/resolve', raw, INTELLIGENCE_TIMEOUT_MS)
+    )
+  let edit = resolved.edit
+  const command = record(resolved.command)
+  if (edit === undefined && typeof command.command === 'string') {
+    let captured: unknown
+    entry.session.applyEditHandler = (value) => {
+      captured = value
+    }
+    try {
+      await entry.session.request(
+        'workspace/executeCommand',
+        {
+          command: command.command,
+          arguments: Array.isArray(command.arguments) ? command.arguments : []
+        },
+        INTELLIGENCE_TIMEOUT_MS
+      )
+    } finally {
+      entry.session.applyEditHandler = null
+    }
+    edit = captured
+  }
+  if (edit === undefined) {
+    const title = typeof payload.title === 'string' ? payload.title : 'This action'
+    throw new Error(`${title} returned no edit to apply`)
+  }
+  const grouped = workspaceEdits(edit)
+  if (!grouped.size) {
+    const title = typeof payload.title === 'string' ? payload.title : 'This action'
+    throw new Error(`${title} returned no edit to apply`)
+  }
+  const next = applyTextEdits(text, grouped.get(uri) ?? []) ?? text
+  const skippedFiles: string[] = []
+  for (const key of grouped.keys()) {
+    if (key === uri) continue
+    if (!key.startsWith('file:')) {
+      skippedFiles.push(key)
+      continue
+    }
+    try {
+      const path = fileURLToPath(key)
+      skippedFiles.push(relative(root, path).split('\\').join('/'))
+    } catch {
+      skippedFiles.push(key)
+    }
+  }
+  return { text: next, skippedFiles }
 }
 async function grep(
   root: string,
@@ -554,7 +954,15 @@ const chains = new Map<string, Promise<unknown>>()
  * for the document to be synced but never for each other.
  */
 const DOCUMENT_ACTIONS = new Set(['sync', 'capabilities', 'format'])
-const INTELLIGENCE_ACTIONS = new Set(['hover', 'definition', 'references'])
+const INTELLIGENCE_ACTIONS = new Set([
+  'hover',
+  'definition',
+  'references',
+  'completion',
+  'resolveCompletion',
+  'codeActions',
+  'applyCodeAction'
+])
 /** Bumped by every close, so work that was already queued cannot resurrect a
  *  document the editor has left. */
 const generations = new Map<string, number>()
@@ -592,7 +1000,9 @@ function capabilitiesOf(sessions: Session[]) {
   return {
     definition: sessions.some((session) => Boolean(session.capabilities.definitionProvider)),
     references: sessions.some((session) => Boolean(session.capabilities.referencesProvider)),
-    hover: sessions.some((session) => Boolean(session.capabilities.hoverProvider))
+    hover: sessions.some((session) => Boolean(session.capabilities.hoverProvider)),
+    completion: sessions.some((session) => Boolean(session.capabilities.completionProvider)),
+    codeActions: sessions.some((session) => Boolean(session.capabilities.codeActionProvider))
   }
 }
 
@@ -812,6 +1222,11 @@ async function handle(
       )
     }
   if (request.action === 'format') return formatDocument(entries, uri, text)
+  if (request.action === 'completion') return completionsFor(entries, uri, request)
+  if (request.action === 'resolveCompletion') return resolveCompletion(entries, request)
+  if (request.action === 'codeActions') return codeActionsFor(entries, uri, request, text)
+  if (request.action === 'applyCodeAction')
+    return applyCodeAction(entries, root, uri, request, text)
   if (!capabilities[request.action]) return { capabilities, locations: [] }
   const params = {
     textDocument: { uri },

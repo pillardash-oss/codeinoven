@@ -20,8 +20,16 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import type { IdeAction, IdeLocation, IdeProgress, IdeResponse } from '$shared/editor-ide'
+  import type {
+    IdeAction,
+    IdeCodeAction,
+    IdeCompletionItem,
+    IdeLocation,
+    IdeProgress,
+    IdeResponse
+  } from '$shared/editor-ide'
   import type { IdeToken, IdeMenuAction } from '$lib/editor/ide-context'
+  import { toast } from 'svelte-sonner'
 
   interface Props {
     projectId: string
@@ -32,6 +40,9 @@
     enabled?: boolean
     projectName?: string
     statusPortal?: AppPanelPortal
+    /** Write a whole-document text the language server produced, such as an
+     *  applied import or quick fix. The editor owns its own buffer. */
+    onReplaceDocument?: (text: string) => void
   }
   let {
     projectId,
@@ -41,7 +52,8 @@
     value,
     enabled = false,
     projectName = '',
-    statusPortal
+    statusPortal,
+    onReplaceDocument
   }: Props = $props()
   let resolvedProjectName = $state('')
   let connectedServers = $state<IdeResponse['servers']>([])
@@ -107,13 +119,25 @@
     'definition',
     'references',
     'hover',
-    'format'
+    'format',
+    'completion',
+    // Resolve reads the buffer too: the server's project copy must match what
+    // the reader sees, or the import edit would be computed against the saved
+    // file instead of the line being typed on.
+    'resolveCompletion',
+    'codeActions',
+    'applyCodeAction'
   ])
 
   /** The largest body the IDE channel accepts; the main process refuses more. */
   const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 
-  async function request(action: IdeAction, token?: IdeToken, text?: string): Promise<IdeResponse> {
+  async function request(
+    action: IdeAction,
+    token?: IdeToken,
+    text?: string,
+    extra?: { triggerKind?: number; triggerCharacter?: string; payload?: unknown }
+  ): Promise<IdeResponse> {
     const body = text ?? (DOCUMENT_ACTIONS.has(action) ? value : undefined)
     return invoke(
       'projectFiles:ide',
@@ -129,7 +153,10 @@
         line: token?.line,
         character: token?.character,
         query,
-        caseSensitive: action === 'grep' ? caseSensitive : undefined
+        caseSensitive: action === 'grep' ? caseSensitive : undefined,
+        triggerKind: extra?.triggerKind,
+        triggerCharacter: extra?.triggerCharacter,
+        payload: extra?.payload
       },
       scopeBucketId,
       threadId
@@ -335,45 +362,136 @@
       floatingRoot = undefined
     }
   }
-  export function actions(token: IdeToken): IdeMenuAction[] {
+  /**
+   * The completion list for the caret, one request at a time.
+   *
+   * Typing is faster than a language server answers, so only the newest ask is
+   * kept: every earlier one resolves empty and its answer is never shown. That
+   * also keeps the IDE channel from filling with stale keystrokes.
+   */
+  interface CompletionQuery {
+    line: number
+    character: number
+    triggerKind?: number
+    triggerCharacter?: string
+  }
+  let pendingCompletion: {
+    query: CompletionQuery
+    resolve: (items: IdeCompletionItem[]) => void
+  } | null = null
+  let completionRunning = false
+  export function completions(query: CompletionQuery): Promise<IdeCompletionItem[]> {
+    if (!active) return Promise.resolve([])
+    return new Promise((resolve) => {
+      pendingCompletion?.resolve([])
+      pendingCompletion = { query, resolve }
+      if (!completionRunning) void drainCompletions()
+    })
+  }
+  async function drainCompletions(): Promise<void> {
+    completionRunning = true
+    try {
+      for (;;) {
+        const next = pendingCompletion
+        if (!next) break
+        pendingCompletion = null
+        try {
+          const result = await request(
+            'completion',
+            { line: next.query.line, character: next.query.character, word: '', x: 0, y: 0 },
+            undefined,
+            {
+              triggerKind: next.query.triggerKind,
+              triggerCharacter: next.query.triggerCharacter
+            }
+          )
+          capabilities = result.capabilities ?? capabilities
+          next.resolve(result.completions ?? [])
+        } catch {
+          next.resolve([])
+        }
+      }
+    } finally {
+      completionRunning = false
+    }
+  }
+  /** Resolve one accepted completion, which is where tsserver puts the import. */
+  export async function resolveCompletion(
+    item: IdeCompletionItem
+  ): Promise<IdeCompletionItem | null> {
+    if (!active) return null
+    try {
+      const result = await request(
+        'resolveCompletion',
+        { line: 0, character: 0, word: '', x: 0, y: 0 },
+        undefined,
+        { payload: item }
+      )
+      return result.completions?.[0] ?? null
+    } catch {
+      return null
+    }
+  }
+  /**
+   * The context menu, with the file's own code actions on top.
+   *
+   * Imports and quick fixes are not a separate section: they are actions of the
+   * same kind as Go to Definition, so they sit beside it whenever the language
+   * server has one for the code under the cursor.
+   */
+  export async function actions(token: IdeToken): Promise<IdeMenuAction[]> {
     if (!active) return []
     const items: IdeMenuAction[] = []
     if (!capabilities || capabilities.definition)
-      items.push({
-        label: 'Go to Definition',
-        run: () => {
-          handle('definition', token)
-        }
-      })
+      items.push({ label: 'Go to Definition', run: () => handle('definition', token) })
     if (!capabilities || capabilities.references)
-      items.push({
-        label: 'Find References',
-        run: () => {
-          handle('references', token)
-        }
-      })
+      items.push({ label: 'Find References', run: () => handle('references', token) })
     if (!capabilities || capabilities.hover)
-      items.push({
-        label: 'Show Documentation',
-        run: () => {
-          handle('documentation', token)
-        }
-      })
+      items.push({ label: 'Show Documentation', run: () => handle('documentation', token) })
+    const codeActions = await loadCodeActions(token)
+    for (const action of codeActions) {
+      if (action.disabled) continue
+      items.unshift({ label: action.title, run: () => void applyCodeAction(action) })
+    }
     items.push(
       {
         label: `Search ${projectName || resolvedProjectName} text`,
-        run: () => {
-          handle('grep', token)
-        }
+        run: () => handle('grep', token)
       },
       {
         label: `Find file in ${projectName || resolvedProjectName}`,
-        run: () => {
-          handle('files', token)
-        }
+        run: () => handle('files', token)
       }
     )
     return items
+  }
+  async function loadCodeActions(token: IdeToken): Promise<IdeCodeAction[]> {
+    if (!capabilities?.codeActions && capabilities) return []
+    try {
+      const result = await request('codeActions', token)
+      return result.codeActions ?? []
+    } catch {
+      // A menu must still open when the server cannot answer quickly.
+      return []
+    }
+  }
+  async function applyCodeAction(action: IdeCodeAction): Promise<void> {
+    try {
+      const result = await request('applyCodeAction', undefined, value, { payload: action })
+      if (!result.text || result.text === value) return
+      if (!onReplaceDocument) {
+        toast.error('The editor closed before the action could be applied')
+        return
+      }
+      onReplaceDocument(result.text)
+      const skipped = result.skippedFiles?.length ?? 0
+      if (skipped)
+        toast.info(
+          `${action.title} also changes ${skipped} other file${skipped === 1 ? '' : 's'}; only this file was updated.`
+        )
+    } catch (reason) {
+      toast.error(ipcErrorMessage(reason, 'The code action could not be applied'))
+    }
   }
   /**
    * Open one of the two project searches without a token under the cursor.
