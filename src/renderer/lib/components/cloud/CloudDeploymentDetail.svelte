@@ -28,6 +28,7 @@
     type DeploymentLogLine
   } from '$lib/cloud/deployment-log'
   import ContainerLinksMenu from './ContainerLinksMenu.svelte'
+  import EnumSelect from '../ui/EnumSelect.svelte'
   import {
     deploymentStatusLabel,
     deploymentStatusTone,
@@ -69,6 +70,9 @@
   /** Used to auto-tail only when the log content actually grows. */
   let lastLogLength = $state(0)
 
+  /** Stack-wide build log, selected through the log picker instead of a container. */
+  const BUILD_LOG_SOURCE_ID = '__build_log__'
+
   /** The containers inside this resource; more than one means a compose stack. */
   const logSources = $derived(container.logSources ?? [])
 
@@ -98,6 +102,15 @@
   const logSourceLabel = $derived(
     logSources.find((source) => source.id === logSourceId)?.label ?? logSourceId ?? ''
   )
+
+  /** Logs the picker can open: the deployment's build, then each container. */
+  const logSourceOptions = $derived([
+    ...(selectedDeployment ? [{ id: BUILD_LOG_SOURCE_ID, label: 'Build log' }] : []),
+    ...logSources
+  ])
+
+  /** The picker's current value: a container id, or the build log of the open deployment. */
+  const logSourceValue = $derived(logSourceId ?? (selectedDeployment ? BUILD_LOG_SOURCE_ID : null))
 
   /** Human-readable lines for the current deployment log. */
   const logLines = $derived<DeploymentLogLine[]>(parseDeploymentLog(log))
@@ -513,7 +526,7 @@
       {:else if logSourceId}
         <span class="font-mono">{container.id}</span>
         <span>·</span>
-        <span>{logSourceLabel}</span>
+        <span>{container.providerKind}</span>
       {:else}
         <span class="font-mono">{container.id}</span>
         <span>·</span>
@@ -522,63 +535,30 @@
     </div>
   </div>
 
-  {#if logSources.length > 1}
-    <!-- One docker-compose stack runs several containers, each with its own log. -->
-    <div
-      class="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-surface px-2 py-1"
-    >
-      <span
-        class="shrink-0 pr-0.5 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
-      >
-        Logs
-      </span>
-      {#if selectedDeployment}
-        <button
-          type="button"
-          class="h-6 shrink-0 cursor-pointer px-1.5 text-[0.625rem] font-medium transition-colors {logSourceId
-            ? 'text-muted hover:bg-elevated hover:text-foreground'
-            : 'bg-raised text-foreground'}"
-          title="Show this deployment's build log"
-          aria-label="Show this deployment's build log"
-          aria-pressed={!logSourceId}
-          onclick={() => void selectLogSource(null)}
-        >
-          Build
-        </button>
-      {/if}
-      {#each logSources as source (source.id)}
-        <button
-          type="button"
-          class="h-6 shrink-0 cursor-pointer px-1.5 text-[0.625rem] font-medium transition-colors {logSourceId ===
-          source.id
-            ? 'bg-raised text-foreground'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
-          title="Show the {source.label} container log"
-          aria-label="Show the {source.label} container log"
-          aria-pressed={logSourceId === source.id}
-          onclick={() => void selectLogSource(source.id)}
-        >
-          {source.label}
-        </button>
-      {/each}
-    </div>
-  {/if}
-
   <!-- Body -->
   <div class="min-h-0 flex-1 overflow-y-auto" bind:this={logScrollerEl}>
     {#if selectedDeployment || logSourceId}
       <!-- One log: a deployment's build, or one container's runtime output. -->
       <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-        <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
-          {logSourceId ? 'Container log' : 'Deployment log'}
-        </span>
-        {#if logSourceId}
-          <span class="truncate text-[0.5625rem] text-dimmed">{logSourceLabel}</span>
-        {:else if selectedDeployment && selectedDeployment.status !== 'unknown'}
-          <span class="ml-1">
-            <StatusPill tone={deploymentStatusTone(selectedDeployment.status)}>
-              {deploymentStatusLabel(selectedDeployment.status)}
-            </StatusPill>
+        {#if logSources.length > 1}
+          <!-- One docker-compose stack runs several containers, each read on its
+               own, so the log source is picked in the section header. -->
+          <span class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+            Log
+          </span>
+          <EnumSelect
+            compact
+            class="min-w-0 flex-1"
+            options={logSourceOptions}
+            value={logSourceValue}
+            onChange={(id) => void selectLogSource(id === BUILD_LOG_SOURCE_ID ? null : id)}
+            placeholder="Build log"
+            ariaLabel="Log to read"
+            title="Choose which log to read"
+          />
+        {:else}
+          <span class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+            Deployment log
           </span>
         {/if}
         {#if log}
@@ -710,12 +690,30 @@
     {:else}
       <!-- Deployment history list -->
       <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-        <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+        <span class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Deployment history
         </span>
         {#if deployments.length > 0}
-          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{deployments.length}</span
+          <span
+            class="text-[0.5625rem] tabular-nums text-dimmed {logSources.length > 1
+              ? ''
+              : 'ml-auto'}">{deployments.length}</span
           >
+        {/if}
+        {#if logSources.length > 1}
+          <!-- A compose stack's containers are readable straight from here, with no
+               deployment opened first. -->
+          <div class="ml-auto w-40 shrink-0">
+            <EnumSelect
+              compact
+              options={logSources}
+              value={null}
+              onChange={(id) => void selectLogSource(id)}
+              placeholder="Container logs"
+              ariaLabel="Container log to read"
+              title="Read one container's log"
+            />
+          </div>
         {/if}
       </div>
       {#if deploymentsLoading && deployments.length === 0}
@@ -733,7 +731,7 @@
           </p>
           {#if logSources.length > 1}
             <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
-              This stack's individual containers are in the Logs row above.
+              Read one of this stack's containers from the picker above.
             </p>
           {/if}
           <button
