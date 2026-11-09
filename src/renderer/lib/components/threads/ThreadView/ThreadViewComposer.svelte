@@ -20,6 +20,7 @@
   import AgentSecretCard from '../AgentSecretCard.svelte'
   import AgentMcpSignInCard from '../AgentMcpSignInCard.svelte'
   import PermissionRequestCard from '../PermissionRequestCard.svelte'
+  import DelegatedAttentionStack from '../DelegatedAttentionStack.svelte'
   import ImageDescriptorErrorCard from '../ImageDescriptorErrorCard.svelte'
   import AgentProviderStatusCard from '../AgentProviderStatusCard.svelte'
   import AiAccountSetupCard from '../AiAccountSetupCard.svelte'
@@ -474,6 +475,12 @@
               rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
           />
         {/if}
+        {#key `${board.handleAgentEvent.thread.projectId}:${board.handleAgentEvent.thread.id}`}
+          <DelegatedAttentionStack
+            projectId={board.handleAgentEvent.thread.projectId}
+            threadId={board.handleAgentEvent.thread.id}
+          />
+        {/key}
         {#if board.currentWorkingTraceAttribution.independentAuditorChild && board.buildSpecActionPrompt.auditorThreadCardState !== undefined}
           <AuditGeneratedCard
             state={board.buildSpecActionPrompt.auditorThreadCardState}

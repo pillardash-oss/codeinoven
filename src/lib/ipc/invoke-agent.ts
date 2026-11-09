@@ -44,6 +44,7 @@ import type {
   ThreadSettings,
   UserMessagePresentation
 } from '../types'
+import type { DelegatedAttentionEntry } from '../delegated-attention'
 import type { Contract } from './contract-helpers'
 
 export const invokeAgentContract = {
@@ -240,6 +241,13 @@ export const invokeAgentContract = {
   'agent:listQuestions': {} as Contract<
     [projectId: string, threadId: string],
     PendingAgentQuestionRequest[]
+  >,
+  // The requests the threads this conversation dispatched are waiting on. The
+  // cards are drawn here with the blocked thread's own ids, so an answer given in
+  // this conversation settles that thread directly.
+  'agent:listDelegatedAttention': {} as Contract<
+    [projectId: string, threadId: string],
+    DelegatedAttentionEntry[]
   >,
   'agent:updateQuestion': {} as Contract<
     [

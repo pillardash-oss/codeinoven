@@ -573,6 +573,27 @@ export class ChatEngineLifecycleBoot {
     ipcMain.handle('agent:listQuestions', (_, projectId: string, threadId: string) =>
       this.host.listQuestions(projectId, threadId)
     )
+    // The attention the threads this conversation dispatched are waiting on. The
+    // cards are the children's own requests, so the answer settles them directly
+    // instead of travelling through the agent that dispatched the work.
+    ipcMain.handle(
+      'agent:listDelegatedAttention',
+      async (_, projectId: string, threadId: string) => {
+        const { listDelegatedAttention, logDelegatedAttentionFailure } = await import(
+          '../delegated-attention-service'
+        )
+        try {
+          return await listDelegatedAttention(
+            this.host,
+            validateEntityId(projectId, 'Project ID'),
+            validateEntityId(threadId, 'Thread ID')
+          )
+        } catch (error) {
+          logDelegatedAttentionFailure(error)
+          return []
+        }
+      }
+    )
     // A side chat opened from a card keeps the user active while it is in use,
     // so the card's countdown stays held. This carries no answer or decision.
     ipcMain.handle('agent:userActivity', () => this.host.noteUserActivity())
