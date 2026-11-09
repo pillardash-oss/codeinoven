@@ -17,15 +17,16 @@ let pendingAccess: Promise<SpeechMicrophoneAccess> | null = null
 /**
  * Whether microphone access is already granted, without asking for it.
  *
- * Opening the capture device is the only thing that may not happen unchecked:
- * `granted` never prompts, while `not-determined` would turn a device open into
- * the permission dialog the user has not asked for. Every device-open path
- * therefore asks this first, so a fresh install stays silent until the
+ * Warming the capture worker means opening CoreAudio's input path, so it is
+ * only safe once the TCC decision exists: `granted` never prompts, while
+ * `not-determined` would turn a background warmup into the permission dialog
+ * the user has not asked for. A user who has recorded before gets an instant
+ * first start after a relaunch; a fresh install stays silent until the
  * recording gesture asks.
  */
 export function microphoneAccessGranted(): boolean {
   // Only macOS gates capture behind a TCC decision, and only macOS has a native
-  // capture worker at all.
+  // capture worker to warm in the first place.
   if (process.platform !== 'darwin') return false
   try {
     return systemPreferences.getMediaAccessStatus('microphone') === 'granted'
