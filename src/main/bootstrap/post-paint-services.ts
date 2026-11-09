@@ -16,13 +16,19 @@ import { join } from 'path'
 import { appfileProjectFilesGate, scopedPathResolverGate, settleAppfileGates } from './boot-gate'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { appResourcesRoot, isShippedBuild } from './app-resources'
-import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
+import {
+  assistantPrimaryModel,
+  modelSelectionFromThreadSettings,
+  settingsWithAssistantModel,
+  withDefaultAssistantPrimary
+} from '../../lib/assistant-agents'
 import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
+import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
 import { isGroupThread } from '../../lib/types'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
@@ -620,6 +626,40 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           const config = await storage.getConfig()
           await storage.saveConfig({ ...config, userPreferredName: name })
           return name
+        },
+        // Hiring spans two owners: the assistant directory owns the row, the chat
+        // engine owns the Getting started thread and the turn that writes it. The
+        // model handed over is the one this conversation is already running on, so
+        // the teammate can answer the first time it is opened.
+        createAssistant: async (input, context) => {
+          const requesting = await chatEngine.threadManager.getThread(
+            context.projectId,
+            context.threadId
+          )
+          const selection = modelSelectionFromThreadSettings(requesting?.settings)
+          const assistant = assistantManager.createAssistant({
+            name: input.name,
+            description: input.purpose,
+            // A hire is not a schedule: the clock is agreed with the teammate
+            // itself later, from its own panel.
+            agents: withDefaultAssistantPrimary({ fallbacks: [] }, selection),
+            scheduled: false
+          })
+          broadcastAssistantsChanged(assistantManager.listAssistants())
+          if (!requesting?.settings) {
+            throw new Error('This conversation has no model to give the new assistant')
+          }
+          const thread = await chatEngine.openRecruitedAssistantConversation({
+            assistant,
+            purpose: input.purpose,
+            ...(input.request ? { request: input.request } : {}),
+            settings: requesting.settings
+          })
+          return {
+            assistantId: assistant.id,
+            name: assistant.name,
+            threadId: thread.id
+          }
         }
       })
       const delegations = new DonDelegations()

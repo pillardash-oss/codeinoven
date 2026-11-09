@@ -115,6 +115,7 @@ import type {
   BrainstormPrototypeFidelity,
   LocalRankingGradeProgress,
   LocalRankingGradeScope,
+  Assistant,
   AssistantAgents
 } from '../../lib/types'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -1561,6 +1562,18 @@ export class ChatEngine {
     settings?: ThreadSettings
   }): Promise<Thread> {
     return this.units['assistant-authoring'].createAssistantRunThread(input)
+  }
+  /**
+   * Open the Getting started conversation of a teammate the orchestrator hired,
+   * with the request that caused the hire already in it.
+   */
+  async openRecruitedAssistantConversation(input: {
+    assistant: Assistant
+    purpose: string
+    request?: string
+    settings: ThreadSettings
+  }): Promise<Thread> {
+    return this.units['assistant-authoring'].openRecruitedAssistantConversation(input)
   }
   /**
    * Install Don's runtime and hand its executor to the utility gateway, so a turn on

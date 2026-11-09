@@ -23,11 +23,21 @@ export const DON_USER_NAME_TOOL_NAME = 'cio_user_name'
  * is still running, under this assistant's own name and mark.
  */
 export const GROUP_CHAT_REPLY_TOOL_NAME = 'cio_reply_in_chat'
+/**
+ * Hire the teammate a request needs when nothing on the roster was built for it.
+ *
+ * The assistant is created here, with the work already waiting in its Getting
+ * started conversation, so the user never leaves this chat to go and make one by
+ * hand. That is the whole point of the orchestrator: it can build the team it
+ * needs instead of reporting that the team is missing.
+ */
+export const DON_CREATE_ASSISTANT_TOOL_NAME = 'cio_create_assistant'
 
 /** Every Don tool name, for the gateway gate and the extension. */
 export const DON_TOOL_NAMES: readonly string[] = [
   DON_USER_NAME_TOOL_NAME,
-  GROUP_CHAT_REPLY_TOOL_NAME
+  GROUP_CHAT_REPLY_TOOL_NAME,
+  DON_CREATE_ASSISTANT_TOOL_NAME
 ]
 
 /** Whether a gateway tool name belongs to Don's own tools. */
@@ -36,12 +46,13 @@ export function isDonTool(name: string): boolean {
 }
 
 /** The single operation a Don tool call names. */
-export type DonToolOperation = 'user-name' | 'reply-in-chat'
+export type DonToolOperation = 'user-name' | 'reply-in-chat' | 'create-assistant'
 
 /** Read the operation a tool name stands for. */
 export function donToolOperation(name: string): DonToolOperation | null {
   if (name === DON_USER_NAME_TOOL_NAME) return 'user-name'
   if (name === GROUP_CHAT_REPLY_TOOL_NAME) return 'reply-in-chat'
+  if (name === DON_CREATE_ASSISTANT_TOOL_NAME) return 'create-assistant'
   return null
 }
 
@@ -69,6 +80,29 @@ const GROUP_CHAT_REPLY_INPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false
 }
 
+const CREATE_ASSISTANT_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    name: {
+      type: 'string',
+      description:
+        'The name to give the new teammate, short and human. Use the name the user said; invent one in the same spirit only when they gave none.'
+    },
+    purpose: {
+      type: 'string',
+      description:
+        'What this teammate is for, in one or two sentences: the kind of work it owns, so its instructions and its row read plainly later.'
+    },
+    request: {
+      type: 'string',
+      description:
+        "The work that is waiting for it, in the user's own words and with the detail they gave. It is carried into the new assistant's first conversation, so nothing has to be explained twice."
+    }
+  },
+  required: ['name', 'purpose'],
+  additionalProperties: false
+}
+
 const USER_NAME_INPUT_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
@@ -91,6 +125,15 @@ export const DON_TOOLS: GatewayToolDefinition[] = [
     route: '/group-chat-reply',
     sentWhen:
       'A conversation started from a group chat, when the assistant has something useful to say before finishing'
+  },
+  {
+    name: DON_CREATE_ASSISTANT_TOOL_NAME,
+    description:
+      'Create the teammate this request needs when nothing on the roster fits. It creates the assistant, gives it the name and the purpose you chose, and opens its Getting started conversation with the waiting request already in it, so the person only has to answer its first questions. Use it instead of asking the user to create an assistant themselves, and instead of doing work that belongs to a teammate. Say one line afterwards naming who was created and that the work is already with them.',
+    inputSchema: CREATE_ASSISTANT_INPUT_SCHEMA,
+    outputSchema: DON_RESULT_SCHEMA,
+    route: '/don-create-assistant',
+    sentWhen: "Don's thread, when the request needs work no existing assistant was built for"
   },
   {
     name: DON_USER_NAME_TOOL_NAME,

@@ -237,6 +237,22 @@ export const ASSISTANT_PLACEHOLDER_NAME = 'New assistant'
  */
 export const ASSISTANT_NAME_LIMIT = 200
 
+/**
+ * Ceiling for the purpose an orchestrator gives a teammate it hires.
+ *
+ * The purpose is what the teammate is for, so it is a couple of sentences rather
+ * than a document: the instructions themselves are written in its own Getting
+ * started conversation and have no ceiling here.
+ */
+export const ASSISTANT_PURPOSE_LIMIT = 600
+
+/**
+ * Ceiling for the request an orchestrator carries into a teammate's first
+ * conversation. It is quoted back to the new assistant, so it stays a request and
+ * never becomes the whole transcript.
+ */
+export const ASSISTANT_RECRUIT_REQUEST_LIMIT = 4000
+
 /** Ceiling for the name a user gives their assistant's clock. */
 export const ASSISTANT_SCHEDULE_NAME_LIMIT = 120
 

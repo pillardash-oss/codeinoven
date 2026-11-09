@@ -85,6 +85,14 @@ export interface DonRuntime {
   resolveAuthor?: (assistantId: string) => MessageAuthor | null
 }
 
+/** A teammate Don hired, as the tool answers with it. */
+export interface DonRecruitedAssistant {
+  assistantId: string
+  name: string
+  /** The Getting started conversation the request was carried into. */
+  threadId: string
+}
+
 /** Everything the executor needs from the chat engine, narrow enough to test. */
 export interface DonDeps {
   /**
@@ -97,6 +105,16 @@ export interface DonDeps {
   ) => Promise<{ posted: boolean; error?: string }>
   readUserName: () => Promise<string>
   writeUserName: (name: string) => Promise<string>
+  /**
+   * Hire the teammate a request needs: create it, then open its Getting started
+   * conversation with the request already in it. The chat engine owns assistant
+   * rows, thread creation and the turn lifecycle, so the executor only names what
+   * it wants and forwards the turn it came from.
+   */
+  createAssistant: (
+    input: { name: string; purpose: string; request?: string },
+    context: { projectId: string; threadId: string }
+  ) => Promise<DonRecruitedAssistant>
 }
 
 /** The speaker snapshot a delegated assistant's reply carries. */
@@ -168,6 +186,25 @@ export function createDonExecutor(deps: DonDeps): DonExecutor {
       }
       const stored = await deps.writeUserName(requested)
       return { name: stored, stored: true }
+    }
+    if (operation === 'create-assistant') {
+      const name = typeof input['name'] === 'string' ? input['name'].trim() : ''
+      const purpose = typeof input['purpose'] === 'string' ? input['purpose'].trim() : ''
+      if (name.length === 0 || purpose.length === 0) {
+        throw new Error('A new assistant needs a name and what it is for')
+      }
+      const request = typeof input['request'] === 'string' ? input['request'].trim() : ''
+      const created = await deps.createAssistant(
+        { name, purpose, ...(request.length > 0 ? { request } : {}) },
+        { projectId: context.projectId, threadId: context.threadId }
+      )
+      return {
+        status: 'created',
+        assistant: { id: created.assistantId, name: created.name },
+        threadId: created.threadId,
+        projectId: ASSISTANT_SPACE_ID,
+        note: `The new assistant is being interviewed in its own Getting started conversation, and the request is already with it. Say one short line naming who was created and that the work is with them. Do not do the work yourself, and do not wait for it.`
+      }
     }
   }
 }
