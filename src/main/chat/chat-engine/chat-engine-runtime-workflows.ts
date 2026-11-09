@@ -2,7 +2,10 @@ import { userSuppliedPaths } from '../user-supplied-paths'
 import { Logger } from '../../system/logger'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import { instanceRegistry } from '../../system/instance-registry'
-import { createOrchestrationRuntime } from '../chat-engine-orchestration'
+import {
+  createOrchestrationRuntime,
+  type OrchestrationAssistantDirectory
+} from '../chat-engine-orchestration'
 import { LOCAL_OVEN_ID } from '../../../lib/ovens'
 import { OvenRegistry } from '../../ovens/oven-registry'
 import { OvenService } from '../../ovens/oven-service'
@@ -252,6 +255,17 @@ export class ChatEngineRuntimeWorkflows {
       }
     })
     this.host.state.utilityOrchestration.setOrchestrationExecutor(this.host.orchestration.executor)
+  }
+
+  /**
+   * Give the orchestration tools the assistant directory they dispatch to.
+   *
+   * The orchestration runtime is created before the assistant manager is
+   * attached on the same boot, so the directory arrives here rather than as a
+   * constructor argument. A dispatch with no assistantId never reads it.
+   */
+  attachOrchestrationAssistantDirectory(directory: OrchestrationAssistantDirectory | null): void {
+    this.host.orchestration?.setAssistantDirectory(directory)
   }
 
   /**

@@ -244,7 +244,7 @@
 </script>
 
 <div
-  class="group relative flex items-center gap-1 border-l-2 px-1.5 py-2 transition-colors {expanded
+  class="group relative mb-1 flex items-center gap-1 border-l-2 px-1.5 py-2.5 transition-colors {expanded
     ? 'bg-elevated/70'
     : taskDropActive
       ? 'bg-primary/10'

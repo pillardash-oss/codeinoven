@@ -173,6 +173,10 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // @cio-hey session. The gateway refuses a route the turn never received.
       if (isOrchestrationTool(name)) {
         return (
+          // The orchestrator is the one conversation that starts work by
+          // definition: its roster and the project list are what it dispatches
+          // from, so it never needs the tag or the full-access tier.
+          request.donTurn === true ||
           request.delegationReach === true ||
           request.permissionLevel === 'full_access' ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')

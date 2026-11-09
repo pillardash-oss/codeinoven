@@ -20,6 +20,9 @@ import {
 import { isRemoteOvenId, LOCAL_OVEN_ID } from '../../lib/ovens'
 import { isThreadBusyStatus } from '../../lib/thread-status-policy'
 import { ASSISTANT_SPACE_ID } from '../../lib/types/project'
+import type { Assistant } from '../../lib/types/assistant'
+import { delegationAuthor, assistantCanDelegate } from './chat-engine-don'
+import type { PendingDonDelegation } from './chat-engine-don'
 import {
   acpHarnessDescriptors,
   ensureAcpAgentsLoaded,
@@ -125,6 +128,7 @@ export interface OrchestrationDeps {
     projectId: string
     title: string
     settings: ThreadSettings
+    assistantId?: string
     dispatchOrigin?: ThreadDispatchOrigin
   }) => Promise<Thread>
   /** Run a prompt on a thread, exactly as the app does for its own dispatch. */
@@ -157,27 +161,48 @@ export interface OrchestrationDeps {
   }) => Promise<void>
 }
 
+/**
+ * The assistants a dispatch may name, supplied by the part of the app that owns
+ * them. Kept behind a setter because the orchestration runtime is created before
+ * the assistant directory is attached on the same boot.
+ */
+export interface OrchestrationAssistantDirectory {
+  list: () => readonly Assistant[]
+  get: (assistantId: string) => Assistant | null
+  /** Remember a handoff so its answer is reported into the group chat. */
+  rememberDelegation: (delegation: PendingDonDelegation) => void
+}
+
 /** The executor plus the dispatch book the turn lifecycle reads. */
 export interface OrchestrationRuntime {
   executor: OrchestrationExecutor
   dispatches: OrchestrationDispatches
+  setAssistantDirectory: (directory: OrchestrationAssistantDirectory | null) => void
 }
 
 export function createOrchestrationRuntime(deps: OrchestrationDeps): OrchestrationRuntime {
   const dispatches = new OrchestrationDispatches()
-  return { dispatches, executor: createOrchestrationExecutor(deps, dispatches) }
+  const assistants: { current: OrchestrationAssistantDirectory | null } = { current: null }
+  return {
+    dispatches,
+    executor: createOrchestrationExecutor(deps, dispatches, assistants),
+    setAssistantDirectory: (directory) => {
+      assistants.current = directory
+    }
+  }
 }
 
 export function createOrchestrationExecutor(
   deps: OrchestrationDeps,
-  dispatches: OrchestrationDispatches
+  dispatches: OrchestrationDispatches,
+  assistants: { current: OrchestrationAssistantDirectory | null }
 ): OrchestrationExecutor {
   return async (operation, input, context) => {
     switch (operation) {
       case 'targets':
-        return readTargets(deps, input, context)
+        return readTargets(deps, input, context, assistants.current)
       case 'dispatch':
-        return dispatchWork(deps, dispatches, input, context)
+        return dispatchWork(deps, dispatches, input, context, assistants.current)
       case 'status':
         return readStatus(deps, input, context)
       default:
@@ -210,7 +235,8 @@ function requiredString(input: Record<string, unknown>, key: string): string {
 async function readTargets(
   deps: OrchestrationDeps,
   input: Record<string, unknown>,
-  context: OrchestrationToolContext
+  context: OrchestrationToolContext,
+  assistants: OrchestrationAssistantDirectory | null
 ): Promise<unknown> {
   const harnessFilter = optionalString(input, 'harnessId')
   const ovenFilter = optionalString(input, 'ovenId')
@@ -260,6 +286,19 @@ async function readTargets(
       name: project.name,
       path: project.path
     })),
+    // Assistants are a dispatch target of their own: research, ideas and tasks
+    // go to one of them, while coding work goes to a project. The agent reads
+    // both lists the same way and names exactly one id.
+    assistants: (assistants?.list() ?? [])
+      .filter((assistant) => !assistant.builtin)
+      .map((assistant) => ({
+        assistantId: assistant.id,
+        name: assistant.name,
+        description: assistant.description ?? '',
+        ready: assistantCanDelegate(assistant).ok,
+        paused: assistant.paused === true,
+        scheduled: assistant.scheduled !== false
+      })),
     defaults: {
       ovenId: state.defaultOvenId,
       harnessId: DEFAULT_HARNESS,
@@ -351,16 +390,58 @@ async function dispatchWork(
   deps: OrchestrationDeps,
   dispatches: OrchestrationDispatches,
   input: Record<string, unknown>,
-  context: OrchestrationToolContext
+  context: OrchestrationToolContext,
+  assistants: OrchestrationAssistantDirectory | null
 ): Promise<unknown> {
   const title = requiredString(input, 'title')
   const prompt = requiredString(input, 'prompt')
-  const harnessId = requiredString(input, 'harnessId')
-  const providerId = requiredString(input, 'providerId')
-  const modelId = requiredString(input, 'modelId')
-  const projectId = optionalString(input, 'projectId') ?? context.projectId
-  const ovenId = optionalString(input, 'ovenId') ?? LOCAL_OVEN_ID
-  const ovenPath = optionalString(input, 'ovenPath')
+  const assistantId = optionalString(input, 'assistantId')
+  const assistant = assistantId ? (assistants?.get(assistantId) ?? null) : null
+  if (assistantId && !assistant) {
+    throw new Error(`No assistant has the id "${assistantId}". Read cio_orchestrate_targets.`)
+  }
+  if (assistant) {
+    const usable = assistantCanDelegate(assistant)
+    if (!usable.ok) throw new Error(usable.reason)
+  }
+
+  // An assistant runs in the assistant space; a project dispatch runs where the
+  // agent named it, or in the project this conversation already works on.
+  const projectId = assistant
+    ? ASSISTANT_SPACE_ID
+    : (optionalString(input, 'projectId') ?? context.projectId)
+
+  const requestingThread = await deps.getThread(context.projectId, context.threadId)
+  const base = requestingThread?.settings
+  const namedHarness = optionalString(input, 'harnessId')
+  const namedProvider = optionalString(input, 'providerId')
+  const namedModel = optionalString(input, 'modelId')
+  const namesModel = Boolean(namedHarness || namedProvider || namedModel)
+
+  // A dispatch that names no model runs on the model this conversation is
+  // already using. That is the point of delegating from a chat: the answer comes
+  // from the same mind the user is talking to, not from a model left over on the
+  // assistant's own row.
+  let harnessId: string
+  let providerId: string
+  let modelId: string
+  if (namesModel) {
+    harnessId = requiredString(input, 'harnessId')
+    providerId = requiredString(input, 'providerId')
+    modelId = requiredString(input, 'modelId')
+  } else if (base) {
+    harnessId = base.harnessId
+    providerId = base.providerId
+    modelId = base.modelId
+  } else {
+    throw new Error(
+      'This conversation has no model to inherit, so the dispatch must name harnessId, providerId and modelId.'
+    )
+  }
+
+  const ovenId = optionalString(input, 'ovenId') ?? base?.ovenId ?? LOCAL_OVEN_ID
+  const ovenPath =
+    optionalString(input, 'ovenPath') ?? (ovenId === base?.ovenId ? base?.ovenPath : undefined)
   const accountId = optionalString(input, 'accountId')
 
   const acpAgents = await acpAgentsList()
@@ -369,31 +450,30 @@ async function dispatchWork(
     acpHarnessDescriptors(acpAgents).find((candidate) => candidate.id === harnessId)
   if (!harness) throw new Error(`Unknown harness "${harnessId}". Read cio_orchestrate_targets.`)
 
-  const [catalogs, accounts, state, requestingThread] = await Promise.all([
-    deps.listProviderCatalogs(projectId),
+  const [catalogs, accounts, state] = await Promise.all([
+    deps.listProviderCatalogs(assistant ? context.projectId : projectId),
     deps.listAccounts(),
-    deps.listOvens(),
-    deps.getThread(context.projectId, context.threadId)
+    deps.listOvens()
   ])
 
-  let resolved = findCatalogModel(catalogs, harnessId, providerId, modelId)
-  if (!resolved) {
+  let resolved = namesModel ? findCatalogModel(catalogs, harnessId, providerId, modelId) : null
+  if (namesModel && !resolved) {
     // The snapshot the model picker holds is the only source dispatch checks, and
     // it is empty until the app has discovered once. Discover here rather than
     // telling the agent to re-read a target list built from the same snapshot.
     resolved = findCatalogModel(
-      await deps.refreshProviderCatalogs(projectId),
+      await deps.refreshProviderCatalogs(assistant ? context.projectId : projectId),
       harnessId,
       providerId,
       modelId
     )
+    if (!resolved) {
+      throw new Error(
+        `The ${harnessId} catalog has no provider "${providerId}" with model "${modelId}", even after discovering the catalogs again. Read cio_orchestrate_targets and copy an id from it exactly.`
+      )
+    }
   }
-  if (!resolved) {
-    throw new Error(
-      `The ${harnessId} catalog has no provider "${providerId}" with model "${modelId}", even after discovering the catalogs again. Read cio_orchestrate_targets and copy an id from it exactly.`
-    )
-  }
-  const { catalog, model } = resolved
+  const { catalog, model } = resolved ?? { catalog: null, model: null }
 
   const oven = state.ovens.find((candidate) => candidate.id === ovenId)
   if (!oven) throw new Error(`Unknown Oven "${ovenId}". Read cio_orchestrate_targets.`)
@@ -411,19 +491,26 @@ async function dispatchWork(
     }
   }
 
-  const account = resolveAccount(accounts, harnessId, accountId)
+  const inheritsSameModel = !namesModel && base?.harnessId === harnessId
+  const account =
+    inheritsSameModel && !accountId
+      ? { id: base?.accountId ?? resolveAccount(accounts, harnessId, accountId).id }
+      : resolveAccount(accounts, harnessId, accountId)
+  const accountLabel =
+    accounts.find((candidate) => candidate.id === account.id)?.label ?? account.id
   const thinkingLevel =
     resolveThinkingLevel(
       input,
-      model.thinkingPresets?.map((preset) => preset.id)
-    ) ?? DEFAULT_THINKING_LEVEL
-  const inferenceMode = optionalString(input, 'inferenceMode')
+      model?.thinkingPresets?.map((preset) => preset.id)
+    ) ??
+    (inheritsSameModel ? base?.thinkingLevel : undefined) ??
+    DEFAULT_THINKING_LEVEL
+  const inferenceMode =
+    optionalString(input, 'inferenceMode') ?? (inheritsSameModel ? base?.inferenceMode : undefined)
   // A dispatch always runs under a real permission tier: the one the agent
   // named, the one the requesting thread already runs with, or the app default.
   const permissionLevel: PermissionLevel =
-    resolvePermissionLevel(input['permissionLevel']) ??
-    requestingThread?.settings?.permissionLevel ??
-    'auto_review'
+    resolvePermissionLevel(input['permissionLevel']) ?? base?.permissionLevel ?? 'auto_review'
 
   const settings: ThreadSettings = {
     harnessId,
@@ -432,35 +519,58 @@ async function dispatchWork(
     accountId: account.id,
     thinkingLevel,
     ...(inferenceMode ? { inferenceMode: inferenceMode as ThreadSettings['inferenceMode'] } : {}),
+    ...(inheritsSameModel && base?.contextWindow !== undefined
+      ? { contextWindow: base.contextWindow }
+      : {}),
     permissionLevel,
     ovenId,
     ...(ovenPath ? { ovenPath } : {})
   }
 
+  const author = assistant ? delegationAuthor(assistant) : null
   const thread = await deps.createThread({
+    ...(assistant ? { assistantId: assistant.id } : {}),
     projectId,
     title,
     settings,
     // The board states a dispatched row's origin from the row itself, so the
     // fact is written once, here, with the thread it describes.
     dispatchOrigin: {
-      ...(requestingThread?.projectId === ASSISTANT_SPACE_ID && requestingThread.assistantId
-        ? { assistantId: requestingThread.assistantId }
-        : {}),
+      ...(author
+        ? { author, assistantId: assistant?.id, assistantName: assistant?.name }
+        : requestingThread?.projectId === ASSISTANT_SPACE_ID && requestingThread.assistantId
+          ? { assistantId: requestingThread.assistantId }
+          : {}),
       initiatorProjectId: context.projectId,
       initiatorThreadId: context.threadId,
       at: Date.now()
     }
   })
-  dispatches.remember({
-    runThreadId: thread.id,
-    requestingProjectId: context.projectId,
-    requestingThreadId: context.threadId,
-    title,
-    ovenName: oven.name,
-    settings,
-    createdAt: Date.now()
-  })
+
+  if (assistant && author) {
+    // The assistant answers for itself in the group chat: the report is posted
+    // under its own name when the run settles, never steered back as a prompt.
+    assistants?.rememberDelegation({
+      runThreadId: thread.id,
+      donProjectId: context.projectId,
+      donThreadId: context.threadId,
+      author,
+      assistantName: assistant.name,
+      request: prompt,
+      createdAt: Date.now()
+    })
+  } else {
+    dispatches.remember({
+      runThreadId: thread.id,
+      requestingProjectId: context.projectId,
+      requestingThreadId: context.threadId,
+      title,
+      ovenName: oven.name,
+      settings,
+      createdAt: Date.now()
+    })
+  }
+
   // Write the dispatch down before the run is sent. The board that lists this
   // thread's dispatched work reads the ledger, and the in-memory book above is
   // only alive for as long as this process is: after a restart the thread rows
@@ -476,8 +586,8 @@ async function dispatchWork(
       ovenId: oven.id,
       ovenName: oven.name,
       harnessId,
-      providerId: catalog.id,
-      modelId: model.id,
+      providerId,
+      modelId,
       ...(thinkingLevel ? { thinkingLevel } : {})
     })
   } catch (error) {
@@ -488,20 +598,24 @@ async function dispatchWork(
 
   return {
     status: 'dispatched',
+    kind: assistant ? 'assistant' : 'project',
+    ...(assistant ? { assistant: { id: assistant.id, name: assistant.name } } : {}),
     threadId: thread.id,
     projectId,
     title: thread.title,
     oven: { id: oven.id, name: oven.name, kind: oven.kind },
     harness: { id: harness.id, name: harness.name },
     model: {
-      providerId: catalog.id,
-      providerName: catalog.name,
-      modelId: model.id,
-      name: model.name
+      providerId: catalog?.id ?? providerId,
+      providerName: catalog?.name ?? providerId,
+      modelId: model?.id ?? modelId,
+      name: model?.name ?? modelId
     },
     thinkingLevel,
-    account: { id: account.id, label: account.label },
-    note: 'The run has been accepted, not finished. The app reports its outcome into this conversation when the thread settles.'
+    account: { id: account.id, label: accountLabel },
+    note: assistant
+      ? 'The assistant runs on its own thread and its reply appears in this conversation under its own name. Do not wait for it.'
+      : 'The run has been accepted, not finished. The app reports its outcome into this conversation when the thread settles.'
   }
 }
 

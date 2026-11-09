@@ -37,7 +37,7 @@
   )
 </script>
 
-<div class="flex justify-center border-b border-border px-3 py-3.5">
+<div class="flex justify-center px-3 pt-3.5 pb-1">
   <button
     type="button"
     class="group flex flex-col items-center gap-2 outline-none"

@@ -1,5 +1,10 @@
 import { ASSISTANT_SPACE_ID, type Thread, type ThreadSettings } from '../../lib/types'
-import { DON_THREAD_TITLE, donAssistantSeed, donThreadSettings } from '../../lib/don-assistant'
+import {
+  DON_KNOWLEDGE,
+  DON_THREAD_TITLE,
+  donAssistantSeed,
+  donThreadSettings
+} from '../../lib/don-assistant'
 import { DON_ASSISTANT_ID } from '../../lib/types/assistant'
 import type { AgentModelSelection } from '../../lib/types/common'
 import type { AssistantManager } from '../../lib/engines/assistant-manager'
@@ -66,6 +71,13 @@ export async function ensureDonOrchestrator(deps: {
     const primary: AgentModelSelection | undefined = config.agentDefaults?.seniorEngineer
     const seed = donAssistantSeed(primary ? { primary, fallbacks: [] } : undefined)
     const { created: assistantCreated } = assistantManager.ensureBuiltinAssistant(seed)
+    // The instructions moved from a dedicated delegate tool to the unified
+    // dispatch tool. Only a knowledge that still references the retired tool is
+    // upgraded, so an install that changed Don's own instructions keeps them.
+    const existingAssistant = assistantManager.getAssistant(DON_ASSISTANT_ID)
+    if (existingAssistant?.knowledge.includes('cio_delegate')) {
+      assistantManager.updateAssistant(DON_ASSISTANT_ID, { knowledge: DON_KNOWLEDGE })
+    }
     const settings = primary ? donThreadSettings(primary) : null
 
     const existing = await threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)

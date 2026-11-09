@@ -1,4 +1,3 @@
-import { Logger } from '../system/logger'
 import {
   ASSISTANT_SPACE_ID,
   assistantIsBuiltin,
@@ -7,7 +6,6 @@ import {
   type MessageAuthor,
   type Thread
 } from '../../lib/types'
-import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
 import { DON_ASSISTANT_ID, DON_ASSISTANT_NAME } from '../../lib/types/assistant'
 import type { DonExecutor } from '../utilities/utility-orchestration-service'
 
@@ -89,18 +87,6 @@ export interface DonRuntime {
 
 /** Everything the executor needs from the chat engine, narrow enough to test. */
 export interface DonDeps {
-  assistants: () => Assistant[]
-  getAssistant: (assistantId: string) => Assistant | null
-  /**
-   * Create the thread a delegation runs on and dispatch the request into it.
-   * Returns the created thread, or null when the run could not be started.
-   */
-  startDelegation: (
-    assistant: Assistant,
-    request: string
-  ) => Promise<{ thread: Thread } | { error: string }>
-  /** Announce that a delegation started, so Don's thread shows it working. */
-  announceDelegation: (delegation: PendingDonDelegation) => Promise<void>
   /**
    * Say one thing in the group chat this run was started from, under the run
    * assistant's own name and mark, while the work is still going.
@@ -111,17 +97,6 @@ export interface DonDeps {
   ) => Promise<{ posted: boolean; error?: string }>
   readUserName: () => Promise<string>
   writeUserName: (name: string) => Promise<string>
-}
-
-/** One assistant as Don sees it, when it asks for the roster. */
-interface DelegationCandidate {
-  assistantId: string
-  name: string
-  description?: string
-  /** Whether it has instructions and a model, so a handoff can actually run. */
-  ready: boolean
-  paused: boolean
-  scheduled: boolean
 }
 
 /** The speaker snapshot a delegated assistant's reply carries. */
@@ -136,7 +111,14 @@ export function delegationAuthor(assistant: Assistant): NonNullable<AgentMessage
   }
 }
 
-/** Whether an assistant can take a handoff right now. */
+/**
+ * Whether an assistant can take a handoff right now.
+ *
+ * A handoff runs on the model of the conversation that started it, so the
+ * assistant's own model is not a requirement here: an assistant with
+ * instructions can take work even before its scheduled row has a model of its
+ * own.
+ */
 export function assistantCanDelegate(
   assistant: Assistant
 ): { ok: true } | { ok: false; reason: string } {
@@ -147,24 +129,7 @@ export function assistantCanDelegate(
   if (assistant.knowledge.trim().length === 0) {
     return { ok: false, reason: `${assistant.name} has no instructions yet` }
   }
-  if (!assistantPrimaryModel(assistant.agents)) {
-    return { ok: false, reason: `${assistant.name} has no model yet` }
-  }
   return { ok: true }
-}
-
-/** The roster Don reads before it picks, in sidebar order. */
-export function delegationRoster(assistants: readonly Assistant[]): DelegationCandidate[] {
-  return assistants
-    .filter((assistant) => assistant.id !== DON_ASSISTANT_ID && !assistantIsBuiltin(assistant))
-    .map((assistant) => ({
-      assistantId: assistant.id,
-      name: assistant.name,
-      ...(assistant.description ? { description: assistant.description } : {}),
-      ready: assistantCanDelegate(assistant).ok,
-      paused: assistant.paused === true,
-      scheduled: assistant.scheduled !== false
-    }))
 }
 
 /** Normalize a name the user gave Don: one line, no surrounding punctuation. */
@@ -177,19 +142,13 @@ export function normalizeUserName(raw: unknown): string {
   return trimmed.slice(0, DON_NAME_LIMIT)
 }
 
-/** The model a delegated run starts on, from the assistant's own model set. */
-export function delegationSettings(settings: Thread['settings'], assistant: Assistant) {
-  const primary = assistantPrimaryModel(assistant.agents)
-  return primary && settings ? settingsWithAssistantModel(settings, primary) : settings
-}
-
 /**
  * Build Don's executor.
  *
- * The two operations are deliberately small: one reads the roster or starts a
- * handoff, the other reads or stores the user's name. Every judgement about *which*
- * assistant fits stays with the model, exactly as skill selection does, and the app
- * only validates the id it is given.
+ * The operations are deliberately small: storing the name the user chose and
+ * saying something in the group chat the turn belongs to. Starting work on an
+ * assistant or in a project is the orchestration tool's job, so there is one
+ * dispatch path with one set of model and Oven rules, not two that drift.
  */
 export function createDonExecutor(deps: DonDeps): DonExecutor {
   return async (operation, input, context) => {
@@ -209,49 +168,6 @@ export function createDonExecutor(deps: DonDeps): DonExecutor {
       }
       const stored = await deps.writeUserName(requested)
       return { name: stored, stored: true }
-    }
-
-    const assistantId = typeof input['assistantId'] === 'string' ? input['assistantId'].trim() : ''
-    if (assistantId.length === 0) {
-      return { assistants: delegationRoster(deps.assistants()) }
-    }
-
-    const assistant = deps.getAssistant(assistantId)
-    if (!assistant) {
-      return { delegated: false, error: `No assistant has the id ${assistantId}` }
-    }
-    const usable = assistantCanDelegate(assistant)
-    if (!usable.ok) return { delegated: false, assistant: assistant.name, error: usable.reason }
-
-    const request = typeof input['request'] === 'string' ? input['request'].trim() : ''
-    if (request.length === 0) {
-      return { delegated: false, assistant: assistant.name, error: 'The request was empty' }
-    }
-
-    const started = await deps.startDelegation(assistant, request)
-    if ('error' in started)
-      return { delegated: false, assistant: assistant.name, error: started.error }
-
-    const delegation: PendingDonDelegation = {
-      runThreadId: started.thread.id,
-      donProjectId: started.thread.dispatchOrigin?.initiatorProjectId ?? started.thread.projectId,
-      donThreadId: started.thread.dispatchOrigin?.initiatorThreadId ?? '',
-      author: delegationAuthor(assistant),
-      assistantName: assistant.name,
-      request,
-      createdAt: Date.now()
-    }
-    try {
-      await deps.announceDelegation(delegation)
-    } catch (error) {
-      Logger.dev('Don delegation activity card skipped:', error)
-    }
-    return {
-      delegated: true,
-      assistant: assistant.name,
-      assistantId: assistant.id,
-      threadId: started.thread.id,
-      note: 'Accepted. The assistant runs on its own thread; its reply appears in this conversation under its own name. Do not wait for it.'
     }
   }
 }

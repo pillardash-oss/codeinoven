@@ -28,7 +28,6 @@ import {
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../../lib/orchestration-tools'
 import {
-  DON_DELEGATE_TOOL_NAME,
   DON_USER_NAME_TOOL_NAME,
   GROUP_CHAT_REPLY_TOOL_NAME,
   type DonToolOperation
@@ -189,8 +188,6 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.orchestrate(state, input, 'dispatch')
       case ORCHESTRATION_STATUS_TOOL_NAME:
         return (state, input) => this.orchestrate(state, input, 'status')
-      case DON_DELEGATE_TOOL_NAME:
-        return (state, input) => this.don(state, input, 'delegate')
       case DON_USER_NAME_TOOL_NAME:
         return (state, input) => this.don(state, input, 'user-name')
       case GROUP_CHAT_REPLY_TOOL_NAME:

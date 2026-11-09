@@ -1574,6 +1574,11 @@ export class ChatEngine {
   attachOrchestrationRuntime(): void {
     return this.units['runtime-workflows'].attachOrchestrationRuntime()
   }
+  attachOrchestrationAssistantDirectory(
+    directory: import('./chat-engine-orchestration').OrchestrationAssistantDirectory | null
+  ): void {
+    return this.units['runtime-workflows'].attachOrchestrationAssistantDirectory(directory)
+  }
   attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
     return this.units['runtime-connectivity'].attachHeartbeatScheduler(scheduler)
   }

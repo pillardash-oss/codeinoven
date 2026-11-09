@@ -23,8 +23,7 @@ import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn
 import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
-import { DON_THREAD_ID } from '../don/don-bootstrap'
-import { ASSISTANT_SPACE_ID, isGroupThread } from '../../lib/types'
+import { isGroupThread } from '../../lib/types'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -560,72 +559,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   {
     const chatEngine = state.chatEngine
     if (chatEngine && assistantManager) {
-      const readDonThreadSettings = async () => {
-        const thread = await chatEngine.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
-        return thread?.settings
-      }
       const executor = createDonExecutor({
-        assistants: () => assistantManager.listAssistants(),
-        getAssistant: (assistantId) => assistantManager.getAssistant(assistantId),
-        startDelegation: async (assistant, request) => {
-          const primary = assistantPrimaryModel(assistant.agents)
-          if (!primary) return { error: `${assistant.name} has no model yet` }
-          const base = await readDonThreadSettings()
-          if (!base) return { error: 'The orchestrator has no model configured yet' }
-          const settings = settingsWithAssistantModel(
-            settingsWithAssistantTarget(base, assistant.execution),
-            primary
-          )
-          const thread = await chatEngine.threadManager.createThread({
-            projectId: ASSISTANT_SPACE_ID,
-            providerId: '',
-            title: request.slice(0, 80),
-            titleSource: 'default',
-            workingDirectory: '',
-            assistantId: assistant.id,
-            settings,
-            dispatchOrigin: {
-              assistantId: assistant.id,
-              assistantName: assistant.name,
-              // The report into Don's thread can outlive this process, so the
-              // speaker it must print travels on the run thread's own row.
-              author: delegationAuthor(assistant),
-              initiatorProjectId: ASSISTANT_SPACE_ID,
-              initiatorThreadId: DON_THREAD_ID,
-              at: Date.now()
-            }
-          })
-          await chatEngine.sendPrompt(
-            thread.projectId,
-            thread.id,
-            settings,
-            request,
-            [],
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            'internal',
-            undefined,
-            undefined,
-            true
-          )
-          return { thread }
-        },
-        announceDelegation: async (delegation) => {
-          // Nothing is written into Don's conversation while Don's own turn is
-          // still running: an assistant message inserted mid-turn is what made
-          // the turn's final answer render inside the working trace. The
-          // delegated assistant speaks only when it has something to report,
-          // from the settle or pause path, and that report is the group message.
-          // The sub-agent card an earlier build wrote here is retired.
-          await chatEngine.threadManager
-            .deleteAppMessages(delegation.donProjectId, delegation.donThreadId, [
-              `don-delegation-${delegation.runThreadId}-working`
-            ])
-            .catch(() => undefined)
-        },
         replyInGroupChat: async (context, text) => {
           // The run thread is the caller. It belongs to the group either by
           // being the group itself or by the dispatch that started it, so the
@@ -694,6 +628,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           const assistant = assistantManager.getAssistant(assistantId)
           return assistant ? delegationAuthor(assistant) : null
         }
+      })
+      // The orchestration tools dispatch to a project or to one of these
+      // assistants. Handing them the directory here is what makes an assistant
+      // handoff a group reply instead of a prompt steered back into the chat.
+      chatEngine.attachOrchestrationAssistantDirectory({
+        list: () => assistantManager.listAssistants(),
+        get: (assistantId) => assistantManager.getAssistant(assistantId),
+        rememberDelegation: (delegation) => delegations.remember(delegation)
       })
     }
   }

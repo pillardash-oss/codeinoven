@@ -1373,7 +1373,7 @@
                               {/if}
                             </button>
                           {/if}
-                          {#if board.props.controller?.kind !== 'temporary-chat'}
+                          {#if board.props.controller?.kind !== 'temporary-chat' && !groupThread}
                             <button
                               class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                               aria-label="Fork thread from this message"
@@ -1388,7 +1388,7 @@
                               {/if}
                             </button>
                           {/if}
-                          {#if board.props.chatMode && board.props.onContinueInProject}
+                          {#if board.props.chatMode && board.props.onContinueInProject && !groupThread}
                             <button
                               class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                               aria-label="Continue this chat in a project"
