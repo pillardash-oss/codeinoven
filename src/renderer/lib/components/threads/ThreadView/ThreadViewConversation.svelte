@@ -1594,6 +1594,10 @@
       {#if board.pollStreamParts.conversationBusy}
         <TraceActivityLine
           parts={board.pollStreamParts.latestTurnRenderableParts}
+          folded={!agentRuns.isTraceOpen(
+            board.handleAgentEvent.thread.projectId,
+            board.handleAgentEvent.thread.id
+          )}
           onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
           formatProse={conversationLiveProse}
         />
