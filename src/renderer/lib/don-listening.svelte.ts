@@ -16,9 +16,24 @@ class DonListeningState {
   /** Whether the panel exists at all. False drops it, and its dock chip with it. */
   isOpen = $state(false)
 
-  /** Show the panel, expanded, wherever the user is in the app. */
-  open(): void {
+  /**
+   * How many times the gesture has asked the panel to start listening as it
+   * opens. The gesture runs in the window and the panel mounts afterwards, so
+   * the request has to outlive the call that made it; the panel consumes it once
+   * its own mic is registered.
+   */
+  listenRequest = $state(0)
+
+  /**
+   * Show the panel, expanded, wherever the user is in the app.
+   *
+   * `listen` is the triple-press gesture: the user pressed the dictation
+   * modifier three times to start talking to Don, so the take begins as soon as
+   * the panel's own mic exists. A panel opened any other way waits for the user.
+   */
+  open(options: { listen?: boolean } = {}): void {
     this.isOpen = true
+    if (options.listen) this.listenRequest += 1
   }
 
   /** Drop the panel. Whatever it holds is discarded, so the next open is empty. */

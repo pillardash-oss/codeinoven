@@ -800,7 +800,16 @@ export class ChatEngineTurnsSendPrompt {
     // Track the latest user expression for the memory proposal at turn end.
     // Recorded before the active-turn branch below so a message that steers a
     // running turn still carries its text and referenced selections.
-    if (origin === 'user' && !(targetThread && isAssistantSetupThread(targetThread))) {
+    //
+    // An app-owned turn is never mined: `presentation` means the visible message
+    // is the app's own status line and `text` is an instruction the app wrote,
+    // such as Don's opening interview. Reading that as the user's words is how a
+    // prompt line became a pending "standing preference" in their memory.
+    if (
+      origin === 'user' &&
+      presentation === undefined &&
+      !(targetThread && isAssistantSetupThread(targetThread))
+    ) {
       this.host.state.pendingMemoryDecisions.set(sessionId, {
         userMessage: text,
         settings,

@@ -27,6 +27,7 @@ import {
   broadcastAssistantsChanged
 } from '../../scheduler/assistant-events'
 import { broadcastThreadUpdate } from '../../chat/thread-events'
+import { Logger } from '../../system/logger'
 import { raiseStartAtLoginOffer } from '../../system/start-at-login-offer'
 import type { IpcHandlerContext } from './context'
 import type {
@@ -428,6 +429,7 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     const chatEngine = ctx.chatEngine
     if (!chatEngine || donFirstRunInFlight) return
     donFirstRunInFlight = true
+    const openingMessageId = 'don-first-run'
     try {
       const thread = await ctx.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
       if (!thread?.settings) return
@@ -445,13 +447,32 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
         DON_FIRST_RUN_PROMPT,
         [],
         undefined,
-        undefined,
+        openingMessageId,
         undefined,
         undefined,
         undefined,
         'user',
         { action: DON_FIRST_RUN_ACTION }
       )
+    } catch (error) {
+      // An install with no provider account yet cannot run the introduction.
+      // The app-owned opening turn is rolled back with the failure, so Don does
+      // not keep a prompt nobody answered and the next open (after the user
+      // connects a provider) asks again instead of reading as already started.
+      await ctx.threadManager
+        .deleteAppMessages(ASSISTANT_SPACE_ID, DON_THREAD_ID, [openingMessageId])
+        .catch(() => undefined)
+      const thread = await ctx.threadManager
+        .getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+        .catch(() => null)
+      if (thread?.status === 'failed') {
+        await ctx.threadManager
+          .setStatus(ASSISTANT_SPACE_ID, DON_THREAD_ID, 'created')
+          .catch(() => undefined)
+      }
+      Logger.dev('Don could not open its first conversation', {
+        error: error instanceof Error ? error.message : String(error)
+      })
     } finally {
       donFirstRunInFlight = false
     }

@@ -20,6 +20,7 @@
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
+  import { triggerVoiceHost } from '$lib/speech/voice-trigger-registry'
   import type { SpeechEditorTarget } from '$lib/speech/editor-target'
   import { sendThreadMessageHeadless } from '$lib/stores/thread-delivery'
   import { logRendererError } from '$lib/system/renderer-logger'
@@ -169,6 +170,27 @@
     if (canSend) void send()
     return true
   }
+
+  /**
+   * The triple press opens this panel to listen, not to look at it: the take
+   * begins as soon as this panel's own mic has registered. The request is
+   * consumed by the panel, so reopening it from the dock never steals the
+   * microphone from whatever the user was doing.
+   */
+  let handledListenRequest = 0
+  $effect(() => {
+    const request = donListening.listenRequest
+    if (!donListening.isOpen || request === 0 || request === handledListenRequest) return
+    handledListenRequest = request
+    let frames = 24
+    const startTake = (): void => {
+      if (!donListening.isOpen) return
+      if (triggerVoiceHost(SPEECH_TARGET_ID)) return
+      frames -= 1
+      if (frames > 0) requestAnimationFrame(startTake)
+    }
+    requestAnimationFrame(startTake)
+  })
 
   void loadDon()
 </script>
