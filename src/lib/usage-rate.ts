@@ -63,6 +63,24 @@ export const DEFAULT_CHARS_PER_TOKEN = 4
  *  never generation time, not even at a request boundary. */
 export const GENERATION_BURST_GAP_MS = 2_000
 
+/**
+ * How much of the silence between a request's last streamed chunk and the
+ * request's own end may still be generation time.
+ *
+ * A request reports its completion some time after its final chunk, and that
+ * gap is not generation: for a turn that ends on a tool call it is the tool
+ * running (measured in this app's own sessions: 2.9 s for one bash call, up to
+ * 75 s for a long one). Crediting the whole gap is what the bounded tail used to
+ * guard against, but the guard sat at {@link GENERATION_BURST_GAP_MS} and so
+ * still billed up to two seconds of tool runtime to the denominator, which read
+ * as 3-6x understated on short tool-call-only messages and 6% low in aggregate.
+ *
+ * This allowance covers only what a server can lag behind its last chunk, which
+ * is a flush and an acknowledgement, so it stays at the shortest window the app
+ * is willing to measure at all.
+ */
+export const POST_OUTPUT_TAIL_MS = 250
+
 /** Below this, a request's characters-per-token ratio cannot describe
  *  tokenization, so the sample is not used to calibrate the estimate. */
 export const MIN_PLAUSIBLE_CHARS_PER_TOKEN = 1.5
@@ -186,7 +204,8 @@ export class GenerationClock {
     if (entry.burstStart === null) {
       entry.burstStart = at
     } else if (at - entry.lastSignalAt > GENERATION_BURST_GAP_MS) {
-      this.#settleBurst(entry, entry.lastSignalAt)
+      // The gap itself is not generation: this burst ends at its last signal.
+      this.#settleBurst(entry, entry.lastSignalAt, 0)
       entry.burstStart = at
       entry.burstChars = 0
       entry.burstSignals = 0
@@ -204,9 +223,11 @@ export class GenerationClock {
    *
    *  A report is itself evidence the model was producing output, so it extends
    *  the open burst, but only while the stream is still live. A report that
-   *  arrives long after the last output signal (a step's accounting delivered at
-   *  its end, a cumulative `token_count` between steps) must not stretch the
-   *  burst over the silence that followed generation. */
+   *  arrives after the last output signal (a step's accounting delivered at its
+   *  end, a request's total delivered with its completion) must not stretch the
+   *  burst over the silence that followed generation, which on this app's
+   *  sessions is a tool running. It gets the same allowance as the request end
+   *  for exactly that reason. */
   noteReported(key: string, tokens: number, at: number, scope: TokenUsageScope = 'message'): void {
     if (tokens <= 0) return
     const entry = this.#entry(key)
@@ -214,7 +235,7 @@ export class GenerationClock {
     if (scope === 'session') return
     entry.requestReportedTokens = Math.max(entry.requestReportedTokens, tokens)
     if (entry.burstStart === null) return
-    if (at - entry.lastSignalAt <= GENERATION_BURST_GAP_MS) {
+    if (at - entry.lastSignalAt <= POST_OUTPUT_TAIL_MS) {
       entry.lastSignalAt = Math.max(entry.lastSignalAt, at)
     }
   }
@@ -230,7 +251,7 @@ export class GenerationClock {
     const entry = this.#entries.get(key)
     if (!entry) return
     if (entry.burstStart !== null) {
-      this.#settleBurst(entry, at)
+      this.#settleBurst(entry, at, POST_OUTPUT_TAIL_MS)
       entry.burstStart = null
       entry.burstChars = 0
       entry.burstSignals = 0
@@ -246,12 +267,14 @@ export class GenerationClock {
     this.#learn(key)
   }
 
-  /** Count a finished burst as generation time, or leave it unmeasured. */
-  #settleBurst(entry: GenerationEntry, at: number): void {
-    // The tail between the last chunk and the request's own end is generation
-    // only while it stays inside one burst gap; beyond that the model had
-    // stopped producing output.
-    const end = Math.min(at, entry.lastSignalAt + GENERATION_BURST_GAP_MS)
+  /** Count a finished burst as generation time, or leave it unmeasured.
+   *
+   *  `tailMs` is how much of the silence after the last chunk may still be
+   *  generation. Mid-stream that silence is inter-token latency the model is
+   *  still working through, so it gets the wider burst gap. At a request end it
+   *  may be a tool running, so it gets only {@link POST_OUTPUT_TAIL_MS}. */
+  #settleBurst(entry: GenerationEntry, at: number, tailMs: number): void {
+    const end = Math.min(at, entry.lastSignalAt + tailMs)
     const spanMs = Math.max(0, end - (entry.burstStart ?? end))
     if (entry.burstSignals < 2 || spanMs < MIN_MEASURED_BURST_MS) {
       entry.unmeasuredRequests += 1

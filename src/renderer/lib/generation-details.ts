@@ -1,6 +1,7 @@
 import type { AgentMessage, AgentTokenUsage, NormalizedUsage } from '$shared/types'
 import {
   GENERATION_BURST_GAP_MS,
+  POST_OUTPUT_TAIL_MS,
   type GenerationSample,
   type TokenUsageScope
 } from '$shared/usage-rate'
@@ -230,6 +231,12 @@ export function generationDetails(input: {
       'Stream gap cutoff',
       milliseconds(GENERATION_BURST_GAP_MS),
       'A silence this long ends the generation window'
+    )
+    add(
+      measurement,
+      'End-of-output allowance',
+      milliseconds(POST_OUTPUT_TAIL_MS),
+      'Only this much of the wait after the last chunk can still be generation'
     )
     add(
       measurement,
