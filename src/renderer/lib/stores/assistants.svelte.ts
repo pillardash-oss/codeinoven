@@ -1,5 +1,6 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { isThreadExecutionActiveStatus } from '$shared/thread-status-policy'
 import type { CustomIconImage } from '$shared/custom-icon'
 import {
   nextRunAtExcluding,
@@ -12,6 +13,7 @@ import {
   type AssistantDeletionResult,
   type AssistantKnowledgeRevision,
   type AssistantKnowledgeRevisionDetail,
+  type AssistantPreview,
   type AssistantSchedule,
   type SkippedRun,
   type Thread,
@@ -65,6 +67,12 @@ class AssistantsState {
   /** Custom icon data URLs for assistants that store one, keyed by assistant id. */
   iconUrls: SvelteMap<string, string> = $state(new SvelteMap())
   /**
+   * The last thing said in each assistant's most recent conversation, keyed by
+   * assistant id. The assistant list draws one line from this instead of loading
+   * a transcript per row; it is refreshed after a turn settles, not streamed.
+   */
+  previews: SvelteMap<string, AssistantPreview> = $state(new SvelteMap())
+  /**
    * Getting started checkpoints by assistant id: what the authoring interview has
    * agreed so far. `null` means the interview has not saved one yet. Pushed by
    * `assistant:checkpointChanged` and read on demand by the knowledge panel, so an
@@ -77,6 +85,11 @@ class AssistantsState {
   private iconSignatures = new Map<string, string>()
   private initialized = false
   private disposers: Array<() => void> = []
+  /**
+   * Coalesced preview refresh. A turn settling emits several row pushes in a
+   * row, and one bounded query per burst is enough to keep the list honest.
+   */
+  private previewRefreshTimer: ReturnType<typeof setTimeout> | null = null
   /**
    * Assistant ids the user already removed from the UI while the main process
    * finishes the background cleanup. An assistant list pushed in that window (a
@@ -98,6 +111,7 @@ class AssistantsState {
       subscribe('assistant:changed', (assistants) => {
         this.publishAssistants(assistants)
         void this.refreshIcons()
+        this.schedulePreviewRefresh()
       }),
       subscribe('assistant:missedRunsChanged', () => {
         void this.refreshMissedRuns()
@@ -110,16 +124,26 @@ class AssistantsState {
       }),
       subscribe('assistant:checkpointChanged', (assistantId) => {
         void this.refreshCheckpoint(assistantId)
+      }),
+      subscribe('thread:updated', (thread) => {
+        // A turn settling is what changes the last line, so a busy status tick is
+        // skipped: the list would re-query on every step of a run for a preview
+        // that cannot have changed yet.
+        if (isThreadExecutionActiveStatus(thread.status)) return
+        this.schedulePreviewRefresh()
       })
     )
     void this.ensureSpace().catch(() => undefined)
     void this.refresh()
+    void this.refreshPreviews()
     void this.refreshMissedRuns()
     void this.refreshBackgroundRuns()
     void this.refreshSkippedRuns()
   }
 
   dispose(): void {
+    if (this.previewRefreshTimer !== null) clearTimeout(this.previewRefreshTimer)
+    this.previewRefreshTimer = null
     for (const dispose of this.disposers) dispose()
     this.disposers = []
     this.initialized = false
@@ -128,6 +152,36 @@ class AssistantsState {
   async refresh(): Promise<void> {
     this.publishAssistants(await invoke('assistant:list'))
     await this.refreshIcons()
+    this.schedulePreviewRefresh()
+  }
+
+  /**
+   * Read one last-line excerpt per assistant for the list rows.
+   *
+   * Best-effort: a row without a preview says it has no conversation yet, which
+   * is also the truth while the read is failing, so a failure never blocks the
+   * list from rendering.
+   */
+  async refreshPreviews(): Promise<void> {
+    try {
+      const previews = await invoke('assistant:previews')
+      const next = new SvelteMap<string, AssistantPreview>()
+      for (const preview of previews) {
+        if (this.removing.has(preview.assistantId)) continue
+        next.set(preview.assistantId, preview)
+      }
+      this.previews = next
+    } catch {
+      // The previous previews stay until the next refresh succeeds.
+    }
+  }
+
+  private schedulePreviewRefresh(): void {
+    if (this.previewRefreshTimer !== null) clearTimeout(this.previewRefreshTimer)
+    this.previewRefreshTimer = setTimeout(() => {
+      this.previewRefreshTimer = null
+      void this.refreshPreviews()
+    }, 600)
   }
 
   /**
@@ -379,6 +433,14 @@ class AssistantsState {
    */
   async startManualSetup(assistantId: string): Promise<void> {
     await invoke('assistant:startManualSetup', assistantId)
+  }
+
+  /**
+   * Open Don's first conversation, once. The orchestrator introduces itself with
+   * a real turn, the way every assistant does, and opening it again is a no-op.
+   */
+  async startDonSetup(): Promise<void> {
+    await invoke('assistant:startDonSetup')
   }
 
   /**

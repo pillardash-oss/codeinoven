@@ -70,6 +70,26 @@ export function settingsWithAssistantModel(
 }
 
 /**
+ * The model a thread is running on, as the selection an assistant's Agents tab
+ * stores. A thread with no model to name has no selection, which the caller
+ * treats as "this conversation cannot give a new assistant a model".
+ */
+export function modelSelectionFromThreadSettings(
+  settings: ThreadSettings | undefined
+): AgentModelSelection | undefined {
+  if (!settings?.modelId) return undefined
+  return {
+    harnessId: settings.harnessId,
+    providerId: settings.providerId,
+    modelId: settings.modelId,
+    ...(settings.accountId ? { accountId: settings.accountId } : {}),
+    inferenceMode: settings.inferenceMode,
+    contextWindow: settings.contextWindow,
+    ...(settings.thinkingLevel ? { thinkingLevel: settings.thinkingLevel } : {})
+  }
+}
+
+/**
  * The model set an assistant starts with. When the user did not pick a primary,
  * the model they were already working on   the composer's current selection  
  * becomes the primary, so an assistant defaults to the model they started with

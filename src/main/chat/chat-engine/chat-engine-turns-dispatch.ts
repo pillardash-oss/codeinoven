@@ -1,6 +1,8 @@
 import { deliverWithWorkPathNotices } from '../../design/work-path-notices'
 import { join } from 'path'
 import { Logger } from '../../system/logger'
+import { assistantResultText } from '../../../lib/assistant-result'
+import { broadcastThreadMessagesChanged, broadcastThreadUpdate } from '../thread-events'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import {
@@ -29,7 +31,12 @@ import type {
   PromptAttachment,
   ThreadSettings
 } from '../../../lib/types'
-import { INBOX_PROJECT_ID } from '../../../lib/types'
+import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../../lib/types'
+import {
+  delegationOutcomeText,
+  lastAssistantText,
+  type PendingDonDelegation
+} from '../chat-engine-don'
 import { modelKey } from '../../../lib/model-keys'
 import {
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
@@ -478,6 +485,134 @@ export class ChatEngineTurnsDispatch {
    * the durable record, so a report that cannot land (the requesting thread is
    * mid-turn, or has been closed) must never fail the run's finalization.
    */
+  /**
+   * Write a delegated run's answer into Don's thread.
+   *
+   * The assistant speaks for itself: the row carries the speaker as a snapshot, so
+   * the group transcript names the assistant that did the work and keeps naming it
+   * after a rename or a deletion. A run that produced no text reports its outcome
+   * instead of going silent, because a delegation the user cannot see finishing is
+   * worse than no delegation.
+   */
+  /** The speaker as the app knows it now, when the handoff carries only a name. */
+  private delegationAuthor(delegation: PendingDonDelegation): PendingDonDelegation['author'] {
+    return this.host.don?.resolveAuthor?.(delegation.author.assistantId) ?? delegation.author
+  }
+
+  async reportDonDelegation(delegation: PendingDonDelegation, status: string): Promise<void> {
+    if (!delegation.donThreadId) return
+    try {
+      // A "waiting to retry" line is temporary by nature: once the run settles
+      // its answer replaces it, so the group thread never keeps a stale pause.
+      await this.host.threadManager
+        .deleteAppMessages(ASSISTANT_SPACE_ID, delegation.donThreadId, [
+          `don-delegation-${delegation.runThreadId}-status`
+        ])
+        .catch(() => undefined)
+      const messages = await this.host.loadMessages(ASSISTANT_SPACE_ID, delegation.runThreadId)
+      const rawAnswer = lastAssistantText(messages)
+      // The run's text carries the app's `<assistant_result>` boundary; the
+      // conversation that reports it must read the answer, not the envelope.
+      const answer = rawAnswer ? assistantResultText(rawAnswer) : ''
+      let text = answer.length > 0 ? answer : delegationOutcomeText(delegation, status)
+      if (status === 'failed') {
+        // A failed handoff names the failure. "Its thread has the details" is
+        // the fallback, not the whole message: the user asked for an answer and
+        // needs to know what stopped it without opening another conversation.
+        const runThread = await this.host.threadManager
+          .getThread(ASSISTANT_SPACE_ID, delegation.runThreadId)
+          .catch(() => null)
+        const reason = runThread?.lastError?.trim()
+        if (reason) text = `${delegation.assistantName} could not finish the work: ${reason}`
+        text = `${text}\n\n@thread:${delegation.runThreadId}`
+      }
+      await this.host.threadManager.upsertMessages(ASSISTANT_SPACE_ID, delegation.donThreadId, [
+        {
+          id: `don-delegation-${delegation.runThreadId}`,
+          role: 'assistant',
+          origin: 'assistant',
+          visibility: 'conversation',
+          author: this.delegationAuthor(delegation),
+          parts: [
+            {
+              type: 'text',
+              id: `don-delegation-${delegation.runThreadId}-text`,
+              messageID: `don-delegation-${delegation.runThreadId}`,
+              text
+            }
+          ],
+          createdAt: Date.now(),
+          // An app-written conversation message is complete the moment it is
+          // written. Without this the transcript treats it as still streaming
+          // and, with no `<assistant_result>` boundary, renders it blank.
+          completedAt: Date.now()
+        }
+      ])
+      // The report lands while Don's conversation may be open, and this path
+      // does not go through a turn: without the two pushes the store keeps the
+      // transcript it has and the assistant appears never to have come back.
+      broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, delegation.donThreadId)
+      // The group is where the answer is reported, so the group is the row that
+      // carries the unread mark: the delegated run's own row deliberately does
+      // not (see `isGroupDispatchedRun`). Opening the conversation settles it.
+      const donThread = await this.host.threadManager
+        .markUnread(ASSISTANT_SPACE_ID, delegation.donThreadId)
+        .catch(() => null)
+      if (donThread) broadcastThreadUpdate(donThread)
+    } catch (error) {
+      Logger.error('Don delegation report failed', {
+        runThreadId: delegation.runThreadId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  /**
+   * State one delegated run's temporary state in Don's thread, under the
+   * assistant's own name.
+   *
+   * The one outcome the user cannot act on is silence: a run parked waiting for
+   * a provider or a reconnect used to show nothing at all in the conversation
+   * that asked for it. The line names what is happening and links the run's own
+   * thread, so the user can open it and see the retry card. It is written with a
+   * fixed id, so a second pause replaces the first instead of stacking.
+   */
+  async reportDonDelegationStatus(delegation: PendingDonDelegation, line: string): Promise<void> {
+    if (!delegation.donThreadId) return
+    const id = `don-delegation-${delegation.runThreadId}-status`
+    try {
+      await this.host.threadManager.upsertMessages(ASSISTANT_SPACE_ID, delegation.donThreadId, [
+        {
+          id,
+          role: 'assistant',
+          origin: 'assistant',
+          visibility: 'conversation',
+          author: this.delegationAuthor(delegation),
+          parts: [
+            {
+              type: 'text',
+              id: `${id}-text`,
+              messageID: id,
+              text: `${line}\n\n@thread:${delegation.runThreadId}`
+            }
+          ],
+          createdAt: Date.now(),
+          completedAt: Date.now()
+        }
+      ])
+      broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, delegation.donThreadId)
+      const donThread = await this.host.threadManager
+        .getThread(ASSISTANT_SPACE_ID, delegation.donThreadId)
+        .catch(() => null)
+      if (donThread) broadcastThreadUpdate(donThread)
+    } catch (error) {
+      Logger.dev('Don delegation status skipped', {
+        runThreadId: delegation.runThreadId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
   async reportOrchestrationDispatch(
     dispatch: PendingOrchestrationDispatch,
     status: string

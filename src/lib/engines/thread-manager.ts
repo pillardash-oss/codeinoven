@@ -35,6 +35,7 @@ import {
   type ThreadSettings,
   type ThreadContextUsage,
   type AgentMessage,
+  type AssistantPreview,
   type ThreadMessageCursor,
   type ThreadMessagePage,
   type UsageBearingMessage,
@@ -388,6 +389,15 @@ export class ThreadManager {
       assistantId: input.assistantId,
       assistantIconType: input.assistantIconType,
       assistantIcon: input.assistantIcon,
+      // A group's participants must be part of the created row for the same
+      // reason: the creation broadcast carries this object, and a group that
+      // only reached the database would render as a single-assistant thread
+      // until the next reload. The orchestrator's conversation is the first
+      // group, so without this every Don message reads as a project turn.
+      ...(input.groupParticipants && input.groupParticipants.length > 0
+        ? { groupParticipants: input.groupParticipants }
+        : {}),
+      ...(input.groupTitle ? { groupTitle: input.groupTitle } : {}),
       // Kept out of the row when absent: the repository stores only the true
       // case, so the in-memory shape must match what a read returns.
       ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
@@ -809,6 +819,8 @@ export class ThreadManager {
         | 'assistantIconType'
         | 'assistantIcon'
         | 'assistantGettingStarted'
+        | 'groupParticipants'
+        | 'groupTitle'
         | 'lastRunAt'
         | 'scheduleOverride'
         | 'scheduled'
@@ -906,6 +918,8 @@ export class ThreadManager {
       assistantId: input.assistantId ?? existing.assistantId,
       assistantIconType: input.assistantIconType ?? existing.assistantIconType,
       assistantIcon: input.assistantIcon ?? existing.assistantIcon,
+      groupParticipants: input.groupParticipants ?? existing.groupParticipants,
+      groupTitle: input.groupTitle ?? existing.groupTitle,
       ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
       lastRunAt: input.lastRunAt ?? existing.lastRunAt,
       scheduleOverride:
@@ -1959,6 +1973,31 @@ export class ThreadManager {
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
     if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     return this.transcripts.loadUserMessages(projectId, threadId)
+  }
+
+  /**
+   * The newest conversation message per assistant, for the assistant list rows.
+   *
+   * Read straight from the message repo rather than through a transcript load:
+   * the sidebar needs one bounded line per row, not a conversation.
+   */
+  async listAssistantPreviews(projectId: string): Promise<AssistantPreview[]> {
+    return this.agentMessageRepo.latestAssistantPreviewsViaWorker(projectId)
+  }
+
+  /**
+   * Retire app-owned seed messages. The orchestrator bootstrap uses this when the
+   * app changes what it seeds, so an install that saw the earlier version does
+   * not keep a line the app no longer writes.
+   */
+  async deleteAppMessages(
+    projectId: string,
+    threadId: string,
+    ids: readonly string[]
+  ): Promise<void> {
+    if (ids.length === 0) return
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
+    this.agentMessageRepo.deleteByIds(threadId, ids)
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */

@@ -1,4 +1,5 @@
 import { wireChatEngine } from './chat-engine/chat-engine-wiring'
+import type { DonRuntime } from './chat-engine-don'
 import { ChatEngineState } from './chat-engine/chat-engine-state'
 import type { ThreadTransferRelease } from './thread-transfer-service/thread-transfer-workers'
 import type { HandoffReleaseDetails } from '../system/instance-handoff-bus'
@@ -114,6 +115,7 @@ import type {
   BrainstormPrototypeFidelity,
   LocalRankingGradeProgress,
   LocalRankingGradeScope,
+  Assistant,
   AssistantAgents
 } from '../../lib/types'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -474,6 +476,15 @@ export class ChatEngine {
 
   /** The workstation tools' implementation and the dispatches awaiting a report. */
   public orchestration: OrchestrationRuntime | null = null
+
+  /**
+   * Don's capability implementation and the handoffs awaiting an answer.
+   *
+   * Attached by the bootstrap, because it owns both the assistant directory and the
+   * config the user's name lives in, while the chat engine owns thread creation,
+   * prompt sending and the turn that settles a delegated run.
+   */
+  public don: DonRuntime | null = null
 
   /**
    * Read the HEAD commit of one checkout, for a run's starting point.
@@ -1552,8 +1563,34 @@ export class ChatEngine {
   }): Promise<Thread> {
     return this.units['assistant-authoring'].createAssistantRunThread(input)
   }
+  /**
+   * Open the Getting started conversation of a teammate the orchestrator hired,
+   * with the request that caused the hire already in it.
+   */
+  async openRecruitedAssistantConversation(input: {
+    assistant: Assistant
+    purpose: string
+    request?: string
+    settings: ThreadSettings
+  }): Promise<Thread> {
+    return this.units['assistant-authoring'].openRecruitedAssistantConversation(input)
+  }
+  /**
+   * Install Don's runtime and hand its executor to the utility gateway, so a turn on
+   * Don's thread can read the assistant roster and delegate work.
+   */
+  attachDonRuntime(runtime: DonRuntime): void {
+    this.don = runtime
+    this.state.utilityOrchestration.setDonExecutor(runtime.executor)
+  }
+
   attachOrchestrationRuntime(): void {
     return this.units['runtime-workflows'].attachOrchestrationRuntime()
+  }
+  attachOrchestrationAssistantDirectory(
+    directory: import('./chat-engine-orchestration').OrchestrationAssistantDirectory | null
+  ): void {
+    return this.units['runtime-workflows'].attachOrchestrationAssistantDirectory(directory)
   }
   attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
     return this.units['runtime-connectivity'].attachHeartbeatScheduler(scheduler)

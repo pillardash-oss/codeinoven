@@ -26,13 +26,19 @@ import type {
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance,
+  Assistant,
   AssistantAgents
 } from '../../../lib/types'
 import {
+  ASSISTANT_SETUP_TITLE,
   ASSISTANT_SPACE_ID,
   isAssistantSetupThread,
   assistantKnowledgeComplete
 } from '../../../lib/types'
+import {
+  ASSISTANT_RECRUIT_SETUP_ACTION,
+  assistantRecruitSetupPrompt
+} from '../../../lib/assistant-chat-setup'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
 import { assistantReportIsTerminal, isAssistantReportThread } from '../../../lib/assistant-reports'
@@ -188,6 +194,81 @@ export class ChatEngineAssistantAuthoring {
     const updated = this.host.state.assistantRepo.updateIdentity(assistantId, identity, Date.now())
     if (!updated) return
     broadcastAssistantsChanged(this.host.state.assistantRepo.list())
+  }
+
+  /**
+   * Open the conversation that writes a recruited teammate's instructions.
+   *
+   * This is the orchestrator building its own team. The assistant row is created by
+   * the caller, which owns the directory, and this opens the other half: the pinned
+   * Getting started thread and the app-owned turn that starts the interview with
+   * the request that caused the hire already in it.
+   *
+   * Nothing is known about the assistant yet, which is what makes this thread the
+   * authoring interview: the contract rides the turn exactly as it does for the
+   * other two create paths, and the thread inherits the model of the conversation
+   * the hire came from, so the teammate can answer the first time it is opened.
+   */
+  async openRecruitedAssistantConversation(input: {
+    assistant: Assistant
+    /** What the teammate is for, in the words of whoever hired it. */
+    purpose: string
+    /** The work waiting for it, in the user's own words. */
+    request?: string
+    /** The settings of the conversation the hire came from, inherited by the new
+     *  thread. */
+    settings: ThreadSettings
+  }): Promise<Thread> {
+    const settings = input.settings
+    const { thread, finalize } = this.host.threadManager.prepareCreateThread(
+      {
+        projectId: ASSISTANT_SPACE_ID,
+        providerId: settings.providerId,
+        title: ASSISTANT_SETUP_TITLE,
+        titleSource: 'manual',
+        settings,
+        assistantId: input.assistant.id,
+        // The flag is what pins the row, makes it the assistant's knowledge
+        // thread, and keeps it out of eviction for the assistant's whole life.
+        assistantGettingStarted: true,
+        workingDirectory: ''
+      },
+      {
+        onEviction: (outcome) => {
+          if (outcome.failedIds.length === 0) return
+          Logger.error('Recruited assistant thread eviction failed', {
+            assistantId: input.assistant.id,
+            evictedId: outcome.evictedId,
+            failedIds: outcome.failedIds.join(','),
+            error: String(outcome.error)
+          })
+        }
+      }
+    )
+    await finalize()
+    broadcastThreadUpdate(thread)
+    // The opening turn is the user's, because the authoring contract rides a user
+    // turn on an assistant whose knowledge is still missing; its visible half is
+    // the app's own line, so the user reads what is happening instead of the
+    // instruction.
+    await this.host.sendPrompt(
+      ASSISTANT_SPACE_ID,
+      thread.id,
+      settings,
+      assistantRecruitSetupPrompt(
+        { name: input.assistant.name, purpose: input.purpose },
+        input.request
+      ),
+      [],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'user',
+      { action: ASSISTANT_RECRUIT_SETUP_ACTION }
+    )
+    return thread
   }
 
   /**

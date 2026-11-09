@@ -186,6 +186,7 @@
       {icon}
       {tabIcon}
       {tabIndicator}
+      closeOnIcon={hostsBrowserView}
       {actions}
       trailing={stripTrailing}
       {onNew}

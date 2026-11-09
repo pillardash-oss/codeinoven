@@ -3,7 +3,6 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
-  import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
   import SidebarListRow from '$lib/components/shared/SidebarListRow.svelte'
   import { RowPageBudget, THREAD_LIST_PAGE_SIZE } from '$lib/components/shared/RowPageBudget.svelte'
   import { ListRowReflow, rowArrangement } from '$lib/motion'
@@ -11,20 +10,18 @@
   import { slide } from 'svelte/transition'
   import { ThreadOrderSettle } from '$lib/components/workspace/thread-order-settle.svelte'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
-  import { pinnedThreadSort, threadSort } from '$lib/stores/workspace.svelte'
+  import { threadSort } from '$lib/stores/workspace.svelte'
   import { sortAssistants } from '$shared/assistant-order'
-  import {
-    isAssistantSetupThread,
-    isThreadWorking,
-    type Assistant,
-    type Thread
-  } from '$shared/types'
+  import { DON_ASSISTANT_ID, assistantIsBuiltin, assistantReady } from '$shared/types'
+  import { isThreadWorking, type Assistant, type Thread } from '$shared/types'
   import {
     countThreadStates,
     emptyThreadStateCounts,
     type ThreadStateCounts
   } from '$lib/thread-state-counts'
+  import { settledThreadReadsUnread } from '$shared/thread-status-policy'
   import AssistantRow from './AssistantRow.svelte'
+  import DonTile from './DonTile.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import AssistantEditModal from './AssistantEditModal.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
@@ -157,16 +154,11 @@
     return map
   })
 
-  /** The subset of each assistant's tasks that render nested under it (a
-   *  user-pinned task leaves for the Pinned section above). */
+  /** Every assistant's tasks, pinned ones included: a pinned task stays with
+   *  the assistant it belongs to instead of leaving for a section of its own. */
   const nestedTasksByAssistant = $derived.by(() => {
     const map = new SvelteMap<string, Thread[]>()
-    for (const [assistantId, list] of tasksByAssistant) {
-      map.set(
-        assistantId,
-        list.filter((task) => !task.pinned || isAssistantSetupThread(task))
-      )
-    }
+    for (const [assistantId, list] of tasksByAssistant) map.set(assistantId, list)
     return map
   })
 
@@ -241,26 +233,21 @@
    * assistants in, so dragging a row and seeing it stay put agree on one rule.
    */
   const orderedAssistants = $derived(sortAssistants(assistants))
-
-  /** Assistant-less, unpinned tasks, most recently active first. */
-  const standaloneTasks = $derived(
-    tasks
-      .filter((task) => !task.assistantId && !task.pinned)
-      .sort((a, b) => b.lastActivity - a.lastActivity)
-  )
+  /** Don, the app's orchestrator: a fixed slot above the list, never a row. */
+  const donAssistant = $derived(assistants.find((row) => row.id === DON_ASSISTANT_ID) ?? null)
+  const donThread = $derived(tasks.find((task) => task.assistantId === DON_ASSISTANT_ID) ?? null)
+  /** Every assistant the user owns, in sidebar order. Built-ins hold their own slot. */
+  const listedAssistants = $derived(orderedAssistants.filter((row) => !assistantIsBuiltin(row)))
 
   /**
-   * Pinned tasks that leave their assistant and join the flat Pinned section, in
-   * one shared pin order, exactly as the project sidebar treats pinned threads.
-   * An assistant's knowledge ("Getting started") thread is the exception: it is pinned
-   * for its whole life so it is never evicted, but it belongs to its assistant and
-   * stays nested there. Only an assistant-less knowledge thread (its assistant was
-   * removed) rises to this list.
+   * Assistant-less tasks, most recently active first.
+   *
+   * A pinned task among them stays here: the assistant sidebar has no Pinned
+   * section, because the large Don mark is the one fixed slot above the list and
+   * every other task reads in the place it belongs.
    */
-  const pinnedTasks = $derived(
-    tasks
-      .filter((task) => task.pinned && !(task.assistantId && isAssistantSetupThread(task)))
-      .sort((a, b) => pinnedThreadSort(a, b))
+  const standaloneTasks = $derived(
+    tasks.filter((task) => !task.assistantId).sort((a, b) => b.lastActivity - a.lastActivity)
   )
 
   /**
@@ -275,19 +262,20 @@
    * Pinned section above, and it keeps its own runs nested there.
    */
   const threadRowsByAssistant = $derived.by(() => {
-    const pinnedTaskIds = new SvelteSet(pinnedTasks.map((task) => task.id))
+    // Nothing leaves an assistant's chronology: pinned tasks are drawn in it.
+    const noTaskLiftedOut: ReadonlySet<string> = new SvelteSet<string>()
     const rowsByAssistant = new SvelteMap<string, Thread[]>()
     for (const [assistantId, list] of nestedTasksByAssistant) {
       rowsByAssistant.set(
         assistantId,
-        assistantThreadRows(list, runsByAssistant.get(assistantId) ?? EMPTY_RUNS, pinnedTaskIds)
+        assistantThreadRows(list, runsByAssistant.get(assistantId) ?? EMPTY_RUNS, noTaskLiftedOut)
       )
     }
     // Runs can outlive their assistant's task list (the task was removed), so an
     // assistant left with only runs still draws them.
     for (const [assistantId, runs] of runsByAssistant) {
       if (rowsByAssistant.has(assistantId)) continue
-      rowsByAssistant.set(assistantId, assistantThreadRows(EMPTY_TASKS, runs, pinnedTaskIds))
+      rowsByAssistant.set(assistantId, assistantThreadRows(EMPTY_TASKS, runs, noTaskLiftedOut))
     }
     for (const rows of rowsByAssistant.values()) rows.sort((a, b) => threadSort(a, b))
     return rowsByAssistant
@@ -327,7 +315,6 @@
    */
   const assistantRowArrangement = $derived(
     rowArrangement([
-      { key: 'pinned', rowKeys: pinnedTasks.map((task) => task.id) },
       ...orderedAssistants.map((assistant) => ({
         key: `assistant:${assistant.id}`,
         rowKeys: threadRowsOfAssistant(assistant.id).map((row) => row.id)
@@ -355,14 +342,6 @@
   $effect(() => {
     assistantRowReflow.play(assistantListElement, scroller ?? null, assistantRowArrangement)
   })
-
-  /** Open a pinned task, docking its assistant's knowledge panel like a nested row. */
-  function openPinnedTask(task: Thread): void {
-    onOpenTask(task)
-    const assistant = assistants.find((entry) => entry.id === task.assistantId)
-    if (assistant) onOpenAssistantKnowledge(assistant)
-    else onOpenTaskKnowledge(task)
-  }
 
   /** Every task of an assistant, pinned ones included, most recent first. */
   function assistantTasks(assistantId: string): readonly Thread[] {
@@ -435,12 +414,6 @@
    */
   function threadRowsOfAssistant(assistantId: string): readonly Thread[] {
     return threadRowsByAssistant.get(assistantId) ?? EMPTY_TASKS
-  }
-
-  /** The accent colour a flat (pinned) row should tint its icon with. */
-  function assistantColorFor(task: Thread): string | undefined {
-    if (!task.assistantId) return undefined
-    return assistants.find((assistant) => assistant.id === task.assistantId)?.color
   }
 
   function assistantNextRun(assistantId: string): number | null {
@@ -681,26 +654,26 @@
       <!-- No empty note here: the shell paints this sidebar only while it holds a
            assistant or a task, and the view's own empty state is what invites the
            first one. -->
-      <!-- Pinned tasks lead the list, above the assistants: the shared
-           PinnedSection owns the header, the fold state, and the row list,
-           and the assistant supplies its own task row to it. -->
-      <PinnedSection
-        sectionKey="assistant"
-        label="Pinned"
-        threads={pinnedTasks}
-        activeThreadId={selectedThreadId}
-        onOpen={openPinnedTask}
-        onRename={onRenameTask}
-        onTogglePin={onTogglePinTask}
-        onDelete={onDeleteTask}
-        onFork={onForkTask}
-      >
-        {#snippet row(task: Thread)}
-          {@render taskWithRuns(task, assistantColorFor(task), openPinnedTask, true)}
-        {/snippet}
-      </PinnedSection>
+      {#if donAssistant}
+        <DonTile
+          assistant={donAssistant}
+          threadId={donThread?.id ?? null}
+          selected={donThread !== null && selectedThreadId === donThread.id}
+          unread={donThread !== null && settledThreadReadsUnread(donThread, donThread.read)}
+          iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
+          ready={assistantReady(donAssistant)}
+          onOpen={() => {
+            if (!donThread) return
+            // The first open is the one moment Don introduces itself. A failure
+            // here is not fatal: the thread is open and the user can write the
+            // first line themselves.
+            void assistantStore.startDonSetup().catch(() => undefined)
+            onOpenTask(donThread)
+          }}
+        />
+      {/if}
 
-      {#each orderedAssistants as assistant (assistant.id)}
+      {#each listedAssistants as assistant (assistant.id)}
         {@const assistantTaskList = assistantTasks(assistant.id)}
         {@const visibleRows = filteredAssistantRows(assistant)}
         {@const rowsShown = assistantPage(assistant, visibleRows)}
@@ -724,6 +697,7 @@
           threadCount={threadsOfAssistant(assistant.id)}
           iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
           nextRunAt={assistantNextRun(assistant.id)}
+          preview={assistantStore.previews.get(assistant.id)?.text ?? null}
           searchOpen={searching}
           searchQuery={query}
           onToggle={toggleAssistant}

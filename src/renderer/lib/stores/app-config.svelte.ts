@@ -88,6 +88,11 @@ let autoRunMissedAssistantRuns = $state(true)
 let modelProfiles = $state<ModelProfile[]>([])
 /** Whether IDE Mode reformats a file through its language server on save. */
 let ideFormatOnSave = $state(true)
+/**
+ * What the user asked Don to call them. Empty until they answer, and read by the
+ * group thread transcript, which signs the user's own messages with it.
+ */
+let userPreferredName = $state('')
 
 /** Push the persisted appearance preferences onto the document. The CSS itself
  *  is applied by `lib/app-typography.ts`, which the app's child documents use as
@@ -188,6 +193,10 @@ export const appConfigState = {
   get ideFormatOnSave(): boolean {
     return ideFormatOnSave
   },
+  /** The name the user asked Don to call them; empty until they say. */
+  get userPreferredName(): string {
+    return userPreferredName
+  },
   sync(config: AppConfig): void {
     maxDiffLines = config.maxDiffLines
     browserHibernationMinutes = config.browserHibernationMinutes
@@ -232,6 +241,7 @@ export const appConfigState = {
     autoRunMissedAssistantRuns = config.autoRunMissedAssistantRuns
     modelProfiles = config.modelProfiles ?? []
     ideFormatOnSave = config.ideFormatOnSave !== false
+    userPreferredName = config.userPreferredName ?? ''
     // The persisted keybindings overwrite the registry defaults, so every
     // handler that asks keymapState for an id picks up the user's binding.
     keymapState.setOverrides(config.keybindings)

@@ -11,6 +11,7 @@ import {
   type BackgroundRunReason,
   type MissedRun,
   type MissedRunReason,
+  isGroupDispatchedRun,
   type Assistant,
   type AssistantConnection,
   type AssistantSchedule,
@@ -678,8 +679,10 @@ export type TaskPopoverState =
  * badge priority: unread only for a completed run nobody has opened, then the
  * status policy's tone, so a parked or failed run reads as what it is waiting on.
  */
-export function taskPopoverState(task: Pick<Thread, 'status' | 'read'>): TaskPopoverState {
-  if (settledThreadReadsUnread(task, task.read)) return 'unread'
+export function taskPopoverState(
+  task: Pick<Thread, 'status' | 'read' | 'dispatchOrigin'>
+): TaskPopoverState {
+  if (!isGroupDispatchedRun(task) && settledThreadReadsUnread(task, task.read)) return 'unread'
   switch (threadStatusPolicy(task.status).tone) {
     case 'working':
       return 'working'

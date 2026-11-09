@@ -27,6 +27,7 @@ import {
   ORCHESTRATION_STATUS_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../../lib/orchestration-tools'
+import { GROUP_CHAT_REPLY_TOOL_NAME, isDonTool } from '../../../lib/don-tools'
 import {
   APP_CONTROL_CALL_TOOL_NAME,
   APP_CONTROL_CATALOG_TOOL_NAME,
@@ -172,10 +173,24 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // @cio-hey session. The gateway refuses a route the turn never received.
       if (isOrchestrationTool(name)) {
         return (
+          // The orchestrator is the one conversation that starts work by
+          // definition: its roster and the project list are what it dispatches
+          // from, so it never needs the tag or the full-access tier.
+          request.donTurn === true ||
           request.delegationReach === true ||
           request.permissionLevel === 'full_access' ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
+      }
+      // Don's own tools are granted only on Don's thread. Delegating work and
+      // recording what the user is called are the orchestrator's job, so no other
+      // assistant, chat or worker is ever offered them. The one exception is
+      // speaking into the group chat a delegated run was started from: that tool
+      // belongs to the assistant doing the work, which is why it is granted by
+      // the turn's group membership instead.
+      if (isDonTool(name)) {
+        if (name === GROUP_CHAT_REPLY_TOOL_NAME) return request.groupChatTurn === true
+        return request.donTurn === true
       }
       // The engineering artifact tools are granted by the turn's own flag: they
       // create a real Brainstorm, PRD, spec or Assignment for the thread, so a

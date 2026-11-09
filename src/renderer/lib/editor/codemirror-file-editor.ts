@@ -223,6 +223,8 @@ export async function createFileEditor(
   let loadingCompletionKey: string | null = null
   /** The one-shot answer consumed by the retriggered completion source. */
   let readyCompletion: { key: string; items: IdeCompletionItem[] } | null = null
+  /** The popup drawn immediately by Ctrl+Space, before the server answers. */
+  let completionLoading: HTMLDivElement | null = null
   /** Last depth pair handed to `onHistoryChange`, so the toolbar is only told
    *  when something actually changed. `null` forces the creation report. */
   let reportedHistory: FileEditorHistoryState | null = null
@@ -446,6 +448,8 @@ export async function createFileEditor(
       maxRenderedOptions: 60
     }),
     api.EditorView.updateListener.of((update) => {
+      // A moved caret or an edited document invalidates the anchored wait.
+      if (update.docChanged || update.selectionSet) hideCompletionLoading()
       reportHistory(update.state)
       const conflictRangesChanged = update.transactions.some(
         (transaction) =>
@@ -486,16 +490,14 @@ export async function createFileEditor(
     return line.from + Math.min(position.character, line.length)
   }
   /**
-   * Insert an accepted completion, together with its auto-import edit.
+   * Insert an accepted completion, then add the edits its resolution reveals.
    *
-   * The insertion itself is CodeMirror's own from/to for the word being typed,
-   * so what the reader sees replaced is exactly the token the dropdown matched.
-   * Additional edits are the language server's own positions: they are what adds
-   * `import CioCircle from '...'` above the line the component was typed on.
-   *
-   * Resolution is asynchronous because tsserver only reveals those edits when
-   * the item is resolved, so both are applied in one transaction afterwards and
-   * one undo removes the completion and its import together.
+   * The insertion is CodeMirror's own from/to for the word being typed, so what
+   * the reader sees replaced is exactly the token the dropdown matched. It is
+   * committed before the item is resolved: a server can take seconds to answer
+   * `completionItem/resolve`, and a click or Enter that does nothing until then
+   * reads as a broken list. The auto-import edits are applied in a second
+   * transaction when the resolve answers.
    */
   async function applyIdeCompletion(
     target: EditorView,
@@ -504,37 +506,15 @@ export async function createFileEditor(
     from: number,
     to: number
   ): Promise<void> {
-    let resolved = item
-    if (item.data !== undefined && options.resolveIdeCompletion) {
-      try {
-        resolved = (await options.resolveIdeCompletion(item)) ?? item
-      } catch {
-        resolved = item
-      }
-    }
     if (destroyed || target !== view) return
     const doc = view.state.doc
-    const primary = resolved.textEdit?.newText ?? resolved.insertText ?? resolved.label
-    const changes: { from: number; to: number; insert: string }[] = [{ from, to, insert: primary }]
-    let shift = 0
-    for (const edit of resolved.additionalTextEdits ?? []) {
-      const start = offsetAt(doc, edit.range.start)
-      const end = offsetAt(doc, edit.range.end)
-      if (start === null || end === null || end < start) continue
-      // Overlapping the insertion would mean the server's two edits disagree
-      // about the same characters, so the import is dropped rather than applied
-      // on top of the completion.
-      if (start <= to && end >= from) continue
-      changes.push({ from: start, to: end, insert: edit.newText })
-      if (start <= from) shift += edit.newText.length - (end - start)
-    }
-    const delta = changes.reduce(
-      (total, change) => total + change.insert.length - (change.to - change.from),
-      0
+    const primary = item.textEdit?.newText ?? item.insertText ?? item.label
+    const cursor = Math.max(
+      0,
+      Math.min(from + primary.length, doc.length + primary.length - (to - from))
     )
-    const cursor = Math.max(0, Math.min(from + shift + primary.length, doc.length + delta))
     view.dispatch({
-      changes,
+      changes: { from, to, insert: primary },
       selection: { anchor: cursor },
       scrollIntoView: true,
       // The picked annotation tells CodeMirror this completion was accepted, so
@@ -542,6 +522,30 @@ export async function createFileEditor(
       annotations: api.pickedCompletion.of(completion),
       userEvent: 'input.complete'
     })
+    if (item.data === undefined || !options.resolveIdeCompletion) return
+    let resolved: IdeCompletionItem
+    try {
+      resolved = (await options.resolveIdeCompletion(item)) ?? item
+    } catch {
+      return
+    }
+    if (destroyed || target !== view) return
+    const edits = resolved.additionalTextEdits ?? []
+    if (!edits.length) return
+    const current = view.state.doc
+    const changes: { from: number; to: number; insert: string }[] = []
+    for (const edit of edits) {
+      const start = offsetAt(current, edit.range.start)
+      const end = offsetAt(current, edit.range.end)
+      if (start === null || end === null || end < start) continue
+      // A resolved edit that overlaps the text the completion just inserted
+      // disagrees with what is already on screen, so it is dropped instead of
+      // rewriting the symbol the reader accepted.
+      if (start < cursor && end > cursor) continue
+      changes.push({ from: start, to: end, insert: edit.newText })
+    }
+    if (!changes.length) return
+    view.dispatch({ changes, userEvent: 'input.complete.import' })
   }
   /**
    * The language server's completions as CodeMirror's dropdown.
@@ -565,6 +569,7 @@ export async function createFileEditor(
     if (readyCompletion?.key === key) {
       const { items } = readyCompletion
       readyCompletion = null
+      hideCompletionLoading()
       if (!items.length) return null
       return {
         from: word?.from ?? context.pos,
@@ -583,13 +588,14 @@ export async function createFileEditor(
     if (context.explicit) {
       if (loadingCompletionKey !== key) {
         loadingCompletionKey = key
+        showCompletionLoading()
         void options
           .getIdeCompletions(query)
           .then((items) => {
             loadingCompletionKey = null
             if (destroyed) return
             readyCompletion = { key, items }
-            // One painted frame of the loading row before the answer replaces
+            // One painted frame of the loading popup before the answer replaces
             // it: a source that resolves inside the same frame otherwise shows
             // no feedback at all, which is exactly the cold-start case.
             requestAnimationFrame(() => {
@@ -598,6 +604,7 @@ export async function createFileEditor(
           })
           .catch(() => {
             loadingCompletionKey = null
+            hideCompletionLoading()
             if (destroyed) return
             readyCompletion = { key, items: [] }
             requestAnimationFrame(() => {
@@ -605,25 +612,67 @@ export async function createFileEditor(
             })
           })
       }
-      return {
-        from: word?.from ?? context.pos,
-        filter: false,
-        options: [
-          {
-            label: 'Searching for suggestions…',
-            detail: 'Language server',
-            apply: () => undefined
-          }
-        ]
-      }
+      // The popup is already on screen, drawn synchronously by the keydown.
+      // Returning null keeps CodeMirror from opening its own empty list and
+      // flashing until the real answer exists.
+      return null
     }
     const items = await options.getIdeCompletions(query)
+    hideCompletionLoading()
     if (!items.length) return null
     return {
       from: word?.from ?? context.pos,
       options: completionChoices(items),
       validFor: /^[\w$]*$/u
     }
+  }
+  /**
+   * Draw the waiting state now, not after CodeMirror's query pipeline.
+   *
+   * CodeMirror schedules an explicit source after a short delay and only draws
+   * a tooltip once that source settles, so a cold language server used to leave
+   * Ctrl+Space looking broken for seconds. This popup is appended in the same
+   * keydown that asked for suggestions; the real dropdown replaces it when the
+   * answer exists.
+   */
+  function showCompletionLoading(): void {
+    hideCompletionLoading()
+    const doc = view.dom.ownerDocument
+    const win = doc.defaultView
+    const coords = view.coordsAtPos(view.state.selection.main.head)
+    if (!win || !coords) return
+    const popup = doc.createElement('div')
+    popup.className = 'cio-completion-loading'
+    popup.setAttribute('role', 'status')
+    popup.setAttribute('aria-live', 'polite')
+    popup.textContent = 'Searching for suggestions…'
+    popup.style.cssText = [
+      'position: fixed',
+      'z-index: 90',
+      'padding: 0.3rem 0.55rem',
+      'border: 1px solid var(--color-border)',
+      'background: var(--color-surface)',
+      'color: var(--color-muted)',
+      'font-family: var(--font-mono)',
+      'font-size: 0.75rem',
+      'line-height: 1.5',
+      'min-width: 220px',
+      'box-shadow: 0 12px 32px rgb(0 0 0 / 0.28)',
+      'pointer-events: none',
+      'white-space: nowrap',
+      `max-width: ${Math.max(220, Math.floor(host.clientWidth - 16))}px`
+    ].join(';')
+    doc.body.appendChild(popup)
+    const width = popup.getBoundingClientRect().width
+    const left = Math.max(8, Math.min(coords.left, win.innerWidth - width - 8))
+    const top = Math.max(8, Math.min(coords.bottom + 4, win.innerHeight - 32))
+    popup.style.left = `${left}px`
+    popup.style.top = `${top}px`
+    completionLoading = popup
+  }
+  function hideCompletionLoading(): void {
+    completionLoading?.remove()
+    completionLoading = null
   }
   function completionChoices(items: IdeCompletionItem[]): Completion[] {
     return items.map((item) => ({
@@ -668,7 +717,14 @@ export async function createFileEditor(
         // presses it expects.
         if (keymapState.matches('ide-complete', event)) {
           event.preventDefault()
-          return api.startCompletion(view)
+          showCompletionLoading()
+          const started = api.startCompletion(view)
+          if (!started) hideCompletionLoading()
+          return started
+        }
+        if (keymapState.matches('ide-info-close', event)) {
+          hideCompletionLoading()
+          return false
         }
         const commands = ['definition', 'references', 'documentation', 'grep', 'files'] as const
         const command = commands.find((action) => keymapState.matches(`ide-${action}`, event))
@@ -971,6 +1027,7 @@ export async function createFileEditor(
       clearTimeout(hoverTimer)
       unregisterIde()
       destroyed = true
+      hideCompletionLoading()
       completionWidth.disconnect()
       clearFlashTimer()
       view.destroy()

@@ -93,10 +93,15 @@ const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
       description:
         'The complete instruction the dispatched agent receives, self-contained and written as if the user typed it into that thread.'
     },
+    assistantId: {
+      type: 'string',
+      description:
+        'Exact assistantId from the `assistants` list in cio_orchestrate_targets. Use this for research, ideas, writing and tasks that belong to an assistant. Omit it to dispatch work into a project. Never send both assistantId and projectId.'
+    },
     projectId: {
       type: 'string',
       description:
-        'Project the thread belongs to, from the `projects` list in cio_orchestrate_targets. Omit to dispatch inside the project this conversation is already working on.'
+        'Project the thread belongs to, from the `projects` list in cio_orchestrate_targets. Use this for coding and other work in a repository. Omit to dispatch inside the project this conversation is already working on, or when targeting an assistant.'
     },
     ovenId: {
       type: 'string',
@@ -111,15 +116,17 @@ const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
     harnessId: {
       type: 'string',
       description:
-        'Exact harness id from cio_orchestrate_targets, for example pi, codex or claude-code.'
+        'Exact harness id from cio_orchestrate_targets, for example pi, codex or claude-code. Omit to run on the model this conversation is already using.'
     },
     providerId: {
       type: 'string',
-      description: 'Exact provider id from the selected harness catalog in cio_orchestrate_targets.'
+      description:
+        'Exact provider id from the selected harness catalog in cio_orchestrate_targets. Omit to run on the model this conversation is already using.'
     },
     modelId: {
       type: 'string',
-      description: 'Exact model id from the selected provider in cio_orchestrate_targets.'
+      description:
+        'Exact model id from the selected provider in cio_orchestrate_targets. Omit to run on the model this conversation is already using, which is the right default unless the user asked for another model.'
     },
     accountId: {
       type: 'string',
@@ -143,7 +150,7 @@ const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
       description: 'Permission tier for the dispatched run. Omit to inherit the requesting thread.'
     }
   },
-  required: ['title', 'prompt', 'harnessId', 'providerId', 'modelId'],
+  required: ['title', 'prompt'],
   additionalProperties: false
 }
 
@@ -168,7 +175,7 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
   {
     name: ORCHESTRATION_TARGETS_TOOL_NAME,
     description:
-      'Read the CodeInOven workstation: the Ovens (machines) and which harnesses each one has installed, the harness catalog, the model catalogs with the thinking levels each model offers, the saved model profiles, the accounts per harness with the one the app marks as default, and every project with its id. Call this before cio_orchestrate_dispatch: it is the only source of the exact ids a dispatch accepts. Its results also carry the current project, the default Oven and the default harness, so a request that names none of them still has a real value to propose and confirm with the user.',
+      'Read the CodeInOven workstation: every project with its id, every assistant with its id and what it is for, the Ovens (machines) and which harnesses each one has installed, the harness catalog, the model catalogs with the thinking levels each model offers, the saved model profiles, and the accounts per harness with the one the app marks as default. Call this before cio_orchestrate_dispatch: it is the only source of the exact ids a dispatch accepts. Its results also carry the current project, the default Oven and the default harness, so a request that names none of them still has a real value to propose and confirm with the user.',
     inputSchema: TARGETS_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-targets',
@@ -177,7 +184,7 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
   {
     name: ORCHESTRATION_DISPATCH_TOOL_NAME,
     description:
-      'Create a real CodeInOven thread and run a prompt in it, on a chosen Oven with a chosen harness, provider, model, thinking level, account and permission tier. This is also the one call that starts a thread in another project with a first message: pass that project id from cio_orchestrate_targets and the user never sees an empty thread. The thread appears in the sidebar like any other, bound to the Oven and streaming its status, exactly as if the user had configured and started it by hand. Use only exact ids read from cio_orchestrate_targets. Before calling, resolve every field the user named; for a field the user left out and the app has no default for, ask the user with the harness question tool and offer the real options. The call returns as soon as the run is accepted: do not block, and do not claim the work is finished. The app reports back into this conversation when the dispatched thread settles.',
+      'Start real work from this conversation, on another assistant or in a project. Pass `assistantId` from cio_orchestrate_targets for research, ideas, writing and tasks that belong to an assistant; pass `projectId` for coding and other work in a repository. The thread is created with the first prompt already in it, so the user never sees an empty thread, and it appears in the sidebar like any other. Omit harnessId, providerId and modelId to run on the model this conversation is already using, which is the right default; name them only when the user asked for another model, thinking level, account or Oven. Use only exact ids read from cio_orchestrate_targets. The call returns as soon as the run is accepted: do not block, and do not claim the work is finished. An assistant answers here under its own name; a project run reports its outcome here when it settles.',
     inputSchema: DISPATCH_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-dispatch',

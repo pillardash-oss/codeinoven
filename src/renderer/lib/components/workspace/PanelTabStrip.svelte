@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import type { Snippet } from 'svelte'
   import { browserTabIndicatorSlotClass } from '$lib/stores/browser-tab-status'
@@ -9,6 +10,9 @@
     id: string
     title: string
     indicatorCount?: number
+    /** Whether the tab's page is still coming up, so the strip can say so in the
+     *  same slot the page's own mark occupies. */
+    loading?: boolean
   }
 
   interface Props {
@@ -29,6 +33,10 @@
     onCloseTab?: (id: string) => void
     onTabContextMenu?: (id: string, event: MouseEvent) => void
     onMoveTab?: (id: string, targetId: string, position: 'before' | 'after') => void
+    /** Whether closing belongs on the tab's own mark instead of a second button.
+     *  Only a surface whose tabs carry a leading icon can say yes: with no icon
+     *  there is nothing for the control to replace. */
+    closeOnIcon?: boolean
     titlebar?: boolean
   }
 
@@ -46,6 +54,7 @@
     onCloseTab,
     onTabContextMenu,
     onMoveTab,
+    closeOnIcon = false,
     titlebar = false
   }: Props = $props()
 
@@ -88,8 +97,9 @@
     >
       {#each tabs as tab (tab.id)}
         {@const indicatorCount = tabIndicator ? (tab.indicatorCount ?? 0) : 0}
+        {@const closeTakesIcon = closeOnIcon && onCloseTab !== undefined && indicatorCount === 0}
         <div
-          class="relative flex shrink-0 items-center"
+          class="group relative flex shrink-0 items-center"
           role="listitem"
           draggable={Boolean(onMoveTab)}
           ondragstart={(event) => {
@@ -142,14 +152,40 @@
                 class="shrink-0 {browserTabIndicatorSlotClass(indicatorCount)}"
                 aria-hidden="true"
               ></span>
-            {:else if tabIcon}
-              {@render tabIcon({ id: tab.id, title: tab.title })}
-            {:else if icon}
-              {@render icon()}
+            {:else}
+              <!-- The tab's mark is its loading state and, while the pointer is
+                   on the chip, its close control: the strip spends no width on a
+                   second button and the title keeps that room. -->
+              <span
+                class="flex shrink-0 items-center justify-center transition-opacity duration-100 {closeTakesIcon
+                  ? 'group-hover:opacity-0'
+                  : ''}"
+              >
+                {#if tab.loading}
+                  <CioSpinner size={11} class="animate-spin text-dimmed" />
+                {:else if tabIcon}
+                  {@render tabIcon({ id: tab.id, title: tab.title })}
+                {:else if icon}
+                  {@render icon()}
+                {/if}
+              </span>
             {/if}
             <span class="max-w-40 truncate">{tab.title}</span>
           </button>
-          {#if onCloseTab}
+          {#if onCloseTab && closeTakesIcon}
+            <!-- Drawn over the tab's own mark, so the control appears where the
+                 eye already is. A sibling of the select button, because a button
+                 cannot nest a button. -->
+            <button
+              type="button"
+              class="absolute left-1 top-1/2 z-20 flex h-6 w-6 -translate-y-1/2 items-center justify-center text-dimmed opacity-0 transition-opacity duration-100 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+              aria-label={`Close ${tab.title}`}
+              title={`Close ${tab.title}`}
+              onclick={() => onCloseTab(tab.id)}
+            >
+              <CioClose size={10} />
+            </button>
+          {:else if onCloseTab}
             <button
               type="button"
               class="mr-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"

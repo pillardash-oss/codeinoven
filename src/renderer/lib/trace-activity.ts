@@ -20,6 +20,10 @@ export interface TraceActivityLine {
  *  reading as a summary and starts reading as a paragraph. */
 const MAX_LABEL_CHARS = 48
 
+/** How much of the agent's own words the line carries before it stops reading as
+ *  a status line. */
+const MAX_PROSE_CHARS = 480
+
 /** Shorten one label to what the line can show without cutting the newest off. */
 function shortenedLabel(label: string): string {
   const trimmed = label.trim()
@@ -75,6 +79,30 @@ export function traceActivityLine(parts: AgentPart[], maxActions = 3): TraceActi
     else actions.push({ label, count: 1 })
   }
   return { prose, actions: actions.slice(-maxActions) }
+}
+
+/**
+ * The newest paragraph the agent wrote, which is what the line reports.
+ *
+ * A step's text arrives as one growing block: its opening line never changes, so
+ * a line that drew the block whole would keep showing what the agent said
+ * minutes ago while the sentence it just wrote sits far below. The blank line the
+ * agent ends a thought with is the boundary between what it is saying now and
+ * what it said before, so only the last of those blocks is shown. A single
+ * paragraph too long for the line keeps its own ending, because the newest words
+ * are what a reader is looking for.
+ */
+export function newestProseParagraph(text: string, maxChars = MAX_PROSE_CHARS): string {
+  const paragraphs = text.split(/\n{2,}/)
+  for (let i = paragraphs.length - 1; i >= 0; i--) {
+    const paragraph = paragraphs[i]?.trim() ?? ''
+    if (!paragraph) continue
+    if (paragraph.length <= maxChars) return paragraph
+    const tail = paragraph.slice(paragraph.length - maxChars)
+    const firstSpace = tail.search(/\s/)
+    return `…${(firstSpace === -1 ? tail : tail.slice(firstSpace + 1)).trimStart()}`
+  }
+  return ''
 }
 
 /** The actions as the one line the reader sees: `Read ×3 · Shell · Edit`. */

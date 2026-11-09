@@ -8,6 +8,7 @@ import type {
   BrowserUtilityExecutor,
   CuaOperationEvent,
   DesignCapabilityExecutor,
+  DonExecutor,
   EngineeringToolExecutor,
   FollowUpExecutor,
   McpSignInExecutor,
@@ -135,6 +136,17 @@ export class UtilityOrchestrationServiceExecutors {
    */
   setOrchestrationExecutor(executor: OrchestrationExecutor | null): void {
     this.host.orchestrationExecutor = executor
+  }
+
+  /**
+   * Register the executor behind Don's own tools. Reading the assistant roster,
+   * handing a request to another assistant and recording what the user asked to be
+   * called are app capabilities: the executor owns assistant lookup, the thread a
+   * delegation runs on and the config write. The chat engine supplies it because it
+   * owns all three.
+   */
+  setDonExecutor(executor: DonExecutor | null): void {
+    this.host.donExecutor = executor
   }
 
   /**

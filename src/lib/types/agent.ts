@@ -77,6 +77,14 @@ export interface AgentDefaultsConfig {
 
 /** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */
 export interface ThreadSettings {
+  /**
+   * When the app posted its one app-owned opening turn on an orchestrator
+   * thread. It is durable on purpose: the orchestrator introduces itself once
+   * per install, and opening its conversation later is a plain read, never
+   * another introduction. A read of the transcript decides nothing here, because
+   * a transient read failure would ask the user to meet Don a second time.
+   */
+  donIntroAskedAt?: number
   /** An explicitly opened behavior-editing session on an assistant's Getting started thread. */
   assistantBehaviorSession?: {
     startedAt: number

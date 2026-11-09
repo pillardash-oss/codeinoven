@@ -739,6 +739,17 @@ export class ChatEngineProvidersAccounts {
             read: false
           })
         }
+        // A delegation parked here would otherwise be silent in the
+        // conversation that asked for it: the run thread shows the retry card,
+        // Don's thread said nothing. One line there names the wait and links the
+        // run, so the user can see why the answer has not arrived.
+        const delegation = this.host.don?.delegations.peek(info.threadId)
+        if (delegation) {
+          void this.host.units['turns-dispatch'].reportDonDelegationStatus(
+            delegation,
+            `Waiting to retry: ${issue.message}`
+          )
+        }
       }
       await this.host.units['turns-sessions'].onSessionError(sessionId, error, true, issue.rawError)
       return

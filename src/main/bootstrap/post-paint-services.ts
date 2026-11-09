@@ -16,12 +16,20 @@ import { join } from 'path'
 import { appfileProjectFilesGate, scopedPathResolverGate, settleAppfileGates } from './boot-gate'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
 import { appResourcesRoot, isShippedBuild } from './app-resources'
-import { assistantPrimaryModel, settingsWithAssistantModel } from '../../lib/assistant-agents'
+import {
+  assistantPrimaryModel,
+  modelSelectionFromThreadSettings,
+  settingsWithAssistantModel,
+  withDefaultAssistantPrimary
+} from '../../lib/assistant-agents'
 import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
+import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
+import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
+import { assistantIsBuiltin, isGroupThread } from '../../lib/types'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -30,6 +38,7 @@ import { Logger } from '../system/logger'
 import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
   broadcastThreadAuthoredWorkUpdated,
+  broadcastThreadMessagesChanged,
   broadcastThreadUpdate,
   publishThreadMessagesChanged,
   subscribeThreadCorpus,
@@ -550,6 +559,144 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       )
     }
   })
+  // Don, the orchestrator: the roster it chooses from, the thread a delegation
+  // runs on, and the name the user asked to be called. Built here because this is
+  // where the assistant directory, the chat engine and the config meet.
+  {
+    const chatEngine = state.chatEngine
+    if (chatEngine && assistantManager) {
+      const executor = createDonExecutor({
+        replyInGroupChat: async (context, text) => {
+          // The run thread is the caller. It belongs to the group either by
+          // being the group itself or by the dispatch that started it, so the
+          // initiator is the chat the message goes back to.
+          const thread = await chatEngine.threadManager.getThread(
+            context.projectId,
+            context.threadId
+          )
+          if (!thread) return { posted: false, error: 'This conversation no longer exists' }
+          const group = thread.groupParticipants?.length
+            ? { projectId: thread.projectId, threadId: thread.id }
+            : thread.dispatchOrigin?.initiatorThreadId
+              ? {
+                  projectId: thread.dispatchOrigin.initiatorProjectId,
+                  threadId: thread.dispatchOrigin.initiatorThreadId
+                }
+              : null
+          if (!group) {
+            return { posted: false, error: 'This conversation was not started from a group chat' }
+          }
+          const groupThread = await chatEngine.threadManager.getThread(
+            group.projectId,
+            group.threadId
+          )
+          if (!groupThread || !isGroupThread(groupThread)) {
+            return { posted: false, error: 'There is no group chat to reply in' }
+          }
+          const assistant = thread.assistantId
+            ? assistantManager.getAssistant(thread.assistantId)
+            : null
+          const author = assistant ? delegationAuthor(assistant) : thread.dispatchOrigin?.author
+          if (!author) return { posted: false, error: 'This conversation has no speaker to name' }
+          const id = `group-chat-reply-${thread.id}-${Date.now()}`
+          const now = Date.now()
+          await chatEngine.threadManager.upsertMessages(group.projectId, group.threadId, [
+            {
+              id,
+              role: 'assistant',
+              origin: 'assistant',
+              visibility: 'conversation',
+              author,
+              parts: [{ type: 'text', id: `${id}-text`, messageID: id, text }],
+              createdAt: now,
+              completedAt: now
+            }
+          ])
+          // The group may be open while this turn runs, and this write does not
+          // pass through the turn lifecycle: push it like any other message.
+          broadcastThreadMessagesChanged(group.projectId, group.threadId)
+          // The group is where the reply landed, so the group's row is what says
+          // an answer arrived; the run's own row carries no unread mark.
+          const updated = await chatEngine.threadManager.markUnread(group.projectId, group.threadId)
+          if (updated) broadcastThreadUpdate(updated)
+          return { posted: true }
+        },
+        readUserName: async () => (await storage.getConfig()).userPreferredName ?? '',
+        writeUserName: async (name) => {
+          const config = await storage.getConfig()
+          await storage.saveConfig({ ...config, userPreferredName: name })
+          return name
+        },
+        // Hiring spans two owners: the assistant directory owns the row, the chat
+        // engine owns the Getting started thread and the turn that writes it. The
+        // model handed over is the one this conversation is already running on, so
+        // the teammate can answer the first time it is opened.
+        createAssistant: async (input, context) => {
+          const requesting = await chatEngine.threadManager.getThread(
+            context.projectId,
+            context.threadId
+          )
+          // Hiring is the last resort, so the app holds the line the roster check
+          // is meant to hold: a teammate the team already has is never hired
+          // twice, and a model that skipped reading the roster is told where the
+          // work actually goes instead of quietly growing a second one.
+          const existing = assistantManager
+            .listAssistants()
+            .find(
+              (candidate) =>
+                !assistantIsBuiltin(candidate) &&
+                candidate.name.trim().toLowerCase() === input.name.trim().toLowerCase()
+            )
+          if (existing) {
+            throw new Error(
+              `There is already an assistant called ${existing.name}. Dispatch the work to it instead of hiring a second one.`
+            )
+          }
+          const selection = modelSelectionFromThreadSettings(requesting?.settings)
+          const assistant = assistantManager.createAssistant({
+            name: input.name,
+            description: input.purpose,
+            // A hire is not a schedule: the clock is agreed with the teammate
+            // itself later, from its own panel.
+            agents: withDefaultAssistantPrimary({ fallbacks: [] }, selection),
+            scheduled: false
+          })
+          broadcastAssistantsChanged(assistantManager.listAssistants())
+          if (!requesting?.settings) {
+            throw new Error('This conversation has no model to give the new assistant')
+          }
+          const thread = await chatEngine.openRecruitedAssistantConversation({
+            assistant,
+            purpose: input.purpose,
+            ...(input.request ? { request: input.request } : {}),
+            settings: requesting.settings
+          })
+          return {
+            assistantId: assistant.id,
+            name: assistant.name,
+            threadId: thread.id
+          }
+        }
+      })
+      const delegations = new DonDelegations()
+      chatEngine.attachDonRuntime({
+        executor,
+        delegations,
+        resolveAuthor: (assistantId) => {
+          const assistant = assistantManager.getAssistant(assistantId)
+          return assistant ? delegationAuthor(assistant) : null
+        }
+      })
+      // The orchestration tools dispatch to a project or to one of these
+      // assistants. Handing them the directory here is what makes an assistant
+      // handoff a group reply instead of a prompt steered back into the chat.
+      chatEngine.attachOrchestrationAssistantDirectory({
+        list: () => assistantManager.listAssistants(),
+        get: (assistantId) => assistantManager.getAssistant(assistantId),
+        rememberDelegation: (delegation) => delegations.remember(delegation)
+      })
+    }
+  }
   state.assistantScheduler.attachChangeListener(() => {
     broadcastMissedRunsChanged(state.assistantScheduler?.listMissedRuns() ?? [])
     broadcastBackgroundRunsChanged(state.assistantScheduler?.listBackgroundRuns() ?? [])
@@ -1459,6 +1606,18 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     } catch (error) {
       Logger.error('Internal-attribution repair failed (non-fatal):', error)
+    }
+
+    // One-time cleanup of cards that only hold another turn's abandoned work:
+    // a turn with no write evidence of its own cannot own a project-wide diff
+    // while a sibling turn was in flight in the same window.
+    try {
+      const repaired = await new CheckpointManager(database).dropUnprovenOverlappingChanges()
+      if (repaired > 0) {
+        Logger.info(`Cleared ${repaired} file-change checkpoints of unproven work`)
+      }
+    } catch (error) {
+      Logger.error('Unproven-change repair failed (non-fatal):', error)
     }
 
     // One-time cleanup of cards that listed the app's scratch folder or build

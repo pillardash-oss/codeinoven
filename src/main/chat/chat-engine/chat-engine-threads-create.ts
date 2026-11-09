@@ -20,6 +20,14 @@ export class ChatEngineThreadsCreate {
     title: string
     settings: ThreadSettings
     /**
+     * The assistant a dispatched run belongs to, when the target was one.
+     *
+     * It is part of the created row for the same reason a task carries it: the
+     * run's prompt is composed with that assistant's instructions, and its
+     * reply is written back into the group chat under that assistant's name.
+     */
+    assistantId?: string
+    /**
      * Who dispatched this thread, recorded on the row itself.
      *
      * Written once at creation rather than inferred later: the project board
@@ -35,6 +43,7 @@ export class ChatEngineThreadsCreate {
         title: input.title,
         titleSource: 'manual',
         settings: input.settings,
+        ...(input.assistantId ? { assistantId: input.assistantId } : {}),
         dispatchOrigin: input.dispatchOrigin
       },
       {

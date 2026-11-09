@@ -22,7 +22,7 @@
   import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
   import { assistantIsScheduled, type Assistant } from '$shared/types'
-  import { assistantGap, assistantNextRunLine, assistantThreadCountLabel } from './assistant-view'
+  import { assistantGap } from './assistant-view'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
     threadHoverPopoverStyle
@@ -53,6 +53,12 @@
     iconUrl?: string | null
     /** Next intended fire for the assistant, or null when unscheduled. */
     nextRunAt: number | null
+    /**
+     * The last thing said in this assistant's most recent conversation, so the
+     * row reads as a place with recent work in it instead of a label. Absent
+     * while the assistant has never spoken.
+     */
+    preview?: string | null
     /** Inline assistant-search state, driven from the sidebar. */
     searchOpen: boolean
     searchQuery: string
@@ -83,6 +89,7 @@
     threadCount,
     iconUrl = null,
     nextRunAt,
+    preview = null,
     searchOpen,
     searchQuery,
     onToggle,
@@ -109,7 +116,6 @@
   const incomplete = $derived(assistantGap(assistant) !== null)
   const working = $derived(stateCounts.working > 0)
   /** Line 2's next fire, beside the run count (see `assistantNextRunLine`). */
-  const nextRunLabel = $derived(assistantNextRunLine(assistant, nextRunAt, Date.now()))
   const scheduled = $derived(assistantIsScheduled(assistant))
   const gapLabel = $derived(assistantGap(assistant) ?? '')
   const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} assistant: ${assistant.name}`)
@@ -238,7 +244,7 @@
 </script>
 
 <div
-  class="group relative flex items-center gap-1 border-l-2 px-1.5 py-2 transition-colors {expanded
+  class="group relative mb-2.5 flex items-center gap-1 border-l-2 px-1.5 py-2.5 transition-colors {expanded
     ? 'bg-elevated/70'
     : taskDropActive
       ? 'bg-primary/10'
@@ -271,21 +277,21 @@
 
   <button
     type="button"
-    class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+    class="flex min-w-0 flex-1 items-center gap-2 text-left"
     aria-expanded={expanded}
     title={toggleTitle}
     onclick={() => onToggle(assistant)}
   >
     <!-- Assistant icon ↔ chevron swap on hover -->
-    <span class="relative h-4 w-4 shrink-0">
+    <span class="relative size-8 shrink-0">
       <span
         class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover:opacity-0"
         aria-hidden="true"
       >
         {#if assistantIcon}
-          <img src={assistantIcon} alt="" class="h-4 w-4 object-contain" draggable="false" />
+          <img src={assistantIcon} alt="" class="size-7 object-contain" draggable="false" />
         {:else}
-          <AssistantDefaultIcon size={14} style="color: {color}" />
+          <AssistantDefaultIcon size={28} style="color: {color}" />
         {/if}
       </span>
       <span
@@ -293,7 +299,7 @@
         aria-hidden="true"
       >
         <CioForward
-          size={13}
+          size={15}
           class="text-dimmed transition-transform duration-150 {expanded ? 'rotate-90' : ''}"
         />
       </span>
@@ -304,26 +310,9 @@
         {#if assistant.pinned}
           <CioPin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
-        <span class="truncate text-[0.8125rem] text-foreground">{assistant.name}</span>
+        <span class="truncate text-sm font-medium text-foreground">{assistant.name}</span>
         <ThreadStateCounts counts={stateCounts} class="shrink-0" />
         <MediaActivityTrail activities={media} label={assistant.name} />
-      </span>
-      <span class="mt-0.5 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-        <span
-          class="shrink-0 border border-border bg-elevated px-1.5 py-px text-[0.5rem] tracking-wide text-dimmed uppercase"
-          title={scheduled
-            ? 'This assistant runs on a schedule'
-            : 'This assistant runs only when you ask it to'}
-        >
-          {scheduled ? 'Scheduled' : 'Unscheduled'}
-        </span>
-        {#if threadCount > 0}
-          <span class="shrink-0">{assistantThreadCountLabel(threadCount)}</span>
-        {/if}
-        {#if nextRunLabel}
-          <span class="shrink-0" aria-hidden="true">·</span>
-          <span class="truncate">{nextRunLabel}</span>
-        {/if}
         {#if assistant.paused}
           <span
             class="flex shrink-0 items-center"
@@ -357,6 +346,11 @@
             <CioAttention size={11} />
           </span>
         {/if}
+      </span>
+      <span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted">
+        <span class="truncate" title={preview ?? undefined}>
+          {preview ?? 'No conversation yet'}
+        </span>
       </span>
     </span>
   </button>

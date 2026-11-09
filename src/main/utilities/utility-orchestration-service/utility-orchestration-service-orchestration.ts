@@ -28,6 +28,12 @@ import {
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../../lib/orchestration-tools'
 import {
+  DON_CREATE_ASSISTANT_TOOL_NAME,
+  DON_USER_NAME_TOOL_NAME,
+  GROUP_CHAT_REPLY_TOOL_NAME,
+  type DonToolOperation
+} from '../../../lib/don-tools'
+import {
   APP_CONTROL_CALL_TOOL_NAME,
   APP_CONTROL_CATALOG_TOOL_NAME
 } from '../../../lib/app-control-tools'
@@ -103,6 +109,18 @@ import type { UtilityOrchestrationService } from '../utility-orchestration-servi
 
 /** UtilityOrchestrationService orchestration: one concern, moved verbatim from the composition root. */
 export class UtilityOrchestrationServiceOrchestration {
+  /**
+   * The turns that have actually read the assistant roster.
+   *
+   * Hiring is the one call that must never happen blind: a teammate already on the
+   * team cannot be hired over, and a model that skipped the roster has no way to
+   * know that. The gate is per turn object, not per session, because a session
+   * outlives a turn and a roster read from ten turns ago says nothing about who is
+   * on the team now. Nothing is remembered past the turn: the set is weak, so the
+   * proof dies with the turn that produced it.
+   */
+  private readonly rosterReadTurns = new WeakSet<TurnState>()
+
   constructor(private readonly host: UtilityOrchestrationService) {}
 
   /**
@@ -183,6 +201,12 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.orchestrate(state, input, 'dispatch')
       case ORCHESTRATION_STATUS_TOOL_NAME:
         return (state, input) => this.orchestrate(state, input, 'status')
+      case DON_USER_NAME_TOOL_NAME:
+        return (state, input) => this.don(state, input, 'user-name')
+      case GROUP_CHAT_REPLY_TOOL_NAME:
+        return (state, input) => this.don(state, input, 'reply-in-chat')
+      case DON_CREATE_ASSISTANT_TOOL_NAME:
+        return (state, input) => this.don(state, input, 'create-assistant')
       case APP_CONTROL_CATALOG_TOOL_NAME:
         return (state, input) => this.appControl(state, input, 'catalog')
       case APP_CONTROL_CALL_TOOL_NAME:
@@ -341,6 +365,41 @@ export class UtilityOrchestrationServiceOrchestration {
   ): Promise<unknown> {
     const executor = this.host.orchestrationExecutor
     if (!executor) throw new Error('Orchestration is unavailable in this deployment')
+    // Reading the roster is the check every hire depends on, so the turn that read
+    // it is remembered here, where the Don tools can ask whether it happened.
+    if (operation === 'targets') this.rosterReadTurns.add(state)
+    return executor(operation, input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
+  }
+
+  /**
+   * Run one of Don's own operations for the turn that asked for it.
+   *
+   * The executor owns the assistant roster, the thread a delegation runs on and
+   * the name the user chose, so this handler only forwards the operation with the
+   * turn it belongs to. A missing executor means the app was built without the
+   * orchestrator, which is a deployment fault rather than a model error, so it says
+   * so plainly instead of returning an empty result.
+   */
+  async don(
+    state: TurnState,
+    input: Record<string, unknown>,
+    operation: DonToolOperation
+  ): Promise<unknown> {
+    const executor = this.host.donExecutor
+    if (!executor) throw new Error('The orchestrator is unavailable in this deployment')
+    // A hire without the roster read first is the one outcome this app refuses:
+    // the work may already belong to an assistant nobody looked at.
+    if (operation === 'create-assistant' && !this.rosterReadTurns.has(state)) {
+      throw new Error(
+        'Read cio_orchestrate_targets on this turn first and check whether one of the existing assistants can take the work. Only hire when none of them fits.'
+      )
+    }
     return executor(operation, input, {
       projectId: state.request.projectId,
       threadId: state.request.threadId,

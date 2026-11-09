@@ -51,6 +51,23 @@ export interface AssistantPriority {
 }
 
 /**
+ * The last thing said in an assistant's most recent conversation.
+ *
+ * The assistant list carries this one line so a row reads as a place with
+ * recent work in it rather than as a label, without the renderer loading a
+ * transcript per row. It is a bounded excerpt, never the message itself.
+ */
+export interface AssistantPreview {
+  assistantId: string
+  /** Who said it, so the row can mark an answer it is still waiting on. */
+  role: 'user' | 'assistant'
+  /** Flattened, whitespace-collapsed text, already shortened for a row. */
+  text: string
+  /** Epoch ms the message was written, so the newest thread wins a tie. */
+  at: number
+}
+
+/**
  * An Assistant is the top-level assistant grouping ("Triage CodeInOven PRs daily,
  * 9am and 5pm"). It owns the agent-authored knowledge that every task inside it
  * reuses, a default schedule that tasks may override, and the set of
@@ -140,6 +157,14 @@ export interface Assistant {
   paused?: boolean
   /** Pinned assistants sort above the rest and render a pin indicator. */
   pinned?: boolean
+  /**
+   * An assistant the app itself seeds and owns (currently only Don, the
+   * orchestrator). It is always present, always first in the sidebar, and its
+   * identity is not the user's to change: the manager refuses to rename, delete,
+   * reorder or pause it, and no panel offers those actions. Everything else about
+   * it   model, knowledge, connections   is ordinary.
+   */
+  builtin?: boolean
   /** When the assistant was pinned; newest pins sort first. */
   pinnedAt?: number
   /**
@@ -212,10 +237,56 @@ export const ASSISTANT_PLACEHOLDER_NAME = 'New assistant'
  */
 export const ASSISTANT_NAME_LIMIT = 200
 
+/**
+ * Ceiling for the purpose an orchestrator gives a teammate it hires.
+ *
+ * The purpose is what the teammate is for, so it is a couple of sentences rather
+ * than a document: the instructions themselves are written in its own Getting
+ * started conversation and have no ceiling here.
+ */
+export const ASSISTANT_PURPOSE_LIMIT = 600
+
+/**
+ * Ceiling for the request an orchestrator carries into a teammate's first
+ * conversation. It is quoted back to the new assistant, so it stays a request and
+ * never becomes the whole transcript.
+ */
+export const ASSISTANT_RECRUIT_REQUEST_LIMIT = 4000
+
 /** Ceiling for the name a user gives their assistant's clock. */
 export const ASSISTANT_SCHEDULE_NAME_LIMIT = 120
 
-/** Whether an assistant is still wearing the name it was created with. */
+/**
+ * Don, the orchestrator assistant the app seeds for every user.
+ *
+ * Don's only job is to put work in the right hands: it answers a small question
+ * itself and delegates everything else to the assistant whose description and
+ * knowledge fit, whose reply lands back in Don's thread under its own name. It
+ * owns exactly one permanent group thread, which is why the id is reserved here
+ * beside the type rather than minted at seed time.
+ */
+export const DON_ASSISTANT_ID = 'don'
+
+/** The name Don wears. Reserved, because a built-in assistant cannot be renamed. */
+export const DON_ASSISTANT_NAME = 'Don'
+
+/** Whether an assistant is the app's own orchestrator. */
+export function assistantIsDon(assistant: Pick<Assistant, 'id'>): boolean {
+  return assistant.id === DON_ASSISTANT_ID
+}
+
+/**
+ * Whether an assistant is built in, and therefore not renameable, deletable or
+ * movable. Read through this rather than a bare `builtin` check, so a row seeded
+ * before the flag existed (recognized by its reserved id) is still protected.
+ */
+export function assistantIsBuiltin(assistant: Pick<Assistant, 'id' | 'builtin'>): boolean {
+  return assistant.builtin === true || assistantIsDon(assistant)
+}
+
+/**
+ * Whether an assistant is still wearing the name it was created with.
+ */
 export function assistantIsUnnamed(assistant: Pick<Assistant, 'name'>): boolean {
   return assistant.name.trim() === ASSISTANT_PLACEHOLDER_NAME
 }
@@ -238,6 +309,12 @@ export interface CreateAssistantInput {
   agents?: AssistantAgents
   execution?: AssistantExecution
   paused?: boolean
+  /**
+   * Seed an assistant the app owns (only the orchestrator bootstrap passes this).
+   * It is part of the creation input rather than an ordinary update so a user-facing
+   * patch can never promote an assistant into a built-in one.
+   */
+  builtin?: boolean
 }
 
 export interface UpdateAssistantInput {

@@ -391,6 +391,78 @@ export async function dropExcludedPathChanges(host: CheckpointMaintenanceHost): 
   return repaired
 }
 
+/** How far back an unfinished sibling turn still overlaps a completion. Mirrors
+ *  the manager's own window so a repair and a live completion agree. */
+const OVERLAP_GRACE_MS = 10 * 60 * 1000
+
+/**
+ * One-time repair pass for cards that only hold another turn's abandoned work.
+ *
+ * A turn that proved nothing it wrote (`toolSources` empty and no per-path
+ * evidence) cannot own the files a project-wide diff handed it, and it is only
+ * plausible at all when nothing else was running. When a sibling turn was in
+ * flight in the same window and never finished, those files are that turn's
+ * leftovers, and the card reported work this turn never did. Idempotent: a
+ * cleared card no longer matches the candidate query.
+ */
+export async function dropUnprovenOverlappingChanges(
+  host: CheckpointMaintenanceHost
+): Promise<number> {
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await host.queryRows(
+      `SELECT a.turn_id AS turn_id, a.project_id AS project_id, a.thread_id AS thread_id
+         FROM turn_checkpoints a
+        WHERE json_array_length(json_extract(a.data, '$.changes')) > 0
+          AND (SELECT COUNT(*) FROM json_each(json_extract(a.data, '$.toolSources'))) = 0
+          AND (
+            SELECT COUNT(*) FROM json_each(json_extract(a.data, '$.changeSourceRefs')) je
+             WHERE json_array_length(je.value) > 0
+          ) = 0
+          AND EXISTS (
+            SELECT 1 FROM turn_checkpoints b
+             WHERE b.project_id = a.project_id
+               AND b.thread_id != a.thread_id
+               AND json_extract(b.data, '$.completedAt') IS NULL
+               AND json_extract(b.data, '$.createdAt') BETWEEN
+                   json_extract(a.data, '$.createdAt') - ? AND json_extract(a.data, '$.completedAt')
+          )
+        LIMIT ?`,
+      [OVERLAP_GRACE_MS, REPAIR_MAX_CHECKPOINTS],
+      REPAIR_MAX_CHECKPOINTS
+    )
+  } catch (error) {
+    Logger.error('Unproven-change repair could not list candidates (non-fatal):', error)
+    return 0
+  }
+  let repaired = 0
+  for (const row of rows) {
+    const turnId = row['turn_id']
+    const projectId = row['project_id']
+    const threadId = row['thread_id']
+    if (typeof turnId !== 'string' || typeof projectId !== 'string' || typeof threadId !== 'string')
+      continue
+    try {
+      const checkpoint = await host.get(projectId, threadId, turnId)
+      if (!checkpoint || checkpoint.changes.length === 0) continue
+      await host.save({
+        ...checkpoint,
+        changes: [],
+        toolSources: {},
+        changeSourceRefs: {},
+        lineStats: {},
+        breakdown: undefined,
+        changeFilterApplied: true
+      })
+      repaired += 1
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    } catch (error) {
+      Logger.error('Unproven-change repair skipped a checkpoint (non-fatal):', error)
+    }
+  }
+  return repaired
+}
+
 /** Remove project checkpoint blobs that no remaining thread references. */
 export async function pruneUnusedBlobs(
   host: CheckpointMaintenanceHost,

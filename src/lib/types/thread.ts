@@ -57,6 +57,15 @@ export interface ThreadDispatchOrigin {
   /** Assistant whose turn made the dispatch, when an assistant made it. */
   assistantId?: string
   assistantName?: string
+  /**
+   * The speaker at the moment of the dispatch: name, colour and mark.
+   *
+   * A delegation reports back into the initiating thread long after it started,
+   * possibly across a restart when the in-memory handoff is gone. The thread row
+   * is the durable record, so the speaker travels with it and the report keeps
+   * the right name and icon without a second lookup or a guess.
+   */
+  author?: import('./agent-message').MessageAuthor
   initiatorProjectId: string
   initiatorThreadId: string
   at: number
@@ -277,6 +286,21 @@ export interface Thread {
    */
   assistantTaskId?: string
 
+  // ─── Group thread fields ─────────────────────────────────────────────────
+  /**
+   * Assistants taking part in this thread, by assistant id, when the thread is a
+   * group conversation rather than one assistant's own thread. The first entry
+   * is the host that answers the user directly; every other entry may be pulled
+   * in by delegation and speaks under its own name and icon.
+   *
+   * A thread with no participants is an ordinary thread. Don's thread is the
+   * seeded group with `['don']`, so one rendering path serves it and any group
+   * the user creates between assistants.
+   */
+  groupParticipants?: string[]
+  /** The name the user gave a group thread, when it is not just its host's name. */
+  groupTitle?: string
+
   createdAt: number
   updatedAt: number
   lastActivity: number
@@ -295,6 +319,24 @@ export interface ThreadNote {
   body: string
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * Whether a thread is a group conversation between assistants.
+ *
+ * Read everywhere the transcript decides between one speaker and many, so the
+ * rule lives here instead of each surface re-deriving it from a possibly empty
+ * participant list.
+ */
+export function isGroupThread(thread: Pick<Thread, 'groupParticipants'>): boolean {
+  return (thread.groupParticipants?.length ?? 0) > 0
+}
+
+/** The host assistant of a group thread: the one that answers the user first. */
+export function groupThreadHost(
+  thread: Pick<Thread, 'groupParticipants' | 'assistantId'>
+): string | undefined {
+  return thread.groupParticipants?.[0] ?? thread.assistantId
 }
 
 /** A thread that lives in the assistant space (an assistant task). */
@@ -443,6 +485,19 @@ export function threadTracksReadStatus(thread: Thread): boolean {
 }
 
 /**
+ * Whether a run was started from a group conversation.
+ *
+ * The assistant it was handed to speaks in that group, and the group is where its
+ * answer is reported, so the run's own row is not where the reader meets the
+ * result. Such a run never claims the unread mark: the reply landing in the group
+ * is what says the answer arrived, and the group is the row that carries it.
+ */
+export function isGroupDispatchedRun(thread: Pick<Thread, 'dispatchOrigin'>): boolean {
+  const origin = thread.dispatchOrigin
+  return Boolean(origin?.author && origin.initiatorThreadId)
+}
+
+/**
  * Whether the coordinator row must still read as unread because one of its
  * workers has not been read yet. Only non-reporting workers hold the dot open:
  * a reporting worker's progress is visible through the Assignment lifecycle
@@ -544,6 +599,9 @@ export interface CreateThreadInput {
   assistantGettingStarted?: boolean
   /** Set when creating a run thread: the assistant task it runs. */
   assistantTaskId?: string
+  /** Participants of a group thread, host first (see `Thread.groupParticipants`). */
+  groupParticipants?: string[]
+  groupTitle?: string
   /** Project scope this thread works in when it is not its home container. */
   boundScope?: BoundScopeRebind
   /** Commit the run starts from, recorded once by whoever starts it. */

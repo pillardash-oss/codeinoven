@@ -31,7 +31,7 @@ import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
-import { WORKING_TRACE_PAGE_SIZE } from '$shared/types'
+import { WORKING_TRACE_PAGE_SIZE, isGroupThread } from '$shared/types'
 import type { Thread, AgentEvent, RemoteAgentEventPayload } from '$shared/types'
 import { releaseAnnotationHighlights } from '$lib/selection-anchors'
 import { registerSelectionAnnotationClaim, trackLiveSelection } from '$lib/selection-menu'
@@ -345,6 +345,10 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     $effect(() => {
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
       const thread = this.root.handleAgentEvent.thread
+      // A group conversation asks for the work and receives the answer as a
+      // reply, so a board of spawned threads beside it would duplicate what the
+      // transcript already says. The reply carries the link to the work instead.
+      if (isGroupThread(thread)) return
       const rowThreadId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
       const hasPawns = pawnAgentsState.hasWorkers(rowThreadId)
       if (!hasPawns && !orchestrationCoordinatorState.hasDispatches(thread.projectId, rowThreadId))

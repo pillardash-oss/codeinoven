@@ -8,6 +8,7 @@ import type {
   AssistantDeletionResult,
   AssistantKnowledgeRevision,
   AssistantKnowledgeRevisionDetail,
+  AssistantPreview,
   AssistantSchedule,
   SkippedRun,
   Thread,
@@ -28,6 +29,24 @@ export const invokeAssistantContract = {
   /** Ensure the hidden assistant-space container exists, returning it. */
   'assistant:ensureSpace': {} as Contract<[], Project>,
   'assistant:list': {} as Contract<[], Assistant[]>,
+  /**
+   * One last-line excerpt per assistant, newest conversation message first.
+   * Read by the assistant list so a row shows what happened in it without the
+   * renderer loading a transcript per row.
+   */
+  'assistant:previews': {} as Contract<[], AssistantPreview[]>,
+  /**
+   * Don's one thread, seeded on first launch. Read by the surfaces that talk to the
+   * orchestrator without opening the assistant view, such as the listening panel,
+   * so none of them has to search the assistant space for it.
+   */
+  'assistant:donThread': {} as Contract<[], { threadId: string | null }>,
+  /**
+   * Open Don's first conversation, once. The orchestrator introduces itself with
+   * a real turn the first time it is opened, exactly like every other assistant,
+   * instead of sitting on a pre-written question. Opening it again is a no-op.
+   */
+  'assistant:startDonSetup': {} as Contract<[], void>,
   'assistant:create': {} as Contract<[input: CreateAssistantInput], Assistant>,
   'assistant:update': {} as Contract<[assistantId: string, input: UpdateAssistantInput], Assistant>,
   /**
