@@ -389,6 +389,15 @@ export class ThreadManager {
       assistantId: input.assistantId,
       assistantIconType: input.assistantIconType,
       assistantIcon: input.assistantIcon,
+      // A group's participants must be part of the created row for the same
+      // reason: the creation broadcast carries this object, and a group that
+      // only reached the database would render as a single-assistant thread
+      // until the next reload. The orchestrator's conversation is the first
+      // group, so without this every Don message reads as a project turn.
+      ...(input.groupParticipants && input.groupParticipants.length > 0
+        ? { groupParticipants: input.groupParticipants }
+        : {}),
+      ...(input.groupTitle ? { groupTitle: input.groupTitle } : {}),
       // Kept out of the row when absent: the repository stores only the true
       // case, so the in-memory shape must match what a read returns.
       ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
@@ -810,6 +819,8 @@ export class ThreadManager {
         | 'assistantIconType'
         | 'assistantIcon'
         | 'assistantGettingStarted'
+        | 'groupParticipants'
+        | 'groupTitle'
         | 'lastRunAt'
         | 'scheduleOverride'
         | 'scheduled'
@@ -907,6 +918,8 @@ export class ThreadManager {
       assistantId: input.assistantId ?? existing.assistantId,
       assistantIconType: input.assistantIconType ?? existing.assistantIconType,
       assistantIcon: input.assistantIcon ?? existing.assistantIcon,
+      groupParticipants: input.groupParticipants ?? existing.groupParticipants,
+      groupTitle: input.groupTitle ?? existing.groupTitle,
       ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
       lastRunAt: input.lastRunAt ?? existing.lastRunAt,
       scheduleOverride:

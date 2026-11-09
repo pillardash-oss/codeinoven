@@ -613,38 +613,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           return { thread }
         },
         announceDelegation: async (delegation) => {
-          // A delegation is a conversation with another assistant, not a pawn
-          // or a sub-agent of Don. It therefore reads as that assistant's own
-          // message, with its mark and a link into the thread it is doing the
-          // work on, instead of a generic sub-agent card with a robot.
-          const startId = `don-delegation-${delegation.runThreadId}-start`
+          // Nothing is written into Don's conversation while Don's own turn is
+          // still running: an assistant message inserted mid-turn is what made
+          // the turn's final answer render inside the working trace. The
+          // delegated assistant speaks only when it has something to report,
+          // from the settle or pause path, and that report is the group message.
+          // The sub-agent card an earlier build wrote here is retired.
           await chatEngine.threadManager
             .deleteAppMessages(delegation.donProjectId, delegation.donThreadId, [
               `don-delegation-${delegation.runThreadId}-working`
             ])
             .catch(() => undefined)
-          await chatEngine.threadManager.upsertMessages(
-            delegation.donProjectId,
-            delegation.donThreadId,
-            [
-              {
-                id: startId,
-                role: 'assistant',
-                origin: 'assistant',
-                visibility: 'conversation',
-                author: delegation.author,
-                parts: [
-                  {
-                    type: 'text',
-                    id: `${startId}-text`,
-                    messageID: startId,
-                    text: `On it. I will report back here.\n\n@thread:${delegation.runThreadId}`
-                  }
-                ],
-                createdAt: delegation.createdAt
-              }
-            ]
-          )
         },
         readUserName: async () => (await storage.getConfig()).userPreferredName ?? '',
         writeUserName: async (name) => {

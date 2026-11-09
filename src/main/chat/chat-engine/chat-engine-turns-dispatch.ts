@@ -1,6 +1,8 @@
 import { deliverWithWorkPathNotices } from '../../design/work-path-notices'
 import { join } from 'path'
 import { Logger } from '../../system/logger'
+import { assistantResultText } from '../../../lib/assistant-result'
+import { broadcastThreadMessagesChanged, broadcastThreadUpdate } from '../thread-events'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import {
@@ -503,7 +505,22 @@ export class ChatEngineTurnsDispatch {
         ])
         .catch(() => undefined)
       const messages = await this.host.loadMessages(ASSISTANT_SPACE_ID, delegation.runThreadId)
-      const answer = lastAssistantText(messages) ?? delegationOutcomeText(delegation, status)
+      const rawAnswer = lastAssistantText(messages)
+      // The run's text carries the app's `<assistant_result>` boundary; the
+      // conversation that reports it must read the answer, not the envelope.
+      const answer = rawAnswer ? assistantResultText(rawAnswer) : ''
+      let text = answer.length > 0 ? answer : delegationOutcomeText(delegation, status)
+      if (status === 'failed') {
+        // A failed handoff names the failure. "Its thread has the details" is
+        // the fallback, not the whole message: the user asked for an answer and
+        // needs to know what stopped it without opening another conversation.
+        const runThread = await this.host.threadManager
+          .getThread(ASSISTANT_SPACE_ID, delegation.runThreadId)
+          .catch(() => null)
+        const reason = runThread?.lastError?.trim()
+        if (reason) text = `${delegation.assistantName} could not finish the work: ${reason}`
+        text = `${text}\n\n@thread:${delegation.runThreadId}`
+      }
       await this.host.threadManager.upsertMessages(ASSISTANT_SPACE_ID, delegation.donThreadId, [
         {
           id: `don-delegation-${delegation.runThreadId}`,
@@ -516,12 +533,20 @@ export class ChatEngineTurnsDispatch {
               type: 'text',
               id: `don-delegation-${delegation.runThreadId}-text`,
               messageID: `don-delegation-${delegation.runThreadId}`,
-              text: answer
+              text
             }
           ],
           createdAt: Date.now()
         }
       ])
+      // The report lands while Don's conversation may be open, and this path
+      // does not go through a turn: without the two pushes the store keeps the
+      // transcript it has and the assistant appears never to have come back.
+      broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, delegation.donThreadId)
+      const donThread = await this.host.threadManager
+        .getThread(ASSISTANT_SPACE_ID, delegation.donThreadId)
+        .catch(() => null)
+      if (donThread) broadcastThreadUpdate(donThread)
     } catch (error) {
       Logger.error('Don delegation report failed', {
         runThreadId: delegation.runThreadId,
@@ -562,6 +587,11 @@ export class ChatEngineTurnsDispatch {
           createdAt: Date.now()
         }
       ])
+      broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, delegation.donThreadId)
+      const donThread = await this.host.threadManager
+        .getThread(ASSISTANT_SPACE_ID, delegation.donThreadId)
+        .catch(() => null)
+      if (donThread) broadcastThreadUpdate(donThread)
     } catch (error) {
       Logger.dev('Don delegation status skipped', {
         runThreadId: delegation.runThreadId,

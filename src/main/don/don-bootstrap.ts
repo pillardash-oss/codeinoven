@@ -79,10 +79,20 @@ export async function ensureDonOrchestrator(deps: {
       // An earlier build let the first opening prompt auto-title this thread,
       // which put the app's instruction text in the sidebar. The orchestrator's
       // conversation is named for the orchestrator and never titled by a turn.
-      if (existing.title !== DON_THREAD_TITLE || existing.titleSource !== 'manual') {
+      // The group participants were also never persisted by that build, which is
+      // what made the conversation render as a project transcript instead of the
+      // group chat it is.
+      const needsRepair =
+        existing.title !== DON_THREAD_TITLE ||
+        existing.titleSource !== 'manual' ||
+        existing.groupParticipants?.[0] !== DON_ASSISTANT_ID ||
+        existing.groupTitle !== DON_THREAD_TITLE
+      if (needsRepair) {
         await threadManager.updateThread(ASSISTANT_SPACE_ID, DON_THREAD_ID, {
           title: DON_THREAD_TITLE,
-          titleSource: 'manual'
+          titleSource: 'manual',
+          groupParticipants: [DON_ASSISTANT_ID],
+          groupTitle: DON_THREAD_TITLE
         })
       }
       const thread = await threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)

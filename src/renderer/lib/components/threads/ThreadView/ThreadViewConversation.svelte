@@ -114,6 +114,20 @@
   const groupThread = $derived(isGroupThread(board.handleAgentEvent.thread))
 
   /**
+   * The same text rule the answer uses, applied to whatever the trace draws.
+   *
+   * An assistant run wraps its update in the app's `<assistant_result>` boundary.
+   * The closing answer already reads only the text inside it; a step's text in
+   * the working trace must read the same way, or the envelope itself shows up in
+   * a chat that is meant to be readable.
+   */
+  function conversationTraceOutput(text: string): string {
+    if (!board.props.assistantMode) return text
+    if (board.abortRun.assistantAuthoringThread) return assistantDisplayText(text)
+    return assistantResultText(text, false)
+  }
+
+  /**
    * What a group thread signs the user's own messages with.
    *
    * It is the name the user asked Don to call them, and "You" until they answer:
@@ -436,7 +450,7 @@
             )}
           onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
           onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
-          formatOutput={board.abortRun.assistantAuthoringOutput}
+          formatOutput={conversationTraceOutput}
         />
       {/snippet}
       <!-- A turn a prompt closed whose work the transcript never mirrored:
@@ -482,7 +496,7 @@
           isFast={board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.isFast}
           onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
           onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
-          formatOutput={board.abortRun.assistantAuthoringOutput}
+          formatOutput={conversationTraceOutput}
         />
       {/snippet}
       <!-- One slice of a turn's working trace. A turn the reader answered is cut
@@ -588,6 +602,7 @@
             open={isCurrentAssistantTurn || traceIsLive}
             busy={segmentBusy}
             done={segmentDone}
+            formatOutput={conversationTraceOutput}
             rehydrated={traceIsRestored && segmentIsLast}
             foreignRun={traceRunIsForeign}
             active={board.props.active}
@@ -835,16 +850,21 @@
                          left edge is drawn, a 2px accent against the transcript,
                          and every corner is square. -->
                 <div
-                  class="w-full border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground"
+                  class={groupThread
+                    ? 'ml-auto w-fit max-w-[85%] border border-border bg-elevated px-3.5 py-2.5 text-sm text-foreground'
+                    : 'w-full border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground'}
                   data-conversation-searchable
                 >
                   <!-- A group thread signs the user's own messages too, with the
                        same 16px mark an assistant reply wears, so both sides of
-                       the conversation read as speakers. -->
+                       the conversation read as speakers. The bubble sits on the
+                       right, the way a chat puts the person speaking. -->
                   {#if groupThread}
-                    <div class="mb-2 flex min-w-0 items-center gap-1.5 text-[0.6875rem]">
-                      <CioUserMark name={userName} />
+                    <div
+                      class="mb-2 flex min-w-0 items-center justify-end gap-1.5 text-[0.6875rem]"
+                    >
                       <span class="truncate font-medium text-foreground">{userName}</span>
+                      <CioUserMark name={userName} />
                     </div>
                   {/if}
                   {#if leftoverReferences.length}
@@ -1164,7 +1184,9 @@
                       speechController.readingOverlayActive}
                     <div
                       id={`msg-${msg.id}`}
-                      class="message-block min-w-0 w-full text-[0.8125rem] text-foreground"
+                      class={groupThread
+                        ? 'message-block min-w-0 max-w-[90%] border border-border bg-surface px-3.5 py-2.5 text-[0.8125rem] text-foreground'
+                        : 'message-block min-w-0 w-full text-[0.8125rem] text-foreground'}
                       data-assistant-response
                       data-conversation-searchable
                       data-message-id={msg.id}
@@ -1203,6 +1225,16 @@
                                  answer may carry the drafted knowledge, which is a
                                  document rather than a code block, so it is shown as
                                  the finished markdown it is. -->
+                        {@const assistantInlineTags = inlineFileTagsForMessage(
+                          msg,
+                          board.props.assistantSpaceThreads
+                            ? {
+                                threads: board.props.assistantSpaceThreads,
+                                assistants: assistants.assistants,
+                                assistantIcons: assistants.iconUrls
+                              }
+                            : undefined
+                        )}
                         <DeferredMarkdownView
                           text={deliveredClosingText}
                           citationThread={board.unmirroredTraceStartTime.citationThreadContext}
@@ -1210,6 +1242,8 @@
                             projectId: board.handleAgentEvent.thread.projectId,
                             threadId: board.handleAgentEvent.thread.id
                           }}
+                          inlineFileTags={assistantInlineTags}
+                          onOpenAssistantTag={board.state.openAssistantTag}
                           onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
                           onOpenLocalFile={(url) =>
                             void board.unmirroredTraceStartTime.openFilePart(url)}
