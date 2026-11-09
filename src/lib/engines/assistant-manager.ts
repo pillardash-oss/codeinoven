@@ -59,7 +59,9 @@ export class AssistantManager {
    * disk artifacts). Attached by the IPC layer once the thread manager exists,
    * so deleting an assistant sweeps its threads instead of orphaning them.
    */
-  private threadDeleter: ((threadId: string) => Promise<void>) | null = null
+  private threadDeleter:
+    | ((threadId: string, options?: { allowAssistantSetupThread?: boolean }) => Promise<void>)
+    | null = null
 
   constructor(
     private database: Database,
@@ -72,7 +74,9 @@ export class AssistantManager {
   }
 
   /** Attach the canonical thread deleter used when an assistant is deleted. */
-  attachThreadDeleter(deleter: (threadId: string) => Promise<void>): void {
+  attachThreadDeleter(
+    deleter: (threadId: string, options?: { allowAssistantSetupThread?: boolean }) => Promise<void>
+  ): void {
     this.threadDeleter = deleter
   }
 
@@ -419,7 +423,10 @@ export class AssistantManager {
       return
     }
     try {
-      await this.threadDeleter(thread.id)
+      // Removing an assistant removes its behavior thread with it: that is the one
+      // sweep allowed to take a Getting started thread away, because there is no
+      // assistant left for it to belong to.
+      await this.threadDeleter(thread.id, { allowAssistantSetupThread: true })
     } catch (error) {
       if (!this.threadRepo.get(thread.id)) return
       throw error

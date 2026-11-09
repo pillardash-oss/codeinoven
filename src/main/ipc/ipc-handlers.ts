@@ -179,9 +179,10 @@ export function registerIpcHandlers(
       : null
   )
   // An assistant's threads (its hidden knowledge thread included) are deleted through
-  // this same canonical path when the assistant is removed.
-  assistantManager.attachThreadDeleter((threadId) =>
-    threadManager.deleteThread(ASSISTANT_SPACE_ID, threadId)
+  // this same canonical path when the assistant is removed, which is the one sweep
+  // allowed to take a behavior thread away.
+  assistantManager.attachThreadDeleter((threadId, options) =>
+    threadManager.deleteThread(ASSISTANT_SPACE_ID, threadId, options)
   )
   // The merge lifecycle deletes/moves threads in the source scope after the
   // git merge lands; the thread manager is created after the worktree service,

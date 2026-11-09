@@ -162,7 +162,9 @@ describe('AssistantManager', () => {
   })
 
   it('deletes every thread of an assistant when it is removed, the hidden knowledge thread included', async () => {
-    assistants.attachThreadDeleter((threadId) => threads.deleteThread(ASSISTANT_SPACE_ID, threadId))
+    assistants.attachThreadDeleter((threadId, options) =>
+      threads.deleteThread(ASSISTANT_SPACE_ID, threadId, options)
+    )
     const assistant = assistants.createAssistant({ name: 'Temp' })
     const task = await threads.createThread({
       projectId: ASSISTANT_SPACE_ID,

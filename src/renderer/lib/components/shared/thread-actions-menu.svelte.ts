@@ -146,11 +146,14 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
   const items = $derived.by((): MenuItem[] => {
     const thread = config.getThread()
     if (!thread) return []
-    const showScope = config.showChangeScope?.() ?? true
+    const knowledgeThread = config.isKnowledgeThread?.() ?? false
+    // The Getting started thread is the assistant's behavior record: it is not
+    // renamed, pinned, re-scoped or moved, and it is not deleted on its own. The
+    // menu offers what applies to it (hiding) and nothing that would rewrite it.
+    const showScope = !knowledgeThread && (config.showChangeScope?.() ?? true)
     const showNotesItem = config.showNotes?.() ?? false
     const showCopyIdItem = config.showCopyId?.() ?? false
     const showHandoffItem = (config.showHandoff?.() ?? false) && config.onHandoff !== undefined
-    const knowledgeThread = config.isKnowledgeThread?.() ?? false
     const bookmarkAvailable = (config.showBookmark?.() ?? false) && config.onBookmark !== undefined
     // Only a settled thread may be pushed back to unread: a finished or errored
     // run. Live work, a ready spec, and "Needs attention" are not the same as
@@ -158,7 +161,7 @@ export function createThreadActionsMenu(config: ThreadActionsMenuConfig) {
     const canMarkUnread =
       threadTracksReadStatus(thread) && thread.read && canMarkThreadUnread(thread.status)
     return [
-      { label: 'Rename', icon: CioPencil, onClick: startRename },
+      ...(knowledgeThread ? [] : [{ label: 'Rename', icon: CioPencil, onClick: startRename }]),
       ...(canMarkUnread
         ? [{ label: 'Mark as unread', icon: CioMessage, onClick: () => void markUnread() }]
         : []),
