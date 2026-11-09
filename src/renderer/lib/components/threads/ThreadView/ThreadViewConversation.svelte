@@ -48,6 +48,11 @@
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { getCustomSvgDataUrl } from '../../../../../lib/custom-svg-tint'
   import { assistants } from '$lib/stores/assistants.svelte'
+  import { appConfigState } from '$lib/stores/app-config.svelte'
+  import { assistantAccentColor, getAssistantIcon } from '$lib/assistant-icons'
+  import CioUserMark from '$lib/components/icons/cio/CioUserMark.svelte'
+  import ThreadMessageSpeaker from '../ThreadMessageSpeaker.svelte'
+  import { isGroupThread } from '$shared/types'
   import { assistantDisplayText } from '$lib/components/assistant/assistant-view'
   import { assistantResultText } from '$shared/assistant-result'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
@@ -95,6 +100,66 @@
     const thread = board.handleAgentEvent.thread
     return isBoundAssistantTask(thread) && thread.assistantTaskId ? thread : null
   })
+
+  /**
+   * Whether this conversation is a group thread, and therefore has to name its
+   * speakers.
+   *
+   * An ordinary thread has exactly one implied assistant author and one implied
+   * human, so it keeps the plain transcript it always had: its rows read as the
+   * dialogue they are, and a name over every message would be noise. A group
+   * thread holds several assistants, so a reply that does not say who spoke is
+   * unattributable, and the transcript signs both sides like a group chat.
+   */
+  const groupThread = $derived(isGroupThread(board.handleAgentEvent.thread))
+
+  /**
+   * What a group thread signs the user's own messages with.
+   *
+   * It is the name the user asked Don to call them, and "You" until they answer:
+   * the question is asked in Don's thread on first launch, but an older thread
+   * must still read as a conversation while it is unanswered.
+   */
+  const userName = $derived(appConfigState.userPreferredName.trim() || 'You')
+
+  /** One assistant a group thread's transcript names above its reply. */
+  interface GroupSpeaker {
+    name: string
+    icon: string | null
+    color: string
+  }
+
+  /**
+   * The assistant that spoke one reply in a group thread, or null when there is
+   * nobody left to name.
+   *
+   * The message's own `author` snapshot wins, because it is what the reply read
+   * as when it was written: an assistant can be renamed, re-iconed or deleted
+   * after it spoke, and the conversation that happened must keep reading as
+   * itself. A reply with no snapshot is the thread's own assistant speaking (the
+   * host of a group opens the conversation as itself), so it is resolved through
+   * the assistants the renderer already holds rather than through a second path.
+   *
+   * The icon comes from `getAssistantIcon`, the same resolution every assistant
+   * surface uses, with the stored image icon by id as its highest priority.
+   */
+  function groupSpeakerFor(msg: AgentMessage): GroupSpeaker | null {
+    const author = msg.author
+    if (author) {
+      return {
+        name: author.name,
+        icon: getAssistantIcon(author, assistants.iconUrls.get(author.assistantId) ?? null),
+        color: assistantAccentColor(author)
+      }
+    }
+    const assistant = assistants.assistantForTask(board.handleAgentEvent.thread)
+    if (!assistant) return null
+    return {
+      name: assistant.name,
+      icon: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null),
+      color: assistantAccentColor(assistant)
+    }
+  }
 
   /**
    * The receipt is read once per range. A running run reads its state, and a run
@@ -773,6 +838,15 @@
                   class="w-full border-l-2 border-l-foreground bg-surface px-4 py-2.5 text-sm text-foreground"
                   data-conversation-searchable
                 >
+                  <!-- A group thread signs the user's own messages too, with the
+                       same 16px mark an assistant reply wears, so both sides of
+                       the conversation read as speakers. -->
+                  {#if groupThread}
+                    <div class="mb-2 flex min-w-0 items-center gap-1.5 text-[0.6875rem]">
+                      <CioUserMark name={userName} />
+                      <span class="truncate font-medium text-foreground">{userName}</span>
+                    </div>
+                  {/if}
                   {#if leftoverReferences.length}
                     <div class="mb-2 flex flex-wrap gap-1.5">
                       {#each leftoverReferences as reference (reference.id)}
@@ -1095,6 +1169,21 @@
                       data-conversation-searchable
                       data-message-id={msg.id}
                     >
+                      <!-- Who answered. Drawn only in a group thread, and only
+                           over the reply's text: the working trace above and
+                           the metadata footer below belong to the turn, not to
+                           a speaker. -->
+                      {#if groupThread}
+                        {@const speaker = groupSpeakerFor(msg)}
+                        {#if speaker}
+                          <ThreadMessageSpeaker
+                            name={speaker.name}
+                            icon={speaker.icon}
+                            color={speaker.color}
+                            class="mb-1.5"
+                          />
+                        {/if}
+                      {/if}
                       {#if isReadingActiveLine}
                         <!-- The read-along only exists while a turn is being
                                  spoken, so its chunk waits for playback instead

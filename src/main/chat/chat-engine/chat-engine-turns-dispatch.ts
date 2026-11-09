@@ -29,7 +29,12 @@ import type {
   PromptAttachment,
   ThreadSettings
 } from '../../../lib/types'
-import { INBOX_PROJECT_ID } from '../../../lib/types'
+import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../../lib/types'
+import {
+  delegationOutcomeText,
+  lastAssistantText,
+  type PendingDonDelegation
+} from '../chat-engine-don'
 import { modelKey } from '../../../lib/model-keys'
 import {
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
@@ -478,6 +483,46 @@ export class ChatEngineTurnsDispatch {
    * the durable record, so a report that cannot land (the requesting thread is
    * mid-turn, or has been closed) must never fail the run's finalization.
    */
+  /**
+   * Write a delegated run's answer into Don's thread.
+   *
+   * The assistant speaks for itself: the row carries the speaker as a snapshot, so
+   * the group transcript names the assistant that did the work and keeps naming it
+   * after a rename or a deletion. A run that produced no text reports its outcome
+   * instead of going silent, because a delegation the user cannot see finishing is
+   * worse than no delegation.
+   */
+  async reportDonDelegation(delegation: PendingDonDelegation, status: string): Promise<void> {
+    if (!delegation.donThreadId) return
+    try {
+      const messages = await this.host.loadMessages(ASSISTANT_SPACE_ID, delegation.runThreadId)
+      const answer = lastAssistantText(messages) ?? delegationOutcomeText(delegation, status)
+      await this.host.threadManager.upsertMessages(ASSISTANT_SPACE_ID, delegation.donThreadId, [
+        {
+          id: `don-delegation-${delegation.runThreadId}`,
+          role: 'assistant',
+          origin: 'assistant',
+          visibility: 'conversation',
+          author: delegation.author,
+          parts: [
+            {
+              type: 'text',
+              id: `don-delegation-${delegation.runThreadId}-text`,
+              messageID: `don-delegation-${delegation.runThreadId}`,
+              text: answer
+            }
+          ],
+          createdAt: Date.now()
+        }
+      ])
+    } catch (error) {
+      Logger.error('Don delegation report failed', {
+        runThreadId: delegation.runThreadId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
   async reportOrchestrationDispatch(
     dispatch: PendingOrchestrationDispatch,
     status: string

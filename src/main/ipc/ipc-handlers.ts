@@ -83,6 +83,7 @@ import { registerHistoryHandlers } from './handlers/history-handlers'
 import { registerSearchHandlers } from './handlers/search-handlers'
 import { registerPlanHandlers } from './handlers/plan-handlers'
 import { registerUpdaterHandlers } from './handlers/updater-handlers'
+import { ensureDonOrchestrator } from '../don/don-bootstrap'
 import { registerAssistantHandlers } from './handlers/assistant-handlers'
 import { registerCioCleanupHandlers } from './handlers/cio-cleanup-handlers'
 import { registerOrchestrationHandlers } from './handlers/orchestration-handlers'
@@ -168,6 +169,11 @@ export function registerIpcHandlers(
   )
   // Intent (semantic) search rides the same thread search: the provider
   // returns semantic matches that the search service merges with keyword hits.
+  // Don, the orchestrator, is seeded before any window asks for it: the assistant
+  // sidebar draws it as the first row and the listening panel resolves its thread,
+  // and neither can do that until the row and the thread exist.
+  void ensureDonOrchestrator({ assistantManager, threadManager, storage })
+
   threadManager.setIntentSearchProvider(
     options.searchService
       ? (query, searchOptions) =>

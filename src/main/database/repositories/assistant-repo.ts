@@ -34,6 +34,7 @@ interface AssistantRow {
   pinned: number
   pinned_at: number | null
   sort_order: number | null
+  builtin: number
   created_at: number
   updated_at: number
 }
@@ -166,6 +167,7 @@ function rowToAssistant(row: AssistantRow): Assistant {
     pinned: row.pinned === 1,
     pinnedAt: row.pinned_at ?? undefined,
     sortOrder: row.sort_order ?? undefined,
+    ...(row.builtin === 1 ? { builtin: true } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at
   }
@@ -179,8 +181,8 @@ export class AssistantRepo {
       `INSERT INTO assistants(
         id, name, description, scheduled, schedule_name, color, icon, icon_type, custom_svg, schedule, schedule_updated_at, knowledge,
         knowledge_updated_at, connections, delivery, priority, agents, execution, paused, pinned,
-        pinned_at, sort_order, created_at, updated_at
-      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        pinned_at, sort_order, builtin, created_at, updated_at
+      ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
@@ -203,6 +205,7 @@ export class AssistantRepo {
         pinned = excluded.pinned,
         pinned_at = excluded.pinned_at,
         sort_order = excluded.sort_order,
+        builtin = excluded.builtin,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at`,
       assistant.id,
@@ -227,6 +230,7 @@ export class AssistantRepo {
       assistant.pinned ? 1 : 0,
       assistant.pinnedAt ?? null,
       assistant.sortOrder ?? null,
+      assistant.builtin ? 1 : 0,
       assistant.createdAt,
       assistant.updatedAt
     )

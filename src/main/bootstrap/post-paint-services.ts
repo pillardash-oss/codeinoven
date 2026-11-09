@@ -22,6 +22,9 @@ import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
+import { createDonExecutor, DonDelegations } from '../chat/chat-engine-don'
+import { DON_THREAD_ID } from '../don/don-bootstrap'
+import { ASSISTANT_SPACE_ID } from '../../lib/types'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -550,6 +553,102 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       )
     }
   })
+  // Don, the orchestrator: the roster it chooses from, the thread a delegation
+  // runs on, and the name the user asked to be called. Built here because this is
+  // where the assistant directory, the chat engine and the config meet.
+  {
+    const chatEngine = state.chatEngine
+    if (chatEngine && assistantManager) {
+      const readDonThreadSettings = async () => {
+        const thread = await chatEngine.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+        return thread?.settings
+      }
+      const executor = createDonExecutor({
+        assistants: () => assistantManager.listAssistants(),
+        getAssistant: (assistantId) => assistantManager.getAssistant(assistantId),
+        startDelegation: async (assistant, request) => {
+          const primary = assistantPrimaryModel(assistant.agents)
+          if (!primary) return { error: `${assistant.name} has no model yet` }
+          const base = await readDonThreadSettings()
+          if (!base) return { error: 'The orchestrator has no model configured yet' }
+          const settings = settingsWithAssistantModel(
+            settingsWithAssistantTarget(base, assistant.execution),
+            primary
+          )
+          const thread = await chatEngine.threadManager.createThread({
+            projectId: ASSISTANT_SPACE_ID,
+            providerId: '',
+            title: request.slice(0, 80),
+            titleSource: 'default',
+            workingDirectory: '',
+            assistantId: assistant.id,
+            settings,
+            dispatchOrigin: {
+              assistantId: assistant.id,
+              assistantName: assistant.name,
+              initiatorProjectId: ASSISTANT_SPACE_ID,
+              initiatorThreadId: DON_THREAD_ID,
+              at: Date.now()
+            }
+          })
+          await chatEngine.sendPrompt(
+            thread.projectId,
+            thread.id,
+            settings,
+            request,
+            [],
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            undefined,
+            'internal',
+            undefined,
+            undefined,
+            true
+          )
+          return { thread }
+        },
+        announceDelegation: async (delegation) => {
+          await chatEngine.threadManager.upsertMessages(
+            delegation.donProjectId,
+            delegation.donThreadId,
+            [
+              {
+                id: `don-delegation-${delegation.runThreadId}-working`,
+                role: 'assistant',
+                origin: 'subagent',
+                visibility: 'working_trace',
+                parts: [
+                  {
+                    type: 'subagent',
+                    id: `don-delegation-${delegation.runThreadId}-working-part`,
+                    messageID: `don-delegation-${delegation.runThreadId}-working`,
+                    activity: {
+                      status: 'running',
+                      agent: delegation.author.name,
+                      description: delegation.request,
+                      background: true,
+                      pawn: false
+                    }
+                  }
+                ],
+                createdAt: delegation.createdAt
+              }
+            ]
+          )
+        },
+        readUserName: async () => (await storage.getConfig()).userPreferredName ?? '',
+        writeUserName: async (name) => {
+          const config = await storage.getConfig()
+          await storage.saveConfig({ ...config, userPreferredName: name })
+          return name
+        }
+      })
+      const delegations = new DonDelegations()
+      chatEngine.attachDonRuntime({ executor, delegations })
+    }
+  }
   state.assistantScheduler.attachChangeListener(() => {
     broadcastMissedRunsChanged(state.assistantScheduler?.listMissedRuns() ?? [])
     broadcastBackgroundRunsChanged(state.assistantScheduler?.listBackgroundRuns() ?? [])

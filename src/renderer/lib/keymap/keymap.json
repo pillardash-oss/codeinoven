@@ -224,6 +224,13 @@
           "scenario": "Anywhere a microphone input is visible."
         },
         {
+          "id": "don-listening",
+          "keys": ["alt", "alt", "alt"],
+          "label": "Open Don Listening",
+          "description": "Presses the dictation modifier three times in a row to open the Don Listening panel, where dictation lands in a markdown editor that sends into Don's thread. The first two presses still start and stop dictation, so the third press asks Don to listen instead of recording. Follows the dictation binding set in Sound > Preferences.",
+          "scenario": "Anywhere in the app window."
+        },
+        {
           "id": "chat-focus-composer",
           "keys": ["double-mod"],
           "label": "Focus the chat composer",

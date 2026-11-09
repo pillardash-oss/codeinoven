@@ -28,6 +28,12 @@ export const invokeAssistantContract = {
   /** Ensure the hidden assistant-space container exists, returning it. */
   'assistant:ensureSpace': {} as Contract<[], Project>,
   'assistant:list': {} as Contract<[], Assistant[]>,
+  /**
+   * Don's one thread, seeded on first launch. Read by the surfaces that talk to the
+   * orchestrator without opening the assistant view, such as the listening panel,
+   * so none of them has to search the assistant space for it.
+   */
+  'assistant:donThread': {} as Contract<[], { threadId: string | null }>,
   'assistant:create': {} as Contract<[input: CreateAssistantInput], Assistant>,
   'assistant:update': {} as Contract<[assistantId: string, input: UpdateAssistantInput], Assistant>,
   /**

@@ -37,6 +37,7 @@
   import { gitPullJobs } from '$lib/stores/git-pull-jobs.svelte'
   import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
   import { questionWalkthrough } from '$lib/stores/question-walkthrough.svelte'
+  import { donListening } from '$lib/don-listening.svelte'
   import { guideState } from '$lib/guide/guide-state.svelte'
   import { createApp } from './App/App-board.svelte'
   const board = createApp()
@@ -326,6 +327,15 @@
          the card that opened it. -->
     {#await import('$lib/components/threads/QuestionWalkthroughDock.svelte') then { default: QuestionWalkthroughDock }}
       <QuestionWalkthroughDock />
+    {/await}
+  {/if}
+
+  {#if donListening.isOpen}
+    <!-- The surface the three-tap dictation gesture raises. It floats above every
+         view because the gesture works anywhere in the window, and it outlives the
+         thread that happened to be open when it was raised. -->
+    {#await import('$lib/components/don/DonListeningPanel.svelte') then { default: DonListeningPanel }}
+      <DonListeningPanel />
     {/await}
   {/if}
 

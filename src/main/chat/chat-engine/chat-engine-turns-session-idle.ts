@@ -1168,6 +1168,15 @@ export class ChatEngineTurnsSessionIdle {
           finalStatus
         )
       }
+      // A settled run the orchestrator handed to an assistant is written back into
+      // Don's thread under that assistant's own name, which is what makes Don's
+      // conversation read as a group chat instead of a list of statuses.
+      const settledDelegation = finishedThread
+        ? this.host.don?.delegations.settle(finishedThread.id)
+        : undefined
+      if (settledDelegation) {
+        void this.host.units['turns-dispatch'].reportDonDelegation(settledDelegation, finalStatus)
+      }
       // A settled turn on an assistant task is reported to the assistant scheduler,
       // which knows whether it dispatched a run on that task and stamps its last
       // successful run. Harmless for a user's own chat: the scheduler ignores a

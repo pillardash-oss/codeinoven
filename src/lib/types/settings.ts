@@ -413,6 +413,12 @@ export interface AppConfig {
   /** Format a file through its language server before the editor writes it. */
   ideFormatOnSave?: boolean
   keybindings: Record<string, string>
+  /**
+   * What the user asked Don to call them, captured the first time they answered
+   * Don's "How should I address you?" question. It is the name a group thread puts
+   * on the user's own messages, and it is empty until they say.
+   */
+  userPreferredName?: string
   /** How slash commands are handled: in-app actions or forwarded to the harness. */
   slashCommandMode: SlashCommandMode
   /** Preferred editor used by “Open in Editor”. `system` falls back to the OS default. */

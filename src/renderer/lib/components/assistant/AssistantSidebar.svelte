@@ -13,6 +13,7 @@
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { pinnedThreadSort, threadSort } from '$lib/stores/workspace.svelte'
   import { sortAssistants } from '$shared/assistant-order'
+  import { DON_ASSISTANT_ID, assistantIsBuiltin, assistantReady } from '$shared/types'
   import {
     isAssistantSetupThread,
     isThreadWorking,
@@ -25,6 +26,7 @@
     type ThreadStateCounts
   } from '$lib/thread-state-counts'
   import AssistantRow from './AssistantRow.svelte'
+  import DonTile from './DonTile.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
   import AssistantEditModal from './AssistantEditModal.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
@@ -241,6 +243,11 @@
    * assistants in, so dragging a row and seeing it stay put agree on one rule.
    */
   const orderedAssistants = $derived(sortAssistants(assistants))
+  /** Don, the app's orchestrator: a fixed slot above the list, never a row. */
+  const donAssistant = $derived(assistants.find((row) => row.id === DON_ASSISTANT_ID) ?? null)
+  const donThread = $derived(tasks.find((task) => task.assistantId === DON_ASSISTANT_ID) ?? null)
+  /** Every assistant the user owns, in sidebar order. Built-ins hold their own slot. */
+  const listedAssistants = $derived(orderedAssistants.filter((row) => !assistantIsBuiltin(row)))
 
   /** Assistant-less, unpinned tasks, most recently active first. */
   const standaloneTasks = $derived(
@@ -684,6 +691,19 @@
       <!-- Pinned tasks lead the list, above the assistants: the shared
            PinnedSection owns the header, the fold state, and the row list,
            and the assistant supplies its own task row to it. -->
+      {#if donAssistant}
+        <DonTile
+          assistant={donAssistant}
+          threadId={donThread?.id ?? null}
+          selected={donThread !== null && selectedThreadId === donThread.id}
+          iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
+          ready={assistantReady(donAssistant)}
+          onOpen={() => {
+            if (donThread) onOpenTask(donThread)
+          }}
+        />
+      {/if}
+
       <PinnedSection
         sectionKey="assistant"
         label="Pinned"
@@ -700,7 +720,7 @@
         {/snippet}
       </PinnedSection>
 
-      {#each orderedAssistants as assistant (assistant.id)}
+      {#each listedAssistants as assistant (assistant.id)}
         {@const assistantTaskList = assistantTasks(assistant.id)}
         {@const visibleRows = filteredAssistantRows(assistant)}
         {@const rowsShown = assistantPage(assistant, visibleRows)}

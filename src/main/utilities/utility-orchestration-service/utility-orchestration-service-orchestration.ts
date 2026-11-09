@@ -28,6 +28,11 @@ import {
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../../lib/orchestration-tools'
 import {
+  DON_DELEGATE_TOOL_NAME,
+  DON_USER_NAME_TOOL_NAME,
+  type DonToolOperation
+} from '../../../lib/don-tools'
+import {
   APP_CONTROL_CALL_TOOL_NAME,
   APP_CONTROL_CATALOG_TOOL_NAME
 } from '../../../lib/app-control-tools'
@@ -183,6 +188,10 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.orchestrate(state, input, 'dispatch')
       case ORCHESTRATION_STATUS_TOOL_NAME:
         return (state, input) => this.orchestrate(state, input, 'status')
+      case DON_DELEGATE_TOOL_NAME:
+        return (state, input) => this.don(state, input, 'delegate')
+      case DON_USER_NAME_TOOL_NAME:
+        return (state, input) => this.don(state, input, 'user-name')
       case APP_CONTROL_CATALOG_TOOL_NAME:
         return (state, input) => this.appControl(state, input, 'catalog')
       case APP_CONTROL_CALL_TOOL_NAME:
@@ -341,6 +350,31 @@ export class UtilityOrchestrationServiceOrchestration {
   ): Promise<unknown> {
     const executor = this.host.orchestrationExecutor
     if (!executor) throw new Error('Orchestration is unavailable in this deployment')
+    return executor(operation, input, {
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
+  }
+
+  /**
+   * Run one of Don's own operations for the turn that asked for it.
+   *
+   * The executor owns the assistant roster, the thread a delegation runs on and
+   * the name the user chose, so this handler only forwards the operation with the
+   * turn it belongs to. A missing executor means the app was built without the
+   * orchestrator, which is a deployment fault rather than a model error, so it says
+   * so plainly instead of returning an empty result.
+   */
+  async don(
+    state: TurnState,
+    input: Record<string, unknown>,
+    operation: DonToolOperation
+  ): Promise<unknown> {
+    const executor = this.host.donExecutor
+    if (!executor) throw new Error('The orchestrator is unavailable in this deployment')
     return executor(operation, input, {
       projectId: state.request.projectId,
       threadId: state.request.threadId,

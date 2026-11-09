@@ -81,6 +81,8 @@ interface ThreadRow {
   last_success_at: number | null
   assistant_getting_started: number
   assistant_task_id: string | null
+  group_participants: string | null
+  group_title: string | null
   last_error: string | null
   last_error_at: number | null
   last_outcome: string | null
@@ -99,6 +101,24 @@ function parseStoredJson(raw: string): unknown {
   } catch {
     return null
   }
+}
+
+/**
+ * The assistant ids taking part in a group thread.
+ *
+ * A corrupt or hand-edited row must never break a thread list, so a value that
+ * is not a list of non-empty strings reads as no participants at all, which is
+ * exactly the ordinary single-speaker thread.
+ */
+function parseGroupParticipants(raw: string): string[] {
+  const parsed = parseStoredJson(raw)
+  if (!Array.isArray(parsed)) return []
+  return parsed.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+}
+
+/** Store a group thread's participants, or nothing when it is not a group. */
+function serializeGroupParticipants(participants: string[] | undefined): string | null {
+  return participants && participants.length > 0 ? JSON.stringify(participants) : null
 }
 
 /**
@@ -332,6 +352,10 @@ function rowToThread(row: ThreadRow): Thread {
     lastSuccessAt: row.last_success_at ?? undefined,
     ...(row.assistant_getting_started === 1 ? { assistantGettingStarted: true } : {}),
     ...(row.assistant_task_id !== null ? { assistantTaskId: row.assistant_task_id } : {}),
+    ...(row.group_participants !== null
+      ? { groupParticipants: parseGroupParticipants(row.group_participants) }
+      : {}),
+    ...(row.group_title !== null ? { groupTitle: row.group_title } : {}),
     ...(row.last_error !== null ? { lastError: row.last_error } : {}),
     ...(row.last_error_at !== null ? { lastErrorAt: row.last_error_at } : {}),
     ...(row.last_outcome !== null
@@ -548,10 +572,11 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   assistant_id, assistant_icon_type, assistant_icon, schedule_override, scheduled, last_run_at, last_dispatched_at, last_success_at,
   assistant_getting_started,
   assistant_task_id,
+  group_participants, group_title,
   last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -606,6 +631,8 @@ ON CONFLICT(id) DO UPDATE SET
   last_success_at=excluded.last_success_at,
   assistant_getting_started=excluded.assistant_getting_started,
   assistant_task_id=excluded.assistant_task_id,
+  group_participants=excluded.group_participants,
+  group_title=excluded.group_title,
   last_error=excluded.last_error,
   last_error_at=excluded.last_error_at,
   last_outcome=excluded.last_outcome,
@@ -671,6 +698,8 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.lastSuccessAt ?? null,
     thread.assistantGettingStarted ? 1 : 0,
     thread.assistantTaskId ?? null,
+    serializeGroupParticipants(thread.groupParticipants),
+    thread.groupTitle ?? null,
     thread.lastError ?? null,
     thread.lastErrorAt ?? null,
     thread.lastOutcome ?? null,

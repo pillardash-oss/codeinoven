@@ -9,6 +9,7 @@ import type {
   AgentMessageVisibility,
   AgentPart,
   AgentTokenUsage,
+  MessageAuthor,
   NormalizedUsage,
   ThinkingLevel,
   ThreadMessageCursor,
@@ -96,6 +97,7 @@ export interface PersistedMessageRow {
   thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
+  author: string | null
   created_at: number
   completed_at: number | null
   cost: number | null
@@ -137,6 +139,7 @@ export function hashPersistedRow(row: PersistedMessageRow): string {
     row.thinking_level ?? '',
     row.references_json ?? '',
     row.project_references_json ?? '',
+    row.author ?? '',
     String(row.created_at),
     String(row.completed_at ?? ''),
     String(row.cost ?? ''),
@@ -177,6 +180,7 @@ export interface AgentMessageRow {
   thinking_level: string | null
   references_json: string | null
   project_references_json: string | null
+  author: string | null
   created_at: number
   completed_at: number | null
   cost: number | null
@@ -264,6 +268,41 @@ function stripStoredThinkingArtifacts(role: string, parts: AgentPart[]): AgentPa
   return changed ? cleaned : parts
 }
 
+/**
+ * The speaking assistant of a group message, read back from its snapshot.
+ *
+ * A row whose snapshot is corrupt reads as an author-less message, which renders
+ * as the thread's own assistant rather than breaking the transcript, and only the
+ * fields the snapshot actually carries are kept.
+ */
+function parseMessageAuthor(raw: string): MessageAuthor | undefined {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return undefined
+  }
+  if (!parsed || typeof parsed !== 'object') return undefined
+  const record = parsed as Record<string, unknown>
+  const assistantId = typeof record['assistantId'] === 'string' ? record['assistantId'] : ''
+  const name = typeof record['name'] === 'string' ? record['name'] : ''
+  if (assistantId.length === 0 || name.length === 0) return undefined
+  const optional = (key: keyof MessageAuthor): string | undefined =>
+    typeof record[key] === 'string' ? (record[key] as string) : undefined
+  const icon = optional('icon')
+  const iconType = optional('iconType')
+  const customSvg = optional('customSvg')
+  const color = optional('color')
+  return {
+    assistantId,
+    name,
+    ...(icon === undefined ? {} : { icon }),
+    ...(iconType === undefined ? {} : { iconType }),
+    ...(customSvg === undefined ? {} : { customSvg }),
+    ...(color === undefined ? {} : { color })
+  }
+}
+
 function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMessage {
   // Defensive read-side cap: threads persisted before the persist-time output
   // cap existed can still carry multi-megabyte tool outputs in their rows.
@@ -307,6 +346,7 @@ function rowToMessage(row: AgentMessageRow, includeTransport = false): AgentMess
     projectReferences: row.project_references_json
       ? JSON.parse(row.project_references_json)
       : undefined,
+    ...(row.author ? { author: parseMessageAuthor(row.author) } : {}),
     createdAt: row.created_at,
     completedAt: row.completed_at ?? undefined,
     cost: row.cost ?? undefined,
@@ -358,6 +398,7 @@ export interface EncodedAgentMessage {
   thinkingLevel: string | null
   referencesJson: string | null
   projectReferencesJson: string | null
+  authorJson: string | null
   createdAt: number
   completedAt: number | null
   cost: number | null
@@ -404,6 +445,7 @@ export function encodeAgentMessage(
   const projectReferencesJson = message.projectReferences
     ? JSON.stringify(message.projectReferences)
     : null
+  const authorJson = message.author ? JSON.stringify(message.author) : null
   const createdAt = message.createdAt
   const completedAt = message.completedAt ?? null
   const cost = message.cost ?? null
@@ -440,6 +482,7 @@ export function encodeAgentMessage(
     thinking_level: thinkingLevel,
     references_json: referencesJson,
     project_references_json: projectReferencesJson,
+    author: authorJson,
     created_at: createdAt,
     completed_at: completedAt,
     cost,
@@ -477,6 +520,7 @@ export function encodeAgentMessage(
     thinkingLevel,
     referencesJson,
     projectReferencesJson,
+    authorJson,
     createdAt,
     completedAt,
     cost,
@@ -505,11 +549,11 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       transport_parts, transport_origin,
       model_id, provider_id, harness_id, account_id, account_label, oven_id, oven_label,
       oven_appearance_json, thinking_level,
-      references_json, project_references_json,
+      references_json, project_references_json, author,
       created_at, completed_at, cost,
       tokens_json, normalized_usage_json, tokens_total, rate_limits_json, usage_credits_json,
       context_window, context_used, context_estimated, generation_ms, error, structured_output
-    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+    ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     ON CONFLICT(id) DO UPDATE SET
       role = excluded.role,
       origin = excluded.origin,
@@ -530,6 +574,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       thinking_level = excluded.thinking_level,
       references_json = excluded.references_json,
       project_references_json = excluded.project_references_json,
+      author = excluded.author,
       created_at = excluded.created_at,
       completed_at = excluded.completed_at,
       cost = excluded.cost,
@@ -567,6 +612,7 @@ export function encodeWriteStatement(encoded: EncodedAgentMessage): {
       encoded.thinkingLevel,
       encoded.referencesJson,
       encoded.projectReferencesJson,
+      encoded.authorJson,
       encoded.createdAt,
       encoded.completedAt,
       encoded.cost,
@@ -1172,7 +1218,7 @@ function afterCursor(after: ThreadMessageCursor | undefined): string {
 const MESSAGE_READ_COLUMNS = `id, thread_id, session_id, role, origin, visibility, parts,
   content_hash, transport_parts, transport_origin, model_id, provider_id, harness_id,
   account_id, account_label, oven_id, oven_label, oven_appearance_json,
-  thinking_level, references_json, project_references_json, created_at, completed_at, cost,
+  thinking_level, references_json, project_references_json, author, created_at, completed_at, cost,
   tokens_json, normalized_usage_json, rate_limits_json, usage_credits_json, context_window, context_used,
   context_estimated, generation_ms, error, structured_output`
 

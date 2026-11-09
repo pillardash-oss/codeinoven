@@ -254,6 +254,12 @@ export class ChatEngineUtilities {
      */
     delegationReach = false,
     /**
+     * Whether this turn runs on Don's own thread. Don is the one assistant that
+     * sees the other assistants, so its roster and delegation tools are offered
+     * here and nowhere else.
+     */
+    donTurn = false,
+    /**
      * Whether this turn may create the thread's engineering artifacts (Brainstorm,
      * PRD, specification, Assignment) through the app-owned artifact tools. Set
      * for a real project thread's turn, and left off for a chat, an assistant task
@@ -354,6 +360,7 @@ export class ChatEngineUtilities {
           videoSession,
           orchestrationSession,
           delegationReach,
+          donTurn,
           artifactTools,
           ...(brainstormInterview
             ? {

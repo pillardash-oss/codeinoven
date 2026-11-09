@@ -277,6 +277,21 @@ export interface Thread {
    */
   assistantTaskId?: string
 
+  // ─── Group thread fields ─────────────────────────────────────────────────
+  /**
+   * Assistants taking part in this thread, by assistant id, when the thread is a
+   * group conversation rather than one assistant's own thread. The first entry
+   * is the host that answers the user directly; every other entry may be pulled
+   * in by delegation and speaks under its own name and icon.
+   *
+   * A thread with no participants is an ordinary thread. Don's thread is the
+   * seeded group with `['don']`, so one rendering path serves it and any group
+   * the user creates between assistants.
+   */
+  groupParticipants?: string[]
+  /** The name the user gave a group thread, when it is not just its host's name. */
+  groupTitle?: string
+
   createdAt: number
   updatedAt: number
   lastActivity: number
@@ -295,6 +310,24 @@ export interface ThreadNote {
   body: string
   createdAt: number
   updatedAt: number
+}
+
+/**
+ * Whether a thread is a group conversation between assistants.
+ *
+ * Read everywhere the transcript decides between one speaker and many, so the
+ * rule lives here instead of each surface re-deriving it from a possibly empty
+ * participant list.
+ */
+export function isGroupThread(thread: Pick<Thread, 'groupParticipants'>): boolean {
+  return (thread.groupParticipants?.length ?? 0) > 0
+}
+
+/** The host assistant of a group thread: the one that answers the user first. */
+export function groupThreadHost(
+  thread: Pick<Thread, 'groupParticipants' | 'assistantId'>
+): string | undefined {
+  return thread.groupParticipants?.[0] ?? thread.assistantId
 }
 
 /** A thread that lives in the assistant space (an assistant task). */
@@ -544,6 +577,9 @@ export interface CreateThreadInput {
   assistantGettingStarted?: boolean
   /** Set when creating a run thread: the assistant task it runs. */
   assistantTaskId?: string
+  /** Participants of a group thread, host first (see `Thread.groupParticipants`). */
+  groupParticipants?: string[]
+  groupTitle?: string
   /** Project scope this thread works in when it is not its home container. */
   boundScope?: BoundScopeRebind
   /** Commit the run starts from, recorded once by whoever starts it. */

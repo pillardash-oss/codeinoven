@@ -13,6 +13,7 @@ import {
 } from '../../ipc/ipc-validation'
 import type { SendPromptOptions } from '../../drivers/driver.interface'
 import { isAssistantNextStepsPrompt } from '../../../lib/assistant-next-steps'
+import { DON_ASSISTANT_ID } from '../../../lib/types/assistant'
 import { isContinuationRelayPrompt } from '../../../lib/pending-request'
 import { composeAssistantInstruction } from '../../../lib/assistant-run'
 import { isCioUtilityRequest } from '../../utilities/cio-utility-prompt'
@@ -1062,6 +1063,9 @@ export class ChatEngineTurnsSendPrompt {
       // thread, so the workstation tools are opened for it here rather than by
       // a tag, and the dispatched thread carries the project's own gate.
       assistantTaskTurn,
+      // Don is the only assistant that can see and hand work to the others, so the
+      // roster and delegation tools are opened on its own thread and nowhere else.
+      targetThread?.assistantId === DON_ASSISTANT_ID,
       // A real project thread may create its engineering artifacts through the
       // artifact tools. A chat, an assistant task, the inbox and an Assignment
       // worker are offered none of those routes.

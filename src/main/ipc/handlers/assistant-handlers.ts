@@ -45,6 +45,8 @@ import type {
 import { ASSISTANT_NAME_LIMIT, ASSISTANT_SCHEDULE_NAME_LIMIT } from '../../../lib/types'
 import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import { validateCustomIconImage } from '../../../lib/custom-icon'
+import { ASSISTANT_SPACE_ID } from '../../../lib/types'
+import { DON_THREAD_ID } from '../../don/don-bootstrap'
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const DELIVERY_CHANNELS = new Set<string>(ASSISTANT_DELIVERY_CHANNEL_IDS)
@@ -388,6 +390,18 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     ipcMain.handle('assistant:ensureSpace', () => projectManager.ensureAssistantSpace())
   }
   ipcMain.handle('assistant:list', () => assistantManager.listAssistants())
+
+  /**
+   * Don's one thread, or null while it has not been seeded yet.
+   *
+   * Every surface that hands the orchestrator a message without opening the
+   * assistant view resolves it here instead of searching the assistant space, so
+   * there is exactly one answer to "which thread is Don's".
+   */
+  ipcMain.handle('assistant:donThread', async () => {
+    const thread = await ctx.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+    return { threadId: thread?.id ?? null }
+  })
 
   ipcMain.handle('assistant:create', (_, input: unknown) => {
     const assistant = assistantManager.createAssistant(validateCreateInput(input))

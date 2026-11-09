@@ -379,12 +379,40 @@ export interface AgentArtifact {
   relativePath?: string
 }
 
+/**
+ * The assistant that spoke a message in a group thread, captured as a snapshot.
+ *
+ * A group conversation shows several speakers in one transcript, and the speaker
+ * is a fact about the message, not about the thread: two replies from two
+ * assistants sit side by side. The name, icon and colour are copied at write
+ * time so history renders the speaker it had then, and renaming or deleting an
+ * assistant never rewrites what the conversation recorded.
+ */
+export interface MessageAuthor {
+  assistantId: string
+  name: string
+  /** Stored icon image filename, resolved through the assistant icon cache. */
+  icon?: string
+  /** Selected SVG icon key. */
+  iconType?: string
+  /** Sanitized custom SVG pasted by the user. */
+  customSvg?: string
+  /** Accent colour the speaker's row wears in the assistant panel. */
+  color?: string
+}
+
 /** A message in the agent conversation. */
 export interface AgentMessage {
   /** App-published artifact row independent of the assistant turn trace. */
   inlineArtifact?: boolean
   id: string
   role: 'user' | 'assistant'
+  /**
+   * The assistant that spoke this message in a group thread. Absent on every
+   * other message   an ordinary thread's single author is implied by the thread
+   * itself, and a user message's author is the user.
+   */
+  author?: MessageAuthor
   /** Who produced the display-facing record. */
   origin?: AgentMessageOrigin
   /** Which UI channel may load this record. */

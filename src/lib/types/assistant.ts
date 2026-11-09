@@ -140,6 +140,14 @@ export interface Assistant {
   paused?: boolean
   /** Pinned assistants sort above the rest and render a pin indicator. */
   pinned?: boolean
+  /**
+   * An assistant the app itself seeds and owns (currently only Don, the
+   * orchestrator). It is always present, always first in the sidebar, and its
+   * identity is not the user's to change: the manager refuses to rename, delete,
+   * reorder or pause it, and no panel offers those actions. Everything else about
+   * it   model, knowledge, connections   is ordinary.
+   */
+  builtin?: boolean
   /** When the assistant was pinned; newest pins sort first. */
   pinnedAt?: number
   /**
@@ -215,7 +223,37 @@ export const ASSISTANT_NAME_LIMIT = 200
 /** Ceiling for the name a user gives their assistant's clock. */
 export const ASSISTANT_SCHEDULE_NAME_LIMIT = 120
 
-/** Whether an assistant is still wearing the name it was created with. */
+/**
+ * Don, the orchestrator assistant the app seeds for every user.
+ *
+ * Don's only job is to put work in the right hands: it answers a small question
+ * itself and delegates everything else to the assistant whose description and
+ * knowledge fit, whose reply lands back in Don's thread under its own name. It
+ * owns exactly one permanent group thread, which is why the id is reserved here
+ * beside the type rather than minted at seed time.
+ */
+export const DON_ASSISTANT_ID = 'don'
+
+/** The name Don wears. Reserved, because a built-in assistant cannot be renamed. */
+export const DON_ASSISTANT_NAME = 'Don'
+
+/** Whether an assistant is the app's own orchestrator. */
+export function assistantIsDon(assistant: Pick<Assistant, 'id'>): boolean {
+  return assistant.id === DON_ASSISTANT_ID
+}
+
+/**
+ * Whether an assistant is built in, and therefore not renameable, deletable or
+ * movable. Read through this rather than a bare `builtin` check, so a row seeded
+ * before the flag existed (recognized by its reserved id) is still protected.
+ */
+export function assistantIsBuiltin(assistant: Pick<Assistant, 'id' | 'builtin'>): boolean {
+  return assistant.builtin === true || assistantIsDon(assistant)
+}
+
+/**
+ * Whether an assistant is still wearing the name it was created with.
+ */
 export function assistantIsUnnamed(assistant: Pick<Assistant, 'name'>): boolean {
   return assistant.name.trim() === ASSISTANT_PLACEHOLDER_NAME
 }
@@ -238,6 +276,12 @@ export interface CreateAssistantInput {
   agents?: AssistantAgents
   execution?: AssistantExecution
   paused?: boolean
+  /**
+   * Seed an assistant the app owns (only the orchestrator bootstrap passes this).
+   * It is part of the creation input rather than an ordinary update so a user-facing
+   * patch can never promote an assistant into a built-in one.
+   */
+  builtin?: boolean
 }
 
 export interface UpdateAssistantInput {
