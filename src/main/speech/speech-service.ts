@@ -254,16 +254,15 @@ export class SpeechService {
     void this.nativeCapture.ping().catch((error) => {
       Logger.dev('Native speech capture could not be started ahead of time:', error)
     })
-    // Wait for the boot to settle before opening the microphone once. Priming
-    // builds the engine, installs the tap and resolves the device at launch, so
-    // the first press of the session costs tens of milliseconds like every other
-    // one; it is a one-off warmup and must not compete with the boot itself.
-    if (microphoneAccessGranted() && !(await this.storage.anotherInstanceIsRecording())) {
-      this.scheduleCaptureWarmup()
-    }
+    // Nothing here may open the microphone. Priming the capture engine starts
+    // CoreAudio's input unit, which lights the system microphone indicator and
+    // shows the app as recording while the user is only looking at their
+    // desktop. Launch therefore spawns the worker (no audio device) and stops
+    // there: the microphone opens on the first real gesture, a pointer over a
+    // mic (`armNativeCapture`) or the first tap of the dictation shortcut, and
+    // never on boot.
   }
 
-  private captureWarmupTimer: ReturnType<typeof setTimeout> | null = null
   /**
    * Reads the `voiceRecordingEnabled` setting, the second way a user can have a
    * mic on screen (the first is an installed ASR model). Wired by the boot
@@ -278,39 +277,10 @@ export class SpeechService {
   }
 
   /**
-   * Prime the native microphone once the application has rendered and booted.
-   *
-   * The microphone stays released until the user actually records (the engine is
-   * started once and stopped again, with the device object retained), so this is
-   * invisible apart from a brief device open. Warming here rather than on the
-   * first press is what makes a shortcut recording start on the press: a
-   * shortcut never hovers a mic, so a gesture-driven warmup cannot help it.
-   */
-  private scheduleCaptureWarmup(delayMs = 1_500): void {
-    if (this.captureWarmupTimer) clearTimeout(this.captureWarmupTimer)
-    this.captureWarmupTimer = setTimeout(() => {
-      this.captureWarmupTimer = null
-      if (this.openCaptures.size > 0) return
-      if (!microphoneAccessGranted()) return
-      void (async () => {
-        // Gate the warmup exactly like the mic control it exists for: a user
-        // with no usable model and the audio-to-LLM setting off has no mic on
-        // screen, and the microphone must not open for them.
-        if (!(await this.dictationAvailable())) return
-        await this.nativeCapture.warm().catch((error) => {
-          Logger.dev('Native speech capture warmup failed (non-fatal):', error)
-        })
-      })()
-    }, delayMs)
-  }
-
-  /**
    * Resolve microphone access for a recording the user just asked for.
    *
    * The only place the permission is ever requested: a fresh install is asked
-   * when the user presses the mic, never while the application boots. Warming
-   * the capture worker is separate and only runs once this answer already
-   * exists (see `initialize`).
+   * when the user presses the mic, never while the application boots.
    */
   ensureMicrophoneAccess(): Promise<SpeechMicrophoneAccess> {
     return requestMicrophoneAccess()
@@ -586,9 +556,6 @@ export class SpeechService {
   async failNativeCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
     await this.nativeCapture.stop(sessionId).catch(() => undefined)
     const attempt = await this.failCapture(sessionId, message)
-    // A failed take can leave the recorder dead or cold. Prime it again so the
-    // retry starts on a microphone that is already open.
-    if (microphoneAccessGranted()) this.scheduleCaptureWarmup(500)
     return attempt
   }
 
@@ -1124,11 +1091,6 @@ export class SpeechService {
       existing.available = true
       if (capability) existing.capability = capability
       await this.persistInstalledIndex()
-      // The mic appears as soon as an ASR model is usable, so the recorder is
-      // primed for it now rather than on the first press.
-      if (existing.capability === 'asr' && microphoneAccessGranted()) {
-        this.scheduleCaptureWarmup(0)
-      }
       this.emit({ kind: 'history', attemptId: existing.artifactId, stage: 'completed' })
       return structuredClone(existing)
     }
@@ -1144,7 +1106,6 @@ export class SpeechService {
     }
     this.installed.artifacts.push(artifact)
     await this.persistInstalledIndex()
-    if (capability === 'asr' && microphoneAccessGranted()) this.scheduleCaptureWarmup(0)
     this.emit({ kind: 'history', attemptId: artifact.artifactId, stage: 'completed' })
     return structuredClone(artifact)
   }
@@ -1463,10 +1424,6 @@ export class SpeechService {
   }
 
   async dispose(): Promise<void> {
-    if (this.captureWarmupTimer) {
-      clearTimeout(this.captureWarmupTimer)
-      this.captureWarmupTimer = null
-    }
     this.eviction.dispose()
     this.downloader.abortAll()
     const activeNativeSession = this.nativeCapture.activeSessionId
@@ -1804,9 +1761,6 @@ export class SpeechService {
       capability: artifact.capability
     })
     await this.persistInstalledIndex()
-    // A model that just became usable is the moment the mic appears for a user
-    // who had none, so this is when the recorder is primed for it.
-    if (artifact.capability === 'asr' && microphoneAccessGranted()) this.scheduleCaptureWarmup(0)
   }
 
   private installedIndexPath(): string {
