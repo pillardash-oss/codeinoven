@@ -532,7 +532,9 @@
   let selectedLabelDisplay = $derived(truncateLabel(selectedLabel))
   /** Peak/off-peak state of the currently selected model, for the trigger badge. */
   let selectedPeak = $derived(
-    selectedModel ? peakHoursBadgeFor(selectedModel.id, selectedProvider?.id) : null
+    selectedModel
+      ? peakHoursBadgeFor({ id: selectedModel.id, name: selectedModel.name }, selectedProvider?.id)
+      : null
   )
   /** True while the current project's catalog is being re-probed by the store. */
   let refreshing = $derived(projectId ? providerCatalog.refreshing(projectId) : false)

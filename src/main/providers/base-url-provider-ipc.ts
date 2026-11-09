@@ -64,12 +64,27 @@ const MAX_THINKING_PRESETS = 16
 export function registerBaseUrlProviderIpc(
   storage: StorageEngine,
   providers = new BaseUrlProviderService(storage),
-  vault = new SecretVault(storage)
+  vault = new SecretVault(storage),
+  /**
+   * Called whenever a custom provider is created, edited, enabled/disabled or
+   * deleted. A saved provider is part of its harness's catalog the moment the
+   * write lands, so the catalog cache is invalidated here instead of on the next
+   * model-picker open.
+   */
+  onProvidersChanged?: () => void | Promise<void>
 ): void {
   // Custom vendor artwork lives in `custom-vendor-ipc.ts`: the first frame's
   // vendor icons read it, so it is registered before `app:featuresReady` rather
   // than from this deferred provider block.
   const usageClient = new CustomProviderUsageClient()
+  /**
+   * Fire the invalidation without holding the caller's response: the cache is
+   * dropped synchronously and the re-discovery that follows runs in the
+   * background, so saving a provider never waits on a harness probe.
+   */
+  const notifyProvidersChanged = (): void => {
+    void Promise.resolve(onProvidersChanged?.()).catch(() => undefined)
+  }
   ipcMain.handle('baseUrlProviders:list', () => providers.listProviders())
 
   ipcMain.handle('baseUrlProviders:create', async (_, rawInput: unknown) => {
@@ -77,7 +92,7 @@ export function registerBaseUrlProviderIpc(
     const native = hasNativeProviderCatalog(input.harnessId)
     const apiKeyRef = input.apiKey && !native ? await vault.save(input.apiKey) : undefined
     try {
-      return await providers.createProvider({
+      const created = await providers.createProvider({
         harnessId: input.harnessId,
         npm: input.npm,
         name: input.name,
@@ -92,6 +107,8 @@ export function registerBaseUrlProviderIpc(
         ...(input.enabled === undefined ? {} : { enabled: input.enabled }),
         ...(input.id === undefined ? {} : { id: input.id })
       } satisfies BaseUrlProviderCreateRequest)
+      notifyProvidersChanged()
+      return created
     } catch (error) {
       if (apiKeyRef) await vault.remove(apiKeyRef)
       throw error
@@ -143,6 +160,7 @@ export function registerBaseUrlProviderIpc(
         })
 
         await removeSecrets(vault, refsToRemove)
+        notifyProvidersChanged()
         return updated
       } catch (error) {
         await removeSecrets(vault, createdRef)
@@ -158,6 +176,7 @@ export function registerBaseUrlProviderIpc(
     if (!provider) return false
     const deleted = await providers.deleteProvider(harnessId, id)
     if (deleted && provider.apiKeyRef) await vault.remove(provider.apiKeyRef)
+    if (deleted) notifyProvidersChanged()
     return deleted
   })
 

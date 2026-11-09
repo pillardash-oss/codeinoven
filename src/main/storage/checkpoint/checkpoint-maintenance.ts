@@ -29,6 +29,17 @@ export interface CheckpointMaintenanceHost {
   save(checkpoint: TurnCheckpoint): Promise<void>
   tracker(projectId: string): ChangeTrackingService
   queryRows(sql: string, params: unknown[], maxRows: number): Promise<Record<string, unknown>[]>
+  /**
+   * Same read, but answered only by the maintenance worker's connection and
+   * never by the primary one: a project-wide scan is far too expensive to run
+   * on the Electron main thread, so a failure must reach the caller as an
+   * error instead of being retried there. Throws when the read fails.
+   */
+  queryRowsStrict(
+    sql: string,
+    params: unknown[],
+    maxRows: number
+  ): Promise<Record<string, unknown>[]>
   withBlobLock<T>(projectId: string, operation: () => Promise<T>): Promise<T>
 }
 
@@ -402,9 +413,19 @@ export async function pruneUnusedBlobs(
     // rescued from this turn's write evidence can reference content the
     // snapshot maps never listed, and deleting that blob would leave the
     // change with no diff and no rollback source.
+    //
+    // A change entry is `{path, kind, before?, after?}`, and only its `before`
+    // and `after` objects carry a `hash`. Reading every member instead hands
+    // `json_extract` a raw path or kind string, which SQLite parses as JSON and
+    // rejects as `malformed JSON`   that aborted this whole scan, so nothing
+    // was ever pruned and every call fell back to the main thread.
+    //
+    // The read is strict: this scan covers every checkpoint of a project, so it
+    // must never be answered by the primary connection on the main thread. A
+    // failure throws and the catch below keeps the blobs.
     let rows: Record<string, unknown>[]
     try {
-      rows = await host.queryRows(
+      rows = await host.queryRowsStrict(
         `SELECT json_extract(je.value, '$.hash') AS hash
            FROM turn_checkpoints tc, json_each(tc.data, '$.before.files') je
            WHERE tc.project_id = ?
@@ -416,7 +437,9 @@ export async function pruneUnusedBlobs(
            SELECT json_extract(side.value, '$.hash') AS hash
            FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je,
                 json_each(je.value) side
-           WHERE tc.project_id = ? AND json_extract(side.value, '$.hash') IS NOT NULL`,
+           WHERE tc.project_id = ?
+             AND side.key IN ('before', 'after')
+             AND json_extract(side.value, '$.hash') IS NOT NULL`,
         [projectId, projectId, projectId],
         200_000
       )

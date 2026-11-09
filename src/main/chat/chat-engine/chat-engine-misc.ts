@@ -489,14 +489,18 @@ export class ChatEngineMisc {
    * A message whose output mostly arrived as buffered flushes is left without a
    * window: the clock measured no generation to divide its tokens by, and a
    * stamped window would outlive this process as a rate nobody can read
-   * correctly. The renderer withholds a rate for exactly the same samples, so the
-   * live figure and the reopened figure agree.
+   * correctly. A message whose reported count includes a request that streamed
+   * nothing measurable is left without one for the same reason: its tokens and
+   * its window would describe different requests. The renderer withholds a rate
+   * for exactly the same samples, so the live figure and the reopened figure
+   * agree.
    */
   applyGenerationStamps(sessionId: string, messages: AgentMessage[]): void {
     for (const msg of messages) {
       if (msg.role !== 'assistant' || msg.generationMs !== undefined) continue
       const sample = this.host.state.generationClock.sample(GenerationClock.key(sessionId, msg.id))
       if (!sample || sample.activeMs <= 0) continue
+      if (sample.reportedIncomplete) continue
       if (!windowCoversOutput(sample)) continue
       msg.generationMs = Math.round(sample.activeMs)
     }

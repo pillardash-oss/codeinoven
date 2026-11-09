@@ -61,7 +61,10 @@ export class ChatEngineProvidersCatalog {
       if (existing && this.acpDriverSignatures.get(agent.id) === signature) continue
       if (existing) {
         // Keep a running turn alive: its driver is swapped on the next refresh.
-        if (existing.hasActiveTurn && this.host.units['providers-harness'].harnessHasActiveTurn(agent.id)) {
+        if (
+          existing.hasActiveTurn &&
+          this.host.units['providers-harness'].harnessHasActiveTurn(agent.id)
+        ) {
           continue
         }
         existing.dispose()
@@ -183,8 +186,11 @@ export class ChatEngineProvidersCatalog {
   }
 
   /**
-   * A harness probe reported a changed install state (status/version). Re-run
-   * provider discovery and push the fresh catalog to open pickers.
+   * A harness probe reported a changed install state (status/version), or a
+   * provider was added to, hidden from or removed from a harness. Both change
+   * which providers and models a harness offers, so the cached catalog is no
+   * longer true and discovery runs again right here instead of being deferred
+   * to whichever surface reads the catalog next.
    */
   async invalidateProviderCatalogs(): Promise<void> {
     if (this.host.state.catalogInvalidationInFlight)
@@ -411,11 +417,14 @@ export class ChatEngineProvidersCatalog {
    * broadcast the update so open model pickers refresh without being reopened.
    */
   async rebroadcastUpdatedCatalogs(): Promise<void> {
+    // The shared snapshot is dropped even when no project has a cached catalog:
+    // it is a cache of a set that just changed, and the next reader must not be
+    // served the providers that no longer (or do not yet) exist.
+    this.host.state.sharedProviderCatalog = null
     const projectIds = [...this.host.state.providerCache.keys()]
     if (projectIds.length === 0) return
     let catalogs: ProviderCatalog[]
     try {
-      this.host.state.sharedProviderCatalog = null
       catalogs = await this.host.listProviders(projectIds[0] as string, true)
     } catch (error) {
       Logger.info('Provider catalog refresh after harness update skipped', {

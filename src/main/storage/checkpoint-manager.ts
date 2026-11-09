@@ -1099,6 +1099,13 @@ export class CheckpointManager {
       save: (checkpoint) => this.save(checkpoint),
       tracker: (projectId) => this.tracker(projectId),
       queryRows: (sql, params, maxRows) => this.queryRows(sql, params, maxRows),
+      queryRowsStrict: async (sql, params, maxRows) => {
+        const result = await this.db.queryViaWorker(sql, params, maxRows, {
+          allowPrimaryFallback: false
+        })
+        if (!result.ok) throw new Error(result.error ?? 'checkpoint read failed')
+        return (result.rows ?? []) as Record<string, unknown>[]
+      },
       withBlobLock: (projectId, operation) => this.withBlobLock(projectId, operation)
     }
   }
@@ -1635,7 +1642,12 @@ export class CheckpointManager {
     params: unknown[],
     maxRows: number
   ): Promise<Row[]> {
-    const result = await this.db.queryViaWorker(sql, params, maxRows)
+    // `allowPrimaryFallback: false` because `queryViaWorker` otherwise answers a
+    // failed worker read from the primary connection itself, and the retry below
+    // would then run the identical statement on the main thread a second time.
+    const result = await this.db.queryViaWorker(sql, params, maxRows, {
+      allowPrimaryFallback: false
+    })
     if (!result.ok) {
       return this.db.all<Row>(sql, ...params)
     }
