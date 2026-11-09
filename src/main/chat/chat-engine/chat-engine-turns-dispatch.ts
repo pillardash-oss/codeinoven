@@ -495,6 +495,13 @@ export class ChatEngineTurnsDispatch {
   async reportDonDelegation(delegation: PendingDonDelegation, status: string): Promise<void> {
     if (!delegation.donThreadId) return
     try {
+      // A "waiting to retry" line is temporary by nature: once the run settles
+      // its answer replaces it, so the group thread never keeps a stale pause.
+      await this.host.threadManager
+        .deleteAppMessages(ASSISTANT_SPACE_ID, delegation.donThreadId, [
+          `don-delegation-${delegation.runThreadId}-status`
+        ])
+        .catch(() => undefined)
       const messages = await this.host.loadMessages(ASSISTANT_SPACE_ID, delegation.runThreadId)
       const answer = lastAssistantText(messages) ?? delegationOutcomeText(delegation, status)
       await this.host.threadManager.upsertMessages(ASSISTANT_SPACE_ID, delegation.donThreadId, [
@@ -517,6 +524,46 @@ export class ChatEngineTurnsDispatch {
       ])
     } catch (error) {
       Logger.error('Don delegation report failed', {
+        runThreadId: delegation.runThreadId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
+  /**
+   * State one delegated run's temporary state in Don's thread, under the
+   * assistant's own name.
+   *
+   * The one outcome the user cannot act on is silence: a run parked waiting for
+   * a provider or a reconnect used to show nothing at all in the conversation
+   * that asked for it. The line names what is happening and links the run's own
+   * thread, so the user can open it and see the retry card. It is written with a
+   * fixed id, so a second pause replaces the first instead of stacking.
+   */
+  async reportDonDelegationStatus(delegation: PendingDonDelegation, line: string): Promise<void> {
+    if (!delegation.donThreadId) return
+    const id = `don-delegation-${delegation.runThreadId}-status`
+    try {
+      await this.host.threadManager.upsertMessages(ASSISTANT_SPACE_ID, delegation.donThreadId, [
+        {
+          id,
+          role: 'assistant',
+          origin: 'assistant',
+          visibility: 'conversation',
+          author: delegation.author,
+          parts: [
+            {
+              type: 'text',
+              id: `${id}-text`,
+              messageID: id,
+              text: `${line}\n\n@thread:${delegation.runThreadId}`
+            }
+          ],
+          createdAt: Date.now()
+        }
+      ])
+    } catch (error) {
+      Logger.dev('Don delegation status skipped', {
         runThreadId: delegation.runThreadId,
         error: error instanceof Error ? error.message : String(error)
       })

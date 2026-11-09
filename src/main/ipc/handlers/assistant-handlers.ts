@@ -433,13 +433,24 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
     try {
       const thread = await ctx.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
       if (!thread?.settings) return
+      // The introduction is a one-time event per install, written down where a
+      // failed transcript read cannot lose it. Everything after the first open
+      // is a plain read of the conversation.
+      if (thread.settings.donIntroAskedAt) return
       const messages = await ctx.threadManager.loadMessages(ASSISTANT_SPACE_ID, DON_THREAD_ID)
-      const alreadyStarted = messages.some(
-        (message) =>
-          message.visibility === 'conversation' &&
-          (message.role === 'user' || message.role === 'assistant')
-      )
-      if (alreadyStarted) return
+      const alreadyStarted =
+        messages.some(
+          (message) =>
+            message.visibility === 'conversation' &&
+            (message.role === 'user' || message.role === 'assistant')
+        ) || messages.some((message) => message.id === openingMessageId)
+      if (alreadyStarted) {
+        await ctx.threadManager.updateSettings(ASSISTANT_SPACE_ID, DON_THREAD_ID, {
+          ...thread.settings,
+          donIntroAskedAt: Date.now()
+        })
+        return
+      }
       await chatEngine.sendPrompt(
         thread.projectId,
         thread.id,
@@ -454,6 +465,12 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
         'user',
         { action: DON_FIRST_RUN_ACTION }
       )
+      // Marked only after the turn was accepted, so a failure rolls back to a
+      // state the next open can retry, while a success can never repeat.
+      await ctx.threadManager.updateSettings(ASSISTANT_SPACE_ID, DON_THREAD_ID, {
+        ...thread.settings,
+        donIntroAskedAt: Date.now()
+      })
     } catch (error) {
       // An install with no provider account yet cannot run the introduction.
       // The app-owned opening turn is rolled back with the failure, so Don does

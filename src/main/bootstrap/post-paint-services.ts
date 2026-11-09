@@ -22,7 +22,7 @@ import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
-import { createDonExecutor, DonDelegations } from '../chat/chat-engine-don'
+import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
 import { DON_THREAD_ID } from '../don/don-bootstrap'
 import { ASSISTANT_SPACE_ID } from '../../lib/types'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
@@ -586,6 +586,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
             dispatchOrigin: {
               assistantId: assistant.id,
               assistantName: assistant.name,
+              // The report into Don's thread can outlive this process, so the
+              // speaker it must print travels on the run thread's own row.
+              author: delegationAuthor(assistant),
               initiatorProjectId: ASSISTANT_SPACE_ID,
               initiatorThreadId: DON_THREAD_ID,
               at: Date.now()
@@ -610,27 +613,32 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           return { thread }
         },
         announceDelegation: async (delegation) => {
+          // A delegation is a conversation with another assistant, not a pawn
+          // or a sub-agent of Don. It therefore reads as that assistant's own
+          // message, with its mark and a link into the thread it is doing the
+          // work on, instead of a generic sub-agent card with a robot.
+          const startId = `don-delegation-${delegation.runThreadId}-start`
+          await chatEngine.threadManager
+            .deleteAppMessages(delegation.donProjectId, delegation.donThreadId, [
+              `don-delegation-${delegation.runThreadId}-working`
+            ])
+            .catch(() => undefined)
           await chatEngine.threadManager.upsertMessages(
             delegation.donProjectId,
             delegation.donThreadId,
             [
               {
-                id: `don-delegation-${delegation.runThreadId}-working`,
+                id: startId,
                 role: 'assistant',
-                origin: 'subagent',
-                visibility: 'working_trace',
+                origin: 'assistant',
+                visibility: 'conversation',
+                author: delegation.author,
                 parts: [
                   {
-                    type: 'subagent',
-                    id: `don-delegation-${delegation.runThreadId}-working-part`,
-                    messageID: `don-delegation-${delegation.runThreadId}-working`,
-                    activity: {
-                      status: 'running',
-                      agent: delegation.author.name,
-                      description: delegation.request,
-                      background: true,
-                      pawn: false
-                    }
+                    type: 'text',
+                    id: `${startId}-text`,
+                    messageID: startId,
+                    text: `On it. I will report back here.\n\n@thread:${delegation.runThreadId}`
                   }
                 ],
                 createdAt: delegation.createdAt

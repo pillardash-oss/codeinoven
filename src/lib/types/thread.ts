@@ -57,6 +57,15 @@ export interface ThreadDispatchOrigin {
   /** Assistant whose turn made the dispatch, when an assistant made it. */
   assistantId?: string
   assistantName?: string
+  /**
+   * The speaker at the moment of the dispatch: name, colour and mark.
+   *
+   * A delegation reports back into the initiating thread long after it started,
+   * possibly across a restart when the in-memory handoff is gone. The thread row
+   * is the durable record, so the speaker travels with it and the report keeps
+   * the right name and icon without a second lookup or a guess.
+   */
+  author?: import('./agent-message').MessageAuthor
   initiatorProjectId: string
   initiatorThreadId: string
   at: number

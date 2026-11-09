@@ -1,5 +1,6 @@
 import { Logger } from '../system/logger'
 import {
+  ASSISTANT_SPACE_ID,
   assistantIsBuiltin,
   type Assistant,
   type AgentMessage,
@@ -59,6 +60,12 @@ export class DonDelegations {
 
   has(runThreadId: string): boolean {
     return this.pending.has(runThreadId)
+  }
+
+  /** Read the handoff a run thread belongs to without consuming it, so a run
+   *  that pauses can be reported and still report its answer when it settles. */
+  peek(runThreadId: string): PendingDonDelegation | undefined {
+    return this.pending.get(runThreadId)
   }
 
   /** Forget one handoff, when the run could not actually be started. */
@@ -243,6 +250,37 @@ export function lastAssistantText(messages: readonly AgentMessage[]): string | n
     if (text.length > 0) return text
   }
   return null
+}
+
+/**
+ * Rebuild the handoff a run thread was started by, from the thread row itself.
+ *
+ * A delegation lives in memory while the run is in flight, and an app restart
+ * takes that memory with it. The thread still carries its dispatch origin, so a
+ * run that settles after a restart reports back instead of finishing silently.
+ * Only a thread Don started qualifies: its initiator is Don's own conversation
+ * and it lives in the assistant space.
+ */
+export function delegationFromThread(
+  thread: Thread,
+  donThreadId: string
+): PendingDonDelegation | null {
+  const origin = thread.dispatchOrigin
+  if (!origin) return null
+  if (origin.initiatorThreadId !== donThreadId) return null
+  if (origin.initiatorProjectId !== ASSISTANT_SPACE_ID) return null
+  const assistantId = thread.assistantId ?? origin.assistantId
+  const assistantName = origin.assistantName?.trim()
+  if (!assistantId || !assistantName) return null
+  return {
+    runThreadId: thread.id,
+    donProjectId: origin.initiatorProjectId,
+    donThreadId: origin.initiatorThreadId,
+    author: origin.author ?? { assistantId, name: assistantName },
+    assistantName,
+    request: thread.title,
+    createdAt: thread.createdAt
+  }
 }
 
 /**

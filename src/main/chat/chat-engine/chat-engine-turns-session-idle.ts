@@ -1,4 +1,6 @@
 import { stripAbortedRunErrors } from '../stopped-run-errors'
+import { delegationFromThread } from '../chat-engine-don'
+import { DON_THREAD_ID } from '../../don/don-bootstrap'
 import { Logger } from '../../system/logger'
 import { latestAgentTodo } from '../../../lib/agent-todos'
 import type {
@@ -1172,7 +1174,10 @@ export class ChatEngineTurnsSessionIdle {
       // Don's thread under that assistant's own name, which is what makes Don's
       // conversation read as a group chat instead of a list of statuses.
       const settledDelegation = finishedThread
-        ? this.host.don?.delegations.settle(finishedThread.id)
+        ? (this.host.don?.delegations.settle(finishedThread.id) ??
+          (finishedThread.projectId === ASSISTANT_SPACE_ID
+            ? (delegationFromThread(finishedThread, DON_THREAD_ID) ?? undefined)
+            : undefined))
         : undefined
       if (settledDelegation) {
         void this.host.units['turns-dispatch'].reportDonDelegation(settledDelegation, finalStatus)

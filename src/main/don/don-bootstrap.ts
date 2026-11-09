@@ -76,6 +76,15 @@ export async function ensureDonOrchestrator(deps: {
         await threadManager.updateSettings(ASSISTANT_SPACE_ID, DON_THREAD_ID, settingsFor(settings))
         threadSettingsRepaired = true
       }
+      // An earlier build let the first opening prompt auto-title this thread,
+      // which put the app's instruction text in the sidebar. The orchestrator's
+      // conversation is named for the orchestrator and never titled by a turn.
+      if (existing.title !== DON_THREAD_TITLE || existing.titleSource !== 'manual') {
+        await threadManager.updateThread(ASSISTANT_SPACE_ID, DON_THREAD_ID, {
+          title: DON_THREAD_TITLE,
+          titleSource: 'manual'
+        })
+      }
       const thread = await threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
       return {
         thread: thread ?? existing,
@@ -90,7 +99,9 @@ export async function ensureDonOrchestrator(deps: {
       projectId: ASSISTANT_SPACE_ID,
       providerId: settings?.providerId ?? '',
       title: DON_THREAD_TITLE,
-      titleSource: 'default',
+      // Named by the app, never by a prompt: the orchestrator's conversation is
+      // one fixed place, so a turn must not rename it.
+      titleSource: 'manual',
       workingDirectory: '',
       assistantId: DON_ASSISTANT_ID,
       groupParticipants: [DON_ASSISTANT_ID],
