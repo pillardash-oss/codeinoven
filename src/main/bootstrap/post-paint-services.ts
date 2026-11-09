@@ -1185,8 +1185,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerLocalAiIpc } = await import('../local-ai/local-ai-ipc')
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
-    registerProviderAccountIpc(storage, undefined, (accountId) =>
-      state.chatEngine!.removeHarnessAccount(accountId)
+    registerProviderAccountIpc(
+      storage,
+      undefined,
+      (accountId) => state.chatEngine!.removeHarnessAccount(accountId),
+      // A provider that was just connected (or hidden, switched out or removed)
+      // changed the harness's catalog. It is invalidated here, at the moment the
+      // save lands, so the provider and its models are already in the cache the
+      // next time any model picker opens.
+      () => state.chatEngine?.invalidateProviderCatalogs()
     )
     const { registerAcpAgentIpc } = await import('../providers/acp-agent-ipc')
     registerAcpAgentIpc(storage, {
@@ -1203,7 +1210,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         await state.chatEngine?.refreshAcpHarnesses()
       }
     })
-    registerBaseUrlProviderIpc(storage)
+    // A saved custom provider is part of its harness's catalog immediately, so
+    // the catalog cache is invalidated at that write rather than at the next
+    // model-picker open.
+    registerBaseUrlProviderIpc(storage, undefined, undefined, () =>
+      state.chatEngine?.invalidateProviderCatalogs()
+    )
     // Local servers never touch the provider registry: a custom base-URL
     // provider is the user's to create, and starting or stopping a server here
     // must leave it exactly as it was.

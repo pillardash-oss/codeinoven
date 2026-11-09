@@ -18,11 +18,26 @@ const LOGIN_MODES = new Set(['default', 'subscription', 'console', 'device'])
 export function registerProviderAccountIpc(
   storage: StorageEngine,
   auth = new ProviderAccountOrchestrator(),
-  removeAccount?: (accountId: string) => Promise<boolean>
+  removeAccount?: (accountId: string) => Promise<boolean>,
+  /**
+   * Called whenever a provider becomes available to, hidden from, or removed
+   * from a harness. Connecting, switching or dropping a provider changes which
+   * models the harness offers, so the cached provider catalog is invalidated at
+   * that moment rather than lazily when a model picker is next opened.
+   */
+  onProvidersChanged?: () => void | Promise<void>
 ): void {
   const accounts = new HarnessAccountRegistry(storage)
   const accountLists = new Map<string, Promise<HarnessAccount[]>>()
   const lastAccountSync = new Map<string, number>()
+  /**
+   * Fire the catalog invalidation without holding the caller's response: the
+   * cache is dropped synchronously and the re-discovery that follows runs in the
+   * background, so saving a provider never waits on a harness probe.
+   */
+  const notifyProvidersChanged = (): void => {
+    void Promise.resolve(onProvidersChanged?.()).catch(() => undefined)
+  }
   ipcMain.handle(
     'providerAccounts:list',
     async (_, rawHarnessId?: unknown, rawRefresh?: unknown) => {
@@ -120,12 +135,17 @@ export function registerProviderAccountIpc(
       if (!authenticated) {
         throw new Error('The provider did not report a completed sign-in.')
       }
-      return accounts.finalizePending(
+      const account = await accounts.finalizePending(
         pendingId,
         providerId,
         authenticated.label || providerId,
         rawLabel === undefined ? undefined : text(rawLabel, 'Account label', 80, false, true)
       )
+      // The provider exists the moment its account is saved, whether the user
+      // named it or not, so the catalog is invalidated here instead of on the
+      // next model-picker open.
+      notifyProvidersChanged()
+      return account
     }
   )
   ipcMain.handle('providerAccounts:cancelPending', (_, rawPendingAccountId: unknown) =>
@@ -165,12 +185,17 @@ export function registerProviderAccountIpc(
       account.sourceId,
       accounts.environment(account)
     )
+    notifyProvidersChanged()
   })
-  ipcMain.handle('providerAccounts:remove', (_, rawAccountId: unknown) =>
-    (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(
+  ipcMain.handle('providerAccounts:remove', async (_, rawAccountId: unknown) => {
+    const removed = await (removeAccount ?? ((accountId: string) => accounts.remove(accountId)))(
       validateEntityId(rawAccountId, 'Account ID', 256)
     )
-  )
+    // A removed account can take its provider with it (a harness that only
+    // offered it because of that credential), so the catalog is re-discovered.
+    if (removed) notifyProvidersChanged()
+    return removed
+  })
   async function mergedAuthStatus(
     harnessId: string,
     projectPath?: string
@@ -383,12 +408,17 @@ export function registerProviderAccountIpc(
   )
   ipcMain.handle(
     'providerAccounts:setHidden',
-    (_, rawHarnessId: unknown, rawProviderId: unknown, rawHidden: unknown) =>
-      auth.setProviderHidden(
+    async (_, rawHarnessId: unknown, rawProviderId: unknown, rawHidden: unknown) => {
+      const hidden = await auth.setProviderHidden(
         validateEntityId(rawHarnessId, 'Harness ID', 256),
         validateEntityId(rawProviderId, 'Provider ID', 256),
         boolean(rawHidden, 'Hidden')
       )
+      // Hiding or unhiding a provider changes the harness's catalog, so it is
+      // re-discovered now rather than at the next model-picker open.
+      notifyProvidersChanged()
+      return hidden
+    }
   )
 }
 
