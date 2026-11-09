@@ -30,6 +30,7 @@ import {
 import {
   DON_DELEGATE_TOOL_NAME,
   DON_USER_NAME_TOOL_NAME,
+  GROUP_CHAT_REPLY_TOOL_NAME,
   type DonToolOperation
 } from '../../../lib/don-tools'
 import {
@@ -192,6 +193,8 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.don(state, input, 'delegate')
       case DON_USER_NAME_TOOL_NAME:
         return (state, input) => this.don(state, input, 'user-name')
+      case GROUP_CHAT_REPLY_TOOL_NAME:
+        return (state, input) => this.don(state, input, 'reply-in-chat')
       case APP_CONTROL_CATALOG_TOOL_NAME:
         return (state, input) => this.appControl(state, input, 'catalog')
       case APP_CONTROL_CALL_TOOL_NAME:

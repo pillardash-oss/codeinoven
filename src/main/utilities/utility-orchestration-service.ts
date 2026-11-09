@@ -88,6 +88,12 @@ export interface UtilityTurnRequest {
    * hand its work sideways or rename the person it serves.
    */
   donTurn?: boolean
+  /**
+   * Whether this turn belongs to a conversation started from a group chat, so
+   * the assistant doing the work may say something back into that chat while it
+   * runs. Granted by the run's own dispatch origin, never by the group itself.
+   */
+  groupChatTurn?: boolean
   orchestrationSession?: OrchestrationSessionMode
   /**
    * Whether this turn may delegate real work whether or not the user opened a

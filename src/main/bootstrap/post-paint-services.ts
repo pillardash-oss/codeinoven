@@ -24,7 +24,7 @@ import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
 import { DON_THREAD_ID } from '../don/don-bootstrap'
-import { ASSISTANT_SPACE_ID } from '../../lib/types'
+import { ASSISTANT_SPACE_ID, isGroupThread } from '../../lib/types'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -33,6 +33,7 @@ import { Logger } from '../system/logger'
 import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
   broadcastThreadAuthoredWorkUpdated,
+  broadcastThreadMessagesChanged,
   broadcastThreadUpdate,
   publishThreadMessagesChanged,
   subscribeThreadCorpus,
@@ -625,6 +626,59 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
             ])
             .catch(() => undefined)
         },
+        replyInGroupChat: async (context, text) => {
+          // The run thread is the caller. It belongs to the group either by
+          // being the group itself or by the dispatch that started it, so the
+          // initiator is the chat the message goes back to.
+          const thread = await chatEngine.threadManager.getThread(
+            context.projectId,
+            context.threadId
+          )
+          if (!thread) return { posted: false, error: 'This conversation no longer exists' }
+          const group = thread.groupParticipants?.length
+            ? { projectId: thread.projectId, threadId: thread.id }
+            : thread.dispatchOrigin?.initiatorThreadId
+              ? {
+                  projectId: thread.dispatchOrigin.initiatorProjectId,
+                  threadId: thread.dispatchOrigin.initiatorThreadId
+                }
+              : null
+          if (!group) {
+            return { posted: false, error: 'This conversation was not started from a group chat' }
+          }
+          const groupThread = await chatEngine.threadManager.getThread(
+            group.projectId,
+            group.threadId
+          )
+          if (!groupThread || !isGroupThread(groupThread)) {
+            return { posted: false, error: 'There is no group chat to reply in' }
+          }
+          const assistant = thread.assistantId
+            ? assistantManager.getAssistant(thread.assistantId)
+            : null
+          const author = assistant ? delegationAuthor(assistant) : thread.dispatchOrigin?.author
+          if (!author) return { posted: false, error: 'This conversation has no speaker to name' }
+          const id = `group-chat-reply-${thread.id}-${Date.now()}`
+          const now = Date.now()
+          await chatEngine.threadManager.upsertMessages(group.projectId, group.threadId, [
+            {
+              id,
+              role: 'assistant',
+              origin: 'assistant',
+              visibility: 'conversation',
+              author,
+              parts: [{ type: 'text', id: `${id}-text`, messageID: id, text }],
+              createdAt: now,
+              completedAt: now
+            }
+          ])
+          // The group may be open while this turn runs, and this write does not
+          // pass through the turn lifecycle: push it like any other message.
+          broadcastThreadMessagesChanged(group.projectId, group.threadId)
+          const updated = await chatEngine.threadManager.getThread(group.projectId, group.threadId)
+          if (updated) broadcastThreadUpdate(updated)
+          return { posted: true }
+        },
         readUserName: async () => (await storage.getConfig()).userPreferredName ?? '',
         writeUserName: async (name) => {
           const config = await storage.getConfig()
@@ -633,7 +687,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         }
       })
       const delegations = new DonDelegations()
-      chatEngine.attachDonRuntime({ executor, delegations })
+      chatEngine.attachDonRuntime({
+        executor,
+        delegations,
+        resolveAuthor: (assistantId) => {
+          const assistant = assistantManager.getAssistant(assistantId)
+          return assistant ? delegationAuthor(assistant) : null
+        }
+      })
     }
   }
   state.assistantScheduler.attachChangeListener(() => {

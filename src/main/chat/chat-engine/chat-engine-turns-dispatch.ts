@@ -494,6 +494,11 @@ export class ChatEngineTurnsDispatch {
    * instead of going silent, because a delegation the user cannot see finishing is
    * worse than no delegation.
    */
+  /** The speaker as the app knows it now, when the handoff carries only a name. */
+  private delegationAuthor(delegation: PendingDonDelegation): PendingDonDelegation['author'] {
+    return this.host.don?.resolveAuthor?.(delegation.author.assistantId) ?? delegation.author
+  }
+
   async reportDonDelegation(delegation: PendingDonDelegation, status: string): Promise<void> {
     if (!delegation.donThreadId) return
     try {
@@ -527,7 +532,7 @@ export class ChatEngineTurnsDispatch {
           role: 'assistant',
           origin: 'assistant',
           visibility: 'conversation',
-          author: delegation.author,
+          author: this.delegationAuthor(delegation),
           parts: [
             {
               type: 'text',
@@ -536,7 +541,11 @@ export class ChatEngineTurnsDispatch {
               text
             }
           ],
-          createdAt: Date.now()
+          createdAt: Date.now(),
+          // An app-written conversation message is complete the moment it is
+          // written. Without this the transcript treats it as still streaming
+          // and, with no `<assistant_result>` boundary, renders it blank.
+          completedAt: Date.now()
         }
       ])
       // The report lands while Don's conversation may be open, and this path
@@ -575,7 +584,7 @@ export class ChatEngineTurnsDispatch {
           role: 'assistant',
           origin: 'assistant',
           visibility: 'conversation',
-          author: delegation.author,
+          author: this.delegationAuthor(delegation),
           parts: [
             {
               type: 'text',
@@ -584,7 +593,8 @@ export class ChatEngineTurnsDispatch {
               text: `${line}\n\n@thread:${delegation.runThreadId}`
             }
           ],
-          createdAt: Date.now()
+          createdAt: Date.now(),
+          completedAt: Date.now()
         }
       ])
       broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, delegation.donThreadId)

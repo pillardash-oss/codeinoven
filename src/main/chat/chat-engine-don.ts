@@ -78,6 +78,13 @@ export class DonDelegations {
 export interface DonRuntime {
   executor: DonExecutor
   delegations: DonDelegations
+  /**
+   * The current speaker snapshot for one assistant, when the app still holds
+   * that assistant. A report rebuilt from a thread row can carry only a name; the
+   * renderer needs the mark and colour to draw the group message as that
+   * assistant, so the report asks here instead of shipping a bare name.
+   */
+  resolveAuthor?: (assistantId: string) => MessageAuthor | null
 }
 
 /** Everything the executor needs from the chat engine, narrow enough to test. */
@@ -94,6 +101,14 @@ export interface DonDeps {
   ) => Promise<{ thread: Thread } | { error: string }>
   /** Announce that a delegation started, so Don's thread shows it working. */
   announceDelegation: (delegation: PendingDonDelegation) => Promise<void>
+  /**
+   * Say one thing in the group chat this run was started from, under the run
+   * assistant's own name and mark, while the work is still going.
+   */
+  replyInGroupChat: (
+    context: { projectId: string; threadId: string },
+    text: string
+  ) => Promise<{ posted: boolean; error?: string }>
   readUserName: () => Promise<string>
   writeUserName: (name: string) => Promise<string>
 }
@@ -177,7 +192,15 @@ export function delegationSettings(settings: Thread['settings'], assistant: Assi
  * only validates the id it is given.
  */
 export function createDonExecutor(deps: DonDeps): DonExecutor {
-  return async (operation, input) => {
+  return async (operation, input, context) => {
+    if (operation === 'reply-in-chat') {
+      const text = typeof input['text'] === 'string' ? input['text'].trim() : ''
+      if (text.length === 0) return { posted: false, error: 'There is nothing to say' }
+      return deps.replyInGroupChat(
+        { projectId: context.projectId, threadId: context.threadId },
+        text.slice(0, 4000)
+      )
+    }
     if (operation === 'user-name') {
       const requested = normalizeUserName(input['name'])
       if (requested.length === 0) {

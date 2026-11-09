@@ -27,7 +27,7 @@ import {
   ORCHESTRATION_STATUS_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../../lib/orchestration-tools'
-import { isDonTool } from '../../../lib/don-tools'
+import { GROUP_CHAT_REPLY_TOOL_NAME, isDonTool } from '../../../lib/don-tools'
 import {
   APP_CONTROL_CALL_TOOL_NAME,
   APP_CONTROL_CATALOG_TOOL_NAME,
@@ -180,8 +180,14 @@ export class UtilityOrchestrationServiceTurnRuntime {
       }
       // Don's own tools are granted only on Don's thread. Delegating work and
       // recording what the user is called are the orchestrator's job, so no other
-      // assistant, chat or worker is ever offered them.
-      if (isDonTool(name)) return request.donTurn === true
+      // assistant, chat or worker is ever offered them. The one exception is
+      // speaking into the group chat a delegated run was started from: that tool
+      // belongs to the assistant doing the work, which is why it is granted by
+      // the turn's group membership instead.
+      if (isDonTool(name)) {
+        if (name === GROUP_CHAT_REPLY_TOOL_NAME) return request.groupChatTurn === true
+        return request.donTurn === true
+      }
       // The engineering artifact tools are granted by the turn's own flag: they
       // create a real Brainstorm, PRD, spec or Assignment for the thread, so a
       // chat, an assistant task and a worker thread are offered none of them.

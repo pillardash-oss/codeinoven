@@ -20,9 +20,18 @@ import type { GatewayToolDefinition } from './gateway-tools'
 export const DON_DELEGATE_TOOL_NAME = 'cio_delegate'
 /** Read or store what the user asked Don to call them. */
 export const DON_USER_NAME_TOOL_NAME = 'cio_user_name'
+/**
+ * Say something in the group chat this conversation is part of, while the work
+ * is still running, under this assistant's own name and mark.
+ */
+export const GROUP_CHAT_REPLY_TOOL_NAME = 'cio_reply_in_chat'
 
 /** Every Don tool name, for the gateway gate and the extension. */
-export const DON_TOOL_NAMES: readonly string[] = [DON_DELEGATE_TOOL_NAME, DON_USER_NAME_TOOL_NAME]
+export const DON_TOOL_NAMES: readonly string[] = [
+  DON_DELEGATE_TOOL_NAME,
+  DON_USER_NAME_TOOL_NAME,
+  GROUP_CHAT_REPLY_TOOL_NAME
+]
 
 /** Whether a gateway tool name belongs to Don's own tools. */
 export function isDonTool(name: string): boolean {
@@ -30,12 +39,13 @@ export function isDonTool(name: string): boolean {
 }
 
 /** The single operation a Don tool call names. */
-export type DonToolOperation = 'delegate' | 'user-name'
+export type DonToolOperation = 'delegate' | 'user-name' | 'reply-in-chat'
 
 /** Read the operation a tool name stands for. */
 export function donToolOperation(name: string): DonToolOperation | null {
   if (name === DON_DELEGATE_TOOL_NAME) return 'delegate'
   if (name === DON_USER_NAME_TOOL_NAME) return 'user-name'
+  if (name === GROUP_CHAT_REPLY_TOOL_NAME) return 'reply-in-chat'
   return null
 }
 
@@ -67,6 +77,19 @@ const DELEGATE_INPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false
 }
 
+const GROUP_CHAT_REPLY_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    text: {
+      type: 'string',
+      description:
+        'What to say in the group chat, in your own words, one short message. It is shown to the person who asked for the work.'
+    }
+  },
+  required: ['text'],
+  additionalProperties: false
+}
+
 const USER_NAME_INPUT_SCHEMA: Record<string, unknown> = {
   type: 'object',
   properties: {
@@ -88,6 +111,16 @@ export const DON_TOOLS: GatewayToolDefinition[] = [
     outputSchema: DON_RESULT_SCHEMA,
     route: '/don-delegate',
     sentWhen: "A request on Don's thread that needs real work rather than a direct answer"
+  },
+  {
+    name: GROUP_CHAT_REPLY_TOOL_NAME,
+    description:
+      'Say something in the group chat this conversation was started from, while your work is still running. Use it as soon as you have your first useful answer or a short progress line, so the person who asked is not left waiting in silence, and again when a step changes what you found. Your message appears under your own name and mark, exactly like a reply in a chat. This is not the final answer: when the work ends, your result is delivered on its own, so do not use this tool to restate it. Never use it outside a group chat.',
+    inputSchema: GROUP_CHAT_REPLY_INPUT_SCHEMA,
+    outputSchema: DON_RESULT_SCHEMA,
+    route: '/group-chat-reply',
+    sentWhen:
+      'A conversation started from a group chat, when the assistant has something useful to say before finishing'
   },
   {
     name: DON_USER_NAME_TOOL_NAME,

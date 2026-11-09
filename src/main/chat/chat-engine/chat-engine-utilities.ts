@@ -260,6 +260,12 @@ export class ChatEngineUtilities {
      */
     donTurn = false,
     /**
+     * Whether this turn belongs to a conversation a group chat started, so the
+     * assistant doing that work may say something back into the group while it
+     * is still running. Offered to that assistant, never to the group's host.
+     */
+    groupChatTurn = false,
+    /**
      * Whether this turn may create the thread's engineering artifacts (Brainstorm,
      * PRD, specification, Assignment) through the app-owned artifact tools. Set
      * for a real project thread's turn, and left off for a chat, an assistant task
@@ -361,6 +367,7 @@ export class ChatEngineUtilities {
           orchestrationSession,
           delegationReach,
           donTurn,
+          groupChatTurn,
           artifactTools,
           ...(brainstormInterview
             ? {
