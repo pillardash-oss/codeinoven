@@ -239,6 +239,18 @@ export function triggerVoiceHost(targetId: string): boolean {
   return false
 }
 
+/**
+ * Whether a take is already underway: starting, recording, or stopping.
+ *
+ * A press can never start a second take while one is running, so the shortcut
+ * reads this to mean the gesture can only be "stop", and to skip the wait that
+ * exists purely to tell a new take apart from the longer Don gesture.
+ */
+export function isVoiceTakeActive(): boolean {
+  const state = speechController.state.state
+  return state !== 'idle' && state !== 'failed'
+}
+
 /** Runs the mic action of whichever input is on view; toggles off the current
  *  recording when one is already running. */
 export function triggerPreferredVoiceHost(): void {

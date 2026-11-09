@@ -8,10 +8,28 @@ import {
   normalizeVoiceRecordingShortcut,
   type VoiceRecordingShortcut
 } from '../../../lib/speech/types'
-import { armPreferredVoiceHost, triggerPreferredVoiceHost } from './voice-trigger-registry'
+import {
+  armPreferredVoiceHost,
+  isVoiceTakeActive,
+  triggerPreferredVoiceHost
+} from './voice-trigger-registry'
 
-/** How quickly the double-tap variant must be repeated to fire. */
+/** How quickly the double-tap variant must be repeated to fire. This is the
+ *  forgiveness of the pair itself, never a wait the user pays: the take is
+ *  released as soon as it is clear the gesture is over. */
 const DOUBLE_TAP_WINDOW_MS = 500
+
+/**
+ * How long a completed pair waits for a third press before the take starts.
+ *
+ * The dictation pair and the Don Listening gesture share their first two presses,
+ * so the take cannot start on the second one: a third press inside this window
+ * makes it Don instead. The window is therefore felt as lag on every ordinary
+ * double tap, which is why it is deliberately short. A triple press is a fast
+ * roll of the fingers, not a considered pause, and a take that starts a fifth of a
+ * second late is worse than a slow third press falling back to plain dictation.
+ */
+const DON_LISTENING_GRACE_MS = 150
 
 /** Taps of the dictation modifier that raise the Don Listening panel instead of
  *  starting another recording: the pair that starts/stops dictation, plus one
@@ -144,9 +162,16 @@ const handleKeydown = (event: KeyboardEvent): void => {
   if (binding.doubleTap && MODIFIER_KEY_CODES.has(binding.code)) {
     // Keep a lone modifier press from moving focus (menu bar on Windows/Linux).
     event.preventDefault()
+    // A take is already running, so this gesture can only stop it: no second
+    // recording can start while one is live, which means there is no longer
+    // gesture behind it and Don Listening is never reachable from here. The
+    // detector is dropped rather than fed, so a third press cannot open the panel
+    // over a running take.
+    const takeActive = isVoiceTakeActive()
+    if (takeActive) tapSequence.reset()
     // The detector answers the third press of the same gesture. It is fed every
     // press the pair logic sees, so the two count exactly the same taps.
-    const opensDonListening = tapSequence.handleKeydown(event, binding)
+    const opensDonListening = takeActive ? false : tapSequence.handleKeydown(event, binding)
     const now = performance.now()
     if (opensDonListening) {
       // The third press means Don, not dictation. Nothing has been armed by the
@@ -159,12 +184,17 @@ const handleKeydown = (event: KeyboardEvent): void => {
       return
     }
     if (!tapSequenceDirty && now - lastTapAt <= DOUBLE_TAP_WINDOW_MS) {
-      // The pair is complete, but whether it is dictation or the first two taps
-      // of the triple press is not known until the window closes. Recording is
-      // only asked for then, so the first press and the second never arm
-      // anything, and a third press inside the window cancels it.
       lastTapAt = 0
       tapSequenceDirty = false
+      if (takeActive) {
+        // The pair is a stop, and it is unambiguous, so it lands now instead of
+        // waiting out a window that only exists to tell a new take from Don.
+        cancelPendingDictation()
+        triggerPreferredVoiceHost()
+        return
+      }
+      // Idle, and the pair may still become the Don gesture: the take is asked
+      // for once the short grace, not the whole tap window, has passed.
       scheduleDictation()
       return
     }
@@ -183,13 +213,13 @@ const handleKeydown = (event: KeyboardEvent): void => {
 }
 
 /**
- * Ask for dictation once the tap window closes with no third press.
+ * Ask for dictation once the grace passes with no third press.
  *
  * The dictation gesture and the Don Listening gesture share their first two
- * presses, so the pair cannot act on the second tap: doing so armed and started
- * a recording before the user had finished asking Don to listen. The take is
- * therefore deferred by exactly one window, which is the same wait the pair
- * already had to satisfy.
+ * presses, so the pair cannot act on the second tap: doing so started a recording
+ * before the user had finished asking Don to listen. The take is therefore held
+ * for {@link DON_LISTENING_GRACE_MS} only, which is short enough that an ordinary
+ * double tap still feels immediate.
  */
 function scheduleDictation(): void {
   cancelPendingDictation()
@@ -197,8 +227,12 @@ function scheduleDictation(): void {
     pendingDictation = null
     lastTapAt = 0
     tapSequenceDirty = false
+    // The grace is spent, so the pair is dictation and the sequence that would
+    // have made it Don is over: a later press starts a new gesture instead of
+    // completing one the take already answered.
+    tapSequence.reset()
     triggerPreferredVoiceHost()
-  }, DOUBLE_TAP_WINDOW_MS)
+  }, DON_LISTENING_GRACE_MS)
 }
 
 /** Drop a dictation that a third press, a stray key, or a pointer press cancelled. */
