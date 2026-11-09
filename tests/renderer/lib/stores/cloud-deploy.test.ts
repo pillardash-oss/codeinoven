@@ -170,6 +170,38 @@ describe('CloudDeployState store', () => {
     expect(invoke).toHaveBeenCalledTimes(1)
   })
 
+  it('keeps the cached snapshot object when a status write changes nothing', async () => {
+    invoke.mockResolvedValue(container)
+    const first = await cloudDeployState.ensureContainerStatus(
+      'project-1',
+      providerKind,
+      container.id
+    )
+    const cachedBefore = cloudDeployState.containerStatuses['project-1/coolify/app-1']?.value
+
+    // The panel hands the read result straight back. Publishing a fresh object
+    // here would re-render every view derived from it, and a view that writes
+    // statuses back (the deployment detail) would retrigger itself each time.
+    cloudDeployState.setContainerStatus('project-1', { ...first! })
+
+    expect(cloudDeployState.containerStatuses['project-1/coolify/app-1']?.value).toBe(cachedBefore)
+  })
+
+  it('publishes a status write that does change the snapshot', async () => {
+    invoke.mockResolvedValue(container)
+    const first = await cloudDeployState.ensureContainerStatus(
+      'project-1',
+      providerKind,
+      container.id
+    )
+
+    cloudDeployState.setContainerStatus('project-1', { ...first!, status: 'failed' })
+
+    expect(cloudDeployState.containerStatuses['project-1/coolify/app-1']?.value.status).toBe(
+      'failed'
+    )
+  })
+
   it('force bypasses the TTL and failure cooldown', async () => {
     invoke.mockRejectedValue(new Error('boom'))
     await expect(cloudDeployState.ensureOverview('project-1', providerKind)).rejects.toThrow('boom')

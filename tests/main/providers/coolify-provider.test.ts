@@ -326,6 +326,25 @@ describe('CoolifyProvider', () => {
       expect(container?.logSources).toBeUndefined()
     })
 
+    it('skips parsing a compose file too large to read on the main process', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse({
+            uuid: 'app-1',
+            name: 'huge',
+            status: 'running',
+            build_pack: 'dockercompose',
+            docker_compose: `services:\n  web:\n    image: ${'x'.repeat(600_000)}`
+          })
+        )
+        .mockResolvedValueOnce(jsonResponse([]))
+
+      const container = await makeProvider().getStatus('app-1')
+
+      expect(container).not.toBeNull()
+      expect(container?.logSources).toBeUndefined()
+    })
+
     it('returns null when the application is missing (404 fallback)', async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'not found' }, 404))
 

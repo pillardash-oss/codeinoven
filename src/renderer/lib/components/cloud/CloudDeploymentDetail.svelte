@@ -186,6 +186,17 @@
     return () => window.removeEventListener('keydown', handleKeydown)
   })
 
+  /**
+   * The container's identity as primitives. The panel hands down a fresh
+   * container object on every status refresh, and a `$derived` only notifies its
+   * readers when its own value changes, so the mount effect below re-runs when
+   * the container actually changes and never when its object was merely
+   * replaced. Without this the effect re-ran on every write it caused itself.
+   */
+  const containerProviderKind = $derived(container.providerKind)
+  const containerId = $derived(container.id)
+  const containerAccountId = $derived(container.accountId)
+
   const cachedStatus = $derived(
     cloudDeployState.containerStatuses[
       CloudDeployState.containerKey(
@@ -211,10 +222,10 @@
     try {
       const list = await cloudDeployState.ensureDeployments(
         projectId,
-        container.providerKind,
-        container.id,
+        containerProviderKind,
+        containerId,
         force,
-        container.accountId
+        containerAccountId
       )
       deployments = list ?? []
       if (deployments.length === 0) {
@@ -223,10 +234,10 @@
       }
       const fresh = await cloudDeployState.ensureContainerStatus(
         projectId,
-        container.providerKind,
-        container.id,
+        containerProviderKind,
+        containerId,
         force,
-        container.accountId
+        containerAccountId
       )
       if (fresh) onUpdated(fresh)
     } catch (reason) {

@@ -515,6 +515,11 @@ export class CloudDeployState {
    * Push an updated snapshot for a configured container into the cache so the
    * panel reflects a status change without waiting for the next poll. Clears any
    * failure cooldown for the key.
+   *
+   * A poll that returns what the panel already shows is a no-op: the cache keeps
+   * the existing snapshot object, so nothing derived from it re-renders. That is
+   * what keeps a view that writes statuses back (the deployment detail) from
+   * retriggering itself on every write.
    */
   setContainerStatus(projectId: string, container: CloudDeploymentContainer): void {
     const key = CloudDeployState.containerKey(
@@ -523,6 +528,11 @@ export class CloudDeployState {
       container.id,
       container.accountId
     )
+    const cached = this.containerStatuses[key]
+    if (cached && isSameContainerSnapshot(cached.value, container)) {
+      delete this.failures[key]
+      return
+    }
     this.containerStatuses = {
       ...this.containerStatuses,
       [key]: { value: container, fetchedAt: Date.now() }
@@ -581,6 +591,32 @@ export class CloudDeployState {
     // with the panel open renders instantly instead of re-fetching.
     this.error = null
   }
+}
+
+/**
+ * Whether two snapshots of one container show the same thing to the user.
+ *
+ * Used to skip publishing a poll result that changes nothing: the cached object
+ * keeps its identity, so no view derived from it re-renders and no view that
+ * writes statuses back can retrigger itself through a fresh object.
+ */
+function isSameContainerSnapshot(
+  previous: CloudDeploymentContainer,
+  next: CloudDeploymentContainer
+): boolean {
+  return (
+    previous.status === next.status &&
+    previous.runtimeStatus === next.runtimeStatus &&
+    previous.label === next.label &&
+    previous.url === next.url &&
+    previous.urls?.join('\n') === next.urls?.join('\n') &&
+    previous.project === next.project &&
+    previous.createdAt === next.createdAt &&
+    previous.updatedAt === next.updatedAt &&
+    previous.log === next.log &&
+    previous.logSources?.map((source) => source.id).join('\n') ===
+      next.logSources?.map((source) => source.id).join('\n')
+  )
 }
 
 export const cloudDeployState = new CloudDeployState()

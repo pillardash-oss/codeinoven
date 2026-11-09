@@ -32,6 +32,9 @@ const DEFAULT_LOG_LINES = 200
 /** Coolify build pack that runs a whole docker-compose file as one resource. */
 const DOCKER_COMPOSE_BUILD_PACK = 'dockercompose'
 
+/** Largest compose file whose service list is parsed on the main process. */
+const MAX_COMPOSE_PARSE_CHARACTERS = 512_000
+
 /** How many recent deployments the detail view surfaces at once. */
 const CloudDeploymentDeploymentLimit = 10
 
@@ -181,6 +184,10 @@ export class CoolifyProvider implements DeploymentProvider {
     const composeFile =
       this.readString(record, 'docker_compose') ?? this.readString(record, 'docker_compose_raw')
     if (!composeFile) return []
+    // Parsing runs on the main process, so an unbounded file is refused rather
+    // than turned into a stall: a compose file this large is not one whose
+    // service list this panel needs, and the container keeps its deployment log.
+    if (composeFile.length > MAX_COMPOSE_PARSE_CHARACTERS) return []
     if (buildPack !== null && buildPack !== DOCKER_COMPOSE_BUILD_PACK) return []
     let services: unknown
     try {
