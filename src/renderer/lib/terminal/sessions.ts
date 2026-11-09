@@ -6,6 +6,7 @@ import { setTerminalFocused } from './focus'
 import { patchSelectionCopy } from './selection-copy'
 import { attachTerminalInputCompat } from './input-compat'
 import { attachMouseTracking } from './mouse-tracking'
+import { createOutputScrollHold } from './output-scroll-hold'
 import { registerTerminalHost } from './host-registry'
 import { FileLinkProvider } from './path-links'
 import { loadGhosttyWeb } from './runtime'
@@ -430,6 +431,11 @@ class TerminalSessionManager {
     const cursorShape = new CursorShapeDecoder()
     subs.push(cleanupFocus, observeTerminalResize(host, session))
 
+    // Output must never yank the reader's viewport: see the module's note on
+    // ghostty-web snapping to the bottom on every write.
+    const outputScrollHold = createOutputScrollHold(term, host)
+    subs.push(() => outputScrollHold.dispose())
+
     // Let the shared context menu resolve this session from its host element:
     // it needs the live Terminal (selection, select-all) and the PTY channel
     // (paste) but has no other way to reach the session object.
@@ -449,7 +455,7 @@ class TerminalSessionManager {
     subs.push(
       subscribe(`pty:data:${id}`, (data) => {
         const text = data as string
-        term.write(text)
+        outputScrollHold.write(text)
         const shape = cursorShape.push(text)
         if (shape && term.renderer) {
           term.renderer.setCursorStyle(shape.style)
