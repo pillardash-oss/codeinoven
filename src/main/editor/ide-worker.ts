@@ -620,6 +620,15 @@ function overlapsRange(value: unknown, range: IdeRange): boolean {
   if (!diagnostic) return false
   return range.start.line <= diagnostic.end.line && range.end.line >= diagnostic.start.line
 }
+/** The word characters immediately before the caret, as the reader typed them. */
+function wordPrefixAt(text: string, line: number, character: number): string {
+  const range = wordRangeAt(text, line, character)
+  const target = text.split('\n')[range.start.line] ?? ''
+  return target.slice(
+    range.start.character,
+    Math.max(range.start.character, Math.min(character, target.length))
+  )
+}
 /**
  * Every completion the file's servers offer at the caret.
  *
@@ -630,7 +639,8 @@ function overlapsRange(value: unknown, range: IdeRange): boolean {
 async function completionsFor(
   entries: { session: Session; selection: Selection }[],
   uri: string,
-  request: IdeRequest
+  request: IdeRequest,
+  text: string
 ): Promise<IdeResponse> {
   const providers = entries.filter((entry) =>
     Boolean(entry.session.capabilities.completionProvider)
@@ -678,7 +688,19 @@ async function completionsFor(
     results.every((r) => r.status === 'rejected')
   )
     throw rejection instanceof Error ? rejection : new Error(String(rejection))
-  return { completions: completions.slice(0, 500), isIncomplete }
+  // Keep the list small enough to cross the IPC boundary on every keystroke.
+  // The typed prefix is filtered here, where the buffer is, so the item the
+  // reader is spelling survives the cap instead of being dropped from page 40
+  // of an alphabetical list. Nothing matching keeps the whole list so
+  // CodeMirror's fuzzy matching still has something to show.
+  const prefix = wordPrefixAt(text, request.line ?? 0, request.character ?? 0).toLowerCase()
+  const matching = prefix
+    ? completions.filter((item) => (item.filterText ?? item.label).toLowerCase().startsWith(prefix))
+    : []
+  return {
+    completions: (matching.length ? matching : completions).slice(0, 250),
+    isIncomplete
+  }
 }
 /** Resolve one completion, which is where tsserver attaches its auto-import. */
 async function resolveCompletion(
@@ -1159,6 +1181,19 @@ async function handle(
     throw new Error(
       'No enabled language server for this file type. Configure one in Settings > IDE Mode.'
     )
+  // Inventory the servers this file needs before starting any of them. When
+  // every one is missing, the answer is an installable state rather than an
+  // error: the editor then knows what to install and can retry by itself, where
+  // a thrown "not installed" used to leave the file silently without
+  // intelligence and without the list that would make it installable.
+  const requestedServers = selections.map((selection) => selection.server)
+  const opening = request.action === 'sync' || request.action === 'capabilities'
+  // Only a document open pays this walk. Hover, completion and code actions
+  // run on every keystroke or mouse move, and the executable does not change
+  // between them, so the disk lookup stays on the one request that needs it.
+  const inventory = opening ? await ideInstallations(env, requestedServers, false) : undefined
+  if (inventory?.length && inventory.every((item) => item.source === 'missing'))
+    return { capabilities: capabilitiesOf([]), servers: [], installations: inventory }
   const uri = pathToFileURL(path).href
   const text = request.text ?? (await readFile(path, 'utf8'))
   if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('File is too large for IDE Mode')
@@ -1215,14 +1250,10 @@ async function handle(
     return {
       capabilities,
       servers: connected,
-      installations: await ideInstallations(
-        env,
-        selections.map((selection) => selection.server),
-        false
-      )
+      installations: inventory ?? (await ideInstallations(env, requestedServers, false))
     }
   if (request.action === 'format') return formatDocument(entries, uri, text)
-  if (request.action === 'completion') return completionsFor(entries, uri, request)
+  if (request.action === 'completion') return completionsFor(entries, uri, request, text)
   if (request.action === 'resolveCompletion') return resolveCompletion(entries, request)
   if (request.action === 'codeActions') return codeActionsFor(entries, uri, request, text)
   if (request.action === 'applyCodeAction')

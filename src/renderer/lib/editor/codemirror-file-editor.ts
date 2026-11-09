@@ -553,7 +553,11 @@ export async function createFileEditor(
     const items = await options.getIdeCompletions({
       line: line.number - 1,
       character: context.pos - line.from,
-      triggerKind: context.explicit ? 1 : 2
+      // LSP has no "the reader typed a letter" trigger kind. Normal typing is a
+      // manual invocation (1); 2 is reserved for a trigger character such as
+      // `.`, and svelteserver answers 2 with an empty list, which is why typing
+      // used to show no dropdown at all.
+      triggerKind: 1
     })
     if (!items.length) return null
     const choices: Completion[] = items.map((item) => ({

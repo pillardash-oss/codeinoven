@@ -30,6 +30,7 @@
   } from '$shared/editor-ide'
   import type { IdeToken, IdeMenuAction } from '$lib/editor/ide-context'
   import { toast } from 'svelte-sonner'
+  import { SvelteSet } from 'svelte/reactivity'
 
   interface Props {
     projectId: string
@@ -235,6 +236,7 @@
       clearTimeout(hoverLeaveTimer)
       capabilities = undefined
       hover = null
+      installingLabel = ''
       closeModal(true)
       void invoke(
         'projectFiles:ide',
@@ -274,6 +276,7 @@
             capabilities = result.capabilities
             failedRetry = -1
             connecting = false
+            void installMissingServers(result.installations ?? [])
           }
         })
         .catch((reason: unknown) => {
@@ -311,6 +314,61 @@
     void invoke('projectFiles:ide', projectId, { owner, action: 'cancel', path: '' }).catch(
       () => undefined
     )
+  }
+
+  let installingLabel = $state('')
+  /** Servers this editor already asked to install, so a failing download is not
+   *  retried on every sync. The main process dedupes concurrent installs too. */
+  const attemptedInstalls = new SvelteSet<string>()
+  /**
+   * Install the server this file needs when it is missing.
+   *
+   * Enabling a server definition does not download anything, so a file whose
+   * server was never installed used to open to silence: no suggestions, no
+   * imports, and no hint that anything was absent. The managed install is the
+   * same one Settings > IDE Mode runs, and the sync after it picks the new
+   * executable up.
+   */
+  async function installMissingServers(items: IdeInstallation[]): Promise<void> {
+    const missing = items.filter(
+      (item) =>
+        item.source === 'missing' &&
+        Boolean(item.packageName) &&
+        !attemptedInstalls.has(item.serverId)
+    )
+    if (!missing.length) return
+    for (const item of missing) attemptedInstalls.add(item.serverId)
+    for (const item of missing) {
+      installingLabel = labelForPackage(item.packageName)
+      try {
+        await invoke(
+          'projectFiles:ide',
+          projectId,
+          { owner, action: 'install', path: '', serverId: item.serverId },
+          scopeBucketId,
+          threadId
+        )
+      } catch (reason) {
+        installingLabel = ''
+        toast.error(
+          ipcErrorMessage(reason, `Could not install ${labelForPackage(item.packageName)}`)
+        )
+        serverError = ipcErrorMessage(reason, 'Language server installation failed')
+        return
+      }
+    }
+    installingLabel = ''
+    if (!alive) return
+    retryVersion++
+  }
+  function labelForPackage(spec: string | undefined): string {
+    if (!spec) return 'language server'
+    const separator = spec.lastIndexOf('@')
+    return separator > 0 ? spec.slice(0, separator) : spec
+  }
+  function installServer(item: IdeInstallation): void {
+    attemptedInstalls.delete(item.serverId)
+    void installMissingServers([item])
   }
 
   function closeModal(preserve = false): void {
@@ -730,7 +788,14 @@
     aria-live="polite"
   >
     <div class="flex min-w-0 items-center gap-1 whitespace-nowrap">
-      {#if connecting}<CioSpinner size={13} class="shrink-0 animate-spin" aria-hidden="true" />{/if}
+      {#if installingLabel}
+        <CioSpinner size={13} class="shrink-0 animate-spin" aria-hidden="true" />
+        <span class="min-w-0 truncate text-muted">Installing {installingLabel}</span>
+      {:else if connecting}<CioSpinner
+          size={13}
+          class="shrink-0 animate-spin"
+          aria-hidden="true"
+        />{/if}
       {#if progressEntries.length}
         <span class="shrink-0 font-mono text-muted"
           >{progressEntries[0].percentage !== undefined
@@ -885,11 +950,41 @@
               class="max-h-48 overflow-auto whitespace-pre-wrap break-words border-t border-danger/30 bg-app px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-muted">{serverError}</pre>
           </details>
         </section>
-      {:else if !connectedServers?.length}<CardNotice
-          >{connecting
-            ? 'Starting language server...'
-            : 'No language server is connected. Configure a server in IDE Mode settings.'}</CardNotice
-        >{/if}
+      {:else if !connectedServers?.length}
+        <CardNotice>
+          {#if installingLabel}
+            Installing {installingLabel}...
+          {:else if connecting}
+            Starting language server...
+          {:else}
+            No language server is connected. Configure a server in IDE Mode settings.
+          {/if}
+        </CardNotice>
+      {/if}
+      {#each installations.filter((item) => item.source === 'missing') as item (item.serverId)}
+        <section class="space-y-2 border border-border bg-elevated p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-semibold">{labelForPackage(item.packageName)}</span>
+            <SettingsStatusBadge
+              label="Not installed"
+              classes="border-warning/30 bg-warning/10 text-warning"
+              ><CioCircle size={11} /></SettingsStatusBadge
+            >
+          </div>
+          {#if item.packageName}
+            <button
+              type="button"
+              class="border border-border bg-surface px-2 py-1 text-xs text-foreground hover:bg-overlay disabled:opacity-50"
+              disabled={Boolean(installingLabel)}
+              onclick={() => installServer(item)}>Install</button
+            >
+          {:else}
+            <p class="leading-relaxed text-muted">
+              This server is a custom executable. Open LSP settings to set its path.
+            </p>
+          {/if}
+        </section>
+      {/each}
       {#each connectedServers ?? [] as server (server.id)}
         {@const installation = installations.find((item) => item.serverId === server.id)}
         {@const reports = progressEntries.filter((entry) => entry.serverId === server.id)}
