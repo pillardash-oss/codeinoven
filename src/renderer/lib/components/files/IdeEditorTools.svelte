@@ -14,13 +14,23 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import DeferredMarkdownView from '$lib/components/markdown/DeferredMarkdownView.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
+  import Switch from '$lib/components/ui/Switch.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import type { AppPanelPortal } from '$lib/app-panel-portal'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import type { IdeAction, IdeLocation, IdeProgress, IdeResponse } from '$shared/editor-ide'
+  import type {
+    IdeAction,
+    IdeCodeAction,
+    IdeCompletionItem,
+    IdeLocation,
+    IdeProgress,
+    IdeResponse
+  } from '$shared/editor-ide'
   import type { IdeToken, IdeMenuAction } from '$lib/editor/ide-context'
+  import { toast } from 'svelte-sonner'
+  import { SvelteSet } from 'svelte/reactivity'
 
   interface Props {
     projectId: string
@@ -31,6 +41,9 @@
     enabled?: boolean
     projectName?: string
     statusPortal?: AppPanelPortal
+    /** Write a whole-document text the language server produced, such as an
+     *  applied import or quick fix. The editor owns its own buffer. */
+    onReplaceDocument?: (text: string) => void
   }
   let {
     projectId,
@@ -40,7 +53,8 @@
     value,
     enabled = false,
     projectName = '',
-    statusPortal
+    statusPortal,
+    onReplaceDocument
   }: Props = $props()
   let resolvedProjectName = $state('')
   let connectedServers = $state<IdeResponse['servers']>([])
@@ -67,6 +81,15 @@
   let retryVersion = $state(0)
   let locationTitle = $state('Code locations')
   let truncated = $state(false)
+  /**
+   * Whether the project text search matches case.
+   *
+   * Off by default: a reader searching a project is looking for the text, not
+   * for its capitalisation, so an exact-case scan is the deliberate choice they
+   * turn on in the modal's footer. It outlives one search, because a reader who
+   * wants exact case wants it for the next query too.
+   */
+  let caseSensitive = $state(false)
   let hover = $state<{ text: string; x: number; y: number } | null>(null)
   /**
    * What the language servers themselves report doing, keyed by server and work
@@ -97,13 +120,25 @@
     'definition',
     'references',
     'hover',
-    'format'
+    'format',
+    'completion',
+    // Resolve reads the buffer too: the server's project copy must match what
+    // the reader sees, or the import edit would be computed against the saved
+    // file instead of the line being typed on.
+    'resolveCompletion',
+    'codeActions',
+    'applyCodeAction'
   ])
 
   /** The largest body the IDE channel accepts; the main process refuses more. */
   const MAX_DOCUMENT_BYTES = 2 * 1024 * 1024
 
-  async function request(action: IdeAction, token?: IdeToken, text?: string): Promise<IdeResponse> {
+  async function request(
+    action: IdeAction,
+    token?: IdeToken,
+    text?: string,
+    extra?: { triggerKind?: number; triggerCharacter?: string; payload?: unknown }
+  ): Promise<IdeResponse> {
     const body = text ?? (DOCUMENT_ACTIONS.has(action) ? value : undefined)
     return invoke(
       'projectFiles:ide',
@@ -118,7 +153,11 @@
         text: body !== undefined && body.length > MAX_DOCUMENT_BYTES ? undefined : body,
         line: token?.line,
         character: token?.character,
-        query
+        query,
+        caseSensitive: action === 'grep' ? caseSensitive : undefined,
+        triggerKind: extra?.triggerKind,
+        triggerCharacter: extra?.triggerCharacter,
+        payload: extra?.payload
       },
       scopeBucketId,
       threadId
@@ -197,6 +236,7 @@
       clearTimeout(hoverLeaveTimer)
       capabilities = undefined
       hover = null
+      installingLabel = ''
       closeModal(true)
       void invoke(
         'projectFiles:ide',
@@ -236,6 +276,7 @@
             capabilities = result.capabilities
             failedRetry = -1
             connecting = false
+            void installMissingServers(result.installations ?? [])
           }
         })
         .catch((reason: unknown) => {
@@ -273,6 +314,61 @@
     void invoke('projectFiles:ide', projectId, { owner, action: 'cancel', path: '' }).catch(
       () => undefined
     )
+  }
+
+  let installingLabel = $state('')
+  /** Servers this editor already asked to install, so a failing download is not
+   *  retried on every sync. The main process dedupes concurrent installs too. */
+  const attemptedInstalls = new SvelteSet<string>()
+  /**
+   * Install the server this file needs when it is missing.
+   *
+   * Enabling a server definition does not download anything, so a file whose
+   * server was never installed used to open to silence: no suggestions, no
+   * imports, and no hint that anything was absent. The managed install is the
+   * same one Settings > IDE Mode runs, and the sync after it picks the new
+   * executable up.
+   */
+  async function installMissingServers(items: IdeInstallation[]): Promise<void> {
+    const missing = items.filter(
+      (item) =>
+        item.source === 'missing' &&
+        Boolean(item.packageName) &&
+        !attemptedInstalls.has(item.serverId)
+    )
+    if (!missing.length) return
+    for (const item of missing) attemptedInstalls.add(item.serverId)
+    for (const item of missing) {
+      installingLabel = labelForPackage(item.packageName)
+      try {
+        await invoke(
+          'projectFiles:ide',
+          projectId,
+          { owner, action: 'install', path: '', serverId: item.serverId },
+          scopeBucketId,
+          threadId
+        )
+      } catch (reason) {
+        installingLabel = ''
+        toast.error(
+          ipcErrorMessage(reason, `Could not install ${labelForPackage(item.packageName)}`)
+        )
+        serverError = ipcErrorMessage(reason, 'Language server installation failed')
+        return
+      }
+    }
+    installingLabel = ''
+    if (!alive) return
+    retryVersion++
+  }
+  function labelForPackage(spec: string | undefined): string {
+    if (!spec) return 'language server'
+    const separator = spec.lastIndexOf('@')
+    return separator > 0 ? spec.slice(0, separator) : spec
+  }
+  function installServer(item: IdeInstallation): void {
+    attemptedInstalls.delete(item.serverId)
+    void installMissingServers([item])
   }
 
   function closeModal(preserve = false): void {
@@ -324,45 +420,169 @@
       floatingRoot = undefined
     }
   }
-  export function actions(token: IdeToken): IdeMenuAction[] {
+  /**
+   * The completion list for the caret, one request at a time.
+   *
+   * Typing is faster than a language server answers, so only the newest ask is
+   * kept: every earlier one resolves empty and its answer is never shown. That
+   * also keeps the IDE channel from filling with stale keystrokes.
+   */
+  interface CompletionQuery {
+    line: number
+    character: number
+    triggerKind?: number
+    triggerCharacter?: string
+  }
+  /**
+   * A repeat ask at the same caret for the same buffer is the same question.
+   * Language servers can take seconds on the first answer for a project, and
+   * pressing the trigger again used to pay that cost all over again. The cache
+   * is keyed by the buffer itself, so any edit invalidates it.
+   */
+  const COMPLETION_CACHE_MS = 30_000
+  let completionCache: {
+    text: string
+    line: number
+    character: number
+    at: number
+    items: IdeCompletionItem[]
+  } | null = null
+  /** At most two asks run at once; a stuck request must not block a fresh one. */
+  const COMPLETION_MAX_IN_FLIGHT = 2
+  let completionInFlight = 0
+  let queuedCompletion: {
+    query: CompletionQuery
+    resolve: (items: IdeCompletionItem[]) => void
+  } | null = null
+  export function completions(query: CompletionQuery): Promise<IdeCompletionItem[]> {
+    if (!active) return Promise.resolve([])
+    if (
+      completionCache &&
+      completionCache.text === value &&
+      completionCache.line === query.line &&
+      completionCache.character === query.character &&
+      Date.now() - completionCache.at < COMPLETION_CACHE_MS
+    )
+      return Promise.resolve(completionCache.items)
+    return new Promise((resolve) => {
+      if (completionInFlight < COMPLETION_MAX_IN_FLIGHT) void runCompletion(query, resolve)
+      else {
+        queuedCompletion?.resolve([])
+        queuedCompletion = { query, resolve }
+      }
+    })
+  }
+  async function runCompletion(
+    query: CompletionQuery,
+    resolve: (items: IdeCompletionItem[]) => void
+  ): Promise<void> {
+    completionInFlight++
+    const text = value
+    try {
+      const result = await request(
+        'completion',
+        { line: query.line, character: query.character, word: '', x: 0, y: 0 },
+        undefined,
+        { triggerKind: query.triggerKind, triggerCharacter: query.triggerCharacter }
+      )
+      capabilities = result.capabilities ?? capabilities
+      const items = result.completions ?? []
+      completionCache = {
+        text,
+        line: query.line,
+        character: query.character,
+        at: Date.now(),
+        items
+      }
+      resolve(items)
+    } catch {
+      resolve([])
+    } finally {
+      completionInFlight--
+      const next = queuedCompletion
+      if (next) {
+        queuedCompletion = null
+        void runCompletion(next.query, next.resolve)
+      }
+    }
+  }
+  /** Resolve one accepted completion, which is where tsserver puts the import. */
+  export async function resolveCompletion(
+    item: IdeCompletionItem
+  ): Promise<IdeCompletionItem | null> {
+    if (!active) return null
+    try {
+      const result = await request(
+        'resolveCompletion',
+        { line: 0, character: 0, word: '', x: 0, y: 0 },
+        undefined,
+        { payload: item }
+      )
+      return result.completions?.[0] ?? null
+    } catch {
+      return null
+    }
+  }
+  /**
+   * The context menu, with the file's own code actions on top.
+   *
+   * Imports and quick fixes are not a separate section: they are actions of the
+   * same kind as Go to Definition, so they sit beside it whenever the language
+   * server has one for the code under the cursor.
+   */
+  export async function actions(token: IdeToken): Promise<IdeMenuAction[]> {
     if (!active) return []
     const items: IdeMenuAction[] = []
     if (!capabilities || capabilities.definition)
-      items.push({
-        label: 'Go to Definition',
-        run: () => {
-          handle('definition', token)
-        }
-      })
+      items.push({ label: 'Go to Definition', run: () => handle('definition', token) })
     if (!capabilities || capabilities.references)
-      items.push({
-        label: 'Find References',
-        run: () => {
-          handle('references', token)
-        }
-      })
+      items.push({ label: 'Find References', run: () => handle('references', token) })
     if (!capabilities || capabilities.hover)
-      items.push({
-        label: 'Show Documentation',
-        run: () => {
-          handle('documentation', token)
-        }
-      })
+      items.push({ label: 'Show Documentation', run: () => handle('documentation', token) })
+    const codeActions = await loadCodeActions(token)
+    for (const action of codeActions) {
+      if (action.disabled) continue
+      items.unshift({ label: action.title, run: () => void applyCodeAction(action) })
+    }
     items.push(
       {
         label: `Search ${projectName || resolvedProjectName} text`,
-        run: () => {
-          handle('grep', token)
-        }
+        run: () => handle('grep', token)
       },
       {
         label: `Find file in ${projectName || resolvedProjectName}`,
-        run: () => {
-          handle('files', token)
-        }
+        run: () => handle('files', token)
       }
     )
     return items
+  }
+  async function loadCodeActions(token: IdeToken): Promise<IdeCodeAction[]> {
+    if (!capabilities?.codeActions && capabilities) return []
+    try {
+      const result = await request('codeActions', token)
+      return result.codeActions ?? []
+    } catch {
+      // A menu must still open when the server cannot answer quickly.
+      return []
+    }
+  }
+  async function applyCodeAction(action: IdeCodeAction): Promise<void> {
+    try {
+      const result = await request('applyCodeAction', undefined, value, { payload: action })
+      if (!result.text || result.text === value) return
+      if (!onReplaceDocument) {
+        toast.error('The editor closed before the action could be applied')
+        return
+      }
+      onReplaceDocument(result.text)
+      const skipped = result.skippedFiles?.length ?? 0
+      if (skipped)
+        toast.info(
+          `${action.title} also changes ${skipped} other file${skipped === 1 ? '' : 's'}; only this file was updated.`
+        )
+    } catch (reason) {
+      toast.error(ipcErrorMessage(reason, 'The code action could not be applied'))
+    }
   }
   /**
    * Open one of the two project searches without a token under the cursor.
@@ -601,7 +821,14 @@
     aria-live="polite"
   >
     <div class="flex min-w-0 items-center gap-1 whitespace-nowrap">
-      {#if connecting}<CioSpinner size={13} class="shrink-0 animate-spin" aria-hidden="true" />{/if}
+      {#if installingLabel}
+        <CioSpinner size={13} class="shrink-0 animate-spin" aria-hidden="true" />
+        <span class="min-w-0 truncate text-muted">Installing {installingLabel}</span>
+      {:else if connecting}<CioSpinner
+          size={13}
+          class="shrink-0 animate-spin"
+          aria-hidden="true"
+        />{/if}
       {#if progressEntries.length}
         <span class="shrink-0 font-mono text-muted"
           >{progressEntries[0].percentage !== undefined
@@ -620,48 +847,53 @@
 {/if}
 
 <svelte:window onkeydown={handleResultKey} onpointerdown={dismissOutside} />
-{#snippet resultRows()}
-  {#if error}<p class="px-2 py-1 text-xs text-danger" role="status">{error}</p>{/if}
-  {#if busy}<p class="flex items-center gap-2 px-2 py-1 text-xs text-muted" role="status">
-      <CioSpinner size={13} class="animate-spin" />Loading...
-    </p>{/if}
-  {#if mode === 'documentation' || hover}
-    <div class="min-h-0 overflow-auto px-2 py-1 text-xs text-foreground">
-      <DeferredMarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
-    </div>
-  {:else}
-    <div
-      class="max-h-96 min-h-0 overflow-auto"
-      {@attach (node) => {
-        resultList = node
-        return () => {
-          resultList = undefined
-        }
-      }}
-    >
-      {#each results as result, index (`${result.path}:${result.line}:${index}`)}
-        <button
-          type="button"
-          class={[
-            'block w-full border-b border-border px-2 py-1 text-left text-xs text-foreground hover:bg-elevated focus:bg-elevated',
-            index === selectedIndex && 'bg-elevated'
-          ]}
-          onfocus={() => (selectedIndex = index)}
-          data-modal-primary={index === selectedIndex ? '' : undefined}
-          onclick={() => void navigate(result)}
-        >
-          <span class="block truncate font-mono">{result.path}:{result.line}</span>
-          {#if result.preview}<span class="block truncate text-muted">{result.preview}</span>{/if}
-        </button>
-      {:else}{#if !busy && !error}<p class="px-2 py-1 text-xs text-muted">
-            {mode === 'locations'
-              ? `No ${locationTitle.toLowerCase()} found for this symbol.`
-              : query
-                ? 'No matches found.'
-                : 'Type to search.'}
-          </p>{/if}{/each}
-    </div>
-  {/if}
+{#snippet resultRows(fill = false)}
+  <div class="flex min-h-0 flex-1 flex-col {fill ? 'overflow-auto' : ''}">
+    {#if error}<p class="shrink-0 px-2 py-1 text-xs text-danger" role="status">{error}</p>{/if}
+    {#if busy}<p
+        class="flex shrink-0 items-center gap-2 px-2 py-1 text-xs text-muted"
+        role="status"
+      >
+        <CioSpinner size={13} class="animate-spin" />Loading...
+      </p>{/if}
+    {#if mode === 'documentation' || hover}
+      <div class="min-h-0 flex-1 overflow-auto px-2 py-1 text-xs text-foreground">
+        <DeferredMarkdownView text={hover?.text ?? documentation} class="markdown-body-card" />
+      </div>
+    {:else}
+      <div
+        class={fill ? '' : 'max-h-96 min-h-0 overflow-auto'}
+        {@attach (node) => {
+          resultList = node
+          return () => {
+            resultList = undefined
+          }
+        }}
+      >
+        {#each results as result, index (`${result.path}:${result.line}:${index}`)}
+          <button
+            type="button"
+            class={[
+              'block w-full border-b border-border px-2 py-1 text-left text-xs text-foreground hover:bg-elevated focus:bg-elevated',
+              index === selectedIndex && 'bg-elevated'
+            ]}
+            onfocus={() => (selectedIndex = index)}
+            data-modal-primary={index === selectedIndex ? '' : undefined}
+            onclick={() => void navigate(result)}
+          >
+            <span class="block truncate font-mono">{result.path}:{result.line}</span>
+            {#if result.preview}<span class="block truncate text-muted">{result.preview}</span>{/if}
+          </button>
+        {:else}{#if !busy && !error}<p class="px-2 py-1 text-xs text-muted">
+              {mode === 'locations'
+                ? `No ${locationTitle.toLowerCase()} found for this symbol.`
+                : query
+                  ? 'No matches found.'
+                  : 'Type to search.'}
+            </p>{/if}{/each}
+      </div>
+    {/if}
+  </div>
 {/snippet}
 {#if active && (hover || (open && (mode === 'locations' || mode === 'documentation')))}
   <div
@@ -751,11 +983,41 @@
               class="max-h-48 overflow-auto whitespace-pre-wrap break-words border-t border-danger/30 bg-app px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-muted">{serverError}</pre>
           </details>
         </section>
-      {:else if !connectedServers?.length}<CardNotice
-          >{connecting
-            ? 'Starting language server...'
-            : 'No language server is connected. Configure a server in IDE Mode settings.'}</CardNotice
-        >{/if}
+      {:else if !connectedServers?.length}
+        <CardNotice>
+          {#if installingLabel}
+            Installing {installingLabel}...
+          {:else if connecting}
+            Starting language server...
+          {:else}
+            No language server is connected. Configure a server in IDE Mode settings.
+          {/if}
+        </CardNotice>
+      {/if}
+      {#each installations.filter((item) => item.source === 'missing') as item (item.serverId)}
+        <section class="space-y-2 border border-border bg-elevated p-3">
+          <div class="flex flex-wrap items-center gap-2">
+            <span class="font-semibold">{labelForPackage(item.packageName)}</span>
+            <SettingsStatusBadge
+              label="Not installed"
+              classes="border-warning/30 bg-warning/10 text-warning"
+              ><CioCircle size={11} /></SettingsStatusBadge
+            >
+          </div>
+          {#if item.packageName}
+            <button
+              type="button"
+              class="border border-border bg-surface px-2 py-1 text-xs text-foreground hover:bg-overlay disabled:opacity-50"
+              disabled={Boolean(installingLabel)}
+              onclick={() => installServer(item)}>Install</button
+            >
+          {:else}
+            <p class="leading-relaxed text-muted">
+              This server is a custom executable. Open LSP settings to set its path.
+            </p>
+          {/if}
+        </section>
+      {/each}
       {#each connectedServers ?? [] as server (server.id)}
         {@const installation = installations.find((item) => item.serverId === server.id)}
         {@const reports = progressEntries.filter((entry) => entry.serverId === server.id)}
@@ -854,6 +1116,27 @@
     </div>
   </aside>
 {/if}
+<!--
+  The project search panel keeps one height for the whole search.
+
+  A results list that grows row by row resized the panel under the cursor while
+  the reader was still typing, so the surface itself now holds a fixed body: the
+  input, the scroll region and the truncation note are all pinned, and only the
+  rows inside move.
+-->
+{#snippet searchFooter()}
+  <Switch
+    class="mr-auto"
+    checked={caseSensitive}
+    label="Case sensitive"
+    title="Match uppercase and lowercase exactly"
+    aria-label="Case sensitive"
+    onchange={(next) => {
+      caseSensitive = next
+      if (mode === 'grep') scheduleSearch(true)
+    }}
+  />
+{/snippet}
 <Modal
   open={active && open && (mode === 'grep' || mode === 'files')}
   onClose={() => closeModal()}
@@ -865,23 +1148,27 @@
         ? 'Documentation'
         : locationTitle}
   size="lg"
+  contentClass="flex flex-col overflow-y-auto p-6"
+  footer={mode === 'grep' ? searchFooter : undefined}
 >
-  {#if mode === 'grep' || mode === 'files'}
-    <input
-      class="w-full border border-border bg-app px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
-      aria-label={mode === 'grep'
-        ? `Search ${projectName || resolvedProjectName} text`
-        : 'Find project file'}
-      placeholder={mode === 'grep' ? 'Find text across files' : 'Find a file by name or path'}
-      value={query}
-      oninput={(event) => {
-        query = event.currentTarget.value
-        scheduleSearch()
-      }}
-    />
-  {/if}
-  {@render resultRows()}
-  {#if truncated}<p class="text-xs text-muted">
-      Results limited. Narrow your search to find more.
-    </p>{/if}
+  <div class="flex h-[20rem] min-h-0 flex-col gap-2">
+    {#if mode === 'grep' || mode === 'files'}
+      <input
+        class="w-full shrink-0 border border-border bg-app px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+        aria-label={mode === 'grep'
+          ? `Search ${projectName || resolvedProjectName} text`
+          : 'Find project file'}
+        placeholder={mode === 'grep' ? 'Find text across files' : 'Find a file by name or path'}
+        value={query}
+        oninput={(event) => {
+          query = event.currentTarget.value
+          scheduleSearch()
+        }}
+      />
+    {/if}
+    {@render resultRows(true)}
+    {#if truncated}<p class="shrink-0 text-xs text-muted">
+        Results limited. Narrow your search to find more.
+      </p>{/if}
+  </div>
 </Modal>

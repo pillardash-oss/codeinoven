@@ -125,7 +125,8 @@ const CHANNEL_ARG_HINTS: Readonly<Record<string, string>> = {
   'cloudDeploy:availableContainers': 'projectId, providerKind, accountId?',
   'cloudDeploy:containerStatus': 'projectId, providerKind, containerId, accountId?',
   'cloudDeploy:deployments': 'projectId, providerKind, containerId, accountId?',
-  'cloudDeploy:containerLog': 'projectId, providerKind, containerId, deploymentId?, accountId?',
+  'cloudDeploy:containerLog':
+    'projectId, providerKind, containerId, deploymentId?, accountId?, serviceName? (a logSources id, for one compose container)',
   'browser:loadTabs': 'no arguments',
   'providers:getStatus': 'no arguments',
   'project:list': 'no arguments',

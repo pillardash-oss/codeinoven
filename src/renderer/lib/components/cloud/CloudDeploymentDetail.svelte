@@ -28,6 +28,7 @@
     type DeploymentLogLine
   } from '$lib/cloud/deployment-log'
   import ContainerLinksMenu from './ContainerLinksMenu.svelte'
+  import EnumSelect from '../ui/EnumSelect.svelte'
   import {
     deploymentStatusLabel,
     deploymentStatusTone,
@@ -51,6 +52,8 @@
   let deployments = $state<CloudDeploymentDeployment[]>([])
   let deploymentsLoading = $state(false)
   let selectedDeploymentId = $state<string | null>(null)
+  /** One of the container's log source ids (a compose service) whose runtime log is open. */
+  let logSourceId = $state<string | null>(null)
   let logLoading = $state(false)
   let logError = $state('')
 
@@ -67,26 +70,47 @@
   /** Used to auto-tail only when the log content actually grows. */
   let lastLogLength = $state(0)
 
+  /** Stack-wide build log, selected through the log picker instead of a container. */
+  const BUILD_LOG_SOURCE_ID = '__build_log__'
+
+  /** The containers inside this resource; more than one means a compose stack. */
+  const logSources = $derived(container.logSources ?? [])
+
+  const logBaseKey = $derived(
+    CloudDeployState.containerKey(
+      projectId,
+      container.providerKind,
+      container.id,
+      container.accountId
+    )
+  )
+
   const logKey = $derived(
-    selectedDeploymentId
-      ? `${CloudDeployState.containerKey(
-          projectId,
-          container.providerKind,
-          container.id,
-          container.accountId
-        )}/${selectedDeploymentId}`
-      : CloudDeployState.containerKey(
-          projectId,
-          container.providerKind,
-          container.id,
-          container.accountId
-        )
+    logSourceId
+      ? `${logBaseKey}/service/${logSourceId}`
+      : selectedDeploymentId
+        ? `${logBaseKey}/${selectedDeploymentId}`
+        : logBaseKey
   )
   const log = $derived(cloudDeployState.containerLogs[logKey]?.value.log ?? '')
 
   const selectedDeployment = $derived(
     deployments.find((deployment) => deployment.id === selectedDeploymentId) ?? null
   )
+
+  /** The open log-source label, when a single container's log is being read. */
+  const logSourceLabel = $derived(
+    logSources.find((source) => source.id === logSourceId)?.label ?? logSourceId ?? ''
+  )
+
+  /** Logs the picker can open: the deployment's build, then each container. */
+  const logSourceOptions = $derived([
+    ...(selectedDeployment ? [{ id: BUILD_LOG_SOURCE_ID, label: 'Build log' }] : []),
+    ...logSources
+  ])
+
+  /** The picker's current value: a container id, or the build log of the open deployment. */
+  const logSourceValue = $derived(logSourceId ?? (selectedDeployment ? BUILD_LOG_SOURCE_ID : null))
 
   /** Human-readable lines for the current deployment log. */
   const logLines = $derived<DeploymentLogLine[]>(parseDeploymentLog(log))
@@ -162,6 +186,17 @@
     return () => window.removeEventListener('keydown', handleKeydown)
   })
 
+  /**
+   * The container's identity as primitives. The panel hands down a fresh
+   * container object on every status refresh, and a `$derived` only notifies its
+   * readers when its own value changes, so the mount effect below re-runs when
+   * the container actually changes and never when its object was merely
+   * replaced. Without this the effect re-ran on every write it caused itself.
+   */
+  const containerProviderKind = $derived(container.providerKind)
+  const containerId = $derived(container.id)
+  const containerAccountId = $derived(container.accountId)
+
   const cachedStatus = $derived(
     cloudDeployState.containerStatuses[
       CloudDeployState.containerKey(
@@ -187,10 +222,10 @@
     try {
       const list = await cloudDeployState.ensureDeployments(
         projectId,
-        container.providerKind,
-        container.id,
+        containerProviderKind,
+        containerId,
         force,
-        container.accountId
+        containerAccountId
       )
       deployments = list ?? []
       if (deployments.length === 0) {
@@ -199,10 +234,10 @@
       }
       const fresh = await cloudDeployState.ensureContainerStatus(
         projectId,
-        container.providerKind,
-        container.id,
+        containerProviderKind,
+        containerId,
         force,
-        container.accountId
+        containerAccountId
       )
       if (fresh) onUpdated(fresh)
     } catch (reason) {
@@ -214,8 +249,8 @@
 
   /**
    * Force a full refresh of everything shown on the current screen:
-   * the deployment list, the container status, and   when a single deployment
-   * is open   that deployment's log. The refresh button spins while this runs.
+   * the deployment list, the container status, and   when a log is open   that
+   * log. The refresh button spins while this runs.
    */
   async function refresh(): Promise<void> {
     if (refreshing) return
@@ -239,7 +274,17 @@
         container.accountId
       )
       if (fresh) onUpdated(fresh)
-      if (selectedDeploymentId) {
+      if (logSourceId) {
+        await cloudDeployState.ensureContainerLog(
+          projectId,
+          container.providerKind,
+          container.id,
+          undefined,
+          true,
+          container.accountId,
+          logSourceId
+        )
+      } else if (selectedDeploymentId) {
         await cloudDeployState.ensureContainerLog(
           projectId,
           container.providerKind,
@@ -258,6 +303,7 @@
 
   async function selectDeployment(deployment: CloudDeploymentDeployment): Promise<void> {
     selectedDeploymentId = deployment.id
+    logSourceId = null
     tail = false
     lastLogLength = 0
     logError = ''
@@ -270,6 +316,44 @@
         deployment.id,
         false,
         container.accountId
+      )
+    } catch (reason) {
+      logError = message(reason)
+    } finally {
+      logLoading = false
+    }
+  }
+
+  /** Retry whichever log read is open: a container's, or a deployment's. */
+  async function retryActiveLog(): Promise<void> {
+    if (logSourceId) await selectLogSource(logSourceId)
+    else if (selectedDeployment) await selectDeployment(selectedDeployment)
+  }
+
+  /**
+   * Read one container's runtime log inside a multi-container (docker-compose)
+   * resource, or go back to the selected deployment's build log with `null`.
+   *
+   * A deployment log covers the whole stack's build, so it can never answer
+   * "what did the tutors container print?"; the provider reads that container's
+   * output only when it is asked for by name.
+   */
+  async function selectLogSource(sourceId: string | null): Promise<void> {
+    logSourceId = sourceId
+    tail = false
+    lastLogLength = 0
+    logError = ''
+    if (!sourceId) return
+    logLoading = true
+    try {
+      await cloudDeployState.ensureContainerLog(
+        projectId,
+        container.providerKind,
+        container.id,
+        undefined,
+        false,
+        container.accountId,
+        sourceId
       )
     } catch (reason) {
       logError = message(reason)
@@ -357,7 +441,7 @@
   <!-- Header -->
   <div class="shrink-0 border-b border-border px-3 py-2">
     <div class="flex items-center gap-1">
-      {#if selectedDeployment}
+      {#if selectedDeployment || logSourceId}
         <button
           type="button"
           class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -365,6 +449,7 @@
           aria-label="Back to deployments"
           onclick={() => {
             selectedDeploymentId = null
+            logSourceId = null
             tail = false
           }}
         >
@@ -398,7 +483,7 @@
           {deploymentStatusLabel(status.status)}
         </StatusPill>
       {/if}
-      {#if selectedDeployment?.status === 'failed'}
+      {#if selectedDeployment?.status === 'failed' && !logSourceId}
         <button
           type="button"
           class="flex h-7 cursor-pointer items-center gap-1 border border-border px-2.5 text-[0.625rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -413,13 +498,13 @@
       <button
         type="button"
         class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        title="Refresh deployment log"
-        aria-label="Refresh deployment log"
+        title="Refresh log"
+        aria-label="Refresh log"
         onclick={() => void refresh()}
       >
         <CioRefresh size={12} class={refreshing ? 'animate-spin' : ''} />
       </button>
-      {#if selectedDeployment}
+      {#if selectedDeployment || logSourceId}
         <button
           type="button"
           class="cursor-pointer p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
@@ -439,7 +524,7 @@
       {/if}
     </div>
     <div class="mt-1 flex items-center gap-1.5 text-[0.5625rem] text-dimmed">
-      {#if selectedDeployment}
+      {#if selectedDeployment && !logSourceId}
         <span class="font-mono">{selectedDeployment.id.slice(0, 12)}</span>
         {#if selectedDeployment.commit}
           <span>·</span>
@@ -449,6 +534,10 @@
           <span>·</span>
           <span>{formatCompactAge(selectedDeployment.updatedAt)}</span>
         {/if}
+      {:else if logSourceId}
+        <span class="font-mono">{container.id}</span>
+        <span>·</span>
+        <span>{container.providerKind}</span>
       {:else}
         <span class="font-mono">{container.id}</span>
         <span>·</span>
@@ -459,17 +548,28 @@
 
   <!-- Body -->
   <div class="min-h-0 flex-1 overflow-y-auto" bind:this={logScrollerEl}>
-    {#if selectedDeployment}
-      <!-- Single deployment detail + its log -->
+    {#if selectedDeployment || logSourceId}
+      <!-- One log: a deployment's build, or one container's runtime output. -->
       <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-        <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
-          Deployment log
-        </span>
-        {#if selectedDeployment.status && selectedDeployment.status !== 'unknown'}
-          <span class="ml-1">
-            <StatusPill tone={deploymentStatusTone(selectedDeployment.status)}>
-              {deploymentStatusLabel(selectedDeployment.status)}
-            </StatusPill>
+        {#if logSources.length > 1}
+          <!-- One docker-compose stack runs several containers, each read on its
+               own, so the log source is picked in the section header. -->
+          <span class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+            Log
+          </span>
+          <EnumSelect
+            compact
+            class="min-w-0 flex-1"
+            options={logSourceOptions}
+            value={logSourceValue}
+            onChange={(id) => void selectLogSource(id === BUILD_LOG_SOURCE_ID ? null : id)}
+            placeholder="Build log"
+            ariaLabel="Log to read"
+            title="Choose which log to read"
+          />
+        {:else}
+          <span class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+            Deployment log
           </span>
         {/if}
         {#if log}
@@ -583,26 +683,48 @@
           <button
             type="button"
             class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"
-            onclick={() => void selectDeployment(selectedDeployment)}
+            onclick={() => void retryActiveLog()}
           >
             Try again
           </button>
         </div>
       {:else}
-        <div class="flex items-center justify-center gap-2 px-6 py-8 text-[0.6875rem] text-dimmed">
-          <CioSpinner size={13} class="animate-spin" />
-          Loading log
+        <div class="flex flex-col items-center gap-2 px-6 py-8 text-center">
+          <CioCloud size={18} class="text-dimmed" />
+          <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
+            {logSourceId
+              ? `The ${logSourceLabel} container has not printed anything yet. Refresh to read it again.`
+              : 'This deployment has no log output yet. Refresh to read it again.'}
+          </p>
         </div>
       {/if}
     {:else}
       <!-- Deployment history list -->
       <div class="flex items-center gap-2 bg-surface px-3 py-1.5">
-        <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
+        <span class="shrink-0 text-[0.625rem] font-semibold uppercase tracking-wide text-muted">
           Deployment history
         </span>
         {#if deployments.length > 0}
-          <span class="ml-auto text-[0.5625rem] tabular-nums text-dimmed">{deployments.length}</span
+          <span
+            class="text-[0.5625rem] tabular-nums text-dimmed {logSources.length > 1
+              ? ''
+              : 'ml-auto'}">{deployments.length}</span
           >
+        {/if}
+        {#if logSources.length > 1}
+          <!-- A compose stack's containers are readable straight from here, with no
+               deployment opened first. -->
+          <div class="ml-auto w-40 shrink-0">
+            <EnumSelect
+              compact
+              options={logSources}
+              value={null}
+              onChange={(id) => void selectLogSource(id)}
+              placeholder="Container logs"
+              ariaLabel="Container log to read"
+              title="Read one container's log"
+            />
+          </div>
         {/if}
       </div>
       {#if deploymentsLoading && deployments.length === 0}
@@ -618,6 +740,11 @@
           <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
             {error || 'No deployments found for this container.'}
           </p>
+          {#if logSources.length > 1}
+            <p class="max-w-[42ch] text-[0.625rem] leading-relaxed text-dimmed">
+              Read one of this stack's containers from the picker above.
+            </p>
+          {/if}
           <button
             type="button"
             class="h-8 cursor-pointer border border-border px-3 text-[0.6875rem] font-medium text-foreground hover:bg-elevated"

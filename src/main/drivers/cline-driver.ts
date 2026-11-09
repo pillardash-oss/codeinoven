@@ -53,6 +53,15 @@ import { mapClineRecord, mapCurrentClineRecord } from './cline/cline-stream-fold
 import type { ClineTurnState } from './cline/cline-stream-fold'
 import { record, stringValue, utilityKey } from './cline/cline-values'
 
+/**
+ * How long one successful `cline --version` probe answers for.
+ *
+ * The probe exists to catch a missing or broken install before a turn, and a
+ * Cline install cannot change inside this window, so ten minutes keeps a broken
+ * install surfacing quickly while removing a whole node boot from every turn.
+ */
+const CLINE_READY_TTL_MS = 10 * 60 * 1000
+
 export class ClineDriver extends PersistentCliDriver {
   readonly id = 'cline'
   readonly name = 'Cline'
@@ -83,6 +92,10 @@ export class ClineDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, ClineTurnState>()
   private turnCounts = new Map<string, number>()
+  /** When the `cline --version` readiness probe last passed; see `ensureCliReady`. */
+  private cliReadyAt = 0
+  /** The readiness probe in flight, shared by turns that start together. */
+  private cliReadyCheck: Promise<void> | null = null
   /** Approval bridges keyed by CodeInOven session id; cleaned up on turn end. */
   private approvalBridges = new Map<string, ClineApprovalBridge>()
   /** Web-only hook directories keyed by CodeInOven session id. */
@@ -114,11 +127,25 @@ export class ClineDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
+    // `cline` is a node launcher, so one `--version` probe boots a whole node
+    // process (measured at ~186 MB and several seconds) for a single line.
+    // Cline's install cannot change mid-turn, so one successful answer is reused
+    // instead of paid on every turn of every Cline thread.
+    if (Date.now() - this.cliReadyAt < CLINE_READY_TTL_MS) return
+    this.cliReadyCheck ??= this.probeCli(projectPath).finally(() => {
+      this.cliReadyCheck = null
+    })
+    await this.cliReadyCheck
+  }
+
+  private async probeCli(projectPath: string): Promise<void> {
     await runHarnessCommand('cline', ['--version'], {
       cwd: projectPath,
       env: await buildProcessEnvironmentAsync(),
       timeoutMs: 10_000
     })
+    // Only a success is cached: a missing install must surface on every turn.
+    this.cliReadyAt = Date.now()
   }
 
   async listProviders(): Promise<ProviderCatalog[]> {

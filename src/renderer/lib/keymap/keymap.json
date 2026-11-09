@@ -1149,6 +1149,13 @@
           "scenario": "A project source editor with IDE Mode enabled."
         },
         {
+          "id": "ide-complete",
+          "keys": ["ctrl", "space"],
+          "label": "Trigger suggestions",
+          "description": "Opens the IDE Mode suggestion dropdown at the caret and asks the file's language server for completions, including imports, even when nothing has been typed yet.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
           "id": "ide-info-close",
           "keys": ["escape"],
           "label": "Close code information",

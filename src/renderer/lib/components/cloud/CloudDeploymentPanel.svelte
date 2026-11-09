@@ -80,8 +80,20 @@
    */
   const BUILDING_REFRESH_INTERVAL_MS = 20_000
 
-  /** When set, the in-app detail view replaces the container list. */
-  let selectedContainer = $state<CloudDeploymentContainer | null>(null)
+  /**
+   * The container the detail view is showing, addressed by provider/account/id
+   * so the open view is derived from the live list: a status refresh that
+   * brings per-container log sources, a new URL or a new deployment state lands
+   * in the open detail view instead of sitting in a snapshot taken at click time.
+   */
+  let selectedContainerKey = $state<string | null>(null)
+
+  /**
+   * Snapshot kept from the click, used only when the live list momentarily no
+   * longer reports the container (a failed overview read): the open detail view
+   * keeps showing what it had instead of vanishing under the user.
+   */
+  let selectedContainerSnapshot = $state<CloudDeploymentContainer | null>(null)
 
   let config = $state<CloudDeploymentConfig | null>(null)
   let configLoading = $state(true)
@@ -191,6 +203,9 @@
             updatedAt: statusEntry.value.updatedAt,
             createdAt: statusEntry.value.createdAt,
             log: statusEntry.value.log,
+            ...(statusEntry.value.logSources === undefined
+              ? {}
+              : { logSources: statusEntry.value.logSources }),
             url: statusEntry.value.url,
             urls: statusEntry.value.urls
           }
@@ -199,6 +214,20 @@
     }
     return Object.values(byKey)
   })
+
+  /** See {@link selectedContainerKey}. */
+  const selectedContainer = $derived(
+    selectedContainerKey === null
+      ? null
+      : (containers.find(
+          (container) => containerSelectionKey(container) === selectedContainerKey
+        ) ?? selectedContainerSnapshot)
+  )
+
+  /** Stable selection identity: the same id can exist under two accounts. */
+  function containerSelectionKey(container: CloudDeploymentContainer): string {
+    return `${container.providerKind}/${container.accountId ?? ''}/${container.id}`
+  }
 
   /**
    * The containers the panel currently shows as building (either a deployment
@@ -539,7 +568,8 @@
   })
 
   function openContainer(container: CloudDeploymentContainer): void {
-    selectedContainer = container
+    selectedContainerKey = containerSelectionKey(container)
+    selectedContainerSnapshot = container
   }
 
   /**
@@ -629,7 +659,7 @@ ${fence}`
     <CloudDeploymentDetail
       {projectId}
       container={selectedContainer}
-      onBack={() => (selectedContainer = null)}
+      onBack={() => (selectedContainerKey = null)}
       onUpdated={(updated) => cloudDeployState.setContainerStatus(projectId, updated)}
       onRemediate={(logText) => void startAgentRemediation(logText)}
     />

@@ -116,6 +116,9 @@
       isIdeEnabled: () => ideEnabled && Boolean(projectId),
       onIdeAction: (action, token) => ideTools?.handle(action, token) ?? false,
       getIdeActions: (token) => ideTools?.actions(token) ?? [],
+      getIdeCompletions: (query) => ideTools?.completions(query) ?? Promise.resolve([]),
+      resolveIdeCompletion: (item) =>
+        ideTools ? ideTools.resolveCompletion(item) : Promise.resolve(null),
       onDocChange: (text) => onInput({ currentTarget: { value: text } }),
       onFindMatches,
       onHistoryChange: (history) => onHistoryChange?.(history)
@@ -215,5 +218,10 @@
     enabled={ideEnabled}
     {projectName}
     statusPortal={ideStatusPortal}
+    onReplaceDocument={(text) => {
+      const current = controller
+      if (!current) return
+      current.replaceRange(0, current.getValue().length, text, 'ide.codeAction')
+    }}
   />
 {/if}

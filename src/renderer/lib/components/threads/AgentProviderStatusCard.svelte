@@ -33,7 +33,6 @@
   import { presentProviderError, providerIssueTitle } from '$shared/provider-issue'
   import { formatDateTimeWithWeekday } from '$shared/date-time-format'
   import Modal from '../ui/Modal.svelte'
-  import ProviderSignInPanel from '../providers/ProviderSignInPanel.svelte'
 
   interface Props {
     status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }>
@@ -497,12 +496,18 @@ card, the way it did before the head moved onto the shared primitives. -->
 {/if}
 
 {#if signInOpen}
-  <ProviderSignInPanel
-    harnessId={issue.harnessId}
-    harnessName={providerName}
-    providerId={signInProviderId}
-    accountId={signInAccountId}
-    onClose={() => (signInOpen = false)}
-    onComplete={signedIn}
-  />
+  <!-- Signing in is a gesture, never part of the first screen: the card shows a
+       status line, and the panel behind it is the sign-in flow with every
+       provider form. Importing it here keeps that flow in its own chunk instead
+       of charging the launch for a dialog most sessions never open. -->
+  {#await import('../providers/ProviderSignInPanel.svelte') then { default: ProviderSignInPanel }}
+    <ProviderSignInPanel
+      harnessId={issue.harnessId}
+      harnessName={providerName}
+      providerId={signInProviderId}
+      accountId={signInAccountId}
+      onClose={() => (signInOpen = false)}
+      onComplete={signedIn}
+    />
+  {/await}
 {/if}

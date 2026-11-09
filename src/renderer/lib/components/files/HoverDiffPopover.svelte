@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
-  import FileDiffView from './FileDiffView.svelte'
+  import FileDiffView from './DeferredFileDiffView.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type { TurnCheckpointFileDiff } from '$shared/types'

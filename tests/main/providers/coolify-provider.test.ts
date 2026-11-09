@@ -278,6 +278,73 @@ describe('CoolifyProvider', () => {
       expect(fetchMock).toHaveBeenCalledTimes(2)
     })
 
+    it('reports one log source per container of a docker-compose resource', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse({
+            uuid: 'app-1',
+            name: 'classroom',
+            status: 'running',
+            build_pack: 'dockercompose',
+            docker_compose: [
+              'services:',
+              '  migrate:',
+              '    image: app-migrate',
+              '  tutors:',
+              '    image: app-tutors',
+              '  users:',
+              '    image: app-users'
+            ].join('\n')
+          })
+        )
+        .mockResolvedValueOnce(jsonResponse([]))
+
+      const container = await makeProvider().getStatus('app-1')
+
+      expect(container?.logSources).toEqual([
+        { id: 'migrate', label: 'migrate' },
+        { id: 'tutors', label: 'tutors' },
+        { id: 'users', label: 'users' }
+      ])
+    })
+
+    it('reports no log sources for a single-container application', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse({
+            uuid: 'app-1',
+            name: 'website',
+            status: 'running',
+            build_pack: 'dockerfile',
+            docker_compose: 'services:\n  web:\n    image: website'
+          })
+        )
+        .mockResolvedValueOnce(jsonResponse([]))
+
+      const container = await makeProvider().getStatus('app-1')
+
+      expect(container?.logSources).toBeUndefined()
+    })
+
+    it('skips parsing a compose file too large to read on the main process', async () => {
+      fetchMock
+        .mockResolvedValueOnce(
+          jsonResponse({
+            uuid: 'app-1',
+            name: 'huge',
+            status: 'running',
+            build_pack: 'dockercompose',
+            docker_compose: `services:\n  web:\n    image: ${'x'.repeat(600_000)}`
+          })
+        )
+        .mockResolvedValueOnce(jsonResponse([]))
+
+      const container = await makeProvider().getStatus('app-1')
+
+      expect(container).not.toBeNull()
+      expect(container?.logSources).toBeUndefined()
+    })
+
     it('returns null when the application is missing (404 fallback)', async () => {
       fetchMock.mockResolvedValueOnce(jsonResponse({ message: 'not found' }, 404))
 
@@ -359,6 +426,26 @@ describe('CoolifyProvider', () => {
         `${BASE_URL}/api/v1/applications/app-1/logs?lines=200`
       )
       expect(log).toBe('runtime container output')
+    })
+
+    it('reads one compose container runtime log when a service name is given', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ logs: 'tutors container output' }))
+
+      const log = await makeProvider().getLogs('app-1', undefined, 'tutors')
+
+      expect(requestUrl()).toBe(
+        `${BASE_URL}/api/v1/applications/app-1/logs?lines=200&service_name=tutors`
+      )
+      expect(log).toBe('tutors container output')
+    })
+
+    it('never reads a deployment log for a named compose container', async () => {
+      fetchMock.mockResolvedValueOnce(jsonResponse({ logs: 'users container output' }))
+
+      await makeProvider().getLogs('app-1', 'dep-9', 'users')
+
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(requestUrl()).toContain('service_name=users')
     })
 
     it('returns an empty string when the fallback log body has no logs field', async () => {

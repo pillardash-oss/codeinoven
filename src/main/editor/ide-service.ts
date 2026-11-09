@@ -69,9 +69,18 @@ export class IdeService {
     if (request.action === 'close') this.documentOwners.delete(request.owner)
     else if (
       request.path &&
-      ['sync', 'capabilities', 'definition', 'references', 'hover', 'format'].includes(
-        request.action
-      )
+      [
+        'sync',
+        'capabilities',
+        'definition',
+        'references',
+        'hover',
+        'format',
+        'completion',
+        'resolveCompletion',
+        'codeActions',
+        'applyCodeAction'
+      ].includes(request.action)
     )
       this.documentOwners.add(request.owner)
     if ((request.action === 'close' || request.action === 'cancel') && !this.worker) return {}
@@ -228,7 +237,17 @@ export class IdeService {
         // project would be reported as an editor failure instead of an answer.
         request.action === 'inventory'
           ? 150_000
-          : ['hover', 'definition', 'references', 'sync', 'capabilities'].includes(request.action)
+          : [
+                'hover',
+                'definition',
+                'references',
+                'sync',
+                'capabilities',
+                'completion',
+                'resolveCompletion',
+                'codeActions',
+                'applyCodeAction'
+              ].includes(request.action)
             ? 45_000
             : 20_000
       )

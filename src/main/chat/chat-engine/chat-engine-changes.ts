@@ -305,12 +305,13 @@ export function shellWritePaths(projectPath: string, input: Record<string, unkno
   }
   let workingDirectory = shellWorkingDirectory(projectPath, input, '')
   const paths = new Set<string>()
-  const add = (candidate: string | undefined): void => {
+  const addIn = (directory: string, candidate: string | undefined): void => {
     // Runtime expansion, command substitution and globs cannot establish an exact target.
     if (!candidate || /[$`*?{}]/u.test(candidate)) return
-    const path = projectRelativePath(projectPath, resolve(workingDirectory, candidate))
+    const path = projectRelativePath(projectPath, resolve(directory, candidate))
     if (path) paths.add(path)
   }
+  const add = (candidate: string | undefined): void => addIn(workingDirectory, candidate)
   const segments: ShellWord[][] = [[]]
   for (const word of words) {
     if (word.operator && [';', '\n', '|', '||', '&&', '&'].includes(word.value)) segments.push([])
@@ -363,8 +364,19 @@ export function shellWritePaths(projectPath: string, input: Record<string, unkno
     /(?:^|[;\n|&(])\s*(python[\d.]*|node|bun|deno|apply_patch)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z_0-9]*)['"]?[^\n]*\n([\s\S]*?)\n\2(?:\n|$)/gmu
   for (const match of sourceCommand.matchAll(heredoc)) {
     const code = match[3] ?? ''
+    // A heredoc body belongs to the command that opened it, so its targets are
+    // resolved against the directory in effect at that point. Resolving them
+    // against the final directory of the whole command put every heredoc write
+    // one directory off whenever a later `cd` followed it: the turn claimed
+    // `apps/app/apps/app/src/...` instead of `apps/app/src/...`, proved nothing
+    // about the file it really wrote, and lost the change.
+    const heredocDirectory = shellWorkingDirectory(
+      projectPath,
+      input,
+      sourceCommand.slice(0, match.index)
+    )
     for (const path of match[1] === 'apply_patch' ? patchPaths(code) : scriptWritePaths(code))
-      add(path)
+      addIn(heredocDirectory, path)
   }
   return [...paths]
 }

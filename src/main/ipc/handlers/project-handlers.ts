@@ -753,7 +753,11 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
         'references',
         'hover',
         'capabilities',
-        'grep'
+        'grep',
+        'completion',
+        'resolveCompletion',
+        'codeActions',
+        'applyCodeAction'
       ] as const
       const action = actions.find((action) => action === value.action)
       if (!action) throw new TypeError('Invalid IDE action')
@@ -773,6 +777,8 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
         value.text === undefined ? undefined : requireString(value.text, 'IDE text', true)
       const query =
         value.query === undefined ? undefined : requireString(value.query, 'IDE query', true)
+      if (value.caseSensitive !== undefined && typeof value.caseSensitive !== 'boolean')
+        throw new TypeError('Invalid IDE case sensitivity')
       if (
         (text?.length ?? 0) > 2 * 1024 * 1024 ||
         (query?.length ?? 0) > 1000 ||
@@ -784,6 +790,23 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
         if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0)
           throw new TypeError('Invalid IDE position')
         return value
+      }
+      const triggerKind = value.triggerKind === undefined ? undefined : position(value.triggerKind)
+      if (triggerKind !== undefined && (triggerKind < 1 || triggerKind > 3))
+        throw new TypeError('Invalid IDE completion trigger')
+      const triggerCharacter =
+        value.triggerCharacter === undefined
+          ? undefined
+          : requireString(value.triggerCharacter, 'IDE trigger character')
+      if ((triggerCharacter?.length ?? 0) > 4) throw new TypeError('Invalid IDE trigger character')
+      // A resolve or apply sends the server's own object back. It is bounded and
+      // must serialise, because it crosses two process boundaries unchanged.
+      let payload: unknown
+      if (value.payload !== undefined) {
+        const serialized = JSON.stringify(value.payload)
+        if (serialized === undefined || serialized.length > 256_000)
+          throw new TypeError('IDE payload exceeds limits')
+        payload = value.payload
       }
       return ide.request(
         action === 'inventory' ||
@@ -809,8 +832,12 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
           path,
           text,
           query,
+          caseSensitive: value.caseSensitive === true,
           line: position(value.line),
-          character: position(value.character)
+          character: position(value.character),
+          triggerKind,
+          triggerCharacter,
+          payload
         },
         (await storage.getConfig()).ideLanguageServers
       )

@@ -51,7 +51,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
-  import FileDiffView from './FileDiffView.svelte'
+  import FileDiffView from './DeferredFileDiffView.svelte'
   import { FileDiffState } from './file-diff-state.svelte'
   import { wrapTextState } from '$lib/stores/wrap-text.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'

@@ -320,6 +320,12 @@ function validateUpdateInput(value: unknown): UpdateAssistantInput {
       throw new TypeError('Assistant knowledge must be a string')
     patch.knowledge = record.knowledge.slice(0, MAX_KNOWLEDGE)
   }
+  if (record.authoringThreadId !== undefined) {
+    patch.authoringThreadId = validateEntityId(
+      requireString(record.authoringThreadId, 'Authoring thread ID'),
+      'Authoring thread ID'
+    )
+  }
   if (record.connections !== undefined) patch.connections = sanitizeConnections(record.connections)
   if (record.agents !== undefined) {
     const agents = sanitizeAgents(record.agents)
@@ -392,7 +398,21 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('assistant:update', async (_, assistantId: unknown, input: unknown) => {
     const safeId = validateEntityId(assistantId, 'Assistant ID')
     const existing = assistantManager.getAssistant(safeId)
-    const assistant = assistantManager.updateAssistant(safeId, validateUpdateInput(input))
+    const { authoringThreadId, ...patch } = validateUpdateInput(input)
+    // Instructions are only ever committed from the conversation that authored
+    // them. A save whose thread belongs to another assistant is refused rather
+    // than written, because the two drifting apart is how one assistant's
+    // instructions, name and schedule once landed on a different assistant
+    // entirely, and every later run of that assistant then did its neighbour's
+    // job.
+    if (patch.knowledge !== undefined && authoringThreadId !== undefined) {
+      if (!assistantManager.threadAuthoringBelongsTo(authoringThreadId, safeId)) {
+        throw new Error(
+          'This conversation does not belong to that assistant, so its instructions cannot be saved here'
+        )
+      }
+    }
+    const assistant = assistantManager.updateAssistant(safeId, patch)
     assistantsChanged()
     // The first knowledge an assistant ever gets is the moment its owner has work they
     // expect to run, so it is the one moment the app offers to start at login.

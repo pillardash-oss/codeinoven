@@ -17,6 +17,7 @@ import { Logger } from '../system/logger'
 import {
   ChangeTrackingService,
   isBinary,
+  isExcludedRelativePath,
   type CheckpointChange,
   type CheckpointFile,
   type ProjectCheckpoint,
@@ -37,7 +38,9 @@ import {
   MAX_CHECKPOINT_FAILURE_LENGTH
 } from './checkpoint/checkpoint-errors'
 import {
+  dropExcludedPathChanges,
   pruneUnusedBlobs,
+  repairEvidenceDroppedCheckpoints,
   repairMisattributedInternalCheckpoints,
   repairTruncatedLineStats,
   type CheckpointMaintenanceHost
@@ -328,7 +331,10 @@ export class CheckpointManager {
     const after = await tracker.snapshot(projectPath, {
       includeGitMetadata: before.git !== undefined
     })
-    return tracker.calculateChanges(before, after).map((change) => change.path)
+    return tracker
+      .calculateChanges(before, after)
+      .map((change) => change.path)
+      .filter((path) => !isExcludedRelativePath(path))
   }
 
   /**
@@ -470,6 +476,13 @@ export class CheckpointManager {
           rescued.add(path)
           rescueCount += 1
         }
+      }
+      // Scratch and build output are never the turn's work, however they reached
+      // the diff: a file-change card that offers `.cio/tmp/report.txt` as a
+      // change is noise the user has to clear by hand.
+      for (let index = changes.length - 1; index >= 0; index -= 1) {
+        const change = changes[index]
+        if (change && isExcludedRelativePath(change.path)) changes.splice(index, 1)
       }
       // A turn whose real diff was entirely filtered away is the one case where
       // the file-changes card silently shows nothing. Record why, bounded, so a
@@ -1096,6 +1109,17 @@ export class CheckpointManager {
 
   async repairMisattributedInternalCheckpoints(): Promise<number> {
     return repairMisattributedInternalCheckpoints(this.maintenanceHost())
+  }
+
+  /** Drop scratch and build-output paths a card should never have listed. */
+  async dropExcludedPathChanges(): Promise<number> {
+    return dropExcludedPathChanges(this.maintenanceHost())
+  }
+
+  /** Restore the real files of turns whose contested diff was filtered away
+   *  while their write evidence was mis-parsed, so an empty card becomes true. */
+  async repairEvidenceDroppedCheckpoints(): Promise<number> {
+    return repairEvidenceDroppedCheckpoints(this.maintenanceHost())
   }
 
   /** Re-open a recently completed checkpoint so late tool claims   edits that

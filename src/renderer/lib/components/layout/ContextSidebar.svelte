@@ -637,7 +637,7 @@
       ></div>
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left {closeTakesIcon
+        class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-3 text-left {closeTakesIcon
           ? 'pr-1.5'
           : ''}"
         aria-current={activeTabId === tab.id ? 'page' : undefined}
@@ -697,7 +697,8 @@
         {:else}
           <span class="flex min-w-0 flex-col">
             <span
-              class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
+              class="truncate text-[0.6875rem] leading-[0.875rem] font-medium {tab.kind ===
+                'files' && tab.preview
                 ? 'italic'
                 : ''}">{tab.title}</span
             >
@@ -708,7 +709,7 @@
                    threads readable: the tab says whose work it is without opening
                    it. -->
               <span
-                class="flex min-w-0 items-center gap-1"
+                class="flex min-w-0 items-center gap-1 leading-3"
                 title={`Agent working here in ${agentThread.title}`}
               >
                 {#if agentThread.iconUrl}
@@ -719,7 +720,9 @@
                     aria-hidden="true"
                   />
                 {/if}
-                <span class="truncate text-[0.625rem] text-dimmed">{agentThread.title}</span>
+                <span class="truncate text-[0.625rem] leading-3 text-dimmed"
+                  >{agentThread.title}</span
+                >
               </span>
             {/if}
           </span>
@@ -798,7 +801,9 @@
   {#if !headerless}
     <div class="flex h-10 shrink-0 items-center border-b border-border">
       {#if tabbedMode}
-        <div class="min-w-0 flex-1 overflow-x-auto" bind:this={stripScroller}>
+        <!-- Only ever horizontal: a chip is as tall as the strip, so a wrapped or
+             over-tall title must be cut, never turned into a second scroll axis. -->
+        <div class="min-w-0 flex-1 overflow-x-auto overflow-y-hidden" bind:this={stripScroller}>
           <div class="flex h-10 min-w-max items-stretch">
             {#each stripTabs as tab (tab.id)}
               {@render stripRow(tab)}

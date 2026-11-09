@@ -24,6 +24,21 @@ const DEFAULT_EXCLUDED_DIRECTORIES = new Set([
   `${APP_SLUG}-temp`
 ])
 
+/** Every directory name checkpoints refuse to track, for callers that need to
+ *  look for stale ones in stored rows. */
+export const EXCLUDED_DIRECTORY_NAMES: readonly string[] = [...DEFAULT_EXCLUDED_DIRECTORIES]
+
+/**
+ * True for any project-relative path that lives inside a directory checkpoints
+ * never track: the app's own scratch folder, VCS and dependency trees, build
+ * output. A card must never offer one of these as the turn's work, and the rule
+ * is applied to the diff itself rather than only to the candidate walk, because
+ * a git-mode listing or an older snapshot could still hand one over.
+ */
+export function isExcludedRelativePath(relativePath: string): boolean {
+  return relativePath.split('/').some((segment) => DEFAULT_EXCLUDED_DIRECTORIES.has(segment))
+}
+
 export interface CheckpointBlobStore {
   put(hash: string, content: Uint8Array): Promise<void>
   get(hash: string): Promise<Uint8Array | null>
@@ -345,6 +360,7 @@ export class ChangeTrackingService {
    * and blob rules apply as in a full snapshot.
    */
   async capturePath(projectPath: string, relativePath: string): Promise<CheckpointFile | null> {
+    if (isExcludedRelativePath(relativePath)) return null
     const projectRoot = await this.resolveProjectRoot(projectPath)
     const candidate = this.resolveTrackedPath(projectRoot, relativePath)
     const observed = await this.observeFile(projectRoot, candidate, new Map())
@@ -365,7 +381,9 @@ export class ChangeTrackingService {
     gitPaths: string[] | undefined
   ): Promise<string[]> {
     if (gitPaths) {
-      return gitPaths.map((path) => this.resolveTrackedPath(projectRoot, path))
+      return gitPaths
+        .filter((path) => !isExcludedRelativePath(path))
+        .map((path) => this.resolveTrackedPath(projectRoot, path))
     }
     const paths: string[] = []
     const visit = async (directory: string): Promise<void> => {

@@ -16,7 +16,7 @@
 
   import { ContextMenu } from 'bits-ui'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
-  import FileDiffView from '../files/FileDiffView.svelte'
+  import FileDiffView from '../files/DeferredFileDiffView.svelte'
   import Switch from '../ui/Switch.svelte'
 
   interface Props {

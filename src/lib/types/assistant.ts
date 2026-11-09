@@ -257,6 +257,16 @@ export interface UpdateAssistantInput {
   customSvg?: string | null
   schedule?: AssistantSchedule | null
   knowledge?: string
+  /**
+   * The thread whose conversation authored the knowledge in this write.
+   *
+   * The knowledge is committed from an assistant's own Getting started
+   * conversation, so the save names that thread and the app refuses the write when
+   * it belongs to a different assistant. Without it a conversation that no longer
+   * belongs where it started could save one assistant's instructions, name and
+   * schedule onto another.
+   */
+  authoringThreadId?: string
   connections?: AssistantConnection[]
   /** `null` clears the delivery, for an assistant that reports nothing. */
   delivery?: AssistantDelivery | null

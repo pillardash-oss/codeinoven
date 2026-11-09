@@ -1,4 +1,6 @@
 import { registerIdeContext, type IdeToken, type IdeMenuAction } from './ide-context'
+import type { IdeCompletionItem } from '$shared/editor-ide'
+import type { Completion, CompletionContext, CompletionResult } from '@codemirror/autocomplete'
 import { isMacPlatform } from '../keymap/keymap'
 import { keymapState } from '../keymap/keymap-state.svelte'
 import type { EditorState, Extension, Range } from '@codemirror/state'
@@ -104,7 +106,17 @@ export interface CreateFileEditorOptions {
     action: 'definition' | 'references' | 'hover' | 'documentation' | 'grep' | 'files',
     token: IdeToken
   ) => boolean
-  getIdeActions?: (token: IdeToken) => IdeMenuAction[]
+  getIdeActions?: (token: IdeToken) => IdeMenuAction[] | Promise<IdeMenuAction[]>
+  /** The file's own language-server completions, shown in CodeMirror's
+   *  dropdown as the reader types. */
+  getIdeCompletions?: (query: {
+    line: number
+    character: number
+    triggerKind?: number
+    triggerCharacter?: string
+  }) => Promise<IdeCompletionItem[]>
+  /** Resolve an accepted completion, which is where an auto-import edit lives. */
+  resolveIdeCompletion?: (item: IdeCompletionItem) => Promise<IdeCompletionItem | null>
   onDocChange: (text: string, changes: FileEditorDocumentChange[], userEvent: string | null) => void
   onConflictRangesChange?: (ranges: FileEditorConflictRange[]) => void
   onFindMatches?: (count: number) => void
@@ -148,6 +160,9 @@ interface CodeMirrorApi {
   syntaxHighlighting: (typeof import('@codemirror/language'))['syntaxHighlighting']
   HighlightStyle: (typeof import('@codemirror/language'))['HighlightStyle']
   tags: (typeof import('@lezer/highlight'))['tags']
+  autocompletion: (typeof import('@codemirror/autocomplete'))['autocompletion']
+  pickedCompletion: (typeof import('@codemirror/autocomplete'))['pickedCompletion']
+  startCompletion: (typeof import('@codemirror/autocomplete'))['startCompletion']
 }
 
 export async function createFileEditor(
@@ -204,6 +219,10 @@ export async function createFileEditor(
 
   let flashTimer: ReturnType<typeof setTimeout> | null = null
   let destroyed = false
+  /** The explicit query currently waiting on the language server. */
+  let loadingCompletionKey: string | null = null
+  /** The one-shot answer consumed by the retriggered completion source. */
+  let readyCompletion: { key: string; items: IdeCompletionItem[] } | null = null
   /** Last depth pair handed to `onHistoryChange`, so the toolbar is only told
    *  when something actually changed. `null` forces the creation report. */
   let reportedHistory: FileEditorHistoryState | null = null
@@ -416,6 +435,16 @@ export async function createFileEditor(
     // keymap and the placeholder text are all part of the same extension.
     api.codeFolding(),
     api.keymap.of([tabBinding, ...api.foldKeymap, ...api.defaultKeymap, ...api.historyKeymap]),
+    // The language server is the completion source: CodeMirror owns the
+    // dropdown, its keyboard handling and its filtering, while every accepted
+    // item travels back to the server for the auto-import edit it carries.
+    api.autocompletion({
+      override: [completionSource],
+      activateOnTyping: true,
+      closeOnBlur: true,
+      icons: false,
+      maxRenderedOptions: 60
+    }),
     api.EditorView.updateListener.of((update) => {
       reportHistory(update.state)
       const conflictRangesChanged = update.transactions.some(
@@ -445,6 +474,169 @@ export async function createFileEditor(
     api.EditorView.domEventHandlers({ scroll: () => onScroll?.() })
   ]
 
+  /** Convert an LSP line/character position into a document offset. */
+  function offsetAt(
+    doc: EditorState['doc'],
+    position: { line: number; character: number }
+  ): number | null {
+    if (!Number.isInteger(position.line) || position.line < 0 || position.line >= doc.lines)
+      return null
+    const line = doc.line(position.line + 1)
+    if (!Number.isInteger(position.character) || position.character < 0) return null
+    return line.from + Math.min(position.character, line.length)
+  }
+  /**
+   * Insert an accepted completion, together with its auto-import edit.
+   *
+   * The insertion itself is CodeMirror's own from/to for the word being typed,
+   * so what the reader sees replaced is exactly the token the dropdown matched.
+   * Additional edits are the language server's own positions: they are what adds
+   * `import CioCircle from '...'` above the line the component was typed on.
+   *
+   * Resolution is asynchronous because tsserver only reveals those edits when
+   * the item is resolved, so both are applied in one transaction afterwards and
+   * one undo removes the completion and its import together.
+   */
+  async function applyIdeCompletion(
+    target: EditorView,
+    item: IdeCompletionItem,
+    completion: Completion,
+    from: number,
+    to: number
+  ): Promise<void> {
+    let resolved = item
+    if (item.data !== undefined && options.resolveIdeCompletion) {
+      try {
+        resolved = (await options.resolveIdeCompletion(item)) ?? item
+      } catch {
+        resolved = item
+      }
+    }
+    if (destroyed || target !== view) return
+    const doc = view.state.doc
+    const primary = resolved.textEdit?.newText ?? resolved.insertText ?? resolved.label
+    const changes: { from: number; to: number; insert: string }[] = [{ from, to, insert: primary }]
+    let shift = 0
+    for (const edit of resolved.additionalTextEdits ?? []) {
+      const start = offsetAt(doc, edit.range.start)
+      const end = offsetAt(doc, edit.range.end)
+      if (start === null || end === null || end < start) continue
+      // Overlapping the insertion would mean the server's two edits disagree
+      // about the same characters, so the import is dropped rather than applied
+      // on top of the completion.
+      if (start <= to && end >= from) continue
+      changes.push({ from: start, to: end, insert: edit.newText })
+      if (start <= from) shift += edit.newText.length - (end - start)
+    }
+    const delta = changes.reduce(
+      (total, change) => total + change.insert.length - (change.to - change.from),
+      0
+    )
+    const cursor = Math.max(0, Math.min(from + shift + primary.length, doc.length + delta))
+    view.dispatch({
+      changes,
+      selection: { anchor: cursor },
+      scrollIntoView: true,
+      // The picked annotation tells CodeMirror this completion was accepted, so
+      // it closes the dropdown instead of reopening it on the new text.
+      annotations: api.pickedCompletion.of(completion),
+      userEvent: 'input.complete'
+    })
+  }
+  /**
+   * The language server's completions as CodeMirror's dropdown.
+   *
+   * Only word-like prefixes open it automatically, so typing a brace or a
+   * space never leaves a list open. The explicit path is the app keymap's
+   * `ide-complete`, which asks for completions at an empty prefix too.
+   *
+   * An explicit ask opens the dropdown on the same frame with a loading row,
+   * because a cold language server takes seconds and a trigger that does
+   * nothing while it thinks reads as broken. The real answer arrives through
+   * `readyCompletion`, one shot per key: the retriggered source consumes it
+   * instead of asking the server again.
+   */
+  async function completionSource(context: CompletionContext): Promise<CompletionResult | null> {
+    if (!options.isIdeEnabled?.() || !options.getIdeCompletions) return null
+    const word = context.matchBefore(/[\w$]+/u)
+    if (!word && !context.explicit) return null
+    const line = context.state.doc.lineAt(context.pos)
+    const key = `${line.number - 1}:${context.pos - line.from}:${context.state.doc.length}:${word?.text ?? ''}`
+    if (readyCompletion?.key === key) {
+      const { items } = readyCompletion
+      readyCompletion = null
+      if (!items.length) return null
+      return {
+        from: word?.from ?? context.pos,
+        options: completionChoices(items),
+        validFor: /^[\w$]*$/u
+      }
+    }
+    const query = {
+      line: line.number - 1,
+      character: context.pos - line.from,
+      // LSP has no "the reader typed a letter" trigger kind. Normal typing is a
+      // manual invocation (1); 2 is reserved for a trigger character such as
+      // `.`, and svelteserver answers 2 with an empty list.
+      triggerKind: 1
+    }
+    if (context.explicit) {
+      if (loadingCompletionKey !== key) {
+        loadingCompletionKey = key
+        void options
+          .getIdeCompletions(query)
+          .then((items) => {
+            loadingCompletionKey = null
+            if (destroyed) return
+            readyCompletion = { key, items }
+            // One painted frame of the loading row before the answer replaces
+            // it: a source that resolves inside the same frame otherwise shows
+            // no feedback at all, which is exactly the cold-start case.
+            requestAnimationFrame(() => {
+              if (!destroyed && view) api.startCompletion(view)
+            })
+          })
+          .catch(() => {
+            loadingCompletionKey = null
+            if (destroyed) return
+            readyCompletion = { key, items: [] }
+            requestAnimationFrame(() => {
+              if (!destroyed && view) api.startCompletion(view)
+            })
+          })
+      }
+      return {
+        from: word?.from ?? context.pos,
+        filter: false,
+        options: [
+          {
+            label: 'Searching for suggestions…',
+            detail: 'Language server',
+            apply: () => undefined
+          }
+        ]
+      }
+    }
+    const items = await options.getIdeCompletions(query)
+    if (!items.length) return null
+    return {
+      from: word?.from ?? context.pos,
+      options: completionChoices(items),
+      validFor: /^[\w$]*$/u
+    }
+  }
+  function completionChoices(items: IdeCompletionItem[]): Completion[] {
+    return items.map((item) => ({
+      label: item.labelDetail ? `${item.label} ${item.labelDetail}` : item.label,
+      detail: item.detail,
+      info: item.documentation,
+      boost: item.sortText?.startsWith('0') ? 1 : 0,
+      apply: (target, completion, from, to) => {
+        void applyIdeCompletion(target, item, completion, from, to)
+      }
+    }))
+  }
+
   function tokenAt(view: EditorView, position: number, x = 0, y = 0): IdeToken | null {
     const word = view.state.wordAt(position)
     if (!word) return null
@@ -470,6 +662,14 @@ export async function createFileEditor(
       },
       keydown(event, view) {
         if (!options.isIdeEnabled?.()) return false
+        // Ctrl+Space is the app keymap's trigger, not CodeMirror's: asking the
+        // dropdown to open explicitly makes the completion source query the
+        // language server even with an empty prefix, which is what a reader who
+        // presses it expects.
+        if (keymapState.matches('ide-complete', event)) {
+          event.preventDefault()
+          return api.startCompletion(view)
+        }
         const commands = ['definition', 'references', 'documentation', 'grep', 'files'] as const
         const command = commands.find((action) => keymapState.matches(`ide-${action}`, event))
         if (!command) return false
@@ -510,6 +710,17 @@ export async function createFileEditor(
   let hoverTimer: ReturnType<typeof setTimeout> | undefined
   const state = api.EditorState.create({ doc: value, extensions })
   const view = new api.EditorView({ state, parent: host })
+  // The dropdown may not be wider than the editor it belongs to. In the sidebar
+  // that used to let a long detail column stretch the popup over the file tree,
+  // while in full screen there was room to spare. A variable on the editor root
+  // keeps both honest without a second layout pass.
+  const syncCompletionWidth = (): void => {
+    const width = Math.max(220, Math.floor(host.clientWidth - 16))
+    view.dom.style.setProperty('--cio-completion-width', `${width}px`)
+  }
+  const completionWidth = new ResizeObserver(syncCompletionWidth)
+  completionWidth.observe(host)
+  syncCompletionWidth()
   const unregisterIde = registerIdeContext(host, (event) => {
     if (!options.isIdeEnabled?.()) return []
     const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
@@ -760,6 +971,7 @@ export async function createFileEditor(
       clearTimeout(hoverTimer)
       unregisterIde()
       destroyed = true
+      completionWidth.disconnect()
       clearFlashTimer()
       view.destroy()
     }
@@ -767,13 +979,15 @@ export async function createFileEditor(
 }
 
 async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
-  const [stateModule, viewModule, commandModule, languageModule, tagsModule] = await Promise.all([
-    import('@codemirror/state'),
-    import('@codemirror/view'),
-    import('@codemirror/commands'),
-    import('@codemirror/language'),
-    import('@lezer/highlight')
-  ])
+  const [stateModule, viewModule, commandModule, languageModule, tagsModule, autocompleteModule] =
+    await Promise.all([
+      import('@codemirror/state'),
+      import('@codemirror/view'),
+      import('@codemirror/commands'),
+      import('@codemirror/language'),
+      import('@lezer/highlight'),
+      import('@codemirror/autocomplete')
+    ])
   return {
     EditorState: stateModule.EditorState,
     EditorSelection: stateModule.EditorSelection,
@@ -805,7 +1019,10 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     foldKeymap: languageModule.foldKeymap,
     syntaxHighlighting: languageModule.syntaxHighlighting,
     HighlightStyle: languageModule.HighlightStyle,
-    tags: tagsModule.tags
+    tags: tagsModule.tags,
+    autocompletion: autocompleteModule.autocompletion,
+    pickedCompletion: autocompleteModule.pickedCompletion,
+    startCompletion: autocompleteModule.startCompletion
   }
 }
 
@@ -960,6 +1177,75 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       },
       '.cm-merge-conflict-active': {
         backgroundColor: 'color-mix(in srgb, var(--color-warning) 13%, transparent)'
+      },
+      // The completion dropdown is the app's own surface, not CodeMirror's
+      // default white popover: same border, radius-free corners and tokens as
+      // every other menu.
+      '.cm-tooltip': {
+        border: '1px solid var(--color-border)',
+        backgroundColor: 'var(--color-surface)',
+        color: 'var(--color-foreground)',
+        boxShadow: '0 12px 32px rgb(0 0 0 / 0.28)'
+      },
+      '.cm-tooltip.cm-tooltip-autocomplete': {
+        fontFamily: 'var(--font-mono)',
+        borderRadius: '0',
+        // Never wider than the editor that owns it: the sidebar panel is narrow
+        // and a long detail column used to stretch the list over the file tree.
+        maxWidth: 'var(--cio-completion-width, 34rem)'
+      },
+      '.cm-tooltip-autocomplete > ul': {
+        fontFamily: 'var(--font-mono)',
+        fontSize: '0.75rem',
+        maxHeight: '17rem',
+        maxWidth: 'inherit'
+      },
+      '.cm-tooltip-autocomplete > ul > li': {
+        padding: '0.2rem 0.55rem',
+        lineHeight: '1.5',
+        display: 'flex',
+        alignItems: 'baseline',
+        gap: '0.5rem',
+        minWidth: '0'
+      },
+      // Selected is an inversion, not a slightly lighter row: primary is near
+      // black on paper and near white in dark mode, and on-primary is its ink.
+      // That is the highest contrast pair the app already guarantees, so the
+      // highlighted entry is unmistakable on a poor panel too.
+      '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+        backgroundColor: 'var(--color-primary)',
+        color: 'var(--color-on-primary)'
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionMatchedText': {
+        color: 'inherit',
+        textDecoration: 'underline'
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail': {
+        color: 'color-mix(in srgb, var(--color-on-primary) 82%, transparent)'
+      },
+      '.cm-completionLabel': {
+        flex: '0 1 auto',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis'
+      },
+      '.cm-completionMatchedText': {
+        textDecoration: 'none',
+        fontWeight: '600',
+        color: 'var(--color-primary)'
+      },
+      '.cm-completionDetail': {
+        marginLeft: 'auto',
+        flex: '0 1 auto',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        fontStyle: 'normal',
+        color: 'var(--color-muted)'
+      },
+      '.cm-completionIcon': { display: 'none' },
+      // CodeMirror draws its own separator lines with a fixed colour; use the
+      // app border so the footer matches the popup it belongs to.
+      '.cm-tooltip-autocomplete > ul > li.cm-completionInfo': {
+        borderTop: '1px solid var(--color-border)'
       }
     },
     { dark: false }

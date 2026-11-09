@@ -656,7 +656,7 @@
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
-  import FileDiffView from './FileDiffView.svelte'
+  import FileDiffView from './DeferredFileDiffView.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'

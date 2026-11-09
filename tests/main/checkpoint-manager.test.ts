@@ -191,14 +191,15 @@ describe('CheckpointManager', () => {
     expect(diff.before).toBeUndefined()
   })
 
-  it('keeps the content of a rescued change out of blob pruning', async () => {
+  // The app's own scratch folder is never the turn's work: a card that offers
+  // `.cio/tmp/report.txt` beside the real files is noise the user has to clear
+  // by hand, so write evidence for it is dropped like any excluded directory.
+  it('never records the scratch folder as a change, even with write evidence', async () => {
     const projectRoot = await temporaryDirectory('codeinoven-project-')
     const manager = await testCheckpointManager()
     await writeFile(join(projectRoot, 'tracked.txt'), 'before', 'utf-8')
     const turn = await manager.beginTurn('project1', 'thread1', projectRoot, 'Scratch note', false)
     await writeFile(join(projectRoot, 'tracked.txt'), 'after', 'utf-8')
-    // A file in the checkpoint-excluded scratch directory: the project-wide
-    // snapshot never lists it, so only the turn's own write evidence rescues it.
     const scratchPath = '.cio/work/feature/progress.md'
     await mkdir(join(projectRoot, '.cio/work/feature'), { recursive: true })
     await writeFile(join(projectRoot, scratchPath), '# Progress', 'utf-8')
@@ -213,15 +214,10 @@ describe('CheckpointManager', () => {
       undefined,
       { changeSources: new Map([[scratchPath, [claimedSource(scratchPath)]]]) }
     )
-    expect(completed.changes.map((change) => change.path)).toContain(scratchPath)
 
-    await manager.pruneUnusedBlobs('project1')
-
-    // The rescued change is still served after its snapshot was compacted and
-    // every blob nobody references was collected.
-    await expect(
-      manager.getFileDiff('project1', 'thread1', turn.id, scratchPath)
-    ).resolves.toMatchObject({ kind: 'created', after: '# Progress' })
+    expect(completed.changes.map((change) => change.path)).toEqual(['tracked.txt'])
+    expect(completed.changeSourceRefs?.[scratchPath]).toBeUndefined()
+    expect(completed.toolSources && Object.keys(completed.toolSources)).toHaveLength(0)
   })
 
   it('reports a diff whose content blob is gone instead of failing the read', async () => {

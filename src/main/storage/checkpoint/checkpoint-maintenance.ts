@@ -5,7 +5,14 @@ import { Logger } from '../../system/logger'
 import type { ChangeTrackingService } from '../../git/change-tracking-service'
 import { assertId } from './checkpoint-errors'
 import { isMissing } from './checkpoint-blob-store'
+import { EXCLUDED_DIRECTORY_NAMES, isExcludedRelativePath } from '../../git/change-tracking-service'
+import { snapshotChangeBreakdown } from './checkpoint-breakdown'
 import { calculateLineStats, type CheckpointLineStats } from './checkpoint-diff'
+import { diffCheckpointFiles } from './checkpoint-summary'
+import {
+  TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
+  transcriptWriteEvidence
+} from './checkpoint-transcript-evidence'
 import type { TurnCheckpoint } from '../checkpoint-manager'
 
 /** Upper bounds for one line-stats repair pass so startup is never blocked. */
@@ -171,6 +178,203 @@ export async function repairMisattributedInternalCheckpoints(
       await new Promise<void>((resolve) => setImmediate(resolve))
     } catch (error) {
       Logger.error('Internal-attribution repair skipped a checkpoint (non-fatal):', error)
+    }
+  }
+  return repaired
+}
+
+/** Most diff paths one evidence repair will consider, so a wide project diff
+ *  can never turn startup into a long comparison. */
+const EVIDENCE_REPAIR_MAX_PATHS = 2_000
+
+/**
+ * One-time repair pass for file-change cards that recorded nothing while the
+ * turn really wrote files.
+ *
+ * A contested project diff keeps only the paths the turn can prove it wrote,
+ * and a command whose write target was parsed in the wrong directory proved
+ * nothing: the card ended up empty and its whole diff was filtered away. The
+ * snapshots are still on the row (completion now keeps them for exactly this
+ * state), so the real diff can be recomputed and intersected with the durable
+ * transcript evidence for the turn. Idempotent: a repaired row holds changes
+ * and no longer matches the candidate query.
+ */
+export async function repairEvidenceDroppedCheckpoints(
+  host: CheckpointMaintenanceHost
+): Promise<number> {
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await host.queryRows(
+      `SELECT tc.turn_id AS turn_id,
+              tc.project_id AS project_id,
+              tc.thread_id AS thread_id,
+              json_extract(tc.data, '$.createdAt') AS created_at
+         FROM turn_checkpoints tc
+        WHERE json_extract(tc.data, '$.status') = 'completed'
+          AND json_array_length(json_extract(tc.data, '$.changes')) = 0
+          AND json_extract(tc.data, '$.changeFilterApplied') = 1
+          AND json_type(tc.data, '$.before.files') = 'object'
+          AND json_type(tc.data, '$.after.files') = 'object'
+        ORDER BY tc.created_at DESC
+        LIMIT ?`,
+      [REPAIR_MAX_CHECKPOINTS],
+      REPAIR_MAX_CHECKPOINTS
+    )
+  } catch (error) {
+    Logger.error('Evidence repair could not list candidates (non-fatal):', error)
+    return 0
+  }
+  let repaired = 0
+  let repairedPaths = 0
+  for (const row of rows) {
+    const turnId = row['turn_id']
+    const projectId = row['project_id']
+    const threadId = row['thread_id']
+    const createdAt = row['created_at']
+    if (
+      typeof turnId !== 'string' ||
+      typeof projectId !== 'string' ||
+      typeof threadId !== 'string' ||
+      typeof createdAt !== 'number'
+    ) {
+      continue
+    }
+    if (repairedPaths >= REPAIR_MAX_FILES) break
+    try {
+      const checkpoint = await host.get(projectId, threadId, turnId)
+      if (!checkpoint || checkpoint.status !== 'completed' || !checkpoint.after) continue
+      const projectRows = await host.queryRows(
+        'SELECT path FROM projects WHERE id = ?',
+        [projectId],
+        1
+      )
+      const projectPath = projectRows[0]?.['path']
+      if (typeof projectPath !== 'string' || projectPath.length === 0) continue
+      const diff = diffCheckpointFiles(checkpoint.before, checkpoint.after)
+      if (diff.length === 0 || diff.length > EVIDENCE_REPAIR_MAX_PATHS) continue
+      const transcript = await host.queryRows(
+        `SELECT parts FROM agent_messages
+          WHERE thread_id = ? AND role = 'assistant' AND created_at >= ?
+          ORDER BY created_at DESC, id DESC`,
+        [threadId, checkpoint.before.createdAt],
+        TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT
+      )
+      const evidence = transcriptWriteEvidence(
+        projectPath,
+        transcript.map((row) => ({ parts: row['parts'] }))
+      )
+      const kept = diff.filter((change) => (evidence.get(change.path)?.length ?? 0) > 0)
+      if (kept.length === 0) continue
+      const lineStats = await calculateLineStats(host.tracker(projectId), kept)
+      const breakdown = await snapshotChangeBreakdown(
+        kept.map((change) => ({
+          path: change.path,
+          additions: lineStats.stats[change.path]?.additions,
+          deletions: lineStats.stats[change.path]?.deletions
+        }))
+      )
+      await host.save({
+        ...checkpoint,
+        changes: kept,
+        toolSources: Object.fromEntries(
+          kept.flatMap((change) =>
+            (evidence.get(change.path) ?? []).map((source) => [source.toolPartId, source])
+          )
+        ),
+        changeSourceRefs: Object.fromEntries(
+          kept.map((change) => [
+            change.path,
+            (evidence.get(change.path) ?? []).map((source) => ({
+              toolPartId: source.toolPartId,
+              verification: source.verification,
+              window: source.window
+            }))
+          ])
+        ),
+        lineStats: lineStats.stats,
+        breakdown
+      })
+      repaired += 1
+      repairedPaths += kept.length
+      // Yield between checkpoints so a large first-run repair never
+      // monopolizes the main process.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    } catch (error) {
+      Logger.error('Evidence repair skipped a checkpoint (non-fatal):', error)
+    }
+  }
+  return repaired
+}
+
+/**
+ * One-time repair pass for cards that list files checkpoints never track.
+ *
+ * The app's own scratch folder and build output are not the turn's work, but an
+ * older snapshot or a git-mode listing could still hand them to the diff, so
+ * cards offered `.cio/tmp/report.txt` as a change beside the real ones. The
+ * candidates are found in SQL on the scratch prefix, then every excluded path is
+ * dropped from the stored changes and the snapshot maps (via the regular
+ * compaction on save). Idempotent: a repaired row no longer matches the query.
+ */
+export async function dropExcludedPathChanges(host: CheckpointMaintenanceHost): Promise<number> {
+  const matchers = EXCLUDED_DIRECTORY_NAMES.flatMap(() => [
+    `json_extract(je.value, '$.path') LIKE ?`,
+    `json_extract(je.value, '$.path') LIKE ?`
+  ])
+  const params = EXCLUDED_DIRECTORY_NAMES.flatMap((name) => [`${name}/%`, `%/${name}/%`])
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await host.queryRows(
+      `SELECT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
+         FROM turn_checkpoints tc
+        WHERE EXISTS (
+          SELECT 1 FROM json_each(json_extract(tc.data, '$.changes')) je
+           WHERE ${matchers.join(' OR ')}
+        )
+        LIMIT ?`,
+      [...params, REPAIR_MAX_CHECKPOINTS],
+      REPAIR_MAX_CHECKPOINTS
+    )
+  } catch (error) {
+    Logger.error('Excluded-path repair could not list candidates (non-fatal):', error)
+    return 0
+  }
+  let repaired = 0
+  for (const row of rows) {
+    const turnId = row['turn_id']
+    const projectId = row['project_id']
+    const threadId = row['thread_id']
+    if (typeof turnId !== 'string' || typeof projectId !== 'string' || typeof threadId !== 'string')
+      continue
+    try {
+      const checkpoint = await host.get(projectId, threadId, turnId)
+      if (!checkpoint) continue
+      const kept = checkpoint.changes.filter((change) => !isExcludedRelativePath(change.path))
+      if (kept.length === checkpoint.changes.length) continue
+      const lineStats = await calculateLineStats(host.tracker(projectId), kept)
+      await host.save({
+        ...checkpoint,
+        changes: kept,
+        lineStats: lineStats.stats,
+        changeSourceRefs: Object.fromEntries(
+          kept.map((change) => [change.path, checkpoint.changeSourceRefs?.[change.path] ?? []])
+        ),
+        toolSources: Object.fromEntries(
+          Object.entries(checkpoint.toolSources ?? {}).filter(([partId]) =>
+            kept.some((change) =>
+              (checkpoint.changeSourceRefs?.[change.path] ?? []).some(
+                (reference) => reference.toolPartId === partId
+              )
+            )
+          )
+        )
+      })
+      repaired += 1
+      // Yield between checkpoints so a large first-run repair never
+      // monopolizes the main process.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    } catch (error) {
+      Logger.error('Excluded-path repair skipped a checkpoint (non-fatal):', error)
     }
   }
   return repaired

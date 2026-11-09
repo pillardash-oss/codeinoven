@@ -43,8 +43,14 @@ export interface DeploymentProvider {
    * the detail view asks for that one deployment's log through {@link getLogs}.
    */
   listDeployments(containerId: string): Promise<CloudDeploymentDeployment[]>
-  /** Capped raw log text for a deployment, or the latest when no id is given. */
-  getLogs(containerId: string, deploymentId?: string): Promise<string>
+  /**
+   * Capped raw log text for a deployment, or the latest when no id is given.
+   *
+   * `serviceName` selects one container's runtime log inside a multi-container
+   * (docker-compose) resource, using the id of one of the container's
+   * `logSources`. It is a runtime read, so no deployment record is consulted.
+   */
+  getLogs(containerId: string, deploymentId?: string, serviceName?: string): Promise<string>
   /** Static metadata about the adapter itself. */
   getProviderInfo(): CloudDeploymentProviderInfo
 }

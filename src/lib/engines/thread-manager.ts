@@ -817,6 +817,30 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
+    // An assistant's Getting started thread is its behavior record: the
+    // conversation that wrote the instructions the assistant follows on every run.
+    // It belongs to that assistant, and to that place, for life. Nothing renames it,
+    // moves it, or hands it to another assistant, because a behavior thread that
+    // changes owner is how one assistant's instructions, name and schedule once
+    // landed on a different assistant entirely.
+    if (isAssistantSetupThread(existing)) {
+      if (
+        (input.title !== undefined && input.title !== existing.title) ||
+        (input.titleSource !== undefined && input.titleSource !== existing.titleSource)
+      ) {
+        throw new Error('The Getting started thread cannot be renamed')
+      }
+      if (input.assistantId !== undefined && input.assistantId !== existing.assistantId) {
+        throw new Error('The Getting started thread cannot be moved to another assistant')
+      }
+      if (
+        input.scopeBucketId !== undefined &&
+        input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+      ) {
+        throw new Error('The Getting started thread cannot be moved out of its scope')
+      }
+    }
+
     // Only an assistant task has a home and a workspace that can differ. A
     // project thread already names its own scope, so accepting a binding for
     // one would create a second, contradictory answer to the same question.
@@ -1017,9 +1041,20 @@ export class ThreadManager {
     this.onChange?.(updated)
     return updated
   }
-  async deleteThread(projectId: string, threadId: string): Promise<void> {
+  async deleteThread(
+    projectId: string,
+    threadId: string,
+    options: { allowAssistantSetupThread?: boolean } = {}
+  ): Promise<void> {
     const projectThreads = await this.threadRepo.listForDeletionViaWorker(projectId)
     const thread = projectThreads.find((candidate) => candidate.id === threadId)
+    // An assistant's Getting started thread is never deleted on its own: it is the
+    // record of the conversation that wrote the instructions the assistant runs on.
+    // It leaves with its assistant, through the sweep that removes both, which is
+    // the only caller that passes the allowance below.
+    if (thread && isAssistantSetupThread(thread) && !options.allowAssistantSetupThread) {
+      throw new Error('The Getting started thread cannot be deleted. Remove the assistant itself.')
+    }
     if (!thread) {
       // Deleting a thread that is already gone is a finished deletion, not a
       // failure: the row and everything the cascade takes with it are exactly

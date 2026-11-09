@@ -59,7 +59,9 @@ export class AssistantManager {
    * disk artifacts). Attached by the IPC layer once the thread manager exists,
    * so deleting an assistant sweeps its threads instead of orphaning them.
    */
-  private threadDeleter: ((threadId: string) => Promise<void>) | null = null
+  private threadDeleter:
+    | ((threadId: string, options?: { allowAssistantSetupThread?: boolean }) => Promise<void>)
+    | null = null
 
   constructor(
     private database: Database,
@@ -72,7 +74,9 @@ export class AssistantManager {
   }
 
   /** Attach the canonical thread deleter used when an assistant is deleted. */
-  attachThreadDeleter(deleter: (threadId: string) => Promise<void>): void {
+  attachThreadDeleter(
+    deleter: (threadId: string, options?: { allowAssistantSetupThread?: boolean }) => Promise<void>
+  ): void {
     this.threadDeleter = deleter
   }
 
@@ -419,7 +423,10 @@ export class AssistantManager {
       return
     }
     try {
-      await this.threadDeleter(thread.id)
+      // Removing an assistant removes its behavior thread with it: that is the one
+      // sweep allowed to take a Getting started thread away, because there is no
+      // assistant left for it to belong to.
+      await this.threadDeleter(thread.id, { allowAssistantSetupThread: true })
     } catch (error) {
       if (!this.threadRepo.get(thread.id)) return
       throw error
@@ -530,10 +537,43 @@ export class AssistantManager {
     return updated
   }
 
-  /** Group a task into an assistant, or ungroup it with `null`. */
+  /**
+   * Whether a thread's conversation is an assistant's own authoring
+   * conversation.
+   *
+   * A knowledge write is the app committing what one assistant's Getting started
+   * conversation produced, so the two must belong together: the assistant whose
+   * instructions are being replaced is the assistant that owns the thread the draft
+   * was read from. This is what the write path checks before it replaces anything,
+   * because the two drifting apart is how one assistant's instructions, name and
+   * schedule once landed on another.
+   */
+  threadAuthoringBelongsTo(threadId: string, assistantId: string): boolean {
+    const thread = this.threadRepo.get(threadId)
+    return thread?.projectId === ASSISTANT_SPACE_ID && thread.assistantId === assistantId
+  }
+
+  /**
+   * Group a task into an assistant, or ungroup it with `null`.
+   *
+   * A Getting started thread is never regrouped: it is the record of the
+   * conversation that wrote its assistant's instructions, so moving it under
+   * another assistant would leave that assistant's next recap save committing the
+   * previous assistant's knowledge, name, schedule and connections. The two belong
+   * together for the assistant's whole life, which is why this refuses to move it.
+   */
   assignTask(threadId: string, assistantId: string | null): Thread {
     const existing = this.threadRepo.get(threadId)
     if (!existing) throw new Error(`Thread not found: ${threadId}`)
+    if (
+      existing.assistantId &&
+      existing.assistantId !== assistantId &&
+      isAssistantSetupThread(existing)
+    ) {
+      throw new Error(
+        'The Getting started thread writes the instructions of the assistant it belongs to, so it cannot be moved to another assistant'
+      )
+    }
     const updated: Thread = {
       ...existing,
       assistantId: assistantId ?? undefined,
