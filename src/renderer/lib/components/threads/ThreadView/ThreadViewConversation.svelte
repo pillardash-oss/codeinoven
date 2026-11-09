@@ -53,8 +53,7 @@
   import CioUserMark from '$lib/components/icons/cio/CioUserMark.svelte'
   import ThreadMessageSpeaker from '../ThreadMessageSpeaker.svelte'
   import { isGroupThread } from '$shared/types'
-  import { assistantDisplayText } from '$lib/components/assistant/assistant-view'
-  import { assistantResultText } from '$shared/assistant-result'
+  import { conversationAnswerText, conversationProseText } from '../conversation-text'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -121,10 +120,26 @@
    * the working trace must read the same way, or the envelope itself shows up in
    * a chat that is meant to be readable.
    */
+  const textScope = $derived({
+    assistantMode: board.props.assistantMode,
+    groupThread,
+    authoringThread: board.abortRun.assistantAuthoringThread
+  })
+
   function conversationTraceOutput(text: string): string {
-    if (!board.props.assistantMode && !groupThread) return text
-    if (board.abortRun.assistantAuthoringThread) return assistantDisplayText(text)
-    return assistantResultText(text, false)
+    return conversationProseText(textScope, text)
+  }
+
+  /**
+   * The newest words a live step left behind, read the same way the answer is.
+   *
+   * The activity line under the transcript draws that prose before the answer
+   * exists, so it can hold the app's own `<assistant_result>` boundary while the
+   * run is still working. A run that has not opened its result yet says nothing
+   * here, and the line reports what the agent is doing instead.
+   */
+  function conversationLiveProse(text: string): string {
+    return conversationProseText(textScope, text)
   }
 
   /**
@@ -1163,12 +1178,11 @@
                     isLatest
                   )}
                   {@const rawClosingText = turnClosingText?.text ?? messageText(msg)}
-                  {@const deliveredClosingText =
-                    board.props.assistantMode || groupThread
-                      ? board.abortRun.assistantAuthoringThread
-                        ? assistantDisplayText(rawClosingText)
-                        : assistantResultText(rawClosingText, !msg.completedAt)
-                      : rawClosingText}
+                  {@const deliveredClosingText = conversationAnswerText(
+                    textScope,
+                    rawClosingText,
+                    !msg.completedAt
+                  )}
                   {#if turnClosingVisible && turnClosingText}
                     {@const isReadingThisTurn =
                       'messageId' in speechController.playback &&
@@ -1581,6 +1595,7 @@
         <TraceActivityLine
           parts={board.pollStreamParts.latestTurnRenderableParts}
           onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
+          formatProse={conversationLiveProse}
         />
       {/if}
 
