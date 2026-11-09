@@ -219,6 +219,10 @@ export async function createFileEditor(
 
   let flashTimer: ReturnType<typeof setTimeout> | null = null
   let destroyed = false
+  /** The explicit query currently waiting on the language server. */
+  let loadingCompletionKey: string | null = null
+  /** The one-shot answer consumed by the retriggered completion source. */
+  let readyCompletion: { key: string; items: IdeCompletionItem[] } | null = null
   /** Last depth pair handed to `onHistoryChange`, so the toolbar is only told
    *  when something actually changed. `null` forces the creation report. */
   let reportedHistory: FileEditorHistoryState | null = null
@@ -544,25 +548,85 @@ export async function createFileEditor(
    *
    * Only word-like prefixes open it automatically, so typing a brace or a
    * space never leaves a list open. The explicit path is the app keymap's
-   * `ide-complete` (Ctrl+Space by default), which asks for completions at an
-   * empty prefix too.
+   * `ide-complete`, which asks for completions at an empty prefix too.
+   *
+   * An explicit ask opens the dropdown on the same frame with a loading row,
+   * because a cold language server takes seconds and a trigger that does
+   * nothing while it thinks reads as broken. The real answer arrives through
+   * `readyCompletion`, one shot per key: the retriggered source consumes it
+   * instead of asking the server again.
    */
   async function completionSource(context: CompletionContext): Promise<CompletionResult | null> {
     if (!options.isIdeEnabled?.() || !options.getIdeCompletions) return null
     const word = context.matchBefore(/[\w$]+/u)
     if (!word && !context.explicit) return null
     const line = context.state.doc.lineAt(context.pos)
-    const items = await options.getIdeCompletions({
+    const key = `${line.number - 1}:${context.pos - line.from}:${context.state.doc.length}:${word?.text ?? ''}`
+    if (readyCompletion?.key === key) {
+      const { items } = readyCompletion
+      readyCompletion = null
+      if (!items.length) return null
+      return {
+        from: word?.from ?? context.pos,
+        options: completionChoices(items),
+        validFor: /^[\w$]*$/u
+      }
+    }
+    const query = {
       line: line.number - 1,
       character: context.pos - line.from,
       // LSP has no "the reader typed a letter" trigger kind. Normal typing is a
       // manual invocation (1); 2 is reserved for a trigger character such as
-      // `.`, and svelteserver answers 2 with an empty list, which is why typing
-      // used to show no dropdown at all.
+      // `.`, and svelteserver answers 2 with an empty list.
       triggerKind: 1
-    })
+    }
+    if (context.explicit) {
+      if (loadingCompletionKey !== key) {
+        loadingCompletionKey = key
+        void options
+          .getIdeCompletions(query)
+          .then((items) => {
+            loadingCompletionKey = null
+            if (destroyed) return
+            readyCompletion = { key, items }
+            // One painted frame of the loading row before the answer replaces
+            // it: a source that resolves inside the same frame otherwise shows
+            // no feedback at all, which is exactly the cold-start case.
+            requestAnimationFrame(() => {
+              if (!destroyed && view) api.startCompletion(view)
+            })
+          })
+          .catch(() => {
+            loadingCompletionKey = null
+            if (destroyed) return
+            readyCompletion = { key, items: [] }
+            requestAnimationFrame(() => {
+              if (!destroyed && view) api.startCompletion(view)
+            })
+          })
+      }
+      return {
+        from: word?.from ?? context.pos,
+        filter: false,
+        options: [
+          {
+            label: 'Searching for suggestions…',
+            detail: 'Language server',
+            apply: () => undefined
+          }
+        ]
+      }
+    }
+    const items = await options.getIdeCompletions(query)
     if (!items.length) return null
-    const choices: Completion[] = items.map((item) => ({
+    return {
+      from: word?.from ?? context.pos,
+      options: completionChoices(items),
+      validFor: /^[\w$]*$/u
+    }
+  }
+  function completionChoices(items: IdeCompletionItem[]): Completion[] {
+    return items.map((item) => ({
       label: item.labelDetail ? `${item.label} ${item.labelDetail}` : item.label,
       detail: item.detail,
       info: item.documentation,
@@ -571,7 +635,6 @@ export async function createFileEditor(
         void applyIdeCompletion(target, item, completion, from, to)
       }
     }))
-    return { from: word?.from ?? context.pos, options: choices, validFor: /^[\w$]*$/u }
   }
 
   function tokenAt(view: EditorView, position: number, x = 0, y = 0): IdeToken | null {
@@ -647,6 +710,17 @@ export async function createFileEditor(
   let hoverTimer: ReturnType<typeof setTimeout> | undefined
   const state = api.EditorState.create({ doc: value, extensions })
   const view = new api.EditorView({ state, parent: host })
+  // The dropdown may not be wider than the editor it belongs to. In the sidebar
+  // that used to let a long detail column stretch the popup over the file tree,
+  // while in full screen there was room to spare. A variable on the editor root
+  // keeps both honest without a second layout pass.
+  const syncCompletionWidth = (): void => {
+    const width = Math.max(220, Math.floor(host.clientWidth - 16))
+    view.dom.style.setProperty('--cio-completion-width', `${width}px`)
+  }
+  const completionWidth = new ResizeObserver(syncCompletionWidth)
+  completionWidth.observe(host)
+  syncCompletionWidth()
   const unregisterIde = registerIdeContext(host, (event) => {
     if (!options.isIdeEnabled?.()) return []
     const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
@@ -897,6 +971,7 @@ export async function createFileEditor(
       clearTimeout(hoverTimer)
       unregisterIde()
       destroyed = true
+      completionWidth.disconnect()
       clearFlashTimer()
       view.destroy()
     }
@@ -1114,23 +1189,39 @@ function buildEditorTheme(EditorView: CodeMirrorApi['EditorView']): Extension {
       },
       '.cm-tooltip.cm-tooltip-autocomplete': {
         fontFamily: 'var(--font-mono)',
-        borderRadius: '0'
+        borderRadius: '0',
+        // Never wider than the editor that owns it: the sidebar panel is narrow
+        // and a long detail column used to stretch the list over the file tree.
+        maxWidth: 'var(--cio-completion-width, 34rem)'
       },
       '.cm-tooltip-autocomplete > ul': {
         fontFamily: 'var(--font-mono)',
         fontSize: '0.75rem',
-        maxHeight: '17rem'
+        maxHeight: '17rem',
+        maxWidth: 'inherit'
       },
       '.cm-tooltip-autocomplete > ul > li': {
         padding: '0.2rem 0.55rem',
         lineHeight: '1.5',
         display: 'flex',
         alignItems: 'baseline',
-        gap: '0.5rem'
+        gap: '0.5rem',
+        minWidth: '0'
       },
+      // Selected is an inversion, not a slightly lighter row: primary is near
+      // black on paper and near white in dark mode, and on-primary is its ink.
+      // That is the highest contrast pair the app already guarantees, so the
+      // highlighted entry is unmistakable on a poor panel too.
       '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
-        backgroundColor: 'var(--color-elevated)',
-        color: 'var(--color-foreground)'
+        backgroundColor: 'var(--color-primary)',
+        color: 'var(--color-on-primary)'
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionMatchedText': {
+        color: 'inherit',
+        textDecoration: 'underline'
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected] .cm-completionDetail': {
+        color: 'color-mix(in srgb, var(--color-on-primary) 82%, transparent)'
       },
       '.cm-completionLabel': {
         flex: '0 1 auto',

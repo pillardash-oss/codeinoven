@@ -433,44 +433,77 @@
     triggerKind?: number
     triggerCharacter?: string
   }
-  let pendingCompletion: {
+  /**
+   * A repeat ask at the same caret for the same buffer is the same question.
+   * Language servers can take seconds on the first answer for a project, and
+   * pressing the trigger again used to pay that cost all over again. The cache
+   * is keyed by the buffer itself, so any edit invalidates it.
+   */
+  const COMPLETION_CACHE_MS = 30_000
+  let completionCache: {
+    text: string
+    line: number
+    character: number
+    at: number
+    items: IdeCompletionItem[]
+  } | null = null
+  /** At most two asks run at once; a stuck request must not block a fresh one. */
+  const COMPLETION_MAX_IN_FLIGHT = 2
+  let completionInFlight = 0
+  let queuedCompletion: {
     query: CompletionQuery
     resolve: (items: IdeCompletionItem[]) => void
   } | null = null
-  let completionRunning = false
   export function completions(query: CompletionQuery): Promise<IdeCompletionItem[]> {
     if (!active) return Promise.resolve([])
+    if (
+      completionCache &&
+      completionCache.text === value &&
+      completionCache.line === query.line &&
+      completionCache.character === query.character &&
+      Date.now() - completionCache.at < COMPLETION_CACHE_MS
+    )
+      return Promise.resolve(completionCache.items)
     return new Promise((resolve) => {
-      pendingCompletion?.resolve([])
-      pendingCompletion = { query, resolve }
-      if (!completionRunning) void drainCompletions()
+      if (completionInFlight < COMPLETION_MAX_IN_FLIGHT) void runCompletion(query, resolve)
+      else {
+        queuedCompletion?.resolve([])
+        queuedCompletion = { query, resolve }
+      }
     })
   }
-  async function drainCompletions(): Promise<void> {
-    completionRunning = true
+  async function runCompletion(
+    query: CompletionQuery,
+    resolve: (items: IdeCompletionItem[]) => void
+  ): Promise<void> {
+    completionInFlight++
+    const text = value
     try {
-      for (;;) {
-        const next = pendingCompletion
-        if (!next) break
-        pendingCompletion = null
-        try {
-          const result = await request(
-            'completion',
-            { line: next.query.line, character: next.query.character, word: '', x: 0, y: 0 },
-            undefined,
-            {
-              triggerKind: next.query.triggerKind,
-              triggerCharacter: next.query.triggerCharacter
-            }
-          )
-          capabilities = result.capabilities ?? capabilities
-          next.resolve(result.completions ?? [])
-        } catch {
-          next.resolve([])
-        }
+      const result = await request(
+        'completion',
+        { line: query.line, character: query.character, word: '', x: 0, y: 0 },
+        undefined,
+        { triggerKind: query.triggerKind, triggerCharacter: query.triggerCharacter }
+      )
+      capabilities = result.capabilities ?? capabilities
+      const items = result.completions ?? []
+      completionCache = {
+        text,
+        line: query.line,
+        character: query.character,
+        at: Date.now(),
+        items
       }
+      resolve(items)
+    } catch {
+      resolve([])
     } finally {
-      completionRunning = false
+      completionInFlight--
+      const next = queuedCompletion
+      if (next) {
+        queuedCompletion = null
+        void runCompletion(next.query, next.resolve)
+      }
     }
   }
   /** Resolve one accepted completion, which is where tsserver puts the import. */
