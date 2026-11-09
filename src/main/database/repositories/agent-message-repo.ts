@@ -1,6 +1,7 @@
 import { createHash } from 'crypto'
 import { capDecodedParts, capPersistedParts } from '../../chat/bounded-tool-output'
 import { stripThinkingArtifacts } from '../../../lib/agent-text-artifacts'
+import { assistantResultText } from '../../../lib/assistant-result'
 import { isAppPublishedMessageId } from '../../../lib/published-messages'
 import type { Database } from '../database'
 import type {
@@ -95,10 +96,19 @@ function previewText(partsJson: string, role: string): string {
       raw = summarizeUserMessage(partsJson).content
     } else {
       const parts = JSON.parse(partsJson) as AgentPart[]
-      raw = parts
+      const spoken = parts
         .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
         .map((part) => part.text)
         .join(' ')
+      // A run's answer is wrapped in the app's own `<assistant_result>` transport
+      // tags, and the conversation view has always shown the text inside them.
+      // The preview is the same line to the user, so a message that carries the
+      // envelope is read through the same extraction, while an ordinary message
+      // with no boundary stays exactly as it was written. `streaming` keeps a
+      // half-written tag from surfacing while the run is still producing it.
+      raw = /<\/?assistant_(?:result|detail)\b/iu.test(spoken)
+        ? assistantResultText(spoken, true)
+        : spoken
     }
   } catch {
     return ''
