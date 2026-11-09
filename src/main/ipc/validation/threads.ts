@@ -81,7 +81,8 @@ const THREAD_SETTINGS_FIELDS = new Set([
   'loopAuditor',
   'imageDescriptor',
   'imageDescriptorFallback',
-  'stoppedByUserAt'
+  'stoppedByUserAt',
+  'donIntroAskedAt'
 ])
 const AGENT_MODEL_SELECTION_FIELDS = new Set([
   'harnessId',
@@ -232,6 +233,14 @@ export function validateThreadSettings(value: unknown): ThreadSettings {
     settings.stoppedByUserAt = validateBoundedInteger(
       input.stoppedByUserAt,
       'Stopped-by-user timestamp',
+      0,
+      Number.MAX_SAFE_INTEGER
+    )
+  }
+  if (input.donIntroAskedAt !== undefined) {
+    settings.donIntroAskedAt = validateBoundedInteger(
+      input.donIntroAskedAt,
+      'Orchestrator introduction timestamp',
       0,
       Number.MAX_SAFE_INTEGER
     )
