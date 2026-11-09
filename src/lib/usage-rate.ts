@@ -124,6 +124,18 @@ export interface GenerationSample {
   requests: number
   /** Requests that ended without a measurable window (output never streamed). */
   unmeasuredRequests: number
+  /**
+   * True when `reportedTokens` describes output from a request that contributed
+   * no generation window, so the count has no denominator of its own.
+   *
+   * A harness that reports one cumulative count per message (pi's turn total)
+   * cannot be split, so its rate is withheld rather than divided by the windows
+   * of the requests that did stream. A harness that reports per request
+   * (`tokenUsageScope: 'request'`) never reaches this state: the unmeasurable
+   * request's count is dropped and both sides of the division keep describing
+   * the same requests.
+   */
+  reportedIncomplete: boolean
 }
 
 interface GenerationEntry extends GenerationSample {
@@ -142,6 +154,9 @@ interface GenerationEntry extends GenerationSample {
    *  running total for the request they are reporting, so the latest figure
    *  supersedes the earlier ones. */
   requestReportedTokens: number
+  /** True when a burst of the request now closing could not be measured, so the
+   *  request's own count has no denominator for part of its output. */
+  requestUnmeasured: boolean
   /** Scope of the counts this session reports. */
   scope: TokenUsageScope
   /** Characters and tokens already folded into the calibration. */
@@ -205,7 +220,9 @@ export class GenerationClock {
       entry.burstStart = at
     } else if (at - entry.lastSignalAt > GENERATION_BURST_GAP_MS) {
       // The gap itself is not generation: this burst ends at its last signal.
-      this.#settleBurst(entry, entry.lastSignalAt, 0)
+      // An unmeasurable burst still leaves its output inside the request's own
+      // count, so the request can no longer be divided by a window.
+      if (!this.#settleBurst(entry, entry.lastSignalAt, 0)) entry.requestUnmeasured = true
       entry.burstStart = at
       entry.burstChars = 0
       entry.burstSignals = 0
@@ -250,44 +267,57 @@ export class GenerationClock {
   completeRequest(key: string, at: number): void {
     const entry = this.#entries.get(key)
     if (!entry) return
-    if (entry.burstStart !== null) {
-      this.#settleBurst(entry, at, POST_OUTPUT_TAIL_MS)
-      entry.burstStart = null
-      entry.burstChars = 0
-      entry.burstSignals = 0
-    }
+    const tailMeasured =
+      entry.burstStart !== null ? this.#settleBurst(entry, at, POST_OUTPUT_TAIL_MS) : true
+    const measured = tailMeasured && !entry.requestUnmeasured
+    entry.requestUnmeasured = false
+    entry.burstStart = null
+    entry.burstChars = 0
+    entry.burstSignals = 0
     if (entry.requestReportedTokens > 0) {
-      entry.reportedTokens =
-        entry.scope === 'request'
-          ? (entry.reportedTokens ?? 0) + entry.requestReportedTokens
-          : Math.max(entry.reportedTokens ?? 0, entry.requestReportedTokens)
+      if (entry.scope === 'request') {
+        // A per-request count describes exactly the window this request put in
+        // the denominator. A request with no measurable window has no
+        // denominator to divide its count by, so the count is dropped and both
+        // sides of the division keep describing the same requests.
+        if (measured) {
+          entry.reportedTokens = (entry.reportedTokens ?? 0) + entry.requestReportedTokens
+        }
+      } else {
+        entry.reportedTokens = Math.max(entry.reportedTokens ?? 0, entry.requestReportedTokens)
+        // A cumulative count cannot be split, so a request that streamed nothing
+        // measurable leaves output in the numerator that no window covers.
+        if (!measured) entry.reportedIncomplete = true
+      }
     }
     entry.requestReportedTokens = 0
     entry.requests += 1
     this.#learn(key)
   }
 
-  /** Count a finished burst as generation time, or leave it unmeasured.
+  /** Count a finished burst as generation time and report whether it was
+   *  measurable.
    *
    *  `tailMs` is how much of the silence after the last chunk may still be
    *  generation. Mid-stream that silence is inter-token latency the model is
    *  still working through, so it gets the wider burst gap. At a request end it
    *  may be a tool running, so it gets only {@link POST_OUTPUT_TAIL_MS}. */
-  #settleBurst(entry: GenerationEntry, at: number, tailMs: number): void {
+  #settleBurst(entry: GenerationEntry, at: number, tailMs: number): boolean {
     const end = Math.min(at, entry.lastSignalAt + tailMs)
     const spanMs = Math.max(0, end - (entry.burstStart ?? end))
     if (entry.burstSignals < 2 || spanMs < MIN_MEASURED_BURST_MS) {
       entry.unmeasuredRequests += 1
-      return
+      return false
     }
     if (entry.burstChars / spanMs > MAX_PLAUSIBLE_STREAM_CHARS_PER_SECOND / 1000) {
       // Denser than any model can stream: the transport buffered the output and
       // released it at once, so this span measures the flush, not the model.
       entry.unmeasuredRequests += 1
-      return
+      return false
     }
     entry.activeMs += spanMs
     entry.measuredChars += entry.burstChars
+    return true
   }
 
   /**
@@ -330,7 +360,8 @@ export class GenerationClock {
       measuredChars,
       reportedTokens: entry.reportedTokens,
       requests: entry.requests,
-      unmeasuredRequests: entry.unmeasuredRequests
+      unmeasuredRequests: entry.unmeasuredRequests,
+      reportedIncomplete: entry.reportedIncomplete
     }
   }
 
@@ -360,12 +391,14 @@ export class GenerationClock {
       reportedTokens: null,
       requests: 0,
       unmeasuredRequests: 0,
+      reportedIncomplete: false,
       burstStart: null,
       lastSignalAt: 0,
       burstChars: 0,
       burstSignals: 0,
       countedByPart: new Map(),
       requestReportedTokens: 0,
+      requestUnmeasured: false,
       scope: 'message',
       learnedChars: 0,
       learnedTokens: 0
@@ -403,16 +436,22 @@ export class GenerationClock {
  *
  * A rate is withheld when nothing measurable streamed, when the reported count
  * covers output the window does not (the measured bursts carried less than
- * {@link MIN_MEASURED_OUTPUT_SHARE} of the streamed characters), and when the
- * result exceeds what any model generates. `charsPerToken` is the session's
- * calibrated factor, used only when the harness reported no token counts.
+ * {@link MIN_MEASURED_OUTPUT_SHARE} of the streamed characters), when the count
+ * includes a request that contributed no window at all
+ * ({@link GenerationSample.reportedIncomplete}), and when the result exceeds
+ * what any model generates. `charsPerToken` is the session's calibrated factor,
+ * used only when the harness reported no token counts.
  */
 export function tokensPerSecond(
-  sample: Pick<GenerationSample, 'activeMs' | 'chars' | 'measuredChars' | 'reportedTokens'>,
+  sample: Pick<
+    GenerationSample,
+    'activeMs' | 'chars' | 'measuredChars' | 'reportedTokens' | 'reportedIncomplete'
+  >,
   charsPerToken = DEFAULT_CHARS_PER_TOKEN
 ): number | null {
   if (sample.activeMs <= 0) return null
   const reported = sample.reportedTokens
+  if (reported !== null && sample.reportedIncomplete) return null
   if (reported !== null && !windowCoversOutput(sample)) return null
   const generated =
     reported ?? (sample.measuredChars > 0 ? sample.measuredChars / Math.max(0.5, charsPerToken) : 0)
