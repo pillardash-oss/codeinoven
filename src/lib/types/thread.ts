@@ -485,6 +485,19 @@ export function threadTracksReadStatus(thread: Thread): boolean {
 }
 
 /**
+ * Whether a run was started from a group conversation.
+ *
+ * The assistant it was handed to speaks in that group, and the group is where its
+ * answer is reported, so the run's own row is not where the reader meets the
+ * result. Such a run never claims the unread mark: the reply landing in the group
+ * is what says the answer arrived, and the group is the row that carries it.
+ */
+export function isGroupDispatchedRun(thread: Pick<Thread, 'dispatchOrigin'>): boolean {
+  const origin = thread.dispatchOrigin
+  return Boolean(origin?.author && origin.initiatorThreadId)
+}
+
+/**
  * Whether the coordinator row must still read as unread because one of its
  * workers has not been read yet. Only non-reporting workers hold the dot open:
  * a reporting worker's progress is visible through the Assignment lifecycle

@@ -2,6 +2,7 @@ import {
   coordinatorHasActiveDelegates,
   isOrchestrationChildThread,
   threadTracksReadStatus,
+  isGroupDispatchedRun,
   type Thread
 } from '$shared/types'
 import { settledThreadReadsUnread } from '$shared/thread-status-policy'
@@ -129,7 +130,8 @@ function addThreadStateCount(counts: ThreadStateCounts, thread: Thread, now: num
   // once), and it is the one unread rule the rail and the strips share: only a
   // completed run nobody has opened is unread, never a failure, a parked card,
   // a ready spec or a run still in flight (see `canMarkThreadUnread`).
-  if (settledThreadReadsUnread(thread, thread.read)) markUnreadThread(counts, thread.id)
+  if (settledThreadReadsUnread(thread, thread.read) && !isGroupDispatchedRun(thread))
+    markUnreadThread(counts, thread.id)
 }
 
 /**

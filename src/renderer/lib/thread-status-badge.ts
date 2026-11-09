@@ -1,5 +1,6 @@
 import CioClock from '@pdslng/cio-icon/CioClock.svelte'
 import {
+  isGroupDispatchedRun,
   isThreadAwaitingUser,
   isThreadRetryPaused,
   isThreadWorking,
@@ -101,7 +102,12 @@ export function statusBadgeForThread(
     case 'interrupted':
       return { label: 'Needs attention · interrupted', tone: 'done' }
     case 'completed':
-      return thread.read ? { label: 'Done', stage: 'done' } : { label: 'Unread', stage: 'unread' }
+      // A run a group conversation dispatched reports its answer into that
+      // group, so its own row is not where the reader meets the result: it never
+      // claims the unread mark, because the group is the row that carries it.
+      return thread.read || isGroupDispatchedRun(thread)
+        ? { label: 'Done', stage: 'done' }
+        : { label: 'Unread', stage: 'unread' }
     case 'created':
       return { label: 'New', stage: 'todo' }
     default: {

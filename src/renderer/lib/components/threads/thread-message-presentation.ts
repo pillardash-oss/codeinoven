@@ -193,6 +193,20 @@ function inlineAssistantTagChipHtml(tag: ComposerAssistantTag, title: string): s
   return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" style="border-left:2px solid ${escapeHtmlForChip(tag.color)}" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeTitle}" data-assistant-tag="${escapeHtmlForChip(`${tag.kind}:${tag.id}`)}">${tag.iconHtml}<span class="max-w-48 truncate font-medium">${escapeHtmlForChip(title)}</span></span>`
 }
 
+/**
+ * The link a reply carries to the thread the work behind it ran on.
+ *
+ * A delegated run reports into the conversation that asked, and its own row is
+ * not where the reader meets the answer, so this chip is the one place that opens
+ * the work. It says what it does rather than showing a bare title, and the title
+ * truncates inside the chip like any other long name.
+ */
+function inlineThreadReferenceChipHtml(tag: ComposerAssistantTag, title: string): string {
+  const label = `Click to view thread: ${title}`
+  const safeLabel = escapeHtmlForChip(label)
+  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" style="border-left:2px solid ${escapeHtmlForChip(tag.color)}" title="${safeLabel}" role="button" tabindex="0" aria-label="${safeLabel}" data-assistant-tag="${escapeHtmlForChip(`${tag.kind}:${tag.id}`)}">${tag.iconHtml}<span class="max-w-48 truncate font-medium">${safeLabel}</span></span>`
+}
+
 /** The assistant-space names a sent tag can render with. */
 export interface AssistantTagLookup {
   threads: readonly Thread[]
@@ -237,7 +251,7 @@ function assistantTagChips(
       ),
       keywords: []
     }
-    chips.push({ token, html: inlineAssistantTagChipHtml(tag, title) })
+    chips.push({ token, html: inlineThreadReferenceChipHtml(tag, title) })
   }
   for (const assistant of lookup.assistants) {
     const token = composerAssistantTagToken({ kind: 'assistant', id: assistant.id })

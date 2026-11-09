@@ -19,6 +19,7 @@
     emptyThreadStateCounts,
     type ThreadStateCounts
   } from '$lib/thread-state-counts'
+  import { settledThreadReadsUnread } from '$shared/thread-status-policy'
   import AssistantRow from './AssistantRow.svelte'
   import DonTile from './DonTile.svelte'
   import AssistantTaskRow from './AssistantTaskRow.svelte'
@@ -658,6 +659,7 @@
           assistant={donAssistant}
           threadId={donThread?.id ?? null}
           selected={donThread !== null && selectedThreadId === donThread.id}
+          unread={donThread !== null && settledThreadReadsUnread(donThread, donThread.read)}
           iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
           ready={assistantReady(donAssistant)}
           onOpen={() => {

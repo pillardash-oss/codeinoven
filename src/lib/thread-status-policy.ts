@@ -1,3 +1,4 @@
+import { isGroupDispatchedRun } from './types/thread'
 import type { ScopeSlice, Thread, ThreadStatus } from './types'
 import { harnessSupportsManualCompaction } from '../main/agents/harness-registry'
 
@@ -209,7 +210,14 @@ export function threadAwaitsIndependentAuditReview(
  * `read` is the caller's resolved read state, so a surface that folds in
  * orchestration children passes its own `effectiveRead`.
  */
-export function settledThreadReadsUnread(thread: Pick<Thread, 'status'>, read: boolean): boolean {
+export function settledThreadReadsUnread(
+  thread: Pick<Thread, 'status'> & Partial<Pick<Thread, 'dispatchOrigin'>>,
+  read: boolean
+): boolean {
+  // A run a group conversation dispatched reports its answer into that group,
+  // which is the row that carries the unread mark. Its own row never claims one:
+  // the reader meets the answer where it was asked for, not in the run.
+  if (isGroupDispatchedRun(thread)) return false
   return !read && canMarkThreadUnread(thread.status)
 }
 

@@ -1,6 +1,7 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import type { Assistant } from '$shared/types'
 
   /**
@@ -25,10 +26,17 @@
     iconUrl?: string | null
     /** Whether Don can run at all: it needs instructions and a model like any assistant. */
     ready: boolean
+    /**
+     * Whether Don's conversation holds an answer nobody has read yet.
+     *
+     * A delegation reports into the group rather than into the run's own row, so
+     * this tile is the one place that says an answer came back.
+     */
+    unread: boolean
     onOpen: () => void
   }
 
-  let { assistant, threadId, selected, iconUrl = null, ready, onOpen }: Props = $props()
+  let { assistant, threadId, selected, iconUrl = null, ready, unread, onOpen }: Props = $props()
 
   const name = $derived(assistant?.name?.trim() || 'Don')
   const accent = $derived(assistant?.color ?? 'var(--color-foreground)')
@@ -59,6 +67,9 @@
       {/if}
     </span>
     <span class="flex items-center gap-1 text-sm font-medium text-foreground">
+      {#if unread && !selected}
+        <StatusBadge stage="unread" title={`${name} has an answer you have not read`} />
+      {/if}
       {name}
       {#if !ready}
         <CioAttention

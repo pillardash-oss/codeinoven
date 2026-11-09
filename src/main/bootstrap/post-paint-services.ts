@@ -609,7 +609,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           // The group may be open while this turn runs, and this write does not
           // pass through the turn lifecycle: push it like any other message.
           broadcastThreadMessagesChanged(group.projectId, group.threadId)
-          const updated = await chatEngine.threadManager.getThread(group.projectId, group.threadId)
+          // The group is where the reply landed, so the group's row is what says
+          // an answer arrived; the run's own row carries no unread mark.
+          const updated = await chatEngine.threadManager.markUnread(group.projectId, group.threadId)
           if (updated) broadcastThreadUpdate(updated)
           return { posted: true }
         },

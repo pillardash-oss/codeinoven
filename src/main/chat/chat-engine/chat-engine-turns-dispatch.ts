@@ -552,8 +552,11 @@ export class ChatEngineTurnsDispatch {
       // does not go through a turn: without the two pushes the store keeps the
       // transcript it has and the assistant appears never to have come back.
       broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, delegation.donThreadId)
+      // The group is where the answer is reported, so the group is the row that
+      // carries the unread mark: the delegated run's own row deliberately does
+      // not (see `isGroupDispatchedRun`). Opening the conversation settles it.
       const donThread = await this.host.threadManager
-        .getThread(ASSISTANT_SPACE_ID, delegation.donThreadId)
+        .markUnread(ASSISTANT_SPACE_ID, delegation.donThreadId)
         .catch(() => null)
       if (donThread) broadcastThreadUpdate(donThread)
     } catch (error) {
