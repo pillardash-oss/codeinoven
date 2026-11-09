@@ -162,6 +162,7 @@ interface CodeMirrorApi {
   tags: (typeof import('@lezer/highlight'))['tags']
   autocompletion: (typeof import('@codemirror/autocomplete'))['autocompletion']
   pickedCompletion: (typeof import('@codemirror/autocomplete'))['pickedCompletion']
+  startCompletion: (typeof import('@codemirror/autocomplete'))['startCompletion']
 }
 
 export async function createFileEditor(
@@ -541,9 +542,10 @@ export async function createFileEditor(
   /**
    * The language server's completions as CodeMirror's dropdown.
    *
-   * Only word-like prefixes open it, so typing a brace or a space never leaves a
-   * list open, and Ctrl+Space (CodeMirror's own explicit request) opens it on
-   * demand even with an empty prefix.
+   * Only word-like prefixes open it automatically, so typing a brace or a
+   * space never leaves a list open. The explicit path is the app keymap's
+   * `ide-complete` (Ctrl+Space by default), which asks for completions at an
+   * empty prefix too.
    */
   async function completionSource(context: CompletionContext): Promise<CompletionResult | null> {
     if (!options.isIdeEnabled?.() || !options.getIdeCompletions) return null
@@ -597,6 +599,14 @@ export async function createFileEditor(
       },
       keydown(event, view) {
         if (!options.isIdeEnabled?.()) return false
+        // Ctrl+Space is the app keymap's trigger, not CodeMirror's: asking the
+        // dropdown to open explicitly makes the completion source query the
+        // language server even with an empty prefix, which is what a reader who
+        // presses it expects.
+        if (keymapState.matches('ide-complete', event)) {
+          event.preventDefault()
+          return api.startCompletion(view)
+        }
         const commands = ['definition', 'references', 'documentation', 'grep', 'files'] as const
         const command = commands.find((action) => keymapState.matches(`ide-${action}`, event))
         if (!command) return false
@@ -936,7 +946,8 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     HighlightStyle: languageModule.HighlightStyle,
     tags: tagsModule.tags,
     autocompletion: autocompleteModule.autocompletion,
-    pickedCompletion: autocompleteModule.pickedCompletion
+    pickedCompletion: autocompleteModule.pickedCompletion,
+    startCompletion: autocompleteModule.startCompletion
   }
 }
 
