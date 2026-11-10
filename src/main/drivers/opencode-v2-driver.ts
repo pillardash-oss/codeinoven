@@ -34,7 +34,7 @@ import { prependHistoryRecap } from './history-recap-prompt'
 import { readOpenCodeAccountUsage } from './opencode-account-usage'
 import { runHarnessCommand } from './harness-runtime'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
-import { SecretVault } from '../storage/secret-vault'
+import { SecretsService } from '../secrets/secrets-service'
 import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
 import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
 import {
@@ -230,7 +230,7 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
 
   constructor(
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault,
+    private readonly secretVault?: SecretsService,
     private readonly accountEnvironment: NodeJS.ProcessEnv = {},
     /** The probed OpenCode binary to spawn; V1 and V2 share one harness entry. */
     private readonly command: string = OPENCODE_COMMAND

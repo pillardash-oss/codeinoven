@@ -1,4 +1,4 @@
-import type { VaultWriterIdentity } from './secret-vault-writer'
+import type { SecretWriterIdentity } from './secret-writer'
 
 /** The OS keyring is unavailable, so no secret may be read or written. */
 export class VaultUnavailableError extends Error {
@@ -35,8 +35,8 @@ export class VaultRecordMissingError extends Error {
 export class VaultCiphertextUnreadableError extends Error {
   constructor(
     readonly ref: string,
-    readonly writer: VaultWriterIdentity | null,
-    readonly currentWriter: VaultWriterIdentity | null,
+    readonly writer: SecretWriterIdentity | null,
+    readonly currentWriter: SecretWriterIdentity | null,
     cause: unknown
   ) {
     super(describeUnreadableRecord(ref, writer, currentWriter), { cause })
@@ -46,8 +46,8 @@ export class VaultCiphertextUnreadableError extends Error {
 
 function describeUnreadableRecord(
   ref: string,
-  writer: VaultWriterIdentity | null,
-  current: VaultWriterIdentity | null
+  writer: SecretWriterIdentity | null,
+  current: SecretWriterIdentity | null
 ): string {
   const currentName = current
     ? `${current.app} ${current.version} (${current.build} build)`

@@ -17,7 +17,7 @@ import {
   type OvenAgentRegistrationInput
 } from '../../lib/ovens'
 import { findHarness } from '../agents/harness-registry'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 
 export async function validateIdentityPath(value: unknown): Promise<string> {
   const supplied = text(value, 'Identity file', 4096)
@@ -306,7 +306,7 @@ const PRIVATE_KEY_PATTERN = /^-----BEGIN (?:OPENSSH|RSA|EC|DSA|ENCRYPTED)? ?PRIV
  */
 export async function validateStartOvenSetup(
   value: unknown,
-  vault: SecretVault
+  vault: SecretsService
 ): Promise<OvenSetupConfiguration> {
   if (typeof value !== 'object' || !value || Array.isArray(value))
     throw new TypeError('Invalid setup configuration.')
@@ -350,7 +350,8 @@ export async function validateStartOvenSetup(
         throw new TypeError('Paste an OpenSSH private key.')
       git.privateKeyRef = await vault.save(
         privateKey,
-        typeof git.privateKeyRef === 'string' && git.privateKeyRef ? git.privateKeyRef : undefined
+        typeof git.privateKeyRef === 'string' && git.privateKeyRef ? git.privateKeyRef : undefined,
+        { scope: 'oven', label: 'Oven git identity key' }
       )
       delete git.privateKey
     }

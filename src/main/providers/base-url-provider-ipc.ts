@@ -13,7 +13,7 @@ import type {
 import { validateEntityId, validateBoundedString } from '../ipc/ipc-validation'
 import { BaseUrlProviderService } from './base-url-provider-service'
 import { hasNativeProviderCatalog } from '../agents/native-provider-config-service'
-import { SecretVault } from '../storage/secret-vault'
+import { SecretsService } from '../secrets/secrets-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import { serializeProviderClipboard } from '../../lib/provider-clipboard'
 import { discoverBaseUrlModels } from './base-url-model-discovery'
@@ -64,7 +64,7 @@ const MAX_THINKING_PRESETS = 16
 export function registerBaseUrlProviderIpc(
   storage: StorageEngine,
   providers = new BaseUrlProviderService(storage),
-  vault = new SecretVault(storage),
+  vault = SecretsService.for(storage),
   /**
    * Called whenever a custom provider is created, edited, enabled/disabled or
    * deleted. A saved provider is part of its harness's catalog the moment the
@@ -90,7 +90,13 @@ export function registerBaseUrlProviderIpc(
   ipcMain.handle('baseUrlProviders:create', async (_, rawInput: unknown) => {
     const input = parseCreateRequest(rawInput)
     const native = hasNativeProviderCatalog(input.harnessId)
-    const apiKeyRef = input.apiKey && !native ? await vault.save(input.apiKey) : undefined
+    const apiKeyRef =
+      input.apiKey && !native
+        ? await vault.save(input.apiKey, undefined, {
+            scope: 'base-url-provider',
+            label: `${input.name} API key`
+          })
+        : undefined
     try {
       const created = await providers.createProvider({
         harnessId: input.harnessId,
@@ -135,7 +141,10 @@ export function registerBaseUrlProviderIpc(
           nextApiKeyRef = undefined
         } else if (patch.apiKey !== undefined) {
           if (current.apiKeyRef) refsToRemove.push(current.apiKeyRef)
-          nextApiKeyRef = await vault.save(patch.apiKey)
+          nextApiKeyRef = await vault.save(patch.apiKey, undefined, {
+            scope: 'base-url-provider',
+            label: `${current.name} API key`
+          })
           createdRef.push(nextApiKeyRef)
         } else {
           nextApiKeyRef = current.apiKeyRef
@@ -679,6 +688,6 @@ function preserveStr(
   return value
 }
 
-async function removeSecrets(vault: SecretVault, refs: string[]): Promise<void> {
+async function removeSecrets(vault: SecretsService, refs: string[]): Promise<void> {
   for (const ref of refs) await vault.remove(ref)
 }

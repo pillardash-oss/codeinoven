@@ -1,7 +1,7 @@
 import { readIconDataUrl, removeIconFile, storeCustomIconFile } from '../../lib/icon-file'
 import { randomUUID } from 'node:crypto'
 import { LOCAL_OVEN_ID, type Oven, type OvenState, type SaveOvenInput } from '../../lib/ovens'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { OvenConnectionStatus } from '../../lib/ovens'
 
@@ -20,6 +20,16 @@ interface OvenRegistryFile {
   ovens: StoredOven[]
   defaultOvenId: string
 }
+/** How one stored Oven field is named wherever it is listed. */
+const OVEN_SECRET_FIELD_LABELS: Readonly<
+  Record<'privateKey' | 'passphrase' | 'publicKey' | 'password', string>
+> = {
+  privateKey: 'SSH private key',
+  passphrase: 'SSH key passphrase',
+  publicKey: 'SSH public key',
+  password: 'SSH password'
+}
+
 const REGISTRY_PATH = 'ovens/registry.json'
 const tails = new WeakMap<StorageEngine, Promise<unknown>>()
 
@@ -47,7 +57,7 @@ function nextOrder(registry: { ovens: StoredOven[] }): number {
 export class OvenRegistry {
   constructor(
     readonly storage: StorageEngine,
-    readonly vault: SecretVault
+    readonly vault: SecretsService
   ) {}
 
   async state(): Promise<OvenState> {
@@ -143,7 +153,11 @@ export class OvenRegistry {
             delete oven[refField]
             continue
           }
-          const ref = await this.vault.save(secret)
+          const ref = await this.vault.save(secret, undefined, {
+            scope: 'oven',
+            ownerId: oven.id,
+            label: `${oven.name} · ${OVEN_SECRET_FIELD_LABELS[field]}`
+          })
           added.push(ref)
           oven[refField] = ref
         }
@@ -247,6 +261,33 @@ export class OvenRegistry {
       }
     })
     return this.state()
+  }
+
+  /**
+   * Forget a reference the Secrets page deleted, so the machine reports the
+   * credential as missing instead of failing to resolve it at connect time.
+   *
+   * Answers whether any Oven held it.
+   */
+  async forgetSecretRef(ref: string): Promise<boolean> {
+    let forgot = false
+    await this.mutate(async (registry) => {
+      for (const oven of registry.ovens) {
+        for (const field of [
+          'privateKeyRef',
+          'passphraseRef',
+          'publicKeyRef',
+          'passwordRef'
+        ] as const) {
+          if (oven[field] !== ref) continue
+          delete oven[field]
+          oven.updatedAt = Date.now()
+          forgot = true
+        }
+      }
+      if (forgot) await this.storage.write(REGISTRY_PATH, registry)
+    })
+    return forgot
   }
 
   private async present(oven: StoredOven): Promise<Oven> {

@@ -5,7 +5,7 @@ import { OvenService } from './oven-service'
 import { inspectOvenConnection, testDraftConnection, localOvenConnection } from './oven-connection'
 import { ovenId, ovenOrder, validateSaveOven, validateIdentityPath } from './oven-validation'
 import type { StorageEngine } from '../storage/storage-engine'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type { ProjectManager } from '../../lib/engines/project-manager'
 import type { ProjectFilesService } from '../editor/project-files-service'
 import { app } from 'electron'
@@ -30,7 +30,7 @@ import { registerOvenHostTrustIpc } from './oven-host-trust'
 
 export function registerOvenIpc(
   storage: StorageEngine,
-  vault: SecretVault,
+  vault: SecretsService,
   threads: ThreadManager,
   resolveImagePath: (value: unknown) => Promise<string>,
   projects: ProjectManager,

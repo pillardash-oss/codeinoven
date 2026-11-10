@@ -9,7 +9,8 @@ import { uuidv7 } from '../../lib/id'
 import { CrossProcessMutex, GITHUB_CREDENTIAL_LOCK_NAME } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
 import { clearRepeatedFailure, reportRepeatedFailure } from '../system/repeated-failure-log'
-import type { SecretVault } from '../storage/secret-vault'
+import { GITHUB_ACCOUNTS_REF, LEGACY_GITHUB_TOKEN_REF } from '../secrets/secret-refs'
+import type { SecretsService } from '../secrets/secrets-service'
 import { isNetworkError, networkErrorCode } from '../util/network-error'
 
 declare global {
@@ -35,12 +36,6 @@ declare global {
  * registration and the two settings it needs.
  */
 const GITHUB_OAUTH_SCOPES = 'repo notifications'
-
-/** Vault ref holding every signed-in account, as one encrypted blob. */
-const GITHUB_ACCOUNTS_REF = 'github_oauth_accounts'
-
-/** Ref the single-account builds wrote, migrated on first read. */
-const LEGACY_GITHUB_TOKEN_REF = 'github_oauth_token'
 
 const DEVICE_CODE_URL = 'https://github.com/login/device/code'
 const ACCESS_TOKEN_URL = 'https://github.com/login/oauth/access_token'
@@ -237,7 +232,7 @@ export class GitHubAuthService {
    */
   private readonly profiles = new Map<string, { user: GitHubUser; at: number }>()
 
-  constructor(private readonly vault: SecretVault) {}
+  constructor(private readonly vault: SecretsService) {}
 
   /**
    * Public client ID of the CodeInOven registration   never a secret.
@@ -969,7 +964,10 @@ export class GitHubAuthService {
   }
 
   private async writeFile(file: StoredGitHubAccountsFile): Promise<void> {
-    await this.vault.save(JSON.stringify(file), GITHUB_ACCOUNTS_REF)
+    await this.vault.save(JSON.stringify(file), GITHUB_ACCOUNTS_REF, {
+      scope: 'github',
+      label: 'GitHub accounts'
+    })
   }
 
   private parseFile(value: string): StoredGitHubAccountsFile {

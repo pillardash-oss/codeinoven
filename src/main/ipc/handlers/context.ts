@@ -34,7 +34,7 @@ import type { EditorService } from '../../editor/editor-service'
 import type { RepositoryService } from '../../git/repository-service'
 import type { GitService } from '../../git/git-service'
 import type { GitProvider } from '../../git/git-provider.interface'
-import type { SecretVault } from '../../storage/secret-vault'
+import type { SecretsService } from '../../secrets/secrets-service'
 import type { GitHubAuthService } from '../../git/github-auth-service'
 import type { SkillUpdateService } from '../../utilities/skill-updates'
 import type { DiagnosticsService } from '../../system/diagnostics-service'
@@ -112,7 +112,7 @@ export interface RegisterIpcHandlersOptions {
    * Credential vault and GitHub auth, created by the composition root so main
    * services outside the IPC layer (the skill updater) resolve the same token.
    */
-  vault?: SecretVault
+  vault?: SecretsService
   githubAuthService?: GitHubAuthService
   /**
    * The live browser service, or null before the first window and after the last
@@ -218,7 +218,7 @@ export interface IpcHandlerContext {
   repositoryService: RepositoryService
   gitService: GitService
   branchBackfillDeps: ThreadBranchDeps
-  vault: SecretVault
+  vault: SecretsService
   gitCredentialRef: (projectId: string) => string
   githubAuthService: GitHubAuthService
   /** Background skill updater; absent only in tests that build a bare handler set. */

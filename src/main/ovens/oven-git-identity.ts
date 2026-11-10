@@ -1,7 +1,7 @@
 import type { OvenPreflightReport } from '../../lib/ovens'
 import { sshQuote, type OvenSsh } from './oven-ssh'
 import { powershellLiteral, windowsEncodedCommand } from './oven-remote-shell'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import { Logger } from '../system/logger'
 
 /** Dedicated identity file name on the Oven. Never the machine login key. */
@@ -43,7 +43,7 @@ export interface OvenGitVerification {
 
 export interface OvenGitIdentityPorts {
   ssh: OvenSsh
-  vault: SecretVault
+  vault: SecretsService
 }
 
 /**

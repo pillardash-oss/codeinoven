@@ -10,7 +10,7 @@
 import type { BaseUrlProvider, BaseUrlProviderModel } from '../../lib/types'
 import { discoverBaseUrlModels } from './base-url-model-discovery'
 import type { BaseUrlProviderService } from './base-url-provider-service'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 
 /** Model IDs routinely include slashes/at-signs (LM Studio `org/model`,
  *  HF `org/model@precision`)   anything else cannot be persisted. */
@@ -27,7 +27,7 @@ const REFRESH_CONCURRENCY = 4
  */
 export async function refreshCustomProviderModels(
   providers: BaseUrlProviderService,
-  vault: SecretVault
+  vault: SecretsService
 ): Promise<number> {
   const all = await providers.listProviders()
   // Linked harness records share an id (and baseURL)   refresh each once.
@@ -58,7 +58,7 @@ export async function refreshCustomProviderModels(
 /** Refresh one provider. True when the stored model list was replaced. */
 async function refreshOne(
   providers: BaseUrlProviderService,
-  vault: SecretVault,
+  vault: SecretsService,
   provider: BaseUrlProvider
 ): Promise<boolean> {
   try {

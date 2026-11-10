@@ -11,7 +11,7 @@ import { isShippedBuild } from '../bootstrap/app-resources'
  * instead of surfacing as a bare keyring error, and it is what tells a reader
  * whether the keyring key was replaced or the record arrived from another build.
  */
-export interface VaultWriterIdentity {
+export interface SecretWriterIdentity {
   /** Product name the writing launch reported, which names its keyring service. */
   app: string
   version: string
@@ -25,7 +25,7 @@ export interface VaultWriterIdentity {
  * (a unit test, a plain script). A record without an author stays readable; it
  * simply cannot say who wrote it.
  */
-export function describeVaultWriter(): VaultWriterIdentity | null {
+export function describeSecretWriter(): SecretWriterIdentity | null {
   try {
     return {
       app: app.getName(),

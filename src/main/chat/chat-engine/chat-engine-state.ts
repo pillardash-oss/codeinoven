@@ -23,7 +23,7 @@ import type { TypesafeDecisionService } from '../../typesafe/typesafe-decision-s
 import type { RetrySchedulerService } from '../../system/retry-scheduler-service'
 import type { ConnectivitySource } from '../../system/connectivity-service'
 import { WorkflowOwnershipService } from '../../system/workflow-ownership-service'
-import { SecretVault } from '../../storage/secret-vault'
+import { SecretsService } from '../../secrets/secrets-service'
 import { UtilityRuntimeService } from '../../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../../utilities/utility-registry-service'
 import { AgentSecretService } from '../../utilities/agent-secret-service'
@@ -674,7 +674,7 @@ export class ChatEngineState {
 
   promptAssembler!: PromptAssembler
 
-  secretVault!: SecretVault
+  secretVault!: SecretsService
 
   utilityRuntime!: UtilityRuntimeService
 

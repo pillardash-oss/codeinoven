@@ -263,7 +263,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       broadcastSkippedRunsChanged
     },
     { SkillUpdateService },
-    { SecretVault },
+    { SecretsService },
     { GitHubAuthService },
     { CioCleanupService },
     { broadcastCioCleanupProgress, broadcastCioCleanupState },
@@ -296,7 +296,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../scheduler/assistant-scheduler-service'),
     import('../scheduler/assistant-events'),
     import('../utilities/skill-updates'),
-    import('../storage/secret-vault'),
+    import('../secrets/secrets-service'),
     import('../git/github-auth-service'),
     import('../cio-cleanup/cio-cleanup-service'),
     import('../cio-cleanup/cio-cleanup-events'),
@@ -394,7 +394,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // One vault and one GitHub auth for the whole app: the skill updater reads the
   // same token the IPC layer does, so a check is authenticated exactly like an
   // install instead of running against the anonymous rate limit.
-  const vault = new SecretVault(storage)
+  const vault = SecretsService.for(storage)
   const githubAuthService = new GitHubAuthService(vault)
   const resolveProjectRoot = async (projectId: string): Promise<string> => {
     const project = await projectManager.getProject(projectId)
@@ -1335,6 +1335,34 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
     const { registerLlamaCppIpc } = await import('../llama-cpp/llama-cpp-ipc')
     const { registerLocalAiIpc } = await import('../local-ai/local-ai-ipc')
+    // One secrets page over the one secrets service. The lookup names owners it
+    // can reach, and the revoker lets each owner let go of a reference the user
+    // removed, so nothing is left pointing at a value that no longer exists.
+    const [
+      { registerSecretsIpc },
+      { createSecretOwnerLookup },
+      { createSecretRevoker },
+      { OvenRegistry },
+      { BaseUrlProviderService }
+    ] = await Promise.all([
+      import('../secrets/secrets-ipc'),
+      import('../secrets/secret-owner-lookup'),
+      import('../secrets/secret-revocation'),
+      import('../ovens/oven-registry'),
+      import('../providers/base-url-provider-service')
+    ])
+    registerSecretsIpc(vault, {
+      describeOwner: createSecretOwnerLookup({
+        ...(state.chatEngine ? { utilities: state.chatEngine.state.utilityRegistry } : {}),
+        projectName: async (projectId) => (await projectManager.getProject(projectId))?.name ?? null
+      }),
+      onRevoked: createSecretRevoker({
+        ...(state.chatEngine ? { utilities: state.chatEngine.state.utilityRegistry } : {}),
+        ovens: new OvenRegistry(storage, vault),
+        providers: new BaseUrlProviderService(storage),
+        storage
+      })
+    })
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
     registerProviderAccountIpc(

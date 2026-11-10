@@ -1,5 +1,6 @@
 import type { McpOAuthState, McpOAuthStateStore } from '@earendil-works/pi-mcp/oauth'
-import type { SecretVault } from '../../storage/secret-vault'
+import { mcpOAuthStateRef } from '../../secrets/secret-refs'
+import type { SecretsService } from '../../secrets/secrets-service'
 
 /**
  * One MCP utility's OAuth state, held in the encrypted vault.
@@ -16,12 +17,12 @@ import type { SecretVault } from '../../storage/secret-vault'
  */
 export class VaultMcpOAuthStateStore implements McpOAuthStateStore {
   constructor(
-    private readonly vault: SecretVault,
+    private readonly vault: SecretsService,
     private readonly utilityId: string
   ) {}
 
   async load(): Promise<McpOAuthState | undefined> {
-    const stored = await this.vault.resolveMcpOAuthState(this.utilityId)
+    const stored = await this.vault.resolveOrNull(mcpOAuthStateRef(this.utilityId))
     if (!stored) return undefined
     try {
       const parsed: unknown = JSON.parse(stored)
@@ -36,12 +37,16 @@ export class VaultMcpOAuthStateStore implements McpOAuthStateStore {
   }
 
   async save(state: McpOAuthState): Promise<void> {
-    await this.vault.saveMcpOAuthState(this.utilityId, JSON.stringify(state))
+    await this.vault.save(JSON.stringify(state), mcpOAuthStateRef(this.utilityId), {
+      scope: 'mcp-oauth',
+      ownerId: this.utilityId,
+      label: 'Capability sign-in'
+    })
   }
 
   /** Forget the grant, the client registration, and everything discovered for it. */
   async clear(): Promise<void> {
-    await this.vault.removeMcpOAuthState(this.utilityId)
+    await this.vault.remove(mcpOAuthStateRef(this.utilityId))
   }
 }
 

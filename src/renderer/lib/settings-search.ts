@@ -6,6 +6,7 @@ import CioCode from '@pdslng/cio-icon/CioCode.svelte'
 import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
 import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
 import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
+import CioKey from '@pdslng/cio-icon/CioKey.svelte'
 import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
 import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
 import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
@@ -334,6 +335,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Timed pings that keep a model’s usage window warm.',
     keywords: ['ping', 'pong', 'usage window', 'reset', 'schedule'],
     icon: CioHeartPulse
+  },
+  {
+    id: 'secrets',
+    section: 'secrets',
+    group: 'data',
+    title: 'Secrets',
+    description: 'Every stored credential, with replace and revoke.',
+    keywords: ['secrets', 'vault', 'credentials', 'api key', 'tokens', 'keyring', 'encrypted'],
+    icon: CioKey
   },
   {
     id: 'profile',

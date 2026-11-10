@@ -1,5 +1,5 @@
 import { chmod, mkdir, rm, writeFile } from 'fs/promises'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UtilityRegistryService } from './utility-registry-service'
 import { Logger } from '../system/logger'
@@ -7,6 +7,8 @@ import {
   AGENT_SECRET_ROOT as SECRET_ROOT,
   SECRET_ENVIRONMENT_VARIABLE_PATTERN
 } from '../../lib/secret-request'
+import { validateTargetEnvironmentVariable } from '../../lib/secret-names'
+import { agentThreadSecretRef } from '../secrets/secret-refs'
 
 /** Where a thread's free-standing secrets live inside the app config root. */
 const SECRET_REGISTRY_DIRECTORY = `${SECRET_ROOT}/threads`
@@ -122,15 +124,13 @@ interface AgentSecretRegistryFile {
  */
 export class AgentSecretService {
   constructor(
-    private readonly vault: SecretVault,
+    private readonly vault: SecretsService,
     private readonly registry: UtilityRegistryService,
     private readonly storage: StorageEngine
   ) {}
 
   async store(request: AgentSecretStoreRequest): Promise<AgentStoredSecret> {
-    if (!SECRET_ENVIRONMENT_VARIABLE_PATTERN.test(request.environmentVariable)) {
-      throw new TypeError(`Secret environment variable is invalid: ${request.environmentVariable}`)
-    }
+    validateTargetEnvironmentVariable(request.environmentVariable)
     if (!request.value) throw new TypeError('Secret value must not be empty')
     if (request.utilityId) {
       await this.bindUtilityCredential(request)
@@ -352,7 +352,11 @@ export class AgentSecretService {
         credential.id === credentialId ||
         credential.environmentVariable === request.environmentVariable
     )
-    const secretRef = await this.vault.save(request.value, existing?.secretRef)
+    const secretRef = await this.vault.save(request.value, existing?.secretRef, {
+      scope: 'utility',
+      ownerId: utilityId,
+      label: `${utility.name} · ${request.label}`
+    })
     const credentials = utility.credentials.filter(
       (credential) =>
         credential.id !== credentialId &&
@@ -374,7 +378,11 @@ export class AgentSecretService {
     const existing = secrets.find(
       (secret) => secret.environmentVariable === request.environmentVariable
     )
-    const secretRef = await this.vault.save(request.value, existing?.secretRef)
+    const secretRef = await this.vault.save(
+      request.value,
+      existing?.secretRef ?? agentThreadSecretRef(request.threadId, request.environmentVariable),
+      { scope: 'agent', ownerId: request.threadId, label: request.label }
+    )
     const remaining = secrets.filter(
       (secret) => secret.environmentVariable !== request.environmentVariable
     )

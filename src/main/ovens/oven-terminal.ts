@@ -4,7 +4,7 @@ import { ProjectRepo } from '../database/repositories/project-repo'
 import { resolveOvenThreadRoot } from './oven-thread-root'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { StorageEngine } from '../storage/storage-engine'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type {
   PtyOvenShellLaunchHook,
   PtyRemoteLaunch,
@@ -59,7 +59,7 @@ async function prepareOvenLaunch(
 /** Resolve terminal/action work to the chat's Oven before looking at local files. */
 export function ovenTerminalLaunch(
   storage: StorageEngine,
-  vault: SecretVault,
+  vault: SecretsService,
   database: Database,
   /**
    * The optimistic-thread lane the terminal has to respect.
@@ -153,7 +153,7 @@ export function ovenTerminalLaunch(
  */
 export function ovenShellLaunch(
   storage: StorageEngine,
-  vault: SecretVault
+  vault: SecretsService
 ): PtyOvenShellLaunchHook {
   const service = new OvenService(new OvenRegistry(storage, vault))
   return async (ovenId) => {

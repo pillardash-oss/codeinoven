@@ -75,6 +75,7 @@
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
+  import SecretsSettingsTab from './SecretsSettingsTab.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -1534,6 +1535,8 @@
       <CloudDeploymentsSettingsTab />
     {:else if section === 'archives'}
       <ArchivesSettingsTab />
+    {:else if section === 'secrets'}
+      <SecretsSettingsTab />
     {:else if section === 'about'}
       <div class="px-6 pb-8 pt-2">
         <!-- Identity: icon, version, copyright -->

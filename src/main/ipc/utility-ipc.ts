@@ -12,7 +12,8 @@ import type {
   UtilitySearchOptions
 } from '../../lib/types'
 import { validateEntityId } from './ipc-validation'
-import { SecretVault } from '../storage/secret-vault'
+import { validateTargetEnvironmentVariable } from '../../lib/secret-names'
+import { SecretsService } from '../secrets/secrets-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import { UtilityRegistryService } from '../utilities/utility-registry-service'
 import type { UtilityScopeFootprintService } from '../utilities/utility-scope-footprint'
@@ -26,7 +27,7 @@ import { parseMcpOAuthAuthorizeRequest } from '../utilities/mcp-oauth/mcp-oauth-
 export function registerUtilityIpc(
   storage: StorageEngine,
   registry = new UtilityRegistryService(storage),
-  vault = new SecretVault(storage),
+  vault = SecretsService.for(storage),
   cuaBridge = new CuaBridgeService(storage),
   pip?: ComputerUsePipService,
   /** Applied to turns that are already running, after a successful write. */
@@ -141,7 +142,10 @@ export function registerUtilityIpc(
       for (const entry of bundle.utilities) {
         const credentials = []
         for (const credential of entry.credentials ?? []) {
-          const secretRef = await vault.save(credential.value)
+          const secretRef = await vault.save(credential.value, undefined, {
+            scope: 'utility',
+            label: `${entry.definition.name} credential`
+          })
           savedSecretRefs.push(secretRef)
           credentials.push({
             id: credential.id,
@@ -214,7 +218,11 @@ export function registerUtilityIpc(
         throw new TypeError('Credential required must be a boolean')
       }
       const current = utility.credentials.find((credential) => credential.id === credentialId)
-      const secretRef = await vault.save(value, current?.secretRef)
+      const secretRef = await vault.save(value, current?.secretRef, {
+        scope: 'utility',
+        ownerId: safeUtilityId,
+        label: `${utility.name} · ${label}`
+      })
       const credentials = utility.credentials.filter((credential) => credential.id !== credentialId)
       credentials.push({
         id: credentialId,
@@ -404,8 +412,7 @@ function validateText(value: unknown, label: string, maximumLength: number, trim
 
 function validateEnvironmentVariable(value: unknown): string {
   const name = validateText(value, 'Environment variable', 160)
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(name)) {
-    throw new TypeError('Environment variable name is invalid')
-  }
-  return name
+  // The same name rules every other secret path uses: a capability may name its
+  // own variable, but never one the OS, a runtime or this app already owns.
+  return validateTargetEnvironmentVariable(name)
 }

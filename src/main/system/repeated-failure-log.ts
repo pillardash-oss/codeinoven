@@ -29,7 +29,7 @@ const DEFAULT_RE_ESCALATE_AFTER_MS = 6 * 60 * 60 * 1000
 
 /**
  * Incidents live here rather than on the caller, because the same condition is
- * often watched from several places in one process (every `SecretVault` instance
+ * often watched from several places in one process (every `SecretsService` instance
  * reads the same ref). One label, one incident, one durable error line.
  */
 const incidents = new Map<string, FailureIncident>()
