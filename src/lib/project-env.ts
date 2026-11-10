@@ -237,6 +237,39 @@ export interface ProjectEnvPreviewRequest {
   threadId?: string
 }
 
+/**
+ * The directory groups an action script runs in.
+ *
+ * An action launches at the project root, but a monorepo script almost always
+ * `cd`s into a package (or is the only package there is), and that package's env
+ * file is what its process needs. The root group is applied by the caller, so only
+ * the package groups the script reaches are returned, in the order it reaches them.
+ */
+export function actionEnvironmentDirectories(script: string, groups: readonly string[]): string[] {
+  const candidates = [...new Set(groups.filter((group) => group.length > 0))]
+  if (candidates.length === 0) return []
+  const mentioned = new Set<string>()
+  for (const line of script.split(/\r?\n/u)) {
+    for (const match of line.matchAll(/\bcd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/gu)) {
+      const raw = (match[1] ?? match[2] ?? match[3] ?? '').trim().replace(/\/+$/u, '')
+      if (!raw || raw === '.' || raw === '..') continue
+      if (raw.startsWith('~') || raw.startsWith('/') || raw.startsWith('$')) continue
+      const target = raw.replace(/^\.\//u, '')
+      const group = candidates.find(
+        (candidate) =>
+          candidate === target ||
+          target.startsWith(`${candidate}/`) ||
+          candidate.startsWith(`${target}/`)
+      )
+      if (group) mentioned.add(group)
+    }
+  }
+  if (mentioned.size > 0) return [...mentioned]
+  // A project with one env group has one package to run, so its group applies even
+  // when the script never spells the path out.
+  return candidates.length === 1 ? candidates : []
+}
+
 /** The managed reference a value line carries. */
 export function projectEnvReference(secretRef: string): string {
   return `${PROJECT_ENV_REFERENCE_PREFIX}${secretRef}`

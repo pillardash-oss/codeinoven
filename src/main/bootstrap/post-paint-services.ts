@@ -27,6 +27,7 @@ import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
+import { actionEnvironmentDirectories } from '../../lib/project-env'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
 import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
 import { assistantIsBuiltin, isGroupThread } from '../../lib/types'
@@ -1328,14 +1329,32 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           },
           ovenTerminalLaunch(storage, vault, database, context.threadCreation),
           ovenShellLaunch(storage, vault),
-          async ({ projectId, threadId, cwd, directory }) => {
+          async ({ projectId, threadId, cwd, directory, script }) => {
             const resolved = await projectEnvService.environmentForLaunch({
               projectId,
               threadId,
               cwd,
               directory
             })
-            return resolved.environment
+            if (!script) return resolved.environment
+            // An action starts at the project root and then moves into a package,
+            // so every group its script reaches contributes too. The package applies
+            // after the root, which is the same nearest-first order a process started
+            // in that directory would see.
+            const groups = (await projectEnvService.listProjectEnv(projectId)).map(
+              (file) => file.group
+            )
+            let environment = resolved.environment
+            for (const group of actionEnvironmentDirectories(script, groups)) {
+              const packageEnv = await projectEnvService.environmentForLaunch({
+                projectId,
+                threadId,
+                cwd,
+                directory: group
+              })
+              environment = { ...environment, ...packageEnv.environment }
+            }
+            return environment
           }
         )
       : null

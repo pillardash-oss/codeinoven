@@ -142,6 +142,13 @@ export interface PtyProjectEnvironmentHook {
     cwd: string
     /** Project-relative directory the session starts in, '' for the project root. */
     directory: string
+    /**
+     * The action script about to run, when this is an action.
+     *
+     * An action starts at the project root but usually moves into a package, so the
+     * resolver reads the script to know which directory groups apply.
+     */
+    script?: string
   }): Promise<Record<string, string>>
 }
 
@@ -525,11 +532,12 @@ export class PtyService {
     projectId: string,
     threadId: string,
     cwd: string,
-    directory: string
+    directory: string,
+    script?: string
   ): Promise<Record<string, string>> {
     if (!this.projectEnvironment) return {}
     try {
-      return await this.projectEnvironment({ projectId, threadId, cwd, directory })
+      return await this.projectEnvironment({ projectId, threadId, cwd, directory, script })
     } catch (error: unknown) {
       Logger.error('Project env could not be applied to this process:', error)
       return {}
@@ -1042,7 +1050,7 @@ export class PtyService {
     await this.prepareWindowsShell()
     const shell = await resolveShell()
     const createdAt = Date.now()
-    const projectEnv = await this.resolveProjectEnvironment(projectId, threadId, cwd, '')
+    const projectEnv = await this.resolveProjectEnvironment(projectId, threadId, cwd, '', script)
     const env = { ...(await buildShellEnv()), ...safeVariables, ...projectEnv }
     ensureActive()
     // An action runs its lines in sequence with no user watching keystrokes, so
