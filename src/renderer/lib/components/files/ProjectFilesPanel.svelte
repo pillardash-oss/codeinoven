@@ -85,6 +85,7 @@
     type DocumentReadAloud
   } from './project-files-panel-read-aloud'
   import ProjectTextEditor from './ProjectTextEditor.svelte'
+  import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
   import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
   import { ovenRootThread } from '$lib/oven-root-target'
@@ -346,6 +347,27 @@
   function findProjectFile(): void {
     const editor = fullscreenOpen ? fullscreenTextEditor : sidebarTextEditor
     editor?.findProjectFile()
+  }
+
+  /**
+   * Open the secret panel for a `cio://` reference the reader opened in the buffer.
+   *
+   * The link names a key, and the file it sits in names the group and the file, so
+   * the panel opens on that exact key and the reader only has to reveal it.
+   */
+  function openSecretReference(name: string): void {
+    const path = activeTab?.path
+    if (!path) return
+    const directory = posixDirname(path)
+    projectEnvDock.open({
+      projectId,
+      projectName,
+      iconUrl: projectIconUrl,
+      color: projectAccentColor,
+      group: directory === '.' ? '' : directory,
+      fileName: path.split('/').at(-1) ?? '',
+      focusName: name
+    })
   }
   let documentFindAvailable = $derived.by(() => {
     if (!activeTab) return false
@@ -1445,6 +1467,7 @@
               !ovenFile}
             value={visibleContent}
             path={activeTab.path}
+            onSecretReference={openSecretReference}
             readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
             ariaLabel={`${deletedAtCheckpoint ? 'View' : 'Edit'} ${activeTab.path}`}
             spellcheck={markdown}
@@ -1838,6 +1861,7 @@
                   !ovenFile}
                 value={visibleContent}
                 path={activeTab.path}
+                onSecretReference={openSecretReference}
                 readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
                 ariaLabel={`${deletedAtCheckpoint ? 'View' : 'Edit'} ${activeTab.path} fullscreen`}
                 spellcheck={markdown}

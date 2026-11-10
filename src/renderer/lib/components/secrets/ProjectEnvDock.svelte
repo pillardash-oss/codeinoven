@@ -72,6 +72,8 @@
   let redoStack = $state<Snapshot[]>([])
   const revealed = new SvelteSet<string>()
   let confirmWrite = $state(false)
+  /** The row a `cio://` link pointed at, outlined until the reader moves on. */
+  let highlightRowId = $state<number | null>(null)
 
   const group = $derived(projectEnvDock.group)
   const groupLabel = $derived(group || '/')
@@ -150,15 +152,53 @@
     try {
       files = await invoke('secrets:envList', projectId)
       const available = files.filter((file) => file.group === group)
+      // A link named the file it came from, so open exactly that one even when it
+      // does not exist yet; anything else falls back to the usual default.
+      const preferred = projectEnvDock.fileName
+      const matched = preferred
+        ? (available.find((file) => file.fileName === preferred) ?? null)
+        : null
       const initial =
-        available.find((file) => file.fileName === DEFAULT_ENV_FILE_NAME) ?? available[0] ?? null
-      fileName = initial?.fileName ?? DEFAULT_ENV_FILE_NAME
+        matched ??
+        (preferred
+          ? null
+          : (available.find((file) => file.fileName === DEFAULT_ENV_FILE_NAME) ??
+            available[0] ??
+            null))
+      fileName = initial?.fileName ?? preferred ?? DEFAULT_ENV_FILE_NAME
       await resetDocument(initial)
+      await focusPendingKey()
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not read this path’s env files'
     } finally {
       loading = false
     }
+  }
+
+  /**
+   * Bring the key a `cio://` link named into view.
+   *
+   * The link opened the panel to reveal one value, so the panel switches to rows,
+   * puts the caret in that key's value and outlines the row for a moment instead of
+   * leaving the reader to find it in a long file.
+   */
+  async function focusPendingKey(): Promise<void> {
+    const name = projectEnvDock.takeFocusName()
+    if (!name) return
+    if (surface !== 'keys') switchSurface('keys')
+    await tick()
+    const row = rows.find((candidate) => candidate.name === name)
+    if (!row) return
+    const field = document.getElementById(`env-key-value-${row.id}`)
+    field?.scrollIntoView({ block: 'center' })
+    if (field instanceof HTMLInputElement) {
+      field.focus()
+      field.select()
+    }
+    highlightRowId = row.id
+    window.setTimeout(() => {
+      if (highlightRowId === row.id) highlightRowId = null
+    }, 2_400)
   }
 
   /** Read a file's values into both surfaces and start a clean history. */
@@ -368,6 +408,16 @@
   onMount(() => {
     void readFiles()
   })
+
+  // The dock stays mounted while the same project is open, so a second reference
+  // link re-targets the file and key here instead of remounting the panel.
+  let appliedSequence = projectEnvDock.sequence
+  $effect(() => {
+    const sequence = projectEnvDock.sequence
+    if (sequence === appliedSequence) return
+    appliedSequence = sequence
+    void readFiles()
+  })
 </script>
 
 <DockableModal
@@ -562,7 +612,12 @@
           {#each rows as row (row.id)}
             {@const stored =
               currentFile?.entries.some((entry) => entry.name === row.name.trim()) ?? false}
-            <div class="flex items-center gap-2 px-3 py-1.5">
+            <div
+              id="env-key-row-{row.id}"
+              class="flex items-center gap-2 px-3 py-1.5 {highlightRowId === row.id
+                ? 'bg-primary/10'
+                : ''}"
+            >
               <input
                 id="env-key-name-{row.id}"
                 class="h-7 w-52 shrink-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none focus:border-primary"
@@ -576,6 +631,7 @@
               />
               <div class="flex min-w-0 flex-1 items-center gap-1">
                 <input
+                  id="env-key-value-{row.id}"
                   class="h-7 min-w-0 flex-1 border bg-elevated px-2 font-mono text-xs text-foreground outline-none focus:border-primary"
                   type={revealed.has(String(row.id)) ? 'text' : 'password'}
                   autocomplete="off"

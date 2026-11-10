@@ -13,6 +13,12 @@ class ProjectEnvDockState {
   color = $state<string | null>(null)
   /** Project-relative directory group being edited, '' for the project root. */
   group = $state('')
+  /** The file to open, when the caller already knows which one it means. */
+  fileName = $state<string | null>(null)
+  /** A key to bring into view once the file loads, set by a `cio://` link. */
+  focusName = $state<string | null>(null)
+  /** Bumped by every open, so a dock that is already mounted re-reads its target. */
+  sequence = $state(0)
   minimized = $state(false)
 
   open(target: {
@@ -21,13 +27,25 @@ class ProjectEnvDockState {
     iconUrl?: string | null
     color?: string | null
     group?: string
+    fileName?: string | null
+    focusName?: string | null
   }): void {
     this.projectId = target.projectId
     this.projectName = target.projectName
     this.iconUrl = target.iconUrl ?? null
     this.color = target.color ?? null
     this.group = target.group ?? ''
+    this.fileName = target.fileName ?? null
+    this.focusName = target.focusName ?? null
+    this.sequence += 1
     this.minimized = false
+  }
+
+  /** Read the pending key once, so a later render does not move focus again. */
+  takeFocusName(): string | null {
+    const name = this.focusName
+    this.focusName = null
+    return name
   }
 
   minimize(): void {
@@ -40,6 +58,8 @@ class ProjectEnvDockState {
 
   close(): void {
     this.projectId = null
+    this.fileName = null
+    this.focusName = null
     this.minimized = false
   }
 }
