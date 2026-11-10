@@ -4,6 +4,7 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioUpload from '@pdslng/cio-icon/CioUpload.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { getProjectIcon, loadProjectIcons } from '$lib/project-icons'
   import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
   import { formatDateTimeCompact } from '$shared/date-time-format'
   import {
@@ -15,6 +16,7 @@
     type ProjectEnvMode
   } from '$shared/project-env'
   import type { Project } from '$shared/types'
+  import { SvelteMap } from 'svelte/reactivity'
   import { onMount } from 'svelte'
   import ProjectSelect, { type ProjectSelectOption } from '../../shared/ProjectSelect.svelte'
   import ConfirmDialog from '../../ui/ConfirmDialog.svelte'
@@ -40,6 +42,8 @@
   let { projectId: initialProjectId, directory = '' }: Props = $props()
 
   let projects = $state<Project[]>([])
+  /** Each project's real mark, so the picker never falls back to a folder glyph. */
+  const projectIcons = new SvelteMap<string, string>()
   let projectId = $state('')
   let files = $state<ProjectEnvFile[]>([])
   let preview = $state<ProjectEnvLaunchPreview | null>(null)
@@ -72,6 +76,7 @@
     localProjects.map((project) => ({
       id: project.id,
       name: project.name,
+      iconUrl: getProjectIcon(project, projectIcons.get(project.id)),
       ...(project.color ? { color: project.color } : {})
     }))
   )
@@ -86,6 +91,12 @@
       if (!projectId) {
         const first = projects.find((project) => project.source === 'local' && !project.hidden)
         projectId = first?.id ?? ''
+      }
+      const local = projects.filter((project) => project.source === 'local' && !project.hidden)
+      const stored = await loadProjectIcons(local)
+      for (const project of local) {
+        const icon = getProjectIcon(project, stored.get(project.id))
+        if (icon) projectIcons.set(project.id, icon)
       }
     } catch (cause) {
       report(cause, 'Could not read the projects')
@@ -268,7 +279,7 @@
 
 <div class="space-y-4">
   <div class="flex flex-wrap items-end justify-between gap-3">
-    <div class="min-w-56">
+    <div class="w-64 shrink-0">
       <p class="text-xs font-medium text-muted">Project</p>
       <ProjectSelect
         projects={projectOptions}
