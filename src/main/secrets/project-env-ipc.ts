@@ -1,7 +1,6 @@
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { validateEntityId } from '../ipc/ipc-validation'
 import {
-  parseProjectEnvMode,
   type ProjectEnvApplyTextRequest,
   type ProjectEnvEntryRequest,
   type ProjectEnvFileRequest,
@@ -37,12 +36,11 @@ function text(value: unknown, label: string, maximum: number): string {
 
 function fileRequest(value: unknown): ProjectEnvFileRequest {
   const input = record(value, 'Env file request')
-  const mode = parseProjectEnvMode(input['mode'])
-  if (!mode) throw new TypeError('Env file mode is invalid')
   return {
     projectId: validateEntityId(input['projectId'], 'Project ID'),
     group: typeof input['group'] === 'string' ? input['group'] : '',
-    mode
+    // The name is the user's; the service decides what a safe file name is.
+    fileName: text(input['fileName'], 'Env file name', 128)
   }
 }
 

@@ -62,11 +62,11 @@ afterEach(async () => {
 
 describe('ProjectEnvService resolution', () => {
   it('resolves a root key for a process started at the project root', async () => {
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       name: 'API_URL',
       value: 'https://api.example.com'
     })
@@ -75,37 +75,37 @@ describe('ProjectEnvService resolution', () => {
 
     expect(launch.environment).toEqual({ API_URL: 'https://api.example.com' })
     expect(launch.preview.entries).toEqual([
-      { name: 'API_URL', group: '', mode: 'default', scope: 'project' }
+      { name: 'API_URL', group: '', fileName: '.env', scope: 'project' }
     ])
   })
 
   it('lets a deeper directory group and a later run mode override, and a thread win over all', async () => {
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'local' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env.local' })
     await service.createProjectEnvFile({
       projectId: PROJECT_ID,
       group: 'packages/api',
-      mode: 'default'
+      fileName: '.env'
     })
 
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       name: 'DATABASE_URL',
       value: 'postgres://root'
     })
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'local',
+      fileName: '.env.local',
       name: 'DATABASE_URL',
       value: 'postgres://local'
     })
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
       group: 'packages/api',
-      mode: 'default',
+      fileName: '.env',
       name: 'DATABASE_URL',
       value: 'postgres://api'
     })
@@ -123,7 +123,7 @@ describe('ProjectEnvService resolution', () => {
       cwd: join(projectRoot, 'packages', 'api')
     })
     expect(inPackage.environment['DATABASE_URL']).toBe('postgres://api')
-    expect(inPackage.preview.entries[0]).toMatchObject({ group: 'packages/api', mode: 'default' })
+    expect(inPackage.preview.entries[0]).toMatchObject({ group: 'packages/api', fileName: '.env' })
 
     const inThread = await service.environmentForLaunch({
       projectId: PROJECT_ID,
@@ -135,23 +135,23 @@ describe('ProjectEnvService resolution', () => {
   })
 
   it('matches a package group from a worktree cwd when the caller names the directory', async () => {
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
     await service.createProjectEnvFile({
       projectId: PROJECT_ID,
       group: 'packages/api',
-      mode: 'default'
+      fileName: '.env'
     })
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       name: 'API_URL',
       value: 'root'
     })
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
       group: 'packages/api',
-      mode: 'default',
+      fileName: '.env',
       name: 'API_URL',
       value: 'package'
     })
@@ -168,13 +168,13 @@ describe('ProjectEnvService resolution', () => {
   })
 
   it('refuses a name the OS or the app owns', async () => {
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
 
     await expect(
       service.setProjectEnvValue({
         projectId: PROJECT_ID,
         group: '',
-        mode: 'default',
+        fileName: '.env',
         name: 'PATH',
         value: '/tmp/bin'
       })
@@ -184,7 +184,7 @@ describe('ProjectEnvService resolution', () => {
       service.setProjectEnvValue({
         projectId: PROJECT_ID,
         group: '',
-        mode: 'default',
+        fileName: '.env',
         name: 'CIO_SOMETHING',
         value: 'x'
       })
@@ -192,11 +192,11 @@ describe('ProjectEnvService resolution', () => {
   })
 
   it('reports a name whose value is gone instead of failing the launch', async () => {
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       name: 'STRIPE_KEY',
       value: 'sk_test'
     })
@@ -213,12 +213,12 @@ describe('ProjectEnvService resolution', () => {
 
 describe('ProjectEnvService typed body', () => {
   it('stores values, keeps empty lines that have a value, and removes what is gone', async () => {
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
 
     const first = await service.applyEnvText({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       text: '# app\nDATABASE_URL=postgres://one\nPORT=3000\n'
     })
     expect(first.stored).toEqual(['DATABASE_URL', 'PORT'])
@@ -229,7 +229,7 @@ describe('ProjectEnvService typed body', () => {
     const second = await service.applyEnvText({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       text: 'DATABASE_URL=postgres://two\nPORT=\nMAIL_KEY=\n'
     })
 
@@ -246,7 +246,7 @@ describe('ProjectEnvService typed body', () => {
     const third = await service.applyEnvText({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       text: 'PORT=3000\n'
     })
     expect(third.removed).toEqual(['DATABASE_URL'])
@@ -257,17 +257,17 @@ describe('ProjectEnvService typed body', () => {
     const created = await service.applyEnvText({
       projectId: PROJECT_ID,
       group: 'packages/api',
-      mode: 'local',
+      fileName: '.env.local',
       text: 'API_URL=http://localhost:3001\n'
     })
     expect(created.files).toEqual([
-      expect.objectContaining({ group: 'packages/api', mode: 'local' })
+      expect.objectContaining({ group: 'packages/api', fileName: '.env.local' })
     ])
 
     const refused = await service.applyEnvText({
       projectId: PROJECT_ID,
       group: 'packages/api',
-      mode: 'local',
+      fileName: '.env.local',
       text: 'API_URL=http://localhost:3001\nPATH=/tmp\n'
     })
     expect(refused.stored).toEqual(['API_URL'])
@@ -277,14 +277,14 @@ describe('ProjectEnvService typed body', () => {
 
 describe('ProjectEnvService import', () => {
   it('previews without writing, then rewrites the file and keeps a private backup', async () => {
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
     const original = '# local only\nDATABASE_URL=postgres://secret\nPORT=3000\n'
     await writeFile(join(projectRoot, '.env'), original, 'utf8')
 
     const preview = await service.importProjectEnv({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       path: '.env',
       apply: false
     })
@@ -297,7 +297,7 @@ describe('ProjectEnvService import', () => {
     const applied = await service.importProjectEnv({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       path: '.env',
       apply: true
     })
@@ -318,11 +318,11 @@ describe('ProjectEnvService import', () => {
   })
 
   it('forgets a key and its value together', async () => {
-    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
     await service.setProjectEnvValue({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       name: 'MAIL_KEY',
       value: 'mail'
     })
@@ -331,13 +331,13 @@ describe('ProjectEnvService import', () => {
     await service.removeProjectEnvEntry({
       projectId: PROJECT_ID,
       group: '',
-      mode: 'default',
+      fileName: '.env',
       name: 'MAIL_KEY'
     })
 
     expect(secrets.values.size).toBe(0)
     expect(await service.listProjectEnv(PROJECT_ID)).toEqual([
-      { group: '', mode: 'default', entries: [], updatedAt: expect.any(Number) }
+      { group: '', fileName: '.env', entries: [], updatedAt: expect.any(Number) }
     ])
   })
 })

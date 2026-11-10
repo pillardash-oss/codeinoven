@@ -1,7 +1,5 @@
 <script lang="ts">
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import type { ProjectEnvMode } from '$shared/project-env'
-  import { projectEnvModeFileName } from '$shared/project-env'
   import Modal from '../../ui/Modal.svelte'
   import SecretVisibilityButton from '../../shared/SecretVisibilityButton.svelte'
 
@@ -16,7 +14,7 @@
     existing: { name: string } | null
     /** File the value is being written to, shown so the target is never a guess. */
     group: string
-    mode: ProjectEnvMode
+    fileName: string
     /** Replaces the default "written to <file>" line, e.g. for a thread-scoped key. */
     description?: string
     busy?: boolean
@@ -28,7 +26,7 @@
   let {
     existing,
     group,
-    mode,
+    fileName,
     description,
     busy = false,
     error = '',
@@ -42,7 +40,7 @@
   let value = $state('')
   let revealed = $state(false)
 
-  const target = $derived(`${group || '.'}/${projectEnvModeFileName(mode)}`)
+  const target = $derived(`${group || '.'}/${fileName}`)
   const canSubmit = $derived(name.trim().length > 0 && value.length > 0 && !busy)
 
   async function submit(): Promise<void> {

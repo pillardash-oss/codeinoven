@@ -154,7 +154,7 @@
   <EnvKeyModal
     existing={keyTarget.existing}
     group=""
-    mode="local"
+    fileName=".env"
     description="Saved for this thread only. It overrides the project's keys for processes started here."
     {busy}
     {error}

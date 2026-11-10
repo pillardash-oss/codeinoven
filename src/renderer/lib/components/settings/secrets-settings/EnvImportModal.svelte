@@ -1,7 +1,6 @@
 <script lang="ts">
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import type { ProjectEnvImportPreview, ProjectEnvMode } from '$shared/project-env'
-  import { projectEnvModeFileName } from '$shared/project-env'
+  import type { ProjectEnvImportPreview } from '$shared/project-env'
   import Modal from '../../ui/Modal.svelte'
 
   /**
@@ -14,7 +13,7 @@
    */
   interface Props {
     group: string
-    mode: ProjectEnvMode
+    fileName: string
     busy?: boolean
     error?: string
     preview: ProjectEnvImportPreview | null
@@ -25,7 +24,7 @@
 
   let {
     group,
-    mode,
+    fileName,
     busy = false,
     error = '',
     preview,
@@ -34,9 +33,9 @@
     onClose
   }: Props = $props()
 
-  /** The file the selected mode lives in, used until the user types another path. */
+  /** The file this name lives in, used until the user types another path. */
   function defaultPath(): string {
-    return `${group ? `${group}/` : ''}${projectEnvModeFileName(mode)}`
+    return `${group ? `${group}/` : ''}${fileName}`
   }
 
   let override = $state<string | null>(null)

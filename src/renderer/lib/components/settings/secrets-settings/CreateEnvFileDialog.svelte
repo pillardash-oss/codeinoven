@@ -1,37 +1,40 @@
 <script lang="ts">
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import {
-    PROJECT_ENV_MODES,
-    projectEnvModeFileName,
-    type ProjectEnvMode
-  } from '$shared/project-env'
+  import { DEFAULT_ENV_FILE_NAME } from '$shared/project-env'
   import Modal from '../../ui/Modal.svelte'
 
   /**
-   * Create one managed env file: a directory group plus a run mode.
+   * Create one env file at a chosen path.
    *
-   * The group is what makes a monorepo work: `packages/api` gets its own file, and a
-   * process started there sees the group's keys on top of the project root's.
+   * The directory is the path the user opened the surface for, and the name is
+   * theirs to type: this is where a `.env.production`, a `.env.selfhost` or anything
+   * else they run with begins.
    */
   interface Props {
+    /** Project-relative directory the file belongs to, '' for the project root. */
     group: string
-    mode: ProjectEnvMode
+    /** Initial name, editable. */
+    name: string
     busy?: boolean
     onCreate: () => void | Promise<void>
     onClose: () => void
   }
 
-  let { group = $bindable(), mode = $bindable(), busy = false, onCreate, onClose }: Props = $props()
+  let {
+    group = $bindable(),
+    name = $bindable(DEFAULT_ENV_FILE_NAME),
+    busy = false,
+    onCreate,
+    onClose
+  }: Props = $props()
 
-  const preview = $derived(
-    `${group.trim().replace(/^\/+|\/+$/gu, '') || '.'}/${projectEnvModeFileName(mode)}`
-  )
+  const preview = $derived(`${group.trim().replace(/^\/+|\/+$/gu, '') || '.'}/${name.trim()}`)
 </script>
 
 <Modal open={true} title="New env file" {onClose} size="md">
   <div class="space-y-4">
     <label class="block text-xs font-medium text-muted" for="env-new-group">
-      Directory, relative to the project
+      Path, relative to the project
       <input
         id="env-new-group"
         class="mt-1 h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
@@ -44,23 +47,23 @@
       />
     </label>
 
-    <label class="block text-xs font-medium text-muted" for="env-new-mode">
-      Run mode
-      <select
-        id="env-new-mode"
-        class="mt-1 h-9 w-full border bg-elevated px-2 text-sm outline-none focus:border-primary"
-        value={mode}
-        onchange={(event) => (mode = event.currentTarget.value as ProjectEnvMode)}
-      >
-        {#each PROJECT_ENV_MODES as candidate (candidate)}
-          <option value={candidate}>{projectEnvModeFileName(candidate)}</option>
-        {/each}
-      </select>
+    <label class="block text-xs font-medium text-muted" for="env-new-name">
+      File name
+      <input
+        id="env-new-name"
+        class="mt-1 h-9 w-full border bg-elevated px-3 font-mono text-xs outline-none focus:border-primary"
+        type="text"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder={DEFAULT_ENV_FILE_NAME}
+        value={name}
+        oninput={(event) => (name = event.currentTarget.value)}
+      />
     </label>
 
     <p class="text-[0.6875rem] text-dimmed">
-      Creates <span class="font-mono text-foreground">{preview}</span>. A later mode overrides an
-      earlier one in the same directory, and a deeper directory overrides the project root.
+      Creates <span class="font-mono text-foreground">{preview}</span>. A file named `.env` is
+      applied before any other name in its directory; the rest follow by name.
     </p>
   </div>
 
@@ -69,7 +72,7 @@
     <button
       type="button"
       class="bg-primary px-3 py-1.5 text-sm font-medium text-on-primary disabled:opacity-40"
-      disabled={busy}
+      disabled={busy || !name.trim()}
       data-modal-primary
       onclick={() => void onCreate()}
     >

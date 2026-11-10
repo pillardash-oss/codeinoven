@@ -1,17 +1,16 @@
 import { chmod, readFile, writeFile } from 'fs/promises'
 import { basename, isAbsolute, relative, resolve, sep } from 'path'
 import {
-  PROJECT_ENV_MODE_ORDER,
+  compareEnvFileNames,
   parseProjectEnvFile,
-  projectEnvModeFileName,
   projectEnvReference,
+  validateEnvFileName,
+  type ProjectEnvApplyTextResult,
   type ProjectEnvEntry,
   type ProjectEnvFile,
-  type ProjectEnvApplyTextResult,
   type ProjectEnvImportResult,
   type ProjectEnvLaunchPreview,
-  type ProjectEnvLaunchPreviewEntry,
-  type ProjectEnvMode
+  type ProjectEnvLaunchPreviewEntry
 } from '../../lib/project-env'
 import { validateProcessEnvironmentVariable } from '../../lib/secret-names'
 import { Logger } from '../system/logger'
@@ -40,7 +39,7 @@ export interface ProjectEnvServiceDependencies {
 export interface SetEnvValueInput {
   projectId: string
   group: string
-  mode: ProjectEnvMode
+  fileName: string
   name: string
   value: string
 }
@@ -48,7 +47,7 @@ export interface SetEnvValueInput {
 export interface EnvFileKeyInput {
   projectId: string
   group: string
-  mode: ProjectEnvMode
+  fileName: string
 }
 
 export interface ApplyEnvTextInput extends EnvFileKeyInput {
@@ -82,13 +81,14 @@ export interface LaunchEnvironment {
 }
 
 /**
- * Project-owned ENV secrets: the `.env` family held in the encrypted store and
- * injected into the processes the app starts.
+ * Project-owned ENV secrets: the env files a user keeps for a project, held in the
+ * encrypted store and injected into the processes the app starts.
  *
- * Everything here is manifest-shaped. A file is a list of names plus the vault ref
- * holding each value; a launch resolves the winning value for each name and hands
- * the values to the process environment only. No method on this service returns a
- * value to the renderer.
+ * Everything here is manifest-shaped. A file is a directory group, a file name the
+ * user chose, and the names it declares with the vault ref holding each value. A
+ * launch resolves the winning value for each name and hands the values to the
+ * process environment only. No method on this service returns a value to the
+ * renderer.
  */
 export class ProjectEnvService {
   constructor(private readonly dependencies: ProjectEnvServiceDependencies) {}
@@ -98,30 +98,31 @@ export class ProjectEnvService {
     return this.dependencies.resolveProjectPath(projectId).catch(() => null)
   }
 
-  /** Every manifest of one project, root first, then by run mode. */
+  /** Every file of one project, root first, then by name. */
   async listProjectEnv(projectId: string): Promise<ProjectEnvFile[]> {
     const files = await this.dependencies.store.readProject(projectId)
-    const described = await Promise.all(sortFiles(files).map((file) => this.describeFile(file)))
-    return described
+    return Promise.all(sortFiles(files).map((file) => this.describeFile(file)))
   }
 
-  /** One thread's own overrides, which win over every project manifest. */
+  /** One thread's own overrides, which win over every project file. */
   async listThreadEnv(threadId: string): Promise<ProjectEnvEntry[]> {
     const entries = await this.dependencies.store.readThread(threadId)
     return Promise.all(sortEntries(entries).map((entry) => this.describeEntry(entry)))
   }
 
+  /** Backwards-compatible name used by the import dialog's preview shape. */
   async setProjectEnvValue(input: SetEnvValueInput): Promise<ProjectEnvFile[]> {
     const name = validateProcessEnvironmentVariable(input.name)
     const value = requireValue(input.value)
     const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    const file = requireFile(files, group, input.mode)
+    const file = requireFile(files, group, fileName)
     const existing = file.entries.find((entry) => entry.name === name)
     const secretRef = await this.dependencies.secrets.save(value, existing?.secretRef, {
       scope: 'project-env',
       ownerId: input.projectId,
-      label: `${group || '.'} · ${projectEnvModeFileName(input.mode)} · ${name}`
+      label: `${group || '.'} · ${fileName} · ${name}`
     })
     upsertEntry(file, { name, secretRef, updatedAt: Date.now() })
     await this.dependencies.store.writeProject(input.projectId, files)
@@ -132,8 +133,9 @@ export class ProjectEnvService {
     input: EnvFileKeyInput & { name: string }
   ): Promise<ProjectEnvFile[]> {
     const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    const file = requireFile(files, group, input.mode)
+    const file = requireFile(files, group, fileName)
     const entry = file.entries.find((candidate) => candidate.name === input.name)
     file.entries = file.entries.filter((candidate) => candidate.name !== input.name)
     file.updatedAt = Date.now()
@@ -143,18 +145,20 @@ export class ProjectEnvService {
   }
 
   /**
-   * Replace one managed file with the lines of a typed `.env` body.
+   * Replace one managed file with the lines of a typed body.
    *
-   * The body is the file: a line with a value writes that value, a line without
-   * one keeps whatever is stored for that name, a name whose line is gone is
-   * removed, and a line that cannot be used is reported rather than guessed. A file
-   * that does not exist yet is created by this call, so the editor can start from an
-   * empty body.
+   * The body is the file: a line with a value writes that value, a line without one
+   * keeps whatever is stored for that name, a name whose line is gone is removed, and
+   * a line that cannot be used is reported rather than guessed. A file that does not
+   * exist yet is created by this call, so an editor can start from an empty body.
    */
   async applyEnvText(input: ApplyEnvTextInput): Promise<ProjectEnvApplyTextResult> {
     const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    let file = files.find((candidate) => candidate.group === group && candidate.mode === input.mode)
+    let file = files.find(
+      (candidate) => candidate.group === group && candidate.fileName === fileName
+    )
     const lines = parseProjectEnvFile(input.text)
     const skipped: { line: number; reason: string }[] = []
     const typed = new Map<string, { value: string | null; line: number }>()
@@ -180,7 +184,7 @@ export class ProjectEnvService {
 
     if (!file) {
       if (typed.size === 0) throw new Error('Nothing to save: the file is empty')
-      file = { group, mode: input.mode, entries: [], updatedAt: Date.now() }
+      file = { group, fileName, entries: [], updatedAt: Date.now() }
       files.push(file)
     }
 
@@ -201,7 +205,7 @@ export class ProjectEnvService {
       const secretRef = await this.dependencies.secrets.save(entry.value, existing?.secretRef, {
         scope: 'project-env',
         ownerId: input.projectId,
-        label: `${group || '.'} · ${projectEnvModeFileName(input.mode)} · ${name}`
+        label: `${group || '.'} · ${fileName} · ${name}`
       })
       upsertEntry(file, { name, secretRef, updatedAt: Date.now() })
       stored.push(name)
@@ -214,22 +218,22 @@ export class ProjectEnvService {
     for (const entry of removedEntries) {
       await this.dropRefIfUnused(input.projectId, entry.secretRef)
     }
-    const removed = removedEntries.map((entry) => entry.name)
 
     return {
       files: await this.listProjectEnv(input.projectId),
       stored,
       kept,
-      removed,
+      removed: removedEntries.map((entry) => entry.name),
       skipped
     }
   }
 
   async createProjectEnvFile(input: EnvFileKeyInput): Promise<ProjectEnvFile[]> {
     const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    if (!files.some((file) => file.group === group && file.mode === input.mode)) {
-      files.push({ group, mode: input.mode, entries: [], updatedAt: Date.now() })
+    if (!files.some((file) => file.group === group && file.fileName === fileName)) {
+      files.push({ group, fileName, entries: [], updatedAt: Date.now() })
       await this.dependencies.store.writeProject(input.projectId, files)
     }
     return this.listProjectEnv(input.projectId)
@@ -237,8 +241,9 @@ export class ProjectEnvService {
 
   async deleteProjectEnvFile(input: EnvFileKeyInput): Promise<ProjectEnvFile[]> {
     const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    const target = files.find((file) => file.group === group && file.mode === input.mode)
+    const target = files.find((file) => file.group === group && file.fileName === fileName)
     const remaining = files.filter((file) => file !== target)
     await this.dependencies.store.writeProject(input.projectId, remaining)
     for (const entry of target?.entries ?? []) {
@@ -282,21 +287,21 @@ export class ProjectEnvService {
   }
 
   /**
-   * Import an existing plaintext ENV file.
+   * Import an existing plaintext env file.
    *
    * Preview is the default: the caller receives the rewritten file and what would
    * happen to each key, and nothing is written. Applying writes a 0600 backup of the
    * original beside it, rewrites every value to `cio://<ref>`, and records the
-   * manifest, so the repository afterwards holds references and the vault holds the
-   * values.
+   * manifest.
    */
   async importProjectEnv(input: ImportEnvInput): Promise<ProjectEnvImportResult> {
     const projectRoot = await this.requireProjectPath(input.projectId)
     const absolute = resolveProjectFile(projectRoot, input.path)
     const contents = await readFile(absolute, 'utf8')
     const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
     const files = await this.dependencies.store.readProject(input.projectId)
-    const file = requireFile(files, group, input.mode)
+    const file = requireFile(files, group, fileName)
 
     const lines = parseProjectEnvFile(contents)
     const skipped: { line: number; reason: string }[] = []
@@ -338,8 +343,8 @@ export class ProjectEnvService {
           names,
           created,
           replaced,
-          // The preview cannot name a ref that does not exist yet, so it shows
-          // the shape the line will take; the applied write uses the real refs.
+          // The preview cannot name a ref that does not exist yet, so it shows the
+          // shape the line will take; the applied write uses the real refs.
           rewritten: buildRewrittenFile(
             lines,
             new Map(plan.map((entry) => [entry.name, placeholderRef(entry.name)]))
@@ -356,7 +361,7 @@ export class ProjectEnvService {
       const secretRef = await this.dependencies.secrets.save(entry.value, existing?.secretRef, {
         scope: 'project-env',
         ownerId: input.projectId,
-        label: `${group || '.'} · ${projectEnvModeFileName(input.mode)} · ${entry.name}`
+        label: `${group || '.'} · ${fileName} · ${entry.name}`
       })
       references.set(entry.name, secretRef)
       upsertEntry(file, { name: entry.name, secretRef, updatedAt: Date.now() })
@@ -398,7 +403,7 @@ export class ProjectEnvService {
    * The environment one process gets.
    *
    * Names resolve nearest-first: a thread entry, then the deepest matching
-   * directory group, then the project root, with a file later in run-mode order
+   * directory group, then the project root, with a file later in name order
    * overriding an earlier one. A name that cannot be validated or whose value is
    * gone is skipped and reported instead of failing the launch.
    */
@@ -422,18 +427,28 @@ export class ProjectEnvService {
       {
         entry: StoredProjectEnvEntry
         group: string
-        mode: ProjectEnvMode
+        fileName: string
         scope: 'project' | 'thread'
       }
     >()
     for (const file of groupsFor(files, relativeDirectory)) {
       for (const entry of file.entries) {
-        winners.set(entry.name, { entry, group: file.group, mode: file.mode, scope: 'project' })
+        winners.set(entry.name, {
+          entry,
+          group: file.group,
+          fileName: file.fileName,
+          scope: 'project'
+        })
       }
     }
     if (context.threadId) {
       for (const entry of await this.dependencies.store.readThread(context.threadId)) {
-        winners.set(entry.name, { entry, group: '', mode: 'default', scope: 'thread' })
+        winners.set(entry.name, {
+          entry,
+          group: '',
+          fileName: 'this thread',
+          scope: 'thread'
+        })
       }
     }
 
@@ -454,7 +469,12 @@ export class ProjectEnvService {
       try {
         const value = await this.dependencies.secrets.resolve(winner.entry.secretRef)
         if (withValues) environment[name] = value
-        entries.push({ name, group: winner.group, mode: winner.mode, scope: winner.scope })
+        entries.push({
+          name,
+          group: winner.group,
+          fileName: winner.fileName,
+          scope: winner.scope
+        })
       } catch (error: unknown) {
         Logger.dev(`Project env "${name}" could not be resolved:`, error)
         skipped.push({ name, reason: 'Its value is no longer stored. Set it again.' })
@@ -467,7 +487,7 @@ export class ProjectEnvService {
   private async describeFile(file: StoredProjectEnvFile): Promise<ProjectEnvFile> {
     return {
       group: file.group,
-      mode: file.mode,
+      fileName: file.fileName,
       updatedAt: file.updatedAt,
       entries: await Promise.all(
         sortEntries(file.entries).map((entry) => this.describeEntry(entry))
@@ -528,9 +548,11 @@ function normalizeGroup(group: string): string {
 function requireFile(
   files: StoredProjectEnvFile[],
   group: string,
-  mode: ProjectEnvMode
+  fileName: string
 ): StoredProjectEnvFile {
-  const file = files.find((candidate) => candidate.group === group && candidate.mode === mode)
+  const file = files.find(
+    (candidate) => candidate.group === group && candidate.fileName === fileName
+  )
   if (!file) throw new Error('That env file no longer exists. Create it again.')
   return file
 }
@@ -541,14 +563,14 @@ function upsertEntry(file: StoredProjectEnvFile, entry: StoredProjectEnvEntry): 
   file.updatedAt = Date.now()
 }
 
-/** Root first, then deeper groups; inside a group, run-mode order. */
+/** Root first, then deeper groups; inside a group, name order with `.env` first. */
 function sortFiles(files: readonly StoredProjectEnvFile[]): StoredProjectEnvFile[] {
   return [...files].sort((left, right) => {
     const depth = groupDepth(left.group) - groupDepth(right.group)
     if (depth !== 0) return depth
     const group = left.group.localeCompare(right.group)
     if (group !== 0) return group
-    return PROJECT_ENV_MODE_ORDER[left.mode] - PROJECT_ENV_MODE_ORDER[right.mode]
+    return compareEnvFileNames(left.fileName, right.fileName)
   })
 }
 
@@ -566,7 +588,7 @@ function sortPreview(entries: ProjectEnvLaunchPreviewEntry[]): ProjectEnvLaunchP
 
 /**
  * Every file that applies to a working directory, in the order it is applied:
- * shallower groups first, and inside one group the run-mode order.
+ * shallower groups first, and inside one group the name order.
  */
 function groupsFor(
   files: readonly StoredProjectEnvFile[],
@@ -581,7 +603,7 @@ function groupsFor(
   return [...applies].sort((left, right) => {
     const depth = groupDepth(left.group) - groupDepth(right.group)
     if (depth !== 0) return depth
-    return PROJECT_ENV_MODE_ORDER[left.mode] - PROJECT_ENV_MODE_ORDER[right.mode]
+    return compareEnvFileNames(left.fileName, right.fileName)
   })
 }
 

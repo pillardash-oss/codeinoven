@@ -8,12 +8,10 @@
   import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
   import { formatDateTimeCompact } from '$shared/date-time-format'
   import {
-    PROJECT_ENV_MODE_ORDER,
-    projectEnvModeFileName,
+    DEFAULT_ENV_FILE_NAME,
     type ProjectEnvFile,
     type ProjectEnvImportPreview,
-    type ProjectEnvLaunchPreview,
-    type ProjectEnvMode
+    type ProjectEnvLaunchPreview
   } from '$shared/project-env'
   import type { Project } from '$shared/types'
   import { SvelteMap } from 'svelte/reactivity'
@@ -35,7 +33,7 @@
   interface Props {
     /** Project the page was opened on, when an entry point supplied one. */
     projectId?: string
-    /** Project-relative directory a terminal would start in, '' for the root. */
+    /** Project-relative directory a process would start in, '' for the root. */
     directory?: string
   }
 
@@ -52,7 +50,7 @@
   let error = $state('')
 
   let selectedGroup = $state('')
-  let selectedMode = $state<ProjectEnvMode>('default')
+  let selectedFileName = $state(DEFAULT_ENV_FILE_NAME)
 
   let keyTarget = $state<{ existing: { name: string } | null } | null>(null)
   let importOpen = $state(false)
@@ -61,10 +59,10 @@
   let deleteFileOpen = $state(false)
   let createFileOpen = $state(false)
   let newGroup = $state('')
-  let newMode = $state<ProjectEnvMode>('local')
+  let newFileName = $state(DEFAULT_ENV_FILE_NAME)
 
   const selectedFile = $derived(
-    files.find((file) => file.group === selectedGroup && file.mode === selectedMode) ?? null
+    files.find((file) => file.group === selectedGroup && file.fileName === selectedFileName) ?? null
   )
   const groups = $derived(
     [...new Set(files.map((file) => file.group))].sort((a, b) => a.localeCompare(b))
@@ -115,13 +113,13 @@
       files = await invoke('secrets:envList', projectId)
       preview = await invoke('secrets:envPreview', { projectId, directory })
       const current = files.find(
-        (file) => file.group === selectedGroup && file.mode === selectedMode
+        (file) => file.group === selectedGroup && file.fileName === selectedFileName
       )
       if (!current && files.length > 0) {
         const first = files[0]
         if (first) {
           selectedGroup = first.group
-          selectedMode = first.mode
+          selectedFileName = first.fileName
         }
       }
     } catch (cause) {
@@ -134,7 +132,7 @@
   async function selectProject(nextId: string): Promise<void> {
     projectId = nextId
     selectedGroup = ''
-    selectedMode = 'default'
+    selectedFileName = DEFAULT_ENV_FILE_NAME
     await load()
   }
 
@@ -145,7 +143,7 @@
       files = await invoke('secrets:envSetValue', {
         projectId,
         group: selectedGroup,
-        mode: selectedMode,
+        fileName: selectedFileName,
         name: input.name,
         value: input.value
       })
@@ -167,7 +165,7 @@
       files = await invoke('secrets:envRemoveEntry', {
         projectId,
         group: selectedGroup,
-        mode: selectedMode,
+        fileName: selectedFileName,
         name
       })
       deleteEntry = null
@@ -183,15 +181,17 @@
     busy = true
     error = ''
     try {
+      const group = newGroup.trim().replace(/^\/+|\/+$/gu, '')
       files = await invoke('secrets:envCreateFile', {
         projectId,
-        group: newGroup.trim(),
-        mode: newMode
+        group,
+        fileName: newFileName.trim()
       })
-      selectedGroup = newGroup.trim().replace(/^\/+|\/+$/gu, '')
-      selectedMode = newMode
+      selectedGroup = group
+      selectedFileName = newFileName.trim()
       createFileOpen = false
       newGroup = ''
+      newFileName = DEFAULT_ENV_FILE_NAME
     } catch (cause) {
       report(cause, 'Could not create this env file')
     } finally {
@@ -206,11 +206,11 @@
       files = await invoke('secrets:envDeleteFile', {
         projectId,
         group: selectedGroup,
-        mode: selectedMode
+        fileName: selectedFileName
       })
       deleteFileOpen = false
       selectedGroup = ''
-      selectedMode = 'default'
+      selectedFileName = DEFAULT_ENV_FILE_NAME
       preview = await invoke('secrets:envPreview', { projectId, directory })
     } catch (cause) {
       report(cause, 'Could not delete this env file')
@@ -226,7 +226,7 @@
       const result = await invoke('secrets:envImport', {
         projectId,
         group: selectedGroup,
-        mode: selectedMode,
+        fileName: selectedFileName,
         path,
         apply: false
       })
@@ -246,7 +246,7 @@
       const result = await invoke('secrets:envImport', {
         projectId,
         group: selectedGroup,
-        mode: selectedMode,
+        fileName: selectedFileName,
         path,
         apply: true
       })
@@ -268,8 +268,8 @@
     void loadProjects().then(load)
   })
 
-  // An entry point that names a different project (a project row's key button)
-  // re-targets the panel instead of leaving it on whatever was selected before.
+  // An entry point that names a different project re-targets the panel instead of
+  // leaving it on whatever was selected before.
   $effect(() => {
     const target = secretsPageState.target
     if (!target?.projectId || target.projectId === projectId) return
@@ -298,7 +298,11 @@
         class="flex h-8 items-center gap-1.5 border px-2.5 text-xs hover:bg-elevated disabled:opacity-40"
         disabled={!projectId || busy}
         title="Create an env file for this project"
-        onclick={() => (createFileOpen = true)}
+        onclick={() => {
+          newGroup = selectedGroup
+          newFileName = DEFAULT_ENV_FILE_NAME
+          createFileOpen = true
+        }}
       >
         <CioPlus size={13} /> Env file
       </button>
@@ -359,23 +363,22 @@
                 {group || '.'}
               </p>
               <div class="mt-1 space-y-0.5">
-                {#each files
-                  .filter((file) => file.group === group)
-                  .sort((a, b) => PROJECT_ENV_MODE_ORDER[a.mode] - PROJECT_ENV_MODE_ORDER[b.mode]) as file (file.mode)}
-                  {@const active = file.group === selectedGroup && file.mode === selectedMode}
+                {#each files.filter((file) => file.group === group) as file (file.fileName)}
+                  {@const active =
+                    file.group === selectedGroup && file.fileName === selectedFileName}
                   <button
                     type="button"
                     class="flex w-full items-center justify-between gap-2 px-1.5 py-1 text-left text-xs transition-colors {active
                       ? 'bg-elevated text-foreground'
                       : 'text-muted hover:bg-elevated hover:text-foreground'}"
                     aria-current={active ? 'true' : undefined}
-                    title="Edit {group || 'project root'}/{projectEnvModeFileName(file.mode)}"
+                    title="Edit {group || 'project root'}/{file.fileName}"
                     onclick={() => {
                       selectedGroup = file.group
-                      selectedMode = file.mode
+                      selectedFileName = file.fileName
                     }}
                   >
-                    <span class="font-mono">{projectEnvModeFileName(file.mode)}</span>
+                    <span class="truncate font-mono">{file.fileName}</span>
                     <span class="tabular-nums text-dimmed">{file.entries.length}</span>
                   </button>
                 {/each}
@@ -390,7 +393,7 @@
           <section class="border bg-surface" aria-label="Env keys">
             <div class="flex items-center justify-between gap-2 border-b px-4 py-2">
               <p class="font-mono text-xs text-foreground">
-                {selectedFile.group || '.'}/{projectEnvModeFileName(selectedFile.mode)}
+                {selectedFile.group || '.'}/{selectedFile.fileName}
               </p>
               <div class="flex items-center gap-1">
                 <button
@@ -493,7 +496,7 @@
                     <span class="shrink-0 text-[0.6875rem] text-dimmed">
                       {entry.scope === 'thread'
                         ? 'this thread'
-                        : `${entry.group || '.'}/${projectEnvModeFileName(entry.mode)}`}
+                        : `${entry.group || '.'}/${entry.fileName}`}
                     </span>
                   </div>
                 {/each}
@@ -518,7 +521,7 @@
   <EnvKeyModal
     existing={keyTarget.existing}
     group={selectedGroup}
-    mode={selectedMode}
+    fileName={selectedFileName}
     {busy}
     {error}
     onSubmit={saveValue}
@@ -531,7 +534,7 @@
 {#if importOpen}
   <EnvImportModal
     group={selectedGroup}
-    mode={selectedMode}
+    fileName={selectedFileName}
     {busy}
     {error}
     preview={importPreview}
@@ -548,7 +551,7 @@
 {#if createFileOpen}
   <CreateEnvFileDialog
     bind:group={newGroup}
-    bind:mode={newMode}
+    bind:name={newFileName}
     {busy}
     onCreate={createFile}
     onClose={() => (createFileOpen = false)}
@@ -565,9 +568,7 @@
   onConfirm={deleteFile}
 >
   <p>
-    <span class="font-mono text-foreground"
-      >{selectedGroup || '.'}/{projectEnvModeFileName(selectedMode)}</span
-    >
+    <span class="font-mono text-foreground">{selectedGroup || '.'}/{selectedFileName}</span>
     is deleted. A copy in the repository is not touched.
   </p>
 </ConfirmDialog>

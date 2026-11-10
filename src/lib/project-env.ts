@@ -17,45 +17,49 @@
 /** The value prefix a managed ENV line uses instead of a plaintext value. */
 export const PROJECT_ENV_REFERENCE_PREFIX = 'cio://'
 
-/** Run modes a manifest can describe. `default` is plain `.env`. */
-export const PROJECT_ENV_MODES = [
-  'default',
-  'local',
-  'development',
-  'production',
-  'selfhost',
-  'test'
-] as const
+/** The name a new file starts with; a user may rename it to whatever they want. */
+export const DEFAULT_ENV_FILE_NAME = '.env'
 
-/** A run mode a manifest can describe. */
-export type ProjectEnvMode = (typeof PROJECT_ENV_MODES)[number]
+/** Longest file name a managed env file may take. */
+export const ENV_FILE_NAME_LIMIT = 64
+
+const ENV_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+$/u
 
 /**
- * Order in which the files of one directory group are applied. A later file wins,
- * which is what makes `.env.local` beat `.env` without either restating the other.
+ * Validate the name of one managed env file.
+ *
+ * Any plain file name is allowed, because the name is the user's: `.env`,
+ * `.env.production`, `.env.selfhost.local`, `local.env`. What is refused is
+ * anything that would escape the group (a separator, a parent segment) or that a
+ * filesystem cannot tell apart from its own metadata.
  */
-export const PROJECT_ENV_MODE_ORDER: Readonly<Record<ProjectEnvMode, number>> = {
-  default: 0,
-  local: 10,
-  development: 20,
-  test: 30,
-  production: 40,
-  selfhost: 50
+export function validateEnvFileName(name: string): string {
+  const trimmed = name.trim()
+  if (!trimmed) throw new TypeError('An env file needs a name')
+  if (trimmed.length > ENV_FILE_NAME_LIMIT) {
+    throw new TypeError(`An env file name must be at most ${ENV_FILE_NAME_LIMIT} characters`)
+  }
+  if (trimmed === '.' || trimmed === '..' || !ENV_FILE_NAME_PATTERN.test(trimmed)) {
+    throw new TypeError(
+      'An env file name may only use letters, digits, dots, dashes and underscores'
+    )
+  }
+  return trimmed
 }
 
-/** The file name a mode describes, for the UI and for import. */
-export function projectEnvModeFileName(mode: ProjectEnvMode): string {
-  return mode === 'default' ? '.env' : `.env.${mode}`
+/**
+ * Order two files of one group, earliest applied first.
+ *
+ * `.env` is the base every other name layers on top of, and the rest follow by
+ * name so the order never depends on when a file was created.
+ */
+export function compareEnvFileNames(left: string, right: string): number {
+  if (left === DEFAULT_ENV_FILE_NAME) return right === DEFAULT_ENV_FILE_NAME ? 0 : -1
+  if (right === DEFAULT_ENV_FILE_NAME) return 1
+  return left.localeCompare(right)
 }
 
-/** Parse a user-typed mode slug, refusing anything that is not one of the modes. */
-export function parseProjectEnvMode(value: unknown): ProjectEnvMode | null {
-  if (typeof value !== 'string') return null
-  const candidate = value.trim().toLowerCase()
-  return PROJECT_ENV_MODES.find((mode) => mode === candidate) ?? null
-}
-
-/** One key of a manifest: the name, and where its value lives. */
+/** One key of a manifest: the name, and where its value lives. */ /** One key of a manifest: the name, and where its value lives. */
 export interface ProjectEnvEntry {
   name: string
   /** Opaque vault reference; the value itself never leaves the main process. */
@@ -65,11 +69,12 @@ export interface ProjectEnvEntry {
   missing?: boolean
 }
 
-/** One managed ENV file: a directory group plus a run mode. */
+/** One managed ENV file: a directory group plus a file name. */
 export interface ProjectEnvFile {
   /** Project-relative directory, '' for the project root. */
   group: string
-  mode: ProjectEnvMode
+  /** The file name the user gave it, e.g. `.env` or `.env.production`. */
+  fileName: string
   entries: ProjectEnvEntry[]
   updatedAt: number
   /** Project-relative path the values were imported from, when they were. */
@@ -81,7 +86,8 @@ export interface ProjectEnvLaunchPreviewEntry {
   name: string
   /** Directory group that supplied the winning value, '' for the root. */
   group: string
-  mode: ProjectEnvMode
+  /** File the value came from. */
+  fileName: string
   /** 'thread' when a thread-scoped entry won. */
   scope: 'project' | 'thread'
 }
@@ -131,7 +137,7 @@ export interface ProjectEnvImportResult {
 export interface ProjectEnvFileRequest {
   projectId: string
   group: string
-  mode: ProjectEnvMode
+  fileName: string
 }
 
 /** A request that writes one key of a managed env file. */
