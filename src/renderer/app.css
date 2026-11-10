@@ -42,9 +42,9 @@
   --color-primary-hover: #0d2438;
   --color-on-primary: #f7f6f2;
   /* The brand plate: the ground and ink of the app icon itself. Fixed in every
-     theme and contrast level, because the icon never inverts: Don's tile wears
-     it so the orchestrator reads as the app's front door in light and dark
-     alike. */
+     theme and contrast level, because the icon never inverts. Don's tile takes
+     them so the assistant mark on it stays black and ink at night as it is by
+     day. */
   --color-brand-plate: #0b0b0d;
   --color-brand-ink: #f5f4f0;
 
