@@ -12,6 +12,7 @@ import type {
   ProjectEnvThreadEntryRequest,
   ProjectEnvThreadValueRequest,
   ProjectEnvValueRequest,
+  ProjectEnvValues,
   ProjectEnvWriteResult
 } from '../project-env'
 import type { Contract } from './contract-helpers'
@@ -44,6 +45,14 @@ export const invokeSecretsContract = {
     [request: ProjectEnvThreadEntryRequest],
     ProjectEnvEntry[]
   >,
+  /**
+   * The decrypted values of one managed file, for the app's env editor only.
+   *
+   * This is the single channel that hands a secret back to the renderer, because a
+   * person may see and edit their own environment variables at any time. It is
+   * excluded from the agent-facing app-control catalog: no agent tool can call it.
+   */
+  'secrets:envValues': {} as Contract<[request: ProjectEnvFileRequest], ProjectEnvValues>,
   /** Write one managed file into the project as `NAME=cio://<ref>` lines. */
   'secrets:envWriteToProject': {} as Contract<
     [request: ProjectEnvFileRequest],

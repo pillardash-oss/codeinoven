@@ -13,6 +13,7 @@
   import { APP_SLUG } from '$shared/brand'
   import {
     DEFAULT_ENV_FILE_NAME,
+    formatEnvValue,
     parseProjectEnvFile,
     validateEnvFileName,
     type ProjectEnvFile
@@ -96,9 +97,35 @@
     skipCondition.length > 0 && noticeDismissals.isDismissed(skipNoticeId, skipCondition)
   )
 
-  function bodyFor(file: ProjectEnvFile | null): string {
+  /**
+   * The file body, values and all.
+   *
+   * The values are read from the vault on open, because an environment variable is
+   * something its owner looks at and edits whenever they want. They stay in this
+   * panel: the value read is the one channel excluded from everything an agent can
+   * call or list.
+   */
+  function bodyFor(
+    file: ProjectEnvFile | null,
+    values: readonly { name: string; value: string | null }[]
+  ): string {
     if (!file) return ''
-    return file.entries.map((entry) => `${entry.name}=`).join('\n')
+    const byName = new Map(values.map((entry) => [entry.name, entry.value]))
+    return file.entries
+      .map((entry) => `${entry.name}=${formatEnvValue(byName.get(entry.name) ?? '')}`)
+      .join('\n')
+  }
+
+  /** Values for one file, read fresh from the vault. */
+  async function readValues(file: ProjectEnvFile | null): Promise<string> {
+    const projectId = projectEnvDock.projectId
+    if (!projectId || !file) return ''
+    const values = await invoke('secrets:envValues', {
+      projectId,
+      group: file.group,
+      fileName: file.fileName
+    })
+    return bodyFor(file, values.entries)
   }
 
   function resetHistory(next: string): void {
@@ -128,7 +155,7 @@
       const initial =
         available.find((file) => file.fileName === DEFAULT_ENV_FILE_NAME) ?? available[0] ?? null
       fileName = initial?.fileName ?? DEFAULT_ENV_FILE_NAME
-      resetHistory(bodyFor(initial))
+      resetHistory(await readValues(initial))
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not read this path’s env files'
     } finally {
@@ -149,7 +176,7 @@
     skipped = []
     fileName = next
     const file = files.find((candidate) => candidate.group === group && candidate.fileName === next)
-    resetHistory(bodyFor(file ?? null))
+    resetHistory(await readValues(file ?? null))
   }
 
   function undo(): void {
@@ -204,6 +231,24 @@
     else revealed.add(index)
   }
 
+  /**
+   * Names whose line is byte-identical to the one the file opened with.
+   *
+   * Their value is already stored, so the save must not encrypt it again: opening a
+   * file and pressing Save is not a rotation.
+   */
+  function untouchedNames(): string[] {
+    const before = new Map(
+      parseProjectEnvFile(savedBody).flatMap((line) =>
+        line.kind === 'assignment' ? [[line.name, `${line.name}=${line.value}`] as const] : []
+      )
+    )
+    return parseProjectEnvFile(body).flatMap((line) => {
+      if (line.kind !== 'assignment') return []
+      return before.get(line.name) === `${line.name}=${line.value}` ? [line.name] : []
+    })
+  }
+
   async function save(): Promise<void> {
     const projectId = projectEnvDock.projectId
     if (!projectId) return
@@ -216,7 +261,8 @@
         projectId,
         group,
         fileName,
-        text: body
+        text: body,
+        keep: untouchedNames()
       })
       files = result.files
       savedBody = body
@@ -397,6 +443,16 @@
       <div class="ml-auto flex shrink-0 items-center gap-0.5">
         <button
           type="button"
+          class="flex h-7 w-7 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground"
+          title="Add a key"
+          aria-label="Add a key to this env file"
+          onclick={addRow}
+        >
+          <CioPlus size={13} />
+        </button>
+        <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
+        <button
+          type="button"
           class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
           title="Undo"
           aria-label="Undo the last edit"
@@ -478,7 +534,7 @@
                   autocomplete="off"
                   spellcheck="false"
                   aria-label="Value for {row.name || 'this key'}"
-                  placeholder={row.stored ? 'Stored. Type to replace.' : 'Value'}
+                  placeholder={row.stored ? 'No value stored yet' : 'Value'}
                   value={row.value}
                   oninput={(event) => setRow(row.index, { value: event.currentTarget.value })}
                 />
@@ -508,16 +564,6 @@
               </div>
             </div>
           {/each}
-          <div class="flex items-center px-3 py-2">
-            <button
-              type="button"
-              class="flex h-7 items-center gap-1.5 border px-2 text-xs text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Add a key to this file"
-              onclick={addRow}
-            >
-              <CioPlus size={12} /> Add key
-            </button>
-          </div>
         </div>
       {/if}
     </div>

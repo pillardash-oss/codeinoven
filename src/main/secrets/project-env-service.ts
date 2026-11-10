@@ -11,6 +11,7 @@ import {
   type ProjectEnvImportResult,
   type ProjectEnvLaunchPreview,
   type ProjectEnvLaunchPreviewEntry,
+  type ProjectEnvValues,
   type ProjectEnvWriteResult
 } from '../../lib/project-env'
 import { validateProcessEnvironmentVariable } from '../../lib/secret-names'
@@ -54,6 +55,8 @@ export interface EnvFileKeyInput {
 export interface ApplyEnvTextInput extends EnvFileKeyInput {
   /** The whole file body, as the user typed it. */
   text: string
+  /** Names the user did not touch, whose stored value must not be encrypted again. */
+  keep?: readonly string[]
 }
 
 export interface ImportEnvInput extends EnvFileKeyInput {
@@ -189,10 +192,15 @@ export class ProjectEnvService {
       files.push(file)
     }
 
+    const keep = new Set(input.keep ?? [])
     const stored: string[] = []
     const kept: string[] = []
     for (const [name, entry] of typed) {
       const existing = file.entries.find((candidate) => candidate.name === name)
+      if (existing && keep.has(name)) {
+        kept.push(name)
+        continue
+      }
       if (entry.value === null) {
         if (existing) kept.push(name)
         else {
@@ -276,6 +284,33 @@ export class ProjectEnvService {
     file.writtenTo = relativePath
     file.updatedAt = Date.now()
     await this.dependencies.store.writeProject(input.projectId, files)
+  }
+
+  /**
+   * Every value of one managed file, decrypted for the app's own editor.
+   *
+   * This is the one read in the whole feature that hands a value back, and it
+   * exists because an environment variable is something a person looks at and
+   * edits whenever they want. The renderer channel that carries it is deliberately
+   * unreachable for an agent (`AGENT_FORBIDDEN_CHANNELS` in the app-control
+   * executor), so no agent-facing surface can ask for it.
+   */
+  async readEnvValues(input: EnvFileKeyInput): Promise<ProjectEnvValues> {
+    const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
+    const files = await this.dependencies.store.readProject(input.projectId)
+    const file = requireFile(files, group, fileName)
+    const entries = await Promise.all(
+      file.entries.map(async (entry) => ({
+        name: entry.name,
+        value: await this.dependencies.secrets.resolve(entry.secretRef).catch(() => null)
+      }))
+    )
+    return {
+      group,
+      fileName,
+      entries: entries.sort((left, right) => left.name.localeCompare(right.name))
+    }
   }
 
   async createProjectEnvFile(input: EnvFileKeyInput): Promise<ProjectEnvFile[]> {

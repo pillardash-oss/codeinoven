@@ -167,6 +167,32 @@ export interface ProjectEnvEntryRequest extends ProjectEnvFileRequest {
 export interface ProjectEnvApplyTextRequest extends ProjectEnvFileRequest {
   /** The whole file body, as the user typed it. */
   text: string
+  /**
+   * Names whose line the user did not touch. Their stored value is kept as it is
+   * instead of being encrypted again, so opening a file and saving it costs
+   * nothing and cannot rotate a value by accident.
+   */
+  keep?: readonly string[]
+}
+
+/** One stored value, handed to the app's own editor so the user can see it again. */
+export interface ProjectEnvValueEntry {
+  name: string
+  /** The decrypted value, or null when the vault no longer holds it. */
+  value: string | null
+}
+
+/**
+ * Every value of one managed file.
+ *
+ * This shape is only ever produced for the app's own env editor: it is the one
+ * place a stored value is shown back to the person who stored it, and the channel
+ * that returns it is deliberately unreachable for an agent.
+ */
+export interface ProjectEnvValues {
+  group: string
+  fileName: string
+  entries: ProjectEnvValueEntry[]
 }
 
 /** What one bulk apply did, described without any value. */
@@ -257,7 +283,26 @@ function unquote(value: string): string {
   if (value.length >= 2) {
     const first = value[0]
     const last = value[value.length - 1]
-    if ((first === '"' || first === "'") && first === last) return value.slice(1, -1)
+    if (first === '"' && last === '"') return unescapeUnsafeValue(value.slice(1, -1))
+    if (first === "'" && last === "'") return value.slice(1, -1)
   }
   return value
+}
+
+/** Undo the escaping `formatEnvValue` applies inside double quotes. */
+function unescapeUnsafeValue(value: string): string {
+  return value.replace(/\\(["\\n])/gu, (_match, token: string) => (token === 'n' ? '\n' : token))
+}
+
+/**
+ * Render one value as a line the file can hold.
+ *
+ * A value made of plain characters is written as it is. Anything else is quoted
+ * and escaped, so a value with spaces, a `#`, a quote or a newline survives a round
+ * trip through the editor instead of silently becoming two lines.
+ */
+export function formatEnvValue(value: string): string {
+  if (/^[A-Za-z0-9._:/@+,-]*$/u.test(value)) return value
+  const escaped = value.replace(/\\/gu, '\\\\').replace(/"/gu, '\\"').replace(/\r?\n/gu, '\\n')
+  return `"${escaped}"`
 }

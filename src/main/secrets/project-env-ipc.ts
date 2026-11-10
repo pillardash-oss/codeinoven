@@ -64,10 +64,15 @@ function entryRequest(value: unknown): ProjectEnvEntryRequest {
 
 function applyTextRequest(value: unknown): ProjectEnvApplyTextRequest {
   const input = record(value, 'Env file body')
-  const text = input['text']
-  if (typeof text !== 'string') throw new TypeError('Env file body must be a string')
-  if (text.length > TEXT_LIMIT) throw new TypeError('Env file body is too large')
-  return { ...fileRequest(input), text }
+  const body = input['text']
+  if (typeof body !== 'string') throw new TypeError('Env file body must be a string')
+  if (body.length > TEXT_LIMIT) throw new TypeError('Env file body is too large')
+  const rawKeep = input['keep']
+  if (rawKeep !== undefined && !Array.isArray(rawKeep)) {
+    throw new TypeError('Env file keep list must be an array')
+  }
+  const keep = (rawKeep ?? []).map((name) => text(name, 'Env key', NAME_LIMIT))
+  return { ...fileRequest(input), text: body, keep }
 }
 
 function threadValueRequest(value: unknown): ProjectEnvThreadValueRequest {
@@ -137,6 +142,9 @@ export function registerProjectEnvIpc(service: ProjectEnvService): void {
   )
   ipcMain.handle('secrets:envApplyText', (_, request: unknown) =>
     service.applyEnvText(applyTextRequest(request))
+  )
+  ipcMain.handle('secrets:envValues', (_, request: unknown) =>
+    service.readEnvValues(fileRequest(request))
   )
   ipcMain.handle('secrets:envWriteToProject', (_, request: unknown) =>
     service.writeEnvFileToProject(fileRequest(request))

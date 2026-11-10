@@ -275,6 +275,66 @@ describe('ProjectEnvService typed body', () => {
   })
 })
 
+describe('ProjectEnvService values for the editor', () => {
+  it('hands the stored values back, in name order', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'DATABASE_URL=postgres://demo\nQUOTED="a b#c"\nMULTI="line one\\nline two"\n'
+    })
+
+    const values = await service.readEnvValues({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env'
+    })
+
+    expect(values.entries).toContainEqual({ name: 'MULTI', value: 'line one\nline two' })
+    expect(values.entries.filter((entry) => entry.name !== 'MULTI')).toEqual([
+      { name: 'DATABASE_URL', value: 'postgres://demo' },
+      { name: 'QUOTED', value: 'a b#c' }
+    ])
+  })
+
+  it('does not re-encrypt a name the caller says it left untouched', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    let saves = 0
+    const counting: ProjectEnvSecretsPort = {
+      ...secrets,
+      async save(value: string, existingRef?: string): Promise<string> {
+        saves += 1
+        return secrets.save(value, existingRef)
+      }
+    }
+    const countingService = new ProjectEnvService({
+      store: new ProjectEnvStore(storage),
+      secrets: counting,
+      resolveProjectPath: async () => projectRoot
+    })
+    await countingService.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'PORT=3000\n'
+    })
+    expect(saves).toBe(1)
+
+    // Opening the file and saving it again keeps the value exactly as it was.
+    const kept = await countingService.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      fileName: '.env',
+      text: 'PORT=3000\n',
+      keep: ['PORT']
+    })
+    expect(saves).toBe(1)
+    expect(kept.kept).toEqual(['PORT'])
+    expect(secrets.values.size).toBe(1)
+  })
+})
+
 describe('ProjectEnvService writing the file into the project', () => {
   it('writes references, keeps the previous content, and is idempotent', async () => {
     await service.createProjectEnvFile({
