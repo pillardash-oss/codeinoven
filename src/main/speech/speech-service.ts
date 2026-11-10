@@ -192,6 +192,13 @@ export class SpeechService {
   private dictationTranscriptions = 0
   private readonly eviction: SpeechRuntimeEviction
   private readonly playground = new SpeechPlaygroundStore()
+  /**
+   * Queue job ids of the transcription each attempt is waiting on, so a
+   * dictation the user cancels can stop the model work it started instead of
+   * letting it finish words nobody asked for. Entries are removed when the job
+   * settles.
+   */
+  private readonly attemptJobs = new Map<string, string>()
 
   constructor(
     private readonly paths: SpeechServicePaths,
@@ -700,6 +707,7 @@ export class SpeechService {
           signal
         )
     })
+    this.attemptJobs.set(attemptId, queued.id)
     await this.storage.updateAttempt(attemptId, (attempt) => {
       attempt.stage = 'transcribing'
       attempt.runtime = runtime
@@ -764,20 +772,27 @@ export class SpeechService {
       return { attemptId, jobId: queued.id, rawTranscript, finalTranscript }
     } catch (cause) {
       const error = this.asError(cause, 'transcription-failed')
-      Logger.error('Speech transcription failed', {
-        attemptId,
-        runtime,
-        artifactId,
-        jobId: queued.id,
-        error: error.message
-      })
-      await this.storage.updateAttempt(attemptId, (attempt) => {
-        attempt.stage = error.code === 'cancelled' ? 'cancelled' : 'failed'
-        attempt.errors.push({ stage: 'transcribing', error, occurredAt: Date.now() })
-      })
+      // A cancelled dictation is deleted while this job is still running, so
+      // its attempt may already be gone: settling a recording that no longer
+      // exists must not raise over the cancellation that removed it.
+      const known = this.storage.getAttempt(attemptId)
+      if (known) {
+        Logger.error('Speech transcription failed', {
+          attemptId,
+          runtime,
+          artifactId,
+          jobId: queued.id,
+          error: error.message
+        })
+        await this.storage.updateAttempt(attemptId, (attempt) => {
+          attempt.stage = error.code === 'cancelled' ? 'cancelled' : 'failed'
+          attempt.errors.push({ stage: 'transcribing', error, occurredAt: Date.now() })
+        })
+      }
       throw cause
     } finally {
       this.dictationTranscriptions -= 1
+      if (this.attemptJobs.get(attemptId) === queued.id) this.attemptJobs.delete(attemptId)
     }
   }
 
@@ -1071,6 +1086,28 @@ export class SpeechService {
   async deleteHistory(attemptId: string, token: string): Promise<void> {
     this.consumeConfirmation(token, 'history-item', attemptId)
     await this.storage.deleteAttempt(attemptId, true)
+  }
+
+  /**
+   * Throw away a dictation the user cancelled outright.
+   *
+   * Cancelling is not deleting a kept recording, so it needs no confirmation:
+   * the user pressed the gesture that abandons the take while it was still
+   * being made. Any transcription already queued or running for it is cancelled
+   * first, so the model stops on words nobody will read, then the attempt and
+   * its audio are deleted, which is what keeps it out of the history entirely.
+   * Returns quietly when the attempt is already gone, so the renderer's cancel
+   * path and a retried cancel cannot fight over it.
+   */
+  async discardAttempt(attemptId: string): Promise<void> {
+    const jobId = this.attemptJobs.get(attemptId)
+    if (jobId) {
+      this.queue.cancel(jobId)
+      this.attemptJobs.delete(attemptId)
+    }
+    if (!this.storage.getAttempt(attemptId)) return
+    await this.storage.deleteAttempt(attemptId, true)
+    this.emit({ kind: 'history', attemptId, stage: 'cancelled' })
   }
 
   async deleteAllHistory(token: string): Promise<void> {

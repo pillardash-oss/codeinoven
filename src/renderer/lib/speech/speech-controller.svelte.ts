@@ -65,6 +65,16 @@ export type { RendererSpeechState, VoiceSendStage } from './speech-controller-ty
  */
 const MAX_PENDING_DELIVERIES = 12
 
+/**
+ * How long after an Escape press a second one still belongs to the same
+ * gesture.
+ *
+ * One press ends the recording and starts its transcript; two presses inside
+ * this window throw the dictation away instead. Long enough for a comfortable
+ * double press, short enough that a later Escape keeps its normal meaning.
+ */
+const CANCEL_DOUBLE_PRESS_MS = 500
+
 /** One transcript held for a field that was not on screen when it landed. */
 interface PendingDeliveryRecord {
   transcript: string
@@ -179,6 +189,20 @@ class SpeechController {
    */
   private readonly pendingDeliveries = new Map<string, PendingDeliveryRecord>()
   private stopPromise: Promise<void> | null = null
+  /** When Escape last ended a recording, so the press after it can cancel. */
+  private lastEscapeAt = 0
+  /**
+   * The dictation the last stop started, while it is still in flight. It is
+   * what a double press throws away: the attempt and the thread it belongs to,
+   * so the cancel is gated exactly like the stop that produced it.
+   */
+  private lastStopped: { attemptId: string; scope: SpeechScope } | null = null
+  /**
+   * Attempts the user cancelled outright. The controller checks this where a
+   * transcript would otherwise land, so a transcript the model produced anyway
+   * is dropped instead of inserted, sent, or written to the clipboard.
+   */
+  private readonly cancelledAttempts = new Set<string>()
   private sound = structuredClone(DEFAULT_SPEECH_SETTINGS)
   /** Whether `sound` has been loaded from config at least once. Until then a
    *  `start()` still pays one `config:get`; afterwards the mirror below keeps
@@ -222,11 +246,15 @@ class SpeechController {
   private readonly handleGlobalKeydown = (event: KeyboardEvent): void => {
     if (event.defaultPrevented) return
     if (event.key === 'Escape') {
-      if (this.state.state !== 'recording') return
-      if (!this.escapeStopsRecording()) return
+      // A key held down repeats every few milliseconds, and a repeat is never a
+      // second press: holding Escape must stop the recording, not cancel it.
+      if (event.repeat) return
+      const meaning = this.escapeMeaning()
+      if (meaning === 'none') return
       event.preventDefault()
       event.stopPropagation()
-      void this.stop()
+      if (meaning === 'cancel') void this.cancel()
+      else void this.stop()
       return
     }
     if (!this.isVoiceSendShortcut(event)) return
@@ -248,6 +276,36 @@ class SpeechController {
   }
 
   /**
+   * What an Escape press means right now.
+   *
+   * One press ends the recording it belongs to and its transcript follows. A
+   * second press inside the same gesture throws that dictation away instead: it
+   * is never transcribed, never inserted, never sent, and its audio is deleted.
+   */
+  private escapeMeaning(): 'stop' | 'cancel' | 'none' {
+    const now = performance.now()
+    const doublePress = now - this.lastEscapeAt <= CANCEL_DOUBLE_PRESS_MS
+    if (this.state.state === 'recording') {
+      if (!this.escapeStopsRecording()) return 'none'
+      // Only a press that reaches a recording counts towards the gesture, so an
+      // Escape that closed a modal a moment ago can never turn the next one into
+      // a cancel.
+      this.lastEscapeAt = now
+      // Two presses while the microphone is still open cancel the take itself.
+      return doublePress ? 'cancel' : 'stop'
+    }
+    if (!doublePress) return 'none'
+    const stopped = this.lastStopped
+    if (!stopped) return 'none'
+    // Only a dictation that is still being produced can be thrown away: once
+    // its transcript has settled there is nothing left to cancel.
+    if (!this.transcribing.some((entry) => entry.attemptId === stopped.attemptId)) return 'none'
+    if (!this.escapeReachesScope(stopped.scope)) return 'none'
+    this.lastEscapeAt = now
+    return 'cancel'
+  }
+
+  /**
    * Escape may end a recording only while the user is viewing the surface that
    * is recording. A thread-scoped capture keeps running when the user navigates
    * to another thread, so Escape pressed there must keep its normal meaning
@@ -259,6 +317,11 @@ class SpeechController {
   private escapeStopsRecording(): boolean {
     const active = this.active
     if (!active) return false
+    return this.escapeReachesScope(active.scope)
+  }
+
+  /** The surface gate above, for the scope of the recording or dictation. */
+  private escapeReachesScope(scope: SpeechScope): boolean {
     // A surface above the recording owns Escape, a full-page surface (a
     // Settings page or the Scope view) covering the shell, or an open modal or
     // palette (spotlight). Escape there closes the surface on top and must
@@ -269,7 +332,6 @@ class SpeechController {
     // without this the menu would swallow the key and the dictation behind it
     // would stop anyway.
     if (isInlineEscapeClaimed()) return false
-    const scope = active.scope
     if (scope.kind === 'global' || scope.threadId === undefined) return true
     // Temporary side chats render a synthetic thread that is never the
     // selected workspace thread, they live in the context sidebar. When a
@@ -555,6 +617,9 @@ class SpeechController {
     pressedAt?: number
   ): Promise<void> {
     if (this.active || !['idle', 'failed'].includes(this.state.state)) return
+    // A new take replaces the one a double press could have cancelled: only the
+    // dictation this recording supersedes may still be discarded.
+    this.lastStopped = null
     // TTS and the recorder cannot run together; whoever started last wins.
     if (this.playbackEngine.hasActivePlayback()) await this.cancelPlayback()
     this.captureScope = scope
@@ -867,6 +932,65 @@ class SpeechController {
     }
   }
 
+  /**
+   * Throw the dictation away instead of transcribing it.
+   *
+   * This is what the second Escape of a double press does. The microphone is
+   * closed like any stop, and then the take is abandoned: nothing is
+   * transcribed, nothing is inserted, nothing is sent, and the recording is
+   * deleted with its audio, so it never reaches the history either.
+   */
+  async cancel(): Promise<void> {
+    const active = this.active
+    if (active) {
+      // The capture is still open: flag it, then let the ordinary stop close the
+      // recorder and the microphone. `finishStop` discards instead of starting
+      // a transcription when it sees the flag.
+      this.cancelledAttempts.add(active.attemptId)
+      await this.stop()
+      // The stop may have moved past its own check while this press landed, so
+      // the dictation is only cancelled once it is really gone.
+      if (this.transcribing.some((entry) => entry.attemptId === active.attemptId)) {
+        await this.discardDictation(active.attemptId, active.scope)
+      }
+      return
+    }
+    if (this.state.state === 'starting') {
+      // Nothing has been captured yet, so aborting the start is the whole
+      // cancel: `start()` fails the native session on its way out.
+      this.startToken?.abort()
+      this.state = { state: 'idle' }
+      return
+    }
+    const stopped = this.lastStopped
+    if (!stopped) return
+    if (!this.transcribing.some((entry) => entry.attemptId === stopped.attemptId)) return
+    this.cancelledAttempts.add(stopped.attemptId)
+    // The mic returns to idle at once instead of showing a transcription the
+    // user just cancelled, and the running job is cancelled with the attempt.
+    this.endTranscription(stopped.attemptId)
+    if (this.state.state === 'stopping' && this.state.attemptId === stopped.attemptId) {
+      this.state = { state: 'idle' }
+    }
+    await this.discardDictation(stopped.attemptId, stopped.scope)
+  }
+
+  /**
+   * Delete a cancelled dictation: its job is cancelled, its attempt and audio
+   * are removed from the history, and anything still waiting to deliver it is
+   * dropped. Never throws: a cancel gesture must always leave the mic usable.
+   */
+  private async discardDictation(attemptId: string, scope: SpeechScope): Promise<void> {
+    this.endTranscription(attemptId)
+    for (const [targetId, pending] of this.pendingDeliveries) {
+      if (pending.attemptId === attemptId) this.pendingDeliveries.delete(targetId)
+    }
+    await invoke('speech:discardCapture', attemptId).catch((cause: unknown) => {
+      logRendererError('The cancelled voice recording could not be deleted.', cause)
+    })
+    this.settleCaptureDraft(scope)
+  }
+
   private async finishStop(active: ActiveCapture): Promise<void> {
     this.clearElapsedTimer()
     this.clearPreloadTimer()
@@ -882,9 +1006,13 @@ class SpeechController {
     // answers. Registering the job here is what makes the dictation armable
     // while the capture is still finalising, instead of only afterwards.
     this.beginTranscription(active)
+    // The press after this stop belongs to the same gesture, and a second one
+    // throws this dictation away (see `escapeMeaning`).
+    this.lastStopped = { attemptId: active.attemptId, scope: structuredClone(active.scope) }
 
     try {
       const durationMs = Math.max(0, performance.now() - active.startedAt)
+      let finishedCapture: SpeechRecordingAttempt | null = null
       if (active.native) {
         const finished = await invoke(
           'speech:finishNativeCapture',
@@ -892,7 +1020,7 @@ class SpeechController {
           Math.round(durationMs)
         )
         if (!finished.ok) throw new Error(finished.error.message)
-        this.warnShortNativeCapture(finished.value)
+        finishedCapture = finished.value
       } else {
         if (!active.recorder || !active.stream) throw new Error('Browser capture is unavailable.')
         await this.stopRecorder(active.recorder)
@@ -906,6 +1034,14 @@ class SpeechController {
         )
         if (!finished.ok) throw new Error(finished.error.message)
       }
+      if (this.cancelledAttempts.delete(active.attemptId)) {
+        // Escape was pressed twice: the microphone is closed, so the take goes
+        // now instead of being transcribed and kept.
+        await this.discardDictation(active.attemptId, active.scope)
+        return
+      }
+      // Only a take that is actually being transcribed is worth warning about.
+      if (finishedCapture) this.warnShortNativeCapture(finishedCapture)
       playSpeechCue(this.sound, 'stopped')
       const transcription = this.deliverTranscript(active, insertionSnapshot)
       this.transcriptions.set(active.attemptId, transcription)
@@ -916,6 +1052,7 @@ class SpeechController {
     } catch (cause) {
       // No transcript will ever land for this attempt, so its job and any
       // intent armed for it are over before the failure surfaces.
+      const cancelled = this.cancelledAttempts.delete(active.attemptId)
       this.endTranscription(active.attemptId)
       const message = errorMessage(cause)
       await (
@@ -923,8 +1060,12 @@ class SpeechController {
           ? invoke('speech:failNativeCapture', active.sessionId, message)
           : invoke('speech:failCapture', active.sessionId, message)
       ).catch(() => undefined)
-      this.surfaceFailure(active.target.id, 'capture', cause)
-      this.settleCaptureDraft(active.scope)
+      if (cancelled) {
+        await this.discardDictation(active.attemptId, active.scope)
+      } else {
+        this.surfaceFailure(active.target.id, 'capture', cause)
+        this.settleCaptureDraft(active.scope)
+      }
     } finally {
       if (active.stream) for (const track of active.stream.getTracks()) track.stop()
       this.active = null
@@ -970,6 +1111,9 @@ class SpeechController {
     const transcribingScope = structuredClone(active.scope)
     try {
       const transcript = await transcribeCapture(active, this.sound, () => this.selectAsrArtifact())
+      // The user cancelled this dictation while the model was working: the words
+      // are discarded rather than pasted, held, copied, or sent.
+      if (this.cancelledAttempts.has(active.attemptId)) return
       await invoke('clipboard:writeText', transcript)
       const inserted = active.target.apply(insertionSnapshot, transcript)
       let applied: SpeechEditorApplyResult = inserted
@@ -1026,6 +1170,9 @@ class SpeechController {
       const intent = this.voiceSends.find((entry) => entry.attemptId === active.attemptId)
       if (intent) await this.deliverArmedVoiceSend(intent, applied.ok && !landedInStoredDraft)
     } catch (cause) {
+      // A cancelled dictation is not a failure: it never reaches the user as an
+      // error, and its attempt is already being deleted.
+      if (this.cancelledAttempts.has(active.attemptId)) return
       await invoke('speech:markAttemptFailure', active.attemptId, errorMessage(cause)).catch(
         () => undefined
       )
@@ -1038,6 +1185,7 @@ class SpeechController {
         // Toast failures must never break the detached job.
       }
     } finally {
+      this.cancelledAttempts.delete(active.attemptId)
       this.endTranscription(active.attemptId)
       this.settleCaptureDraft(transcribingScope)
       // The transcript settled (landed, held for its field, or failed), which

@@ -280,6 +280,9 @@ export function registerSpeechIpc(
         )
       )
   )
+  ipcMain.handle('speech:discardCapture', (_event, rawAttemptId: unknown) =>
+    speechResult(() => service.discardAttempt(entityId(rawAttemptId, 'Attempt id')))
+  )
   ipcMain.handle(
     'speech:transcribe',
     (
@@ -565,6 +568,7 @@ export function registerSpeechIpc(
       'speech:failCapture',
       'speech:failNativeCapture',
       'speech:markAttemptFailure',
+      'speech:discardCapture',
       'speech:transcribe',
       'speech:preloadAsr',
       'speech:transcribeAudioToLlm',
