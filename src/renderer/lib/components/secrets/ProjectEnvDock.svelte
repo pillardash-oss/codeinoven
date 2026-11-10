@@ -19,7 +19,7 @@
     type ProjectEnvFile
   } from '$shared/project-env'
   import { SvelteSet } from 'svelte/reactivity'
-  import { onMount } from 'svelte'
+  import { onMount, tick } from 'svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
@@ -28,23 +28,37 @@
   /**
    * The env file for one path, as a floating editor.
    *
-   * A project row's key button and the file explorer's `Secrets` action open this
-   * panel for the path they were clicked on. The file is named here: any name is
-   * allowed, and the panel offers the names that already exist in this directory.
+   * Two ways to edit one document. `Editor` is the plain file, comments and all.
+   * `Keys` is the same file as rows: a key field, a value field hidden behind its own
+   * reveal toggle, and per-row removal. A row being typed is never thrown away for
+   * having no name yet, because a name is what the user is in the middle of writing;
+   * an unnamed row simply does not reach the file.
    *
-   * Two ways to edit the same body. `Editor` is the plain file. `Keys` is the same
-   * file as rows, each value a password field with its own reveal control, because a
-   * stored value is never read back: typing a new one replaces it, leaving it blank
-   * keeps what the vault holds.
+   * The values are read from the vault when the file opens, because an environment
+   * variable is something its owner looks at and edits whenever they want. That read
+   * is the one channel excluded from everything an agent can call or list.
    */
   const storageKey = `${APP_SLUG}.projectEnvDock.v1`
   const HISTORY_LIMIT = 200
 
   type Surface = 'editor' | 'keys'
 
+  interface KeyRow {
+    id: number
+    name: string
+    value: string
+  }
+
+  /** One undoable state of the document, carrying both surfaces together. */
+  interface Snapshot {
+    body: string
+    rows: KeyRow[]
+  }
+
   let files = $state<ProjectEnvFile[]>([])
   let fileName = $state(DEFAULT_ENV_FILE_NAME)
   let body = $state('')
+  let rows = $state<KeyRow[]>([])
   let savedBody = $state('')
   let loading = $state(true)
   let saving = $state(false)
@@ -53,9 +67,9 @@
   let outcome = $state('')
   let skipped = $state<{ line: number; reason: string }[]>([])
   let surface = $state<Surface>('editor')
-  let undoStack = $state<string[]>([])
-  let redoStack = $state<string[]>([])
-  const revealed = new SvelteSet<number>()
+  let undoStack = $state<Snapshot[]>([])
+  let redoStack = $state<Snapshot[]>([])
+  const revealed = new SvelteSet<string>()
   let confirmWrite = $state(false)
 
   const group = $derived(projectEnvDock.group)
@@ -67,29 +81,20 @@
     files.find((file) => file.group === group && file.fileName === fileName) ?? null
   )
   const storedCount = $derived(currentFile?.entries.length ?? 0)
-  const dirty = $derived(body !== savedBody)
   const canUndo = $derived(undoStack.length > 0)
   const canRedo = $derived(redoStack.length > 0)
 
+  /** A row id is stable while rows are added and removed, so focus and reveal track. */
+  let nextRowId = 1
+
   /**
-   * The body's key lines, so the row surface edits the very same text the editor
-   * shows: comments and blank lines are preserved, and both surfaces stay one
-   * undoable document.
+   * The document as the current surface holds it.
+   *
+   * In `Keys` the rows are authoritative, so an unnamed row survives until the user
+   * saves; serializing simply leaves it out of the file.
    */
-  const rows = $derived(
-    parseProjectEnvFile(body).flatMap((line, index) =>
-      line.kind === 'assignment'
-        ? [
-            {
-              index,
-              name: line.name,
-              value: line.value,
-              stored: currentFile?.entries.some((key) => key.name === line.name) ?? false
-            }
-          ]
-        : []
-    )
-  )
+  const draft = $derived(surface === 'keys' ? serializeRows(rows) : body)
+  const dirty = $derived(draft !== savedBody)
 
   const skipNoticeId = $derived(`secrets.envSkip.${projectEnvDock.projectId}.${group}.${fileName}`)
   const skipCondition = $derived(skipped.map((entry) => `${entry.line}:${entry.reason}`).join('|'))
@@ -97,51 +102,43 @@
     skipCondition.length > 0 && noticeDismissals.isDismissed(skipNoticeId, skipCondition)
   )
 
-  /**
-   * The file body, values and all.
-   *
-   * The values are read from the vault on open, because an environment variable is
-   * something its owner looks at and edits whenever they want. They stay in this
-   * panel: the value read is the one channel excluded from everything an agent can
-   * call or list.
-   */
-  function bodyFor(
-    file: ProjectEnvFile | null,
-    values: readonly { name: string; value: string | null }[]
-  ): string {
-    if (!file) return ''
-    const byName = new Map(values.map((entry) => [entry.name, entry.value]))
-    return file.entries
-      .map((entry) => `${entry.name}=${formatEnvValue(byName.get(entry.name) ?? '')}`)
+  function parseRows(text: string): KeyRow[] {
+    return parseProjectEnvFile(text).flatMap((line) =>
+      line.kind === 'assignment' ? [{ id: nextRowId++, name: line.name, value: line.value }] : []
+    )
+  }
+
+  /** Comment and blank lines belong to the file, so the key rows never rewrite them. */
+  function serializeRows(list: readonly KeyRow[]): string {
+    return list
+      .filter((row) => row.name.trim().length > 0)
+      .map((row) => `${row.name.trim()}=${formatEnvValue(row.value)}`)
       .join('\n')
   }
 
-  /** Values for one file, read fresh from the vault. */
-  async function readValues(file: ProjectEnvFile | null): Promise<string> {
-    const projectId = projectEnvDock.projectId
-    if (!projectId || !file) return ''
-    const values = await invoke('secrets:envValues', {
-      projectId,
-      group: file.group,
-      fileName: file.fileName
-    })
-    return bodyFor(file, values.entries)
+  function currentSnapshot(): Snapshot {
+    return { body, rows: rows.map((row) => ({ ...row })) }
   }
 
-  function resetHistory(next: string): void {
-    body = next
-    savedBody = next
-    undoStack = []
-    redoStack = []
-    revealed.clear()
+  function stateFor(next: { body?: string; rows?: KeyRow[] }): Snapshot {
+    if (next.rows) return { body: serializeRows(next.rows), rows: next.rows }
+    const text = next.body ?? body
+    return { body: text, rows: parseRows(text) }
   }
 
-  function record(next: string): void {
-    if (next === body) return
-    undoStack = [...undoStack.slice(-HISTORY_LIMIT), body]
+  /** Apply one edit and make it undoable. */
+  function commit(next: { body?: string; rows?: KeyRow[] }): void {
+    undoStack = [...undoStack.slice(-HISTORY_LIMIT), currentSnapshot()]
     redoStack = []
-    body = next
+    const applied = stateFor(next)
+    body = applied.body
+    rows = applied.rows
     outcome = ''
+  }
+
+  function restore(snapshot: Snapshot): void {
+    body = snapshot.body
+    rows = snapshot.rows.map((row) => ({ ...row }))
   }
 
   async function readFiles(): Promise<void> {
@@ -155,12 +152,37 @@
       const initial =
         available.find((file) => file.fileName === DEFAULT_ENV_FILE_NAME) ?? available[0] ?? null
       fileName = initial?.fileName ?? DEFAULT_ENV_FILE_NAME
-      resetHistory(await readValues(initial))
+      await resetDocument(initial)
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not read this path’s env files'
     } finally {
       loading = false
     }
+  }
+
+  /** Read a file's values into both surfaces and start a clean history. */
+  async function resetDocument(file: ProjectEnvFile | null): Promise<void> {
+    const text = await readBody(file)
+    body = text
+    rows = parseRows(text)
+    savedBody = text
+    undoStack = []
+    redoStack = []
+    revealed.clear()
+  }
+
+  async function readBody(file: ProjectEnvFile | null): Promise<string> {
+    const projectId = projectEnvDock.projectId
+    if (!projectId || !file) return ''
+    const values = await invoke('secrets:envValues', {
+      projectId,
+      group: file.group,
+      fileName: file.fileName
+    })
+    const byName = new Map(values.entries.map((entry) => [entry.name, entry.value ?? '']))
+    return file.entries
+      .map((entry) => `${entry.name}=${formatEnvValue(byName.get(entry.name) ?? '')}`)
+      .join('\n')
   }
 
   async function openFile(name: string): Promise<void> {
@@ -175,75 +197,72 @@
     outcome = ''
     skipped = []
     fileName = next
-    const file = files.find((candidate) => candidate.group === group && candidate.fileName === next)
-    resetHistory(await readValues(file ?? null))
+    await resetDocument(
+      files.find((candidate) => candidate.group === group && candidate.fileName === next) ?? null
+    )
   }
 
   function undo(): void {
     const previous = undoStack.at(-1)
-    if (previous === undefined) return
+    if (!previous) return
     undoStack = undoStack.slice(0, -1)
-    redoStack = [...redoStack, body]
-    body = previous
+    redoStack = [...redoStack, currentSnapshot()]
+    restore(previous)
   }
 
   function redo(): void {
     const next = redoStack.at(-1)
-    if (next === undefined) return
+    if (!next) return
     redoStack = redoStack.slice(0, -1)
-    undoStack = [...undoStack, body]
-    body = next
+    undoStack = [...undoStack, currentSnapshot()]
+    restore(next)
   }
 
-  /** Rewrite one key line, keeping every other line where the user left it. */
-  function setRow(
-    index: number,
-    change: { name?: string; value?: string } | 'remove' | 'add'
-  ): void {
-    const lines = body.split('\n')
-    if (change === 'add') {
-      record([...lines, ''].join('\n'))
+  function switchSurface(next: Surface): void {
+    if (next === surface) return
+    if (next === 'keys') {
+      rows = parseRows(body)
+      revealed.clear()
+      surface = 'keys'
       return
     }
-    const current = parseProjectEnvFile(body)
-    const line = current[index]
-    if (!line || line.kind !== 'assignment') return
-    if (change === 'remove') {
-      record(lines.filter((_, position) => position !== index).join('\n'))
-      return
-    }
-    // A key name only ever holds identifier characters, so an accidental space or
-    // "=" cannot make the line disappear under the caret.
-    const name = change.name === undefined ? line.name : change.name.replace(/[^A-Za-z0-9_]/gu, '')
-    const value = change.value ?? line.value
-    const next = [...lines]
-    next[index] = `${name}=${value}`
-    record(next.join('\n'))
+    body = serializeRows(rows)
+    surface = 'editor'
   }
 
-  function addRow(): void {
-    const lines = body.length > 0 ? body.split('\n') : []
-    record([...lines, 'NEW_KEY='].join('\n'))
+  /** Add a blank key, then put the caret in it and bring it on screen. */
+  async function addRow(): Promise<void> {
+    const row: KeyRow = { id: nextRowId++, name: '', value: '' }
+    commit({ rows: [...rows, row] })
+    await tick()
+    const field = document.getElementById(`env-key-name-${row.id}`)
+    field?.scrollIntoView({ block: 'nearest' })
+    if (field instanceof HTMLInputElement) field.focus()
   }
 
-  function toggleReveal(index: number): void {
-    if (revealed.has(index)) revealed.delete(index)
-    else revealed.add(index)
+  function updateRow(id: number, change: Partial<Pick<KeyRow, 'name' | 'value'>>): void {
+    commit({
+      rows: rows.map((row) => (row.id === id ? { ...row, ...change } : row))
+    })
   }
 
-  /**
-   * Names whose line is byte-identical to the one the file opened with.
-   *
-   * Their value is already stored, so the save must not encrypt it again: opening a
-   * file and pressing Save is not a rotation.
-   */
-  function untouchedNames(): string[] {
+  function removeRow(id: number): void {
+    commit({ rows: rows.filter((row) => row.id !== id) })
+  }
+
+  function toggleReveal(id: number): void {
+    const key = String(id)
+    if (revealed.has(key)) revealed.delete(key)
+    else revealed.add(key)
+  }
+
+  function untouchedNames(text: string): string[] {
     const before = new Map(
       parseProjectEnvFile(savedBody).flatMap((line) =>
         line.kind === 'assignment' ? [[line.name, `${line.name}=${line.value}`] as const] : []
       )
     )
-    return parseProjectEnvFile(body).flatMap((line) => {
+    return parseProjectEnvFile(text).flatMap((line) => {
       if (line.kind !== 'assignment') return []
       return before.get(line.name) === `${line.name}=${line.value}` ? [line.name] : []
     })
@@ -252,6 +271,11 @@
   async function save(): Promise<void> {
     const projectId = projectEnvDock.projectId
     if (!projectId) return
+    // In the editor the body is the file, comments included; in Keys the rows are.
+    const text = surface === 'keys' ? serializeRows(rows) : body
+    // An unnamed row is a key still being typed; it stays in the panel and is
+    // reported rather than silently discarded.
+    const unnamed = rows.filter((row) => row.name.trim().length === 0).length
     saving = true
     error = ''
     outcome = ''
@@ -261,14 +285,30 @@
         projectId,
         group,
         fileName,
-        text: body,
-        keep: untouchedNames()
+        text,
+        keep: untouchedNames(text)
       })
       files = result.files
-      savedBody = body
+      savedBody = text
+      if (surface === 'keys') {
+        rows = parseRows(text)
+        revealed.clear()
+      }
       undoStack = []
       redoStack = []
-      skipped = result.skipped
+      skipped = [
+        ...result.skipped,
+        ...(unnamed > 0
+          ? [
+              {
+                line: 0,
+                reason: `${unnamed} ${unnamed === 1 ? 'key has' : 'keys have'} no name yet and ${
+                  unnamed === 1 ? 'was' : 'were'
+                } not saved`
+              }
+            ]
+          : [])
+      ]
       const parts: string[] = []
       if (result.stored.length > 0) {
         parts.push(
@@ -292,11 +332,8 @@
     error = ''
     outcome = ''
     try {
-      const result = await invoke('secrets:envWriteToProject', {
-        projectId,
-        group,
-        fileName
-      })
+      await save()
+      const result = await invoke('secrets:envWriteToProject', { projectId, group, fileName })
       confirmWrite = false
       outcome = result.changed
         ? `Wrote ${result.path}${result.backupPath ? `, previous content kept as ${result.backupPath}` : ''}.`
@@ -422,7 +459,7 @@
             ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           title="Edit the file as plain text"
-          onclick={() => (surface = 'editor')}
+          onclick={() => switchSurface('editor')}
         >
           Editor
         </button>
@@ -434,23 +471,25 @@
             ? 'bg-surface text-foreground'
             : 'text-muted hover:text-foreground'}"
           title="Edit the file key by key, with values hidden"
-          onclick={() => (surface = 'keys')}
+          onclick={() => switchSurface('keys')}
         >
           Keys
         </button>
       </div>
 
       <div class="ml-auto flex shrink-0 items-center gap-0.5">
-        <button
-          type="button"
-          class="flex h-7 w-7 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground"
-          title="Add a key"
-          aria-label="Add a key to this env file"
-          onclick={addRow}
-        >
-          <CioPlus size={13} />
-        </button>
-        <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
+        {#if surface === 'keys'}
+          <button
+            type="button"
+            class="flex h-7 w-7 items-center justify-center border text-muted transition-colors hover:bg-elevated hover:text-foreground"
+            title="Add a key"
+            aria-label="Add a key to this env file"
+            onclick={() => void addRow()}
+          >
+            <CioPlus size={13} />
+          </button>
+          <span class="mx-0.5 h-4 w-px bg-border" aria-hidden="true"></span>
+        {/if}
         <button
           type="button"
           class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"
@@ -512,41 +551,45 @@
           aria-label="{fileName} for {projectEnvDock.projectName}"
           placeholder="KEY=value"
           value={body}
-          oninput={(event) => record(event.currentTarget.value)}
+          oninput={(event) => commit({ body: event.currentTarget.value })}
           onkeydown={handleEditKeydown}></textarea>
       {:else}
         <div class="divide-y">
-          {#each rows as row (row.index)}
+          {#each rows as row (row.id)}
+            {@const stored =
+              currentFile?.entries.some((entry) => entry.name === row.name.trim()) ?? false}
             <div class="flex items-center gap-2 px-3 py-1.5">
               <input
+                id="env-key-name-{row.id}"
                 class="h-7 w-52 shrink-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none focus:border-primary"
                 type="text"
                 autocomplete="off"
                 spellcheck="false"
+                placeholder="New key"
                 aria-label="Key name"
                 value={row.name}
-                oninput={(event) => setRow(row.index, { name: event.currentTarget.value })}
+                oninput={(event) => updateRow(row.id, { name: event.currentTarget.value })}
               />
               <div class="flex min-w-0 flex-1 items-center gap-1">
                 <input
                   class="h-7 min-w-0 flex-1 border bg-elevated px-2 font-mono text-xs text-foreground outline-none focus:border-primary"
-                  type={revealed.has(row.index) ? 'text' : 'password'}
+                  type={revealed.has(String(row.id)) ? 'text' : 'password'}
                   autocomplete="off"
                   spellcheck="false"
-                  aria-label="Value for {row.name || 'this key'}"
-                  placeholder={row.stored ? 'No value stored yet' : 'Value'}
+                  aria-label="Value for {row.name.trim() || 'this key'}"
+                  placeholder={stored ? 'Stored. Type to replace.' : 'Value'}
                   value={row.value}
-                  oninput={(event) => setRow(row.index, { value: event.currentTarget.value })}
+                  oninput={(event) => updateRow(row.id, { value: event.currentTarget.value })}
                 />
                 <button
                   type="button"
                   class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                  aria-pressed={revealed.has(row.index)}
-                  title={revealed.has(row.index) ? 'Hide this value' : 'Show this value'}
-                  aria-label={revealed.has(row.index) ? 'Hide this value' : 'Show this value'}
-                  onclick={() => toggleReveal(row.index)}
+                  aria-pressed={revealed.has(String(row.id))}
+                  title={revealed.has(String(row.id)) ? 'Hide this value' : 'Show this value'}
+                  aria-label={revealed.has(String(row.id)) ? 'Hide this value' : 'Show this value'}
+                  onclick={() => toggleReveal(row.id)}
                 >
-                  {#if revealed.has(row.index)}
+                  {#if revealed.has(String(row.id))}
                     <CioEyeOff size={13} />
                   {:else}
                     <CioEye size={13} />
@@ -555,15 +598,18 @@
                 <button
                   type="button"
                   class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-danger/10 hover:text-danger"
-                  title="Remove {row.name || 'this key'} from the file"
-                  aria-label="Remove {row.name || 'this key'} from the file"
-                  onclick={() => setRow(row.index, 'remove')}
+                  title="Remove {row.name.trim() || 'this key'} from the file"
+                  aria-label="Remove {row.name.trim() || 'this key'} from the file"
+                  onclick={() => removeRow(row.id)}
                 >
                   <CioClose size={13} />
                 </button>
               </div>
             </div>
           {/each}
+          {#if rows.length === 0}
+            <p class="px-3 py-3 text-xs text-muted">No keys yet. Use the plus button to add one.</p>
+          {/if}
         </div>
       {/if}
     </div>
@@ -574,8 +620,11 @@
         role="status"
       >
         <span class="min-w-0 flex-1">
-          {#each skipped as notice (notice.line)}
-            <span class="block">Line {notice.line}: {notice.reason}</span>
+          {#each skipped as notice (notice.line + notice.reason)}
+            <span class="block">
+              {#if notice.line > 0}Line {notice.line}:{/if}
+              {notice.reason}
+            </span>
           {/each}
         </span>
         <NoticeDismissButton
