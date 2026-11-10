@@ -347,7 +347,12 @@
   </div>
 
   {#snippet footer()}
-    <button type="button" class="border px-3 py-1.5 text-sm" onclick={() => projectEnvDock.close()}>
+    <button
+      type="button"
+      class="border px-3 py-1.5 text-sm"
+      data-modal-dismiss
+      onclick={() => projectEnvDock.close()}
+    >
       Close
     </button>
     <button
