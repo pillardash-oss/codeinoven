@@ -88,7 +88,10 @@ export class ChatEngineDirectReply {
     if (sameThread) {
       const message: AgentMessage = {
         ...delivered,
-        parts: [this.replyPart(input, `direct-reply-${delivered.id}`), ...delivered.parts]
+        parts: [
+          this.replyPart(input, `direct-reply-${delivered.id}`, delivered.id),
+          ...delivered.parts
+        ]
       }
       await this.host.threadManager.upsertMessages(fromProjectId, fromThreadId, [message])
       broadcastThreadMessagesChanged(fromProjectId, fromThreadId)
@@ -104,11 +107,11 @@ export class ChatEngineDirectReply {
   }
 
   /** The quote that names the reply these words answered. */
-  private replyPart(input: DirectReplyInput, id: string): AgentPart {
+  private replyPart(input: DirectReplyInput, id: string, messageId = id): AgentPart {
     return {
       type: 'reply',
       id: `${id}-reply`,
-      messageID: id,
+      messageID: messageId,
       projectId: input.target.projectId,
       threadId: input.target.threadId,
       title: input.target.title,
