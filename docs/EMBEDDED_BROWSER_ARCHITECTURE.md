@@ -233,6 +233,22 @@ material way, and the difference is deliberate.
   `url`/`title` out when the extension may not read them. The snapshot comes from
   `browser-extension-page-tabs.ts`, pushed on every `onUpdated`/`onActivated` fact and
   on each document the popup arrives with.
+- **The compatibility preamble is a typed module tree, not one injected file.** It
+  is 3,600 lines of measured workarounds, so it is authored as one module per concern
+  under `src/main/browser/extensions/compat/preamble/`, with `index.ts` as the
+  composition root running them in the order the single closure used to. The app
+  imports that entry through `?compat-bundle`
+  (`scripts/lib/vite-compat-source-plugin.ts`), and
+  `scripts/lib/compat-source-compiler.ts` bundles every module into one IIFE that is
+  written into the extension under the name `cio-compat-preamble.js`. Three rules live
+  in that compiler: the bundle is not minified or tree-shaken, the entry's closing end
+  marker is preserved because a stale copy is rewritten by splitting the file there,
+  and the strict-mode directive a bundled module would otherwise carry is dropped,
+  because the copy it replaced ran as a classic script where a failed assignment is a
+  no-op rather than a throw. The injected text is unchanged in surface:
+  `tests/main/browser/compat-preamble.test.ts` runs the real bundle against a mock
+  runtime and pins the 254 installed members, the created namespaces and the answers
+  of the namespaces an extension actually calls.
 - **A link in the browser view belongs to that browser.** The link context menu offers
   the default browser, a new tab of the app-wide browser and the tab already on screen
   there, and the thread browser's item (which targets a project thread's tab) is not

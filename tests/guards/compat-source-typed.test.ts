@@ -24,13 +24,11 @@ const projectRoot = join(import.meta.dirname, '..', '..')
 const compatDirectory = join(projectRoot, 'src', 'main', 'browser', 'extensions', 'compat')
 
 /**
- * Shims still imported through `?raw`, pinned to the exact set.
- *
- * Every entry here is unchecked source, and the list may only shrink. The preamble
- * is the last one: it is 3622 lines of one closure, so it is converted together
- * with the by-concern split that also brings it under the line ceiling.
+ * Shims still imported through `?raw`. The list is empty, and no entry may be added:
+ * the last one, `cio-compat-preamble.js`, is now the typed module tree in
+ * `compat/preamble/`, injected through `?compat-bundle`.
  */
-const UNCHECKED_SHIMS_PENDING_CONVERSION = ['cio-compat-preamble.js'] as const
+const UNCHECKED_SHIMS_PENDING_CONVERSION: readonly string[] = []
 
 async function listShims(): Promise<string[]> {
   const entries = await readdir(compatDirectory, { withFileTypes: true })
@@ -66,12 +64,20 @@ describe('injected compatibility shims are checked source', () => {
   it('keeps the unchecked inventory inside the pinned list', async () => {
     const shims = await listShims()
     const unchecked = shims.filter((name) => name.endsWith('.js'))
+    // No `.js` may live here again: an injected shim in this folder is exactly the
+    // shape that was invisible to the type checker, the linter and the ceiling.
     expect(unchecked).toEqual([...UNCHECKED_SHIMS_PENDING_CONVERSION])
+    expect(unchecked).toEqual([])
 
-    // `.ts` is what puts a shim back inside the ceiling and the type checker, so
-    // there has to be more than one of them.
+    // `.ts` is what puts a shim back inside the ceiling and the type checker.
     const checked = shims.filter((name) => name.endsWith('.ts'))
     expect(checked.length).toBeGreaterThanOrEqual(7)
+
+    // The preamble's by-concern split, one file per concern.
+    const preamble = await readdir(join(compatDirectory, 'preamble'), { withFileTypes: true })
+    const modules = preamble.filter((entry) => entry.isFile() && entry.name.endsWith('.ts'))
+    expect(modules.length).toBeGreaterThanOrEqual(20)
+    expect(modules.map((entry) => entry.name)).toContain('index.ts')
   })
 
   it('counts every checked shim in the file-size policy scan', async () => {
@@ -87,21 +93,19 @@ describe('injected compatibility shims are checked source', () => {
     }
   })
 
-  it('reaches every checked shim through ?compat-source, never ?raw', async () => {
+  it('reaches every checked shim through the compiler queries, never ?raw', async () => {
     const specifiers = await findShimImports()
     const throughRaw = specifiers.filter(
       (specifier) => specifier.includes('?raw') && !specifier.includes('cio-bridge.page.html')
     )
 
+    // Nothing in `compat/` is reached as raw bytes any more: a `?raw` import is a
+    // file no check in this repository ever reads.
     for (const specifier of throughRaw) {
       const [file, imported] = specifier.split(' -> ')
-      // The preamble is the last unchecked shim, and each importer reaches it by
-      // the path that suits it, plus the `?raw` query that makes it unchecked, so
-      // match the file name rather than a path prefix nobody guarantees.
-      const importedPath = imported.split('?')[0]
       expect(
         [...UNCHECKED_SHIMS_PENDING_CONVERSION].some((name) =>
-          importedPath.endsWith(`compat/${name}`)
+          imported.split('?')[0].endsWith(`compat/${name}`)
         ),
         `${file} imports ${imported} through ?raw, which leaves it unchecked`
       ).toBe(true)
@@ -114,6 +118,12 @@ describe('injected compatibility shims are checked source', () => {
       expect(imported.startsWith('./compat/'), `${specifier} is not a compat shim`).toBe(true)
       expect(imported.endsWith('.ts?compat-source'), `${specifier} must name a .ts shim`).toBe(true)
     }
+
+    // The preamble is the one shim large enough to be a module tree, and it is
+    // bundled rather than transformed, so it is reached through its own query.
+    const bundled = specifiers.filter((specifier) => specifier.includes('?compat-bundle'))
+    expect(bundled.length).toBe(1)
+    expect(bundled[0]).toContain('-> ../compat/preamble/index.ts?compat-bundle')
   })
 
   it('has the compiler wired into the main build, the test run and typed for importers', async () => {
@@ -132,5 +142,6 @@ describe('injected compatibility shims are checked source', () => {
       'utf8'
     )
     expect(declaration).toContain("declare module '*?compat-source'")
+    expect(declaration).toContain("declare module '*?compat-bundle'")
   })
 })

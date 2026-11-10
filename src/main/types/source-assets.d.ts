@@ -27,3 +27,17 @@ declare module '*?compat-source' {
   const source: string
   export default source
 }
+
+/**
+ * A shim that has outgrown one file, bundled to the text the app injects.
+ *
+ * The preamble (`src/main/browser/extensions/compat/preamble/index.ts`) is authored
+ * as a tree of typed concern modules and injected as one IIFE, so it is reached
+ * through this query rather than `?compat-source`: see
+ * `scripts/lib/compat-source-compiler.ts`, which bundles it and keeps the end marker
+ * the app rewrites a stale copy with.
+ */
+declare module '*?compat-bundle' {
+  const source: string
+  export default source
+}

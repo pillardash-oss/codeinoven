@@ -5,7 +5,7 @@
  * in it calls `openOptionsPage` directly from the page rather than from the
  * worker. This runtime has no implementation there, so the click did nothing at
  * all, which reads as a broken settings button. The service worker's own half of
- * the rule lives in `cio-compat-preamble.js`; this is the page's.
+ * the rule lives in `compat/preamble/index.ts`; this is the page's.
  *
  * The page cannot reach main on its own, so it says what it wants in one
  * `postMessage`, which the extension page preload (see

@@ -13,7 +13,7 @@
  * the page's own scripts. The manifest is the source of truth: a permission the
  * extension already declares, required or optional, is one the app has, and a
  * request for it is granted. The service worker's own half of the same rule lives
- * in `cio-compat-preamble.js`.
+ * in `compat/preamble/namespaces.ts`.
  *
  * Rule: it must never throw. A page that gets no `permissions` is no worse off than
  * before, but a page whose preload threw is a page whose other wrappers did not run.
