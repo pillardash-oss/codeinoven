@@ -65,6 +65,21 @@
     endTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
+    /**
+     * True inside a group conversation. The trace belongs to the speaker named
+     * above its bubble, so its header drops the model, harness and account chips
+     * and keeps only the work and the fold control.
+     */
+    compact?: boolean
+    /**
+     * A maximum height for the open body, in rem.
+     *
+     * A group bubble is a reply, not a page: an expanding trace would drag the
+     * bubble with it and push the rest of the conversation away. The body scrolls
+     * inside that ceiling instead, so the bubble keeps one height while the work
+     * keeps arriving.
+     */
+    bodyMaxHeightRem?: number
     /** True while this trace is on screen. A hidden trace   the workspace keeps
      *  a thread mounted behind Settings/Scope and other views   does not pull
      *  its older durable pages, so coming back mounts what the reader is
@@ -145,6 +160,8 @@
     turnSpan = null,
     onLoadOlderParts,
     modelLabel = null,
+    compact = false,
+    bodyMaxHeightRem,
     thinkingLevel = null,
     providerName,
     providerId,
@@ -526,6 +543,7 @@
       label={subagentBadgeLabelText}
       elapsedFor={subagentElapsed}
       {modelLabel}
+      {compact}
       {isFast}
       {thinkingLevel}
       {providerName}
@@ -546,6 +564,8 @@
       bind:this={traceBodyEl}
       transition:slide={foldSlide()}
       class="flex min-w-0 flex-col gap-2 pb-2"
+      class:overflow-y-auto={bodyMaxHeightRem !== undefined}
+      style:max-height={bodyMaxHeightRem === undefined ? undefined : `${bodyMaxHeightRem}rem`}
     >
       {#each chains as chain, index (chain.id)}
         <WorkingTraceChain

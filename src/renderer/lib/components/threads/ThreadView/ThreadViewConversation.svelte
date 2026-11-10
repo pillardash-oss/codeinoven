@@ -28,6 +28,7 @@
   import SpeechPlaybackButton from '../../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../../speech/speech-controller.svelte'
   import WorkingTrace from '../WorkingTrace.svelte'
+  import GroupReplyBubble from '../GroupReplyBubble.svelte'
   import TraceActivityLine from '../TraceActivityLine.svelte'
   import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
   import { runReceiptState } from '$lib/stores/run-receipt.svelte'
@@ -182,6 +183,13 @@
         color: assistantAccentColor(author)
       }
     }
+    return groupSpeakerForThread()
+  }
+
+  /** The speaker of this thread's own replies, when the thread runs as one
+   *  assistant. Used before any message exists, so a live reply can open with the
+   *  name it will answer under. */
+  function groupSpeakerForThread(): GroupSpeaker | null {
     const assistant = assistants.assistantForTask(board.handleAgentEvent.thread)
     if (!assistant) return null
     return {
@@ -407,10 +415,12 @@
       <!-- The live or settled trace for a turn with no mirrored assistant
                row. It renders as its own block so a held steer can be placed
                after it instead of above the work it interrupts. -->
-      {#snippet liveTurnTrace(traceParts: AgentPart[], traceBusy: boolean)}
+      {#snippet liveTurnTrace(traceParts: AgentPart[], traceBusy: boolean, inGroupBubble = false)}
         <WorkingTrace
           parts={traceParts}
           open
+          compact={inGroupBubble}
+          bodyMaxHeightRem={inGroupBubble ? 14 : undefined}
           busy={traceBusy}
           done={!traceBusy}
           note={traceBusy ? board.unmirroredTraceStartTime.workingStatusNote : null}
@@ -1556,12 +1566,37 @@
       {/key}
 
       {#if (board.buildSpecActionPrompt.pendingLiveTurn && board.buildSpecActionPrompt.heldSteerAbsIndex === -1) || board.pollStreamParts.settledTurnParts.length > 0}
-        {@render liveTurnTrace(
-          board.buildSpecActionPrompt.pendingLiveTurn
-            ? board.composerScope.unmirroredTraceParts
-            : board.pollStreamParts.settledTurnParts,
-          Boolean(board.buildSpecActionPrompt.pendingLiveTurn)
-        )}
+        {@const tracePartsForTurn = board.buildSpecActionPrompt.pendingLiveTurn
+          ? board.composerScope.unmirroredTraceParts
+          : board.pollStreamParts.settledTurnParts}
+        {@const traceBusyForTurn = Boolean(board.buildSpecActionPrompt.pendingLiveTurn)}
+        {#if groupThread}
+          <!-- In a group conversation the work is part of the reply, not a band
+               above it: the bubble opens with who is speaking, the trace sits
+               inside it at one fixed height, and the folded line underneath still
+               says what is happening. -->
+          {@const liveSpeaker = groupSpeakerForThread()}
+          <GroupReplyBubble
+            name={liveSpeaker?.name ?? board.handleAgentEvent.thread.title}
+            icon={liveSpeaker?.icon ?? null}
+            color={liveSpeaker?.color}
+          >
+            {@render liveTurnTrace(tracePartsForTurn, traceBusyForTurn, true)}
+            {#if traceBusyForTurn}
+              <TraceActivityLine
+                parts={board.pollStreamParts.latestTurnRenderableParts}
+                folded={!agentRuns.isTraceOpen(
+                  board.handleAgentEvent.thread.projectId,
+                  board.handleAgentEvent.thread.id
+                )}
+                onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
+                formatProse={conversationLiveProse}
+              />
+            {/if}
+          </GroupReplyBubble>
+        {:else}
+          {@render liveTurnTrace(tracePartsForTurn, traceBusyForTurn)}
+        {/if}
       {/if}
 
       {#if board.sources.specGenerationTraceActive && board.sources.specGenerationTraceParts.length > 0}
@@ -1602,7 +1637,7 @@
         {/if}
       {/if}
 
-      {#if board.pollStreamParts.conversationBusy}
+      {#if board.pollStreamParts.conversationBusy && !groupThread}
         <TraceActivityLine
           parts={board.pollStreamParts.latestTurnRenderableParts}
           folded={!agentRuns.isTraceOpen(

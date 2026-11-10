@@ -14,6 +14,7 @@
   import { getProjectIcon } from '$lib/project-icons'
   import { assistants } from '$lib/stores/assistants.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import ThreadMessageSpeaker from './ThreadMessageSpeaker.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
   import AgentSecretCard from './AgentSecretCard.svelte'
@@ -209,12 +210,18 @@
         class="message-block min-w-0 max-w-[90%] border border-border bg-surface px-3.5 py-2.5 text-[0.8125rem] text-foreground"
         data-delegated-attention={entry.kind}
       >
-        <ThreadMessageSpeaker
-          name={speaker.name}
-          icon={speaker.icon}
-          color={speaker.color}
-          class="mb-1.5"
-        />
+        <!-- The speaker is a door: clicking the mark or the name opens the thread
+             this reply came from, so an answer read here can be followed to the
+             work itself. The thread tag below stays with the card. -->
+        <button
+          type="button"
+          class="mb-1.5 flex max-w-full min-w-0 items-center text-left"
+          title={`Open ${entry.threadTitle}`}
+          aria-label={`Open ${entry.threadTitle}`}
+          onclick={() => void openThreadById(entry.projectId, entry.threadId)}
+        >
+          <ThreadMessageSpeaker name={speaker.name} icon={speaker.icon} color={speaker.color} />
+        </button>
         <!-- Which conversation this reply comes from: the row above names who is
              speaking, and this names the work, exactly like a thread tag. -->
         <div class="mb-2 flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-dimmed">

@@ -32,6 +32,14 @@
     elapsedFor: (part: SubagentPart) => number
     /** Attribution for the model working on this trace, shown at the far right. */
     modelLabel: string | null
+    /**
+     * True inside a group conversation, where a reply's trace belongs to the
+     * speaker named above it. The model, harness and account chips are the
+     * thread's own attribution and would report one speaker's machinery beside
+     * every bubble, so a compact summary keeps only the work: steps, time and the
+     * fold control.
+     */
+    compact?: boolean
     isFast: boolean
     thinkingLevel: ThinkingLevel | null
     providerName?: string | null
@@ -61,6 +69,7 @@
     label,
     elapsedFor,
     modelLabel,
+    compact = false,
     isFast,
     thinkingLevel,
     providerName,
@@ -155,7 +164,7 @@
       </span>
     {/if}
   </div>
-  {#if modelLabel}
+  {#if modelLabel && !compact}
     <div
       class="pointer-events-none relative ml-auto inline-flex min-w-0 items-center self-stretch border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong"
     >
