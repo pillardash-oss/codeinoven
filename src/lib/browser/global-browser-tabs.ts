@@ -393,7 +393,15 @@ function parseTabs(
       favicon: isStorableBrowserFavicon(entry['favicon']) ? entry['favicon'] : null,
       groupId:
         typeof storedGroupId === 'string' && groupIds.has(storedGroupId) ? storedGroupId : null,
-      boxId: typeof storedBoxId === 'string' && boxIds.has(storedBoxId) ? storedBoxId : null,
+      // The default box is the profile's own jar, which a tab spells as no box at
+      // all. A stored tab that names it is read back as unboxed, because a tab
+      // carrying the default box's id would be a jar of its own to everything that
+      // compares box ids: no extension is loaded into it and its box mark would be
+      // drawn on a page that belongs to no box.
+      boxId:
+        typeof storedBoxId === 'string' && storedBoxId !== DEFAULT_BOX_ID && boxIds.has(storedBoxId)
+          ? storedBoxId
+          : null,
       createdAt,
       lastUsedAt: safeInteger(entry['lastUsedAt'], createdAt),
       hibernated: entry['hibernated'] === true,
