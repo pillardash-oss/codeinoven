@@ -39,6 +39,12 @@
     /** True inside a group reply's bubble: the rows take the bubble's own surface
      *  instead of painting the darker app fill behind them. */
     flat?: boolean
+    /**
+     * The chain scrolls inside its own box (a trace embedded in a reply) instead of
+     * inside the transcript, so its header pins to that box's own top edge and needs
+     * an opaque fill: rows pass underneath it, not behind a pinned transcript header.
+     */
+    ownScroll?: boolean
   }
 
   let {
@@ -56,7 +62,8 @@
     checkpointPaths,
     onOpenSubagent,
     formatOutput,
-    flat = false
+    flat = false,
+    ownScroll = false
   }: Props = $props()
 
   /**
@@ -129,10 +136,12 @@
            screen instead of having to scroll back to the head. -->
       <button
         type="button"
-        class="sticky z-10 flex w-full items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground {flat
-          ? 'bg-transparent'
-          : 'bg-app'}"
-        style="top: var(--cio-trace-header-h, 0px)"
+        class="sticky z-10 flex w-full items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground {ownScroll
+          ? 'bg-surface'
+          : flat
+            ? 'bg-transparent'
+            : 'bg-app'}"
+        style="top: {ownScroll ? '0px' : 'var(--cio-trace-header-h, 0px)'}"
         aria-expanded={open}
         title={open ? 'Hide the steps behind this output' : 'Show the steps behind this output'}
         onclick={() => (userChoice = !open)}

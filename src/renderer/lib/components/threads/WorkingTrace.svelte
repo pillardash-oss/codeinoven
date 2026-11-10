@@ -581,6 +581,7 @@
         <WorkingTraceChain
           {chain}
           {flat}
+          ownScroll={bodyMaxHeightRem !== undefined}
           {formatOutput}
           active={liveActivity && index === chains.length - 1}
           showHeader={chains.length > 1 || chain.output !== null}
