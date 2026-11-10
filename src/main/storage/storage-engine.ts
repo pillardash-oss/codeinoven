@@ -279,28 +279,39 @@ export class StorageEngine {
     })
 
     await this.timedStep('storage:config', async () => {
-      // Create default config if missing
-      const configPath = this.resolve('config.json')
-      const existing = await readJson<AppConfig>(configPath)
-      if (!existing) {
-        await writeJson(configPath, DEFAULT_CONFIG)
-      }
-      await writeJson(
-        this.resolve(BUNDLED_PI_FILE_POLICY),
-        bundledPiFilePolicy(await readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY)))
-      )
-
-      // Create default providers file if missing
-      const providersPath = this.resolve('providers.json')
-      const providers = await readJson(providersPath)
-      if (!providers) {
-        await writeJson(providersPath, { providers: [] })
-      }
-
-      // The default pool is user-visible and can be copied into the custom file by Settings.
-      if ((await this.readRaw(WORKER_NAMES_FILE)) === null) {
-        await writeJson(this.resolve(WORKER_NAMES_FILE), DEFAULT_WORKER_NAMES)
-      }
+      // Four independent files, one wait. Every branch below touches a file of
+      // its own and reads no result of another, so the serial awaits this block
+      // used to spend bought four threadpool round trips and no ordering.
+      await Promise.all([
+        (async () => {
+          // Create default config if missing
+          const configPath = this.resolve('config.json')
+          const existing = await readJson<AppConfig>(configPath)
+          if (!existing) {
+            await writeJson(configPath, DEFAULT_CONFIG)
+          }
+        })(),
+        (async () => {
+          await writeJson(
+            this.resolve(BUNDLED_PI_FILE_POLICY),
+            bundledPiFilePolicy(await readJson<unknown>(this.resolve(BUNDLED_PI_FILE_POLICY)))
+          )
+        })(),
+        (async () => {
+          // Create default providers file if missing
+          const providersPath = this.resolve('providers.json')
+          const providers = await readJson(providersPath)
+          if (!providers) {
+            await writeJson(providersPath, { providers: [] })
+          }
+        })(),
+        (async () => {
+          // The default pool is user-visible and can be copied into the custom file by Settings.
+          if ((await this.readRaw(WORKER_NAMES_FILE)) === null) {
+            await writeJson(this.resolve(WORKER_NAMES_FILE), DEFAULT_WORKER_NAMES)
+          }
+        })()
+      ])
     })
   }
 

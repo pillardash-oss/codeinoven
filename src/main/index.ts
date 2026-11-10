@@ -1232,27 +1232,44 @@ void app
     })
 
     // Storage and database warm-up are independent   run them concurrently.
-    await Promise.all([
-      storage.initialize(),
-      trackStartupStep('database:init', () => database.init()),
-      // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
-      // here guarantees the flag is ready before `createWindow()` runs without
-      // serializing behind the heavier startup work.
-      trackStartupStep('trafficLight:warm', () => warmTrafficLightDetection())
-    ])
+    //
+    // The window-state read joins the same pool instead of queueing behind it:
+    // it needs the config root and nothing else, so it rides beside the SQLite
+    // open rather than after it. Each branch records its own phase the moment
+    // its own work lands, which is the only way the report can attribute the
+    // gap: marking both after the pool made `database:ready` a 0 ms delta that
+    // folded the whole SQLite open into `storage:ready`.
+    const storageReady = storage.initialize().then(() => startupTelemetry.mark('storage:ready'))
+    const databaseReady = trackStartupStep('database:init', () => database.init()).then(() =>
+      startupTelemetry.mark('database:ready')
+    )
+    // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
+    // here guarantees the flag is ready before `createWindow()` runs without
+    // serializing behind the heavier startup work.
+    const trafficLightReady = trackStartupStep('trafficLight:warm', () =>
+      warmTrafficLightDetection()
+    )
+    const windowStateReady = storageReady.then(() =>
+      trackStartupStep('windowState:load', () => windowStateService.load())
+    )
+    await Promise.all([storageReady, databaseReady, trafficLightReady, windowStateReady])
     if (state.startupRecovery) return
     // Analytics never delays window creation and never runs in a probe.
     usageAnalytics.start(storage, __CODEINOVEN_APP_VERSION__)
-    startupTelemetry.mark('storage:ready')
-    startupTelemetry.mark('database:ready')
-    await windowStateService.load()
     // Load the background preferences, apply the login item, and publish the
-    // instance role before any window exists.
-    await backgroundLifecycle.start()
+    // instance role before any window exists. This one does wait for the
+    // database above rather than running beside it: its attention pass reads
+    // thread state, so arriving before SQLite is open would compute the icon
+    // from a database that is not there yet.
+    await trackStartupStep('backgroundLifecycle:start', () => backgroundLifecycle.start())
     if (state.startupRecovery) return
     Logger.info(`${APP_NAME} main process initialized`)
-    await startStartupUpdater(state, storage)
-    if (state.startupRecovery) return
+    // The updater is deliberately not awaited here. It was already started
+    // unawaited right after `whenReady`, and awaiting it put its cache sweep (a
+    // recursive delete of the updater cache and any abandoned install staging)
+    // in front of the window creation. The feature boot awaits it before
+    // `features:ready`, so no channel is registered late; it simply stops
+    // competing with the first paint.
 
     // The renderer invokes its first config/project/scope/thread reads while
     // its document evaluates. Register that bounded surface before navigation;

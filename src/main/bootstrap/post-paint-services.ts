@@ -30,6 +30,7 @@ import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
 import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
 import { assistantIsBuiltin, isGroupThread } from '../../lib/types'
+import { createWorkQueue } from '../../lib/bounded-work'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
@@ -451,23 +452,31 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   state.chatEngine.attachHeartbeatScheduler(state.heartbeatScheduler)
   state.assistantManager = new AssistantManager(database)
   const assistantManager = state.assistantManager
+  // Three durable records the schedulers and the launch recovery read. Each
+  // owns its own file under the config root and none is derived from another,
+  // so the modules load together and the reads run as one wait instead of
+  // three. All three are still finished before any scheduler can dispatch.
+  const [{ BackgroundRunLedger }, { AutoAnswerStore }, { CleanShutdownStore }] = await Promise.all([
+    import('../scheduler/background-run-ledger'),
+    import('../system/auto-answer-store'),
+    import('../system/clean-shutdown-store')
+  ])
   // Durable evidence of unattended runs, loaded before the scheduler can
   // dispatch so a run that fails at 3am is never invisible on the next launch.
-  const { BackgroundRunLedger } = await import('../scheduler/background-run-ledger')
   state.backgroundRunLedger = new BackgroundRunLedger(storage)
-  await state.backgroundRunLedger.load()
   // Durable record of gates the app resolved without the user. Written the
   // instant one settles, so the attention rail can explain what was asked,
   // offered and chosen even after a restart.
-  const { AutoAnswerStore } = await import('../system/auto-answer-store')
   state.autoAnswerStore = new AutoAnswerStore(storage)
-  await state.autoAnswerStore.load()
   // Proof a previous process shut down on purpose, so an orphaned turn is
   // settled as a clean app-closed stop rather than a crash failure. Loaded
   // before launch recovery reads it.
-  const { CleanShutdownStore } = await import('../system/clean-shutdown-store')
   state.cleanShutdownStore = new CleanShutdownStore(storage)
-  await state.cleanShutdownStore.load()
+  await Promise.all([
+    state.backgroundRunLedger.load(),
+    state.autoAnswerStore.load(),
+    state.cleanShutdownStore.load()
+  ])
   state.chatEngine.attachAutoAnswerRecorder((report) => {
     const store = state.autoAnswerStore
     if (!store) return
@@ -750,54 +759,70 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     speechIsPackaged
       ? join(speechResourcesRoot, 'speech', worker)
       : join(speechResourcesRoot, 'speech/runtime/darwin-arm64', worker)
-  try {
-    const speechService = new SpeechService(
-      {
-        catalogPath: join(speechResourcesRoot, 'speech/model-catalog.json'),
-        mlxWorkerPath: speechWorkerPath('mlx-worker'),
-        coremlWorkerPath: speechWorkerPath('coreml-worker'),
-        nativeCaptureWorkerPath: speechWorkerPath('speech-capture-worker')
-      },
-      undefined,
-      (input) => state.chatEngine!.cleanupSpeechTranscript(input),
-      (input) => state.chatEngine!.transcribeSpeechAudio(input),
-      (input) => state.chatEngine!.learnSpeechLessons(input),
-      (pid, command, cwd) =>
-        state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
-    )
-    // The capture gate needs the audio-to-LLM setting to know whether the user
-    // has a mic at all, so the recorder is never primed behind a hidden mic.
-    speechService.setDictationSettingSource(async () => {
-      const current = await storage.getConfig()
-      return current.sound.voiceRecordingEnabled
-    })
-    await speechService.initialize()
-    state.speechService = speechService
-    state.unregisterSpeechIpc = registerSpeechIpc(
-      speechService,
-      () => state.mainWindow?.webContents ?? null
-    )
-  } catch (error) {
-    state.speechService = null
-    Logger.error('Speech services unavailable; dictation stays disabled', error)
-  }
+  // Speech and intent search are the two optional engines this boot warms.
+  // Each reads its own catalog and its own index out of its own folder and
+  // neither needs the other's result, so they initialize as one two-slot pool
+  // instead of two serial waits. Two is the ceiling on purpose: a low-end
+  // machine gains a whole engine's warm-up, and the pair never becomes a burst
+  // of workers on the same disk. Both are already non-fatal, so a failure still
+  // degrades only the capability it belongs to.
+  const speechStartup = (async (): Promise<void> => {
+    try {
+      const speechService = new SpeechService(
+        {
+          catalogPath: join(speechResourcesRoot, 'speech/model-catalog.json'),
+          mlxWorkerPath: speechWorkerPath('mlx-worker'),
+          coremlWorkerPath: speechWorkerPath('coreml-worker'),
+          nativeCaptureWorkerPath: speechWorkerPath('speech-capture-worker')
+        },
+        undefined,
+        (input) => state.chatEngine!.cleanupSpeechTranscript(input),
+        (input) => state.chatEngine!.transcribeSpeechAudio(input),
+        (input) => state.chatEngine!.learnSpeechLessons(input),
+        (pid, command, cwd) =>
+          state.chatEngine!.trackPtyProcess(undefined, undefined, undefined, pid, command, cwd)
+      )
+      // The capture gate needs the audio-to-LLM setting to know whether the user
+      // has a mic at all, so the recorder is never primed behind a hidden mic.
+      speechService.setDictationSettingSource(async () => {
+        const current = await storage.getConfig()
+        return current.sound.voiceRecordingEnabled
+      })
+      await speechService.initialize()
+      state.speechService = speechService
+      state.unregisterSpeechIpc = registerSpeechIpc(
+        speechService,
+        () => state.mainWindow?.webContents ?? null
+      )
+      // Initialize the auto-evict timers from persisted sound settings. This
+      // has to happen here rather than at the boot's own step: the service is
+      // published later now, so reading the options outside would apply them
+      // while `state.speechService` was still empty and drop them silently.
+      const speechConfig = await storage.getConfig()
+      speechService.updateUnloadOptions({
+        asr: speechConfig.sound.asrUnload,
+        cleanup: speechConfig.sound.cleanupUnload,
+        tts: speechConfig.sound.ttsUnload
+      })
+    } catch (error) {
+      state.speechService = null
+      Logger.error('Speech services unavailable; dictation stays disabled', error)
+    }
+  })()
   // A recording still being produced, and a transcript the model has not
   // answered yet, are lost by a restart, so dictation holds an unattended
   // install back exactly like a working thread. Read from the speech service's
   // own capture and job state, which is the same state its progress events
-  // report, so nothing has to be sent over for the gate to know.
+  // report, so nothing has to be sent over for the gate to know. The closure
+  // reads the service when the gate asks, so it is correct even though the
+  // service is published by the pool above.
   state.updaterService?.setDictationActivitySource({
     activity: () => state.speechService?.dictationActivity() ?? { recording: 0, transcribing: 0 }
   })
-  // Initialize auto-evict timers from persisted sound settings, and the one idle
-  // window the local AI registry unloads every local server on.
+  // The one idle window the local AI registry unloads every local server on.
+  // This is not speech's setting, so it stays on the boot's own thread.
   try {
     const cfg = await storage.getConfig()
-    state.speechService?.updateUnloadOptions({
-      asr: cfg.sound.asrUnload,
-      cleanup: cfg.sound.cleanupUnload,
-      tts: cfg.sound.ttsUnload
-    })
     sharedLocalAiRuntimeRegistry().setUnloadOption(cfg.llamaCppUnload)
   } catch {
     // defaults already applied
@@ -805,25 +830,32 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // Intent search draws the same discovered/downloaded binary through the local
   // AI runtime registry as speech, which owns the process, its idle window, and
   // its journal entry.
-  state.searchService = new SearchService(database, {
+  const searchService = new SearchService(database, {
     subscribeCorpus: subscribeThreadCorpus,
     summarizeThread: (input) => state.chatEngine!.summarizeSearchThread(input),
     llamaServerPath: () => getLlamaServerBinary(),
     runtimeBuild: () => sharedLlamaRuntimeService().selectedBuild()
   })
+  state.searchService = searchService
   // A runtime that will not start disables semantic search and nothing else:
   // this used to abort the whole feature boot, which left every feature channel
   // registered only because readiness was announced too early to notice. It is
   // an optional engine, so it degrades like speech does.
-  try {
-    await state.searchService.initialize()
-    state.unregisterSearchIpc = registerSearchSettingsIpc(
-      state.searchService,
-      () => state.mainWindow?.webContents ?? null
-    )
-  } catch (error) {
-    Logger.error('Semantic search unavailable; intent ranking stays disabled', error)
-  }
+  const searchStartup = (async (): Promise<void> => {
+    try {
+      await searchService.initialize()
+      state.unregisterSearchIpc = registerSearchSettingsIpc(
+        searchService,
+        () => state.mainWindow?.webContents ?? null
+      )
+    } catch (error) {
+      Logger.error('Semantic search unavailable; intent ranking stays disabled', error)
+    }
+  })()
+  // Both engines are awaited once, immediately before the IPC graph that hands
+  // them to the renderer, so the design, media, video and browser wiring built
+  // in between runs while they warm instead of after them.
+  const enginesReady = Promise.all([speechStartup, searchStartup])
   state.prototypePreviewService = new PrototypePreviewService()
   try {
     const startupConfig = await storage.getConfig()
@@ -881,7 +913,37 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // to it after a restart) and serves the coordinator's open and thumbnail
   // actions. Both capabilities record every preview through it, so the user's
   // design or composition is not lost when the window that showed it closes.
-  const { DesignService } = await import('../design/design-service')
+  // Twelve modules build the design, media, video and display surfaces below.
+  // Their construction is ordered; their module loads are not, so the loads run
+  // as one batch instead of twelve awaited chunk reads threaded through the
+  // graph. The batch is a fixed twelve, so it adds no fan-out risk.
+  const [
+    { DesignService },
+    { ScreenBoardService },
+    { ExpertSettingsService },
+    { createDesignPreviewExecutor },
+    { createDesignMediaExecutor },
+    { MediaGenerationService },
+    { createMediaGenerationExecutor },
+    { registerMediaGenerationIpc },
+    { createVideoPreviewExecutor },
+    { VideoStudioService },
+    { registerDisplayIpc },
+    { createVideoCaptureExecutor }
+  ] = await Promise.all([
+    import('../design/design-service'),
+    import('../design/screen-board-service'),
+    import('../design/expert-settings-service'),
+    import('../preview/design-preview-executor'),
+    import('../design/design-media-executor'),
+    import('../media/media-generation-service'),
+    import('../media/media-generation-executor'),
+    import('../media/media-generation-ipc'),
+    import('../video/video-preview-executor'),
+    import('../video/video-studio-service'),
+    import('../display/display-ipc'),
+    import('../video/video-capture-executor')
+  ])
   // One announcement, so a saved composition edit and a design restore reach an
   // open history pane the same way.
   const announceHistoryChanged = (projectId: string, directory: string): void => {
@@ -921,7 +983,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // every design board shares. Kept beside the design service because it is about
   // the same folders, and announced so two windows never disagree about the
   // arrangement the user made.
-  const { ScreenBoardService } = await import('../design/screen-board-service')
   const screenBoards = new ScreenBoardService({
     storage,
     onChanged: (projectId, directory, updatedAt) => {
@@ -967,7 +1028,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // experts and the `delegate` operation that would run one have to agree: a
   // thread the user muted must be neither described as staffed nor allowed to
   // delegate, and two derivations is how those two answers drift apart.
-  const { ExpertSettingsService } = await import('../design/expert-settings-service')
   const expertSettings = new ExpertSettingsService({
     database,
     config: () => storage.getConfig(),
@@ -986,7 +1046,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   if (state.mainWindow && !state.mainWindow.isDestroyed()) {
     await state.attachBrowserToWindow(state.mainWindow)
   }
-  const { createDesignPreviewExecutor } = await import('../preview/design-preview-executor')
   state.chatEngine.setDesignPreviewExecutor(
     createDesignPreviewExecutor({
       previews: state.directoryPreviewService,
@@ -1005,18 +1064,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // Generation services answer with a link and those links expire, so the design
   // capability can bring a generated image, video or sound file into the project
   // as a file the design references by relative path.
-  const { createDesignMediaExecutor } = await import('../design/design-media-executor')
   state.chatEngine.setDesignMediaExecutor(createDesignMediaExecutor({ database }))
   // The engine the app was missing: it turns the prompt an agent writes into a
   // picture, a clip or a track, using the model the user assigned to that craft
   // and the provider token the user stored. The bytes land through the same
   // saver above, so generated media has one writer and one set of ceilings.
-  const { MediaGenerationService } = await import('../media/media-generation-service')
   const mediaGeneration = new MediaGenerationService({
     config: () => storage.getConfig(),
     vault
   })
-  const { createMediaGenerationExecutor } = await import('../media/media-generation-executor')
   state.chatEngine.setMediaGenerationExecutor(
     createMediaGenerationExecutor({
       database,
@@ -1028,14 +1084,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       sessionKind: async (_projectId, threadId) => designService.authoredWorkKindFor(threadId)
     })
   )
-  const { registerMediaGenerationIpc } = await import('../media/media-generation-ipc')
   registerMediaGenerationIpc(mediaGeneration)
   // The video capability composes the same two services: the loopback static
   // host that serves a composition folder and the thread's browser tab that
   // shows it. `capture` adds the frame render and the screenshot on top of the
   // same serve-and-show path, so the two operations cannot drift.
-  const { createVideoPreviewExecutor } = await import('../video/video-preview-executor')
-  const { VideoStudioService } = await import('../video/video-studio-service')
   const videoStudio = new VideoStudioService({
     database,
     previews: state.directoryPreviewService,
@@ -1055,7 +1108,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   // agent starts or attaches to a display target, and its capture modules load on
   // the first frame someone asks for. What is registered here is the thin IPC
   // boundary plus the presence watch that decides when the panel exists at all.
-  const { registerDisplayIpc } = await import('../display/display-ipc')
   registerDisplayIpc({ window: () => state.mainWindow })
   state.chatEngine.setVideoPreviewExecutor(
     createVideoPreviewExecutor({
@@ -1072,7 +1124,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       record: (input) => designService.recordPreview(input)
     })
   )
-  const { createVideoCaptureExecutor } = await import('../video/video-capture-executor')
   state.chatEngine.setVideoCaptureExecutor(
     createVideoCaptureExecutor({
       previews: state.directoryPreviewService,
@@ -1114,6 +1165,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   } catch (error) {
     Logger.error('Orphaned harness process reaping failed at startup:', error)
   }
+  // Both engines have settled by now (each swallows its own failure), so this
+  // cannot throw and cannot delay the IPC graph beyond its slowest engine.
+  await enginesReady
   registerIpcHandlers(storage, database, state.updaterService ?? undefined, state.chatEngine, {
     searchService: state.searchService ?? undefined,
     projectManager,
@@ -1360,12 +1414,26 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // auxiliary decisions already in flight without anything being restarted.
     state.chatEngine?.attachTypesafeDecisionService(typesafe)
 
-    const { registerProviderAccountIpc } = await import('../ipc/provider-account-ipc')
-    const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
-    const { registerLlamaCppIpc } = await import('../llama-cpp/llama-cpp-ipc')
-    const { registerLocalAiIpc } = await import('../local-ai/local-ai-ipc')
-    const { registerUtilityIpc } = await import('../ipc/utility-ipc')
-    const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
+    // Seven registration modules, one batch: they are all loaded here and
+    // called just below, and none of them depends on another having been
+    // imported first.
+    const [
+      { registerProviderAccountIpc },
+      { registerBaseUrlProviderIpc },
+      { registerLlamaCppIpc },
+      { registerLocalAiIpc },
+      { registerUtilityIpc },
+      { registerTypesafeIpc },
+      { registerAcpAgentIpc }
+    ] = await Promise.all([
+      import('../ipc/provider-account-ipc'),
+      import('../providers/base-url-provider-ipc'),
+      import('../llama-cpp/llama-cpp-ipc'),
+      import('../local-ai/local-ai-ipc'),
+      import('../ipc/utility-ipc'),
+      import('../ipc/typesafe-ipc'),
+      import('../providers/acp-agent-ipc')
+    ])
     registerProviderAccountIpc(
       storage,
       undefined,
@@ -1376,7 +1444,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       // next time any model picker opens.
       () => state.chatEngine?.invalidateProviderCatalogs()
     )
-    const { registerAcpAgentIpc } = await import('../providers/acp-agent-ipc')
     registerAcpAgentIpc(storage, {
       onAgentsChanged: async () => {
         // Only the cheap derivations are awaited: the drivers have to exist
@@ -1458,234 +1525,266 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     ) {
       sendToRenderer(state.mainWindow.webContents, 'app:featuresReady')
     }
-
-    try {
-      await state.powerWakeService?.start()
-      if (state.powerWakeService) setPowerWakeService(state.powerWakeService)
-    } catch (error) {
-      Logger.error('Power wake startup failed (non-fatal):', error)
-    }
-
     // Every persisted thread update now re-evaluates the menu bar icon, so a
     // thread that breaks while the window is closed flips it and a thread that
     // recovers flips it back   including the figure, which rises and falls with
     // the threads that are actually running.
     if (state.backgroundLifecycle) setBackgroundTray(state.backgroundLifecycle)
 
-    try {
-      await state.retryScheduler?.start()
-      // Connectivity first, so the scheduler's immediate launch tick already
-      // has a verdict: a wait restored from the last session fires as soon as
-      // the device is verified online instead of sitting through a probe
-      // window it cannot see.
-      state.connectivity?.start()
-      await state.chatEngine?.repairPendingRetryThreadStatuses()
-    } catch (error) {
-      Logger.error('Retry scheduler startup failed (non-fatal):', error)
-    }
-
-    try {
-      await state.heartbeatScheduler?.start()
-    } catch (error) {
-      Logger.error('Heartbeat scheduler startup failed (non-fatal):', error)
-    }
-
-    try {
-      await state.assistantScheduler?.start()
-      // A slot the app was closed (or asleep) through is dispatched on return
-      // when the user allows it, bounded per pass and idempotent across relaunch.
-      if (state.backgroundLifecycle?.autoRunMissedRuns) {
-        void state.assistantScheduler
-          ?.runPendingMisses()
-          .catch((error) => Logger.error('Auto-run of missed assistant runs failed:', error))
-      }
-    } catch (error) {
-      Logger.error('Assistant scheduler startup failed (non-fatal):', error)
-    }
-
-    try {
-      // Agent-scheduled wakes: one clock for the whole app, armed only while a
-      // wake is pending, resuming the thread it was scheduled on.
-      const followUps = new FollowUpService({
-        store: new FollowUpStore(storage),
-        // Exactly one live instance wakes a thread, the same rule the assistant
-        // scheduler follows. Without it two open windows fired one wake twice.
-        isOwner: () => instanceRegistry.isIncumbentInstance(),
-        findThread: (threadId) => {
-          const thread = new ThreadRepo(database).get(threadId)
-          if (!thread) return null
-          return {
-            projectId: thread.projectId,
-            status: thread.status,
-            settings: thread.settings,
-            title: thread.title
+    // Everything below is independent background work: services starting plus
+    // one bounded database repair sequence. None of it reads another task's
+    // result, and every task already reports its own failure as non-fatal, so
+    // it runs through one two-slot queue instead of the serial chain it used to
+    // be. Two is the ceiling on purpose: a service start and the repair
+    // sequence overlap, and the repair passes stay sequential inside their own
+    // task because they are five passes over one SQLite file. The window and
+    // `features:ready` are already up, so this changes when the tail finishes,
+    // never when the user can act.
+    const backgroundStartup = createWorkQueue(2)
+    const backgroundTasks: Array<() => Promise<void>> = [
+      async () => {
+        try {
+          await state.powerWakeService?.start()
+          if (state.powerWakeService) setPowerWakeService(state.powerWakeService)
+        } catch (error) {
+          Logger.error('Power wake startup failed (non-fatal):', error)
+        }
+      },
+      async () => {
+        try {
+          await state.retryScheduler?.start()
+          // Connectivity first, so the scheduler's immediate launch tick already
+          // has a verdict: a wait restored from the last session fires as soon as
+          // the device is verified online instead of sitting through a probe
+          // window it cannot see.
+          state.connectivity?.start()
+          await state.chatEngine?.repairPendingRetryThreadStatuses()
+        } catch (error) {
+          Logger.error('Retry scheduler startup failed (non-fatal):', error)
+        }
+      },
+      async () => {
+        try {
+          await state.heartbeatScheduler?.start()
+        } catch (error) {
+          Logger.error('Heartbeat scheduler startup failed (non-fatal):', error)
+        }
+      },
+      async () => {
+        try {
+          await state.assistantScheduler?.start()
+          // A slot the app was closed (or asleep) through is dispatched on return
+          // when the user allows it, bounded per pass and idempotent across relaunch.
+          if (state.backgroundLifecycle?.autoRunMissedRuns) {
+            void state.assistantScheduler
+              ?.runPendingMisses()
+              .catch((error) => Logger.error('Auto-run of missed assistant runs failed:', error))
           }
-        },
-        sendPrompt: async ({ projectId, threadId, settings, text, visible }) => {
-          if (!state.chatEngine) throw new Error('The chat engine is not available')
-          await state.chatEngine.sendPrompt(
-            projectId,
-            threadId,
-            settings,
-            text,
-            [],
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            'internal',
-            undefined,
-            undefined,
-            visible
-          )
+        } catch (error) {
+          Logger.error('Assistant scheduler startup failed (non-fatal):', error)
         }
-      })
-      state.followUpService = followUps
-      state.chatEngine?.setFollowUpExecutor(createFollowUpExecutor(followUps))
-      // The row badge reads the armed set, so every change to it is pushed
-      // instead of polled, and a window opened later reads the same set once.
-      followUps.attachChangeListener(() => broadcastFollowUpsChanged(followUps))
-      await followUps.start()
-      // The schedule moves with the user, not with the process: when another
-      // instance becomes the main instance this clock stands down, and when this
-      // one takes it back the wakes it was holding come due here.
-      state.stopFollowUpOwnershipListener = instanceRegistry.onOwnershipChanged(() => {
-        if (instanceRegistry.isIncumbentInstance()) {
-          void followUps
-            .takeOver()
-            .catch((error) => Logger.error('Follow-up take-over failed:', error))
-        } else {
-          followUps.standDown()
-        }
-        broadcastFollowUpsChanged(followUps)
-      })
-      broadcastFollowUpsChanged(followUps)
-    } catch (error) {
-      Logger.error('Follow-up scheduler startup failed (non-fatal):', error)
-    }
-
-    try {
-      // Daily, silent, and bounded per pass: a stale scratch backlog is reclaimed
-      // in the background instead of hammering the disk in one go.
-      await state.cioCleanup?.start()
-    } catch (error) {
-      Logger.error('CIO Cleanup startup failed (non-fatal):', error)
-    }
-
-    // A machine that slept through a slot catches up when it wakes or unlocks.
-    try {
-      if (!state.powerMonitorService) {
-        const { PowerMonitorService } = await import('../system/power-monitor-service')
-        state.powerMonitorService = new PowerMonitorService({
-          onResume: () => {
-            // A machine that just woke cannot know what its link does now: the
-            // wake is the signal that re-verifies it and, when the device came
-            // back connected, resumes every thread parked on the connection.
-            state.connectivity?.signal('device wake')
-            state.assistantScheduler?.evaluate()
-            if (state.backgroundLifecycle?.autoRunMissedRuns) {
-              void state.assistantScheduler
-                ?.runPendingMisses()
-                .catch((error) => Logger.error('Resume catch-up failed:', error))
+      },
+      async () => {
+        try {
+          // Agent-scheduled wakes: one clock for the whole app, armed only while a
+          // wake is pending, resuming the thread it was scheduled on.
+          const followUps = new FollowUpService({
+            store: new FollowUpStore(storage),
+            // Exactly one live instance wakes a thread, the same rule the assistant
+            // scheduler follows. Without it two open windows fired one wake twice.
+            isOwner: () => instanceRegistry.isIncumbentInstance(),
+            findThread: (threadId) => {
+              const thread = new ThreadRepo(database).get(threadId)
+              if (!thread) return null
+              return {
+                projectId: thread.projectId,
+                status: thread.status,
+                settings: thread.settings,
+                title: thread.title
+              }
+            },
+            sendPrompt: async ({ projectId, threadId, settings, text, visible }) => {
+              if (!state.chatEngine) throw new Error('The chat engine is not available')
+              await state.chatEngine.sendPrompt(
+                projectId,
+                threadId,
+                settings,
+                text,
+                [],
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                'internal',
+                undefined,
+                undefined,
+                visible
+              )
             }
+          })
+          state.followUpService = followUps
+          state.chatEngine?.setFollowUpExecutor(createFollowUpExecutor(followUps))
+          // The row badge reads the armed set, so every change to it is pushed
+          // instead of polled, and a window opened later reads the same set once.
+          followUps.attachChangeListener(() => broadcastFollowUpsChanged(followUps))
+          await followUps.start()
+          // The schedule moves with the user, not with the process: when another
+          // instance becomes the main instance this clock stands down, and when this
+          // one takes it back the wakes it was holding come due here.
+          state.stopFollowUpOwnershipListener = instanceRegistry.onOwnershipChanged(() => {
+            if (instanceRegistry.isIncumbentInstance()) {
+              void followUps
+                .takeOver()
+                .catch((error) => Logger.error('Follow-up take-over failed:', error))
+            } else {
+              followUps.standDown()
+            }
+            broadcastFollowUpsChanged(followUps)
+          })
+          broadcastFollowUpsChanged(followUps)
+        } catch (error) {
+          Logger.error('Follow-up scheduler startup failed (non-fatal):', error)
+        }
+      },
+      async () => {
+        try {
+          // Daily, silent, and bounded per pass: a stale scratch backlog is reclaimed
+          // in the background instead of hammering the disk in one go.
+          await state.cioCleanup?.start()
+        } catch (error) {
+          Logger.error('CIO Cleanup startup failed (non-fatal):', error)
+        }
+      },
+      async () => {
+        // A machine that slept through a slot catches up when it wakes or unlocks.
+        try {
+          if (!state.powerMonitorService) {
+            const { PowerMonitorService } = await import('../system/power-monitor-service')
+            state.powerMonitorService = new PowerMonitorService({
+              onResume: () => {
+                // A machine that just woke cannot know what its link does now: the
+                // wake is the signal that re-verifies it and, when the device came
+                // back connected, resumes every thread parked on the connection.
+                state.connectivity?.signal('device wake')
+                state.assistantScheduler?.evaluate()
+                if (state.backgroundLifecycle?.autoRunMissedRuns) {
+                  void state.assistantScheduler
+                    ?.runPendingMisses()
+                    .catch((error) => Logger.error('Resume catch-up failed:', error))
+                }
+              }
+            })
           }
-        })
+          state.powerMonitorService.start()
+        } catch (error) {
+          Logger.error('Power monitor startup failed (non-fatal):', error)
+        }
+      },
+      async () => {
+        try {
+          state.modelPricingService?.start()
+        } catch (error) {
+          Logger.error('Model pricing startup failed (non-fatal):', error)
+        }
+      },
+      async () => {
+        try {
+          // The watcher keeps the same pass available for the moment the last
+          // sibling exits, so arm it before the launch pass can fail.
+          state.stopInstanceTakeOverListener = watchForInstanceTakeOver(state, database)
+          // Settles and resumes work left in flight by a process that stopped, while
+          // leaving every turn a sibling instance is still running alone.
+          await reconcileInterruptedWork(state, database, 'launch')
+        } catch (error) {
+          Logger.error('Restart recovery failed (non-fatal):', error)
+        }
+
+        // The repair passes stay one task, in this order. Each is a bounded,
+        // idempotent pass over the same checkpoint tables, so overlapping them
+        // would trade a few milliseconds of wall time for two writers on one
+        // SQLite file, which is exactly what this app does not do.
+        //
+        // One-time repair of file-change cards whose line counts were recorded as
+        // truncated by the previous whole-file gating (large files with small
+        // edits showed +0 −0). Bounded, idempotent, and batched; a no-op once every
+        // candidate has been repaired.
+        try {
+          const repaired = await new CheckpointManager(database).repairTruncatedLineStats()
+          if (repaired > 0) {
+            Logger.info(`Restored line counts for ${repaired} file-change checkpoints`)
+          }
+        } catch (error) {
+          Logger.error('Line-stats repair failed (non-fatal):', error)
+        }
+
+        // One-time repair of file-change cards misattributed to hidden internal
+        // prompts (search nudges, mermaid repairs, incomplete-turn continuations)
+        // by turns that ran before internal attribution existed. Bounded,
+        // idempotent, and batched; a no-op once every candidate is repaired.
+        try {
+          const repaired = await new CheckpointManager(
+            database
+          ).repairMisattributedInternalCheckpoints()
+          if (repaired > 0) {
+            Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
+          }
+        } catch (error) {
+          Logger.error('Internal-attribution repair failed (non-fatal):', error)
+        }
+
+        // One-time cleanup of cards that only hold another turn's abandoned work:
+        // a turn with no write evidence of its own cannot own a project-wide diff
+        // while a sibling turn was in flight in the same window.
+        try {
+          const repaired = await new CheckpointManager(database).dropUnprovenOverlappingChanges()
+          if (repaired > 0) {
+            Logger.info(`Cleared ${repaired} file-change checkpoints of unproven work`)
+          }
+        } catch (error) {
+          Logger.error('Unproven-change repair failed (non-fatal):', error)
+        }
+
+        // One-time cleanup of cards that listed the app's scratch folder or build
+        // output as the turn's work. Bounded, idempotent, and batched; a no-op once
+        // every candidate is repaired.
+        try {
+          const repaired = await new CheckpointManager(database).dropExcludedPathChanges()
+          if (repaired > 0) {
+            Logger.info(`Dropped scratch paths from ${repaired} file-change checkpoints`)
+          }
+        } catch (error) {
+          Logger.error('Excluded-path repair failed (non-fatal):', error)
+        }
+
+        // One-time repair of file-change cards that recorded nothing while the turn
+        // did write files: their contested diff was filtered away and the write
+        // evidence for those paths was mis-parsed. Bounded, idempotent, and batched;
+        // a no-op once every candidate is repaired.
+        try {
+          const repaired = await new CheckpointManager(database).repairEvidenceDroppedCheckpoints()
+          if (repaired > 0) {
+            Logger.info(`Restored files for ${repaired} empty file-change checkpoints`)
+          }
+        } catch (error) {
+          Logger.error('Evidence repair failed (non-fatal):', error)
+        }
+      },
+      async () => {
+        try {
+          // Read through the state rather than a captured local: this runs in a
+          // closure, so the assignment earlier in the boot is not narrowed here.
+          state.notificationService?.start()
+          if (state.notificationService) setNotificationService(state.notificationService)
+          state.updaterService?.start()
+        } catch (error) {
+          Logger.error('Update/notification startup failed (non-fatal):', error)
+        }
       }
-      state.powerMonitorService.start()
-    } catch (error) {
-      Logger.error('Power monitor startup failed (non-fatal):', error)
-    }
-
-    try {
-      state.modelPricingService?.start()
-    } catch (error) {
-      Logger.error('Model pricing startup failed (non-fatal):', error)
-    }
-
-    try {
-      // The watcher keeps the same pass available for the moment the last
-      // sibling exits, so arm it before the launch pass can fail.
-      state.stopInstanceTakeOverListener = watchForInstanceTakeOver(state, database)
-      // Settles and resumes work left in flight by a process that stopped, while
-      // leaving every turn a sibling instance is still running alone.
-      await reconcileInterruptedWork(state, database, 'launch')
-    } catch (error) {
-      Logger.error('Restart recovery failed (non-fatal):', error)
-    }
-
-    // One-time repair of file-change cards whose line counts were recorded as
-    // truncated by the previous whole-file gating (large files with small
-    // edits showed +0 −0). Bounded, idempotent, and batched; a no-op once every
-    // candidate has been repaired.
-    try {
-      const repaired = await new CheckpointManager(database).repairTruncatedLineStats()
-      if (repaired > 0) {
-        Logger.info(`Restored line counts for ${repaired} file-change checkpoints`)
-      }
-    } catch (error) {
-      Logger.error('Line-stats repair failed (non-fatal):', error)
-    }
-
-    // One-time repair of file-change cards misattributed to hidden internal
-    // prompts (search nudges, mermaid repairs, incomplete-turn continuations)
-    // by turns that ran before internal attribution existed. Bounded,
-    // idempotent, and batched; a no-op once every candidate is repaired.
-    try {
-      const repaired = await new CheckpointManager(
-        database
-      ).repairMisattributedInternalCheckpoints()
-      if (repaired > 0) {
-        Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
-      }
-    } catch (error) {
-      Logger.error('Internal-attribution repair failed (non-fatal):', error)
-    }
-
-    // One-time cleanup of cards that only hold another turn's abandoned work:
-    // a turn with no write evidence of its own cannot own a project-wide diff
-    // while a sibling turn was in flight in the same window.
-    try {
-      const repaired = await new CheckpointManager(database).dropUnprovenOverlappingChanges()
-      if (repaired > 0) {
-        Logger.info(`Cleared ${repaired} file-change checkpoints of unproven work`)
-      }
-    } catch (error) {
-      Logger.error('Unproven-change repair failed (non-fatal):', error)
-    }
-
-    // One-time cleanup of cards that listed the app's scratch folder or build
-    // output as the turn's work. Bounded, idempotent, and batched; a no-op once
-    // every candidate is repaired.
-    try {
-      const repaired = await new CheckpointManager(database).dropExcludedPathChanges()
-      if (repaired > 0) {
-        Logger.info(`Dropped scratch paths from ${repaired} file-change checkpoints`)
-      }
-    } catch (error) {
-      Logger.error('Excluded-path repair failed (non-fatal):', error)
-    }
-
-    // One-time repair of file-change cards that recorded nothing while the turn
-    // did write files: their contested diff was filtered away and the write
-    // evidence for those paths was mis-parsed. Bounded, idempotent, and batched;
-    // a no-op once every candidate is repaired.
-    try {
-      const repaired = await new CheckpointManager(database).repairEvidenceDroppedCheckpoints()
-      if (repaired > 0) {
-        Logger.info(`Restored files for ${repaired} empty file-change checkpoints`)
-      }
-    } catch (error) {
-      Logger.error('Evidence repair failed (non-fatal):', error)
-    }
-
-    try {
-      state.notificationService.start()
-      setNotificationService(state.notificationService)
-      state.updaterService?.start()
-    } catch (error) {
-      Logger.error('Update/notification startup failed (non-fatal):', error)
-    }
+    ]
+    // Every task swallows its own failure, so one lane failing cannot cancel
+    // the other. `allSettled` keeps that true even if a future task forgets to.
+    await Promise.allSettled(backgroundTasks.map((task) => backgroundStartup(task)))
 
     // Reclaim directory trees whose database row is gone. Delayed past the
     // interactive path and bounded per run, so a large backlog costs a
