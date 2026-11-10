@@ -817,24 +817,12 @@
           />
         {/snippet}
         {#if shouldMountWorkingTrace(turnParts.length, segmentBusy)}
+          <!-- In a group conversation a turn's work is only ever drawn by the
+               reply that closes it (`inlineInBubble`). Any other call is a
+               caller that still expects work above a bubble, and that is exactly
+               the second, speaker-less trace this screen must never show. -->
           {#if !groupThread || inlineInBubble}
             {@render segmentTrace()}
-          {:else}
-            <!-- A turn with no answer row of its own still reports its work as a
-                 reply from its speaker, so the conversation keeps one voice per
-                 bubble. -->
-            {@const traceSpeaker = groupSpeakerFor(traceMsg)}
-            {#if traceSpeaker}
-              <GroupReplyBubble
-                name={traceSpeaker.name}
-                icon={traceSpeaker.icon}
-                color={traceSpeaker.color}
-              >
-                {@render segmentTrace()}
-              </GroupReplyBubble>
-            {:else}
-              {@render segmentTrace()}
-            {/if}
           {/if}
         {/if}
       {/snippet}
@@ -845,14 +833,14 @@
         <!-- The work of the turn a steer interrupted sits directly above the
                  message that closed it, which is the order the run was lived in:
                  prompt, its trace, the steer, then the next turn's trace. -->
-        {#if !groupThread || msg.role !== 'assistant'}
+        {#if !groupThread}
           {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
             {@render completedTurnTraceBlock(view.turn)}
           {/each}
         {/if}
         <!-- A steer still held under the running trace: its work is the
                  interrupted turn's, so that trace renders above the message. -->
-        {#if absIndex === board.buildSpecActionPrompt.heldSteerAbsIndex && !board.pollStreamParts.turnAboveHasAssistantRow(absIndex)}
+        {#if !groupThread && absIndex === board.buildSpecActionPrompt.heldSteerAbsIndex && !board.pollStreamParts.turnAboveHasAssistantRow(absIndex)}
           {@render liveTurnTrace(board.composerScope.unmirroredTraceParts, true)}
         {/if}
         {@const citedParts = msg.parts.filter(
@@ -1344,13 +1332,6 @@
                     !msg.completedAt
                   )}
                   {#if turnClosingVisible && turnClosingText}
-                    {#if groupThread}
-                      <!-- Every slice of this turn's work, inside the reply that
-                           closes it, so one speaker owns one bubble. -->
-                      {#each board.pollStreamParts.traceSegmentLayout.filter((slice) => slice.turnStart === turnStartIndexForEnd(board.loadOlderMessages.messages, absIndex, board.pollStreamParts.isTransparentTurnMessage)) as segment (segment.segmentIndex)}
-                        {@render turnTraceSegment(segment, msg, true)}
-                      {/each}
-                    {/if}
                     {@const isReadingThisTurn =
                       'messageId' in speechController.playback &&
                       speechController.playback.messageId === msg.id &&
@@ -1389,11 +1370,24 @@
                         {/if}
                         <!-- The work this answer came from, inside the same reply:
                              no band of its own, capped, and scrolling within that
-                             cap so it never resizes the bubble around it. -->
-                        {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
+                             cap so it never resizes the bubble around it. A turn is
+                             stored as several rows, so the whole turn is drawn here
+                             from the row that closes it: nothing of this turn may
+                             render above the bubble instead. -->
+                        {@const turnOpeningIndex = turnStartIndexForEnd(
+                          board.loadOlderMessages.messages,
+                          absIndex,
+                          board.pollStreamParts.isTransparentTurnMessage
+                        )}
+                        {@const turnMessageIds = new Set(
+                          board.loadOlderMessages.messages
+                            .slice(turnOpeningIndex, absIndex + 1)
+                            .map((message) => message.id)
+                        )}
+                        {#each board.pollStreamParts.completedTurnViews.filter( (view) => turnMessageIds.has(view.anchorId) ) as view (view.turn.endTs)}
                           {@render completedTurnTraceBlock(view.turn)}
                         {/each}
-                        {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                        {#each board.pollStreamParts.traceSegmentLayout.filter((slice) => slice.turnStart === turnOpeningIndex) as segment (segment.segmentIndex)}
                           {@render turnTraceSegment(segment, msg, true)}
                         {/each}
                       {/if}
