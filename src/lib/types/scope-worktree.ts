@@ -140,8 +140,9 @@ export type ScopeWorktreeRunOrigin = 'user' | 'agent'
 
 /**
  * Every operation the agent-facing `cio:scope` utility can perform. Read actions
- * report state, write actions mutate app-owned scope state, and the destructive
- * actions are confirmation-gated (see `ScopeAgentConfirmationRequest`).
+ * report state, write actions mutate app-owned scope state, publish actions send
+ * a scope's branch to its remote, and the destructive actions are
+ * confirmation-gated (see `ScopeAgentConfirmationRequest`).
  */
 export const SCOPE_TOOL_ACTIONS = [
   'list',
@@ -160,6 +161,8 @@ export const SCOPE_TOOL_ACTIONS = [
   'retry_setup',
   'sync_from_main',
   'sync_to_main',
+  'publish_branch',
+  'open_pull_request',
   'detach_worktree',
   'delete_scope',
   'merge_into_project'
