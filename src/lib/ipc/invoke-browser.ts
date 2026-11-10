@@ -133,7 +133,13 @@ export const invokeBrowserContract = {
        */
       boxId?: string | null
     ],
-    BrowserPageState
+    /**
+     * The tab's page state, or `null` when a hide or a newer show reached main
+     * while the tab's jar was still loading. A superseded show attaches nothing,
+     * so there is no state to report and the caller keeps what it has; the newer
+     * show answers for the tab that won.
+     */
+    BrowserPageState | null
   >,
   /**
    * Bind a browser tab's assistant conversation to the page that tab is on.
