@@ -607,10 +607,13 @@ export class AppSpotlightPalette extends BoardUnit<App> {
    */
   async selectFromHome(selection: ActionSelection): Promise<void> {
     await this.root.onKeydown.handlePaletteSelection(selection)
-    // A nested screen the action opened (a search, the project switch, the new
-    // project flow) keeps the spotlight open; anything else is a navigation or a
-    // command, which closes it the way it always has.
-    if (!this.spotlightScreenId) this.root.onKeydown.closeSpotlight()
+    // A pick that opened a nested screen (a search, the project switch) leaves the
+    // spotlight up on that screen, which is the page the pick asked for. Every
+    // other pick is an action that already ran: a navigation, a command, a panel
+    // or a modal of its own, so the surface closes behind it instead of staying
+    // over the result it just produced. The home screen is itself `actions`, so
+    // "still on the home screen" is exactly the case that has to close.
+    if (this.spotlightScreenId === 'actions') this.root.onKeydown.closeSpotlight()
   }
 
   /** Preserve the current content view / project sidebar state when opening a
