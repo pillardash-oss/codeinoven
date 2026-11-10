@@ -719,6 +719,7 @@
           <WorkingTrace
             parts={turnParts}
             compact={groupThread}
+            flat={groupThread}
             bodyMaxHeightRem={groupThread ? 14 : undefined}
             open={isCurrentAssistantTurn || traceIsLive}
             busy={segmentBusy}
