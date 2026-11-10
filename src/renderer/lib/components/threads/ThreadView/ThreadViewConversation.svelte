@@ -1605,114 +1605,112 @@
                             </button>
                           {/if}
                         </div>
-                        {#if !groupThread}
-                          <div
-                            class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-                          >
-                            <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
-                              <AgentIcon
-                                agentId={resolveMessageHarnessId(
-                                  msg,
-                                  board.unmirroredTraceStartTime.messageHarnessFallback
-                                )}
-                                size={14}
-                              />
-                              {messageHarnessName(
+                        <div
+                          class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                        >
+                          <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
+                            <AgentIcon
+                              agentId={resolveMessageHarnessId(
                                 msg,
                                 board.unmirroredTraceStartTime.messageHarnessFallback
                               )}
-                            </span>
-                            {#if modelLabel}
-                              <span class="text-[0.625rem] text-dimmed">·</span>
-                              <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
-                                <VendorIcon
-                                  name={provider?.name ?? modelLabel}
-                                  id={provider?.id}
-                                  size={12}
+                              size={14}
+                            />
+                            {messageHarnessName(
+                              msg,
+                              board.unmirroredTraceStartTime.messageHarnessFallback
+                            )}
+                          </span>
+                          {#if modelLabel}
+                            <span class="text-[0.625rem] text-dimmed">·</span>
+                            <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
+                              <VendorIcon
+                                name={provider?.name ?? modelLabel}
+                                id={provider?.id}
+                                size={12}
+                              />
+                              {modelLabel}
+                              {#if fastVariant}
+                                <CioZap
+                                  size={10}
+                                  class="text-accent"
+                                  fill="currentColor"
+                                  aria-label="Fast inference"
+                                  title={`Fast inference   ~${fastVariant.multiplier}× usage`}
                                 />
-                                {modelLabel}
-                                {#if fastVariant}
-                                  <CioZap
-                                    size={10}
-                                    class="text-accent"
-                                    fill="currentColor"
-                                    aria-label="Fast inference"
-                                    title={`Fast inference   ~${fastVariant.multiplier}× usage`}
-                                  />
-                                {/if}
-                              </span>
-                              {#if msgThinking}
-                                <span
-                                  class={`${CONVERSATION_METADATA_BADGE_CLASS} capitalize`}
-                                  title={`Thinking level: ${msgThinking}`}
-                                  aria-label={`Thinking level: ${msgThinking}`}
-                                >
-                                  <board.state.ThinkingMetadataIcon size={9} />
-                                  {msgThinking}
-                                </span>
                               {/if}
-                            {/if}
-                            {#if msg.accountId || msg.accountLabel}
+                            </span>
+                            {#if msgThinking}
                               <span
-                                class={CONVERSATION_METADATA_BADGE_CLASS}
-                                title={`Account: ${msg.accountLabel ?? 'Default'}`}
-                                aria-label={`Account: ${msg.accountLabel ?? 'Default'}`}
+                                class={`${CONVERSATION_METADATA_BADGE_CLASS} capitalize`}
+                                title={`Thinking level: ${msgThinking}`}
+                                aria-label={`Thinking level: ${msgThinking}`}
                               >
-                                <board.state.AccountMetadataIcon size={10} />
-                                {#if msg.accountLabel && msg.accountLabel !== 'Default'}{msg.accountLabel}{/if}
+                                <board.state.ThinkingMetadataIcon size={9} />
+                                {msgThinking}
                               </span>
                             {/if}
+                          {/if}
+                          {#if msg.accountId || msg.accountLabel}
                             <span
                               class={CONVERSATION_METADATA_BADGE_CLASS}
-                              title={`Oven: ${msgOvenLabel}`}
-                              aria-label={`Oven: ${msgOvenLabel}`}
+                              title={`Account: ${msg.accountLabel ?? 'Default'}`}
+                              aria-label={`Account: ${msg.accountLabel ?? 'Default'}`}
                             >
-                              {#if msgOvenIsLocal}
-                                <board.state.LocalMetadataIcon size={10} class="shrink-0" />
-                              {:else}
-                                <img
-                                  class="h-3 w-3 shrink-0"
-                                  alt=""
-                                  src={msgOvenAppearance.customSvg
-                                    ? getCustomSvgDataUrl(
-                                        msgOvenAppearance.customSvg,
-                                        msgOvenAppearance.color
-                                      )
-                                    : getIconSvgDataUrl(
-                                        msgOvenAppearance.icon,
-                                        msgOvenAppearance.color
-                                      )}
-                                />
-                              {/if}
-                              {msgOvenLabel}
+                              <board.state.AccountMetadataIcon size={10} />
+                              {#if msg.accountLabel && msg.accountLabel !== 'Default'}{msg.accountLabel}{/if}
                             </span>
-                            <MessageTimestamp
-                              at={msg.completedAt ?? msg.createdAt}
-                              prefix="· "
-                              class="text-[0.625rem] text-dimmed"
-                            />
-                            {#if turnDuration !== null}
-                              <span class="text-[0.625rem] text-dimmed tabular-nums"
-                                >· {formatDurationMs(turnDuration)}</span
-                              >
-                            {:else if msg.completedAt && msg.createdAt}
-                              <span class="text-[0.625rem] text-dimmed tabular-nums"
-                                >· {formatDurationMs(msg.completedAt - msg.createdAt)}</span
-                              >
+                          {/if}
+                          <span
+                            class={CONVERSATION_METADATA_BADGE_CLASS}
+                            title={`Oven: ${msgOvenLabel}`}
+                            aria-label={`Oven: ${msgOvenLabel}`}
+                          >
+                            {#if msgOvenIsLocal}
+                              <board.state.LocalMetadataIcon size={10} class="shrink-0" />
+                            {:else}
+                              <img
+                                class="h-3 w-3 shrink-0"
+                                alt=""
+                                src={msgOvenAppearance.customSvg
+                                  ? getCustomSvgDataUrl(
+                                      msgOvenAppearance.customSvg,
+                                      msgOvenAppearance.color
+                                    )
+                                  : getIconSvgDataUrl(
+                                      msgOvenAppearance.icon,
+                                      msgOvenAppearance.color
+                                    )}
+                              />
                             {/if}
-                            {#if messageTokenRate( msg, { finalizedTokenRates: board.unmirroredTraceStartTime.finalizedTokenRates, liveTokenRate: board.handleAgentEvent.liveTokenRate } ) !== null}
-                              {@const rate =
-                                messageTokenRate(msg, {
-                                  finalizedTokenRates:
-                                    board.unmirroredTraceStartTime.finalizedTokenRates,
-                                  liveTokenRate: board.handleAgentEvent.liveTokenRate
-                                }) ?? 0}
-                              <span class="text-[0.625rem] text-dimmed tabular-nums">
-                                · {formatTokenRate(rate)}</span
-                              >
-                            {/if}
-                          </div>
-                        {/if}
+                            {msgOvenLabel}
+                          </span>
+                          <MessageTimestamp
+                            at={msg.completedAt ?? msg.createdAt}
+                            prefix="· "
+                            class="text-[0.625rem] text-dimmed"
+                          />
+                          {#if turnDuration !== null}
+                            <span class="text-[0.625rem] text-dimmed tabular-nums"
+                              >· {formatDurationMs(turnDuration)}</span
+                            >
+                          {:else if msg.completedAt && msg.createdAt}
+                            <span class="text-[0.625rem] text-dimmed tabular-nums"
+                              >· {formatDurationMs(msg.completedAt - msg.createdAt)}</span
+                            >
+                          {/if}
+                          {#if messageTokenRate( msg, { finalizedTokenRates: board.unmirroredTraceStartTime.finalizedTokenRates, liveTokenRate: board.handleAgentEvent.liveTokenRate } ) !== null}
+                            {@const rate =
+                              messageTokenRate(msg, {
+                                finalizedTokenRates:
+                                  board.unmirroredTraceStartTime.finalizedTokenRates,
+                                liveTokenRate: board.handleAgentEvent.liveTokenRate
+                              }) ?? 0}
+                            <span class="text-[0.625rem] text-dimmed tabular-nums">
+                              · {formatTokenRate(rate)}</span
+                            >
+                          {/if}
+                        </div>
                       </div>
                     </div>
                   {/if}
