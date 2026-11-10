@@ -42,11 +42,157 @@
  */
 
 ;(() => {
+  /**
+   * The page main pushes into the snapshot, as `chrome.tabs` describes a tab.
+   *
+   * Only the fields this file reads are named: `id` is the one it always has, every
+   * other field is there because a query filter or a published tab entry reads it.
+   */
+  interface PageSnapshot {
+    id: number
+    url?: string
+    title?: string
+    active?: boolean
+    audible?: boolean
+    muted?: boolean
+    loading?: boolean
+  }
+
+  /** One tab of the runtime's own `tabs.query` answer, as far as this file reads it. */
+  interface ListedTab {
+    id?: number
+    url?: unknown
+  }
+
+  /** The tab this file reports, in the shape `chrome.tabs` describes a tab. */
+  interface TabEntry {
+    id: number
+    index: number
+    windowId: number
+    active: boolean
+    highlighted: boolean
+    pinned: boolean
+    incognito: boolean
+    audible: boolean
+    mutedInfo: { muted: boolean; reason: string }
+    discarded: boolean
+    autoDiscardable: boolean
+    groupId: number
+    status: string
+    url?: string
+    title?: string
+  }
+
+  /**
+   * The filters a `tabs.query` caller may set, as this file reads them.
+   *
+   * The values are the types the query documents: an extension that passes something
+   * else is answered by the `typeof` tests in `matchesQuery`, never by these types.
+   */
+  interface TabsQueryInfo {
+    active?: boolean
+    audible?: boolean
+    muted?: boolean
+    pinned?: boolean
+    status?: string
+    url?: string | string[]
+    title?: string | string[]
+  }
+
+  /** The `tabs.create` properties this file reads. */
+  interface TabCreateProperties {
+    url?: string | string[]
+    active?: boolean
+  }
+
+  /** A `tabs.query` call: a promise or a callback, whichever shape the build answers. */
+  interface TabsQuery {
+    (queryInfo: unknown, callback?: (tabs: unknown) => void): unknown
+    /** The marker that makes a second run of this file a rewrite and not a reinstall. */
+    __cioPageTabs?: boolean
+  }
+
+  /** A `tabs.create` call, answered with the tab the app opened. */
+  interface TabsCreate {
+    (createProperties: unknown, callback?: (tab: unknown) => void): unknown
+    /** The marker that makes a second run of this file a rewrite and not a reinstall. */
+    __cioPageTabs?: boolean
+  }
+
+  /** `tabs.getCurrent`, which this file answers itself. */
+  type TabsGetCurrent = (callback?: (tab: unknown) => void) => Promise<undefined> | undefined
+
+  /**
+   * The `chrome.tabs` namespace this file wraps.
+   *
+   * A type alias rather than an interface, so it can be handed to `define` as a
+   * `Record` of members: an interface has no implicit index signature.
+   */
+  type TabsApi = {
+    query?: TabsQuery
+    getCurrent?: TabsGetCurrent
+    create?: TabsCreate
+  }
+
+  /** The `chrome.runtime` surface `mayRead` asks for the extension's manifest. */
+  interface ChromeRuntimeApi {
+    getManifest?: () => ChromeManifest | undefined
+  }
+
+  /** The manifest fields `mayRead` reads. */
+  interface ChromeManifest {
+    permissions?: string[]
+    host_permissions?: string[]
+  }
+
+  /** One root of the compat surface, which `chrome` and `browser` both are. */
+  interface ChromeRoot {
+    tabs?: TabsApi
+    runtime?: ChromeRuntimeApi
+  }
+
+  /** Whatever a `tabs.query` call returns when it answers with a promise. */
+  interface Thenable {
+    then(onFulfilled: (value: unknown) => void, onRejected: (error: unknown) => void): unknown
+  }
+
+  /** One `tabs.create` ask still waiting for the app's answer. */
+  interface OpenRequest {
+    resolve: (tabId: number | null) => void
+    timer: ReturnType<typeof setTimeout>
+  }
+
+  /** The app's answer to one `tabs.create` ask, as the message carries it. */
+  interface OpenedTabAnswer {
+    requestId: number
+    tabId: number | null
+  }
+
+  /** The message the app posts back for one `tabs.create` ask. */
+  interface OpenedTabMessage {
+    __cioPageOpenedTab?: OpenedTabAnswer
+  }
+
+  /**
+   * The global this file is injected into.
+   *
+   * The injected script is not a module, so these declarations stay inside it and
+   * nothing here is published to the page's own world.
+   */
+  type CompatGlobal = typeof globalThis & {
+    chrome?: ChromeRoot
+    browser?: ChromeRoot
+    __cioPageTabsSnapshot?: PageSnapshot
+  }
+
+  /** The one typed view of the global, read through instead of `globalThis` itself. */
+  const surface = globalThis as CompatGlobal
+
   /** Where main leaves the tab this page acts on, read fresh on every call. */
   const SNAPSHOT_KEY = '__cioPageTabsSnapshot'
 
-  const ownTab = () => {
-    const snapshot = globalThis[SNAPSHOT_KEY]
+  const ownTab = (): PageSnapshot | null => {
+    const snapshot = surface[SNAPSHOT_KEY]
     return snapshot && typeof snapshot.id === 'number' ? snapshot : null
   }
 
@@ -59,7 +205,7 @@
    * extension act on itself, so none of them is ever listed, which is also what the
    * app's worker-side repairs already assume.
    */
-  const isHostedExtensionSurface = (url) =>
+  const isHostedExtensionSurface = (url: unknown) =>
     typeof url === 'string' && url.indexOf('chrome-extension://') === 0
 
   // ── Matching a query, for the entry this file adds ──────────────────────────
@@ -72,12 +218,12 @@
   // site, or for a tab that is not active, must not be answered with this page.
 
   /** One literal with `*` wildcards left in place, so they can become wildcards. */
-  const escapeLiteral = (text) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+  const escapeLiteral = (text: string) => text.replace(/[.+?^${}()|[\]\\]/g, '\\$&')
 
   /** One `*`-wildcarded literal, as the body of an expression. */
-  const wildcardBody = (text) => escapeLiteral(text).replace(/\*/g, '[^]*')
+  const wildcardBody = (text: string) => escapeLiteral(text).replace(/\*/g, '[^]*')
 
-  const safeExpression = (source) => {
+  const safeExpression = (source: string): RegExp | null => {
     try {
       return new RegExp(source)
     } catch {
@@ -93,7 +239,7 @@
    * which is Chrome's own rule for match patterns and the one this browser needs:
    * a local development page is served from whatever port it was started on.
    */
-  const urlExpression = (pattern) => {
+  const urlExpression = (pattern: unknown): RegExp | null => {
     if (typeof pattern !== 'string' || pattern.length === 0) return null
     if (
       pattern.length > 1 &&
@@ -120,7 +266,7 @@
    * One pattern from `tabs.query({ title })` or a host permission, as an expression:
    * a glob over a literal, and the `/regex/` short form.
    */
-  const globExpression = (pattern) => {
+  const globExpression = (pattern: unknown): RegExp | null => {
     if (typeof pattern !== 'string' || pattern.length === 0) return null
     if (
       pattern.length > 1 &&
@@ -132,8 +278,12 @@
     return safeExpression('^' + wildcardBody(pattern) + '$')
   }
 
-  const matches = (expression, patterns, value) => {
-    const list = Array.isArray(patterns) ? patterns : [patterns]
+  const matches = (
+    expression: (pattern: unknown) => RegExp | null,
+    patterns: unknown,
+    value: string
+  ) => {
+    const list: unknown[] = Array.isArray(patterns) ? patterns : [patterns]
     for (const pattern of list) {
       const built = expression(pattern)
       if (built && built.test(value)) return true
@@ -148,13 +298,16 @@
    * declared names that are not host patterns (`storage`, `scripting`) simply match
    * no address.
    */
-  const mayRead = (url) => {
+  const mayRead = (url: string) => {
     try {
       for (const root of roots) {
         const runtime = root && root.runtime
         if (!runtime || typeof runtime.getManifest !== 'function') continue
-        const manifest = runtime.getManifest() || {}
-        const declared = [].concat(manifest.permissions || [], manifest.host_permissions || [])
+        const manifest: ChromeManifest = runtime.getManifest() || {}
+        const declared = ([] as string[]).concat(
+          manifest.permissions || [],
+          manifest.host_permissions || []
+        )
         if (declared.indexOf('tabs') !== -1) return true
         if (matches(urlExpression, declared, url)) return true
       }
@@ -174,9 +327,9 @@
    * this is what an extension written against Chromium reads and the app's own
    * `chrome.tabGroups` stub already answers `TAB_GROUP_ID_NONE: -1`.
    */
-  const tabEntry = (page) => {
+  const tabEntry = (page: PageSnapshot): TabEntry => {
     const active = page.active === true
-    const entry = {
+    const entry: TabEntry = {
       id: page.id,
       index: 0,
       windowId: 0,
@@ -202,8 +355,8 @@
   }
 
   /** Whether the tab this file reports answers one query. */
-  const matchesQuery = (page, entry, queryInfo) => {
-    const query = queryInfo && typeof queryInfo === 'object' ? queryInfo : {}
+  const matchesQuery = (page: PageSnapshot, entry: TabEntry, queryInfo: unknown) => {
+    const query = (queryInfo && typeof queryInfo === 'object' ? queryInfo : {}) as TabsQueryInfo
     if (typeof query.active === 'boolean' && query.active !== entry.active) return false
     if (typeof query.audible === 'boolean' && query.audible !== entry.audible) return false
     if (typeof query.muted === 'boolean' && query.muted !== entry.mutedInfo.muted) return false
@@ -222,8 +375,8 @@
    * exists for: the extension surfaces this app hosts are not tabs, and the page
    * behind this one is the active tab, whatever currently holds the keyboard.
    */
-  const answer = (tabs, queryInfo) => {
-    const listed = []
+  const answer = (tabs: ListedTab[], queryInfo: unknown): ListedTab[] => {
+    const listed: ListedTab[] = []
     for (const tab of tabs) {
       if (!tab || typeof tab !== 'object') continue
       if (isHostedExtensionSurface(tab.url)) continue
@@ -233,7 +386,7 @@
     if (!page) return listed
     const entry = tabEntry(page)
     const others = listed.filter((tab) => tab.id !== entry.id)
-    return matchesQuery(page, entry, queryInfo) ? [entry].concat(others) : others
+    return matchesQuery(page, entry, queryInfo) ? ([entry] as ListedTab[]).concat(others) : others
   }
 
   /** How long a runtime that never answers may keep an extension waiting. */
@@ -249,22 +402,22 @@
    * mid-call   resolves empty, because a query that never settles is worse for the
    * page than one that answers "nothing".
    */
-  const askOriginal = (original, queryInfo) =>
-    new Promise((resolve, reject) => {
+  const askOriginal = (original: TabsQuery, queryInfo: unknown) =>
+    new Promise<ListedTab[]>((resolve, reject) => {
       let settled = false
-      const settle = (tabs) => {
+      const settle = (tabs: unknown) => {
         if (settled) return
         settled = true
-        resolve(Array.isArray(tabs) ? tabs : [])
+        resolve(Array.isArray(tabs) ? (tabs as ListedTab[]) : [])
       }
-      const fail = (error) => {
+      const fail = (error: unknown) => {
         if (settled) return
         settled = true
         reject(error instanceof Error ? error : new Error(String(error)))
       }
-      let returned
+      let returned: Thenable | null
       try {
-        returned = original(queryInfo)
+        returned = original(queryInfo) as Thenable | null
       } catch {
         // Either a build that wants a callback, or a refusal: both are settled by
         // the attempt below, so nothing is reported from here.
@@ -275,7 +428,7 @@
         return
       }
       try {
-        const answered = original(queryInfo, settle)
+        const answered = original(queryInfo, settle) as Thenable | null
         if (answered && typeof answered.then === 'function') answered.then(settle, fail)
       } catch (error) {
         fail(error)
@@ -291,7 +444,7 @@
    * panel, a background page   and callers are written for that answer, because it
    * is the one a popup gets in Chrome too.
    */
-  const getCurrent = (callback) => {
+  const getCurrent = (callback?: (tab: unknown) => void): Promise<undefined> | undefined => {
     if (typeof callback === 'function') {
       queueMicrotask(() => callback(undefined))
       return undefined
@@ -300,7 +453,7 @@
   }
 
   /** Define one member, however the runtime made the namespace's properties. */
-  const define = (target, key, value) => {
+  const define = (target: Record<string, unknown>, key: string, value: unknown) => {
     try {
       Object.defineProperty(target, key, { value, configurable: true, writable: true })
       return
@@ -320,7 +473,7 @@
   const OPEN_TAB_TIMEOUT_MS = 3000
 
   /** The asks still waiting for the app's answer, keyed by their request number. */
-  const openRequests = new Map()
+  const openRequests = new Map<number, OpenRequest>()
   let openRequestSequence = 0
 
   /**
@@ -330,7 +483,7 @@
    * link click is held to. An extension asking for one of its own pages is not a
    * tab of the browser, so it is not this channel's to open.
    */
-  const isWebAddress = (url) => {
+  const isWebAddress = (url: string) => {
     try {
       const parsed = new URL(url)
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
@@ -347,7 +500,7 @@
    * status are this browser's constants, and the address is the one the extension
    * asked for   it already knows it, which is why Chromium reports it here too.
    */
-  const openedTabEntry = (id, url, active) => ({
+  const openedTabEntry = (id: number, url: string, active: boolean): TabEntry => ({
     id,
     index: 0,
     windowId: 0,
@@ -367,8 +520,8 @@
 
   // The app's answer to each ask arrives on the same channel the page asks on,
   // labelled so the wrappers here can tell it from a request of their own.
-  window.addEventListener('message', (event) => {
-    const data = event ? event.data : null
+  window.addEventListener('message', (event: MessageEvent<unknown>) => {
+    const data = (event ? event.data : null) as OpenedTabMessage | null
     if (!data || typeof data !== 'object') return
     const answer = data.__cioPageOpenedTab
     if (!answer || typeof answer !== 'object') return
@@ -386,13 +539,17 @@
    * page, or an app that never answers, resolves with no tab instead of a promise
    * that hangs, because a button that waits forever is worse than one that failed.
    */
-  const createTab = (createProperties, callback) => {
-    const properties =
+  const createTab = (
+    createProperties: unknown,
+    callback?: (tab: unknown) => void
+  ): Promise<TabEntry | undefined> | undefined => {
+    const properties = (
       createProperties && typeof createProperties === 'object' ? createProperties : {}
+    ) as TabCreateProperties
     const requested = Array.isArray(properties.url) ? properties.url[0] : properties.url
     const url = typeof requested === 'string' ? requested : ''
     const active = typeof properties.active === 'boolean' ? properties.active : true
-    const opened = new Promise((resolve) => {
+    const opened = new Promise<number | null>((resolve) => {
       if (!url || !isWebAddress(url)) {
         resolve(null)
         return
@@ -424,8 +581,8 @@
   // Both roots, because they are two objects with the same namespaces in this
   // runtime and an extension may reach for either. They are deduplicated: a page
   // where `browser` is `chrome` is one namespace, not two.
-  const roots = []
-  for (const root of [globalThis.chrome, globalThis.browser]) {
+  const roots: ChromeRoot[] = []
+  for (const root of [surface.chrome, surface.browser]) {
     if (!root || roots.indexOf(root) !== -1) continue
     roots.push(root)
   }
@@ -437,7 +594,7 @@
     // One marker on the wrapper itself, so a push into a page that already has them
     // rewrites the snapshot and installs nothing a second time.
     if (original && original.__cioPageTabs !== true) {
-      const wrapped = function (queryInfo, callback) {
+      const wrapped: TabsQuery = function (queryInfo: unknown, callback?: (tabs: unknown) => void) {
         const asked = askOriginal(original, queryInfo)
         if (typeof callback === 'function') {
           asked.then(
@@ -460,7 +617,10 @@
     // that opens nothing is indistinguishable from a broken one.
     const installedCreate = typeof tabsApi.create === 'function' ? tabsApi.create : null
     if (!installedCreate || installedCreate.__cioPageTabs !== true) {
-      const wrappedCreate = function (createProperties, callback) {
+      const wrappedCreate: TabsCreate = function (
+        createProperties: unknown,
+        callback?: (tab: unknown) => void
+      ) {
         return createTab(createProperties, callback)
       }
       wrappedCreate.__cioPageTabs = true

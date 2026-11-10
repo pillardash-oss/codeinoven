@@ -210,7 +210,7 @@ material way, and the difference is deliberate.
 - **A launch from an extension's own page opens a tab.** Electron answers no
   `chrome.tabs.create` in a way that reaches a tab strip, so a password manager's
   "launch" row, which is exactly that call for the address the entry holds, opened
-  nothing at all. The app owns the tabs, so `compat/cio-page-tabs.js` replaces
+  nothing at all. The app owns the tabs, so `compat/cio-page-tabs.ts` replaces
   `tabs.create` on both roots in the page's own world, the ask travels the channel
   `chrome.runtime.openOptionsPage` already uses (`browser-extension-page-tabs.ts`),
   and `BrowserServiceExtensionPages.openTabFromExtensionPage` validates the address
@@ -226,7 +226,7 @@ material way, and the difference is deliberate.
   own document which a password manager reads as the website the user is on, and
   reports as "Site doesn't match" naming the extension's id. The tab facts a tab's
   pages receive are therefore pushed into the extension's own documents as well as
-  into its worker: `compat/cio-page-tabs.js` wraps `tabs.query` on both roots in the
+  into its worker: `compat/cio-page-tabs.ts` wraps `tabs.query` on both roots in the
   page's world (never listing an extension surface as a tab, and reporting the page
   behind the popup as the active one, with the `WebContents` id a message must use),
   answers `tabs.getCurrent` with `undefined` as Chromium does in a popup, and leaves

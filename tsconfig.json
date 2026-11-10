@@ -11,6 +11,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "noEmit": true,
+    "allowImportingTsExtensions": true,
     "paths": {
       "$lib/*": ["./src/renderer/lib/*"],
       "$engines/*": ["./src/lib/engines/*"],

@@ -24,10 +24,118 @@
  */
 
 ;(() => {
-  const chromeApi = globalThis.chrome
+  /** A message the worker posts over the bridge port, or main pushes into it. */
+  interface BridgeMessage {
+    /** Which message this is; main reads the rest of the envelope. */
+    kind?: string
+    /** The number the page gave the command; a `command-complete` reply carries it. */
+    requestId?: number
+    error?: string
+    [key: string]: unknown
+  }
+
+  /** A command the page is still waiting on. */
+  interface PendingRequest {
+    resolve: () => void
+    reject: (error: Error) => void
+    timer: ReturnType<typeof setTimeout>
+  }
+
+  /** One listener list on a port. */
+  interface PortListener<T> {
+    addListener(callback: (value: T) => void): void
+  }
+
+  /** The long-lived port to the worker, as this page uses it. */
+  interface BridgePort {
+    postMessage(message: BridgeMessage): void
+    onMessage: PortListener<BridgeMessage>
+    onDisconnect?: PortListener<() => void>
+  }
+
+  /**
+   * One `chrome.storage` area.
+   *
+   * `get` answers through its callback, or returns a promise when it is called
+   * without one, which is what the runtime's storage does either way.
+   */
+  interface StorageArea {
+    get(
+      keys: string,
+      callback?: (items: Record<string, unknown>) => void
+    ): PromiseLike<Record<string, unknown>> | undefined
+    set?(items: Record<string, unknown>): PromiseLike<unknown> | undefined
+  }
+
+  interface ChromeStorage {
+    session?: StorageArea
+    local?: StorageArea
+  }
+
+  /** One user script the compatibility preamble registered, as it stores it. */
+  interface StoredUserScript {
+    registrationId?: string
+    file?: string
+    matches?: string[]
+    excludeMatches?: string[]
+    runtimeWorld?: string
+    allFrames?: boolean
+    runAt?: string
+  }
+
+  /** A stored user script the registry lost, with the fields re-registering it needs. */
+  interface RestorableUserScript extends StoredUserScript {
+    registrationId: string
+    file: string
+  }
+
+  /** The content script this page registers, as `chrome.scripting` takes it. */
+  interface ContentScriptRegistration {
+    id: string
+    world: 'MAIN' | 'ISOLATED'
+    matches: string[]
+    excludeMatches?: string[]
+    allFrames?: boolean
+    runAt: string
+    js: string[]
+  }
+
+  /** One entry the scripting registry already holds. */
+  interface RegisteredContentScript {
+    id: string
+  }
+
+  interface ChromeScripting {
+    registerContentScripts(scripts: ContentScriptRegistration[]): Promise<void>
+    getRegisteredContentScripts(): Promise<RegisteredContentScript[]>
+  }
+
+  interface ChromeRoot {
+    storage?: ChromeStorage
+    runtime: { connect(info: { name: string }): BridgePort }
+    scripting?: ChromeScripting
+  }
+
+  type CompatGlobal = typeof globalThis & {
+    chrome?: ChromeRoot
+    __cioBridgeReceive?: (command: BridgeMessage) => void
+    __cioBridgeRequest?: (command: BridgeMessage) => Promise<void>
+    __cioBridgeDrainFrameRequests?: () => string
+    __cioBridgeDrainNativeRequests?: () => string
+    __cioBridgeDrainDownloadRequests?: () => string
+    __cioBridgeDrainCookieRequests?: () => string
+    __cioBridgeDrainPageRequests?: () => string
+    __cioBridgeDrain?: () => Promise<string>
+    __cioBridgeDrainWrites?: () => Promise<string>
+    __cioBridgeReassert?: () => Promise<string>
+    __cioBridgeWrite?: (key: string, value: unknown) => Promise<boolean>
+  }
+
+  const globals = globalThis as CompatGlobal
+  const chromeApi = globals.chrome
   if (!chromeApi) return
 
-  const mailboxArea = () => {
+  const mailboxArea = (): StorageArea | null => {
     try {
       const storage = chromeApi.storage
       if (!storage) return null
@@ -44,10 +152,12 @@
    * the worker is released or restarted. It is created on demand, because the
    * port disconnects with the worker and a fresh one is what starts it again.
    */
-  let port = null
-  const requests = new Map()
+  let port: BridgePort | null = null
+  // Keyed by the number the page gave the command, which a message only carries
+  // when it is a reply to one.
+  const requests = new Map<number | undefined, PendingRequest>()
   let requestSequence = 0
-  const frameRequests = []
+  const frameRequests: BridgeMessage[] = []
   /**
    * Native messaging requests the worker posted, waiting for main to pick them up.
    *
@@ -55,7 +165,7 @@
    * open, post and close here and main drains them on the same poll as the frame
    * queries. Bounded so a worker that loops cannot grow the page's memory.
    */
-  const nativeRequests = []
+  const nativeRequests: BridgeMessage[] = []
   /**
    * The `chrome.downloads` calls the worker made.
    *
@@ -64,7 +174,7 @@
    * and the poll is where the two meet. Bounded so a worker that loops cannot grow
    * the page's memory.
    */
-  const downloadRequests = []
+  const downloadRequests: BridgeMessage[] = []
   /**
    * The cookie reads the worker could not do itself.
    *
@@ -73,7 +183,7 @@
    * answers into the worker as `cookies-result` with that number. Bounded so a
    * worker that loops cannot grow the page's memory.
    */
-  const cookieRequests = []
+  const cookieRequests: BridgeMessage[] = []
   /**
    * The extension pages the worker asked the app to open.
    *
@@ -81,12 +191,12 @@
    * the request is the worker's and the window is main's, which is why it travels
    * the same way the rest does. Bounded for the same reason as the others.
    */
-  const pageRequests = []
-  const ensurePort = () => {
+  const pageRequests: BridgeMessage[] = []
+  const ensurePort = (): BridgePort | null => {
     if (port) return port
     try {
       port = chromeApi.runtime.connect({ name: '__cio:bridge' })
-      port.onMessage.addListener((request) => {
+      port.onMessage.addListener((request: BridgeMessage) => {
         if (request && request.kind === 'command-complete') {
           const pending = requests.get(request.requestId)
           if (pending) {
@@ -128,7 +238,7 @@
     return port
   }
 
-  const send = (command) => {
+  const send = (command: BridgeMessage): void => {
     const current = ensurePort()
     if (!current) return
     try {
@@ -149,9 +259,9 @@
   }
 
   /** Main pushes one command into the extension's service worker through this. */
-  globalThis.__cioBridgeReceive = (command) => send(command)
-  globalThis.__cioBridgeRequest = (command) =>
-    new Promise((resolve, reject) => {
+  globals.__cioBridgeReceive = (command: BridgeMessage) => send(command)
+  globals.__cioBridgeRequest = (command: BridgeMessage) =>
+    new Promise<void>((resolve, reject) => {
       const requestId = ++requestSequence
       const timer = setTimeout(() => {
         requests.delete(requestId)
@@ -162,25 +272,25 @@
     })
 
   /** Main answers a small batch using the session's actual frame tree. */
-  globalThis.__cioBridgeDrainFrameRequests = () => JSON.stringify(frameRequests.splice(0, 8))
+  globals.__cioBridgeDrainFrameRequests = () => JSON.stringify(frameRequests.splice(0, 8))
 
   /** Main opens, writes to, and closes native messaging ports through this. */
-  globalThis.__cioBridgeDrainNativeRequests = () => JSON.stringify(nativeRequests.splice(0, 16))
+  globals.__cioBridgeDrainNativeRequests = () => JSON.stringify(nativeRequests.splice(0, 16))
 
   /** Main applies the worker's `chrome.downloads` calls through this. */
-  globalThis.__cioBridgeDrainDownloadRequests = () => JSON.stringify(downloadRequests.splice(0, 16))
+  globals.__cioBridgeDrainDownloadRequests = () => JSON.stringify(downloadRequests.splice(0, 16))
 
   /** Main reads the session's cookie jar for these through this. */
-  globalThis.__cioBridgeDrainCookieRequests = () => JSON.stringify(cookieRequests.splice(0, 16))
+  globals.__cioBridgeDrainCookieRequests = () => JSON.stringify(cookieRequests.splice(0, 16))
 
   /** Main opens the extension pages the worker asked for through this. */
-  globalThis.__cioBridgeDrainPageRequests = () => JSON.stringify(pageRequests.splice(0, 8))
+  globals.__cioBridgeDrainPageRequests = () => JSON.stringify(pageRequests.splice(0, 8))
 
   /** Main reads the worker's mailbox through this. */
-  globalThis.__cioBridgeDrain = () =>
-    new Promise((resolve) => {
+  globals.__cioBridgeDrain = () =>
+    new Promise<string>((resolve) => {
       let settled = false
-      const finish = (value) => {
+      const finish = (value: unknown) => {
         if (settled) return
         settled = true
         try {
@@ -214,10 +324,10 @@
    * gets code into a file the extension's own copy can register: a worker cannot
    * write a file, so it asks the app and waits for the answer.
    */
-  globalThis.__cioBridgeDrainWrites = () =>
-    new Promise((resolve) => {
+  globals.__cioBridgeDrainWrites = () =>
+    new Promise<string>((resolve) => {
       let settled = false
-      const finish = (value) => {
+      const finish = (value: unknown) => {
         if (settled) return
         settled = true
         try {
@@ -260,12 +370,12 @@
    * missing entries, which is why it lives in the page rather than the worker: the
    * page is alive whenever the app's bridge is, even when the worker is asleep.
    */
-  globalThis.__cioBridgeReassert = () =>
-    new Promise((resolve) => {
+  globals.__cioBridgeReassert = () =>
+    new Promise<string>((resolve) => {
       const scripting = chromeApi.scripting
       // The registry lives in `local` (it has to outlive a worker restart), while
       // the mailbox lives in `session`, so this reads the registry's own area.
-      const registryArea = () => {
+      const registryArea = (): StorageArea | null => {
         try {
           if (chromeApi.storage && chromeApi.storage.local) return chromeApi.storage.local
           if (chromeApi.storage && chromeApi.storage.session) return chromeApi.storage.session
@@ -279,11 +389,14 @@
         resolve('unavailable')
         return
       }
-      const finish = (value) => resolve(value)
+      const finish = (value: string) => resolve(value)
       ;(async () => {
         try {
           const bag = await store.get('__cioUserScripts')
-          const entries = bag && Array.isArray(bag.__cioUserScripts) ? bag.__cioUserScripts : []
+          const entries =
+            bag && Array.isArray(bag.__cioUserScripts)
+              ? (bag.__cioUserScripts as StoredUserScript[])
+              : []
           if (entries.length === 0) {
             finish('empty')
             return
@@ -291,7 +404,7 @@
           const present = await scripting.getRegisteredContentScripts()
           const known = new Set(present.map((entry) => entry && entry.id))
           const missing = entries.filter(
-            (entry) =>
+            (entry): entry is RestorableUserScript =>
               entry &&
               typeof entry.registrationId === 'string' &&
               typeof entry.file === 'string' &&
@@ -326,8 +439,8 @@
 
   /** Main writes the answer to a file request (or any other value) back through
    *  this, because the worker can only read, never be called. */
-  globalThis.__cioBridgeWrite = (key, value) =>
-    new Promise((resolve) => {
+  globals.__cioBridgeWrite = (key: string, value: unknown) =>
+    new Promise<boolean>((resolve) => {
       const area = mailboxArea()
       if (!area || typeof area.set !== 'function' || typeof key !== 'string' || !key) {
         resolve(false)

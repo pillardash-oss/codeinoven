@@ -11,7 +11,7 @@
  * extension's own id as the website the user is on.
  *
  * This module is the app's side of the repair: the snapshot main knows, and the one
- * line that puts it where the wrappers in `compat/cio-page-tabs.js` read it. The
+ * line that puts it where the wrappers in `compat/cio-page-tabs.ts` read it. The
  * binding itself is that file's, because it runs inside the page's own world   the
  * only world where an extension page's `chrome.tabs` exists   and this side only
  * says which tab the page is acting on, every time the answer changes.
@@ -20,11 +20,11 @@
  * acts on", for the measured behaviour this works around.
  */
 
-import pageTabsSource from './compat/cio-page-tabs.js?raw'
-import pagePermissionsSource from './compat/cio-page-permissions.js?raw'
-import pageRuntimeSource from './compat/cio-page-runtime.js?raw'
-import storageEventsSource from './compat/cio-storage-events.js?raw'
-import darkReaderStorageSource from './compat/cio-darkreader-storage.js?raw'
+import pageTabsSource from './compat/cio-page-tabs.ts?compat-source'
+import pagePermissionsSource from './compat/cio-page-permissions.ts?compat-source'
+import pageRuntimeSource from './compat/cio-page-runtime.ts?compat-source'
+import storageEventsSource from './compat/cio-storage-events.ts?compat-source'
+import darkReaderStorageSource from './compat/cio-darkreader-storage.ts?compat-source'
 
 /** Where a push leaves the tab, read by the page's wrappers on every call. */
 export const EXTENSION_PAGE_TAB_GLOBAL = '__cioPageTabsSnapshot'

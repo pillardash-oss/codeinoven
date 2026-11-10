@@ -5,7 +5,55 @@
  * with the same exact origin check Bitwarden uses for outgoing messages.
  */
 ;(() => {
-  const service = globalThis.bitwardenAutofillInit?.overlayNotificationsContentService
+  /** A message the page sends to the notification iframe; the shim reads its command. */
+  interface NotificationMessage {
+    command?: string
+  }
+
+  /** The initial notification message Bitwarden opens the iframe with. */
+  interface NotificationInit {
+    command: 'initNotificationBar'
+    initData: unknown
+    parentOrigin: string
+  }
+
+  /** The reload bookkeeping this shim keeps on Bitwarden's service object. */
+  interface NotificationFrames {
+    retries: number
+    expired: boolean
+  }
+
+  /** One notification frame and the updates waiting for its document to be ready. */
+  interface FrameEntry {
+    frame: HTMLIFrameElement
+    url: string
+    ready: boolean
+    pending: NotificationMessage[]
+    retries: number
+    timer: ReturnType<typeof setTimeout> | null
+  }
+
+  /** Bitwarden's notification content service, as this shim replaces parts of it. */
+  interface NotificationService {
+    __cioNotificationFrames: NotificationFrames
+    notificationBarIframeElement?: HTMLIFrameElement
+    extensionOrigin?: string
+    openNotificationBar(this: NotificationService, initData: unknown): unknown
+    sendMessageToNotificationBarIframe(
+      this: NotificationService,
+      message: NotificationMessage
+    ): unknown
+    closeNotificationBar(this: NotificationService, force: boolean): void
+    destroy?(this: NotificationService, ...args: unknown[]): unknown
+  }
+
+  type CompatGlobal = typeof globalThis & {
+    chrome?: { runtime?: { id?: string } }
+    bitwardenAutofillInit?: { overlayNotificationsContentService?: NotificationService }
+  }
+
+  const globals = globalThis as CompatGlobal
+  const service = globals.bitwardenAutofillInit?.overlayNotificationsContentService
   if (
     !service ||
     service.__cioNotificationFrames ||
@@ -16,7 +64,7 @@
     return
   }
 
-  const expectedOrigin = `chrome-extension://${globalThis.chrome?.runtime?.id}`
+  const expectedOrigin = `chrome-extension://${globals.chrome?.runtime?.id}`
   if (service.extensionOrigin !== expectedOrigin) return
 
   const open = service.openNotificationBar
@@ -26,21 +74,21 @@
   const pendingLimit = 32
   const readyTimeoutMs = 5_000
   const retryLimit = 2
-  let current = null
-  let latestInit = null
+  let current: FrameEntry | null = null
+  let latestInit: NotificationInit | null = null
   service.__cioNotificationFrames = { retries: 0, expired: false }
 
-  const release = () => {
+  const release = (): void => {
     if (current) {
-      clearTimeout(current.timer)
+      clearTimeout(current.timer!)
       current.pending.length = 0
     }
     current = null
     latestInit = null
   }
 
-  const waitForReady = (entry) => {
-    clearTimeout(entry.timer)
+  const waitForReady = (entry: FrameEntry): void => {
+    clearTimeout(entry.timer!)
     entry.timer = setTimeout(() => {
       if (current !== entry) return
       if (!entry.frame.isConnected || service.notificationBarIframeElement !== entry.frame) {
@@ -66,7 +114,7 @@
     }, readyTimeoutMs)
   }
 
-  const frameEntry = () => {
+  const frameEntry = (): FrameEntry | null => {
     const frame = service.notificationBarIframeElement
     if (!frame?.contentWindow) return null
     if (current?.frame === frame) return current
@@ -84,7 +132,7 @@
     return current
   }
 
-  service.openNotificationBar = function (initData) {
+  service.openNotificationBar = function (this: NotificationService, initData: unknown) {
     if (this.notificationBarIframeElement && !this.notificationBarIframeElement.isConnected) {
       this.closeNotificationBar(false)
     }
@@ -98,7 +146,10 @@
     return result
   }
 
-  service.sendMessageToNotificationBarIframe = function (message) {
+  service.sendMessageToNotificationBarIframe = function (
+    this: NotificationService,
+    message: NotificationMessage
+  ) {
     const entry = frameEntry()
     if (!entry) return
     const outgoing = message.command === 'initNotificationBar' ? (latestInit ?? message) : message
@@ -106,7 +157,7 @@
       try {
         // A reload can leave the same WindowProxy pointing at a new blank
         // document. That document is readable again from the site.
-        if (entry.frame.contentWindow.location.origin !== expectedOrigin) {
+        if (entry.frame.contentWindow!.location.origin !== expectedOrigin) {
           entry.ready = false
           waitForReady(entry)
         }
@@ -124,12 +175,12 @@
     }
   }
 
-  service.closeNotificationBar = function (...args) {
+  service.closeNotificationBar = function (this: NotificationService, ...args: [boolean]) {
     release()
     return close.apply(this, args)
   }
 
-  const onReady = (event) => {
+  const onReady = (event: MessageEvent<NotificationMessage>): void => {
     const entry = current
     if (
       !entry ||
@@ -140,7 +191,7 @@
     ) {
       return
     }
-    clearTimeout(entry.timer)
+    clearTimeout(entry.timer!)
     // Let Bitwarden's original handshake listener finish first. Its captured
     // initial data must not overwrite a newer open that arrived during loading.
     entry.timer = setTimeout(() => {
@@ -159,7 +210,7 @@
   globalThis.addEventListener('message', onReady)
   globalThis.addEventListener('pagehide', release)
   if (typeof destroy === 'function') {
-    service.destroy = function (...args) {
+    service.destroy = function (this: NotificationService, ...args: unknown[]) {
       release()
       globalThis.removeEventListener('message', onReady)
       globalThis.removeEventListener('pagehide', release)

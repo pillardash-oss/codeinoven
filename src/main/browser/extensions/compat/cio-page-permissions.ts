@@ -20,25 +20,82 @@
  */
 
 ;(() => {
-  const chromeApi = globalThis.chrome
+  /** The four manifest permission lists this shim reads. */
+  interface ExtensionManifest {
+    permissions?: string[]
+    optional_permissions?: string[]
+    host_permissions?: string[]
+    optional_host_permissions?: string[]
+  }
+
+  /** What a page hands `permissions.request`, `contains` or `remove`. */
+  interface PermissionRequestDetails {
+    permissions?: string[]
+    origins?: string[]
+  }
+
+  /** What `permissions.getAll` answers with. */
+  interface PermissionsSnapshot {
+    permissions: string[]
+    origins: string[]
+  }
+
+  /** The listener list an extension page expects on `onAdded` and `onRemoved`. */
+  interface PermissionsEvent {
+    addListener(): void
+    removeListener(): void
+    hasListener(): boolean
+    hasListeners(): boolean
+  }
+
+  /** The namespace this shim puts on the page, as the page calls it. */
+  interface ChromePermissionsNamespace {
+    contains?(
+      details: PermissionRequestDetails,
+      callback?: (granted: boolean) => void
+    ): Promise<boolean>
+    request?(
+      details: PermissionRequestDetails,
+      callback?: (granted: boolean) => void
+    ): Promise<boolean>
+    remove?(
+      details: PermissionRequestDetails,
+      callback?: (granted: boolean) => void
+    ): Promise<boolean>
+    getAll?(callback?: (snapshot: PermissionsSnapshot) => void): Promise<PermissionsSnapshot>
+    onAdded?: PermissionsEvent
+    onRemoved?: PermissionsEvent
+  }
+
+  interface ChromeRoot {
+    runtime?: { getManifest?(): ExtensionManifest }
+    permissions?: ChromePermissionsNamespace
+  }
+
+  type CompatGlobal = typeof globalThis & {
+    chrome?: ChromeRoot
+  }
+
+  const globals = globalThis as CompatGlobal
+  const chromeApi = globals.chrome
   if (!chromeApi || typeof chromeApi !== 'object') return
   if (!chromeApi.runtime) return
   const existing = chromeApi.permissions
   if (existing && typeof existing.request === 'function') return
 
-  const names = new Set()
-  const hosts = []
+  const names = new Set<string>()
+  const hosts: string[] = []
   try {
-    const manifest =
+    const manifest: ExtensionManifest =
       typeof chromeApi.runtime.getManifest === 'function'
         ? chromeApi.runtime.getManifest() || {}
         : {}
-    for (const key of ['permissions', 'optional_permissions']) {
+    for (const key of ['permissions', 'optional_permissions'] as const) {
       const list = manifest[key]
       if (!Array.isArray(list)) continue
       for (const entry of list) if (typeof entry === 'string' && entry) names.add(entry)
     }
-    for (const key of ['host_permissions', 'optional_host_permissions']) {
+    for (const key of ['host_permissions', 'optional_host_permissions'] as const) {
       const list = manifest[key]
       if (!Array.isArray(list)) continue
       for (const entry of list)
@@ -48,19 +105,19 @@
     // A manifest that cannot be read grants nothing, which is the honest answer.
   }
 
-  const evaluate = (details) => {
+  const evaluate = (details: PermissionRequestDetails): boolean => {
     const request = details && typeof details === 'object' ? details : {}
     const permissions = Array.isArray(request.permissions)
-      ? request.permissions.filter((entry) => typeof entry === 'string' && entry)
+      ? request.permissions.filter((entry: string) => typeof entry === 'string' && entry)
       : []
     const origins = Array.isArray(request.origins)
-      ? request.origins.filter((entry) => typeof entry === 'string' && entry)
+      ? request.origins.filter((entry: string) => typeof entry === 'string' && entry)
       : []
     if (permissions.every((name) => names.has(name)) === false) return false
     return origins.every((origin) => typeof origin === 'string' && origin.length > 0)
   }
 
-  const answer = (callback, result) => {
+  const answer = <T>(callback: ((value: T) => void) | undefined, result: T): Promise<T> => {
     if (typeof callback === 'function') {
       try {
         Promise.resolve().then(() => callback(result))
@@ -71,7 +128,7 @@
     return Promise.resolve(result)
   }
 
-  const stableEvent = {
+  const stableEvent: PermissionsEvent = {
     addListener() {},
     removeListener() {},
     hasListener() {
@@ -85,10 +142,14 @@
   try {
     Object.defineProperty(chromeApi, 'permissions', {
       value: {
-        contains: (details, callback) => answer(callback, evaluate(details)),
-        request: (details, callback) => answer(callback, evaluate(details)),
-        remove: (_details, callback) => answer(callback, false),
-        getAll: (callback) => answer(callback, { permissions: [...names], origins: hosts.slice() }),
+        contains: (details: PermissionRequestDetails, callback?: (granted: boolean) => void) =>
+          answer(callback, evaluate(details)),
+        request: (details: PermissionRequestDetails, callback?: (granted: boolean) => void) =>
+          answer(callback, evaluate(details)),
+        remove: (_details: PermissionRequestDetails, callback?: (granted: boolean) => void) =>
+          answer(callback, false),
+        getAll: (callback?: (snapshot: PermissionsSnapshot) => void) =>
+          answer(callback, { permissions: [...names], origins: hosts.slice() }),
         onAdded: stableEvent,
         onRemoved: stableEvent
       },

@@ -19,17 +19,33 @@
  */
 
 ;(() => {
-  const chromeApi = globalThis.chrome
+  /** The one member this shim replaces on a namespace root the page calls through. */
+  interface PageRuntime {
+    openOptionsPage?(callback?: () => void): Promise<void>
+  }
+
+  /** One namespace root the page reaches the runtime through. */
+  interface RuntimeRoot {
+    runtime?: PageRuntime
+  }
+
+  type CompatGlobal = typeof globalThis & {
+    chrome?: RuntimeRoot
+    browser?: RuntimeRoot
+  }
+
+  const globals = globalThis as CompatGlobal
+  const chromeApi = globals.chrome
   if (!chromeApi || typeof chromeApi !== 'object') return
   if (!chromeApi.runtime) return
 
-  const roots = []
-  for (const candidate of [chromeApi, globalThis.browser]) {
+  const roots: RuntimeRoot[] = []
+  for (const candidate of [chromeApi, globals.browser]) {
     if (candidate && typeof candidate === 'object' && !roots.includes(candidate))
       roots.push(candidate)
   }
 
-  const ask = () => {
+  const ask = (): void => {
     try {
       window.postMessage({ __cioPageCommand: 'open-options' }, '*')
     } catch {
@@ -45,7 +61,7 @@
       // answers it with nothing, and a button bound to a call that does nothing is
       // indistinguishable from a broken one.
       Object.defineProperty(runtime, 'openOptionsPage', {
-        value: (callback) => {
+        value: (callback?: () => void) => {
           ask()
           if (typeof callback === 'function') {
             try {
