@@ -622,9 +622,11 @@
         )}
         {@const segmentCheckpoint =
           board.pollStreamParts.transcriptIndex.checkpoint[turnStart] ?? null}
-        {#if shouldMountWorkingTrace(turnParts.length, segmentBusy)}
+        {#snippet segmentTrace()}
           <WorkingTrace
             parts={turnParts}
+            compact={groupThread}
+            bodyMaxHeightRem={groupThread ? 14 : undefined}
             open={isCurrentAssistantTurn || traceIsLive}
             busy={segmentBusy}
             done={segmentDone}
@@ -720,6 +722,28 @@
             onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
             onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
           />
+        {/snippet}
+        {#if shouldMountWorkingTrace(turnParts.length, segmentBusy)}
+          {#if groupThread}
+            <!-- A group reply's work belongs to the speaker it came from: it opens
+                 with that name and wears no model, harness or Oven chips, so the
+                 conversation reads as people taking turns rather than as a run
+                 report. -->
+            {@const traceSpeaker = groupSpeakerFor(traceMsg)}
+            {#if traceSpeaker}
+              <GroupReplyBubble
+                name={traceSpeaker.name}
+                icon={traceSpeaker.icon}
+                color={traceSpeaker.color}
+              >
+                {@render segmentTrace()}
+              </GroupReplyBubble>
+            {:else}
+              {@render segmentTrace()}
+            {/if}
+          {:else}
+            {@render segmentTrace()}
+          {/if}
         {/if}
       {/snippet}
       {#each board.composerScope.visibleMessages as msg, msgIndex (msg.id)}
@@ -849,7 +873,7 @@
               {:else}
                 {@const previousTurnAudit = board.editVideoNote.getPreviousTurnAudit(absIndex)}
                 {@const explicitPresentation = explicitMessagePresentation(msg)}
-                {#if previousTurnAudit}
+                {#if previousTurnAudit && !groupThread}
                   <div class="mb-1 flex items-center gap-1.5 self-end text-[0.625rem] text-dimmed">
                     <span>Previous turn completed</span>
                     <span>·</span>
@@ -1433,112 +1457,114 @@
                             <CioDownload size={12} />
                           </button>
                         </div>
-                        <div
-                          class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
-                        >
-                          <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
-                            <AgentIcon
-                              agentId={resolveMessageHarnessId(
+                        {#if !groupThread}
+                          <div
+                            class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                          >
+                            <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
+                              <AgentIcon
+                                agentId={resolveMessageHarnessId(
+                                  msg,
+                                  board.unmirroredTraceStartTime.messageHarnessFallback
+                                )}
+                                size={14}
+                              />
+                              {messageHarnessName(
                                 msg,
                                 board.unmirroredTraceStartTime.messageHarnessFallback
                               )}
-                              size={14}
-                            />
-                            {messageHarnessName(
-                              msg,
-                              board.unmirroredTraceStartTime.messageHarnessFallback
-                            )}
-                          </span>
-                          {#if modelLabel}
-                            <span class="text-[0.625rem] text-dimmed">·</span>
-                            <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
-                              <VendorIcon
-                                name={provider?.name ?? modelLabel}
-                                id={provider?.id}
-                                size={12}
-                              />
-                              {modelLabel}
-                              {#if fastVariant}
-                                <CioZap
-                                  size={10}
-                                  class="text-accent"
-                                  fill="currentColor"
-                                  aria-label="Fast inference"
-                                  title={`Fast inference   ~${fastVariant.multiplier}× usage`}
-                                />
-                              {/if}
                             </span>
-                            {#if msgThinking}
+                            {#if modelLabel}
+                              <span class="text-[0.625rem] text-dimmed">·</span>
+                              <span class="flex items-center gap-1 text-[0.625rem] text-dimmed">
+                                <VendorIcon
+                                  name={provider?.name ?? modelLabel}
+                                  id={provider?.id}
+                                  size={12}
+                                />
+                                {modelLabel}
+                                {#if fastVariant}
+                                  <CioZap
+                                    size={10}
+                                    class="text-accent"
+                                    fill="currentColor"
+                                    aria-label="Fast inference"
+                                    title={`Fast inference   ~${fastVariant.multiplier}× usage`}
+                                  />
+                                {/if}
+                              </span>
+                              {#if msgThinking}
+                                <span
+                                  class={`${CONVERSATION_METADATA_BADGE_CLASS} capitalize`}
+                                  title={`Thinking level: ${msgThinking}`}
+                                  aria-label={`Thinking level: ${msgThinking}`}
+                                >
+                                  <board.state.ThinkingMetadataIcon size={9} />
+                                  {msgThinking}
+                                </span>
+                              {/if}
+                            {/if}
+                            {#if msg.accountId || msg.accountLabel}
                               <span
-                                class={`${CONVERSATION_METADATA_BADGE_CLASS} capitalize`}
-                                title={`Thinking level: ${msgThinking}`}
-                                aria-label={`Thinking level: ${msgThinking}`}
+                                class={CONVERSATION_METADATA_BADGE_CLASS}
+                                title={`Account: ${msg.accountLabel ?? 'Default'}`}
+                                aria-label={`Account: ${msg.accountLabel ?? 'Default'}`}
                               >
-                                <board.state.ThinkingMetadataIcon size={9} />
-                                {msgThinking}
+                                <board.state.AccountMetadataIcon size={10} />
+                                {#if msg.accountLabel && msg.accountLabel !== 'Default'}{msg.accountLabel}{/if}
                               </span>
                             {/if}
-                          {/if}
-                          {#if msg.accountId || msg.accountLabel}
                             <span
                               class={CONVERSATION_METADATA_BADGE_CLASS}
-                              title={`Account: ${msg.accountLabel ?? 'Default'}`}
-                              aria-label={`Account: ${msg.accountLabel ?? 'Default'}`}
+                              title={`Oven: ${msgOvenLabel}`}
+                              aria-label={`Oven: ${msgOvenLabel}`}
                             >
-                              <board.state.AccountMetadataIcon size={10} />
-                              {#if msg.accountLabel && msg.accountLabel !== 'Default'}{msg.accountLabel}{/if}
+                              {#if msgOvenIsLocal}
+                                <board.state.LocalMetadataIcon size={10} class="shrink-0" />
+                              {:else}
+                                <img
+                                  class="h-3 w-3 shrink-0"
+                                  alt=""
+                                  src={msgOvenAppearance.customSvg
+                                    ? getCustomSvgDataUrl(
+                                        msgOvenAppearance.customSvg,
+                                        msgOvenAppearance.color
+                                      )
+                                    : getIconSvgDataUrl(
+                                        msgOvenAppearance.icon,
+                                        msgOvenAppearance.color
+                                      )}
+                                />
+                              {/if}
+                              {msgOvenLabel}
                             </span>
-                          {/if}
-                          <span
-                            class={CONVERSATION_METADATA_BADGE_CLASS}
-                            title={`Oven: ${msgOvenLabel}`}
-                            aria-label={`Oven: ${msgOvenLabel}`}
-                          >
-                            {#if msgOvenIsLocal}
-                              <board.state.LocalMetadataIcon size={10} class="shrink-0" />
-                            {:else}
-                              <img
-                                class="h-3 w-3 shrink-0"
-                                alt=""
-                                src={msgOvenAppearance.customSvg
-                                  ? getCustomSvgDataUrl(
-                                      msgOvenAppearance.customSvg,
-                                      msgOvenAppearance.color
-                                    )
-                                  : getIconSvgDataUrl(
-                                      msgOvenAppearance.icon,
-                                      msgOvenAppearance.color
-                                    )}
-                              />
+                            <MessageTimestamp
+                              at={msg.completedAt ?? msg.createdAt}
+                              prefix="· "
+                              class="text-[0.625rem] text-dimmed"
+                            />
+                            {#if turnDuration !== null}
+                              <span class="text-[0.625rem] text-dimmed tabular-nums"
+                                >· {formatDurationMs(turnDuration)}</span
+                              >
+                            {:else if msg.completedAt && msg.createdAt}
+                              <span class="text-[0.625rem] text-dimmed tabular-nums"
+                                >· {formatDurationMs(msg.completedAt - msg.createdAt)}</span
+                              >
                             {/if}
-                            {msgOvenLabel}
-                          </span>
-                          <MessageTimestamp
-                            at={msg.completedAt ?? msg.createdAt}
-                            prefix="· "
-                            class="text-[0.625rem] text-dimmed"
-                          />
-                          {#if turnDuration !== null}
-                            <span class="text-[0.625rem] text-dimmed tabular-nums"
-                              >· {formatDurationMs(turnDuration)}</span
-                            >
-                          {:else if msg.completedAt && msg.createdAt}
-                            <span class="text-[0.625rem] text-dimmed tabular-nums"
-                              >· {formatDurationMs(msg.completedAt - msg.createdAt)}</span
-                            >
-                          {/if}
-                          {#if messageTokenRate( msg, { finalizedTokenRates: board.unmirroredTraceStartTime.finalizedTokenRates, liveTokenRate: board.handleAgentEvent.liveTokenRate } ) !== null}
-                            {@const rate =
-                              messageTokenRate(msg, {
-                                finalizedTokenRates:
-                                  board.unmirroredTraceStartTime.finalizedTokenRates,
-                                liveTokenRate: board.handleAgentEvent.liveTokenRate
-                              }) ?? 0}
-                            <span class="text-[0.625rem] text-dimmed tabular-nums">
-                              · {formatTokenRate(rate)}</span
-                            >
-                          {/if}
-                        </div>
+                            {#if messageTokenRate( msg, { finalizedTokenRates: board.unmirroredTraceStartTime.finalizedTokenRates, liveTokenRate: board.handleAgentEvent.liveTokenRate } ) !== null}
+                              {@const rate =
+                                messageTokenRate(msg, {
+                                  finalizedTokenRates:
+                                    board.unmirroredTraceStartTime.finalizedTokenRates,
+                                  liveTokenRate: board.handleAgentEvent.liveTokenRate
+                                }) ?? 0}
+                              <span class="text-[0.625rem] text-dimmed tabular-nums">
+                                · {formatTokenRate(rate)}</span
+                              >
+                            {/if}
+                          </div>
+                        {/if}
                       </div>
                     </div>
                   {/if}
