@@ -167,12 +167,14 @@
             null))
       fileName = initial?.fileName ?? preferred ?? DEFAULT_ENV_FILE_NAME
       await resetDocument(initial)
-      await focusPendingKey()
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not read this path’s env files'
     } finally {
       loading = false
     }
+    // Until this flag clears the panel still renders its reading state, so the rows
+    // a link points at do not exist yet; the key is brought into view only now.
+    if (!error) await focusPendingKey()
   }
 
   /**
@@ -190,11 +192,13 @@
     const row = rows.find((candidate) => candidate.name === name)
     if (!row) return
     const field = document.getElementById(`env-key-value-${row.id}`)
-    field?.scrollIntoView({ block: 'center' })
     if (field instanceof HTMLInputElement) {
-      field.focus()
+      // Focusing first would let the browser pick the scroll offset itself, so the
+      // caret lands in the field and the field is then centred in its scroller.
+      field.focus({ preventScroll: true })
       field.select()
     }
+    field?.scrollIntoView({ block: 'center' })
     highlightRowId = row.id
     window.setTimeout(() => {
       if (highlightRowId === row.id) highlightRowId = null
