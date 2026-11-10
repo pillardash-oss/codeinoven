@@ -413,6 +413,16 @@ export class ChatEngine {
 
   // 30 minutes
 
+  /** Total harness silence after which "it is still working" stops being a
+   *  reason to wait. A driver that reports itself busy keeps the turn alive for
+   *  as long as it keeps reporting *something*, but a half-open provider stream
+   *  leaves it busy with no output at all, and without this ceiling the watchdog
+   *  re-arms its grace window forever and parks the thread invisibly for hours.
+   *  Past the ceiling the silence is surfaced as a retryable failure instead. */
+  static readonly SILENT_STALL_CEILING_MS = 60 * 60 * 1000
+
+  // 60 minutes
+
   /**
    * How long the answer path waits for a session to finish its idle
    * finalization before resuming it with the user's decision.

@@ -128,6 +128,11 @@ export interface SessionInfo {
   rejectedChangeSources?: Map<string, Set<string>>
   /** Paths claimed by precise file-mutating tools this turn, path → last claimed ms. */
   preciseChangedPaths?: Map<string, number>
+  /** Wall-clock ms of the last non-lifecycle harness event for this session.
+   *  The silence watchdog bounds every "it is still working" exemption with
+   *  it: a harness that stops reporting while it still claims to be busy is
+   *  stale work, never proof of life, however long it stays registered. */
+  lastWorkEventAt?: number
   /** Shell-like tool part ids currently in flight for the active turn. */
   openUnboundedTools?: Set<string>
   unboundedWindowToolIds?: Set<string>

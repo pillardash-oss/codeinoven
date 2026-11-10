@@ -846,6 +846,11 @@ export class ChatEngineTurnsSessions {
   markSessionWorking(sessionId: string): void {
     const changed = this.host.sessionStatuses.get(sessionId)?.state !== 'working'
     this.host.handledIdleSessions.delete(sessionId)
+    // A dispatched turn starts a fresh silence clock: without this a session
+    // that emits nothing at all would be measured against the previous turn's
+    // last event and read as stalled the moment the watchdog first fired.
+    const info = this.host.sessionRegistry.get(sessionId)
+    if (info) info.lastWorkEventAt = Date.now()
     if (changed) {
       this.host.sessionStatuses.set(sessionId, { state: 'working' })
       this.host.broadcast({
@@ -1342,23 +1347,48 @@ export class ChatEngineTurnsSessions {
   }
 
   /**
+   * Milliseconds this session has gone without a harness event.
+   *
+   * Anchored on the newest event the session reported, and on first use for a
+   * session that has never reported one, so a stall is always measured from a
+   * real moment instead of from process start.
+   */
+  silentStallElapsedMs(info: SessionInfo): number {
+    const now = Date.now()
+    if (info.lastWorkEventAt === undefined) {
+      info.lastWorkEventAt = now
+      return 0
+    }
+    return Math.max(0, now - info.lastWorkEventAt)
+  }
+
+  /**
    * Called when the watchdog fires   the session has been silent for one check window.
    * When the session is demonstrably still working (an in-flight shell tool or
    * a running sub-agent), the silence is legitimate and the window is extended
    * instead of aborting. Otherwise we try to fetch the conversation history
    * from the agent to surface the actual error (rate-limit, credit exhaustion,
    * provider deprecated, etc.) before cleaning up.
+   *
+   * Every "it is still working" exemption is bounded by
+   * {@link ChatEngine.SILENT_STALL_CEILING_MS}. In-flight tool bookkeeping and
+   * a driver that still calls itself busy both survive the event that would
+   * have closed them, so on their own they would let a half-open provider
+   * stream park a thread for as long as the app stays open.
    */
   async fireSessionWatchdog(sessionId: string): Promise<void> {
     this.host.state.sessionWatchdogs.delete(sessionId)
     const info = this.host.sessionRegistry.get(sessionId)
     if (!info) return
 
+    const silentMs = this.silentStallElapsedMs(info)
+    const stalled = silentMs >= ChatEngine.SILENT_STALL_CEILING_MS
+
     // A genuinely-working-but-silent session must never be aborted: a long CLI
     // action can legitimately produce no events for far longer than the
     // activity window. Extend the window (re-evaluating when it fires again) so
     // live work survives; only silence with no in-flight work is treated as dead.
-    if (this.host.units['misc'].hasInFlightWork(sessionId, info)) {
+    if (!stalled && this.host.units['misc'].hasInFlightWork(sessionId, info)) {
       Logger.info('Session silent but demonstrably working   extending watchdog', {
         sessionId,
         projectId: info.projectId,
@@ -1378,6 +1408,13 @@ export class ChatEngineTurnsSessions {
       // user has not settled is the same bargain from the other side: the turn
       // is waiting on a human, so the card's own timer ends the wait.
       const waitingOnUser = this.sessionAwaitsUserInput(sessionId)
+      if (stalled && !waitingOnUser) {
+        // Nothing left to wait for: the exemption that kept this turn alive has
+        // outlived the ceiling, so holding it any longer would park the thread
+        // silently. Surface the stall as a retryable failure the user can see.
+        await this.failStalledSession(info, sessionId, silentMs)
+        return
+      }
       Logger.info(
         waitingOnUser
           ? 'Session is waiting on the user   extending watchdog'
@@ -1402,6 +1439,7 @@ export class ChatEngineTurnsSessions {
       info.accountId
     )
     if (
+      !stalled &&
       watchdogDriver?.hasActiveTurn &&
       watchdogDriver.hasActiveTurn(sessionId) &&
       watchdogDriver.isSessionBusy &&
@@ -1487,6 +1525,30 @@ export class ChatEngineTurnsSessions {
     } catch {
       /* abort is best-effort */
     }
+  }
+
+  /**
+   * Surface a turn the watchdog gave up waiting on: the harness still claims to
+   * be busy, but it has reported nothing for longer than the stall ceiling, so
+   * the exemption that was keeping the turn alive no longer has anything behind
+   * it. Routed through {@link failWatchedSession} so the user gets the same
+   * visible, retryable failure a dead harness produces rather than a thread
+   * that looks busy and never moves again.
+   */
+  async failStalledSession(info: SessionInfo, sessionId: string, silentMs: number): Promise<void> {
+    const minutes = Math.max(1, Math.round(silentMs / 60_000))
+    Logger.info('Session silent past the stall ceiling   surfacing the parked turn', {
+      sessionId,
+      projectId: info.projectId,
+      threadId: info.threadId,
+      silentMinutes: minutes
+    })
+    await this.failWatchedSession(info, sessionId, {
+      kind: 'network',
+      message: `The ${info.driverId} session reported itself busy but produced no output for ${minutes} minutes. The turn was stopped instead of staying parked; retry to continue.`,
+      harnessId: info.driverId,
+      retryable: true
+    })
   }
 
   // ─── Completion waiter   used by ephemeral sessions ─────────────────────
