@@ -49,11 +49,7 @@ import {
   type Thread,
   type ThreadSearchResult
 } from '$shared/types'
-import {
-  buildPaletteContextActions,
-  navigationActions,
-  openSettingsAction
-} from '../app-palette-actions'
+import { buildPaletteContextActions, navigationActions } from '../app-palette-actions'
 import { ThreadSearchPaletteController } from '../app-thread-search.svelte'
 import { BrowserTabPaletteController } from '../app-browser-tab-search.svelte'
 import { ProjectSwitchPaletteController } from '../app-project-switch.svelte'
@@ -121,11 +117,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
    * (thinking level, permissions, compaction) belong to the inline composer
    * menus they are part of, so the global surface never mirrors them.
    */
-  paletteActions = $derived([
-    ...this.paletteContextActions,
-    ...navigationActions,
-    openSettingsAction
-  ])
+  paletteActions = $derived([...this.paletteContextActions, ...navigationActions])
 
   /** The screen on top. A nested screen outranks the actions list, because
    *  picking one closes the actions list in the same flush. */
