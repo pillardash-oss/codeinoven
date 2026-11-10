@@ -69,6 +69,16 @@ export interface ProjectEnvEntry {
   missing?: boolean
 }
 
+/** What writing a managed file into the project changed. */
+export interface ProjectEnvWriteResult {
+  /** Project-relative path that was written. */
+  path: string
+  /** Where the previous content was kept, when there was any. */
+  backupPath?: string
+  /** False when the file already held exactly these references. */
+  changed: boolean
+}
+
 /** One managed ENV file: a directory group plus a file name. */
 export interface ProjectEnvFile {
   /** Project-relative directory, '' for the project root. */
@@ -79,6 +89,8 @@ export interface ProjectEnvFile {
   updatedAt: number
   /** Project-relative path the values were imported from, when they were. */
   importedFrom?: string
+  /** Project-relative path this file was last written to in the repository. */
+  writtenTo?: string
 }
 
 /** What a launch will inject, described without any value. */

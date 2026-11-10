@@ -275,6 +275,58 @@ describe('ProjectEnvService typed body', () => {
   })
 })
 
+describe('ProjectEnvService writing the file into the project', () => {
+  it('writes references, keeps the previous content, and is idempotent', async () => {
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env',
+      name: 'DATABASE_URL',
+      value: 'postgres://inside'
+    })
+    const target = join(projectRoot, 'packages', 'api', '.env')
+    await writeFile(target, 'DATABASE_URL=postgres://old\n', 'utf8')
+
+    const written = await service.writeEnvFileToProject({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+
+    expect(written).toEqual({
+      path: 'packages/api/.env',
+      changed: true,
+      backupPath: 'packages/api/.env.cio-backup'
+    })
+    const content = await readFile(target, 'utf8')
+    expect(content).toMatch(/^DATABASE_URL=cio:\/\/secret_/mu)
+    expect(content).not.toContain('postgres://old')
+    expect(await readFile(`${target}.cio-backup`, 'utf8')).toBe('DATABASE_URL=postgres://old\n')
+    expect((await stat(target)).mode & 0o777).toBe(0o600)
+
+    expect(await readFile(target, 'utf8')).toBe(content)
+    const again = await service.writeEnvFileToProject({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      fileName: '.env'
+    })
+    expect(again.changed).toBe(false)
+    expect(again.backupPath).toBeUndefined()
+  })
+
+  it('refuses to write a file with no keys', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    await expect(
+      service.writeEnvFileToProject({ projectId: PROJECT_ID, group: '', fileName: '.env' })
+    ).rejects.toThrow(/Add a key/u)
+  })
+})
+
 describe('ProjectEnvService import', () => {
   it('previews without writing, then rewrites the file and keeps a private backup', async () => {
     await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', fileName: '.env' })

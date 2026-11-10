@@ -138,6 +138,9 @@ export function registerProjectEnvIpc(service: ProjectEnvService): void {
   ipcMain.handle('secrets:envApplyText', (_, request: unknown) =>
     service.applyEnvText(applyTextRequest(request))
   )
+  ipcMain.handle('secrets:envWriteToProject', (_, request: unknown) =>
+    service.writeEnvFileToProject(fileRequest(request))
+  )
   ipcMain.handle('secrets:envDeleteFile', (_, request: unknown) =>
     service.deleteProjectEnvFile(fileRequest(request))
   )

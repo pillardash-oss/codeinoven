@@ -10,7 +10,8 @@ import {
   type ProjectEnvFile,
   type ProjectEnvImportResult,
   type ProjectEnvLaunchPreview,
-  type ProjectEnvLaunchPreviewEntry
+  type ProjectEnvLaunchPreviewEntry,
+  type ProjectEnvWriteResult
 } from '../../lib/project-env'
 import { validateProcessEnvironmentVariable } from '../../lib/secret-names'
 import { Logger } from '../system/logger'
@@ -226,6 +227,55 @@ export class ProjectEnvService {
       removed: removedEntries.map((entry) => entry.name),
       skipped
     }
+  }
+
+  /**
+   * Write one managed file into the project as references.
+   *
+   * The repository then holds `NAME=cio://<ref>` lines, so the file names every
+   * value the app injects without carrying one, and a tool run outside the app
+   * fails on the reference instead of silently using a stale plaintext value. Any
+   * previous content is kept owner-only beside it before the rewrite.
+   */
+  async writeEnvFileToProject(input: EnvFileKeyInput): Promise<ProjectEnvWriteResult> {
+    const projectRoot = await this.requireProjectPath(input.projectId)
+    const group = normalizeGroup(input.group)
+    const fileName = validateEnvFileName(input.fileName)
+    const files = await this.dependencies.store.readProject(input.projectId)
+    const file = requireFile(files, group, fileName)
+    if (file.entries.length === 0) throw new Error('Add a key before writing this file')
+
+    const relativePath = group ? `${group}/${fileName}` : fileName
+    const absolute = resolveProjectFile(projectRoot, relativePath)
+    const content = `${file.entries
+      .map((entry) => `${entry.name}=${projectEnvReference(entry.secretRef)}`)
+      .join('\n')}\n`
+    const existing = await readFile(absolute, 'utf8').catch(() => null)
+    if (existing === content) {
+      await this.recordWrittenTo(input, files, file, relativePath)
+      return { path: relativePath, changed: false }
+    }
+
+    if (existing !== null) await writePrivateFile(`${absolute}.cio-backup`, existing)
+    await writePrivateFile(absolute, content)
+    await this.recordWrittenTo(input, files, file, relativePath)
+    return {
+      path: relativePath,
+      changed: true,
+      ...(existing !== null ? { backupPath: `${relativePath}.cio-backup` } : {})
+    }
+  }
+
+  private async recordWrittenTo(
+    input: EnvFileKeyInput,
+    files: StoredProjectEnvFile[],
+    file: StoredProjectEnvFile,
+    relativePath: string
+  ): Promise<void> {
+    if (file.writtenTo === relativePath) return
+    file.writtenTo = relativePath
+    file.updatedAt = Date.now()
+    await this.dependencies.store.writeProject(input.projectId, files)
   }
 
   async createProjectEnvFile(input: EnvFileKeyInput): Promise<ProjectEnvFile[]> {
@@ -492,7 +542,8 @@ export class ProjectEnvService {
       entries: await Promise.all(
         sortEntries(file.entries).map((entry) => this.describeEntry(entry))
       ),
-      ...(file.importedFrom ? { importedFrom: file.importedFrom } : {})
+      ...(file.importedFrom ? { importedFrom: file.importedFrom } : {}),
+      ...(file.writtenTo ? { writtenTo: file.writtenTo } : {})
     }
   }
 

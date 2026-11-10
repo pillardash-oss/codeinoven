@@ -11,7 +11,8 @@ import type {
   ProjectEnvPreviewRequest,
   ProjectEnvThreadEntryRequest,
   ProjectEnvThreadValueRequest,
-  ProjectEnvValueRequest
+  ProjectEnvValueRequest,
+  ProjectEnvWriteResult
 } from '../project-env'
 import type { Contract } from './contract-helpers'
 
@@ -42,6 +43,11 @@ export const invokeSecretsContract = {
   'secrets:envRemoveThreadEntry': {} as Contract<
     [request: ProjectEnvThreadEntryRequest],
     ProjectEnvEntry[]
+  >,
+  /** Write one managed file into the project as `NAME=cio://<ref>` lines. */
+  'secrets:envWriteToProject': {} as Contract<
+    [request: ProjectEnvFileRequest],
+    ProjectEnvWriteResult
   >,
   /** What a launch at this directory would inject, described without values. */
   'secrets:envPreview': {} as Contract<

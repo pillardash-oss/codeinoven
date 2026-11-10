@@ -15,6 +15,7 @@ export interface StoredProjectEnvFile {
   entries: StoredProjectEnvEntry[]
   updatedAt: number
   importedFrom?: string
+  writtenTo?: string
 }
 
 interface ProjectEnvDocument {
@@ -65,6 +66,9 @@ export class ProjectEnvStore {
           entries: entries.flatMap((entry) => sanitizeEntry(entry)),
           ...(typeof file['importedFrom'] === 'string' && file['importedFrom']
             ? { importedFrom: file['importedFrom'] }
+            : {}),
+          ...(typeof file['writtenTo'] === 'string' && file['writtenTo']
+            ? { writtenTo: file['writtenTo'] }
             : {})
         }
       ]
