@@ -1,5 +1,5 @@
 <script lang="ts">
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioMonogram from '$lib/components/icons/cio/CioMonogram.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import type { Assistant } from '$shared/types'
@@ -13,10 +13,11 @@
    * rather than an item, and it is centred so the orchestrator reads as the door
    * the list stands under.
    *
-   * It wears the assistant mark itself   the face, not one of the job variants
-   *   because Don is the assistant, and the mark is what makes that true at a
-   * glance. The tile is never draggable and never carries a menu that could
-   * rename, delete or repin it.
+   * It wears the app's own monogram on the brand plate, the black ground and ink
+   * of the app icon, in both themes: Don is the app's front door, so its tile is
+   * the app's own treatment rather than an assistant's accent, and it reads the
+   * same at night as it does by day. The plate is never draggable and never
+   * carries a menu that could rename, delete or repin it.
    */
   interface Props {
     assistant: Assistant | null
@@ -39,7 +40,6 @@
   let { assistant, threadId, selected, iconUrl = null, ready, unread, onOpen }: Props = $props()
 
   const name = $derived(assistant?.name?.trim() || 'Don')
-  const accent = $derived(assistant?.color ?? 'var(--color-foreground)')
   const title = $derived(
     ready ? `Open ${name}, your orchestrator` : `${name} needs a model before it can take work`
   )
@@ -56,14 +56,14 @@
     onclick={onOpen}
   >
     <span
-      class="flex size-24 items-center justify-center border transition-colors {selected
-        ? 'border-primary bg-elevated'
-        : 'border-border bg-surface group-hover:border-border-strong group-hover:bg-elevated'}"
+      class="flex size-24 items-center justify-center bg-brand-plate transition-shadow {selected
+        ? 'ring-2 ring-accent'
+        : 'ring-1 ring-border group-hover:ring-border-strong'}"
     >
       {#if iconUrl}
         <img src={iconUrl} alt="" aria-hidden="true" class="size-14 object-contain" />
       {:else}
-        <AssistantIcon mark="mark" size={56} style="color: {accent}" />
+        <CioMonogram size={56} class="text-brand-ink" />
       {/if}
     </span>
     <span class="flex items-center gap-1 text-sm font-medium text-foreground">
