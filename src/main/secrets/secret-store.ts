@@ -8,10 +8,8 @@ import {
   VaultRecordMissingError,
   VaultUnavailableError
 } from './secret-errors'
-import { describeSecretRef, generatedSecretRef } from './secret-refs'
-import type { SecretScope } from '../../lib/secrets'
+import { generatedSecretRef, type SecretScope } from './secret-refs'
 import { describeSecretWriter, type SecretWriterIdentity } from './secret-writer'
-import type { SecretStorageAvailability, SecretStorageUnavailableReason } from '../../lib/secrets'
 import type { StorageEngine } from '../storage/storage-engine'
 
 /** What a caller knows about the value it is storing, kept beside the ciphertext. */
@@ -34,17 +32,6 @@ interface EncryptedSecretRecord {
   label?: string
 }
 
-/** One stored value as the inventory reads it: never the plaintext. */
-export interface StoredSecretSummary {
-  ref: string
-  createdAt: number
-  updatedAt: number
-  scope: SecretScope
-  ownerId?: string
-  label?: string
-  writer?: SecretWriterIdentity
-}
-
 type EncryptedSecretStore = Record<string, EncryptedSecretRecord>
 
 const STORE_PATH = 'secrets/vault.json'
@@ -58,7 +45,6 @@ const vaultWriteTails = new WeakMap<StorageEngine, Promise<unknown>>()
  * availability as a plain boolean through the synchronous `isAvailable()`.
  */
 let encryptionAvailable = false
-let encryptionUnavailableReason: SecretStorageUnavailableReason = 'unavailable'
 
 /**
  * Whether the OS can encrypt a value for this launch.
@@ -78,41 +64,33 @@ let encryptionUnavailableReason: SecretStorageUnavailableReason = 'unavailable'
  */
 async function probeEncryption(): Promise<boolean> {
   if (skipsOsKeyring()) {
-    setUnavailable('unattended-launch')
+    setUnavailable()
     return false
   }
   try {
     if (!(await safeStorage.isAsyncEncryptionAvailable())) {
-      setUnavailable('unavailable')
+      setUnavailable()
       return false
     }
     if (process.platform === 'linux' && safeStorage.getSelectedStorageBackend() === 'basic_text') {
-      setUnavailable('plaintext-backend')
+      setUnavailable()
       return false
     }
     encryptionAvailable = true
   } catch (error: unknown) {
     Logger.error('Secure credential storage availability could not be detected:', error)
-    setUnavailable('probe-failed')
+    setUnavailable()
   }
   return encryptionAvailable
 }
 
-function setUnavailable(reason: SecretStorageUnavailableReason): void {
+function setUnavailable(): void {
   encryptionAvailable = false
-  encryptionUnavailableReason = reason
 }
 
 /** Cached keyring availability, safe to read synchronously. */
 export function isSecretEncryptionAvailable(): boolean {
   return encryptionAvailable
-}
-
-/** Why encryption is unavailable, for the page that has to explain it. */
-export function secretStorageAvailability(): SecretStorageAvailability {
-  return encryptionAvailable
-    ? { available: true }
-    : { available: false, reason: encryptionUnavailableReason }
 }
 
 /**
@@ -138,11 +116,6 @@ export class SecretStore {
   /** Cached keyring availability, safe to read synchronously. */
   isAvailable(): boolean {
     return encryptionAvailable
-  }
-
-  /** Availability plus the reason it is unavailable, for the settings page. */
-  availability(): SecretStorageAvailability {
-    return secretStorageAvailability()
   }
 
   async save(value: string, existingRef?: string, metadata?: SecretMetadata): Promise<string> {
@@ -218,25 +191,6 @@ export class SecretStore {
       if (!(ref in store)) return
       delete store[ref]
       await this.storage.write(STORE_PATH, store)
-    })
-  }
-
-  /** Every stored value, described without its plaintext. */
-  async list(): Promise<StoredSecretSummary[]> {
-    const store = await this.load()
-    return Object.entries(store).map(([ref, record]) => {
-      const identity = describeSecretRef(ref)
-      return {
-        ref,
-        createdAt: record.createdAt,
-        updatedAt: record.updatedAt,
-        scope: record.scope ?? identity.scope,
-        ...((record.ownerId ?? identity.ownerId)
-          ? { ownerId: record.ownerId ?? identity.ownerId }
-          : {}),
-        ...(record.label ? { label: record.label } : {}),
-        ...(record.writer ? { writer: record.writer } : {})
-      }
     })
   }
 

@@ -16,6 +16,7 @@
   } from '$shared/project-env'
   import type { Project } from '$shared/types'
   import { onMount } from 'svelte'
+  import ProjectSelect, { type ProjectSelectOption } from '../../shared/ProjectSelect.svelte'
   import ConfirmDialog from '../../ui/ConfirmDialog.svelte'
   import EmptyState from '../../ui/EmptyState.svelte'
   import CreateEnvFileDialog from './CreateEnvFileDialog.svelte'
@@ -66,6 +67,13 @@
   )
   const localProjects = $derived(
     projects.filter((project) => project.source === 'local' && !project.hidden)
+  )
+  const projectOptions = $derived<ProjectSelectOption[]>(
+    localProjects.map((project) => ({
+      id: project.id,
+      name: project.name,
+      ...(project.color ? { color: project.color } : {})
+    }))
   )
 
   function report(cause: unknown, fallback: string): void {
@@ -260,22 +268,19 @@
 
 <div class="space-y-4">
   <div class="flex flex-wrap items-end justify-between gap-3">
-    <label class="block min-w-56 text-xs font-medium text-muted" for="secrets-project">
-      Project
-      <select
-        id="secrets-project"
-        class="mt-1 h-9 w-full border bg-elevated px-2 text-sm outline-none focus:border-primary"
-        value={projectId}
-        onchange={(event) => void selectProject(event.currentTarget.value)}
-      >
-        {#if localProjects.length === 0}
-          <option value="">No local projects yet</option>
-        {/if}
-        {#each localProjects as project (project.id)}
-          <option value={project.id}>{project.name}</option>
-        {/each}
-      </select>
-    </label>
+    <div class="min-w-56">
+      <p class="text-xs font-medium text-muted">Project</p>
+      <ProjectSelect
+        projects={projectOptions}
+        value={projectId || null}
+        onValueChange={(next) => void selectProject(next)}
+        ariaLabel="Select the project whose env files to edit"
+        placeholder="Select a project"
+        searchPlaceholder="Search projects…"
+        emptyMessage="No local projects"
+        class="mt-1"
+      />
+    </div>
     <div class="flex items-center gap-2">
       <button
         type="button"

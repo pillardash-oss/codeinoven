@@ -263,33 +263,6 @@ export class OvenRegistry {
     return this.state()
   }
 
-  /**
-   * Forget a reference the Secrets page deleted, so the machine reports the
-   * credential as missing instead of failing to resolve it at connect time.
-   *
-   * Answers whether any Oven held it.
-   */
-  async forgetSecretRef(ref: string): Promise<boolean> {
-    let forgot = false
-    await this.mutate(async (registry) => {
-      for (const oven of registry.ovens) {
-        for (const field of [
-          'privateKeyRef',
-          'passphraseRef',
-          'publicKeyRef',
-          'passwordRef'
-        ] as const) {
-          if (oven[field] !== ref) continue
-          delete oven[field]
-          oven.updatedAt = Date.now()
-          forgot = true
-        }
-      }
-      if (forgot) await this.storage.write(REGISTRY_PATH, registry)
-    })
-    return forgot
-  }
-
   private async present(oven: StoredOven): Promise<Oven> {
     const { privateKeyRef, passphraseRef, publicKeyRef, passwordRef, imageFile, ...metadata } = oven
     return {

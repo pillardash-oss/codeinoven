@@ -1,4 +1,17 @@
-import type { SecretScope } from '../../lib/secrets'
+/** Where a stored secret belongs. Recorded with the value so it can be described. */
+export type SecretScope =
+  | 'cloud-provider'
+  | 'git'
+  | 'utility'
+  | 'mcp-oauth'
+  | 'media'
+  | 'typesafe'
+  | 'github'
+  | 'oven'
+  | 'agent'
+  | 'project-env'
+  | 'base-url-provider'
+  | 'unknown'
 
 /**
  * Every vault reference the app constructs, in one place.
@@ -9,13 +22,6 @@ import type { SecretScope } from '../../lib/secrets'
  * surface: the strings below are the ones already written into users' state, so
  * they are stable on purpose and must never be reformatted.
  */
-
-/** A ref plus what the app knows about its owner from the ref alone. */
-export interface SecretRefIdentity {
-  scope: SecretScope
-  /** Id of the account, project, utility or thread the ref is keyed by. */
-  ownerId?: string
-}
 
 /**
  * Cloud deployment provider token, keyed by the global account id only: one
@@ -83,33 +89,4 @@ export function agentThreadSecretRef(threadId: string, environmentVariable: stri
  */
 export function generatedSecretRef(id: string): string {
   return `secret_${id}`
-}
-
-const REF_PREFIXES: readonly { prefix: string; scope: SecretScope }[] = [
-  { prefix: 'deployment_provider_', scope: 'cloud-provider' },
-  { prefix: 'mcp_oauth_state_', scope: 'mcp-oauth' },
-  { prefix: 'mcp_oauth_client_', scope: 'mcp-oauth' },
-  { prefix: 'git_pat_', scope: 'git' },
-  { prefix: 'media_provider_token_', scope: 'media' },
-  { prefix: 'oven_git_identity_', scope: 'oven' },
-  { prefix: 'oven_', scope: 'oven' },
-  { prefix: 'base_url_provider_', scope: 'base-url-provider' },
-  { prefix: 'agent_secret_', scope: 'agent' },
-  { prefix: 'cio_typesafe_api_key', scope: 'typesafe' },
-  { prefix: 'github_oauth_accounts', scope: 'github' },
-  { prefix: 'github_oauth_token', scope: 'github' },
-  { prefix: 'secret_', scope: 'unknown' }
-]
-
-/**
- * What a ref says about itself, so a stored value can be listed and described
- * without the code that wrote it being present.
- */
-export function describeSecretRef(ref: string): SecretRefIdentity {
-  for (const { prefix, scope } of REF_PREFIXES) {
-    if (!ref.startsWith(prefix)) continue
-    const ownerId = ref.slice(prefix.length)
-    return ownerId ? { scope, ownerId } : { scope }
-  }
-  return { scope: 'unknown' }
 }

@@ -1,7 +1,4 @@
-import type { SecretStorageAvailability } from '../../lib/secrets'
 import type { StorageEngine } from '../storage/storage-engine'
-import type { SecretInventoryEntry, SecretScope } from '../../lib/secrets'
-import { buildSecretInventory, type SecretOwnerLookup } from './secret-inventory'
 import { SecretStore, type SecretMetadata } from './secret-store'
 
 /**
@@ -9,14 +6,13 @@ import { SecretStore, type SecretMetadata } from './secret-store'
  *
  * Nothing in the app talks to the encrypted store directly. One service per
  * storage root is reachable through {@link SecretsService.for}, so a save, a
- * read, an availability probe and the settings inventory all describe the same
- * state: there is one place to validate a name, one place to enforce that no
- * plaintext is ever written, and one place a reviewer has to look.
+ * read and an availability probe all describe the same state: there is one place
+ * to validate a name, one place to enforce that no plaintext is ever written, and
+ * one place a reviewer has to look.
  *
  * The pieces it composes are deliberately small: `secret-store` owns the
- * ciphertext at rest, `secret-refs` owns every reference format, `secret-names`
- * owns the naming rules, and `secret-inventory` owns what the settings page
- * reads.
+ * ciphertext at rest, `secret-refs` owns every reference format, and
+ * `secret-names` owns the naming rules.
  */
 export class SecretsService {
   private static readonly instances = new WeakMap<StorageEngine, SecretsService>()
@@ -45,11 +41,6 @@ export class SecretsService {
   /** Cached OS keyring availability, safe to read synchronously. */
   isAvailable(): boolean {
     return this.store.isAvailable()
-  }
-
-  /** Availability, plus why it is unavailable when it is. */
-  availability(): SecretStorageAvailability {
-    return this.store.availability()
   }
 
   /**
@@ -86,22 +77,5 @@ export class SecretsService {
 
   async remove(ref: string): Promise<void> {
     await this.store.remove(ref)
-  }
-
-  /** Every stored value, described without plaintext, newest write first. */
-  async inventory(
-    describeOwner: SecretOwnerLookup = async () => ({})
-  ): Promise<SecretInventoryEntry[]> {
-    return buildSecretInventory(await this.store.list(), describeOwner)
-  }
-
-  /** Remove every stored value belonging to one scope and owner. */
-  async forgetOwner(scope: SecretScope, ownerId: string): Promise<number> {
-    const summaries = await this.store.list()
-    const targets = summaries.filter(
-      (summary) => summary.scope === scope && summary.ownerId === ownerId
-    )
-    for (const target of targets) await this.store.remove(target.ref)
-    return targets.length
   }
 }

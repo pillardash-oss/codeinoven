@@ -1,237 +1,42 @@
 <script lang="ts">
-  import CioKey from '@pdslng/cio-icon/CioKey.svelte'
-  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import { invoke } from '$lib/ipc.svelte'
   import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
   import { APP_NAME } from '$shared/brand'
-  import type { SecretsOverview, SecretInventoryEntry } from '$shared/secrets'
-  import { onMount } from 'svelte'
-  import ConfirmDialog from '../ui/ConfirmDialog.svelte'
-  import EmptyState from '../ui/EmptyState.svelte'
   import EnvFilesPanel from './secrets-settings/EnvFilesPanel.svelte'
-  import SecretsList from './secrets-settings/SecretsList.svelte'
-  import SecretRotateModal from './secrets-settings/SecretRotateModal.svelte'
   import ThreadEnvPanel from './secrets-settings/ThreadEnvPanel.svelte'
 
   /**
-   * The one place secrets are managed.
+   * Project env files.
    *
-   * Two surfaces share it. `Env files` is the one a user opens on purpose: their
-   * project's `.env` family, held in the vault and injected into the processes the
-   * app starts. `Stored secrets` is the inventory of everything the app itself
-   * keeps. Neither surface ever receives a value back from the main process.
+   * The page is the editor for a project's `.env` family: names, groups and run
+   * modes live here, values live in the encrypted store, and the processes the app
+   * starts receive them. Every reply from the main process is a manifest, so this
+   * surface never holds a value.
+   *
+   * The app's own credentials (provider tokens, capability credentials, sign-ins)
+   * are owned by the surface that uses them and are not listed here.
    */
-  type SecretsTab = 'env' | 'vault'
-
-  let tab = $state<SecretsTab>('env')
-
-  /** Context an entry point supplied: a project row, a file, or a thread. */
   const target = $derived(secretsPageState.target)
   const openedProjectId = $derived(target?.projectId)
   const openedDirectory = $derived(target?.directory ?? '')
   const openedThreadId = $derived(target?.threadId)
-
-  let overview = $state<SecretsOverview | null>(null)
-  let loading = $state(true)
-  let busy = $state(false)
-  let error = $state('')
-  let rotateTarget = $state<SecretInventoryEntry | null>(null)
-  let deleteTarget = $state<SecretInventoryEntry | null>(null)
-
-  const available = $derived(overview?.availability.available ?? true)
-  const secrets = $derived(overview?.secrets ?? [])
-
-  /** Why nothing can be stored, in the words the user needs to act on. */
-  const unavailableReason = $derived.by((): string => {
-    const availability = overview?.availability
-    if (!availability || availability.available) return ''
-    switch (availability.reason) {
-      case 'plaintext-backend':
-        return 'This Linux session has no keyring, so Electron falls back to a plaintext backend. Install a keyring (GNOME Keyring or KWallet) and restart to store secrets.'
-      case 'unattended-launch':
-        return 'This launch runs unattended and never asks the OS keyring for a key, so secrets are read-only here. Start the app normally to store one.'
-      case 'probe-failed':
-        return 'The OS keyring could not be reached, so secrets cannot be stored right now. Restart the app and approve the keyring prompt.'
-      default:
-        return 'Secure credential storage is unavailable on this device, so no secret can be stored.'
-    }
-  })
-
-  function reportFailure(cause: unknown, fallback: string): void {
-    error = cause instanceof Error ? cause.message : fallback
-  }
-
-  async function load(): Promise<void> {
-    loading = true
-    try {
-      overview = await invoke('secrets:overview')
-    } catch (cause) {
-      reportFailure(cause, 'Could not read the stored secrets')
-    } finally {
-      loading = false
-    }
-  }
-
-  async function rotate(value: string): Promise<void> {
-    const entry = rotateTarget
-    if (!entry) return
-    busy = true
-    error = ''
-    try {
-      overview = await invoke('secrets:rotate', { ref: entry.ref, value })
-      rotateTarget = null
-    } catch (cause) {
-      reportFailure(cause, 'Could not replace this secret')
-    } finally {
-      busy = false
-    }
-  }
-
-  async function remove(): Promise<void> {
-    const entry = deleteTarget
-    if (!entry) return
-    busy = true
-    error = ''
-    try {
-      overview = await invoke('secrets:delete', { ref: entry.ref })
-      deleteTarget = null
-    } catch (cause) {
-      reportFailure(cause, 'Could not delete this secret')
-    } finally {
-      busy = false
-    }
-  }
-
-  onMount(() => {
-    void load()
-  })
-
-  // A key button on a project row, a file or a thread is about env files, so the
-  // page lands on that surface instead of the inventory.
-  $effect(() => {
-    if (target) tab = 'env'
-  })
 </script>
 
 <div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Secrets</h1>
     <p class="mt-0.5 text-sm text-muted">
-      Project env files and every credential {APP_NAME} stores, all encrypted by the OS keyring. A value
-      is never shown again after it is saved: replace it to store a new one, delete it to revoke it.
+      Project env files, held in {APP_NAME}'s encrypted store instead of the repository. A value is
+      written once and never shown again: the file keeps a reference, and any process the app starts
+      for that project receives it.
     </p>
   </div>
 
-  {#if !available}
-    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-      {unavailableReason}
-    </p>
-  {/if}
-
-  {#if error}
-    <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
-  {/if}
-
-  <div
-    class="mb-4 flex w-max items-center gap-0.5 border bg-elevated p-0.5"
-    role="tablist"
-    aria-label="Secret surfaces"
-  >
-    <button
-      type="button"
-      role="tab"
-      aria-selected={tab === 'env'}
-      class="px-3 py-1.5 text-xs font-medium transition-colors {tab === 'env'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      title="Project env files and what their processes receive"
-      onclick={() => (tab = 'env')}
-    >
-      Env files
-    </button>
-    <button
-      type="button"
-      role="tab"
-      aria-selected={tab === 'vault'}
-      class="px-3 py-1.5 text-xs font-medium transition-colors {tab === 'vault'
-        ? 'bg-surface text-foreground'
-        : 'text-muted hover:text-foreground'}"
-      title="Every credential the app itself stores"
-      onclick={() => (tab = 'vault')}
-    >
-      Stored secrets
-      <span class="ml-1 tabular-nums text-dimmed">{secrets.length}</span>
-    </button>
+  <div class="space-y-4">
+    <EnvFilesPanel projectId={openedProjectId} directory={openedDirectory} />
+    {#if openedThreadId}
+      {#key openedThreadId}
+        <ThreadEnvPanel threadId={openedThreadId} />
+      {/key}
+    {/if}
   </div>
-
-  {#if tab === 'env'}
-    <div class="space-y-4">
-      <EnvFilesPanel projectId={openedProjectId} directory={openedDirectory} />
-      {#if openedThreadId}
-        {#key openedThreadId}
-          <ThreadEnvPanel threadId={openedThreadId} />
-        {/key}
-      {/if}
-    </div>
-  {:else if loading}
-    <div class="flex items-center gap-2 border bg-surface px-4 py-3 text-xs text-muted">
-      <CioSpinner size={14} class="animate-spin" /> Reading stored secrets...
-    </div>
-  {:else if secrets.length === 0}
-    <div class="border bg-surface">
-      <EmptyState
-        icon={CioKey}
-        title="Nothing stored yet"
-        description="Credentials you add from Utilities, cloud deployments, Ovens, a capability sign-in or a thread secret appear here, so you can find and revoke them in one place."
-      />
-    </div>
-  {:else}
-    <div class="mb-3 flex items-center justify-between gap-3">
-      <span class="text-xs tabular-nums text-dimmed">
-        {secrets.length}
-        {secrets.length === 1 ? 'secret' : 'secrets'} stored
-      </span>
-    </div>
-    <SecretsList
-      {secrets}
-      {busy}
-      onRotate={(entry) => {
-        error = ''
-        rotateTarget = entry
-      }}
-      onDelete={(entry) => {
-        error = ''
-        deleteTarget = entry
-      }}
-    />
-  {/if}
 </div>
-
-{#if rotateTarget}
-  <SecretRotateModal
-    entry={rotateTarget}
-    {busy}
-    {error}
-    onSubmit={rotate}
-    onClose={() => {
-      if (!busy) rotateTarget = null
-    }}
-  />
-{/if}
-
-<ConfirmDialog
-  open={deleteTarget !== null}
-  title="Delete this secret?"
-  confirmLabel="Delete secret"
-  note="The value is removed from the OS keyring and cannot be recovered."
-  {busy}
-  onCancel={() => {
-    if (!busy) deleteTarget = null
-  }}
-  onConfirm={remove}
->
-  <p>
-    <span class="font-medium text-foreground">{deleteTarget?.title ?? 'This secret'}</span>
-    is deleted, and whatever owns it asks for the value again before it works.
-  </p>
-</ConfirmDialog>

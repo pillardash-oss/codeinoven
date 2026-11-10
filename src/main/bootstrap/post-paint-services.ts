@@ -1363,34 +1363,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const { registerBaseUrlProviderIpc } = await import('../providers/base-url-provider-ipc')
     const { registerLlamaCppIpc } = await import('../llama-cpp/llama-cpp-ipc')
     const { registerLocalAiIpc } = await import('../local-ai/local-ai-ipc')
-    // One secrets page over the one secrets service. The lookup names owners it
-    // can reach, and the revoker lets each owner let go of a reference the user
-    // removed, so nothing is left pointing at a value that no longer exists.
-    const [
-      { registerSecretsIpc },
-      { createSecretOwnerLookup },
-      { createSecretRevoker },
-      { OvenRegistry },
-      { BaseUrlProviderService }
-    ] = await Promise.all([
-      import('../secrets/secrets-ipc'),
-      import('../secrets/secret-owner-lookup'),
-      import('../secrets/secret-revocation'),
-      import('../ovens/oven-registry'),
-      import('../providers/base-url-provider-service')
-    ])
-    registerSecretsIpc(vault, {
-      describeOwner: createSecretOwnerLookup({
-        ...(state.chatEngine ? { utilities: state.chatEngine.state.utilityRegistry } : {}),
-        projectName: async (projectId) => (await projectManager.getProject(projectId))?.name ?? null
-      }),
-      onRevoked: createSecretRevoker({
-        ...(state.chatEngine ? { utilities: state.chatEngine.state.utilityRegistry } : {}),
-        ovens: new OvenRegistry(storage, vault),
-        providers: new BaseUrlProviderService(storage),
-        storage
-      })
-    })
     const { registerUtilityIpc } = await import('../ipc/utility-ipc')
     const { registerTypesafeIpc } = await import('../ipc/typesafe-ipc')
     registerProviderAccountIpc(

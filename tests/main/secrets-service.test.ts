@@ -172,11 +172,11 @@ describe('SecretsService per-account token storage', () => {
     Object.defineProperty(process, 'platform', { configurable: true, value: 'linux' })
     safeStorage.getSelectedStorageBackend.mockReturnValue('basic_text')
     try {
-      await expect(
-        vault.save('must-not-be-stored', providerTokenRef(ACCOUNT_A))
-      ).rejects.toThrow('Secure credential storage is unavailable')
+      await expect(vault.save('must-not-be-stored', providerTokenRef(ACCOUNT_A))).rejects.toThrow(
+        'Secure credential storage is unavailable'
+      )
       await expect(readVaultFile()).rejects.toMatchObject({ code: 'ENOENT' })
-      expect(vault.availability()).toEqual({ available: false, reason: 'plaintext-backend' })
+      expect(vault.isAvailable()).toBe(false)
     } finally {
       safeStorage.getSelectedStorageBackend.mockReturnValue('gnome_libsecret')
       if (platform) Object.defineProperty(process, 'platform', platform)
