@@ -152,6 +152,15 @@ jobs:
       - name: Type check
         run: bun run check
 
+      # The 2000-line source ceiling, enforced as its own fail-fast step so a
+      # non-compliant file can never reach a deploy: this job is a required
+      # check through "Release verification", and `verify:release` runs the same
+      # script. The policy lives in scripts/lib/file-size-policy.ts under a
+      # freeze notice; tests/guards/file-size-limit.test.ts asserts this step
+      # still exists. Split the file by concern, never raise the ceiling.
+      - name: Source file size ceiling
+        run: bun run check:file-size
+
       - name: Lint
         run: bun run lint .
 
