@@ -73,7 +73,22 @@ export class ChatEngineBrainstormGenerate {
     } = {}
   ): Promise<BrainstormContent> {
     const driverId = settings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, threadId)
+    // The artifact session belongs to the thread's own account, exactly like its
+    // turns: resolving the harness default instead put the generator in another
+    // account's container, where the thread's provider does not exist and Pi
+    // answered `Model not found` for a model the conversation was using.
+    const account = await this.host.state.accountRegistry.resolveForProvider(
+      driverId,
+      settings.providerId,
+      settings.accountId
+    )
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      threadId,
+      account.id
+    )
+    settings = { ...settings, accountId: account.id }
     const behaviorPrompt = await this.host.units['turns-dispatch'].getBehaviorPrompt(
       projectId,
       threadId,

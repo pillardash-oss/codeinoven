@@ -37,7 +37,7 @@ import { AssistantRepo } from '../../database/repositories/assistant-repo'
 import { ModelRankingSnapshotRepo } from '../../database/repositories/model-ranking-snapshot-repo'
 import type { StorageEngine } from '../../storage/storage-engine'
 import { WorkflowOwnershipService } from '../../system/workflow-ownership-service'
-import { SecretVault } from '../../storage/secret-vault'
+import { SecretsService } from '../../secrets/secrets-service'
 import { UtilityRuntimeService } from '../../utilities/utility-runtime-service'
 import { UtilityRegistryService } from '../../utilities/utility-registry-service'
 import { AgentSecretService } from '../../utilities/agent-secret-service'
@@ -115,7 +115,7 @@ export function wireChatEngine(
     engine.state.memoryService = new MemoryService(storage)
     engine.state.generatedArtifactService = new GeneratedArtifactService(storage)
     engine.state.promptAssembler = new PromptAssembler(engine.state.memoryService)
-    engine.state.secretVault = new SecretVault(storage)
+    engine.state.secretVault = SecretsService.for(storage)
     engine.state.utilityRuntime = new UtilityRuntimeService(storage)
     engine.state.utilityRegistry = new UtilityRegistryService(storage)
     engine.state.agentSecrets = new AgentSecretService(

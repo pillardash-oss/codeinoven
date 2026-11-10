@@ -24,6 +24,23 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Fixed
 
+- **A page can no longer drag the app window, which is what made an Azure
+  sign-in impossible to click.** Opening Microsoft's "You don't have access to
+  this" page and pressing anywhere on it moved the whole window with the
+  pointer, and every control on the page was dead. Electron applies
+  `-webkit-app-region: drag` from any web contents in the window to the window
+  itself, and Microsoft's sign-in pages declare one (they are written to run
+  inside desktop shells of their own), so the window server claimed its
+  rectangle before the page was asked. A page has no such power over a real
+  browser, so the app's styles for a page now include a `no-drag` subtraction
+  covering the document, which is the one shape that survives wherever a page
+  declares its region: drag rectangles are computed from layout, and a
+  subtraction is the only thing that removes them. It is installed on every
+  `dom-ready` for a tab and for a popup, and the scrollbar theme that is tracked
+  per tab is left alone for a popup's document
+  (`main/browser/browser-service/browser-service-configuration.ts`,
+  `browser-service-tabs.ts`, `browser-service-popups.ts`).
+
 - **A docked agent handoff whose prompt is never sent now says it was cancelled
   and can be closed.** Starting an action with an agent in review mode docks a
   panel that waits for the brief it placed in the thread's composer, and nothing

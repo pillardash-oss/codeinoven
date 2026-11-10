@@ -555,6 +555,11 @@ export class ChatEngineTurns {
         event.type !== 'session.idle' &&
         event.type !== 'session.error'
       ) {
+        // Recorded before the timer reset so the watchdog can tell a session
+        // that is genuinely streaming from one that only still *claims* to be
+        // busy: a stream that stops mid-tool leaves the tool open forever, and
+        // open work with nothing behind it must not buy unlimited silence.
+        eventOwner.lastWorkEventAt = Date.now()
         this.host.units['turns-sessions'].resetSessionWatchdog(event.sessionId)
       }
       this.host.units['brainstorm'].forwardBrainstormTrace(eventOwner, event)

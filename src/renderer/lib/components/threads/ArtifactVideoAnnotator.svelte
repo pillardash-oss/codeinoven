@@ -1,6 +1,5 @@
 <script lang="ts">
   import AnnotationMarkLayer from './AnnotationMarkLayer.svelte'
-  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import { markContentBox, markDescriptor, type MarkCapture } from '$lib/annotation-marks'
   import {
     responseReferencesState,
@@ -249,24 +248,27 @@
        plain one in the conversation, so it shares its controls, its failure
        state and the frame it was left on. The mark layer is drawn over the
        picture: a surface that answers a video cannot also turn every press into
-       play, so the player leaves the pointer to the pen here. -->
-  <VideoPlayer
-    {src}
-    sourceKey={url}
-    label={filename}
-    {startAt}
-    {autoPlay}
-    fit="fill"
-    interactive={false}
-    showCenterControl={!armed}
-    overlay={markOverlay}
-    class="min-h-0 flex-1"
-    onElement={(element) => (video = element)}
-    onMetadata={(element) => {
-      videoWidth = element.videoWidth
-      videoHeight = element.videoHeight
-    }}
-    onTime={(seconds) => (currentTime = seconds)}
-    onError={(element) => onLoadError?.(element)}
-  />
+       play, so the player leaves the pointer to the pen here. It is fetched with
+       the artifact being marked, not with the app. -->
+  {#await import('../ui/VideoPlayer.svelte') then { default: VideoPlayer }}
+    <VideoPlayer
+      {src}
+      sourceKey={url}
+      label={filename}
+      {startAt}
+      {autoPlay}
+      fit="fill"
+      interactive={false}
+      showCenterControl={!armed}
+      overlay={markOverlay}
+      class="min-h-0 flex-1"
+      onElement={(element) => (video = element)}
+      onMetadata={(element) => {
+        videoWidth = element.videoWidth
+        videoHeight = element.videoHeight
+      }}
+      onTime={(seconds) => (currentTime = seconds)}
+      onError={(element) => onLoadError?.(element)}
+    />
+  {/await}
 </div>

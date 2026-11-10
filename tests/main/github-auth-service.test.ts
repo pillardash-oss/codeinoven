@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { GitHubAuthService } from '../../src/main/git/github-auth-service'
-import type { SecretVault } from '../../src/main/storage/secret-vault'
+import type { SecretsService } from '../../src/main/secrets/secrets-service'
 import { Logger } from '../../src/main/system/logger'
 
 const fetchMock = vi.hoisted(() => vi.fn())
@@ -47,7 +47,7 @@ function captureRequest(index = 0): { url: string; init: RequestInit } {
 }
 
 /** A vault stub that behaves like the real one: what is written is what is read. */
-function mapVault(initial: Record<string, string> = {}): SecretVault {
+function mapVault(initial: Record<string, string> = {}): SecretsService {
   const values = new Map(Object.entries(initial))
   return {
     save: vi.fn(async (value: string, ref: string) => {
@@ -60,10 +60,10 @@ function mapVault(initial: Record<string, string> = {}): SecretVault {
     }),
     exists: vi.fn(async (ref: string) => values.has(ref)),
     isAvailable: vi.fn(() => true)
-  } as unknown as SecretVault
+  } as unknown as SecretsService
 }
 
-function storedRef(vault: SecretVault, ref: string): string | null {
+function storedRef(vault: SecretsService, ref: string): string | null {
   const call = vi
     .mocked(vault.save)
     .mock.calls.filter(([, savedRef]) => savedRef === ref)
@@ -83,7 +83,7 @@ interface StoredFile {
 }
 
 /** The account list as the service last wrote it. */
-function writtenFile(vault: SecretVault): StoredFile {
+function writtenFile(vault: SecretsService): StoredFile {
   const raw = storedRef(vault, 'github_oauth_accounts')
   if (raw === null) throw new Error('No GitHub accounts were written')
   return JSON.parse(raw) as StoredFile
@@ -110,7 +110,7 @@ function accountsFile(accounts: StoredFile['accounts'], activeId: string): strin
  * A vault whose second read of the account list answers with a different file,
  * standing in for the other app instance that rotated the refresh token first.
  */
-function rotatingVault(first: string, next: string): SecretVault {
+function rotatingVault(first: string, next: string): SecretsService {
   const vault = mapVault({ github_oauth_accounts: first })
   const base = vi.mocked(vault.resolve).getMockImplementation()
   if (!base) throw new Error('Vault stub has no read behaviour')
@@ -128,7 +128,7 @@ function rotatingVault(first: string, next: string): SecretVault {
  * `afterMs` has passed, which is what a sibling instance that redeems the
  * refresh token a moment after our refusal looks like from here.
  */
-function lateRotatingVault(first: string, next: string, afterMs: number): SecretVault {
+function lateRotatingVault(first: string, next: string, afterMs: number): SecretsService {
   const vault = mapVault({ github_oauth_accounts: first })
   const base = vi.mocked(vault.resolve).getMockImplementation()
   if (!base) throw new Error('Vault stub has no read behaviour')

@@ -5,7 +5,7 @@ import {
 } from '../../../src/main/ovens/oven-setup-capabilities'
 import type { OvenPreflightReport } from '../../../src/lib/ovens'
 import { validateStartOvenSetup } from '../../../src/main/ovens/oven-validation'
-import type { SecretVault } from '../../../src/main/storage/secret-vault'
+import type { SecretsService } from '../../../src/main/secrets/secrets-service'
 import { buildSetupPlan } from '../../../src/main/ovens/remote/oven-setup-script'
 import { planNodeInstall, preflightInvocation } from '../../../src/main/ovens/oven-setup-bootstrap'
 
@@ -235,7 +235,7 @@ describe('oven setup assessment', () => {
 
   it('stores the setup private key in the vault and returns only a reference', async () => {
     const save = vi.fn(async () => 'private-key-ref')
-    const vault = { save } as unknown as SecretVault
+    const vault = { save } as unknown as SecretsService
     const configuration = await validateStartOvenSetup(
       {
         configuration: {
@@ -259,7 +259,7 @@ describe('oven setup assessment', () => {
   })
 
   it('rejects an Oven key passphrase instead of storing an unused secret', async () => {
-    const vault = { save: vi.fn(async () => 'private-key-ref') } as unknown as SecretVault
+    const vault = { save: vi.fn(async () => 'private-key-ref') } as unknown as SecretsService
     await expect(
       validateStartOvenSetup(
         {

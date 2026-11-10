@@ -61,7 +61,6 @@
     type CioCleanupCategoryId,
     type GitPullPreference,
     type PrMergeMethod,
-    type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
   import { onMount, tick, type Component } from 'svelte'
@@ -76,6 +75,7 @@
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
   import Switch from '../ui/Switch.svelte'
   import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
+  import SecretsSettingsTab from './SecretsSettingsTab.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -300,23 +300,6 @@
     { id: 'system' as const, label: 'System', icon: CioDisplay },
     { id: 'light' as const, label: 'Light', icon: CioSun },
     { id: 'dark' as const, label: 'Dark', icon: CioMoon }
-  ]
-
-  const slashCommandOptions: Array<{
-    id: SlashCommandMode
-    label: string
-    description: string
-  }> = [
-    {
-      id: 'app',
-      label: `${APP_NAME} actions`,
-      description: `${APP_NAME} handles supported slash commands in the app.`
-    },
-    {
-      id: 'passthrough',
-      label: 'Harness passthrough',
-      description: 'Forward slash commands to the active agent harness.'
-    }
   ]
 
   const mergeMethodOptions: Array<{
@@ -844,8 +827,6 @@
             </h3>
             <div class="flex items-center justify-between gap-4">
               <div>
-                
-                
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
                     <CioCheckCircle size={13} />
@@ -906,7 +887,7 @@
 
             <div class="mt-4 pt-4">
               <p class="text-sm font-medium">In-app notification sounds</p>
-              
+
               <div class="mt-3 space-y-3">
                 <div class="flex items-center justify-between gap-4">
                   <div>
@@ -947,23 +928,23 @@
             >
               Work Behaviour
             </h3>
-            
+
             <div class="space-y-4">
               <div class="flex items-center justify-between gap-4">
-              <div>
-                <p class="text-sm font-medium">Keep device on while work is in progress</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  Prevent sleep while an agent is actively working; spec-ready threads stay idle
-                </p>
+                <div>
+                  <p class="text-sm font-medium">Keep device on while work is in progress</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Prevent sleep while an agent is actively working; spec-ready threads stay idle
+                  </p>
+                </div>
+                <Switch
+                  checked={config.keepAwakeWhileWorking}
+                  onchange={() =>
+                    void updateConfig({ keepAwakeWhileWorking: !config.keepAwakeWhileWorking })}
+                  aria-label="Toggle keeping the device awake while work is in progress"
+                  disabled={!settingsReady}
+                />
               </div>
-              <Switch
-                checked={config.keepAwakeWhileWorking}
-                onchange={() =>
-                  void updateConfig({ keepAwakeWhileWorking: !config.keepAwakeWhileWorking })}
-                aria-label="Toggle keeping the device awake while work is in progress"
-                disabled={!settingsReady}
-              />
-            </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Resume work on restart</p>
@@ -1125,29 +1106,6 @@
                   aria-label="Maximum threads per project"
                   onchange={saveThreadLimit}
                 />
-              </div>
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-sm font-medium">Slash command behavior</p>
-                  <p class="text-xs leading-relaxed text-dimmed">
-                    {slashCommandOptions.find((option) => option.id === config.slashCommandMode)
-                      ?.description}
-                  </p>
-                </div>
-                <select
-                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                  value={config.slashCommandMode}
-                  disabled={!settingsReady}
-                  aria-label="Slash command behavior"
-                  onchange={(event: SelectChangeEvent) =>
-                    void updateConfig({
-                      slashCommandMode: event.currentTarget.value as SlashCommandMode
-                    })}
-                >
-                  {#each slashCommandOptions as option (option.id)}
-                    <option value={option.id}>{option.label}</option>
-                  {/each}
-                </select>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1577,6 +1535,8 @@
       <CloudDeploymentsSettingsTab />
     {:else if section === 'archives'}
       <ArchivesSettingsTab />
+    {:else if section === 'secrets'}
+      <SecretsSettingsTab />
     {:else if section === 'about'}
       <div class="px-6 pb-8 pt-2">
         <!-- Identity: icon, version, copyright -->

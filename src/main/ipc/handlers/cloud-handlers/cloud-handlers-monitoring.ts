@@ -16,6 +16,7 @@ import type {
   CloudDeploymentProviderKind
 } from '../../../../lib/types'
 import type { DeploymentProviderContext } from '../../../providers/deployment-provider.interface'
+import { providerTokenRef } from '../../../secrets/secret-refs'
 import type { IpcHandlerContext } from '../context'
 
 /**
@@ -93,9 +94,10 @@ export function registerCloudDeploymentMonitoringHandlers(
     // Both overrides are optional: a blank token keeps the stored secret, and a
     // blank base URL keeps the stored one.
     if (typeof input.token === 'string' && input.token.trim() !== '') {
-      account.secretRef = await vault.saveProviderToken(
-        safeAccountId,
-        validateProviderToken(input.token)
+      account.secretRef = await vault.save(
+        validateProviderToken(input.token),
+        providerTokenRef(safeAccountId),
+        { scope: 'cloud-provider', ownerId: safeAccountId }
       )
       account.configured = true
     }
@@ -218,7 +220,7 @@ export function registerCloudDeploymentMonitoringHandlers(
     if (!activeAccount.enabled) {
       throw new TypeError(`Cloud deployment account "${activeAccount.label}" is disabled`)
     }
-    const token = await vault.resolveProviderToken(activeAccount.id)
+    const token = await vault.resolve(providerTokenRef(activeAccount.id))
     return {
       ...(activeAccount.baseUrl === undefined ? {} : { baseUrl: activeAccount.baseUrl }),
       token

@@ -3,6 +3,7 @@
   import CioChevronsDown from '@pdslng/cio-icon/CioChevronsDown.svelte'
   import CioChevronsUp from '@pdslng/cio-icon/CioChevronsUp.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
+  import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
@@ -43,6 +44,14 @@
     /** Bring the open file's row on screen, opening the folders above it. */
     onRevealActiveFile: () => void
     onRefresh: () => void
+    /**
+     * What the Secrets action would edit: the selected folder, the folder holding
+     * the selected file, or the project root. An env file is one case of this, not
+     * the condition for showing the action.
+     */
+    secretsTarget?: string
+    /** Opens this path's env files in the env editor. */
+    onOpenSecrets?: () => void
   }
 
   let {
@@ -65,7 +74,9 @@
     onToggleExpandAll,
     onToggleFilter,
     onRevealActiveFile,
-    onRefresh
+    onRefresh,
+    secretsTarget = '',
+    onOpenSecrets
   }: Props = $props()
 </script>
 
@@ -120,6 +131,18 @@
   <span class="min-w-0 flex-1 truncate text-[0.625rem] font-semibold text-foreground"
     >{projectLabel}</span
   >
+  {#if onOpenSecrets}
+    <button
+      type="button"
+      class="flex h-6 shrink-0 items-center gap-1 border px-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      title="Env secrets for {secretsTarget || 'the project root'}"
+      aria-label="Env secrets for {secretsTarget || 'the project root'}"
+      onclick={onOpenSecrets}
+    >
+      <CioKey size={12} />
+      Secrets
+    </button>
+  {/if}
   <button
     type="button"
     class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-50"

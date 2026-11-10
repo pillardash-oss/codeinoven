@@ -14,6 +14,16 @@ import type { BrowserService } from '../browser-service'
 import type { BrowserAgentActionApprover } from './browser-service-agent-approval'
 
 /**
+ * The stylesheet that keeps a page from dragging the app window.
+ *
+ * A drag region is computed from layout rather than paint order, so one a page
+ * declares is claimed by the window server wherever the page's own content is
+ * painted, which is why a subtraction covering the document is the only shape
+ * that holds for every page. See `applyPageDragIsolation` for what it answers.
+ */
+const PAGE_DRAG_ISOLATION_CSS = 'html,body{-webkit-app-region:no-drag!important}'
+
+/**
  * The values the app pushes into the browser at boot.
  *
  * The browser owns no configuration of its own: the search engine, the scrollbar
@@ -111,6 +121,41 @@ export class BrowserServiceConfiguration {
       `::-webkit-scrollbar-thumb{background:${theme.thumb}}` +
       `::-webkit-scrollbar-thumb:hover{background:${theme.thumbHover}}`
     )
+  }
+
+  /**
+   * Install the app's styles for one document: the scrollbar colours, and the
+   * subtraction that keeps a page from dragging the app window.
+   *
+   * Called on every `dom-ready`, because a navigation replaces the document and
+   * everything installed into the old one goes with it.
+   */
+  applyPageStyles(tabId: string, contents: WebContents): void {
+    this.applyScrollbarTheme(tabId, contents)
+    this.applyPageDragIsolation(contents)
+  }
+
+  /**
+   * Take the window-drag power away from a page.
+   *
+   * Electron applies `-webkit-app-region: drag` from any web contents in the
+   * window to the window itself, so a page that declares one hands the window
+   * server a rectangle that is claimed before the page is asked: the app window
+   * follows the pointer and every link and control inside that rectangle is dead
+   * to the mouse. A page has no such power over a real browser, and this cannot
+   * be left to the sites either: Microsoft's sign-in pages ship the region
+   * (they are written to run inside desktop shells of their own), which made an
+   * Azure sign-in impossible to click and dragged the app around instead.
+   *
+   * `no-drag` subtracts a rectangle from every drag region, and this one is the
+   * whole document, so a page's region cannot survive wherever it was declared.
+   * Author origin with `!important` is what beats the page's own declaration.
+   */
+  applyPageDragIsolation(contents: WebContents): void {
+    if (contents.isDestroyed()) return
+    contents.insertCSS(PAGE_DRAG_ISOLATION_CSS, { cssOrigin: 'author' }).catch((error: unknown) => {
+      Logger.dev('A page could not be kept from dragging the window:', error)
+    })
   }
 
   /**

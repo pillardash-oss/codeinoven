@@ -19,6 +19,7 @@ import {
 } from '$lib/content-view-threads'
 import { viewShowsScopedSidebar } from '$lib/content-view-projects'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { openThreadBrowserFor } from '$lib/stores/thread-browser-open'
 import { settingsRouteState } from '$lib/stores/settings-route.svelte'
 import { loadBrowser, withBrowser } from '$lib/stores/browser-access.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
@@ -33,7 +34,6 @@ import { scopeState } from '$lib/stores/scope.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
 import type { ActionSelection } from '$lib/actions'
-import { actionContext } from '$lib/stores/action-context.svelte'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   INBOX_PROJECT_ID,
@@ -42,7 +42,6 @@ import {
   type Thread
 } from '$shared/types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-import { actionId, settingsTabs } from '../app-palette-actions'
 import { FileSearchPaletteController } from '../app-file-search.svelte'
 import { ThreadSearchPaletteController } from '../app-thread-search.svelte'
 import { workspaceTourViewFor } from '$lib/guide/guide-stops'
@@ -200,14 +199,6 @@ export class AppOnKeydown extends BoardUnit<App> {
   }
 
   async handlePaletteSelection(selection: ActionSelection): Promise<void> {
-    const settingsTab = settingsTabs.find(
-      (tab) => actionId(`settings:${tab.id}`) === selection.action.id
-    )
-    if (settingsTab) {
-      this.navigate(settingsViewForSection(settingsTab.id))
-      return
-    }
-
     switch (selection.action.id) {
       case 'app:new-project':
         this.root.spotlightPalette.openNewProjectSpotlight()
@@ -240,6 +231,15 @@ export class AppOnKeydown extends BoardUnit<App> {
       case 'app:browser-tab-search':
         this.root.spotlightPalette.browserTabSearch.openPalette()
         return
+      case 'app:browser':
+        this.navigate('browser')
+        return
+      case 'app:thread-browser': {
+        const thread = workspaceState.selectedThread
+        if (!thread) return
+        openThreadBrowserFor(thread.projectId, thread.id)
+        return
+      }
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
@@ -314,16 +314,13 @@ export class AppOnKeydown extends BoardUnit<App> {
         this.navigate('settings')
         return
       default:
-        await actionContext.current?.onSelect(selection)
+        return
     }
   }
 
   /** Close the whole spotlight, whichever screen is on top. */
   closeSpotlight(): void {
     this.root.spotlightPalette.commandPaletteOpen = false
-    // The home input ranks threads inline; closing the surface stands that down
-    // so a later open never paints rows from the query it was closed on.
-    this.root.spotlightPalette.resetHomeSearch()
     if (this.fileSearch.paletteOpen) this.fileSearch.close()
     if (this.threadSearch.paletteOpen) this.threadSearch.close()
     if (this.root.spotlightPalette.allThreadSearch.paletteOpen)

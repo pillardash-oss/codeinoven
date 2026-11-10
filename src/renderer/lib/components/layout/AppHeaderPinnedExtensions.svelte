@@ -5,6 +5,7 @@
   import { browserExtensions } from '$lib/stores/browser-extensions.svelte'
   import { browserPopupWindows } from '$lib/stores/browser-popup-windows.svelte'
   import { GLOBAL_BROWSER_CONTEXT, globalBrowser } from '$lib/stores/global-browser.svelte'
+  import { DEFAULT_BOX_ID, extensionJarForBox } from '$lib/stores/global-browser-types'
   import { openBrowserExtensionMenu } from '$lib/components/browser/browser-extension-menus'
 
   /**
@@ -26,11 +27,13 @@
    */
 
   const tab = $derived(globalBrowser.activeTab)
-  /** The jar and tab the pins are drawn for, as the activity store keys them. */
-  const jar = $derived(tab?.boxId ?? '')
+  /** The jar and tab the pins are drawn for, as the activity store keys them. A tab
+   *  with no box is in the profile's own jar, which extensions spell as the empty
+   *  jar id. */
+  const jar = $derived(tab ? extensionJarForBox(tab.boxId ?? DEFAULT_BOX_ID) : '')
   const activeTabId = $derived(tab?.id ?? '')
   /** The pins this box can act on, in the order they were installed. */
-  const pinned = $derived(tab ? browserExtensions.pinnedExtensionsInJar(tab.boxId ?? '') : [])
+  const pinned = $derived(tab ? browserExtensions.pinnedExtensionsInJar(jar) : [])
 
   /** The popup this pin is currently displaying, rather than a retained page. */
   function openPopupFor(extensionId: string): string | null {

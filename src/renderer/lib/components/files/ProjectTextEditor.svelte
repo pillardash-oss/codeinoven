@@ -44,6 +44,8 @@
     /** Mirror of the editor's undo/redo depth, so a toolbar can disable the
      *  actions that would do nothing. */
     onHistoryChange?: (state: FileEditorHistoryState) => void
+    /** A managed `cio://` reference in the buffer was opened with the modifier held. */
+    onSecretReference?: (name: string, secretRef: string) => void
   }
 
   let {
@@ -71,7 +73,8 @@
     onInput,
     onFindMatches = undefined,
     onReplaceDone = undefined,
-    onHistoryChange = undefined
+    onHistoryChange,
+    onSecretReference = undefined
   }: Props = $props()
 
   let ideTools = $state<IdeEditorTools>()
@@ -121,7 +124,10 @@
         ideTools ? ideTools.resolveCompletion(item) : Promise.resolve(null),
       onDocChange: (text) => onInput({ currentTarget: { value: text } }),
       onFindMatches,
-      onHistoryChange: (history) => onHistoryChange?.(history)
+      onHistoryChange,
+      // A prop is read when the gesture happens, so the owner can re-target the
+      // panel without rebuilding the editor.
+      onSecretReference: (name, secretRef) => onSecretReference?.(name, secretRef)
     }).then((instance) => {
       if (cancelled) {
         instance.destroy()

@@ -7,8 +7,6 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioWrapText from '@pdslng/cio-icon/CioWrapText.svelte'
   import Modal from '../ui/Modal.svelte'
-  import AudioPlayer from '../ui/AudioPlayer.svelte'
-  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import ProjectTextEditor from '../files/ProjectTextEditor.svelte'
@@ -381,10 +379,15 @@
           </div>
         {:else if kind === 'video' && src}
           <!-- The app's own player: this surface is the fullscreen view, so it
-               offers no fullscreen action of its own. -->
-          <VideoPlayer {src} label={filename} fit="fill" />
+               offers no fullscreen action of its own. It is fetched only for a
+               video, so the transport controls never ride the eager closure. -->
+          {#await import('../ui/VideoPlayer.svelte') then { default: VideoPlayer }}
+            <VideoPlayer {src} label={filename} fit="fill" />
+          {/await}
         {:else if kind === 'audio' && src}
-          <AudioPlayer {src} label={filename} class="w-full max-w-xl" />
+          {#await import('../ui/AudioPlayer.svelte') then { default: AudioPlayer }}
+            <AudioPlayer {src} label={filename} class="w-full max-w-xl" />
+          {/await}
         {:else if kind === 'pdf' && src}
           <iframe {src} class="min-h-0 w-full flex-1 border-0" title={`Preview ${filename}`}
           ></iframe>

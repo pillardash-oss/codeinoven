@@ -57,6 +57,8 @@ export type StartupStep =
   | 'storage:config'
   | 'database:init'
   | 'trafficLight:warm'
+  | 'windowState:load'
+  | 'backgroundLifecycle:start'
 
 export interface StartupStepRecord {
   step: StartupStep

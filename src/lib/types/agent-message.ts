@@ -345,6 +345,31 @@ export type AgentPart =
       messageID: string
       presentation: UserMessagePresentation
     }
+  /**
+   * The conversation message a user answered directly, shown above their words.
+   *
+   * A group conversation collects replies from several threads, so answering one
+   * of them is a reply in the ordinary sense: the bubble says what is being
+   * answered and opens it, and the words underneath went to that thread. The
+   * excerpt and the title are snapshots, because the answer keeps reading as the
+   * reply it was even after the other conversation is renamed or removed.
+   */
+  | {
+      type: 'reply'
+      id: string
+      messageID: string
+      /** The conversation the user replied into. */
+      projectId: string
+      threadId: string
+      /** That conversation's title when the reply was written. */
+      title: string
+      /** Who spoke the answered reply. */
+      speakerName: string
+      /** The message in this conversation that was answered, for the jump back. */
+      repliedMessageId: string
+      /** A short excerpt of what was answered. */
+      excerpt: string
+    }
   | {
       type: 'cited'
       id: string
@@ -391,6 +416,14 @@ export interface AgentArtifact {
 export interface MessageAuthor {
   assistantId: string
   name: string
+  /**
+   * The conversation this reply was spoken from, when it belongs to another
+   * thread than the one it is written into. A group chat shows replies from the
+   * thread each answer came from, and this is what lets a bubble be answered
+   * back in that thread instead of in the group.
+   */
+  projectId?: string
+  threadId?: string
   /** Stored icon image filename, resolved through the assistant icon cache. */
   icon?: string
   /** Selected SVG icon key. */

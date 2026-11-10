@@ -15,8 +15,10 @@
    *
    * It wears the assistant mark itself   the face, not one of the job variants
    *   because Don is the assistant, and the mark is what makes that true at a
-   * glance. The tile is never draggable and never carries a menu that could
-   * rename, delete or repin it.
+   * glance. The mark is ink on the brand plate, the black ground and ink of the
+   * app icon, in light and dark alike, so the tile does not change colour with
+   * the appearance. The tile is never draggable and never carries a menu that
+   * could rename, delete or repin it.
    */
   interface Props {
     assistant: Assistant | null
@@ -39,7 +41,6 @@
   let { assistant, threadId, selected, iconUrl = null, ready, unread, onOpen }: Props = $props()
 
   const name = $derived(assistant?.name?.trim() || 'Don')
-  const accent = $derived(assistant?.color ?? 'var(--color-foreground)')
   const title = $derived(
     ready ? `Open ${name}, your orchestrator` : `${name} needs a model before it can take work`
   )
@@ -55,15 +56,11 @@
     disabled={threadId === null}
     onclick={onOpen}
   >
-    <span
-      class="flex size-24 items-center justify-center border transition-colors {selected
-        ? 'border-primary bg-elevated'
-        : 'border-border bg-surface group-hover:border-border-strong group-hover:bg-elevated'}"
-    >
+    <span class="flex size-24 items-center justify-center bg-brand-plate">
       {#if iconUrl}
         <img src={iconUrl} alt="" aria-hidden="true" class="size-14 object-contain" />
       {:else}
-        <AssistantIcon mark="mark" size={56} style="color: {accent}" />
+        <AssistantIcon mark="mark" size={56} class="text-brand-ink" />
       {/if}
     </span>
     <span class="flex items-center gap-1 text-sm font-medium text-foreground">

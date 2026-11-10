@@ -2,7 +2,7 @@
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { atomicWrite } from '../../../lib/utils'
-import notificationsSource from './compat/cio-bitwarden-notifications.js?raw'
+import notificationsSource from './compat/cio-bitwarden-notifications.ts?compat-source'
 
 export const BITWARDEN_EXTENSION_ID = 'nngceckbapebfimnlniiiahkandclblb'
 

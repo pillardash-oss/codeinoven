@@ -35,6 +35,11 @@
   let {
     onSend,
     disabled = false,
+    directReply = null,
+    directReplyBusy = false,
+    directReplyError = '',
+    onClearDirectReply,
+    onOpenDirectReply,
     working = false,
     stackedAbove = false,
     onStop,
@@ -114,6 +119,11 @@
   const board = createChatComposer(() => ({
     onSend,
     disabled,
+    directReply,
+    directReplyBusy,
+    directReplyError,
+    onClearDirectReply,
+    onOpenDirectReply,
     working,
     stackedAbove,
     onStop,
@@ -320,6 +330,11 @@
   <ChatComposerAttachmentStrip
     attachments={board.submit.attachments}
     references={board.props.references}
+    directReply={board.props.directReply ?? null}
+    directReplyBusy={board.props.directReplyBusy ?? false}
+    directReplyError={board.props.directReplyError ?? ''}
+    onClearDirectReply={board.props.onClearDirectReply}
+    onOpenDirectReply={board.props.onOpenDirectReply}
     startAfterThreads={board.handleDropData.startAfterThreads}
     threadReferences={board.handleDropData.threadReferences}
     forkParentReference={board.props.forkParentReference ?? null}

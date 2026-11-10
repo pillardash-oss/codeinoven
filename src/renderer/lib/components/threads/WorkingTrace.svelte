@@ -65,6 +65,27 @@
     endTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
+    /**
+     * True inside a group conversation. The trace belongs to the speaker named
+     * above its bubble, so its header drops the model, harness and account chips
+     * and keeps only the work and the fold control.
+     */
+    compact?: boolean
+    /**
+     * True inside a group reply, where the trace is a section of the bubble rather
+     * than a band of its own. Its rows then take the bubble's own surface instead
+     * of painting the darker app fill behind them.
+     */
+    flat?: boolean
+    /**
+     * A maximum height for the open body, in rem.
+     *
+     * A group bubble is a reply, not a page: an expanding trace would drag the
+     * bubble with it and push the rest of the conversation away. The body scrolls
+     * inside that ceiling instead, so the bubble keeps one height while the work
+     * keeps arriving.
+     */
+    bodyMaxHeightRem?: number
     /** True while this trace is on screen. A hidden trace   the workspace keeps
      *  a thread mounted behind Settings/Scope and other views   does not pull
      *  its older durable pages, so coming back mounts what the reader is
@@ -145,6 +166,9 @@
     turnSpan = null,
     onLoadOlderParts,
     modelLabel = null,
+    compact = false,
+    flat = false,
+    bodyMaxHeightRem,
     thinkingLevel = null,
     providerName,
     providerId,
@@ -511,7 +535,10 @@
   <!-- The header pins to the transcript's top while the reader scrolls through
        this trace's work, so folding it is always one click away without a
        scroll back. The body is the transcript's now: one scroller, not two. -->
-  <div class="sticky top-0 z-20 bg-app" bind:clientHeight={traceHeaderHeight}>
+  <div
+    class="sticky top-0 z-20 {flat ? 'bg-transparent' : 'bg-app'}"
+    bind:clientHeight={traceHeaderHeight}
+  >
     <WorkingTraceSummary
       open={isOpen}
       live={liveActivity}
@@ -526,6 +553,7 @@
       label={subagentBadgeLabelText}
       elapsedFor={subagentElapsed}
       {modelLabel}
+      {compact}
       {isFast}
       {thinkingLevel}
       {providerName}
@@ -546,10 +574,14 @@
       bind:this={traceBodyEl}
       transition:slide={foldSlide()}
       class="flex min-w-0 flex-col gap-2 pb-2"
+      class:overflow-y-auto={bodyMaxHeightRem !== undefined}
+      style:max-height={bodyMaxHeightRem === undefined ? undefined : `${bodyMaxHeightRem}rem`}
     >
       {#each chains as chain, index (chain.id)}
         <WorkingTraceChain
           {chain}
+          {flat}
+          ownScroll={bodyMaxHeightRem !== undefined}
           {formatOutput}
           active={liveActivity && index === chains.length - 1}
           showHeader={chains.length > 1 || chain.output !== null}

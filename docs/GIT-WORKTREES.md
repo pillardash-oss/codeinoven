@@ -441,6 +441,10 @@ and defaults to the calling thread's scope):
 - **Reads** `list`, `status`, `conflicts`, `source_info`, `detect_adoptable`.
 - **Writes** `create`, `rename`, `pin`/`unpin`, `archive`/`restore`, `adopt`,
   `repair`, `retry_setup`, `sync_from_main`, `sync_to_main`.
+- **Publishes** `publish_branch` (push a scope's branch to its remote with the
+  project credential, never force), `open_pull_request` (open the pull request
+  that carries that branch and answer with its number and URL). These are the
+  app's own push and `pr:create`, so an agent never handles a token.
 - **Destructive** `detach_worktree`, `delete_scope`, `merge_into_project`.
 
 `create` forks from the project checkout's current branch unless `baseBranch`

@@ -93,7 +93,6 @@
     active,
     ownsReadingColumn
   }))
-  board.effects.setActiveActions(() => activeActions)
   board.submitBrainstormDecision.setReconcileReadySpec(() => reconcileReadySpecNow())
   let composerShoe = $derived.by((): ComposerShoeData => {
     const isNewThread = board.loadOlderMessages.messages.length === 0 && !board.switchProject.busy

@@ -44,8 +44,7 @@
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
-  import { browserAgentClaims } from '$lib/stores/browser-agent-claims.svelte'
-  import { scopeState } from '$lib/stores/scope.svelte'
+  import { agentTabThread, type AgentTabThread } from '$lib/browser-agent-thread'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -245,31 +244,9 @@
     return null
   }
 
-  /**
-   * The conversation whose agent is working on one browser tab, when one is.
-   *
-   * A browser tab is an agent's work when main says so (`browser:agentTabClaims`),
-   * which covers both the tab an agent opened for itself and the page a
-   * conversation was assigned. The tab's own owner is the fallback for a page an
-   * agent opened before the claim arrived, so a strip never shows an agent tab as
-   * if the user had opened it. The name and mark are the thread's own, resolved
-   * from the thread list rather than from the tab, so the strip says which
-   * conversation holds the page instead of repeating the project.
-   */
-  function agentThreadFor(
-    tab: ContextSidebarTab
-  ): { title: string; iconUrl: string | null } | null {
-    if (tab.kind !== 'browser') return null
-    const claim = browserAgentClaims.claimFor(tab.id)
-    const threadId = claim?.threadId ?? (tab.id.startsWith('browser:agent:') ? tab.threadId : null)
-    if (!threadId) return null
-    const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
-    if (!thread) return null
-    const projectId = claim?.projectId ?? thread.projectId
-    return {
-      title: thread.title,
-      iconUrl: scopeState.projects.find((candidate) => candidate.id === projectId)?.iconUrl ?? null
-    }
+  /** The conversation whose agent is working on one browser tab, when one is. */
+  function agentThreadFor(tab: ContextSidebarTab): AgentTabThread | null {
+    return tab.kind === 'browser' ? agentTabThread(tab.id, tab.threadId) : null
   }
 
   /** Closing a popup rail tab destroys that popup page. */

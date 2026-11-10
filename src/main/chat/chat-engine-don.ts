@@ -43,6 +43,14 @@ export interface PendingDonDelegation {
 /** The handoffs Don has made and has not yet been told about. */
 export class DonDelegations {
   private readonly pending = new Map<string, PendingDonDelegation>()
+  /**
+   * Runs whose next settled turn is the user's own reply, not a handoff.
+   *
+   * The user answering a delegated thread reads the answer there. Reporting it
+   * back into the group again would show the same reply twice and read as if the
+   * work had just been handed over, so the next settle is not reported.
+   */
+  private readonly directReplies = new Set<string>()
 
   remember(delegation: PendingDonDelegation): void {
     this.pending.set(delegation.runThreadId, delegation)
@@ -69,6 +77,16 @@ export class DonDelegations {
   /** Forget one handoff, when the run could not actually be started. */
   forget(runThreadId: string): void {
     this.pending.delete(runThreadId)
+  }
+
+  /** Mark the next turn on this run as answered directly by the user. */
+  markDirectReply(runThreadId: string): void {
+    this.directReplies.add(runThreadId)
+  }
+
+  /** Take the mark for one settled turn, so only that turn is unreported. */
+  takeDirectReply(runThreadId: string): boolean {
+    return this.directReplies.delete(runThreadId)
   }
 }
 

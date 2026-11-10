@@ -30,6 +30,7 @@ import type {
 } from '../../../lib/types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { withoutTransportParts } from './chat-engine-message-merge'
+import type { DirectReplyTarget } from '../../../lib/types'
 import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine lifecycle-boot: one concern, moved verbatim from the composition root. */
@@ -350,6 +351,24 @@ export class ChatEngineLifecycleBoot {
         )
     )
     ipcMain.handle(
+      'agent:replyToThread',
+      (
+        _,
+        fromProjectId: string,
+        fromThreadId: string,
+        target: DirectReplyTarget,
+        text: string,
+        attachments: PromptAttachment[]
+      ) =>
+        this.host.sendDirectReply({
+          fromProjectId,
+          fromThreadId,
+          target,
+          text,
+          attachments
+        })
+    )
+    ipcMain.handle(
       'agent:chooseBrainstormEntry',
       (_, projectId: string, threadId: string, choice: BrainstormEntryChoice) =>
         this.host.chooseBrainstormEntry(projectId, threadId, choice)
@@ -572,6 +591,26 @@ export class ChatEngineLifecycleBoot {
     )
     ipcMain.handle('agent:listQuestions', (_, projectId: string, threadId: string) =>
       this.host.listQuestions(projectId, threadId)
+    )
+    // The attention the threads this conversation dispatched are waiting on. The
+    // cards are the children's own requests, so the answer settles them directly
+    // instead of travelling through the agent that dispatched the work.
+    ipcMain.handle(
+      'agent:listDelegatedAttention',
+      async (_, projectId: string, threadId: string) => {
+        const { listDelegatedAttention, logDelegatedAttentionFailure } =
+          await import('../delegated-attention-service')
+        try {
+          return await listDelegatedAttention(
+            this.host,
+            validateEntityId(projectId, 'Project ID'),
+            validateEntityId(threadId, 'Thread ID')
+          )
+        } catch (error) {
+          logDelegatedAttentionFailure(error)
+          return []
+        }
+      }
     )
     // A side chat opened from a card keeps the user active while it is in use,
     // so the card's countdown stays held. This carries no answer or decision.

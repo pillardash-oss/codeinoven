@@ -887,6 +887,28 @@ const MAINTENANCE_STEPS: readonly MaintenanceStep[] = [
           : 'unexpected result'
       return { level: result.ok ? 'info' : 'warn', label: 'fts optimize', detail }
     }
+  },
+  {
+    // Query-planner statistics, moved off the boot path.
+    //
+    // This used to run on the main connection inside the synchronous database
+    // init. `PRAGMA optimize` with the 0x10002 mask decides per table whether
+    // ANALYZE is due and reads the indexes of every table it considers, so on a
+    // multi-hundred-megabyte file it is a main-thread stall in the middle of
+    // startup, and on a small one it is a few milliseconds of work the first
+    // paint has no use for. Here it belongs to the same due-checked pass as the
+    // checkpoint, the integrity probe and the FTS optimize: on this worker, one
+    // serialized task, after the window is up.
+    key: 'statistics_at',
+    intervalMs: DAY_MS,
+    run: () => {
+      try {
+        connection().pragma('optimize = 0x10002')
+        return { level: 'info', label: 'PRAGMA optimize', detail: 'planner statistics refreshed' }
+      } catch (error) {
+        return { level: 'warn', label: 'PRAGMA optimize', detail: String(error) }
+      }
+    }
   }
 ]
 

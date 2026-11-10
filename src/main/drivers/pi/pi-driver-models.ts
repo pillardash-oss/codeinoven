@@ -15,7 +15,7 @@ import {
 import type { PiAuthConfigService } from '../../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../../providers/base-url-provider-service'
 import { apiKeyEnvVarFor } from '../../providers/base-url-provider-service'
-import type { SecretVault } from '../../storage/secret-vault'
+import type { SecretsService } from '../../secrets/secrets-service'
 import type { StorageEngine } from '../../storage/storage-engine'
 import { Logger } from '../../system/logger'
 import {
@@ -72,7 +72,7 @@ export interface PiModelCatalogHost {
   readonly agentDirectory: string | undefined
   readonly accountEnvironment: NodeJS.ProcessEnv
   readonly baseUrlProviders: BaseUrlProviderService | undefined
-  readonly secretVault: SecretVault | undefined
+  readonly secretVault: SecretsService | undefined
   readonly storage: StorageEngine
   readonly authConfig: PiAuthConfigService
   /** Last project a live session belonged to, for a caller that omits one. */

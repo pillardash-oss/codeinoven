@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { SecretVault } from '../../../src/main/storage/secret-vault'
+import { mcpOAuthStateRef } from '../../../src/main/secrets/secret-refs'
+import { SecretsService } from '../../../src/main/secrets/secrets-service'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { UtilityRegistryService } from '../../../src/main/utilities/utility-registry-service'
 import { McpOAuthService } from '../../../src/main/utilities/mcp-oauth/mcp-oauth-service'
@@ -23,6 +24,9 @@ import type {
 const { safeStorage } = vi.hoisted(() => ({
   safeStorage: {
     isAsyncEncryptionAvailable: vi.fn(async () => true),
+    // The vault reports itself unavailable on Linux when Chromium fell back to
+    // the plaintext `basic_text` backend, so every mock has to answer this too.
+    getSelectedStorageBackend: vi.fn(() => 'gnome_libsecret'),
     encryptStringAsync: vi.fn(async (value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
     decryptStringAsync: vi.fn(async (buffer: Buffer) => ({
       result: buffer.toString('utf-8').replace(/^enc:/u, ''),
@@ -229,7 +233,7 @@ function asMcpUtility(utility: UtilityDefinition | null): UtilityDefinitionFor<'
 let root: string
 let configRoot: string
 let storage: StorageEngine
-let vault: SecretVault
+let vault: SecretsService
 let registry: UtilityRegistryService
 let fake: FakeOAuthServer
 const services: McpOAuthService[] = []
@@ -239,7 +243,7 @@ beforeEach(async () => {
   configRoot = join(root, 'config')
   await mkdir(configRoot, { recursive: true })
   storage = new StorageEngine(configRoot)
-  vault = new SecretVault(storage)
+  vault = SecretsService.for(storage)
   registry = new UtilityRegistryService(storage)
   fake = await startFakeOAuthServer()
 })
@@ -362,7 +366,7 @@ describe('McpOAuthService', () => {
 
     expect(status.state).toBe('not_connected')
     expect(status.clientId).toBeUndefined()
-    expect(await vault.resolveMcpOAuthState(utility.id)).toBeNull()
+    expect(await vault.resolveOrNull(mcpOAuthStateRef(utility.id))).toBeNull()
     const stored = asMcpUtility(await registry.get(utility.id))
     expect(stored.config.oauth).toBeUndefined()
     expect(await service.accessToken(stored)).toBeNull()

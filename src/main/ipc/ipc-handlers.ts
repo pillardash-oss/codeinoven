@@ -40,7 +40,8 @@ import { createThreadWorkspaceRoots } from '../editor/project-files/thread-works
 import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
 import { SyncPeerService, syncPeerGit } from '../git/sync-peer-service'
-import { SecretVault } from '../storage/secret-vault'
+import { gitCredentialRef } from '../secrets/secret-refs'
+import { SecretsService } from '../secrets/secrets-service'
 import { registerOvenIpc } from '../ovens/oven-ipc'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { DiagnosticsService } from '../system/diagnostics-service'
@@ -248,7 +249,7 @@ export function registerIpcHandlers(
     store: threadManager,
     onSettled: broadcastThreadBranchUpdated
   }
-  const vault = options.vault ?? new SecretVault(storage)
+  const vault = options.vault ?? SecretsService.for(storage)
   const ovenService = registerOvenIpc(
     storage,
     vault,
@@ -275,7 +276,6 @@ export function registerIpcHandlers(
     threads: threadManager,
     projects: projectManager
   }).reader
-  const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
   const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)
   const diagnosticsService = new DiagnosticsService(database, () =>

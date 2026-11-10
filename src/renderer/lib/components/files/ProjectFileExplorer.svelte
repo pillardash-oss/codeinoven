@@ -25,6 +25,7 @@
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
+  import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
   import ProjectFileExplorerDialogs from './ProjectFileExplorerDialogs.svelte'
@@ -102,6 +103,26 @@
     onToggleConflicts,
     onFileSelect = undefined
   }: Props = $props()
+
+  /**
+   * The directory the Secrets action should edit.
+   *
+   * A selected folder is the group itself, which is what a monorepo needs: the user
+   * clicks `packages/backend` and creates that package's secrets. A selected file
+   * contributes its folder, and no selection means the project root.
+   */
+  function secretsGroupFor(path: string | null): string {
+    if (!path) return ''
+    const parent = parentDirectory(path)
+    const entry = projectState.entriesByDirectory[parent]?.find(
+      (candidate) => candidate.path === path
+    )
+    if (entry) return entry.kind === 'directory' ? path : parent
+    return path in projectState.entriesByDirectory ? path : parent
+  }
+
+  const secretsTarget = $derived(secretsGroupFor(selectedPath))
+
   let filterQuery = $state('')
   let filterOpen = $state(false)
   let revealedSearchPath = $state<string | null>(null)
@@ -1376,6 +1397,15 @@
     onToggleFilter={() => (filterOpen ? closeFilter() : void openFilter())}
     onRevealActiveFile={locateActiveFileTab}
     onRefresh={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
+    {secretsTarget}
+    onOpenSecrets={() =>
+      projectEnvDock.open({
+        projectId,
+        projectName,
+        iconUrl: projectIconUrl,
+        color: projectAccentColor,
+        group: secretsTarget
+      })}
   />
 
   <ProjectFileExplorerFilters

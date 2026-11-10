@@ -1,7 +1,7 @@
 import { OPENCODE_COMMAND, isOpenCodeV2Version } from '../../lib/opencode-version'
 import { cachedOpenCodeInstallation } from '../agents/opencode-installation'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type { HarnessDriver } from './driver.interface'
 import { OpenCodeDriver } from './opencode-driver'
 import { OpenCodeV2Driver } from './opencode-v2-driver'
@@ -17,7 +17,7 @@ import { OpenCodeV2Driver } from './opencode-v2-driver'
  */
 export function createOpenCodeHarnessDriver(
   baseUrlProviders?: BaseUrlProviderService,
-  secretVault?: SecretVault,
+  secretVault?: SecretsService,
   accountEnvironment: NodeJS.ProcessEnv = {}
 ): HarnessDriver {
   const installation = cachedOpenCodeInstallation()

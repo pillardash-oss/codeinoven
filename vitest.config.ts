@@ -1,13 +1,14 @@
 import { defineConfig } from 'vitest/config'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import { resolve } from 'path'
+import { compatSourcePlugin } from './scripts/lib/vite-compat-source-plugin.ts'
 
 // `import.meta.dirname` is what Vite's native config loader supports; `__dirname`
 // is the one feature that warns under `configLoader: 'native'`.
 const projectRoot = import.meta.dirname
 
 export default defineConfig({
-  plugins: [svelte()],
+  plugins: [svelte(), compatSourcePlugin()],
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],

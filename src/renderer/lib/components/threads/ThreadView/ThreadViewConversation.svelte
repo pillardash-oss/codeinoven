@@ -28,6 +28,7 @@
   import SpeechPlaybackButton from '../../speech/SpeechPlaybackButton.svelte'
   import { speechController } from '../../../speech/speech-controller.svelte'
   import WorkingTrace from '../WorkingTrace.svelte'
+  import GroupReplyBubble from '../GroupReplyBubble.svelte'
   import TraceActivityLine from '../TraceActivityLine.svelte'
   import { loadCachedPanelModule, PANEL_KEYS } from '$lib/lazy-panel'
   import { runReceiptState } from '$lib/stores/run-receipt.svelte'
@@ -52,7 +53,10 @@
   import { assistantAccentColor, getAssistantIcon } from '$lib/assistant-icons'
   import CioUserMark from '$lib/components/icons/cio/CioUserMark.svelte'
   import ThreadMessageSpeaker from '../ThreadMessageSpeaker.svelte'
+  import DelegatedAttentionStack from '../DelegatedAttentionStack.svelte'
+  import CioReplyMark from '$lib/components/icons/cio/CioReplyMark.svelte'
   import { isGroupThread } from '$shared/types'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { conversationAnswerText, conversationProseText } from '../conversation-text'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -62,13 +66,19 @@
   import { logRendererDev } from '$lib/system/renderer-logger'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import type { AgentMessage, AgentPart, TurnStreamCompletedTurn } from '$shared/types'
+  import type {
+    AgentMessage,
+    AgentPart,
+    DirectReplyTarget,
+    TurnStreamCompletedTurn
+  } from '$shared/types'
   import { formatTokenRate } from '$lib/token-rate.svelte'
   import {
     auditReportForTurn,
     changesBeforeSteer,
     getTurnFinalText,
     isActivityOnlyUserMessage,
+    turnStartIndexForEnd,
     type TraceSegmentLayout
   } from '../thread-turn-parts'
   import {
@@ -181,6 +191,13 @@
         color: assistantAccentColor(author)
       }
     }
+    return groupSpeakerForThread()
+  }
+
+  /** The speaker of this thread's own replies, when the thread runs as one
+   *  assistant. Used before any message exists, so a live reply can open with the
+   *  name it will answer under. */
+  function groupSpeakerForThread(): GroupSpeaker | null {
     const assistant = assistants.assistantForTask(board.handleAgentEvent.thread)
     if (!assistant) return null
     return {
@@ -188,6 +205,84 @@
       icon: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null),
       color: assistantAccentColor(assistant)
     }
+  }
+
+  /**
+   * The conversation one group reply came from.
+   *
+   * A reply written into a group since messages started carrying it names the
+   * thread it spoke from. A reply written before that keeps it in its own id: a
+   * delegated answer is `don-delegation-<runThreadId>` (and its paused line
+   * `-status`), and a group reply from an assistant is
+   * `group-chat-reply-<runThreadId>-<timestamp>`. Reading the id is what makes
+   * an answer that was already in the transcript answerable, instead of waiting
+   * for the next one.
+   */
+  function sourceThreadIdFor(msg: AgentMessage): string | null {
+    if (msg.author?.threadId) return msg.author.threadId
+    const delegationPrefix = 'don-delegation-'
+    if (msg.id.startsWith(delegationPrefix)) {
+      const id = msg.id.slice(delegationPrefix.length).replace(/-status$/u, '')
+      return id.length > 0 ? id : null
+    }
+    const chatReply = /^group-chat-reply-(.+)-\d+$/u.exec(msg.id)
+    return chatReply?.[1] ?? null
+  }
+
+  /**
+   * The conversation one group bubble came from, as a reply target.
+   *
+   * Every assistant reply in a group is answerable: the words go to the thread
+   * that spoke them, never to the group's own assistant, so a peer's report is
+   * answered in the conversation that is doing the work. The host's own reply
+   * has no other thread, so it answers into this conversation: replying to Don
+   * is chatting with Don. The project is the thread's own where the message
+   * names it, the known list where it lives beside this one, and the open
+   * conversation's project as the last honest answer for an archived child.
+   */
+  function replyTargetFor(msg: AgentMessage): DirectReplyTarget | null {
+    if (!groupThread || msg.role !== 'assistant') return null
+    const openThread = board.handleAgentEvent.thread
+    const threadId = sourceThreadIdFor(msg) ?? openThread.id
+    const known = board.props.assistantSpaceThreads?.find((thread) => thread.id === threadId)
+    const projectId = msg.author?.projectId ?? known?.projectId ?? openThread.projectId
+    if (!projectId) return null
+    const speaker = groupSpeakerFor(msg)
+    const title =
+      threadId === openThread.id
+        ? (openThread.title ?? 'this conversation')
+        : (known?.title ?? speaker?.name ?? msg.author?.name ?? 'that conversation')
+    // The `@thread:` marker is how the group links back to the run's own thread;
+    // it is not part of what the speaker said, so a quote never carries it.
+    const excerpt = messageText(msg)
+      .replace(/@thread:\S+/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .slice(0, 240)
+    return {
+      projectId,
+      threadId,
+      title,
+      speakerName: speaker?.name ?? msg.author?.name ?? title,
+      messageId: msg.id,
+      excerpt
+    }
+  }
+
+  /**
+   * Attach one group bubble to the composer, so the next message answers it.
+   *
+   * Only the container is a door. A double click inside the prose is how the
+   * user selects a word, so a live selection (or a click that landed in the
+   * action row) leaves the transcript alone.
+   */
+  function beginReply(event: MouseEvent, msg: AgentMessage): void {
+    if (!groupThread) return
+    if ((window.getSelection()?.toString() ?? '').length > 0) return
+    const element = event.target instanceof Element ? event.target : null
+    if (element?.closest('[data-message-actions], [data-message-speaker]')) return
+    const target = replyTargetFor(msg)
+    if (target) board.directReply.attach(target)
   }
 
   /**
@@ -406,10 +501,12 @@
       <!-- The live or settled trace for a turn with no mirrored assistant
                row. It renders as its own block so a held steer can be placed
                after it instead of above the work it interrupts. -->
-      {#snippet liveTurnTrace(traceParts: AgentPart[], traceBusy: boolean)}
+      {#snippet liveTurnTrace(traceParts: AgentPart[], traceBusy: boolean, inGroupBubble = false)}
         <WorkingTrace
           parts={traceParts}
           open
+          compact={inGroupBubble}
+          bodyMaxHeightRem={inGroupBubble ? 14 : undefined}
           busy={traceBusy}
           done={!traceBusy}
           note={traceBusy ? board.unmirroredTraceStartTime.workingStatusNote : null}
@@ -478,6 +575,9 @@
           parts={turn.parts}
           done
           busy={false}
+          compact={groupThread}
+          flat={groupThread}
+          bodyMaxHeightRem={groupThread ? 14 : undefined}
           totalSteps={turn.totalSteps}
           turnSubagentParts={turn.subagentParts}
           turnCompacted={turn.turnCompacted}
@@ -517,7 +617,11 @@
       <!-- One slice of a turn's working trace. A turn the reader answered is cut
            at that answer, so the work that led to the question, the answer card,
            and the work the answer unblocked read in the order they happened. -->
-      {#snippet turnTraceSegment(segment: TraceSegmentLayout, traceMsg: AgentMessage)}
+      {#snippet turnTraceSegment(
+        segment: TraceSegmentLayout,
+        traceMsg: AgentMessage,
+        inlineInBubble = false
+      )}
         {@const turnStart = segment.turnStart}
         {@const turnDone = board.pollStreamParts.transcriptIndex.turnCompleted[turnStart] ?? false}
         {@const isTraceTurnLatest =
@@ -551,7 +655,10 @@
           turnEndIndex,
           turnEndIndex === board.loadOlderMessages.messages.length - 1
         )}
-        {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
+        <!-- A group reply's answer is its own text in its own bubble, so the work
+             inside that bubble never carries a copy of it: that copy is what made
+             the trace show a clipped second answer above the real one. -->
+        {@const traceHoldsClosingText = !groupThread && traceIsLive && !turnClosingVisible}
         {@const traceIsLiveTurn = isCurrentAssistantTurn || traceIsLive || traceIsRestored}
         {@const turnClosingTextId =
           turnClosingVisible && turnClosingText ? turnClosingText.id : null}
@@ -611,9 +718,12 @@
         )}
         {@const segmentCheckpoint =
           board.pollStreamParts.transcriptIndex.checkpoint[turnStart] ?? null}
-        {#if shouldMountWorkingTrace(turnParts.length, segmentBusy)}
+        {#snippet segmentTrace()}
           <WorkingTrace
             parts={turnParts}
+            compact={groupThread}
+            flat={groupThread}
+            bodyMaxHeightRem={groupThread ? 14 : undefined}
             open={isCurrentAssistantTurn || traceIsLive}
             busy={segmentBusy}
             done={segmentDone}
@@ -709,6 +819,15 @@
             onOpenSubagent={board.unmirroredTraceStartTime.openSubagent}
             onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
           />
+        {/snippet}
+        {#if shouldMountWorkingTrace(turnParts.length, segmentBusy)}
+          <!-- In a group conversation a turn's work is only ever drawn by the
+               reply that closes it (`inlineInBubble`). Any other call is a
+               caller that still expects work above a bubble, and that is exactly
+               the second, speaker-less trace this screen must never show. -->
+          {#if !groupThread || inlineInBubble}
+            {@render segmentTrace()}
+          {/if}
         {/if}
       {/snippet}
       {#each board.composerScope.visibleMessages as msg, msgIndex (msg.id)}
@@ -718,12 +837,14 @@
         <!-- The work of the turn a steer interrupted sits directly above the
                  message that closed it, which is the order the run was lived in:
                  prompt, its trace, the steer, then the next turn's trace. -->
-        {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
-          {@render completedTurnTraceBlock(view.turn)}
-        {/each}
+        {#if !groupThread}
+          {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
+            {@render completedTurnTraceBlock(view.turn)}
+          {/each}
+        {/if}
         <!-- A steer still held under the running trace: its work is the
                  interrupted turn's, so that trace renders above the message. -->
-        {#if absIndex === board.buildSpecActionPrompt.heldSteerAbsIndex && !board.pollStreamParts.turnAboveHasAssistantRow(absIndex)}
+        {#if !groupThread && absIndex === board.buildSpecActionPrompt.heldSteerAbsIndex && !board.pollStreamParts.turnAboveHasAssistantRow(absIndex)}
           {@render liveTurnTrace(board.composerScope.unmirroredTraceParts, true)}
         {/if}
         {@const citedParts = msg.parts.filter(
@@ -838,7 +959,7 @@
               {:else}
                 {@const previousTurnAudit = board.editVideoNote.getPreviousTurnAudit(absIndex)}
                 {@const explicitPresentation = explicitMessagePresentation(msg)}
-                {#if previousTurnAudit}
+                {#if previousTurnAudit && !groupThread}
                   <div class="mb-1 flex items-center gap-1.5 self-end text-[0.625rem] text-dimmed">
                     <span>Previous turn completed</span>
                     <span>·</span>
@@ -861,6 +982,9 @@
                 {@const leftoverReferences = (msg.projectReferences ?? []).filter(
                   (reference) => !inlinedPaths.has(reference.path)
                 )}
+                {@const replyParts = msg.parts.filter(
+                  (part): part is Extract<AgentPart, { type: 'reply' }> => part.type === 'reply'
+                )}
                 <!-- The user's own message reads as a ledger row: only its
                          left edge is drawn, a 2px accent against the transcript,
                          and every corner is square. -->
@@ -880,6 +1004,32 @@
                     >
                       <span class="truncate font-medium text-foreground">{userName}</span>
                       <CioUserMark name={userName} />
+                    </div>
+                  {/if}
+                  {#if replyParts.length > 0}
+                    <div class="mb-2 flex flex-col gap-1">
+                      {#each replyParts as part (part.id)}
+                        <!-- The quote is the way back to the words being answered:
+                             the reply is still in this transcript, so opening the
+                             quote scrolls to it and marks it. -->
+                        <button
+                          type="button"
+                          class="flex w-full max-w-full items-start gap-2 border-l-2 border-accent/60 bg-app px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                          title={`Go to the reply from ${part.speakerName} in ${part.title}`}
+                          aria-label={`Go to the reply from ${part.speakerName} in ${part.title}`}
+                          onclick={() => void board.directReply.reveal(part.repliedMessageId)}
+                        >
+                          <CioReplyMark size={11} class="mt-0.5 shrink-0 text-accent" />
+                          <span class="min-w-0">
+                            <span class="block truncate text-[0.6875rem] text-muted">
+                              {part.speakerName} · {part.title}
+                            </span>
+                            <span class="line-clamp-2 block text-[0.75rem] text-foreground">
+                              {part.excerpt}
+                            </span>
+                          </span>
+                        </button>
+                      {/each}
                     </div>
                   {/if}
                   {#if leftoverReferences.length}
@@ -1133,9 +1283,11 @@
 
           {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || isTurnEnd}
             <div class="group mb-6 flex min-w-0 flex-col">
-              {#each traceSegmentsAbove as segment (segment.segmentIndex)}
-                {@render turnTraceSegment(segment, msg)}
-              {/each}
+              {#if !groupThread}
+                {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                  {@render turnTraceSegment(segment, msg)}
+                {/each}
+              {/if}
 
               {#if isTurnEnd}
                 <!-- Final text output + footer   hide only on the active in-progress turn -->
@@ -1203,6 +1355,8 @@
                       data-assistant-response
                       data-conversation-searchable
                       data-message-id={msg.id}
+                      role="group"
+                      ondblclick={(event) => beginReply(event, msg)}
                     >
                       <!-- Who answered. Drawn only in a group thread, and only
                            over the reply's text: the working trace above and
@@ -1210,14 +1364,42 @@
                            a speaker. -->
                       {#if groupThread}
                         {@const speaker = groupSpeakerFor(msg)}
+                        {@const replySource = replyTargetFor(msg)}
                         {#if speaker}
                           <ThreadMessageSpeaker
                             name={speaker.name}
                             icon={speaker.icon}
                             color={speaker.color}
                             class="mb-1.5"
+                            onOpen={replySource &&
+                            replySource.threadId !== board.handleAgentEvent.thread.id
+                              ? () =>
+                                  void openThreadById(replySource.projectId, replySource.threadId)
+                              : undefined}
                           />
                         {/if}
+                        <!-- The work this answer came from, inside the same reply:
+                             no band of its own, capped, and scrolling within that
+                             cap so it never resizes the bubble around it. A turn is
+                             stored as several rows, so the whole turn is drawn here
+                             from the row that closes it: nothing of this turn may
+                             render above the bubble instead. -->
+                        {@const turnOpeningIndex = turnStartIndexForEnd(
+                          board.loadOlderMessages.messages,
+                          absIndex,
+                          board.pollStreamParts.isTransparentTurnMessage
+                        )}
+                        {@const turnMessageIds = new Set(
+                          board.loadOlderMessages.messages
+                            .slice(turnOpeningIndex, absIndex + 1)
+                            .map((message) => message.id)
+                        )}
+                        {#each board.pollStreamParts.completedTurnViews.filter( (view) => turnMessageIds.has(view.anchorId) ) as view (view.turn.endTs)}
+                          {@render completedTurnTraceBlock(view.turn)}
+                        {/each}
+                        {#each board.pollStreamParts.traceSegmentLayout.filter((slice) => slice.turnStart === turnOpeningIndex) as segment (segment.segmentIndex)}
+                          {@render turnTraceSegment(segment, msg, true)}
+                        {/each}
                       {/if}
                       {#if isReadingActiveLine}
                         <!-- The read-along only exists while a turn is being
@@ -1347,7 +1529,7 @@
 
                   {#if !board.switchProject.busy || !isLatest}
                     <!-- Footer shown once per turn on the last assistant message -->
-                    <div class="mt-1 flex flex-col">
+                    <div class="mt-1 flex flex-col" data-message-actions>
                       <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                         <div class="flex shrink-0 items-center gap-0.5">
                           <button
@@ -1421,6 +1603,19 @@
                           >
                             <CioDownload size={12} />
                           </button>
+                          {#if groupThread}
+                            {@const replyTarget = replyTargetFor(msg)}
+                            {#if replyTarget}
+                              <button
+                                class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                                aria-label={`Reply to ${replyTarget.speakerName}`}
+                                title="Reply to this message"
+                                onclick={() => board.directReply.attach(replyTarget)}
+                              >
+                                <CioReplyMark size={12} />
+                              </button>
+                            {/if}
+                          {/if}
                         </div>
                         <div
                           class="pointer-events-none flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 whitespace-nowrap opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
@@ -1536,21 +1731,58 @@
             </div>
           {/if}
         {/if}
-        {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
-          {@render turnTraceSegment(
-            segment,
-            board.loadOlderMessages.messages[segment.turnStart] ?? msg
-          )}
-        {/each}
+        {#if !groupThread}
+          {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
+            {@render turnTraceSegment(
+              segment,
+              board.loadOlderMessages.messages[segment.turnStart] ?? msg
+            )}
+          {/each}
+        {/if}
       {/each}
 
+      <!-- Dispatched threads answer here, as replies from their own assistant or
+           project, so the conversation can hold several threads at once and none
+           of them has to wait for this one to be idle. -->
+      {#key `${board.handleAgentEvent.thread.projectId}:${board.handleAgentEvent.thread.id}`}
+        <DelegatedAttentionStack
+          projectId={board.handleAgentEvent.thread.projectId}
+          threadId={board.handleAgentEvent.thread.id}
+        />
+      {/key}
+
       {#if (board.buildSpecActionPrompt.pendingLiveTurn && board.buildSpecActionPrompt.heldSteerAbsIndex === -1) || board.pollStreamParts.settledTurnParts.length > 0}
-        {@render liveTurnTrace(
-          board.buildSpecActionPrompt.pendingLiveTurn
-            ? board.composerScope.unmirroredTraceParts
-            : board.pollStreamParts.settledTurnParts,
-          Boolean(board.buildSpecActionPrompt.pendingLiveTurn)
-        )}
+        {@const tracePartsForTurn = board.buildSpecActionPrompt.pendingLiveTurn
+          ? board.composerScope.unmirroredTraceParts
+          : board.pollStreamParts.settledTurnParts}
+        {@const traceBusyForTurn = Boolean(board.buildSpecActionPrompt.pendingLiveTurn)}
+        {#if groupThread}
+          <!-- In a group conversation the work is part of the reply, not a band
+               above it: the bubble opens with who is speaking, the trace sits
+               inside it at one fixed height, and the folded line underneath still
+               says what is happening. -->
+          {@const liveSpeaker = groupSpeakerForThread()}
+          <GroupReplyBubble
+            name={liveSpeaker?.name ?? board.handleAgentEvent.thread.title}
+            icon={liveSpeaker?.icon ?? null}
+            color={liveSpeaker?.color}
+          >
+            {@render liveTurnTrace(tracePartsForTurn, traceBusyForTurn, true)}
+            {#if traceBusyForTurn}
+              <TraceActivityLine
+                parts={board.pollStreamParts.latestTurnRenderableParts}
+                folded={!agentRuns.isTraceOpen(
+                  board.handleAgentEvent.thread.projectId,
+                  board.handleAgentEvent.thread.id
+                )}
+                onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
+                formatProse={conversationLiveProse}
+              />
+            {/if}
+          </GroupReplyBubble>
+        {:else}
+          {@render liveTurnTrace(tracePartsForTurn, traceBusyForTurn)}
+        {/if}
       {/if}
 
       {#if board.sources.specGenerationTraceActive && board.sources.specGenerationTraceParts.length > 0}
@@ -1591,7 +1823,7 @@
         {/if}
       {/if}
 
-      {#if board.pollStreamParts.conversationBusy}
+      {#if board.pollStreamParts.conversationBusy && !groupThread}
         <TraceActivityLine
           parts={board.pollStreamParts.latestTurnRenderableParts}
           folded={!agentRuns.isTraceOpen(

@@ -23,8 +23,10 @@ import {
   UTILITY_SUGGEST_TOOL_NAME
 } from '../../../lib/gateway-tools'
 import {
+  ORCHESTRATION_ANSWER_TOOL_NAME,
   ORCHESTRATION_DISPATCH_TOOL_NAME,
   ORCHESTRATION_STATUS_TOOL_NAME,
+  ORCHESTRATION_CONTINUE_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../../lib/orchestration-tools'
 import {
@@ -201,6 +203,10 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.orchestrate(state, input, 'dispatch')
       case ORCHESTRATION_STATUS_TOOL_NAME:
         return (state, input) => this.orchestrate(state, input, 'status')
+      case ORCHESTRATION_CONTINUE_TOOL_NAME:
+        return (state, input) => this.orchestrate(state, input, 'continue')
+      case ORCHESTRATION_ANSWER_TOOL_NAME:
+        return (state, input) => this.orchestrate(state, input, 'answer')
       case DON_USER_NAME_TOOL_NAME:
         return (state, input) => this.don(state, input, 'user-name')
       case GROUP_CHAT_REPLY_TOOL_NAME:

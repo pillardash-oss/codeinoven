@@ -38,6 +38,7 @@ import {
   type PendingDonDelegation
 } from '../chat-engine-don'
 import { modelKey } from '../../../lib/model-keys'
+
 import {
   DEFAULT_AGENT_BEHAVIOR_PROMPT,
   gateCuaDriverBehaviorPrompt
@@ -499,6 +500,24 @@ export class ChatEngineTurnsDispatch {
     return this.host.don?.resolveAuthor?.(delegation.author.assistantId) ?? delegation.author
   }
 
+  /**
+   * The same speaker, naming the run thread it spoke from.
+   *
+   * A group bubble is a door back into the conversation that produced it, so the
+   * message carries that thread's id: the conversation the user answers is the
+   * one whose answer they are reading, and without the id the transcript could
+   * only guess from the assistant's name.
+   */
+  private delegationAuthorWithThread(
+    delegation: PendingDonDelegation
+  ): PendingDonDelegation['author'] {
+    return {
+      ...this.delegationAuthor(delegation),
+      projectId: ASSISTANT_SPACE_ID,
+      threadId: delegation.runThreadId
+    }
+  }
+
   async reportDonDelegation(delegation: PendingDonDelegation, status: string): Promise<void> {
     if (!delegation.donThreadId) return
     try {
@@ -532,7 +551,7 @@ export class ChatEngineTurnsDispatch {
           role: 'assistant',
           origin: 'assistant',
           visibility: 'conversation',
-          author: this.delegationAuthor(delegation),
+          author: this.delegationAuthorWithThread(delegation),
           parts: [
             {
               type: 'text',
@@ -587,7 +606,7 @@ export class ChatEngineTurnsDispatch {
           role: 'assistant',
           origin: 'assistant',
           visibility: 'conversation',
-          author: this.delegationAuthor(delegation),
+          author: this.delegationAuthorWithThread(delegation),
           parts: [
             {
               type: 'text',

@@ -330,6 +330,28 @@ export interface PromptReference {
   kind?: 'selection' | 'design' | 'file' | 'video' | 'image' | 'svg' | 'html'
 }
 
+/**
+ * One conversation a user answers directly from the conversation that collected it.
+ *
+ * A group chat shows the replies several threads produced, so a bubble is a door
+ * back into the thread that spoke it: attaching it to the composer addresses the
+ * user's next words to that thread, and the quote in their message keeps the
+ * reply they answered.
+ */
+export interface DirectReplyTarget {
+  /** The conversation the words are delivered to. */
+  projectId: string
+  threadId: string
+  /** That conversation's title, snapshotted for the quote. */
+  title: string
+  /** Who spoke the answered reply. */
+  speakerName: string
+  /** The message in the open conversation that was answered, for the jump back. */
+  messageId: string
+  /** A short excerpt of what was answered. */
+  excerpt: string
+}
+
 /** A project-relative file or directory visibly attached to an outgoing prompt. */
 export interface PromptProjectReference {
   id: string

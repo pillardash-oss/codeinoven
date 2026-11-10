@@ -1,7 +1,4 @@
 <script lang="ts">
-  import AudioPlayer from '../ui/AudioPlayer.svelte'
-  import VideoPlayer from '../ui/VideoPlayer.svelte'
-
   interface Props {
     src: string
     kind: 'audio' | 'video'
@@ -21,8 +18,15 @@
      no border. Both players are the app's own, so their controls read as part of
      the application rather than as a platform widget dropped into a message, and
      a source that fails says so instead of leaving a dead control bar. -->
+<!-- The players are fetched only when a message actually carries media: a
+     conversation without a recording never needed the transport controls, and
+     both chunks stay out of the first screen's eager closure. -->
 {#if kind === 'video'}
-  <VideoPlayer {src} label={filename} onExpand={(at, playing) => onExpand(at, playing)} />
+  {#await import('../ui/VideoPlayer.svelte') then { default: VideoPlayer }}
+    <VideoPlayer {src} label={filename} onExpand={(at, playing) => onExpand(at, playing)} />
+  {/await}
 {:else}
-  <AudioPlayer {src} label={filename} onExpand={() => onExpand()} />
+  {#await import('../ui/AudioPlayer.svelte') then { default: AudioPlayer }}
+    <AudioPlayer {src} label={filename} onExpand={() => onExpand()} />
+  {/await}
 {/if}

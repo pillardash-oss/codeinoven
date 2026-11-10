@@ -177,7 +177,9 @@ export class BrowserServiceExtensionRuntime {
     // the page it is acting on and whether that page is the one on screen. The rest
     // of the lifecycle either concerns the tab's jar or belongs to a tab that is
     // going away, and a tab that goes away takes its own popups with it.
-    if (name === 'onUpdated' || name === 'onActivated') this.reportExtensionPageTabs(tabId)
+    if (name === 'onUpdated' || name === 'onActivated') {
+      this.reportExtensionPageTabs(tabId, { name, args })
+    }
   }
 
   /**
@@ -206,9 +208,19 @@ export class BrowserServiceExtensionRuntime {
    * nngceckbapebfimnlniiiahkandclblb`), so the app pushes the tab it knows instead.
    * See `browser-extension-page-tabs.ts`.
    */
-  reportExtensionPageTabs(tabId: string): void {
-    for (const contents of this.host.popupWindows.extensionPagesForTab(tabId)) {
-      this.pushExtensionPageTab(tabId, contents)
+  reportExtensionPageTabs(
+    tabId: string,
+    event?: { name: BrowserExtensionTabEventName; args: unknown[] }
+  ): void {
+    // Both surfaces an extension hosts beside the page: its action popup and its
+    // side panel. A panel is a surface of the window, not of a tab, so it follows
+    // whichever tab is on screen and has to be told the same fact the popup is.
+    const pages = [
+      ...this.host.popupWindows.extensionPagesForTab(tabId),
+      ...this.host.sidePanels.pagesForTab(tabId)
+    ]
+    for (const contents of pages) {
+      this.pushExtensionPageTab(tabId, contents, event)
     }
   }
 
@@ -259,12 +271,16 @@ export class BrowserServiceExtensionRuntime {
    * what makes an autofill flow correct rather than merely quiet: the extension
    * messages that id, and the message lands in the page's content script.
    */
-  pushExtensionPageTab(tabId: string, contents: WebContents): void {
+  pushExtensionPageTab(
+    tabId: string,
+    contents: WebContents,
+    event?: { name: BrowserExtensionTabEventName; args: unknown[] }
+  ): void {
     if (contents.isDestroyed()) return
     const snapshot = this.extensionPageTabSnapshot(tabId)
     if (!snapshot) return
     void contents
-      .executeJavaScript(extensionPageTabsScript(snapshot), true)
+      .executeJavaScript(extensionPageTabsScript(snapshot, event), true)
       .catch((error: unknown) => {
         Logger.dev('An extension page could not be told which tab it acts on', {
           tabId,
@@ -364,6 +380,14 @@ export class BrowserServiceExtensionRuntime {
     if (!tab) return
     const contents: WebContents | undefined = tab.view.webContents
     if (!contents || contents.isDestroyed()) return
+    // A side panel stays open across a tab switch, so it is pointed at the tab the
+    // user just moved to before the activation is published: the push that follows
+    // then carries the new page rather than the one that was left behind.
+    this.host.sidePanels.followActiveTab({
+      projectId: tab.projectId,
+      boxId: tab.boxId,
+      appTabId: tabId
+    })
     this.host.popupWindows.followActiveTab(
       { tabId, projectId: tab.projectId, threadId: tab.threadId, boxId: tab.boxId },
       (extensionId) => this.host.extensions.popupUrlFor(extensionId, tab.projectId, tab.boxId)

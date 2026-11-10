@@ -1,7 +1,7 @@
 import { invoke } from '$lib/ipc.svelte'
 
 import { workspaceState } from '$lib/stores/workspace.svelte'
-import { browserAddressFocus } from '$lib/stores/browser-address-focus'
+import { openThreadBrowserFor } from '$lib/stores/thread-browser-open'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { rendererRecovery, publishDraftActivity } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
@@ -374,19 +374,10 @@ export class ThreadViewEditVideoNote extends BoardUnit<ThreadView> {
    * takes the caret.
    */
   openThreadBrowser(): void {
-    const existingTabId = contextSidebarState.rememberedBrowserTabId
-    if (existingTabId) {
-      contextSidebarState.focus(existingTabId)
-      return
-    }
-    const tabId = contextSidebarState.openBrowserForContext(
-      '',
+    openThreadBrowserFor(
       this.root.handleAgentEvent.thread.projectId,
-      this.root.handleAgentEvent.thread.id,
-      undefined,
-      true
+      this.root.handleAgentEvent.thread.id
     )
-    browserAddressFocus.request(tabId)
   }
 
   /**

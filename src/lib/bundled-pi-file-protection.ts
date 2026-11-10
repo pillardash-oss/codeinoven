@@ -1,7 +1,16 @@
 import { AGENT_SECRET_ROOT } from './secret-request'
 
-/** Pinned entries cannot be removed; the global protection switch still applies. */
-export const PERMANENT_BUNDLED_PI_FILE_PATTERNS: readonly string[] = [`${AGENT_SECRET_ROOT}/**`]
+/**
+ * Pinned entries cannot be removed; the global protection switch still applies.
+ *
+ * `*.cio-backup` is what the app keeps when it rewrites an env file into
+ * references: that copy is the previous plaintext, so it is as sensitive as the
+ * file it came from and is protected even when the user's own list is empty.
+ */
+export const PERMANENT_BUNDLED_PI_FILE_PATTERNS: readonly string[] = [
+  `${AGENT_SECRET_ROOT}/**`,
+  '*.cio-backup'
+]
 
 /** Only the app-bundled Pi runtime consumes this policy. */
 export const BUNDLED_PI_FILE_POLICY = 'bundled-pi-file-policy.json'

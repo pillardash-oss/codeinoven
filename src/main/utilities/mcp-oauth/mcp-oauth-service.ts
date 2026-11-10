@@ -7,7 +7,8 @@ import type {
   UtilityDefinitionFor
 } from '../../../lib/types'
 import { Logger } from '../../system/logger'
-import type { SecretVault } from '../../storage/secret-vault'
+import { mcpOAuthClientRef } from '../../secrets/secret-refs'
+import type { SecretsService } from '../../secrets/secrets-service'
 import type { UtilityRegistryService } from '../utility-registry-service'
 import { VaultMcpOAuthStateStore } from './mcp-oauth-state-store'
 import { loadMcpOAuthProtocol, type McpOAuthProtocol } from './mcp-oauth-protocol'
@@ -44,7 +45,7 @@ export const MCP_OAUTH_CALLBACK_PATH = '/callback'
 
 export interface McpOAuthServiceDependencies {
   registry: UtilityRegistryService
-  vault: SecretVault
+  vault: SecretsService
   /** Delivers one authorization stage to every renderer that is showing it. */
   broadcast: (payload: McpOAuthEventPayload) => void
   /** Test seam: a shorter window than the real five minutes. */
@@ -107,7 +108,9 @@ export class McpOAuthService {
     const oauth = utility.config.oauth
     const state = await this.store(utilityId).load()
     const tokens = state?.tokens
-    const clientSecretStored = await this.dependencies.vault.resolveMcpOAuthClientSecret(utilityId)
+    const clientSecretStored = await this.dependencies.vault.resolveOrNull(
+      mcpOAuthClientRef(utilityId)
+    )
     const issuer = oauth?.issuer ?? state?.discovery?.authorizationServerUrl
     const clientId = oauth?.clientId ?? state?.clientInformation?.client_id
     const scope = tokens?.scope ?? oauth?.scope
@@ -180,7 +183,11 @@ export class McpOAuthService {
     }
     const clientSecret = request.clientSecret?.trim()
     if (clientSecret) {
-      await this.dependencies.vault.saveMcpOAuthClientSecret(utilityId, clientSecret)
+      await this.dependencies.vault.save(clientSecret, mcpOAuthClientRef(utilityId), {
+        scope: 'mcp-oauth',
+        ownerId: utilityId,
+        label: 'Capability OAuth client secret'
+      })
     }
 
     const session: AuthorizationSession = {
@@ -267,7 +274,7 @@ export class McpOAuthService {
       })
     }
     await this.store(utilityId).clear()
-    await this.dependencies.vault.removeMcpOAuthClientSecret(utilityId)
+    await this.dependencies.vault.remove(mcpOAuthClientRef(utilityId))
     this.lastErrors.delete(utilityId)
     this.challenges.delete(utilityId)
   }
@@ -295,7 +302,7 @@ export class McpOAuthService {
       const result = await protocol.authorizeMcp(
         this.provider(protocol, utility, {
           redirectUrl: defaultRedirectUrl(),
-          clientSecret: await this.dependencies.vault.resolveMcpOAuthClientSecret(utility.id),
+          clientSecret: await this.dependencies.vault.resolveOrNull(mcpOAuthClientRef(utility.id)),
           // A turn is not a browser: a flow that wants the user stops instead.
           onRedirect: () => {
             throw new Error('MCP OAuth authorization has to be completed in a browser')
@@ -398,7 +405,7 @@ export class McpOAuthService {
       clientId: request.clientId?.trim() || utility.config.oauth?.clientId,
       clientSecret:
         request.clientSecret?.trim() ||
-        (await this.dependencies.vault.resolveMcpOAuthClientSecret(utility.id)),
+        (await this.dependencies.vault.resolveOrNull(mcpOAuthClientRef(utility.id))),
       onRedirect: (authorizationUrl) => {
         this.dependencies.broadcast({
           utilityId: utility.id,
@@ -515,7 +522,7 @@ export class McpOAuthService {
       request.clientId?.trim() || previous?.clientId || state?.clientInformation?.client_id
     const confidentialClient = Boolean(
       state?.clientInformation?.client_secret ??
-      (await this.dependencies.vault.resolveMcpOAuthClientSecret(utility.id))
+      (await this.dependencies.vault.resolveOrNull(mcpOAuthClientRef(utility.id)))
     )
     const issuer = discovery?.authorizationServerUrl ?? previous?.issuer
     const scope = state?.tokens?.scope ?? request.scope?.trim() ?? previous?.scope
@@ -547,7 +554,7 @@ export class McpOAuthService {
     const clientId = utility.config.oauth?.clientId ?? state?.clientInformation?.client_id
     const clientSecret =
       state?.clientInformation?.client_secret ??
-      (await this.dependencies.vault.resolveMcpOAuthClientSecret(utility.id))
+      (await this.dependencies.vault.resolveOrNull(mcpOAuthClientRef(utility.id)))
     const body = new URLSearchParams({ token })
     if (clientId) {
       body.set('client_id', clientId)

@@ -15,6 +15,13 @@
   import { keymapState } from '../../keymap/keymap-state.svelte'
   import Switch from '../ui/Switch.svelte'
 
+  /** What a pinned pattern protects, so the row says why it cannot be removed. */
+  function permanentPatternDescription(pattern: string): string {
+    return pattern.endsWith('.cio-backup')
+      ? 'Previous contents kept when an env file is written'
+      : 'Secret-tool files in app data'
+  }
+
   interface Props {
     config: AppConfig
     settingsReady: boolean
@@ -211,7 +218,7 @@
       <li class="flex items-center justify-between gap-3 bg-elevated px-3 py-2">
         <div class="min-w-0">
           <code class="break-all text-xs">{pattern}</code>
-          <p class="text-xs text-dimmed">Secret-tool files in app data</p>
+          <p class="text-xs text-dimmed">{permanentPatternDescription(pattern)}</p>
         </div>
         <span class="shrink-0 text-xs font-medium text-muted">Permanent</span>
       </li>

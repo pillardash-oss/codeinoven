@@ -25,7 +25,7 @@ import { buildProcessEnvironmentAsync } from './cli-environment'
 import { attachmentReferences, attachmentTarget } from './attachment-reference'
 import { runHarnessCommand } from './harness-runtime'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import {
   clineApprovalRequest,
@@ -111,7 +111,7 @@ export class ClineDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault
+    private readonly secretVault?: SecretsService
   ) {
     super(storage)
   }

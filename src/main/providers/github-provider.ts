@@ -431,7 +431,7 @@ export function isMissingRefRefusal(failure: ProviderHttpError): boolean {
 /**
  * GitHub-first REST adapter.
  *
- * The token is resolved from `SecretVault` in the main process only and is
+ * The token is resolved from `SecretsService` in the main process only and is
  * never serialized into IPC payloads or logs. Error surfaces are sanitized so
  * the `Authorization` header can never leak.
  */

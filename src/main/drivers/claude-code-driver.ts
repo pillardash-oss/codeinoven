@@ -12,7 +12,7 @@ import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { CLAUDE_CREDENTIAL_LOCK_NAME, CrossProcessMutex } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
-import { SecretVault } from '../storage/secret-vault'
+import { SecretsService } from '../secrets/secrets-service'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 import type {
   CheapModelRequest,
@@ -129,7 +129,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault,
+    private readonly secretVault?: SecretsService,
     private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)

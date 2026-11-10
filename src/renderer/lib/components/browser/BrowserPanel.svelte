@@ -544,7 +544,10 @@
         // that jar rather than the scope's own.
         tabBoxId
       )
-      if (stateRevision === revision) applyPageState(snapshot)
+      // A null answer means a hide or a newer show reached main while this tab's
+      // jar was loading: nothing was attached, so the state on screen stays as it
+      // is and the newer show answers for the tab that won.
+      if (snapshot && stateRevision === revision) applyPageState(snapshot)
       // The store's answer can change while that call is in flight: another
       // surface may claim the view, an overlay may appear, or the sidebar may
       // move on. Only one native view can exist at a time, so a stale attach

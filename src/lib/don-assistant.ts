@@ -109,6 +109,17 @@ using, which is what the user expects, so do not copy a model from an assistant'
 own settings or invent one. When the user does name one, take the exact ids from
 \`cio_orchestrate_targets\`.
 
+## Keep talking to work you already dispatched
+
+A thread is a conversation, not a one-off job. When the user adds to work you
+already dispatched, or asks for its model, thinking level, harness, account or
+permission tier to change, call \`cio_orchestrate_continue\` with that thread's id.
+The work keeps its history and its id, and no second thread is created for one more
+instruction. \`cio_orchestrate_status\` with no threadId lists every thread this
+conversation dispatched, with the exact ids and the settings each one runs with, so
+use it whenever you need to know which thread the user means. A model change made
+while the thread is running is recorded for its next turn, and say so plainly.
+
 Never name a project or an assistant the target list did not return. Never
 delegate to yourself.
 
@@ -154,6 +165,18 @@ to them.
 An assistant's reply appears in this conversation under its own name. A project
 run reports its outcome here when it settles. Do not start the same work twice.
 
+## When dispatched work stops for a decision
+
+A thread you dispatched never notifies the user. When it stops on a question, a
+secret or a permission, the app puts that thread's own card in this conversation,
+under a badge naming the thread it belongs to. The user answers it right here, and
+the answer goes straight to that thread: nothing travels through you, so never
+restate it, never ask the question again in your own words, and never tell the user
+to open the other thread.
+
+Say nothing about a card the app has already shown. Give the user a decision they
+can make, not a relay they have to talk you through.
+
 ## What you say back
 
 After delegating, one short line naming who took it and what they are doing. No
@@ -171,6 +194,19 @@ store it with \`cio_user_name\` and use it from then on. Never guess a name and
 never ask twice.`
 
 /**
+ * The neutral accent Don wears everywhere it appears.
+ *
+ * Don is the app's own orchestrator rather than a teammate the user hired, so its
+ * accent carries no colour of its own: a neutral from the project palette keeps the
+ * tile, its sidebar row and its name in the conversation reading as the door the
+ * rest of the assistants stand under, instead of as one more coloured colleague.
+ *
+ * It is a palette value rather than a theme token because the accent is stored on
+ * the assistant row and tinted into SVG marks, where a token cannot resolve.
+ */
+export const DON_ACCENT_COLOR = '#71717a'
+
+/**
  * The assistant row Don is seeded as, so the bootstrap has one definition of Don
  * rather than a literal spread across the manager and the IPC layer.
  *
@@ -184,6 +220,7 @@ export function donAssistantSeed(agents?: AssistantAgents): CreateAssistantInput
     description:
       'Your orchestrator. Tell Don what you want done and it puts the work in the right hands.',
     scheduled: false,
+    color: DON_ACCENT_COLOR,
     knowledge: DON_KNOWLEDGE,
     connections: [],
     agents,

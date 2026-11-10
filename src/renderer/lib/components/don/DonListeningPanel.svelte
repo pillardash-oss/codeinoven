@@ -204,6 +204,7 @@
   onClose={() => donListening.close()}
   storageKey={STORAGE_KEY}
   layer="top"
+  recordingTargets={() => [SPEECH_TARGET_ID]}
   flushBody
   defaultHeight={460}
   dragLabel="Drag to move the Don Listening panel"

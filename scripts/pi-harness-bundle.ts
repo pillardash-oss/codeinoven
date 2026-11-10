@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { promisify } from 'node:util'
 import { build as bundleWithEsbuild } from 'esbuild'
 import { toPosixPath } from '../src/lib/paths'
 import {
@@ -429,6 +431,152 @@ function assertVendoredTargetsExist(vendorRoot: string): void {
   }
 }
 
+const execFileAsync = promisify(execFile)
+
+/**
+ * Sign-in flows the bundled registry re-exports so the post-build guard can
+ * exercise the same loader path in-app sign-in takes.
+ */
+const PI_AI_OAUTH_LOADER_EXPORTS = [
+  'loadAnthropicOAuth',
+  'loadGitHubCopilotOAuth',
+  'loadKimiCodingOAuth',
+  'loadMetaOAuth',
+  'loadOpenAIChatGPTOAuth',
+  'loadOpenAICodexOAuth',
+  'loadOpenRouterOAuth',
+  'loadRadiusOAuth',
+  'loadXaiOAuth'
+] as const
+
+/** Written beside the registry while the guard runs, then removed. */
+const PI_AI_OAUTH_PROBE_FILE = '.pi-ai-oauth-probe.mjs'
+
+/**
+ * Entry the provider registry is bundled from.
+ *
+ * `dist/providers/all.js` alone is not a complete registry. pi-ai loads every
+ * OAuth sign-in flow through `auth/oauth/load.js`, which hides its specifier from
+ * bundlers on purpose (`import(new URL("./anthropic.ts", import.meta.url))`) and
+ * only falls back to it when no loaders are registered. esbuild cannot follow a
+ * specifier computed at run time, so the emitted file kept that `import()` and the
+ * packaged app resolved it against its own location: in-app Anthropic sign-in died
+ * with `Cannot find module .../vendor/anthropic.js`, and every other browser or
+ * device flow failed the same way (OpenAI Codex, ChatGPT, GitHub Copilot,
+ * OpenRouter, Kimi Coding, Meta, xAI, Radius). API-key sign-in never touched it.
+ *
+ * pi-ai ships `registerLazyOAuthFlows()` for exactly this case: it registers the
+ * same flows through literal `import()`s, which esbuild does follow, so the flows
+ * land in this bundle and `bundledLoaders` is always set. Registering is what makes
+ * the variable import unreachable rather than patching pi-ai's code.
+ *
+ * Bedrock's stream is deliberately not registered: pi-ai loads it the same way, but
+ * this module only feeds the model catalog and in-app sign-in in the main process.
+ * Requests stream inside Pi's own runtime, whose bundle ships its own Bedrock chunk
+ * (`dist/bundle/chunks/bedrock-converse-stream.js`).
+ */
+function piAiRegistryEntrySource(): string {
+  return [
+    "import { registerLazyOAuthFlows } from './dist/lazy-oauth.js'",
+    '',
+    'registerLazyOAuthFlows()',
+    '',
+    "export * from './dist/providers/all.js'",
+    'export {',
+    ...PI_AI_OAUTH_LOADER_EXPORTS.map((name) => `  ${name},`),
+    "} from './dist/auth/oauth/load.js'",
+    ''
+  ].join('\n')
+}
+
+/**
+ * Child script behind `assertPiAiRegistryOAuthFlows`: loads every sign-in flow
+ * from the emitted registry exactly as the app does, and reports each one that
+ * cannot be reached.
+ */
+function piAiOAuthProbeSource(): string {
+  return [
+    "import { pathToFileURL } from 'node:url'",
+    '',
+    'const registryPath = process.argv[2]',
+    'if (!registryPath) {',
+    "  process.stderr.write('The sign-in guard needs the bundled registry path.\\n')",
+    '  process.exit(2)',
+    '}',
+    '// A unique query keeps the probe honest when a build rewrites the same path.',
+    'const registry = await import(`${pathToFileURL(registryPath).href}?probe=${Date.now()}`)',
+    'const flows = [',
+    "  ['anthropic', () => registry.loadAnthropicOAuth()],",
+    "  ['github-copilot', () => registry.loadGitHubCopilotOAuth()],",
+    "  ['kimi-coding', () => registry.loadKimiCodingOAuth()],",
+    "  ['meta', () => registry.loadMetaOAuth()],",
+    "  ['openai-chatgpt', () => registry.loadOpenAIChatGPTOAuth()],",
+    "  ['openai-codex', () => registry.loadOpenAICodexOAuth()],",
+    "  ['openrouter', () => registry.loadOpenRouterOAuth()],",
+    '  [',
+    "    'radius',",
+    "    () => registry.loadRadiusOAuth({ name: 'probe', gateway: 'https://radius.example.com' })",
+    '  ],',
+    "  ['xai', () => registry.loadXaiOAuth()]",
+    ']',
+    'const failures = []',
+    'for (const [id, load] of flows) {',
+    '  try {',
+    '    const flow = await load()',
+    "    if (!flow || typeof flow.login !== 'function') {",
+    '      failures.push(`${id}: the loader returned no sign-in flow`)',
+    '    }',
+    '  } catch (error) {',
+    '    failures.push(`${id}: ${error instanceof Error ? error.message : String(error)}`)',
+    '  }',
+    '}',
+    'if (failures.length > 0) {',
+    "  process.stderr.write(`Bundled Pi sign-in flows did not load:\\n${failures.join('\\n')}\\n`)",
+    '  process.exit(1)',
+    '}',
+    ''
+  ].join('\n')
+}
+
+function probeFailureDetail(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'stderr' in error) {
+    const { stderr } = error as { stderr?: unknown }
+    if (typeof stderr === 'string' && stderr.trim() !== '') return stderr.trim()
+  }
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * Fails the build when any bundled sign-in flow is unreachable.
+ *
+ * Guarding by construction is not enough here: the failure this catches is an
+ * `import()` esbuild leaves alone, so the build succeeds, the catalog loads, and
+ * only the user who clicks "Sign in with browser" sees it   in the packaged app,
+ * where the missing file is. Running the emitted registry in a child process is
+ * the same observation the app makes, and it costs one module load per build.
+ */
+async function assertPiAiRegistryOAuthFlows(outfile: string): Promise<void> {
+  const probePath = join(dirname(outfile), PI_AI_OAUTH_PROBE_FILE)
+  await writeFile(probePath, piAiOAuthProbeSource())
+  try {
+    await execFileAsync(process.execPath, [probePath, outfile], {
+      cwd: dirname(outfile),
+      timeout: 60_000
+    })
+  } catch (error) {
+    throw new Error(
+      'The bundled Pi registry cannot load its sign-in flows, so every browser and device ' +
+        'sign-in in the packaged app would fail. Keep `registerLazyOAuthFlows()` in ' +
+        '`piAiRegistryEntrySource()`: without it pi-ai falls back to a runtime-variable ' +
+        `import() that resolves beside ${PI_HARNESS_PI_AI_REGISTRY_FILE} and does not exist.\n` +
+        probeFailureDetail(error),
+      { cause: error }
+    )
+  } finally {
+    await rm(probePath, { force: true })
+  }
+}
+
 /**
  * Bundle pi-ai's provider registry into one self-contained ES module.
  *
@@ -445,11 +593,21 @@ function assertVendoredTargetsExist(vendorRoot: string): void {
  * Minified on purpose: ~2.4MB against ~4.8MB expanded, and nothing reads this
  * but the ESM loader. Source maps are omitted for the same reason; the only
  * diagnostics that escape it are error messages, which esbuild does not rename.
+ *
+ * Bundled from `piAiRegistryEntrySource()` rather than from pi-ai's `all.js`
+ * directly, because the sign-in flows are reached through a run-time specifier
+ * and have to be registered into the bundle; `assertPiAiRegistryOAuthFlows` then
+ * proves they load from the emitted file.
  */
 async function bundlePiAiRegistry(piAiPackageDirectory: string, outfile: string): Promise<void> {
   await mkdir(dirname(outfile), { recursive: true })
   await bundleWithEsbuild({
-    entryPoints: [join(piAiPackageDirectory, 'dist/providers/all.js')],
+    stdin: {
+      contents: piAiRegistryEntrySource(),
+      resolveDir: piAiPackageDirectory,
+      sourcefile: 'pi-ai-registry-entry.mjs',
+      loader: 'js'
+    },
     outfile,
     bundle: true,
     format: 'esm',
@@ -462,6 +620,7 @@ async function bundlePiAiRegistry(piAiPackageDirectory: string, outfile: string)
     legalComments: 'none',
     logLevel: 'silent'
   })
+  await assertPiAiRegistryOAuthFlows(outfile)
 }
 
 /**

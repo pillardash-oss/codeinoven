@@ -34,6 +34,7 @@ export type SettingsSection =
   | 'ovens'
   | 'local-ai'
   | 'archives'
+  | 'secrets'
   | 'about'
 
 export type MainView =
@@ -63,6 +64,7 @@ export type MainView =
   | 'settings-ovens'
   | 'settings-local-ai'
   | 'settings-archives'
+  | 'settings-secrets'
   | 'settings-about'
 
 export interface SelectedThreadReference {
@@ -246,6 +248,7 @@ const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'cloud-deployments',
   'local-ai',
   'archives',
+  'secrets',
   'about'
 ]
 const SETTINGS_VIEW_PREFIX = 'settings-'

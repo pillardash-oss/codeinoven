@@ -89,7 +89,6 @@ import type {
 } from '../../../lib/types'
 
 const THEMES = new Set(['light', 'dark', 'system'])
-const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
 const LOCAL_USAGE_RECORD_STORES = new Set<LocalUsageRecordStore>([
   'agentResponses',
@@ -192,7 +191,6 @@ const CONFIG_PATCH_FIELDS = new Set([
   'switcherThreadBrowserTabs',
   'questionTimeoutMs',
   'agentQuestionCap',
-  'slashCommandMode',
   'preferredEditor',
   'ideLanguageServers',
   'ideFormatOnSave',
@@ -1067,16 +1065,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       cleanupUnload: sound.cleanupUnload,
       ttsUnload: sound.ttsUnload
     }
-  }
-
-  if ('slashCommandMode' in value) {
-    if (
-      typeof value.slashCommandMode !== 'string' ||
-      !SLASH_COMMAND_MODES.has(value.slashCommandMode)
-    ) {
-      throw new TypeError('Invalid slash command mode')
-    }
-    patch.slashCommandMode = value.slashCommandMode as AppConfigPatch['slashCommandMode']
   }
 
   if ('ideLanguageServers' in value)

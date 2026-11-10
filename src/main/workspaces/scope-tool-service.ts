@@ -71,6 +71,29 @@ export interface ScopeToolGit {
       token?: string
     }
   ): Promise<GitSyncResult>
+  push(
+    projectPath: string,
+    options: { remote: string; branch: string; token?: string }
+  ): Promise<GitStatus>
+}
+
+/** What opening a pull request needs, all of it resolved by the caller's scope. */
+export interface ScopePullRequestRequest {
+  projectId: string
+  /** Root of the scope the branch lives in, so the provider reads the right origin. */
+  projectPath: string
+  title: string
+  body: string
+  head: string
+  base: string
+  draft: boolean
+}
+
+/** The pull request an agent asked the app to open. */
+export interface ScopePullRequestCreated {
+  number: number
+  url: string
+  title: string
 }
 
 export interface ScopeToolServiceOptions {
@@ -88,6 +111,14 @@ export interface ScopeToolServiceOptions {
   onProgress?: (event: ScopeWorktreeProgressEvent) => void
   /** Vaulted project credential, used to refresh the peer branch before a `from` sync. */
   resolveGitToken?: (projectId: string) => Promise<string | undefined>
+  /**
+   * Open a pull request through the app's own provider and stored credential.
+   *
+   * The agent never handles a GitHub token: this is the app's `pr:create` path,
+   * resolved against the scope's own origin so a worktree and the project root
+   * agree on the repository. Absent only in a session with no provider wired.
+   */
+  createPullRequest?: (input: ScopePullRequestRequest) => Promise<ScopePullRequestCreated>
   /** Configured pull strategy; `ask` is already resolved to a concrete one. */
   defaultPullStrategy?: () => Promise<GitPullStrategy>
   /** How long an unanswered `auto_review` confirmation waits before denying. */
@@ -216,6 +247,10 @@ export class ScopeToolService {
       case 'sync_from_main':
       case 'sync_to_main':
         return await this.syncWithMain(call, context, projectPath)
+      case 'publish_branch':
+        return await this.publishBranch(call, context, projectPath)
+      case 'open_pull_request':
+        return await this.openPullRequest(call, context, projectPath)
       case 'detach_worktree':
       case 'delete_scope':
       case 'merge_into_project':
@@ -511,6 +546,114 @@ export class ScopeToolService {
       conflictState: result.status.conflictState,
       published: false,
       ...(conflicted.length === 0 ? {} : { next: conflictNextStep(result.status) })
+    }
+  }
+
+  // ─── Publishing ───────────────────────────────────────────────────────────
+
+  /**
+   * The checkout a scope actually works in: its managed worktree, or the
+   * project directory for a project-rooted scope.
+   *
+   * Publishing is the one action that may legitimately run in either, so the
+   * root is derived here instead of assuming the project path the way the
+   * worktree lifecycle actions can.
+   */
+  private scopeRootPath(
+    projectPath: string,
+    bucket: ScopeBucket,
+    context: ScopeToolContext
+  ): string {
+    return bucket.root.kind === 'worktree'
+      ? getScopeRootPath(context.projectId, bucket.root.directoryName)
+      : projectPath
+  }
+
+  /**
+   * Push one branch of a scope to its remote.
+   *
+   * A conflict resolution that only exists on the remote is finished by
+   * publishing the branch it produced, which is usually a scratch branch
+   * carrying the resolution rather than the branch under review. The push goes
+   * through the shared Git service with the project's vaulted credential, the
+   * same push the panel runs, so an agent needs no ambient git credentials and
+   * never force-pushes.
+   */
+  private async publishBranch(
+    call: ScopeToolCall,
+    context: ScopeToolContext,
+    projectPath: string
+  ): Promise<unknown> {
+    const branch = call.branch
+    if (!branch) throw new TypeError('branch is required for publish_branch')
+    const bucket = this.resolveScope(call.scope, context)
+    if (bucket.root.kind === 'worktree') {
+      const health = await this.worktrees.health({
+        projectId: context.projectId,
+        scopeBucketId: bucket.id
+      })
+      if (health.category !== 'healthy') {
+        throw new Error(
+          `The scope “${bucket.name}” cannot publish a branch. ${unhealthyScopeAdvice(health)}`
+        )
+      }
+    }
+    const remote = call.remote ?? 'origin'
+    const token = await this.options.resolveGitToken?.(context.projectId)
+    const status = await this.git.push(this.scopeRootPath(projectPath, bucket, context), {
+      remote,
+      branch,
+      ...(token === undefined ? {} : { token })
+    })
+    return {
+      published: true,
+      branch,
+      remote,
+      ahead: status.ahead,
+      behind: status.behind,
+      conflicted: status.conflicted
+    }
+  }
+
+  /**
+   * Open the pull request that carries a published branch, and answer with its
+   * link so the agent can hand the user the one thing left to do.
+   *
+   * The provider and its credential belong to the app, which is why this is an
+   * operation on the capability rather than something an agent does with a
+   * token: the repository is resolved from the scope's own origin, so a worktree
+   * and the project root always open a pull request on the same remote.
+   */
+  private async openPullRequest(
+    call: ScopeToolCall,
+    context: ScopeToolContext,
+    projectPath: string
+  ): Promise<unknown> {
+    const createPullRequest = this.options.createPullRequest
+    if (!createPullRequest) {
+      throw new Error(
+        'Opening a pull request is unavailable in this session. Ask the user to open it from the Git panel.'
+      )
+    }
+    if (!call.title) throw new TypeError('title is required for open_pull_request')
+    if (!call.head) throw new TypeError('head is required for open_pull_request')
+    if (!call.base) throw new TypeError('base is required for open_pull_request')
+    const bucket = this.resolveScope(call.scope, context)
+    const created = await createPullRequest({
+      projectId: context.projectId,
+      projectPath: this.scopeRootPath(projectPath, bucket, context),
+      title: call.title,
+      body: call.body ?? '',
+      head: call.head,
+      base: call.base,
+      draft: call.draft === true
+    })
+    return {
+      number: created.number,
+      url: created.url,
+      title: created.title,
+      head: call.head,
+      base: call.base
     }
   }
 

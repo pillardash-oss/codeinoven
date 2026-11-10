@@ -6,6 +6,7 @@ import { realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'path'
 import { build, type Plugin, type PluginOption } from 'vite'
 import packageJson from './package.json'
+import { compatSourcePlugin } from './scripts/lib/vite-compat-source-plugin.ts'
 
 // Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
 // packaging and passes it here so the splash/about surfaces show the exact
@@ -230,7 +231,12 @@ export default defineConfig(({ mode }) => {
   ])
   return {
     main: {
-      plugins: [refuseEmptyChunks('main'), useModuleScopeCommonJsShim(), standaloneOvenService()],
+      plugins: [
+        compatSourcePlugin(),
+        refuseEmptyChunks('main'),
+        useModuleScopeCommonJsShim(),
+        standaloneOvenService()
+      ],
       define: {
         // Keep the splash copy tied to the package version used to build the
         // Electron bundle (or the CI-resolved nightly prerelease version).

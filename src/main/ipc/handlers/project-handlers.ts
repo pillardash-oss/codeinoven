@@ -44,7 +44,13 @@ import {
   validateSourcePath,
   validateWorktreeDefaults
 } from '../ipc-validation'
-import { requireString, validateStringArray, isRecord } from './shared'
+import {
+  requireString,
+  resolveGitHubRemoteIdentity,
+  runGitHubMutation,
+  validateStringArray,
+  isRecord
+} from './shared'
 import { mapInBatches } from '../../../lib/bounded-work'
 import { writeFilePathsToClipboard } from '../../system/file-clipboard'
 import { EDITOR_IDS } from './config-helpers'
@@ -115,7 +121,8 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     scopeThreadLifecycle,
     gitService,
     vault,
-    gitCredentialRef
+    gitCredentialRef,
+    providerForProject
   } = ctx
 
   ipcMain.handle('icon-library:list', () =>
@@ -231,7 +238,15 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
     projectManager,
     {
       getStatus: (projectPath) => gitService.getStatus(projectPath),
-      syncWith: (projectPath, options) => gitService.syncWith(projectPath, options)
+      syncWith: (projectPath, options) => gitService.syncWith(projectPath, options),
+      /** The panel's own push, so an agent publishing a branch needs no credentials. */
+      push: (projectPath, options) =>
+        gitService.push(projectPath, {
+          setUpstream: true,
+          remote: options.remote,
+          branch: options.branch,
+          ...(options.token === undefined ? {} : { token: options.token })
+        })
     },
     {
       scopeThreads: scopeThreadLifecycle,
@@ -241,6 +256,30 @@ export function registerProjectHandlers(ctx: IpcHandlerContext): void {
       resolveGitToken: async (projectId) => {
         const ref = gitCredentialRef(projectId)
         return (await vault.exists(ref)) ? await vault.resolve(ref) : undefined
+      },
+      /**
+       * The panel's own pull request creation, opened from the scope's checkout
+       * so the repository identity is the one that checkout actually pushes to.
+       */
+      createPullRequest: async (input) => {
+        const provider = await providerForProject(input.projectId)
+        if (!provider) {
+          throw new Error('Configure a GitHub token first (Git panel > Credentials)')
+        }
+        const identity = await resolveGitHubRemoteIdentity(repositoryService, input.projectPath)
+        const result = await runGitHubMutation(identity.owner, identity.repo, () =>
+          provider.createPullRequest({
+            owner: identity.owner,
+            repo: identity.repo,
+            title: input.title,
+            body: input.body,
+            head: input.head,
+            base: input.base,
+            draft: input.draft
+          })
+        )
+        if (result.status === 'permission_required') throw new Error(result.message)
+        return result.value
       },
       // An agent has no strategy chooser, so the configured `ask` resolves to
       // the safe, non-history-rewriting default.

@@ -992,6 +992,14 @@
                                   ? `${APP_NAME} is working · type to queue a message`
                                   : (board.props.composerPlaceholder ?? 'Send a message...')}
                   disabled={board.harnessUsage.specFormulating}
+                  directReply={board.directReply.target}
+                  directReplyBusy={board.directReply.sending}
+                  directReplyError={board.directReply.error}
+                  onClearDirectReply={() => board.directReply.clear()}
+                  onOpenDirectReply={() => {
+                    const target = board.directReply.target
+                    if (target) void board.directReply.reveal(target.messageId)
+                  }}
                   working={board.switchProject.busy}
                   onStop={board.abortRun.abortRun}
                   autofocus

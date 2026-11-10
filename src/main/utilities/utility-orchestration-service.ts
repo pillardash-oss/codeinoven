@@ -11,7 +11,7 @@ import type {
   ThreadSearchResult
 } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
-import { SecretVault } from '../storage/secret-vault'
+import { SecretsService } from '../secrets/secrets-service'
 import { UtilityRegistryService } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import { type DesignSessionMode } from './cio-design-prompt'
@@ -415,7 +415,7 @@ export interface OrchestrationToolContext {
   harnessId: string
 }
 
-export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status'
+export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status' | 'answer' | 'continue'
 
 /** The two app-control operations, mirrored from the tool catalog. */
 export type AppControlOperation = 'catalog' | 'call'
@@ -569,7 +569,7 @@ export class UtilityOrchestrationService {
    */
   readonly units = buildUtilityOrchestrationServiceUnits(this)
   readonly registry: UtilityRegistryService
-  readonly vault: SecretVault
+  readonly vault: SecretsService
   /** Install folders for scoped utilities; resolved on first use. */
   scopeFootprint: UtilityScopeFootprintService | null = null
   scopeFootprintResolved = false
@@ -623,7 +623,7 @@ export class UtilityOrchestrationService {
     readonly mcpOAuth: McpOAuthService | null = null
   ) {
     this.registry = new UtilityRegistryService(storage)
-    this.vault = new SecretVault(storage)
+    this.vault = SecretsService.for(storage)
     this.bridgeHandlers = this.buildBridgeHandlers()
     this.structuredRoutes = this.buildStructuredRoutes()
   }

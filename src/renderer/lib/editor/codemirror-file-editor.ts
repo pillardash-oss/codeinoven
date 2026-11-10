@@ -4,7 +4,7 @@ import type { Completion, CompletionContext, CompletionResult } from '@codemirro
 import { isMacPlatform } from '../keymap/keymap'
 import { keymapState } from '../keymap/keymap-state.svelte'
 import type { EditorState, Extension, Range } from '@codemirror/state'
-import type { Decoration as ViewDecoration, EditorView } from '@codemirror/view'
+import type { Decoration as ViewDecoration, DecorationSet, EditorView } from '@codemirror/view'
 
 export interface FileEditorConflictRange {
   id: string
@@ -124,9 +124,100 @@ export interface CreateFileEditorOptions {
   /** Fires on creation and whenever the undo/redo depth changes, never for an
    *  unchanged depth, so a toolbar can mirror the editor without polling. */
   onHistoryChange?: (state: FileEditorHistoryState) => void
+  /**
+   * A `NAME=cio://<ref>` line was opened with the platform modifier held.
+   *
+   * The editor only reports the key and the reference; the owner decides which
+   * panel that secret lives in, because only it knows the project the file belongs
+   * to.
+   */
+  onSecretReference?: (name: string, secretRef: string) => void
 }
 
 export const TAB_INSERT = '  '
+
+/** One `NAME=cio://<ref>` line, which is how a managed env file holds a value. */
+const SECRET_REFERENCE_LINE =
+  /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(cio:\/\/[^\s#]+)\s*$/u
+
+/**
+ * Make every managed reference in the buffer a link.
+ *
+ * The buffer stays plain text   nothing is rewritten and no value is fetched   the
+ * reference span is only marked so the reader can open the secret panel for it with
+ * the platform modifier, which is the same gesture a link uses everywhere else.
+ */
+function buildSecretReferenceExtension(
+  api: CodeMirrorApi,
+  onOpen: (name: string, secretRef: string) => void
+): Extension {
+  const referenceMark = api.Decoration.mark({
+    class: 'cm-secret-reference',
+    attributes: { title: 'Open this secret (⌘-click or Ctrl-click)' }
+  })
+
+  function references(view: EditorView): DecorationSet {
+    const ranges: Range<ViewDecoration>[] = []
+    const doc = view.state.doc
+    // A reference line is small; a huge buffer is not worth a full scan on every
+    // keystroke, and an env file is never that big.
+    if (doc.length > 2_000_000) return api.Decoration.none
+    for (let number = 1; number <= doc.lines; number++) {
+      const line = doc.line(number)
+      const match = SECRET_REFERENCE_LINE.exec(line.text)
+      const reference = match?.[2]
+      if (!reference) continue
+      const start = line.from + line.text.indexOf(reference)
+      ranges.push(referenceMark.range(start, start + reference.length))
+    }
+    return api.Decoration.set(ranges, true)
+  }
+
+  class SecretReferenceDecorations {
+    decorations: DecorationSet
+    constructor(readonly view: EditorView) {
+      this.decorations = references(view)
+    }
+    update(update: { docChanged: boolean }): void {
+      if (update.docChanged) this.decorations = references(this.view)
+    }
+  }
+
+  const plugin = api.ViewPlugin.fromClass(SecretReferenceDecorations, {
+    decorations: (value) => value.decorations
+  })
+
+  const theme = api.EditorView.theme({
+    '.cm-secret-reference': {
+      color: 'var(--color-primary)',
+      textDecoration: 'underline',
+      textUnderlineOffset: '2px',
+      cursor: 'pointer'
+    }
+  })
+
+  const openAt = (event: MouseEvent, view: EditorView): boolean => {
+    if (!(event.metaKey || event.ctrlKey)) return false
+    const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
+    if (position === null) return false
+    const line = view.state.doc.lineAt(position)
+    const match = SECRET_REFERENCE_LINE.exec(line.text)
+    const reference = match?.[2]
+    const name = match?.[1]
+    if (!reference || !name) return false
+    const start = line.from + line.text.indexOf(reference)
+    if (position < start || position > start + reference.length) return false
+    event.preventDefault()
+    onOpen(name, reference)
+    return true
+  }
+
+  const clicks = api.EditorView.domEventHandlers({
+    mousedown: openAt
+  })
+
+  return [plugin, theme, clicks]
+}
 
 interface CodeMirrorApi {
   EditorState: (typeof import('@codemirror/state'))['EditorState']
@@ -140,6 +231,7 @@ interface CodeMirrorApi {
   highlightActiveLineGutter: (typeof import('@codemirror/view'))['highlightActiveLineGutter']
   keymap: (typeof import('@codemirror/view'))['keymap']
   Decoration: (typeof import('@codemirror/view'))['Decoration']
+  ViewPlugin: (typeof import('@codemirror/view'))['ViewPlugin']
   defaultKeymap: (typeof import('@codemirror/commands'))['defaultKeymap']
   history: (typeof import('@codemirror/commands'))['history']
   historyKeymap: (typeof import('@codemirror/commands'))['historyKeymap']
@@ -183,7 +275,8 @@ export async function createFileEditor(
     onConflictRangesChange,
     onFindMatches,
     onScroll,
-    onHistoryChange
+    onHistoryChange,
+    onSecretReference
   } = options
 
   const wrapCompartment = new api.Compartment()
@@ -421,6 +514,7 @@ export async function createFileEditor(
     ignoredSpellingField,
     flashField,
     conflictField,
+    ...(onSecretReference ? [buildSecretReferenceExtension(api, onSecretReference)] : []),
     api.invertedEffects.of((transaction) => {
       const changesConflictState =
         transaction.docChanged || transaction.effects.some((effect) => effect.is(setConflictRanges))
@@ -1057,6 +1151,7 @@ async function loadCodeMirrorApi(): Promise<CodeMirrorApi> {
     highlightActiveLineGutter: viewModule.highlightActiveLineGutter,
     keymap: viewModule.keymap,
     Decoration: viewModule.Decoration,
+    ViewPlugin: viewModule.ViewPlugin,
     defaultKeymap: commandModule.defaultKeymap,
     history: commandModule.history,
     historyKeymap: commandModule.historyKeymap,

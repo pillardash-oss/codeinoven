@@ -34,7 +34,6 @@ export const defaultConfig: AppConfig = {
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
   keybindings: {},
-  slashCommandMode: 'app',
   preferredEditor: 'system',
   memory: { enabled: true, chatEnabled: true, entries: [] },
   agentDefaults: { syncFromThreadChanges: false },

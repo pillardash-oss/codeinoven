@@ -51,6 +51,12 @@ export const invokeSpeechContract = {
     [attemptId: string, message: string],
     import('../speech/types').SpeechResult<import('../speech/types').SpeechRecordingAttempt>
   >,
+  /** Throws a dictation the user cancelled away: its job is cancelled, and its
+   *  attempt and audio are deleted so nothing reaches the history. */
+  'speech:discardCapture': {} as Contract<
+    [attemptId: string],
+    import('../speech/types').SpeechResult<void>
+  >,
   'speech:transcribe': {} as Contract<
     [
       attemptId: string,

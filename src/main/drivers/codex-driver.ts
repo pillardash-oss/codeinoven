@@ -18,7 +18,7 @@ import { resolveFastModelId } from '../../lib/fast-inference'
 import { COMPACT_LINE_SHARE } from '../../lib/prompt-budget'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
-import { SecretVault } from '../storage/secret-vault'
+import { SecretsService } from '../secrets/secrets-service'
 import { type StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironmentAsync } from './cli-environment'
 import { prependHistoryRecap } from './history-recap-prompt'
@@ -167,7 +167,7 @@ export class CodexDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     public readonly baseUrlProviders?: BaseUrlProviderService,
-    public readonly secretVault?: SecretVault,
+    public readonly secretVault?: SecretsService,
     public readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)

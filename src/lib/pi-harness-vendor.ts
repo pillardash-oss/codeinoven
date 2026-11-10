@@ -15,6 +15,9 @@ export const PI_HARNESS_VENDOR_DIRECTORY = 'vendor'
  *
  * It is a build output, not a copy: pi-ai's `dist` reaches `pi-telemetry`,
  * `typebox`, `openai`, `@google/genai`, `@anthropic-ai/sdk` and `partial-json` by
- * package name, and none of those resolves in the packaged app.
+ * package name, and none of those resolves in the packaged app. It also registers
+ * pi-ai's OAuth sign-in flows (`registerLazyOAuthFlows()`), which pi-ai otherwise
+ * loads through a run-time specifier no bundler can follow; without that the
+ * packaged app cannot reach a single browser or device sign-in.
  */
 export const PI_HARNESS_PI_AI_REGISTRY_FILE = 'pi-ai-registry.mjs'

@@ -11,7 +11,7 @@
  * extension's own id as the website the user is on.
  *
  * This module is the app's side of the repair: the snapshot main knows, and the one
- * line that puts it where the wrappers in `compat/cio-page-tabs.js` read it. The
+ * line that puts it where the wrappers in `compat/cio-page-tabs.ts` read it. The
  * binding itself is that file's, because it runs inside the page's own world   the
  * only world where an extension page's `chrome.tabs` exists   and this side only
  * says which tab the page is acting on, every time the answer changes.
@@ -20,11 +20,11 @@
  * acts on", for the measured behaviour this works around.
  */
 
-import pageTabsSource from './compat/cio-page-tabs.js?raw'
-import pagePermissionsSource from './compat/cio-page-permissions.js?raw'
-import pageRuntimeSource from './compat/cio-page-runtime.js?raw'
-import storageEventsSource from './compat/cio-storage-events.js?raw'
-import darkReaderStorageSource from './compat/cio-darkreader-storage.js?raw'
+import pageTabsSource from './compat/cio-page-tabs.ts?compat-source'
+import pagePermissionsSource from './compat/cio-page-permissions.ts?compat-source'
+import pageRuntimeSource from './compat/cio-page-runtime.ts?compat-source'
+import storageEventsSource from './compat/cio-storage-events.ts?compat-source'
+import darkReaderStorageSource from './compat/cio-darkreader-storage.ts?compat-source'
 
 /** Where a push leaves the tab, read by the page's wrappers on every call. */
 export const EXTENSION_PAGE_TAB_GLOBAL = '__cioPageTabsSnapshot'
@@ -58,8 +58,19 @@ export interface BrowserExtensionPageTab {
  * is rewritten, nothing is installed twice, and the wrapper the page's own code is
  * already holding keeps answering from the fresh one.
  */
-export function extensionPageTabsScript(tab: BrowserExtensionPageTab): string {
-  return `${darkReaderStorageSource}\n;\n${storageEventsSource}\n;\nglobalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ${JSON.stringify(tab)}\n${pageTabsSource}`
+export function extensionPageTabsScript(
+  tab: BrowserExtensionPageTab,
+  event?: { name: string; args: unknown[] }
+): string {
+  // The fact first, then the event that says it changed: an extension's listener
+  // reads the snapshot back while it runs, so a listener fired before the rewrite
+  // would be answered with the tab the page was told about last.
+  const emit = event
+    ? `\ntry { globalThis.__cioPageTabsEmit(${JSON.stringify(event.name)}, ${JSON.stringify(
+        event.args
+      )}) } catch (error) {}\n`
+    : ''
+  return `${darkReaderStorageSource}\n;\n${storageEventsSource}\n;\nglobalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ${JSON.stringify(tab)}\n${pageTabsSource}${emit}`
 }
 
 /** Name of the generated preload file, written into the extension store root. */

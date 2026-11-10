@@ -127,6 +127,7 @@ import type {
   VirtualTaskOptions
 } from './chat-engine/chat-engine-types'
 import { buildChatEngineUnits } from './chat-engine/chat-engine-units'
+import type { DirectReplyInput } from './chat-engine/chat-engine-direct-reply'
 
 export {
   CITATION_SYSTEM_INSTRUCTION,
@@ -411,6 +412,16 @@ export class ChatEngine {
   static readonly SILENT_WORK_GRACE_MS = 30 * 60 * 1000
 
   // 30 minutes
+
+  /** Total harness silence after which "it is still working" stops being a
+   *  reason to wait. A driver that reports itself busy keeps the turn alive for
+   *  as long as it keeps reporting *something*, but a half-open provider stream
+   *  leaves it busy with no output at all, and without this ceiling the watchdog
+   *  re-arms its grace window forever and parks the thread invisibly for hours.
+   *  Past the ceiling the silence is surfaced as a retryable failure instead. */
+  static readonly SILENT_STALL_CEILING_MS = 60 * 60 * 1000
+
+  // 60 minutes
 
   /**
    * How long the answer path waits for a session to finish its idle
@@ -967,6 +978,15 @@ export class ChatEngine {
   }
   async restoreCoordinatorHandoffQueues(): Promise<void> {
     return this.units['assignment'].restoreCoordinatorHandoffQueues()
+  }
+  /**
+   * Answer one conversation from inside the conversation that collected it.
+   *
+   * The words are delivered to the thread that spoke them and recorded in the
+   * conversation the user typed them in, so a group chat reads as one inbox.
+   */
+  async sendDirectReply(input: DirectReplyInput): Promise<AgentMessage> {
+    return this.units['direct-reply'].send(input)
   }
   async sendPrompt(
     projectId: string,

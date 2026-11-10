@@ -272,6 +272,11 @@
       // since turned into a double-click, so it must never fire underneath the
       // arming press no matter which meaning this second press takes.
       clearPendingRestart()
+      // The press of this gesture opened the microphone for a take that will
+      // never start, because a double-click only arms the delivery of the
+      // transcript. The device goes back instead of staying open (and lighting
+      // the system microphone indicator) for an arm nobody is going to press.
+      speechController.disarmCapture()
       if (canAutoSendVoice && armVoiceSend()) return
     }
 
@@ -303,7 +308,13 @@
     void activate()
   }
 
-  onDestroy(clearPendingRestart)
+  onDestroy(() => {
+    const hadPendingRestart = pendingRestart !== null
+    clearPendingRestart()
+    // A held-back restart that never fires takes its microphone with it. The
+    // controller (and the main process) ignore this while a take is live.
+    if (hadPendingRestart) speechController.disarmCapture()
+  })
 
   // A recording outlives the field it was started in: navigating away destroys
   // this button and its editor while the capture keeps running. When the same
@@ -338,6 +349,11 @@
 
   function prepareTarget(): void {
     if (disabled || action !== 'start') return
+    // The press that completes a double-click never opens the microphone: that
+    // gesture arms the delivery of a transcript, not a take. Opening the device
+    // here would re-arm a microphone the gesture has no use for, which is
+    // exactly what the arming press must not do.
+    if (performance.now() - lastClickAt <= VOICE_SEND_DOUBLE_CLICK_MS) return
     pressedAt = Date.now()
     preparedTarget = getTarget()
     preparedSnapshot = preparedTarget?.capture() ?? null

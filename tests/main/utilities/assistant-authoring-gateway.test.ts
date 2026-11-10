@@ -8,6 +8,9 @@ vi.mock('electron', () => ({
   ipcMain: { handle: () => undefined },
   safeStorage: {
     isAsyncEncryptionAvailable: async () => true,
+    // The vault reports itself unavailable on Linux when Chromium fell back to
+    // the plaintext `basic_text` backend, so every mock has to answer this too.
+    getSelectedStorageBackend: () => 'gnome_libsecret',
     encryptStringAsync: async (value: string) => Buffer.from(`encrypted:${value}`),
     decryptStringAsync: async (value: Buffer) => ({
       result: value.toString().replace(/^encrypted:/, ''),
@@ -35,7 +38,7 @@ import {
 } from '../../../src/lib/gateway-tools'
 
 import { AgentSecretService } from '../../../src/main/utilities/agent-secret-service'
-import { SecretVault } from '../../../src/main/storage/secret-vault'
+import { SecretsService } from '../../../src/main/secrets/secrets-service'
 import { RemoteMcpClient } from '../../../src/main/utilities/utility-orchestration/remote-mcp-client'
 
 let storage: StorageEngine
@@ -197,7 +200,7 @@ describe('assistant reporting through the real utility gateway', () => {
 describe('credentials collected during assistant setup', () => {
   it('reconnects active turns with the newly bound credential and never returns its value', async () => {
     const registry = new UtilityRegistryService(storage)
-    const vault = new SecretVault(storage)
+    const vault = SecretsService.for(storage)
     const secrets = new AgentSecretService(vault, registry, storage)
     const utility = await registry.create({
       kind: 'mcp',
@@ -277,7 +280,9 @@ describe('credentials collected during assistant setup', () => {
     const persisted = await restartedRegistry.get(utility.id)
     expect(persisted?.credentials).toHaveLength(1)
     expect(
-      await new SecretVault(new StorageEngine(root)).resolve(persisted!.credentials[0]!.secretRef)
+      await SecretsService.for(new StorageEngine(root)).resolve(
+        persisted!.credentials[0]!.secretRef
+      )
     ).toBe('fixture-new-value')
   })
 })

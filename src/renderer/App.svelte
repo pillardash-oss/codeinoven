@@ -39,8 +39,14 @@
   import { questionWalkthrough } from '$lib/stores/question-walkthrough.svelte'
   import { donListening } from '$lib/don-listening.svelte'
   import { guideState } from '$lib/guide/guide-state.svelte'
+  import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
+  import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
+  import ProjectEnvDock from '$lib/components/secrets/ProjectEnvDock.svelte'
   import { createApp } from './App/App-board.svelte'
   const board = createApp()
+  // A project row's key button and the file explorer's Secrets action live deep in
+  // the tree; both open the Secrets page through this one registration.
+  secretsPageState.setNavigator(board.onKeydown.navigate)
 
   // Agent names label every transcript row and status line, so they are read
   // once here instead of only when the Harnesses page or the editor opens.
@@ -404,6 +410,15 @@
     {#await import('$lib/components/cio/CioCleanupDockHost.svelte') then { default: CioCleanupDockHost }}
       <CioCleanupDockHost />
     {/await}
+  {/if}
+
+  {#if projectEnvDock.projectId}
+    <!-- One env editor for the project tree and the file explorer, mounted at the
+         root so leaving a view never closes what the user is typing into. Keyed by
+         project so opening another project starts from that project's file. -->
+    {#key projectEnvDock.projectId}
+      <ProjectEnvDock />
+    {/key}
   {/if}
 
   <!-- The app's global panels (notifications and sticky notes) are mounted once

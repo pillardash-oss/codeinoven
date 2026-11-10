@@ -46,4 +46,15 @@ export interface ScopeToolCall {
   deleteBranch?: boolean
   threads?: ThreadDisposition
   confirm?: boolean
+  /** `publish_branch`: the local branch to send to its remote. */
+  branch?: string
+  /** `publish_branch`: the remote to push to. Defaults to `origin`. */
+  remote?: string
+  /** `open_pull_request`: the branch carrying the change, and the branch it lands on. */
+  head?: string
+  base?: string
+  /** `open_pull_request`: the pull request description. */
+  body?: string
+  /** `open_pull_request`: open it as a draft instead of ready for review. */
+  draft?: boolean
 }

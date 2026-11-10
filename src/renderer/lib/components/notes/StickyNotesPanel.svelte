@@ -439,6 +439,7 @@
       editNote(note)
     }}
     {tabIcon}
+    recordingTargets={() => [speechTargetId]}
   >
     {#snippet actions()}{@render stripActions()}{/snippet}
     {#if activeNote}{@render noteBody(activeNote)}{/if}

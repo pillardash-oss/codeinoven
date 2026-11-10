@@ -44,6 +44,7 @@ import type {
   ThreadSettings,
   UserMessagePresentation
 } from '../types'
+import type { DelegatedAttentionEntry } from '../delegated-attention'
 import type { Contract } from './contract-helpers'
 
 export const invokeAgentContract = {
@@ -241,6 +242,13 @@ export const invokeAgentContract = {
     [projectId: string, threadId: string],
     PendingAgentQuestionRequest[]
   >,
+  // The requests the threads this conversation dispatched are waiting on. The
+  // cards are drawn here with the blocked thread's own ids, so an answer given in
+  // this conversation settles that thread directly.
+  'agent:listDelegatedAttention': {} as Contract<
+    [projectId: string, threadId: string],
+    DelegatedAttentionEntry[]
+  >,
   'agent:updateQuestion': {} as Contract<
     [
       projectId: string,
@@ -359,6 +367,30 @@ export const invokeAgentContract = {
       projectReferences?: PromptProjectReference[],
       presentation?: UserMessagePresentation,
       taskReferences?: PromptAssignmentTaskReference[]
+    ],
+    AgentMessage
+  >,
+  /**
+   * Answer one conversation from inside the conversation that collected it.
+   *
+   * The words go to the thread that spoke them and are recorded in the open
+   * conversation with the quote they answered, so a group chat reads as one
+   * inbox. Returns the recorded user message.
+   */
+  'agent:replyToThread': {} as Contract<
+    [
+      fromProjectId: string,
+      fromThreadId: string,
+      target: {
+        projectId: string
+        threadId: string
+        title: string
+        speakerName: string
+        messageId: string
+        excerpt: string
+      },
+      text: string,
+      attachments: PromptAttachment[]
     ],
     AgentMessage
   >,

@@ -10,6 +10,9 @@
     id: string
     title: string
     indicatorCount?: number
+    /** The conversation whose agent is working on this tab, so the strip can name
+     *  it under the page title. Absent on a tab no agent holds. */
+    agent?: { title: string; iconUrl: string | null } | null
     /** Whether the tab's page is still coming up, so the strip can say so in the
      *  same slot the page's own mark occupies. */
     loading?: boolean
@@ -134,7 +137,7 @@
           <button
             type="button"
             data-active={tab.id === activeTabId ? 'true' : undefined}
-            class="group flex h-7 shrink-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium transition-colors {tab.id ===
+            class="group flex min-h-7 shrink-0 items-center gap-1.5 px-2 py-0.5 text-[0.6875rem] font-medium transition-colors {tab.id ===
             activeTabId
               ? 'bg-elevated text-foreground'
               : 'text-dimmed hover:bg-elevated hover:text-foreground'}"
@@ -170,7 +173,29 @@
                 {/if}
               </span>
             {/if}
-            <span class="max-w-40 truncate">{tab.title}</span>
+            <span class="flex max-w-40 min-w-0 flex-col">
+              <span class="truncate leading-[0.875rem]">{tab.title}</span>
+              {#if tab.agent}
+                <!-- Whose agent holds this tab, drawn exactly as the panel's chips
+                     draw it: the thread's own mark and name, cut to the chip. -->
+                <span
+                  class="flex min-w-0 items-center gap-1 leading-3"
+                  title={`Agent working here in ${tab.agent.title}`}
+                >
+                  {#if tab.agent.iconUrl}
+                    <img
+                      src={tab.agent.iconUrl}
+                      alt=""
+                      class="h-2.5 w-2.5 shrink-0 object-contain"
+                      aria-hidden="true"
+                    />
+                  {/if}
+                  <span class="truncate text-[0.625rem] leading-3 font-normal text-dimmed"
+                    >{tab.agent.title}</span
+                  >
+                </span>
+              {/if}
+            </span>
           </button>
           {#if onCloseTab && closeTakesIcon}
             <!-- Drawn over the tab's own mark, so the control appears where the

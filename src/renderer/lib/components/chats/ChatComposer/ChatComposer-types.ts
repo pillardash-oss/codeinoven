@@ -17,7 +17,8 @@ import type {
   AgentModelSelection,
   AttachmentStorageScope,
   UsageEfficiencyKpis,
-  HarnessAccount
+  HarnessAccount,
+  DirectReplyTarget
 } from '$shared/types'
 
 export interface Props {
@@ -34,6 +35,13 @@ export interface Props {
     threadReferences?: ThreadContextReference[]
   ) => void
   disabled?: boolean
+  /** The conversation this composer is answering, when the user attached one.
+   *  The next message is delivered to that thread and recorded here as a reply. */
+  directReply?: DirectReplyTarget | null
+  directReplyBusy?: boolean
+  directReplyError?: string
+  onClearDirectReply?: () => void
+  onOpenDirectReply?: () => void
   /** True while the agent is running   turns the send button into a stop button. */
   working?: boolean
   /** Called when the user asks to abort the running turn (stop button / double Escape). */

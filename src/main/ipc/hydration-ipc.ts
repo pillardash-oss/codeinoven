@@ -1,4 +1,5 @@
 import { unarchivedThreadSql } from '../../lib/archives'
+import type { IpcMainInvokeEvent } from 'electron'
 import { trustedIpcMain as ipcMain } from './trusted-ipc-main'
 import { registerRendererLogIpcHandler } from './renderer-log-ipc'
 import type { Database } from '../database/database'
@@ -24,7 +25,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * document is evaluating. This runs before BrowserWindow navigation; feature
  * graphs remain registered by `registerIpcHandlers` after first paint.
  */
-export function registerHydrationIpcHandlers(storage: StorageEngine, database: Database): void {
+export function registerHydrationIpcHandlers(
+  storage: StorageEngine,
+  database: Database,
+  dataReady: Promise<true>
+): void {
+  /**
+   * Register a hydration channel that must not touch the data stores until the
+   * boot has opened them.
+   *
+   * The window is now created before storage and SQLite, so the renderer can
+   * invoke any of these channels before the boot has finished opening them.
+   * Every one of them waits on the boot-data gate instead of answering from a
+   * database that is not there yet; the gate is published the moment both are
+   * open, so a request that beat the boot costs the wait and nothing else.
+   */
+  const handle = <Args extends unknown[]>(
+    channel: string,
+    listener: (event: IpcMainInvokeEvent, ...args: Args) => unknown
+  ): void => {
+    ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+      await dataReady
+      return listener(event, ...(args as Args))
+    })
+  }
   // Renderer error capture runs from the first renderer statement, so the
   // durable logging bridge must exist before BrowserWindow navigation.
   registerRendererLogIpcHandler()
@@ -36,19 +60,21 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // record during its first hydration pass, so ensuring it here keeps that pass
   // off the post-paint feature graph instead of serializing the whole first
   // usable frame behind it. Idempotent: it upserts only when the row is absent.
-  const assistantSpaceReady = projectManager.ensureAssistantSpace()
+  const assistantSpaceReady = dataReady.then(() => projectManager.ensureAssistantSpace())
   // The renderer warms the provider catalog for the inbox as soon as the first
   // paint settles, which is before any New chat resolves `project:ensureInbox`.
   // On a cold data root that pass used to discover against a project row that
   // did not exist yet, so the row is created here, ahead of every renderer read.
-  const inboxReady = projectManager.ensureInboxProject()
+  const inboxReady = dataReady.then(() => projectManager.ensureInboxProject())
   const threadManager = new ThreadManager(database)
   // The global browser's per-tab agent sidebar is a side chat whose scope
   // resolves against this reserved hidden project and its single thread, so
   // both must exist before the browser view can discover capabilities for a
   // tab. Idempotent, and the thread is created only after its project row.
-  const browserSpaceReady = projectManager.ensureGlobalBrowserSpace()
-  void browserSpaceReady.then(() => threadManager.ensureGlobalBrowserThread())
+  const browserSpaceReady = dataReady.then(() => projectManager.ensureGlobalBrowserSpace())
+  void browserSpaceReady
+    .then(() => threadManager.ensureGlobalBrowserThread())
+    .catch(() => undefined)
   const projectsReady = Promise.all([assistantSpaceReady, inboxReady, browserSpaceReady])
   const noteRepo = new NoteRepo(database)
   const branchDeps: ThreadBranchDeps = {
@@ -57,7 +83,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     onSettled: broadcastThreadBranchUpdated
   }
 
-  ipcMain.handle('config:get', () => storage.getConfig())
+  handle('config:get', () => storage.getConfig())
 
   // ── The conversation the last session was on ────────────────────────────
   //
@@ -69,17 +95,16 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   // Best effort in both directions - a missing or unreadable file only costs
   // the warmth, never the restore.
   const LAST_THREAD_FILE = 'state/last-thread.json'
-  ipcMain.handle('app:rememberThread', (_, rawProjectId: unknown, rawThreadId: unknown) => {
+  handle('app:rememberThread', (_, rawProjectId: unknown, rawThreadId: unknown) => {
     const reference = {
       projectId: validateEntityId(rawProjectId, 'Project ID'),
       threadId: validateEntityId(rawThreadId, 'Thread ID')
     }
     void storage.write(LAST_THREAD_FILE, reference).catch(() => undefined)
   })
-  ipcMain.handle('app:forgetThread', () =>
-    storage.removeRaw(LAST_THREAD_FILE).catch(() => undefined)
-  )
+  handle('app:forgetThread', () => storage.removeRaw(LAST_THREAD_FILE).catch(() => undefined))
   void (async (): Promise<void> => {
+    await dataReady
     const last = await storage
       .read<{ projectId: string; threadId: string }>(LAST_THREAD_FILE)
       .catch(() => null)
@@ -89,8 +114,8 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     if (!thread || thread.archived) return
     await threadManager.loadMessagePage(projectId, threadId, undefined, 40)
   })().catch(() => undefined)
-  ipcMain.handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
-  ipcMain.handle('project:list', async () => {
+  handle('project:get', (_, projectId: string) => projectManager.getProject(projectId))
+  handle('project:list', async () => {
     await projectsReady
     // Read on the database worker: this is the first project list the renderer
     // asks for, and a synchronous read here holds the whole main process for as
@@ -101,18 +126,16 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     const projects = await projectRepo.listViaWorkerOrNull()
     return projects ?? projectManager.listProjects()
   })
-  ipcMain.handle('project:ensureInbox', () => projectManager.ensureInboxProject())
+  handle('project:ensureInbox', () => projectManager.ensureInboxProject())
   // Same channel `registerAssistantHandlers` would register after first paint;
   // registering it on the hydration surface lets the renderer resolve it without
   // waiting for the feature graph, and that handler skips its own registration.
-  ipcMain.handle('assistant:ensureSpace', () => projectManager.ensureAssistantSpace())
-  ipcMain.handle('project:getIcon', (_, projectId: string) =>
-    projectManager.getIconDataUrl(projectId)
-  )
-  ipcMain.handle('scope:get', (_, projectId: unknown) =>
+  handle('assistant:ensureSpace', () => projectManager.ensureAssistantSpace())
+  handle('project:getIcon', (_, projectId: string) => projectManager.getIconDataUrl(projectId))
+  handle('scope:get', (_, projectId: unknown) =>
     scopeManager.getBoardViaWorker(validateEntityId(projectId, 'Project ID'))
   )
-  ipcMain.handle('thread:get', async (_, projectId: string, threadId: string) => {
+  handle('thread:get', async (_, projectId: string, threadId: string) => {
     const visible = await database.queryViaWorker(
       `SELECT id FROM threads WHERE id = ? AND project_id = ? AND ${unarchivedThreadSql()}`,
       [threadId, projectId],
@@ -132,12 +155,12 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
    * capped at its configured thread_limit instead. Registered on the early
    * hydration surface because App.svelte invokes it during first paint.
    */
-  ipcMain.handle('thread:listRecentPerProject', async () => {
+  handle('thread:listRecentPerProject', async () => {
     const threads = await threadManager.listRecentPerProject()
     return threads.filter((thread) => !thread.archived)
   })
   /** Paged threads for one project (project filter precedes the SQL LIMIT). */
-  ipcMain.handle('thread:listProjectPage', async (_, rawOptions: unknown) => {
+  handle('thread:listProjectPage', async (_, rawOptions: unknown) => {
     const options = isRecord(rawOptions) ? rawOptions : {}
     if (options.projectId === undefined) throw new TypeError('Project ID is required')
     const projectId = validateEntityId(options.projectId, 'Project ID')
@@ -145,7 +168,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     const offset = validateBoundedInteger(options.offset ?? 0, 'History page offset', 0, 100_000)
     return threadManager.listProjectThreads(projectId, { limit, offset })
   })
-  ipcMain.handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
+  handle('note:get', async (_, projectId: unknown, threadId: unknown) => {
     const validProjectId = validateEntityId(projectId, 'Project ID')
     // The reserved global browser keys its notes by browser tab instead of by a
     // thread; the tab id arrives in the same `threadId` position. Reported in
@@ -167,7 +190,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
     if (!thread) return null
     return noteRepo.get(validThreadId)
   })
-  ipcMain.handle('thread:listRecent', async (_, rawOptions: unknown) => {
+  handle('thread:listRecent', async (_, rawOptions: unknown) => {
     const options = isRecord(rawOptions) ? rawOptions : {}
     const projectId =
       options.projectId === undefined
@@ -191,8 +214,8 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
   })
   // The Threads view's guarantee set: pinned rows, non-done rows, and every row
   // of a pinned-like scope, independent of the recency window.
-  ipcMain.handle('thread:listAlwaysVisible', () => threadManager.listAlwaysVisibleThreads())
-  ipcMain.handle(
+  handle('thread:listAlwaysVisible', () => threadManager.listAlwaysVisibleThreads())
+  handle(
     'thread:loadMessages',
     async (_, projectId: unknown, threadId: unknown, before?: unknown, limit: unknown = 40) => {
       let safeBefore: ThreadMessageCursor | undefined
@@ -216,7 +239,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
       )
     }
   )
-  ipcMain.handle(
+  handle(
     'thread:loadMessagesAround',
     (_, projectId: unknown, threadId: unknown, anchorId: unknown, limit: unknown = 40) =>
       threadManager.loadMessagePageAround(
@@ -226,7 +249,7 @@ export function registerHydrationIpcHandlers(storage: StorageEngine, database: D
         validateBoundedInteger(limit, 'Message page limit', 1, 100)
       )
   )
-  ipcMain.handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) =>
+  handle('thread:loadUserMessages', async (_, projectId: unknown, threadId: unknown) =>
     threadManager.loadUserMessages(
       validateEntityId(projectId, 'Project ID'),
       validateEntityId(threadId, 'Thread ID')

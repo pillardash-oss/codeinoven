@@ -75,6 +75,9 @@
      * for the picture's own control.
      */
     claimInitialFocus?: (panel: HTMLElement) => boolean
+    /** Dictation targets this surface hosts, so a recording made in it keeps
+     *  Escape instead of the key dismissing the surface (see `Modal`). */
+    recordingTargets?: () => readonly string[]
   }
 
   let {
@@ -97,7 +100,8 @@
     hostsBrowserView = false,
     scrim = true,
     hideStrip = false,
-    claimInitialFocus
+    claimInitialFocus,
+    recordingTargets
   }: Props = $props()
 
   /** The dialog is named after the tab it is showing, which is also the label
@@ -174,6 +178,7 @@
   trapFocus={false}
   escapeCloses={false}
   {claimInitialFocus}
+  {recordingTargets}
   scrim={scrim && !hostsBrowserView}
   blocksBrowserView={!hostsBrowserView}
 >
