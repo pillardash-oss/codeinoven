@@ -7,8 +7,6 @@
   import { isVideoMime, isAudioMime } from '$lib/mime'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import Modal from '../ui/Modal.svelte'
-  import AudioPlayer from '../ui/AudioPlayer.svelte'
-  import VideoPlayer from '../ui/VideoPlayer.svelte'
   import { PanZoom } from '$lib/pan-zoom.svelte'
   import PanZoomToolbar from '../ui/PanZoomToolbar.svelte'
   import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
@@ -213,23 +211,29 @@
         {@render annotate()}
       {:else if kind === 'video'}
         <!-- The app's own player, filling this surface. It offers no fullscreen
-             action here: this surface already is the fullscreen view. -->
-        <VideoPlayer
-          {src}
-          sourceKey={revealUrl ?? src}
-          label={filename}
-          {startAt}
-          {autoPlay}
-          fit="fill"
-          onError={(element) => onLoadError?.(element)}
-        />
+             action here: this surface already is the fullscreen view. It loads
+             with the media instead of with the app, so a picture-only preview
+             never pays for the transport controls. -->
+        {#await import('../ui/VideoPlayer.svelte') then { default: VideoPlayer }}
+          <VideoPlayer
+            {src}
+            sourceKey={revealUrl ?? src}
+            label={filename}
+            {startAt}
+            {autoPlay}
+            fit="fill"
+            onError={(element) => onLoadError?.(element)}
+          />
+        {/await}
       {:else if kind === 'audio'}
-        <AudioPlayer
-          {src}
-          label={filename}
-          class="w-full max-w-xl"
-          onError={(element) => onLoadError?.(element)}
-        />
+        {#await import('../ui/AudioPlayer.svelte') then { default: AudioPlayer }}
+          <AudioPlayer
+            {src}
+            label={filename}
+            class="w-full max-w-xl"
+            onError={(element) => onLoadError?.(element)}
+          />
+        {/await}
       {:else}
         <div
           {@attach imageViewportAttachment}
