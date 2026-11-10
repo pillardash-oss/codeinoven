@@ -213,6 +213,23 @@ export class ChatEngineRuntimeWorkflows {
       },
       listModelProfiles: async () => (await this.host.storage.getConfig()).modelProfiles ?? [],
       getThread: (projectId, threadId) => this.host.threadManager.getThread(projectId, threadId),
+      getThreadById: (threadId) => this.host.threadManager.getThreadById(threadId),
+      listDispatchedThreads: (initiatorProjectId, initiatorThreadId) =>
+        dispatchRepo.listByInitiator(initiatorProjectId, initiatorThreadId),
+      updateThreadSettings: (projectId, threadId, settings) =>
+        this.host.threadManager.updateSettings(projectId, threadId, settings),
+      clearStoppedByUser: (projectId, threadId) =>
+        this.host.threadManager.clearStoppedByUser(projectId, threadId),
+      pendingRequestKind: (threadId) => {
+        for (const pending of this.host.pendingQuestions.values()) {
+          if (pending.request.threadId !== threadId) continue
+          return pending.settleSecret ? 'secret' : 'question'
+        }
+        for (const pending of this.host.state.pendingPermissions.values()) {
+          if (pending.session.threadId === threadId) return 'permission'
+        }
+        return null
+      },
       latestAssistantText: async (projectId, threadId) => {
         const messages = await this.host.threadManager.loadMessages(projectId, threadId)
         for (let index = messages.length - 1; index >= 0; index -= 1) {

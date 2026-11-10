@@ -60,7 +60,10 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
     'Read exact Oven, harness, provider, model, profile and account ids plus defaults before dispatch. Use filters to avoid unused catalogs.',
   cio_orchestrate_dispatch:
     'Start a real project thread on the chosen Oven. Use ids from cio_orchestrate_targets, resolve missing required choices with the question tool, and report acceptance, not completion. Results arrive asynchronously.',
-  cio_orchestrate_status: 'Read a previously dispatched thread status and latest result by id.',
+  cio_orchestrate_status:
+    'Read a previously dispatched thread status, current settings and latest result. Omit threadId to list every thread this conversation dispatched.',
+  cio_orchestrate_continue:
+    'Send a follow-up to an existing dispatched thread and/or change its harness, model, thinking level, account, permission tier or Oven in place. Never start a new thread to add to existing work.',
   cio_app_catalog:
     'Read exact app IPC channels, argument order, UI actions and current context before cio_app_call. Filter by domain.',
   cio_app_call:

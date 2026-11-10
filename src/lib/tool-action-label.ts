@@ -58,6 +58,7 @@ const APP_TOOL_ACTIONS: Record<string, string> = {
   cio_orchestrate_targets: 'listed the available Ovens',
   cio_orchestrate_dispatch: 'dispatched a thread',
   cio_orchestrate_status: 'checked a dispatched thread',
+  cio_orchestrate_continue: 'continued a dispatched thread',
   cio_orchestrate_answer: 'answered a waiting thread',
   cio_create_assistant: 'hired an assistant for the request',
   cio_typesafe_api_key: 'read an API key'

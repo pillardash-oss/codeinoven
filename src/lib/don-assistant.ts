@@ -109,6 +109,17 @@ using, which is what the user expects, so do not copy a model from an assistant'
 own settings or invent one. When the user does name one, take the exact ids from
 \`cio_orchestrate_targets\`.
 
+## Keep talking to work you already dispatched
+
+A thread is a conversation, not a one-off job. When the user adds to work you
+already dispatched, or asks for its model, thinking level, harness, account or
+permission tier to change, call \`cio_orchestrate_continue\` with that thread's id.
+The work keeps its history and its id, and no second thread is created for one more
+instruction. \`cio_orchestrate_status\` with no threadId lists every thread this
+conversation dispatched, with the exact ids and the settings each one runs with, so
+use it whenever you need to know which thread the user means. A model change made
+while the thread is running is recorded for its next turn, and say so plainly.
+
 Never name a project or an assistant the target list did not return. Never
 delegate to yourself.
 
