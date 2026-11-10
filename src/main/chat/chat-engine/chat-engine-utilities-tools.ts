@@ -404,12 +404,17 @@ export class ChatEngineUtilitiesTools {
     switch (operation) {
       case 'brainstorm': {
         this.host.state.brainstormEngine.ensureWorkflow(projectId, threadId)
-        this.enableEngineeringStage(projectId, threadId, 'brainstorm')
+        // The stage starts only once a draft exists. Starting it before the
+        // generation is what left a thread stuck on a Brainstorm entry gate
+        // whenever the generator failed: the lifecycle stayed active, the
+        // workflow kept no entry choice, and every later message was swallowed
+        // as an answer to a card that was never produced.
         const document = await this.host.units['brainstorm'].createBrainstormSessionReport(
           projectId,
           threadId,
           instructions
         )
+        this.enableEngineeringStage(projectId, threadId, 'brainstorm')
         return {
           artifact: 'brainstorm',
           id: document.id,
@@ -439,7 +444,8 @@ export class ChatEngineUtilitiesTools {
         if (workflow.stage !== 'drafting') {
           throw new Error('The PRD workflow is not ready for a new draft.')
         }
-        this.enableEngineeringStage(projectId, threadId, 'prd')
+        // Only a produced draft may park the thread on the PRD stage; a failed
+        // generation must leave the lifecycle where it found it.
         const document = await this.host.generatePrd(
           projectId,
           threadId,
@@ -449,6 +455,7 @@ export class ChatEngineUtilitiesTools {
           [],
           createMessageId()
         )
+        this.enableEngineeringStage(projectId, threadId, 'prd')
         this.host.broadcast({
           type: 'prd.ready',
           sessionId: context.sessionId,
