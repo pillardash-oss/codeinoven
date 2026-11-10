@@ -1,19 +1,24 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { slide } from 'svelte/transition'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import type { DelegatedAttentionEntry } from '$shared/delegated-attention'
   import type {
     AgentEvent,
     AgentSecretDraft,
     AgentSecretSubmission,
-    PermissionReply
+    PermissionReply,
+    Thread
   } from '$shared/types'
   import type { SpeechScope } from '$shared/speech/types'
+  import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
+  import { getProjectIcon } from '$lib/project-icons'
+  import { assistants } from '$lib/stores/assistants.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import ThreadMessageSpeaker from './ThreadMessageSpeaker.svelte'
   import AgentQuestionCard from './AgentQuestionCard.svelte'
   import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
-  import DelegatedThreadBadge from './DelegatedThreadBadge.svelte'
+  import DelegatedRetryNotice from './DelegatedRetryNotice.svelte'
   import { isThreadRequestEvent } from './delegated-attention-events'
 
   interface Props {
@@ -25,13 +30,17 @@
   let { projectId, threadId }: Props = $props()
 
   /**
-   * The cards the threads dispatched from this conversation are waiting on.
+   * What the threads dispatched from this conversation are doing, as replies.
    *
-   * They are the child thread's own requests, not copies: every action below
-   * submits against `entry.projectId`/`entry.threadId`, so answering here settles
-   * the blocked thread exactly as answering it there does. That is the whole point
-   * of the mirror: one request, two places to decide it, and no agent relaying what
-   * the user said.
+   * Each entry is drawn exactly where the assistant or project would have
+   * answered: its own mark, its own name, the thread it belongs to, and then the
+   * card. The card is the child thread's own request, not a copy, so every action
+   * below submits against `entry.projectId`/`entry.threadId` and settles the
+   * blocked thread directly, whether the user answers here or there.
+   *
+   * That is what makes the conversation read as a group: several threads can hold
+   * the floor at once, and one of them stopping for a decision never waits for the
+   * conversation to be free.
    */
   let entries = $state<DelegatedAttentionEntry[]>([])
 
@@ -39,18 +48,45 @@
     try {
       entries = await invoke('agent:listDelegatedAttention', projectId, threadId)
     } catch {
-      // A failed read leaves the cards that are already on screen: the thread that
-      // raised them is blocked either way, and its own card still answers it.
+      // A failed read leaves the rows already on screen: the thread that raised
+      // them is blocked either way, and its own card still answers it.
     }
   }
 
-  /** Drop one settled request from the stack, without waiting for the next read. */
+  /** Drop one settled request, so the row goes as soon as the decision lands. */
   function drop(requestId: string): void {
     entries = entries.filter((entry) => entry.requestId !== requestId)
   }
 
   function scopeFor(entry: DelegatedAttentionEntry): SpeechScope {
     return { kind: 'project', projectId: entry.projectId, threadId: entry.threadId }
+  }
+
+  /** The speaker of one row: the assistant the thread works as, else its project. */
+  function speakerOf(entry: DelegatedAttentionEntry): {
+    name: string
+    icon: string | null
+    color: string | undefined
+  } {
+    const assistant = entry.assistantId
+      ? (assistants.assistants.find((candidate) => candidate.id === entry.assistantId) ?? null)
+      : null
+    if (assistant) {
+      return {
+        name: assistant.name,
+        icon: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null),
+        color: assistant.color
+      }
+    }
+    const project = scopeState.projects.find((candidate) => candidate.id === entry.projectId)
+    if (project) {
+      return {
+        name: project.name,
+        icon: getProjectIcon(project, project.iconUrl ?? undefined),
+        color: project.color
+      }
+    }
+    return { name: entry.threadTitle, icon: null, color: undefined }
   }
 
   async function answerQuestion(
@@ -94,7 +130,7 @@
     drop(requestId)
   }
 
-  /** Persist one entry's draft, so a card left half filled resumes where it was. */
+  /** Persist one entry's draft, so a half-filled card resumes where it was. */
   async function draftSecret(
     entry: DelegatedAttentionEntry,
     requestId: string,
@@ -140,26 +176,63 @@
 
   onMount(() => {
     void refresh()
-    // A request appears and settles on the child thread's session, which this
-    // conversation never receives as its own event, so the stream is watched for
-    // the whole app and every relevant one re-reads the authoritative list.
-    return subscribe('agent:event', (...args: unknown[]) => {
-      const event = args[0] as AgentEvent | undefined
-      if (event && isThreadRequestEvent(event)) void refresh()
-    })
+    const unsubscribes = [
+      // A request appears and settles on the child thread's session, which this
+      // conversation never receives as its own event, so the app-wide stream is
+      // watched and every relevant one re-reads the authoritative list.
+      subscribe('agent:event', (...args: unknown[]) => {
+        const event = args[0] as AgentEvent | undefined
+        if (event && isThreadRequestEvent(event)) void refresh()
+      }),
+      // A dispatched thread's own row changes when it parks on a provider wait or
+      // resumes, and that is the only signal a retry notice has: the row says who
+      // dispatched it, so the update is enough to know whether this is our row.
+      subscribe('thread:updated', (...args: unknown[]) => {
+        const thread = args[0] as Thread | undefined
+        if (!thread) return
+        const dispatchedHere = thread.dispatchOrigin?.initiatorThreadId === threadId
+        const alreadyShown = entries.some((entry) => entry.threadId === thread.id)
+        if (dispatchedHere || alreadyShown) void refresh()
+      })
+    ]
+    return () => {
+      for (const unsubscribe of unsubscribes) unsubscribe()
+    }
   })
 </script>
 
 {#if entries.length > 0}
-  <div class="space-y-2">
+  <div class="space-y-3">
     {#each entries as entry (entry.requestId)}
-      <div class="space-y-1.5" in:slide={{ duration: 0 }}>
-        <DelegatedThreadBadge
-          projectId={entry.projectId}
-          threadTitle={entry.threadTitle}
-          assistantId={entry.assistantId}
+      {@const speaker = speakerOf(entry)}
+      <div
+        class="message-block min-w-0 max-w-[90%] border border-border bg-surface px-3.5 py-2.5 text-[0.8125rem] text-foreground"
+        data-delegated-attention={entry.kind}
+      >
+        <ThreadMessageSpeaker
+          name={speaker.name}
+          icon={speaker.icon}
+          color={speaker.color}
+          class="mb-1.5"
         />
-        {#if entry.kind === 'permission' && entry.permission}
+        <!-- Which conversation this reply comes from: the row above names who is
+             speaking, and this names the work, exactly like a thread tag. -->
+        <div class="mb-2 flex min-w-0 items-center gap-1.5 text-[0.6875rem] text-dimmed">
+          {#if speaker.icon}
+            <img
+              src={speaker.icon}
+              alt=""
+              class="h-3 w-3 shrink-0 object-contain"
+              draggable="false"
+            />
+          {:else if entry.assistantId}
+            <AssistantDefaultIcon size={11} class="shrink-0" />
+          {/if}
+          <span class="truncate">{entry.threadTitle}</span>
+        </div>
+        {#if entry.kind === 'retry' && entry.retry}
+          <DelegatedRetryNotice retry={entry.retry} />
+        {:else if entry.kind === 'permission' && entry.permission}
           {#key entry.requestId}
             <PermissionRequestCard
               request={entry.permission}

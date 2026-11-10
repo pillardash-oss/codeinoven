@@ -90,6 +90,26 @@ export async function listDelegatedAttention(
     })
   }
 
+  // A dispatched thread parked on a provider wait is reported the same way: the
+  // conversation that started the work has to know it is waiting, not running.
+  for (const pending of engine.state.retryScheduler?.listPending() ?? []) {
+    const child = await label(pending.projectId, pending.threadId)
+    if (!child) continue
+    entries.push({
+      kind: 'retry',
+      projectId: pending.projectId,
+      threadId: pending.threadId,
+      threadTitle: child.title,
+      ...(child.assistantId ? { assistantId: child.assistantId } : {}),
+      requestId: `retry-${pending.sessionId}`,
+      retry: {
+        ...(pending.retryAt !== undefined ? { retryAt: pending.retryAt } : {}),
+        issueKind: pending.issueKind,
+        message: pending.issueMessage
+      }
+    })
+  }
+
   for (const pending of engine.state.pendingPermissions.values()) {
     const child = await label(pending.session.projectId, pending.session.threadId)
     if (!child) continue

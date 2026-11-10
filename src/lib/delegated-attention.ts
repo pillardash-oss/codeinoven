@@ -15,7 +15,7 @@ import type { PendingAgentQuestionRequest, PermissionRequest } from './types'
  * surfaces one request instead of two.
  */
 export interface DelegatedAttentionEntry {
-  kind: 'question' | 'secret' | 'permission'
+  kind: 'question' | 'secret' | 'permission' | 'retry'
   /** The blocked thread that owns the request. Answers go to these ids. */
   projectId: string
   threadId: string
@@ -28,4 +28,18 @@ export interface DelegatedAttentionEntry {
   question?: PendingAgentQuestionRequest
   /** Set for `permission`: the permission card's own payload, untouched. */
   permission?: PermissionRequest
+  /**
+   * Set for `retry`: a thread parked on a provider wait. It is not a question
+   * anyone has to answer, so it carries the moment the thread resumes by itself
+   * and why, which is what the conversation has to know to stop assuming the work
+   * is running.
+   */
+  retry?: {
+    /** When the wait is admitted again. Absent for a wait only a person ends. */
+    retryAt?: number
+    /** Provider-neutral failure kind, for the notice's wording. */
+    issueKind: string
+    /** The provider's own message, already trimmed for display. */
+    message: string
+  }
 }

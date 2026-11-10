@@ -52,6 +52,7 @@
   import { assistantAccentColor, getAssistantIcon } from '$lib/assistant-icons'
   import CioUserMark from '$lib/components/icons/cio/CioUserMark.svelte'
   import ThreadMessageSpeaker from '../ThreadMessageSpeaker.svelte'
+  import DelegatedAttentionStack from '../DelegatedAttentionStack.svelte'
   import { isGroupThread } from '$shared/types'
   import { conversationAnswerText, conversationProseText } from '../conversation-text'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
@@ -1543,6 +1544,16 @@
           )}
         {/each}
       {/each}
+
+      <!-- Dispatched threads answer here, as replies from their own assistant or
+           project, so the conversation can hold several threads at once and none
+           of them has to wait for this one to be idle. -->
+      {#key `${board.handleAgentEvent.thread.projectId}:${board.handleAgentEvent.thread.id}`}
+        <DelegatedAttentionStack
+          projectId={board.handleAgentEvent.thread.projectId}
+          threadId={board.handleAgentEvent.thread.id}
+        />
+      {/key}
 
       {#if (board.buildSpecActionPrompt.pendingLiveTurn && board.buildSpecActionPrompt.heldSteerAbsIndex === -1) || board.pollStreamParts.settledTurnParts.length > 0}
         {@render liveTurnTrace(
