@@ -113,7 +113,14 @@ export class Database {
       this.ledgerMigrationHost(),
       this.connection.raw()
     )
-    this.connection.raw().pragma('optimize = 0x10002')
+    // `PRAGMA optimize` is not run here any more. It is a query-planner
+    // maintenance pass, not something a boot needs to serve a read, and with the
+    // "consider every table" mask it reads indexes for every table whose
+    // statistics look stale: single-digit milliseconds on a small file and a
+    // main-thread stall on a multi-hundred-megabyte one, which is exactly the
+    // shape of the p99 tail in the durable startup log. The maintenance worker
+    // runs it as its own due-checked step instead (see `statistics_at` in
+    // `database-worker-thread.ts`), behind the first paint and off this thread.
     // Non-blocking: the mirror is brought up to date on the worker in small
     // serialized batches, so init never waits on it and the main thread stays
     // free. Until it reports ready, search uses the legacy (correct) query.
