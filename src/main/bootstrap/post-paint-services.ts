@@ -1274,11 +1274,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           },
           ovenTerminalLaunch(storage, vault, database, context.threadCreation),
           ovenShellLaunch(storage, vault),
-          async ({ projectId, threadId, cwd }) => {
+          async ({ projectId, threadId, cwd, directory }) => {
             const resolved = await projectEnvService.environmentForLaunch({
               projectId,
               threadId,
-              cwd
+              cwd,
+              directory
             })
             return resolved.environment
           }

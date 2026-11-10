@@ -136,7 +136,13 @@ function safeCommandEnvironment(environment?: Record<string, string>): Record<st
  * tool calls.
  */
 export interface PtyProjectEnvironmentHook {
-  (context: { projectId: string; threadId: string; cwd: string }): Promise<Record<string, string>>
+  (context: {
+    projectId: string
+    threadId: string
+    cwd: string
+    /** Project-relative directory the session starts in, '' for the project root. */
+    directory: string
+  }): Promise<Record<string, string>>
 }
 
 /** Called when the user types into a project terminal, so concurrent agent
@@ -518,11 +524,12 @@ export class PtyService {
   private async resolveProjectEnvironment(
     projectId: string,
     threadId: string,
-    cwd: string
+    cwd: string,
+    directory: string
   ): Promise<Record<string, string>> {
     if (!this.projectEnvironment) return {}
     try {
-      return await this.projectEnvironment({ projectId, threadId, cwd })
+      return await this.projectEnvironment({ projectId, threadId, cwd, directory })
     } catch (error: unknown) {
       Logger.error('Project env could not be applied to this process:', error)
       return {}
@@ -577,7 +584,12 @@ export class PtyService {
     const shell = await resolveShell()
     const createdAt = Date.now()
 
-    const projectEnv = await this.resolveProjectEnvironment(projectId, threadId, cwd)
+    const projectEnv = await this.resolveProjectEnvironment(
+      projectId,
+      threadId,
+      cwd,
+      directory ?? ''
+    )
     ensureActive()
     const env = { ...(await buildShellEnv()), ...projectEnv }
     const proc = pty.spawn(shell, resolveShellArgs(shell), {
@@ -1030,7 +1042,7 @@ export class PtyService {
     await this.prepareWindowsShell()
     const shell = await resolveShell()
     const createdAt = Date.now()
-    const projectEnv = await this.resolveProjectEnvironment(projectId, threadId, cwd)
+    const projectEnv = await this.resolveProjectEnvironment(projectId, threadId, cwd, '')
     const env = { ...(await buildShellEnv()), ...safeVariables, ...projectEnv }
     ensureActive()
     // An action runs its lines in sequence with no user watching keystrokes, so

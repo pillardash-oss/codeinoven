@@ -134,6 +134,39 @@ describe('ProjectEnvService resolution', () => {
     expect(inThread.preview.entries[0]).toMatchObject({ scope: 'thread' })
   })
 
+  it('matches a package group from a worktree cwd when the caller names the directory', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      mode: 'default'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      name: 'API_URL',
+      value: 'root'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      mode: 'default',
+      name: 'API_URL',
+      value: 'package'
+    })
+
+    // A managed worktree lives outside the project directory, so a cwd-relative
+    // guess cannot see the package group; the named directory can.
+    const launch = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: join(root, 'config', 'projects', PROJECT_ID, 'scope', 'feature'),
+      directory: 'packages/api'
+    })
+
+    expect(launch.environment['API_URL']).toBe('package')
+  })
+
   it('refuses a name the OS or the app owns', async () => {
     await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
 

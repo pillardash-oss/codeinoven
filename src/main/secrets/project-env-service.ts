@@ -62,6 +62,12 @@ export interface LaunchEnvironmentContext {
   threadId?: string
   /** Absolute working directory the process will start in. */
   cwd: string
+  /**
+   * Project-relative directory the process was started for, when the caller knows
+   * it. A managed worktree scope has a cwd outside the project directory, so this
+   * is what keeps a package group matching there.
+   */
+  directory?: string
 }
 
 export interface LaunchEnvironment {
@@ -317,7 +323,10 @@ export class ProjectEnvService {
   ): Promise<LaunchEnvironment> {
     const projectRoot = await this.requireProjectPath(context.projectId)
     const files = await this.dependencies.store.readProject(context.projectId)
-    const relativeDirectory = projectRelativeDirectory(projectRoot, context.cwd)
+    const relativeDirectory =
+      context.directory === undefined
+        ? projectRelativeDirectory(projectRoot, context.cwd)
+        : normalizeGroup(context.directory)
 
     const winners = new Map<
       string,
