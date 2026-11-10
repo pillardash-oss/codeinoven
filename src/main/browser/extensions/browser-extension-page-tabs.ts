@@ -58,8 +58,19 @@ export interface BrowserExtensionPageTab {
  * is rewritten, nothing is installed twice, and the wrapper the page's own code is
  * already holding keeps answering from the fresh one.
  */
-export function extensionPageTabsScript(tab: BrowserExtensionPageTab): string {
-  return `${darkReaderStorageSource}\n;\n${storageEventsSource}\n;\nglobalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ${JSON.stringify(tab)}\n${pageTabsSource}`
+export function extensionPageTabsScript(
+  tab: BrowserExtensionPageTab,
+  event?: { name: string; args: unknown[] }
+): string {
+  // The fact first, then the event that says it changed: an extension's listener
+  // reads the snapshot back while it runs, so a listener fired before the rewrite
+  // would be answered with the tab the page was told about last.
+  const emit = event
+    ? `\ntry { globalThis.__cioPageTabsEmit(${JSON.stringify(event.name)}, ${JSON.stringify(
+        event.args
+      )}) } catch (error) {}\n`
+    : ''
+  return `${darkReaderStorageSource}\n;\n${storageEventsSource}\n;\nglobalThis.${EXTENSION_PAGE_TAB_GLOBAL} = ${JSON.stringify(tab)}\n${pageTabsSource}${emit}`
 }
 
 /** Name of the generated preload file, written into the extension store root. */

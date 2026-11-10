@@ -122,6 +122,27 @@
   /** `tabs.getCurrent`, which this file answers itself. */
   type TabsGetCurrent = (callback?: (tab: unknown) => void) => Promise<undefined> | undefined
 
+  /** One tab event as this page's own code registers on it. */
+  interface TabsEvent {
+    addListener?: (listener: (...args: unknown[]) => void) => void
+    removeListener?: (listener: (...args: unknown[]) => void) => void
+    hasListener?: (listener: (...args: unknown[]) => void) => boolean
+    hasListeners?: () => boolean
+  }
+
+  /**
+   * A tab event this file owns, so the app can fire it at the page's own listeners.
+   *
+   * The runtime ships these events and never fires one, exactly as it does in a
+   * worker (see the compatibility preamble), so a password manager's side panel that
+   * tracks "which tab am I on" with `tabs.onActivated` never heard about a tab
+   * switch and kept answering for the page the user left.
+   */
+  interface TabsEventEmitter extends TabsEvent {
+    /** Fire at every listener held, one failure isolated per listener. */
+    __cioEmit?: (args: unknown[]) => void
+  }
+
   /**
    * The `chrome.tabs` namespace this file wraps.
    *
@@ -132,6 +153,11 @@
     query?: TabsQuery
     getCurrent?: TabsGetCurrent
     create?: TabsCreate
+    onCreated?: TabsEvent
+    onUpdated?: TabsEvent
+    onRemoved?: TabsEvent
+    onActivated?: TabsEvent
+    onHighlighted?: TabsEvent
   }
 
   /** The `chrome.runtime` surface `mayRead` asks for the extension's manifest. */
@@ -183,6 +209,8 @@
     chrome?: ChromeRoot
     browser?: ChromeRoot
     __cioPageTabsSnapshot?: PageSnapshot
+    /** Fire one tab event the app observed at this page's own listeners. */
+    __cioPageTabsEmit?: (name: string, args: unknown[]) => void
   }
 
   /** The one typed view of the global, read through instead of `globalThis` itself. */
@@ -314,6 +342,40 @@
       return false
     } catch {
       return false
+    }
+  }
+
+  // ── Tab events, which this runtime never fires in a page ──────────────────
+  // A popup or a side panel is a document of the extension, so it registers its
+  // own `tabs.on*` listeners the way Chromium expects and keeps its idea of the
+  // current tab from them. The runtime delivers none of those, which left a side
+  // panel showing the site the user had already left. One emitter per event, on
+  // both roots, and the app fires the same facts it hands the worker.
+  const tabEventEmitters: Record<string, TabsEventEmitter> = {}
+
+  const makeTabEvent = (): TabsEventEmitter => {
+    const listeners: ((...args: unknown[]) => void)[] = []
+    return {
+      addListener: (listener) => {
+        if (typeof listener === 'function' && listeners.indexOf(listener) === -1) {
+          listeners.push(listener)
+        }
+      },
+      removeListener: (listener) => {
+        const index = listeners.indexOf(listener)
+        if (index !== -1) listeners.splice(index, 1)
+      },
+      hasListener: (listener) => listeners.indexOf(listener) !== -1,
+      hasListeners: () => listeners.length > 0,
+      __cioEmit: (args) => {
+        for (const listener of listeners.slice()) {
+          try {
+            listener(...args)
+          } catch {
+            // One listener that throws does not deny the fact to the others.
+          }
+        }
+      }
     }
   }
 
@@ -467,6 +529,41 @@
     }
   }
 
+  /** The tab events this file owns, so the app can fire the facts it observed. */
+  const TAB_EVENT_NAMES: (keyof TabsApi)[] = [
+    'onCreated',
+    'onUpdated',
+    'onRemoved',
+    'onActivated',
+    'onHighlighted'
+  ]
+
+  /**
+   * Install the tab events once per document, and remember them for the app.
+   *
+   * Once, not on every push: a second install would replace the event object and
+   * drop the listeners the extension had already registered on it. The preload is
+   * what runs this before the extension's own bundle, so a page that has it needs
+   * nothing more than the push that rewrites the snapshot.
+   */
+  const installTabEvents = (tabsApi: TabsApi) => {
+    for (const name of TAB_EVENT_NAMES) {
+      const existing = tabEventEmitters[name]
+      if (existing) {
+        if (tabsApi[name] !== existing) define(tabsApi, name, existing)
+        continue
+      }
+      const emitter = makeTabEvent()
+      tabEventEmitters[name] = emitter
+      define(tabsApi, name, emitter)
+    }
+  }
+
+  surface.__cioPageTabsEmit = (name, args) => {
+    const emitter = tabEventEmitters[name]
+    if (emitter && typeof emitter.__cioEmit === 'function') emitter.__cioEmit(args)
+  }
+
   // ── Opening a tab, which this runtime cannot do from a page ─────────────────
 
   /** How long a page waits for the app to say it opened the tab. */
@@ -590,6 +687,7 @@
   for (const root of roots) {
     const tabsApi = root.tabs
     if (!tabsApi) continue
+    installTabEvents(tabsApi)
     const original = typeof tabsApi.query === 'function' ? tabsApi.query : null
     // One marker on the wrapper itself, so a push into a page that already has them
     // rewrites the snapshot and installs nothing a second time.

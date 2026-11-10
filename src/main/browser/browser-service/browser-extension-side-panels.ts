@@ -270,6 +270,49 @@ export class BrowserExtensionSidePanels {
     return undefined
   }
 
+  /**
+   * The pages of every panel one tab is acting through.
+   *
+   * A panel is the extension's own document hosted beside the page, so it asks the
+   * same question an action popup asks ("which tab am I acting on") and is answered
+   * by the same push. Without it a panel kept the address it was opened on while the
+   * page navigated underneath, which a password manager reads as being on another
+   * site entirely.
+   */
+  pagesForTab(tabId: string): WebContents[] {
+    const pages: WebContents[] = []
+    for (const record of this.panels.values()) {
+      if (record.appTabId !== tabId) continue
+      const page = pageOf(record)
+      if (page && !page.isDestroyed()) pages.push(page)
+    }
+    return pages
+  }
+
+  /**
+   * Point every panel of one jar at the tab that just became the one on screen.
+   *
+   * A browser's side panel is a surface of the window, not of a tab: it stays open
+   * across a tab switch and answers for the tab the user is on now. The panel's
+   * document learns which tab that is from this app, so leaving the panel bound to
+   * the tab it was opened on made an extension answer for the page the user left
+   * (Bitwarden's "Site doesn't match", naming the previous site as the current one).
+   *
+   * Only the app tab moves. `extensionTabId` stays the tab the panel was opened on,
+   * which is what the extension was told in its `chrome.sidePanel.onOpened` and what
+   * its own close request names.
+   */
+  followActiveTab(input: { projectId: string; boxId: string | null; appTabId: string }): void {
+    let changed = false
+    for (const record of this.panels.values()) {
+      if (record.projectId !== input.projectId || record.boxId !== input.boxId) continue
+      if (record.appTabId === input.appTabId) continue
+      record.appTabId = input.appTabId
+      changed = true
+    }
+    if (changed) this.viewHost.changed()
+  }
+
   /** Close every panel the browser holds, for a teardown that outranks them. */
   closeAll(reason: string): void {
     for (const extensionId of [...this.panels.keys()]) this.close(extensionId, reason)
