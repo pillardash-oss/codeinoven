@@ -812,6 +812,14 @@ export class BrowserService {
     this.configurationUnit.applyScrollbarTheme(tabId, contents)
   }
 
+  applyPageStyles(tabId: string, contents: WebContents): void {
+    this.configurationUnit.applyPageStyles(tabId, contents)
+  }
+
+  applyPageDragIsolation(contents: WebContents): void {
+    this.configurationUnit.applyPageDragIsolation(contents)
+  }
+
   refreshTabMark(tabId: string, tab: BrowserTab): void {
     this.configurationUnit.refreshTabMark(tabId, tab)
   }

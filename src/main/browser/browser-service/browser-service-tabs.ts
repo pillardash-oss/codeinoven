@@ -47,7 +47,7 @@ export interface TabsHost {
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly allowSiteKeymapOverride: BrowserService['allowSiteKeymapOverride']
   readonly appendConsoleEntry: BrowserService['appendConsoleEntry']
-  readonly applyScrollbarTheme: BrowserService['applyScrollbarTheme']
+  readonly applyPageStyles: BrowserService['applyPageStyles']
   readonly appShortcutChords: BrowserService['appShortcutChords']
   readonly armCompositionQuietly: BrowserService['armCompositionQuietly']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
@@ -342,8 +342,9 @@ export class BrowserServiceTabs {
       this.host.capture.reset(tabId)
       this.watchCaptureMainFrame(tabId, view.webContents)
       // The document that just arrived drops the last one's stylesheet, so the
-      // app's scrollbar colours are installed again here.
-      this.host.applyScrollbarTheme(tabId, view.webContents)
+      // app's styles for a page   its scrollbar colours, and the subtraction that
+      // keeps a page from dragging the window   are installed again here.
+      this.host.applyPageStyles(tabId, view.webContents)
       publish()
       this.host.notifyExtensionWebNavigation(
         tab.projectId,

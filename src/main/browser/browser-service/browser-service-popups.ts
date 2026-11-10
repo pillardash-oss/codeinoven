@@ -48,6 +48,7 @@ import {
 export interface PopupsHost {
   readonly allowSiteKeymapOverride: BrowserService['allowSiteKeymapOverride']
   readonly appendConsoleEntry: BrowserService['appendConsoleEntry']
+  readonly applyPageDragIsolation: BrowserService['applyPageDragIsolation']
   readonly appShortcutChords: BrowserService['appShortcutChords']
   readonly childTabOpeners: BrowserService['childTabOpeners']
   readonly consumeSwitcherKey: BrowserService['consumeSwitcherKey']
@@ -306,6 +307,12 @@ export class BrowserServicePopups {
     // Cmd/Ctrl+W would close the app window rather than this popup.
     contents.on('dom-ready', () => {
       this.host.pageKeys.install(contents)
+      // A popup shows a document of its own, and a page declares the same window
+      // drag regions in one as in a tab: the subtraction is installed for this
+      // document too, so a popup cannot drag the app window either. Its scrollbar
+      // theme is left alone, because that stylesheet is tracked per tab and this
+      // document is not the tab's own page.
+      this.host.applyPageDragIsolation(contents)
       // A popup is a page with its own history, and the user's trackpad gesture
       // belongs to whichever page they are pointing at. Installing the same
       // observer the tabs use is what makes a swipe inside this window walk this
