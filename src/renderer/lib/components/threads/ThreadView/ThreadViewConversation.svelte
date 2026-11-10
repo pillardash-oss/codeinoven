@@ -206,22 +206,48 @@
   }
 
   /**
+   * The conversation one group reply came from.
+   *
+   * A reply written into a group since messages started carrying it names the
+   * thread it spoke from. A reply written before that keeps it in its own id: a
+   * delegated answer is `don-delegation-<runThreadId>` (and its paused line
+   * `-status`), and a group reply from an assistant is
+   * `group-chat-reply-<runThreadId>-<timestamp>`. Reading the id is what makes
+   * an answer that was already in the transcript answerable, instead of waiting
+   * for the next one.
+   */
+  function sourceThreadIdFor(msg: AgentMessage): string | null {
+    if (msg.author?.threadId) return msg.author.threadId
+    const delegationPrefix = 'don-delegation-'
+    if (msg.id.startsWith(delegationPrefix)) {
+      const id = msg.id.slice(delegationPrefix.length).replace(/-status$/u, '')
+      return id.length > 0 ? id : null
+    }
+    const chatReply = /^group-chat-reply-(.+)-\d+$/u.exec(msg.id)
+    return chatReply?.[1] ?? null
+  }
+
+  /**
    * The conversation one group reply came from, as a reply target.
    *
    * A reply written into a group carries the thread that spoke it, so the bubble
    * is a door back into that thread: answering it addresses the next message
    * there instead of to the group's own assistant. A message with no source
-   * thread (the host's own answer, or history from before this existed) has no
-   * door to offer, and its bubble stays a plain card.
+   * thread (the host's own answer) has no door to offer, and its bubble stays a
+   * plain card.
    */
   function replyTargetFor(msg: AgentMessage): DirectReplyTarget | null {
-    const author = msg.author
-    if (!author?.projectId || !author.threadId) return null
+    const threadId = sourceThreadIdFor(msg)
+    if (!threadId) return null
+    const known = board.props.assistantSpaceThreads?.find((thread) => thread.id === threadId)
+    // A dispatched thread lives in the project its group chat collected it in,
+    // so the open conversation's own project is the last honest answer when the
+    // child has been archived or is not in the list.
+    const projectId =
+      msg.author?.projectId ?? known?.projectId ?? board.handleAgentEvent.thread.projectId
+    if (!projectId) return null
     const speaker = groupSpeakerFor(msg)
-    const title =
-      board.props.assistantSpaceThreads?.find((thread) => thread.id === author.threadId)?.title ??
-      speaker?.name ??
-      author.name
+    const title = known?.title ?? speaker?.name ?? msg.author?.name ?? 'that conversation'
     // The `@thread:` marker is how the group links back to the run's own thread;
     // it is not part of what the speaker said, so a quote never carries it.
     const excerpt = messageText(msg)
@@ -230,10 +256,10 @@
       .trim()
       .slice(0, 240)
     return {
-      projectId: author.projectId,
-      threadId: author.threadId,
+      projectId,
+      threadId,
       title,
-      speakerName: speaker?.name ?? author.name,
+      speakerName: speaker?.name ?? msg.author?.name ?? known?.title ?? 'That conversation',
       messageId: msg.id,
       excerpt
     }
@@ -1565,7 +1591,7 @@
                           >
                             <CioDownload size={12} />
                           </button>
-                          {#if groupThread && msg.author?.projectId && msg.author?.threadId}
+                          {#if groupThread && sourceThreadIdFor(msg)}
                             <button
                               class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                               aria-label={`Reply in ${replyTargetFor(msg)?.title ?? 'that conversation'}`}
