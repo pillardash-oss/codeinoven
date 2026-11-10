@@ -89,8 +89,6 @@ export function isContrastLevel(value: unknown): value is ContrastLevel {
   return typeof value === 'string' && (CONTRAST_LEVELS as readonly string[]).includes(value)
 }
 
-export type SlashCommandMode = 'app' | 'passthrough'
-
 export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference' | 'models'
 
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
@@ -419,8 +417,6 @@ export interface AppConfig {
    * on the user's own messages, and it is empty until they say.
    */
   userPreferredName?: string
-  /** How slash commands are handled: in-app actions or forwarded to the harness. */
-  slashCommandMode: SlashCommandMode
   /** Preferred editor used by “Open in Editor”. `system` falls back to the OS default. */
   preferredEditor: EditorId
   /** Last directory chosen in the folder-picker dialog, so it opens there next time. */
@@ -600,7 +596,6 @@ export type AppConfigPatch = Partial<
     | 'switcherThreadBrowserTabs'
     | 'questionTimeoutMs'
     | 'agentQuestionCap'
-    | 'slashCommandMode'
     | 'ideLanguageServers'
     | 'ideFormatOnSave'
     | 'preferredEditor'

@@ -424,11 +424,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-threads',
     title: 'Threads',
-    description:
-      'Thread limits, slash command behavior, question timeout, and which panel tabs the switcher lists.',
+    description: 'Thread limits, question timeout, and which panel tabs the switcher lists.',
     keywords: [
       'limit',
-      'slash commands',
       'timeout',
       'switcher',
       'ctrl+tab',

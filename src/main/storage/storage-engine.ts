@@ -106,7 +106,6 @@ const DEFAULT_CONFIG: AppConfig = {
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
   keybindings: {},
-  slashCommandMode: 'app',
   preferredEditor: 'system',
   ideLanguageServers: DEFAULT_IDE_LANGUAGE_SERVERS,
   ideFormatOnSave: true,

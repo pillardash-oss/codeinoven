@@ -115,7 +115,6 @@ const defaultConfig: AppConfig = {
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
   keybindings: {},
-  slashCommandMode: 'app',
   preferredEditor: 'system',
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
@@ -191,7 +190,6 @@ describe('validateAppConfigPatch', () => {
       validateAppConfigPatch({
         theme: 'dark',
         threadLimit: 120,
-        slashCommandMode: 'passthrough',
         preferredEditor: 'ghostty',
         agentDefaults: {
           syncFromThreadChanges: true,
@@ -236,7 +234,6 @@ describe('validateAppConfigPatch', () => {
     ).toMatchObject({
       theme: 'dark',
       threadLimit: 120,
-      slashCommandMode: 'passthrough',
       preferredEditor: 'ghostty',
       agentDefaults: {
         syncFromThreadChanges: true,
@@ -306,7 +303,6 @@ describe('validateAppConfigPatch', () => {
     { maxDiffLines: 1.5 },
     { maxDiffLines: 5001 },
     { maxDiffLines: '100' },
-    { slashCommandMode: 'both' },
     { preferredEditor: 'unknown-editor' },
     { agentDefaults: { syncFromThreadChanges: 'yes' } },
     { agentDefaults: { syncFromThreadChanges: true, imageDescriptor: { harnessId: 'opencode' } } },
@@ -456,12 +452,9 @@ describe('config IPC', () => {
       ...defaultConfig,
       lastFolderDialogPath: '/projects'
     })
-    await expect(
-      updateHandler?.(trustedEvent(), { theme: 'dark', slashCommandMode: 'passthrough' })
-    ).resolves.toEqual({
+    await expect(updateHandler?.(trustedEvent(), { theme: 'dark' })).resolves.toEqual({
       ...defaultConfig,
       theme: 'dark',
-      slashCommandMode: 'passthrough',
       lastFolderDialogPath: '/projects'
     })
 
@@ -469,7 +462,6 @@ describe('config IPC', () => {
     expect(saveConfig).toHaveBeenCalledWith({
       ...defaultConfig,
       theme: 'dark',
-      slashCommandMode: 'passthrough',
       lastFolderDialogPath: '/projects'
     })
 
