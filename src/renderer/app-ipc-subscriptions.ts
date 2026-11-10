@@ -139,15 +139,22 @@ function showAgentNotification(
       payload.temporaryChatId
     )
   if (
-    !readingTemporaryChat &&
     payload.source === 'temporary-chat' &&
     payload.kind === 'chat-completed' &&
     payload.temporaryChatId
   ) {
-    // The side chat finished while the user was not reading it: flag it so the
-    // response is discoverable from the thread list and the context rail's own
-    // icon. Cleared when the side-chat panel is focused.
-    temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
+    if (readingTemporaryChat) {
+      // The response landed in the panel the user is reading, so it is read on
+      // arrival: a mark left over from a turn that finished while the panel was
+      // away must not keep the row and rail dots lit over a response that is on
+      // screen right now.
+      temporaryChatUnread.clear(payload.projectId, payload.threadId, payload.temporaryChatId)
+    } else {
+      // The side chat finished while the user was not reading it: flag it so the
+      // response is discoverable from the thread list and the context rail's own
+      // icon. Cleared when the side-chat panel is focused.
+      temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
+    }
   }
   if (onSelectedThread) {
     return

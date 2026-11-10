@@ -1081,6 +1081,33 @@ export class SidebarTabContexts {
     if (tab.expired) return
     tab.expiresAt = expiresAt
     this.scheduleTemporaryChatExpiry(tab)
+    // Touching the chat is activity inside it: sending a message, or a turn
+    // lifecycle landing on a panel that is mounted on screen. Either way the
+    // user is in this conversation. A response flagged while the panel was away
+    // must drop its row and rail dots here, because typing into the chat never
+    // goes through a focus event and the badge used to survive exactly that.
+    temporaryChatUnread.clear(tab.projectId, tab.threadId, tab.temporaryChatId)
+  }
+
+  /**
+   * Clear the unread mark of the side chat the user is reading right now.
+   *
+   * Regaining window focus is a read signal for whatever panel is on screen,
+   * the same way it settles an open thread's unread flag. A response that landed
+   * while the window was in the background is already in front of the user, so
+   * the row and rail dots drop now instead of waiting for a click on the rail
+   * icon that happens to focus the tab again.
+   */
+  clearOnScreenTemporaryChatUnread(): void {
+    const context = this.activeContext
+    if (!context) return
+    for (const tab of context.tabs) {
+      if (tab.kind !== 'temporary-chat') continue
+      if (!this.isTemporaryChatOnScreen(context.projectId, context.threadId, tab.temporaryChatId)) {
+        continue
+      }
+      temporaryChatUnread.clear(context.projectId, context.threadId, tab.temporaryChatId)
+    }
   }
 
   expireTemporaryChat(tab: TemporaryChatContextTab, closeRemote = true): void {

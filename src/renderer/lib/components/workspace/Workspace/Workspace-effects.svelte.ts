@@ -562,6 +562,10 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
     // read signal for the open thread; marking read is idempotent.
     $effect(() => {
       const onWindowFocus = (): void => {
+        // A side chat on screen is read by the same act: coming back to the
+        // window with that panel already open is not a click on the rail icon,
+        // so the mark it left behind has to be dropped here.
+        contextSidebarState.clearOnScreenTemporaryChatUnread()
         const selected = workspaceState.selectedThread
         if (!selected || selected.read || !threadTracksReadStatus(selected)) return
         this.root.markThreadReadAndApply.requestThreadRead(selected.projectId, selected.id)

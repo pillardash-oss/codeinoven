@@ -1071,6 +1071,12 @@ class ContextSidebarState {
     this.tabContexts.touchTemporaryChat(tab, expiresAt)
   }
 
+  /** Drop the unread mark of the side chat on screen, used when the window
+   *  regains focus with that chat already open. */
+  clearOnScreenTemporaryChatUnread(): void {
+    this.tabContexts.clearOnScreenTemporaryChatUnread()
+  }
+
   expireTemporaryChat(tab: TemporaryChatContextTab, closeRemote = true): void {
     this.tabContexts.expireTemporaryChat(tab, closeRemote)
   }
