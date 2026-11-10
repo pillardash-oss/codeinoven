@@ -9,6 +9,12 @@ import {
 import { ProjectEnvStore } from '../../src/main/secrets/project-env-store'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 
+/** Windows has no POSIX mode bits: chmod only toggles the read-only flag there. */
+async function expectOwnerOnly(path: string): Promise<void> {
+  if (process.platform === 'win32') return
+  expect((await stat(path)).mode & 0o777).toBe(0o600)
+}
+
 /** An in-memory stand-in for the vault: refs and values, nothing encrypted. */
 function fakeSecrets(): ProjectEnvSecretsPort & { values: Map<string, string> } {
   const values = new Map<string, string>()
@@ -367,7 +373,7 @@ describe('ProjectEnvService writing the file into the project', () => {
     expect(content).toMatch(/^DATABASE_URL=cio:\/\/secret_/mu)
     expect(content).not.toContain('postgres://old')
     expect(await readFile(`${target}.cio-backup`, 'utf8')).toBe('DATABASE_URL=postgres://old\n')
-    expect((await stat(target)).mode & 0o777).toBe(0o600)
+    await expectOwnerOnly(target)
 
     expect(await readFile(target, 'utf8')).toBe(content)
     const again = await service.writeEnvFileToProject({
@@ -422,8 +428,8 @@ describe('ProjectEnvService import', () => {
 
     const backup = await readFile(join(projectRoot, '.env.cio-backup'), 'utf8')
     expect(backup).toBe(original)
-    expect((await stat(join(projectRoot, '.env.cio-backup'))).mode & 0o777).toBe(0o600)
-    expect((await stat(join(projectRoot, '.env'))).mode & 0o777).toBe(0o600)
+    await expectOwnerOnly(join(projectRoot, '.env.cio-backup'))
+    await expectOwnerOnly(join(projectRoot, '.env'))
 
     const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
     expect(launch.environment).toEqual({ DATABASE_URL: 'postgres://secret', PORT: '3000' })
