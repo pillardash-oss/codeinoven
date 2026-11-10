@@ -1,0 +1,246 @@
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
+import { join } from 'path'
+import { tmpdir } from 'os'
+import {
+  ProjectEnvService,
+  type ProjectEnvSecretsPort
+} from '../../src/main/secrets/project-env-service'
+import { ProjectEnvStore } from '../../src/main/secrets/project-env-store'
+import { StorageEngine } from '../../src/main/storage/storage-engine'
+
+/** An in-memory stand-in for the vault: refs and values, nothing encrypted. */
+function fakeSecrets(): ProjectEnvSecretsPort & { values: Map<string, string> } {
+  const values = new Map<string, string>()
+  let counter = 0
+  return {
+    values,
+    async save(value: string, existingRef?: string): Promise<string> {
+      const ref = existingRef ?? `secret_${++counter}`
+      values.set(ref, value)
+      return ref
+    },
+    async resolve(ref: string): Promise<string> {
+      const value = values.get(ref)
+      if (value === undefined) throw new Error('Credential not found')
+      return value
+    },
+    async exists(ref: string): Promise<boolean> {
+      return values.has(ref)
+    },
+    async remove(ref: string): Promise<void> {
+      values.delete(ref)
+    }
+  }
+}
+
+let root: string
+let projectRoot: string
+let storage: StorageEngine
+let secrets: ReturnType<typeof fakeSecrets>
+let service: ProjectEnvService
+
+const PROJECT_ID = 'proj-1'
+const THREAD_ID = 'thread-1'
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), 'codeinoven-project-env-'))
+  projectRoot = join(root, 'project')
+  await mkdir(join(projectRoot, 'packages', 'api'), { recursive: true })
+  storage = new StorageEngine(join(root, 'config'))
+  secrets = fakeSecrets()
+  service = new ProjectEnvService({
+    store: new ProjectEnvStore(storage),
+    secrets,
+    resolveProjectPath: async () => projectRoot
+  })
+})
+
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true })
+})
+
+describe('ProjectEnvService resolution', () => {
+  it('resolves a root key for a process started at the project root', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      name: 'API_URL',
+      value: 'https://api.example.com'
+    })
+
+    const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+
+    expect(launch.environment).toEqual({ API_URL: 'https://api.example.com' })
+    expect(launch.preview.entries).toEqual([
+      { name: 'API_URL', group: '', mode: 'default', scope: 'project' }
+    ])
+  })
+
+  it('lets a deeper directory group and a later run mode override, and a thread win over all', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'local' })
+    await service.createProjectEnvFile({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      mode: 'default'
+    })
+
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      name: 'DATABASE_URL',
+      value: 'postgres://root'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'local',
+      name: 'DATABASE_URL',
+      value: 'postgres://local'
+    })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      mode: 'default',
+      name: 'DATABASE_URL',
+      value: 'postgres://api'
+    })
+    await service.setThreadEnvValue({
+      threadId: THREAD_ID,
+      name: 'DATABASE_URL',
+      value: 'postgres://thread'
+    })
+
+    const atRoot = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(atRoot.environment['DATABASE_URL']).toBe('postgres://local')
+
+    const inPackage = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      cwd: join(projectRoot, 'packages', 'api')
+    })
+    expect(inPackage.environment['DATABASE_URL']).toBe('postgres://api')
+    expect(inPackage.preview.entries[0]).toMatchObject({ group: 'packages/api', mode: 'default' })
+
+    const inThread = await service.environmentForLaunch({
+      projectId: PROJECT_ID,
+      threadId: THREAD_ID,
+      cwd: join(projectRoot, 'packages', 'api')
+    })
+    expect(inThread.environment['DATABASE_URL']).toBe('postgres://thread')
+    expect(inThread.preview.entries[0]).toMatchObject({ scope: 'thread' })
+  })
+
+  it('refuses a name the OS or the app owns', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+
+    await expect(
+      service.setProjectEnvValue({
+        projectId: PROJECT_ID,
+        group: '',
+        mode: 'default',
+        name: 'PATH',
+        value: '/tmp/bin'
+      })
+    ).rejects.toThrow(/reserved/u)
+
+    await expect(
+      service.setProjectEnvValue({
+        projectId: PROJECT_ID,
+        group: '',
+        mode: 'default',
+        name: 'CIO_SOMETHING',
+        value: 'x'
+      })
+    ).rejects.toThrow(/reserved by the app/u)
+  })
+
+  it('reports a name whose value is gone instead of failing the launch', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      name: 'STRIPE_KEY',
+      value: 'sk_test'
+    })
+    secrets.values.clear()
+
+    const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+
+    expect(launch.environment).toEqual({})
+    expect(launch.preview.skipped).toEqual([
+      { name: 'STRIPE_KEY', reason: expect.stringContaining('no longer stored') }
+    ])
+  })
+})
+
+describe('ProjectEnvService import', () => {
+  it('previews without writing, then rewrites the file and keeps a private backup', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    const original = '# local only\nDATABASE_URL=postgres://secret\nPORT=3000\n'
+    await writeFile(join(projectRoot, '.env'), original, 'utf8')
+
+    const preview = await service.importProjectEnv({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      path: '.env',
+      apply: false
+    })
+
+    expect(preview.preview.names).toEqual(['DATABASE_URL', 'PORT'])
+    expect(preview.preview.created).toEqual(['DATABASE_URL', 'PORT'])
+    expect(await readFile(join(projectRoot, '.env'), 'utf8')).toBe(original)
+    expect(secrets.values.size).toBe(0)
+
+    const applied = await service.importProjectEnv({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      path: '.env',
+      apply: true
+    })
+
+    const rewritten = await readFile(join(projectRoot, '.env'), 'utf8')
+    expect(rewritten).toContain('# local only')
+    expect(rewritten).toMatch(/^DATABASE_URL=cio:\/\/secret_/mu)
+    expect(rewritten).not.toContain('postgres://secret')
+    expect(applied.backupPath).toBe('.env.cio-backup')
+
+    const backup = await readFile(join(projectRoot, '.env.cio-backup'), 'utf8')
+    expect(backup).toBe(original)
+    expect((await stat(join(projectRoot, '.env.cio-backup'))).mode & 0o777).toBe(0o600)
+    expect((await stat(join(projectRoot, '.env'))).mode & 0o777).toBe(0o600)
+
+    const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(launch.environment).toEqual({ DATABASE_URL: 'postgres://secret', PORT: '3000' })
+  })
+
+  it('forgets a key and its value together', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+    await service.setProjectEnvValue({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      name: 'MAIL_KEY',
+      value: 'mail'
+    })
+    expect(secrets.values.size).toBe(1)
+
+    await service.removeProjectEnvEntry({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      name: 'MAIL_KEY'
+    })
+
+    expect(secrets.values.size).toBe(0)
+    expect(await service.listProjectEnv(PROJECT_ID)).toEqual([
+      { group: '', mode: 'default', entries: [], updatedAt: expect.any(Number) }
+    ])
+  })
+})

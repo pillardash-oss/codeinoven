@@ -39,8 +39,12 @@
   import { questionWalkthrough } from '$lib/stores/question-walkthrough.svelte'
   import { donListening } from '$lib/don-listening.svelte'
   import { guideState } from '$lib/guide/guide-state.svelte'
+  import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
   import { createApp } from './App/App-board.svelte'
   const board = createApp()
+  // A project row's key button and the file explorer's Secrets action live deep in
+  // the tree; both open the Secrets page through this one registration.
+  secretsPageState.setNavigator(board.onKeydown.navigate)
 
   // Agent names label every transcript row and status line, so they are read
   // once here instead of only when the Harnesses page or the editor opens.

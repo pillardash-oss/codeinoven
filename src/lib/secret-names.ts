@@ -162,6 +162,43 @@ export function validateAppEnvironmentVariable(name: string): string {
   return validated
 }
 
+/**
+ * Reserved names a project's own ENV file may still set.
+ *
+ * A `.env` is where a project declares `NODE_ENV` and a locale; refusing those
+ * would make the feature unusable. Everything else reserved stays refused, because
+ * writing it changes how a launched server resolves its own runtime instead of
+ * handing it a value.
+ */
+const PROJECT_ENV_ALLOWED_RESERVED: readonly string[] = ['NODE_ENV', 'LANG', 'LANGUAGE', 'CI']
+
+/**
+ * Validate a name a project's ENV file will inject into a server it starts.
+ *
+ * Tighter than a plain variable name, looser than a collected secret: a project may
+ * legitimately declare `NODE_ENV`, but it may never declare `PATH`, `LD_PRELOAD` or
+ * a name in the app's own `CIO_` namespace.
+ */
+export function validateProcessEnvironmentVariable(name: string): string {
+  const validated = assertEnvironmentVariableShape(name)
+  if (isAppOwnedEnvironmentVariable(validated)) {
+    throw new TypeError(
+      `Environment variable is reserved by the app and cannot be set by a project: ${validated}`
+    )
+  }
+  if (isReservedEnvironmentName(validated)) {
+    const allowed = PROJECT_ENV_ALLOWED_RESERVED.some(
+      (entry) => entry.toUpperCase() === validated.toUpperCase()
+    )
+    if (!allowed) {
+      throw new TypeError(
+        `Environment variable is reserved by the OS or a runtime and cannot be overridden: ${validated}`
+      )
+    }
+  }
+  return validated
+}
+
 const TITLE_SLUG_LIMIT = 24
 
 /**

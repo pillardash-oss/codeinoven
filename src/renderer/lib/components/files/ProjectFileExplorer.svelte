@@ -25,6 +25,7 @@
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
+  import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
   import ProjectFileExplorerDialogs from './ProjectFileExplorerDialogs.svelte'
@@ -49,6 +50,12 @@
     type InlineEdit,
     type TreeRow
   } from './project-file-explorer-tree'
+
+  /** An env file is the one file whose values the vault can manage. */
+  function isEnvFile(path: string | null): boolean {
+    if (!path) return false
+    return /(^|\/)\.env(\.[A-Za-z0-9_-]+)?$/u.test(path)
+  }
 
   interface Props {
     projectId: string
@@ -1376,6 +1383,9 @@
     onToggleFilter={() => (filterOpen ? closeFilter() : void openFilter())}
     onRevealActiveFile={locateActiveFileTab}
     onRefresh={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
+    envFileOpen={isEnvFile(selectedPath)}
+    onOpenSecrets={() =>
+      secretsPageState.open({ projectId, directory: parentDirectory(selectedPath ?? '') })}
   />
 
   <ProjectFileExplorerFilters

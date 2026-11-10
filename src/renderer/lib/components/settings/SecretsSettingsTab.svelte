@@ -1,23 +1,36 @@
 <script lang="ts">
   import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import { invoke } from '$lib/ipc.svelte'
+  import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
   import { APP_NAME } from '$shared/brand'
   import type { SecretsOverview, SecretInventoryEntry } from '$shared/secrets'
-  import { invoke } from '$lib/ipc.svelte'
   import { onMount } from 'svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import EmptyState from '../ui/EmptyState.svelte'
+  import EnvFilesPanel from './secrets-settings/EnvFilesPanel.svelte'
   import SecretsList from './secrets-settings/SecretsList.svelte'
   import SecretRotateModal from './secrets-settings/SecretRotateModal.svelte'
+  import ThreadEnvPanel from './secrets-settings/ThreadEnvPanel.svelte'
 
   /**
-   * The one place every stored secret is listed.
+   * The one place secrets are managed.
    *
-   * The page reads the inventory from the main process and never a value: rows
-   * describe what a secret belongs to, and the only writes here are replacing a
-   * value and deleting one. Deleting also tells the owning surface to let go of
-   * the reference, so nothing is left pointing at a value that no longer exists.
+   * Two surfaces share it. `Env files` is the one a user opens on purpose: their
+   * project's `.env` family, held in the vault and injected into the processes the
+   * app starts. `Stored secrets` is the inventory of everything the app itself
+   * keeps. Neither surface ever receives a value back from the main process.
    */
+  type SecretsTab = 'env' | 'vault'
+
+  let tab = $state<SecretsTab>('env')
+
+  /** Context an entry point supplied: a project row, a file, or a thread. */
+  const target = $derived(secretsPageState.target)
+  const openedProjectId = $derived(target?.projectId)
+  const openedDirectory = $derived(target?.directory ?? '')
+  const openedThreadId = $derived(target?.threadId)
+
   let overview = $state<SecretsOverview | null>(null)
   let loading = $state(true)
   let busy = $state(false)
@@ -60,12 +73,12 @@
   }
 
   async function rotate(value: string): Promise<void> {
-    const target = rotateTarget
-    if (!target) return
+    const entry = rotateTarget
+    if (!entry) return
     busy = true
     error = ''
     try {
-      overview = await invoke('secrets:rotate', { ref: target.ref, value })
+      overview = await invoke('secrets:rotate', { ref: entry.ref, value })
       rotateTarget = null
     } catch (cause) {
       reportFailure(cause, 'Could not replace this secret')
@@ -75,12 +88,12 @@
   }
 
   async function remove(): Promise<void> {
-    const target = deleteTarget
-    if (!target) return
+    const entry = deleteTarget
+    if (!entry) return
     busy = true
     error = ''
     try {
-      overview = await invoke('secrets:delete', { ref: target.ref })
+      overview = await invoke('secrets:delete', { ref: entry.ref })
       deleteTarget = null
     } catch (cause) {
       reportFailure(cause, 'Could not delete this secret')
@@ -92,14 +105,20 @@
   onMount(() => {
     void load()
   })
+
+  // A key button on a project row, a file or a thread is about env files, so the
+  // page lands on that surface instead of the inventory.
+  $effect(() => {
+    if (target) tab = 'env'
+  })
 </script>
 
 <div class="p-6 pb-24">
   <div class="mb-6">
     <h1 class="text-xl font-bold tracking-tight">Secrets</h1>
     <p class="mt-0.5 text-sm text-muted">
-      Every credential {APP_NAME} stores lives here, encrypted by the OS keyring. Values are never shown
-      again after they are saved. Replace one to store a new value, or delete one to revoke it everywhere.
+      Project env files and every credential {APP_NAME} stores, all encrypted by the OS keyring. A value
+      is never shown again after it is saved: replace it to store a new one, delete it to revoke it.
     </p>
   </div>
 
@@ -113,14 +132,48 @@
     <p class="mb-4 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">{error}</p>
   {/if}
 
-  <div class="mb-4 flex items-center justify-between gap-3">
-    <span class="text-xs tabular-nums text-dimmed">
-      {secrets.length}
-      {secrets.length === 1 ? 'secret' : 'secrets'} stored
-    </span>
+  <div
+    class="mb-4 flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+    role="tablist"
+    aria-label="Secret surfaces"
+  >
+    <button
+      type="button"
+      role="tab"
+      aria-selected={tab === 'env'}
+      class="px-3 py-1.5 text-xs font-medium transition-colors {tab === 'env'
+        ? 'bg-surface text-foreground'
+        : 'text-muted hover:text-foreground'}"
+      title="Project env files and what their processes receive"
+      onclick={() => (tab = 'env')}
+    >
+      Env files
+    </button>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={tab === 'vault'}
+      class="px-3 py-1.5 text-xs font-medium transition-colors {tab === 'vault'
+        ? 'bg-surface text-foreground'
+        : 'text-muted hover:text-foreground'}"
+      title="Every credential the app itself stores"
+      onclick={() => (tab = 'vault')}
+    >
+      Stored secrets
+      <span class="ml-1 tabular-nums text-dimmed">{secrets.length}</span>
+    </button>
   </div>
 
-  {#if loading}
+  {#if tab === 'env'}
+    <div class="space-y-4">
+      <EnvFilesPanel projectId={openedProjectId} directory={openedDirectory} />
+      {#if openedThreadId}
+        {#key openedThreadId}
+          <ThreadEnvPanel threadId={openedThreadId} />
+        {/key}
+      {/if}
+    </div>
+  {:else if loading}
     <div class="flex items-center gap-2 border bg-surface px-4 py-3 text-xs text-muted">
       <CioSpinner size={14} class="animate-spin" /> Reading stored secrets...
     </div>
@@ -133,6 +186,12 @@
       />
     </div>
   {:else}
+    <div class="mb-3 flex items-center justify-between gap-3">
+      <span class="text-xs tabular-nums text-dimmed">
+        {secrets.length}
+        {secrets.length === 1 ? 'secret' : 'secrets'} stored
+      </span>
+    </div>
     <SecretsList
       {secrets}
       {busy}

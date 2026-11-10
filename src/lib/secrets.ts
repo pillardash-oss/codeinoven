@@ -16,6 +16,7 @@ export type SecretScope =
   | 'github'
   | 'oven'
   | 'agent'
+  | 'project-env'
   | 'base-url-provider'
   | 'unknown'
 
@@ -30,6 +31,7 @@ export const SECRET_SCOPE_LABELS: Readonly<Record<SecretScope, string>> = {
   github: 'GitHub',
   oven: 'Oven machine',
   agent: 'Thread secret',
+  'project-env': 'Project env',
   'base-url-provider': 'Provider API key',
   unknown: 'Other credential'
 }
@@ -39,6 +41,7 @@ export const SECRET_SCOPE_ORDER: readonly SecretScope[] = [
   'utility',
   'mcp-oauth',
   'agent',
+  'project-env',
   'git',
   'cloud-provider',
   'base-url-provider',

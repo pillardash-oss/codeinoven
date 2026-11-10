@@ -1212,6 +1212,26 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       import('../notifications/notification-service')
     ])
 
+    // Project-owned ENV secrets: the manifests, the nearest-wins resolver, and the
+    // IPC the Secrets page edits them through. Built before the terminal service,
+    // because every process the app starts for a project resolves its environment
+    // here, and a terminal must open whether or not the vault can answer.
+    const [{ ProjectEnvStore }, { ProjectEnvService }, { registerProjectEnvIpc }] =
+      await Promise.all([
+        import('../secrets/project-env-store'),
+        import('../secrets/project-env-service'),
+        import('../secrets/project-env-ipc')
+      ])
+    const projectEnvService = new ProjectEnvService({
+      store: new ProjectEnvStore(storage),
+      secrets: vault,
+      resolveProjectPath: async (projectId) => {
+        const project = await projectManager.getProject(projectId)
+        return project?.source === 'local' && project.path ? project.path : null
+      }
+    })
+    registerProjectEnvIpc(projectEnvService)
+
     // `node-pty` is the only compiled native module in this graph, and it is
     // built on whichever machine packages the app. A build whose binary will not
     // load (a glibc floor newer than the user's distribution, a missing arch, an
@@ -1253,7 +1273,15 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
             state.chatEngine?.recordUserTerminalInput(projectId, projectPath)
           },
           ovenTerminalLaunch(storage, vault, database, context.threadCreation),
-          ovenShellLaunch(storage, vault)
+          ovenShellLaunch(storage, vault),
+          async ({ projectId, threadId, cwd }) => {
+            const resolved = await projectEnvService.environmentForLaunch({
+              projectId,
+              threadId,
+              cwd
+            })
+            return resolved.environment
+          }
         )
       : null
     // A probe that changes a harness's install state (new install, version
