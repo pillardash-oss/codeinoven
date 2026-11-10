@@ -77,6 +77,7 @@
     changesBeforeSteer,
     getTurnFinalText,
     isActivityOnlyUserMessage,
+    turnStartIndexForEnd,
     type TraceSegmentLayout
   } from '../thread-turn-parts'
   import {
@@ -1290,7 +1291,7 @@
 
           {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || isTurnEnd}
             <div class="group mb-6 flex min-w-0 flex-col">
-              {#if !(groupThread && msg.role === 'assistant')}
+              {#if !groupThread}
                 {#each traceSegmentsAbove as segment (segment.segmentIndex)}
                   {@render turnTraceSegment(segment, msg)}
                 {/each}
@@ -1343,6 +1344,13 @@
                     !msg.completedAt
                   )}
                   {#if turnClosingVisible && turnClosingText}
+                    {#if groupThread}
+                      <!-- Every slice of this turn's work, inside the reply that
+                           closes it, so one speaker owns one bubble. -->
+                      {#each board.pollStreamParts.traceSegmentLayout.filter((slice) => slice.turnStart === turnStartIndexForEnd(board.loadOlderMessages.messages, absIndex, board.pollStreamParts.isTransparentTurnMessage)) as segment (segment.segmentIndex)}
+                        {@render turnTraceSegment(segment, msg, true)}
+                      {/each}
+                    {/if}
                     {@const isReadingThisTurn =
                       'messageId' in speechController.playback &&
                       speechController.playback.messageId === msg.id &&
