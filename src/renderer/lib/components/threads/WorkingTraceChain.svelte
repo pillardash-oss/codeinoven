@@ -36,6 +36,9 @@
     /** Rewrites this chain's output before it is drawn, so a conversation that
      *  carries app machinery in its text can strip it here too. */
     formatOutput?: (text: string) => string
+    /** True inside a group reply's bubble: the rows take the bubble's own surface
+     *  instead of painting the darker app fill behind them. */
+    flat?: boolean
   }
 
   let {
@@ -52,7 +55,8 @@
     checkpointId,
     checkpointPaths,
     onOpenSubagent,
-    formatOutput
+    formatOutput,
+    flat = false
   }: Props = $props()
 
   /**
@@ -125,7 +129,9 @@
            screen instead of having to scroll back to the head. -->
       <button
         type="button"
-        class="sticky z-10 flex w-full items-center gap-1.5 bg-app py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+        class="sticky z-10 flex w-full items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground {flat
+          ? 'bg-surface'
+          : 'bg-app'}"
         style="top: var(--cio-trace-header-h, 0px)"
         aria-expanded={open}
         title={open ? 'Hide the steps behind this output' : 'Show the steps behind this output'}

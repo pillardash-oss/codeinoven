@@ -528,7 +528,11 @@
       <!-- One slice of a turn's working trace. A turn the reader answered is cut
            at that answer, so the work that led to the question, the answer card,
            and the work the answer unblocked read in the order they happened. -->
-      {#snippet turnTraceSegment(segment: TraceSegmentLayout, traceMsg: AgentMessage)}
+      {#snippet turnTraceSegment(
+        segment: TraceSegmentLayout,
+        traceMsg: AgentMessage,
+        inlineInBubble = false
+      )}
         {@const turnStart = segment.turnStart}
         {@const turnDone = board.pollStreamParts.transcriptIndex.turnCompleted[turnStart] ?? false}
         {@const isTraceTurnLatest =
@@ -562,7 +566,10 @@
           turnEndIndex,
           turnEndIndex === board.loadOlderMessages.messages.length - 1
         )}
-        {@const traceHoldsClosingText = traceIsLive && !turnClosingVisible}
+        <!-- A group reply's answer is its own text in its own bubble, so the work
+             inside that bubble never carries a copy of it: that copy is what made
+             the trace show a clipped second answer above the real one. -->
+        {@const traceHoldsClosingText = !groupThread && traceIsLive && !turnClosingVisible}
         {@const traceIsLiveTurn = isCurrentAssistantTurn || traceIsLive || traceIsRestored}
         {@const turnClosingTextId =
           turnClosingVisible && turnClosingText ? turnClosingText.id : null}
@@ -724,11 +731,12 @@
           />
         {/snippet}
         {#if shouldMountWorkingTrace(turnParts.length, segmentBusy)}
-          {#if groupThread}
-            <!-- A group reply's work belongs to the speaker it came from: it opens
-                 with that name and wears no model, harness or Oven chips, so the
-                 conversation reads as people taking turns rather than as a run
-                 report. -->
+          {#if !groupThread || inlineInBubble}
+            {@render segmentTrace()}
+          {:else}
+            <!-- A turn with no answer row of its own still reports its work as a
+                 reply from its speaker, so the conversation keeps one voice per
+                 bubble. -->
             {@const traceSpeaker = groupSpeakerFor(traceMsg)}
             {#if traceSpeaker}
               <GroupReplyBubble
@@ -741,8 +749,6 @@
             {:else}
               {@render segmentTrace()}
             {/if}
-          {:else}
-            {@render segmentTrace()}
           {/if}
         {/if}
       {/snippet}
@@ -1168,9 +1174,11 @@
 
           {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || isTurnEnd}
             <div class="group mb-6 flex min-w-0 flex-col">
-              {#each traceSegmentsAbove as segment (segment.segmentIndex)}
-                {@render turnTraceSegment(segment, msg)}
-              {/each}
+              {#if !groupThread}
+                {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                  {@render turnTraceSegment(segment, msg)}
+                {/each}
+              {/if}
 
               {#if isTurnEnd}
                 <!-- Final text output + footer   hide only on the active in-progress turn -->
@@ -1253,6 +1261,12 @@
                             class="mb-1.5"
                           />
                         {/if}
+                        <!-- The work this answer came from, inside the same reply:
+                             no band of its own, capped, and scrolling within that
+                             cap so it never resizes the bubble around it. -->
+                        {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                          {@render turnTraceSegment(segment, msg, true)}
+                        {/each}
                       {/if}
                       {#if isReadingActiveLine}
                         <!-- The read-along only exists while a turn is being

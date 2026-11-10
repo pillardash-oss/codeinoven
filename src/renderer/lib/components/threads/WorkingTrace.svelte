@@ -72,6 +72,12 @@
      */
     compact?: boolean
     /**
+     * True inside a group reply, where the trace is a section of the bubble rather
+     * than a band of its own. Its rows then take the bubble's own surface instead
+     * of painting the darker app fill behind them.
+     */
+    flat?: boolean
+    /**
      * A maximum height for the open body, in rem.
      *
      * A group bubble is a reply, not a page: an expanding trace would drag the
@@ -161,6 +167,7 @@
     onLoadOlderParts,
     modelLabel = null,
     compact = false,
+    flat = false,
     bodyMaxHeightRem,
     thinkingLevel = null,
     providerName,
@@ -528,7 +535,10 @@
   <!-- The header pins to the transcript's top while the reader scrolls through
        this trace's work, so folding it is always one click away without a
        scroll back. The body is the transcript's now: one scroller, not two. -->
-  <div class="sticky top-0 z-20 bg-app" bind:clientHeight={traceHeaderHeight}>
+  <div
+    class="sticky top-0 z-20 {flat ? 'bg-surface' : 'bg-app'}"
+    bind:clientHeight={traceHeaderHeight}
+  >
     <WorkingTraceSummary
       open={isOpen}
       live={liveActivity}
@@ -570,6 +580,7 @@
       {#each chains as chain, index (chain.id)}
         <WorkingTraceChain
           {chain}
+          {flat}
           {formatOutput}
           active={liveActivity && index === chains.length - 1}
           showHeader={chains.length > 1 || chain.output !== null}
