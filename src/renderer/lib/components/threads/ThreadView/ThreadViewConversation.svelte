@@ -489,6 +489,9 @@
           parts={turn.parts}
           done
           busy={false}
+          compact={groupThread}
+          flat={groupThread}
+          bodyMaxHeightRem={groupThread ? 14 : undefined}
           totalSteps={turn.totalSteps}
           turnSubagentParts={turn.subagentParts}
           turnCompacted={turn.turnCompacted}
@@ -759,9 +762,11 @@
         <!-- The work of the turn a steer interrupted sits directly above the
                  message that closed it, which is the order the run was lived in:
                  prompt, its trace, the steer, then the next turn's trace. -->
-        {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
-          {@render completedTurnTraceBlock(view.turn)}
-        {/each}
+        {#if !groupThread || msg.role !== 'assistant'}
+          {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
+            {@render completedTurnTraceBlock(view.turn)}
+          {/each}
+        {/if}
         <!-- A steer still held under the running trace: its work is the
                  interrupted turn's, so that trace renders above the message. -->
         {#if absIndex === board.buildSpecActionPrompt.heldSteerAbsIndex && !board.pollStreamParts.turnAboveHasAssistantRow(absIndex)}
@@ -1174,11 +1179,9 @@
 
           {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || isTurnEnd}
             <div class="group mb-6 flex min-w-0 flex-col">
-              {#if !groupThread}
-                {#each traceSegmentsAbove as segment (segment.segmentIndex)}
-                  {@render turnTraceSegment(segment, msg)}
-                {/each}
-              {/if}
+              {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                {@render turnTraceSegment(segment, msg)}
+              {/each}
 
               {#if isTurnEnd}
                 <!-- Final text output + footer   hide only on the active in-progress turn -->
@@ -1264,8 +1267,8 @@
                         <!-- The work this answer came from, inside the same reply:
                              no band of its own, capped, and scrolling within that
                              cap so it never resizes the bubble around it. -->
-                        {#each traceSegmentsAbove as segment (segment.segmentIndex)}
-                          {@render turnTraceSegment(segment, msg, true)}
+                        {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
+                          {@render completedTurnTraceBlock(view.turn)}
                         {/each}
                       {/if}
                       {#if isReadingActiveLine}
