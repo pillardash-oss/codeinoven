@@ -56,7 +56,7 @@ const CIO_SENSITIVE_FILE_POLICY_PATH = ${JSON.stringify(sensitiveFilePolicyPath 
 const CIO_DEFAULT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(DEFAULT_BUNDLED_PI_FILE_PATTERNS)}
 const CIO_PERMANENT_SENSITIVE_FILE_PATTERNS = ${JSON.stringify(
     sensitiveSecretRoot
-      ? [`${sensitiveSecretRoot.replaceAll('\\', '/')}/**`]
+      ? [`${sensitiveSecretRoot.replaceAll('\\', '/')}/**`, ...PERMANENT_BUNDLED_PI_FILE_PATTERNS]
       : PERMANENT_BUNDLED_PI_FILE_PATTERNS
   )}
 

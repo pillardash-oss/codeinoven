@@ -9,6 +9,7 @@
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
+  import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
   import { APP_SLUG } from '$shared/brand'
   import {
@@ -339,6 +340,9 @@
         ? `Wrote ${result.path}${result.backupPath ? `, previous content kept as ${result.backupPath}` : ''}.`
         : `${result.path} already holds these references.`
       files = await invoke('secrets:envList', projectId)
+      // The project tree has to show the file and its backup now, not after a
+      // manual refresh: the write happened off the tree's own action.
+      await projectFilesWorkspace.refresh(projectId, result.path)
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not write this file into the project'
     } finally {

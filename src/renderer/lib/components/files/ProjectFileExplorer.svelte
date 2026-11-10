@@ -51,12 +51,6 @@
     type TreeRow
   } from './project-file-explorer-tree'
 
-  /** An env file is the one file whose values the vault can manage. */
-  function isEnvFile(path: string | null): boolean {
-    if (!path) return false
-    return /(^|\/)\.env(\.[A-Za-z0-9_-]+)?$/u.test(path)
-  }
-
   interface Props {
     projectId: string
     projectName: string
@@ -109,6 +103,26 @@
     onToggleConflicts,
     onFileSelect = undefined
   }: Props = $props()
+
+  /**
+   * The directory the Secrets action should edit.
+   *
+   * A selected folder is the group itself, which is what a monorepo needs: the user
+   * clicks `packages/backend` and creates that package's secrets. A selected file
+   * contributes its folder, and no selection means the project root.
+   */
+  function secretsGroupFor(path: string | null): string {
+    if (!path) return ''
+    const parent = parentDirectory(path)
+    const entry = projectState.entriesByDirectory[parent]?.find(
+      (candidate) => candidate.path === path
+    )
+    if (entry) return entry.kind === 'directory' ? path : parent
+    return path in projectState.entriesByDirectory ? path : parent
+  }
+
+  const secretsTarget = $derived(secretsGroupFor(selectedPath))
+
   let filterQuery = $state('')
   let filterOpen = $state(false)
   let revealedSearchPath = $state<string | null>(null)
@@ -1383,14 +1397,14 @@
     onToggleFilter={() => (filterOpen ? closeFilter() : void openFilter())}
     onRevealActiveFile={locateActiveFileTab}
     onRefresh={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
-    envFileOpen={isEnvFile(selectedPath)}
+    {secretsTarget}
     onOpenSecrets={() =>
       projectEnvDock.open({
         projectId,
         projectName,
         iconUrl: projectIconUrl,
         color: projectAccentColor,
-        group: parentDirectory(selectedPath ?? '')
+        group: secretsTarget
       })}
   />
 
