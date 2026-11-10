@@ -171,6 +171,15 @@
      *  calls `preventDefault()` and takes over. Only the topmost layer is ever
      *  called, so a popover opened inside the panel still closes on its own. */
     onEscapeKeydown?: (event: KeyboardEvent) => void
+    /**
+     * Dictation targets this surface hosts, if it holds a microphone.
+     *
+     * A modal claims Escape; without this a recording made inside it would lose
+     * the key to the surface's own dismissal, and Escape would close the
+     * surface instead of stopping the microphone. Naming the targets keeps
+     * Escape with the recorder while this surface is the one on top.
+     */
+    recordingTargets?: () => readonly string[]
     /** Draw the dimmed scrim behind the panel. On by default.
      *
      *  Off for a full screen surface that covers the window with an opaque
@@ -233,6 +242,7 @@
     trapFocus = true,
     escapeCloses = true,
     onEscapeKeydown,
+    recordingTargets,
     scrim = true,
     blocksBrowserView = true,
     abovePage = false,
@@ -386,7 +396,7 @@
 
   $effect(() => {
     if (!open) return
-    return registerOverlayClose(() => (onCloseShortcut ?? onClose)(), modal)
+    return registerOverlayClose(() => (onCloseShortcut ?? onClose)(), modal, recordingTargets)
   })
 
   // ⌘/Ctrl+Enter runs this modal's primary action. This instance registers a

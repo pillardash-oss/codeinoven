@@ -1,6 +1,10 @@
 import { invoke } from '$lib/ipc.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-import { isEscapeClaimed, isInlineEscapeClaimed } from '$lib/stores/page-surface.svelte'
+import {
+  isEscapeClaimed,
+  isInlineEscapeClaimed,
+  ownsEscapeForRecording
+} from '$lib/stores/page-surface.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { commitDraftStateNow, scheduleDraftCommit } from '$lib/stores/draft-activity.svelte'
@@ -196,7 +200,7 @@ class SpeechController {
    * what a double press throws away: the attempt and the thread it belongs to,
    * so the cancel is gated exactly like the stop that produced it.
    */
-  private lastStopped: { attemptId: string; scope: SpeechScope } | null = null
+  private lastStopped: { attemptId: string; targetId: string; scope: SpeechScope } | null = null
   /**
    * Attempts the user cancelled outright. The controller checks this where a
    * transcript would otherwise land, so a transcript the model produced anyway
@@ -300,7 +304,7 @@ class SpeechController {
     // Only a dictation that is still being produced can be thrown away: once
     // its transcript has settled there is nothing left to cancel.
     if (!this.transcribing.some((entry) => entry.attemptId === stopped.attemptId)) return 'none'
-    if (!this.escapeReachesScope(stopped.scope)) return 'none'
+    if (!this.escapeReachesScope(stopped.scope, stopped.targetId)) return 'none'
     this.lastEscapeAt = now
     return 'cancel'
   }
@@ -317,16 +321,19 @@ class SpeechController {
   private escapeStopsRecording(): boolean {
     const active = this.active
     if (!active) return false
-    return this.escapeReachesScope(active.scope)
+    return this.escapeReachesScope(active.scope, active.target.id)
   }
 
   /** The surface gate above, for the scope of the recording or dictation. */
-  private escapeReachesScope(scope: SpeechScope): boolean {
+  private escapeReachesScope(scope: SpeechScope, targetId: string): boolean {
     // A surface above the recording owns Escape, a full-page surface (a
     // Settings page or the Scope view) covering the shell, or an open modal or
     // palette (spotlight). Escape there closes the surface on top and must
-    // never kill a recording happening underneath.
-    if (isEscapeClaimed()) return false
+    // never kill a recording happening underneath. The exception is the surface
+    // that hosts the recording itself, a dockable panel or full screen surface
+    // with its own microphone: there Escape stops the microphone, because that
+    // is what the key means while a take is running.
+    if (isEscapeClaimed() && !ownsEscapeForRecording(targetId)) return false
     // A tag is being named, not a recording ended: the composer's `@` menu
     // closes on Escape and this listener runs before it (capture phase), so
     // without this the menu would swallow the key and the dictation behind it
@@ -1008,7 +1015,11 @@ class SpeechController {
     this.beginTranscription(active)
     // The press after this stop belongs to the same gesture, and a second one
     // throws this dictation away (see `escapeMeaning`).
-    this.lastStopped = { attemptId: active.attemptId, scope: structuredClone(active.scope) }
+    this.lastStopped = {
+      attemptId: active.attemptId,
+      targetId: active.target.id,
+      scope: structuredClone(active.scope)
+    }
 
     try {
       const durationMs = Math.max(0, performance.now() - active.startedAt)
