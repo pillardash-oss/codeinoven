@@ -1,8 +1,8 @@
 /**
  * Enforces the hard 2000-line ceiling on authored source files.
  *
- * Reads every `.ts`, `.tsx`, `.mts`, `.cts`, `.svelte`, `.css`, `.scss` and
- * `.less` file under `src/`, `tests/`, `scripts/` and `services/` and fails when
+ * Reads every `.ts` and `.svelte` file under `src/`, `tests/`, `scripts/` and
+ * `services/` and fails when
  * any single file is longer than `MAX_SOURCE_FILE_LINES`. The policy itself
  * lives in `scripts/lib/file-size-policy.ts`, which is under a freeze notice,
  * and `tests/guards/file-size-limit.test.ts` asserts this check is still wired

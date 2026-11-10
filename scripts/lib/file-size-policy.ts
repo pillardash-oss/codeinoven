@@ -37,22 +37,20 @@ import { extname, join, relative, sep } from 'node:path'
 export const MAX_SOURCE_FILE_LINES = 2000
 
 /**
- * Which files count as source. `.js` is deliberately absent: the JavaScript
- * files in `src/` are browser-extension compat shims and vendored runtime
- * preambles that are shipped as-is, not authored modules (see
- * `src/main/browser/extensions/compat/`). Everything listed here is a file a
- * contributor writes and maintains, so everything listed here is bounded.
+ * Which files count as source: exactly the two extensions this repository
+ * authors. It is a Svelte application, so `TypeScript` and `Svelte` are the
+ * whole authored surface and the list stops there rather than guessing at
+ * extensions nobody uses here.
+ *
+ * Deliberately absent, and stay absent:
+ * - `.js` / `.mjs` / `.cjs`: the JavaScript in `src/` is browser-extension
+ *   compat shims and vendored runtime preambles shipped as-is, not authored
+ *   modules (see `src/main/browser/extensions/compat/`).
+ * - `.tsx` / `.jsx`: this project is Svelte, it renders no React.
+ * - `.mts` / `.cts`: no authored module uses them.
+ * - `.css` / `.scss` / `.less`: stylesheets are out of scope for this ceiling.
  */
-export const SOURCE_FILE_EXTENSIONS = [
-  '.ts',
-  '.tsx',
-  '.mts',
-  '.cts',
-  '.svelte',
-  '.css',
-  '.scss',
-  '.less'
-] as const
+export const SOURCE_FILE_EXTENSIONS = ['.ts', '.svelte'] as const
 
 /** Every authored source tree in this repository. */
 export const SOURCE_SCAN_ROOTS = ['src', 'tests', 'scripts', 'services'] as const

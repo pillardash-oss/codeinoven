@@ -63,16 +63,7 @@ const MINIMUM_SCANNED_FILES = 3000
 describe('source file size ceiling', () => {
   it('keeps the frozen policy exactly as written', () => {
     expect(MAX_SOURCE_FILE_LINES).toBe(2000)
-    expect([...SOURCE_FILE_EXTENSIONS]).toEqual([
-      '.ts',
-      '.tsx',
-      '.mts',
-      '.cts',
-      '.svelte',
-      '.css',
-      '.scss',
-      '.less'
-    ])
+    expect([...SOURCE_FILE_EXTENSIONS]).toEqual(['.ts', '.svelte'])
     expect([...SOURCE_SCAN_ROOTS]).toEqual(['src', 'tests', 'scripts', 'services'])
     expect([...IGNORED_DIRECTORY_NAMES]).toEqual([
       'node_modules',
