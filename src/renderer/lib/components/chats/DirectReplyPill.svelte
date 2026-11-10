@@ -34,8 +34,8 @@
     <button
       type="button"
       class="flex min-w-0 items-center gap-1.5 px-2 py-1 text-left"
-      title={`Replying in ${target.title}. Open that conversation`}
-      aria-label={`Replying in ${target.title}. Open that conversation`}
+      title={`Replying to ${target.speakerName}. Go to the message you are answering`}
+      aria-label={`Replying to ${target.speakerName}. Go to the message you are answering`}
       onclick={onOpen}
     >
       {#if busy}

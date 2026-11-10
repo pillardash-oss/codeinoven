@@ -42,7 +42,6 @@
   import { rendererRecovery, publishDraftActivity } from '$lib/stores/renderer-recovery.svelte'
   import { forkOrigins } from '$lib/stores/fork-origins.svelte'
   import { modelKey } from '$lib/model-keys'
-  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { assistantIsScheduled } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
@@ -999,7 +998,7 @@
                   onClearDirectReply={() => board.directReply.clear()}
                   onOpenDirectReply={() => {
                     const target = board.directReply.target
-                    if (target) void openThreadById(target.projectId, target.threadId)
+                    if (target) void board.directReply.reveal(target.messageId)
                   }}
                   working={board.switchProject.busy}
                   onStop={board.abortRun.abortRun}

@@ -1179,7 +1179,12 @@ export class ChatEngineTurnsSessionIdle {
             ? (delegationFromThread(finishedThread, DON_THREAD_ID) ?? undefined)
             : undefined))
         : undefined
-      if (settledDelegation) {
+      // A turn the user started by answering that thread directly is read where
+      // they answered it, so it is not reported into the group a second time.
+      const directlyAnswered = finishedThread
+        ? (this.host.don?.delegations.takeDirectReply(finishedThread.id) ?? false)
+        : false
+      if (settledDelegation && !directlyAnswered) {
         void this.host.units['turns-dispatch'].reportDonDelegation(settledDelegation, finalStatus)
       }
       // A settled turn on an assistant task is reported to the assistant scheduler,

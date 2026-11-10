@@ -56,6 +56,7 @@
   import DelegatedAttentionStack from '../DelegatedAttentionStack.svelte'
   import CioReplyMark from '$lib/components/icons/cio/CioReplyMark.svelte'
   import { isGroupThread } from '$shared/types'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { conversationAnswerText, conversationProseText } from '../conversation-text'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -229,26 +230,28 @@
   }
 
   /**
-   * The conversation one group reply came from, as a reply target.
+   * The conversation one group bubble came from, as a reply target.
    *
-   * A reply written into a group carries the thread that spoke it, so the bubble
-   * is a door back into that thread: answering it addresses the next message
-   * there instead of to the group's own assistant. A message with no source
-   * thread (the host's own answer) has no door to offer, and its bubble stays a
-   * plain card.
+   * Every assistant reply in a group is answerable: the words go to the thread
+   * that spoke them, never to the group's own assistant, so a peer's report is
+   * answered in the conversation that is doing the work. The host's own reply
+   * has no other thread, so it answers into this conversation: replying to Don
+   * is chatting with Don. The project is the thread's own where the message
+   * names it, the known list where it lives beside this one, and the open
+   * conversation's project as the last honest answer for an archived child.
    */
   function replyTargetFor(msg: AgentMessage): DirectReplyTarget | null {
-    const threadId = sourceThreadIdFor(msg)
-    if (!threadId) return null
+    if (!groupThread || msg.role !== 'assistant') return null
+    const openThread = board.handleAgentEvent.thread
+    const threadId = sourceThreadIdFor(msg) ?? openThread.id
     const known = board.props.assistantSpaceThreads?.find((thread) => thread.id === threadId)
-    // A dispatched thread lives in the project its group chat collected it in,
-    // so the open conversation's own project is the last honest answer when the
-    // child has been archived or is not in the list.
-    const projectId =
-      msg.author?.projectId ?? known?.projectId ?? board.handleAgentEvent.thread.projectId
+    const projectId = msg.author?.projectId ?? known?.projectId ?? openThread.projectId
     if (!projectId) return null
     const speaker = groupSpeakerFor(msg)
-    const title = known?.title ?? speaker?.name ?? msg.author?.name ?? 'that conversation'
+    const title =
+      threadId === openThread.id
+        ? (openThread.title ?? 'this conversation')
+        : (known?.title ?? speaker?.name ?? msg.author?.name ?? 'that conversation')
     // The `@thread:` marker is how the group links back to the run's own thread;
     // it is not part of what the speaker said, so a quote never carries it.
     const excerpt = messageText(msg)
@@ -260,14 +263,14 @@
       projectId,
       threadId,
       title,
-      speakerName: speaker?.name ?? msg.author?.name ?? known?.title ?? 'That conversation',
+      speakerName: speaker?.name ?? msg.author?.name ?? title,
       messageId: msg.id,
       excerpt
     }
   }
 
   /**
-   * Attach one group reply to the composer, so the next message answers it.
+   * Attach one group bubble to the composer, so the next message answers it.
    *
    * Only the container is a door. A double click inside the prose is how the
    * user selects a word, so a live selection (or a click that landed in the
@@ -277,7 +280,7 @@
     if (!groupThread) return
     if ((window.getSelection()?.toString() ?? '').length > 0) return
     const element = event.target instanceof Element ? event.target : null
-    if (element?.closest('[data-message-actions]')) return
+    if (element?.closest('[data-message-actions], [data-message-speaker]')) return
     const target = replyTargetFor(msg)
     if (target) board.directReply.attach(target)
   }
@@ -1361,12 +1364,18 @@
                            a speaker. -->
                       {#if groupThread}
                         {@const speaker = groupSpeakerFor(msg)}
+                        {@const replySource = replyTargetFor(msg)}
                         {#if speaker}
                           <ThreadMessageSpeaker
                             name={speaker.name}
                             icon={speaker.icon}
                             color={speaker.color}
                             class="mb-1.5"
+                            onOpen={replySource &&
+                            replySource.threadId !== board.handleAgentEvent.thread.id
+                              ? () =>
+                                  void openThreadById(replySource.projectId, replySource.threadId)
+                              : undefined}
                           />
                         {/if}
                         <!-- The work this answer came from, inside the same reply:
@@ -1594,18 +1603,18 @@
                           >
                             <CioDownload size={12} />
                           </button>
-                          {#if groupThread && sourceThreadIdFor(msg)}
-                            <button
-                              class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                              aria-label={`Reply in ${replyTargetFor(msg)?.title ?? 'that conversation'}`}
-                              title="Reply in that conversation"
-                              onclick={() => {
-                                const target = replyTargetFor(msg)
-                                if (target) board.directReply.attach(target)
-                              }}
-                            >
-                              <CioReplyMark size={12} />
-                            </button>
+                          {#if groupThread}
+                            {@const replyTarget = replyTargetFor(msg)}
+                            {#if replyTarget}
+                              <button
+                                class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                                aria-label={`Reply to ${replyTarget.speakerName}`}
+                                title="Reply to this message"
+                                onclick={() => board.directReply.attach(replyTarget)}
+                              >
+                                <CioReplyMark size={12} />
+                              </button>
+                            {/if}
                           {/if}
                         </div>
                         <div

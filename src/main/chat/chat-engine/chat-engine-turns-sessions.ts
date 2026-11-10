@@ -18,6 +18,7 @@ import { workerReportsToCoordinator } from '../../../lib/types'
 import { decideModelSwitchCompaction } from '../../../lib/model-switch-compaction'
 import { handoffTailTokenBudget } from '../../../lib/prompt-budget'
 import { selectHistoryTail } from './chat-engine-message-text'
+import { groupConversationTranscript } from './chat-engine-group-transcript'
 import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provider-issue'
 import type { PendingQuestionInfo, SessionCompletionWaiter, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
@@ -305,8 +306,11 @@ export class ChatEngineTurnsSessions {
       if (!nativeHistoryBound && !switchedRuntime) {
         try {
           const editedMirror = await this.host.threadManager.loadMessageRecords(projectId, threadId)
+          // A group chat is several conversations on one screen: only the host's
+          // own exchange is this assistant's history.
+          const hostMirror = groupConversationTranscript(thread, editedMirror)
           const priorMirror =
-            editedMirror.at(-1)?.role === 'user' ? editedMirror.slice(0, -1) : editedMirror
+            hostMirror.at(-1)?.role === 'user' ? hostMirror.slice(0, -1) : hostMirror
           const tailBudget = handoffTailTokenBudget(
             this.host.units['runtime-agents'].selectedModelInputBudget(
               thread.settings?.providerId,

@@ -38,10 +38,12 @@
     author?: MessageAuthor
     /** The accent the rule is drawn in; falls back to the snapshot's own colour. */
     color?: string
+    /** Opens the conversation this speaker answered from, when it has one. */
+    onOpen?: () => void
     class?: string
   }
 
-  let { name, icon = null, author, color, class: className = '' }: Props = $props()
+  let { name, icon = null, author, color, onOpen, class: className = '' }: Props = $props()
 
   /** The mark to draw: the caller's resolved icon, then the snapshot's own icon
    *  fields, then null so the default assistant mark stands in. An assistant
@@ -53,17 +55,39 @@
 </script>
 
 <!-- Square corners, rem sizing, app tokens only: the line is a caption to the
-     reply under it, not a card of its own. -->
+     reply under it, not a card of its own. When the speaker has a conversation
+     of its own, the line is the way into it: the mark and the name are the
+     smallest door back to where the reply came from. -->
 <div
   class="flex min-w-0 items-center gap-1.5 border-l-2 pl-1.5 text-[0.6875rem] {className}"
   style="border-color: {accent ?? 'var(--color-border)'}"
+  data-message-speaker
 >
-  <span class="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-    {#if iconUrl}
-      <img src={iconUrl} alt="" class="size-4 object-contain" draggable="false" />
-    {:else}
-      <AssistantDefaultIcon size={16} style="color: {accent ?? 'var(--color-muted)'}" />
-    {/if}
-  </span>
-  <span class="truncate font-medium text-foreground">{name}</span>
+  {#if onOpen}
+    <button
+      type="button"
+      class="flex min-w-0 items-center gap-1.5 text-left transition-colors hover:text-accent"
+      title={`Open the conversation with ${name}`}
+      aria-label={`Open the conversation with ${name}`}
+      onclick={onOpen}
+    >
+      <span class="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
+        {#if iconUrl}
+          <img src={iconUrl} alt="" class="size-4 object-contain" draggable="false" />
+        {:else}
+          <AssistantDefaultIcon size={16} style="color: {accent ?? 'var(--color-muted)'}" />
+        {/if}
+      </span>
+      <span class="truncate font-medium text-foreground">{name}</span>
+    </button>
+  {:else}
+    <span class="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
+      {#if iconUrl}
+        <img src={iconUrl} alt="" class="size-4 object-contain" draggable="false" />
+      {:else}
+        <AssistantDefaultIcon size={16} style="color: {accent ?? 'var(--color-muted)'}" />
+      {/if}
+    </span>
+    <span class="truncate font-medium text-foreground">{name}</span>
+  {/if}
 </div>

@@ -10,6 +10,7 @@ import { broadcastThreadUpdate } from '../thread-events'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import { instanceRegistry } from '../../system/instance-registry'
 import type { AgentEvent, AgentMessage, ThreadSettings } from '../../../lib/types'
+import { groupConversationTranscript } from './chat-engine-group-transcript'
 import { handoffTailTokenBudget, recapTokenBudget } from '../../../lib/prompt-budget'
 import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
@@ -249,7 +250,10 @@ export class ChatEngineTranscripts {
     // A queued child report has not reached the harness yet. Exclude it from a
     // fresh-session recap so it appears exactly once as the next prompt when
     // the Sr. Engineer becomes idle, never once in history and again as input.
-    const mirrored = persistedMirror.filter((message) => !queuedHandoffIds.has(message.id))
+    const mirrored = groupConversationTranscript(
+      thread,
+      persistedMirror.filter((message) => !queuedHandoffIds.has(message.id))
+    )
     // The current turn's user message is always delivered as the prompt itself,
     // in every branch below. It must never also appear as a "restored from
     // history" entry: on a brand-new or forked thread the mirror holds nothing
