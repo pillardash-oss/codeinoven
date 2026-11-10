@@ -59,6 +59,7 @@ import { ChatEngineTurnsSessionIdle } from './chat-engine-turns-session-idle'
 import { ChatEngineRankings } from './chat-engine-rankings'
 import { ChatEngineRankingsQueue } from './chat-engine-rankings-queue'
 import { ChatEngineCitations } from './chat-engine-citations'
+import { ChatEngineDirectReply } from './chat-engine-direct-reply'
 
 /** The concern units a ChatEngine delegates to, built once in its constructor. */
 export function buildChatEngineUnits(engine: ChatEngine) {
@@ -122,7 +123,8 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     'threads-create': new ChatEngineThreadsCreate(engine),
     'turns-session-idle': new ChatEngineTurnsSessionIdle(engine),
     rankings: new ChatEngineRankings(engine),
-    'rankings-queue': new ChatEngineRankingsQueue(engine)
+    'rankings-queue': new ChatEngineRankingsQueue(engine),
+    'direct-reply': new ChatEngineDirectReply(engine)
   } as const
 }
 

@@ -370,6 +370,30 @@ export const invokeAgentContract = {
     ],
     AgentMessage
   >,
+  /**
+   * Answer one conversation from inside the conversation that collected it.
+   *
+   * The words go to the thread that spoke them and are recorded in the open
+   * conversation with the quote they answered, so a group chat reads as one
+   * inbox. Returns the recorded user message.
+   */
+  'agent:replyToThread': {} as Contract<
+    [
+      fromProjectId: string,
+      fromThreadId: string,
+      target: {
+        projectId: string
+        threadId: string
+        title: string
+        speakerName: string
+        messageId: string
+        excerpt: string
+      },
+      text: string,
+      attachments: PromptAttachment[]
+    ],
+    AgentMessage
+  >,
   'agent:steerPrompt': {} as Contract<
     [
       projectId: string,

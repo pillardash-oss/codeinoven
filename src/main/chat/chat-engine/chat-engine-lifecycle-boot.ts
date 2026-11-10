@@ -30,6 +30,7 @@ import type {
 } from '../../../lib/types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { withoutTransportParts } from './chat-engine-message-merge'
+import type { DirectReplyTarget } from '../../../lib/types'
 import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine lifecycle-boot: one concern, moved verbatim from the composition root. */
@@ -350,6 +351,24 @@ export class ChatEngineLifecycleBoot {
         )
     )
     ipcMain.handle(
+      'agent:replyToThread',
+      (
+        _,
+        fromProjectId: string,
+        fromThreadId: string,
+        target: DirectReplyTarget,
+        text: string,
+        attachments: PromptAttachment[]
+      ) =>
+        this.host.sendDirectReply({
+          fromProjectId,
+          fromThreadId,
+          target,
+          text,
+          attachments
+        })
+    )
+    ipcMain.handle(
       'agent:chooseBrainstormEntry',
       (_, projectId: string, threadId: string, choice: BrainstormEntryChoice) =>
         this.host.chooseBrainstormEntry(projectId, threadId, choice)
@@ -579,9 +598,8 @@ export class ChatEngineLifecycleBoot {
     ipcMain.handle(
       'agent:listDelegatedAttention',
       async (_, projectId: string, threadId: string) => {
-        const { listDelegatedAttention, logDelegatedAttentionFailure } = await import(
-          '../delegated-attention-service'
-        )
+        const { listDelegatedAttention, logDelegatedAttentionFailure } =
+          await import('../delegated-attention-service')
         try {
           return await listDelegatedAttention(
             this.host,

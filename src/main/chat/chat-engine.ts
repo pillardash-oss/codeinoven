@@ -127,6 +127,7 @@ import type {
   VirtualTaskOptions
 } from './chat-engine/chat-engine-types'
 import { buildChatEngineUnits } from './chat-engine/chat-engine-units'
+import type { DirectReplyInput } from './chat-engine/chat-engine-direct-reply'
 
 export {
   CITATION_SYSTEM_INSTRUCTION,
@@ -967,6 +968,15 @@ export class ChatEngine {
   }
   async restoreCoordinatorHandoffQueues(): Promise<void> {
     return this.units['assignment'].restoreCoordinatorHandoffQueues()
+  }
+  /**
+   * Answer one conversation from inside the conversation that collected it.
+   *
+   * The words are delivered to the thread that spoke them and recorded in the
+   * conversation the user typed them in, so a group chat reads as one inbox.
+   */
+  async sendDirectReply(input: DirectReplyInput): Promise<AgentMessage> {
+    return this.units['direct-reply'].send(input)
   }
   async sendPrompt(
     projectId: string,

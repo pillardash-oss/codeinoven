@@ -54,6 +54,7 @@
   import CioUserMark from '$lib/components/icons/cio/CioUserMark.svelte'
   import ThreadMessageSpeaker from '../ThreadMessageSpeaker.svelte'
   import DelegatedAttentionStack from '../DelegatedAttentionStack.svelte'
+  import CioReplyMark from '$lib/components/icons/cio/CioReplyMark.svelte'
   import { isGroupThread } from '$shared/types'
   import { conversationAnswerText, conversationProseText } from '../conversation-text'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
@@ -64,7 +65,12 @@
   import { logRendererDev } from '$lib/system/renderer-logger'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-  import type { AgentMessage, AgentPart, TurnStreamCompletedTurn } from '$shared/types'
+  import type {
+    AgentMessage,
+    AgentPart,
+    DirectReplyTarget,
+    TurnStreamCompletedTurn
+  } from '$shared/types'
   import { formatTokenRate } from '$lib/token-rate.svelte'
   import {
     auditReportForTurn,
@@ -197,6 +203,56 @@
       icon: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null),
       color: assistantAccentColor(assistant)
     }
+  }
+
+  /**
+   * The conversation one group reply came from, as a reply target.
+   *
+   * A reply written into a group carries the thread that spoke it, so the bubble
+   * is a door back into that thread: answering it addresses the next message
+   * there instead of to the group's own assistant. A message with no source
+   * thread (the host's own answer, or history from before this existed) has no
+   * door to offer, and its bubble stays a plain card.
+   */
+  function replyTargetFor(msg: AgentMessage): DirectReplyTarget | null {
+    const author = msg.author
+    if (!author?.projectId || !author.threadId) return null
+    const speaker = groupSpeakerFor(msg)
+    const title =
+      board.props.assistantSpaceThreads?.find((thread) => thread.id === author.threadId)?.title ??
+      speaker?.name ??
+      author.name
+    // The `@thread:` marker is how the group links back to the run's own thread;
+    // it is not part of what the speaker said, so a quote never carries it.
+    const excerpt = messageText(msg)
+      .replace(/@thread:\S+/gu, ' ')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .slice(0, 240)
+    return {
+      projectId: author.projectId,
+      threadId: author.threadId,
+      title,
+      speakerName: speaker?.name ?? author.name,
+      messageId: msg.id,
+      excerpt
+    }
+  }
+
+  /**
+   * Attach one group reply to the composer, so the next message answers it.
+   *
+   * Only the container is a door. A double click inside the prose is how the
+   * user selects a word, so a live selection (or a click that landed in the
+   * action row) leaves the transcript alone.
+   */
+  function beginReply(event: MouseEvent, msg: AgentMessage): void {
+    if (!groupThread) return
+    if ((window.getSelection()?.toString() ?? '').length > 0) return
+    const element = event.target instanceof Element ? event.target : null
+    if (element?.closest('[data-message-actions]')) return
+    const target = replyTargetFor(msg)
+    if (target) board.directReply.attach(target)
   }
 
   /**
@@ -907,6 +963,9 @@
                 {@const leftoverReferences = (msg.projectReferences ?? []).filter(
                   (reference) => !inlinedPaths.has(reference.path)
                 )}
+                {@const replyParts = msg.parts.filter(
+                  (part): part is Extract<AgentPart, { type: 'reply' }> => part.type === 'reply'
+                )}
                 <!-- The user's own message reads as a ledger row: only its
                          left edge is drawn, a 2px accent against the transcript,
                          and every corner is square. -->
@@ -926,6 +985,32 @@
                     >
                       <span class="truncate font-medium text-foreground">{userName}</span>
                       <CioUserMark name={userName} />
+                    </div>
+                  {/if}
+                  {#if replyParts.length > 0}
+                    <div class="mb-2 flex flex-col gap-1">
+                      {#each replyParts as part (part.id)}
+                        <!-- The quote is the way back to the words being answered:
+                             the reply is still in this transcript, so opening the
+                             quote scrolls to it and marks it. -->
+                        <button
+                          type="button"
+                          class="flex w-full max-w-full items-start gap-2 border-l-2 border-accent/60 bg-app px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+                          title={`Go to the reply from ${part.speakerName} in ${part.title}`}
+                          aria-label={`Go to the reply from ${part.speakerName} in ${part.title}`}
+                          onclick={() => void board.directReply.reveal(part.repliedMessageId)}
+                        >
+                          <CioReplyMark size={11} class="mt-0.5 shrink-0 text-accent" />
+                          <span class="min-w-0">
+                            <span class="block truncate text-[0.6875rem] text-muted">
+                              {part.speakerName} · {part.title}
+                            </span>
+                            <span class="line-clamp-2 block text-[0.75rem] text-foreground">
+                              {part.excerpt}
+                            </span>
+                          </span>
+                        </button>
+                      {/each}
                     </div>
                   {/if}
                   {#if leftoverReferences.length}
@@ -1179,9 +1264,11 @@
 
           {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || isTurnEnd}
             <div class="group mb-6 flex min-w-0 flex-col">
-              {#each traceSegmentsAbove as segment (segment.segmentIndex)}
-                {@render turnTraceSegment(segment, msg)}
-              {/each}
+              {#if !(groupThread && msg.role === 'assistant')}
+                {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                  {@render turnTraceSegment(segment, msg)}
+                {/each}
+              {/if}
 
               {#if isTurnEnd}
                 <!-- Final text output + footer   hide only on the active in-progress turn -->
@@ -1249,6 +1336,8 @@
                       data-assistant-response
                       data-conversation-searchable
                       data-message-id={msg.id}
+                      role="group"
+                      ondblclick={(event) => beginReply(event, msg)}
                     >
                       <!-- Who answered. Drawn only in a group thread, and only
                            over the reply's text: the working trace above and
@@ -1269,6 +1358,9 @@
                              cap so it never resizes the bubble around it. -->
                         {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
                           {@render completedTurnTraceBlock(view.turn)}
+                        {/each}
+                        {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                          {@render turnTraceSegment(segment, msg, true)}
                         {/each}
                       {/if}
                       {#if isReadingActiveLine}
@@ -1399,7 +1491,7 @@
 
                   {#if !board.switchProject.busy || !isLatest}
                     <!-- Footer shown once per turn on the last assistant message -->
-                    <div class="mt-1 flex flex-col">
+                    <div class="mt-1 flex flex-col" data-message-actions>
                       <div class="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                         <div class="flex shrink-0 items-center gap-0.5">
                           <button
@@ -1473,6 +1565,19 @@
                           >
                             <CioDownload size={12} />
                           </button>
+                          {#if groupThread && msg.author?.projectId && msg.author?.threadId}
+                            <button
+                              class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                              aria-label={`Reply in ${replyTargetFor(msg)?.title ?? 'that conversation'}`}
+                              title="Reply in that conversation"
+                              onclick={() => {
+                                const target = replyTargetFor(msg)
+                                if (target) board.directReply.attach(target)
+                              }}
+                            >
+                              <CioReplyMark size={12} />
+                            </button>
+                          {/if}
                         </div>
                         {#if !groupThread}
                           <div

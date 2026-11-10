@@ -19,6 +19,7 @@ import { ThreadViewProjectSuggestedPrompts } from './ThreadView-project-suggeste
 import { ThreadViewStudioReloadNonce } from './ThreadView-studio-reload-nonce.svelte'
 import { ThreadViewExpandedMessageBodies } from './ThreadView-expanded-message-bodies.svelte'
 import { ThreadViewOpenOvenPicker } from './ThreadView-open-oven-picker.svelte'
+import { ThreadViewDirectReply } from './ThreadView-direct-reply.svelte'
 import { ThreadViewState } from './ThreadView-state.svelte'
 import { ThreadViewEffects } from './ThreadView-effects.svelte'
 import type { ThreadViewSurfaceProps } from './ThreadView-types'
@@ -52,6 +53,7 @@ export class ThreadView extends BoardState<ThreadViewSurfaceProps> {
   readonly studioReloadNonce = new ThreadViewStudioReloadNonce(this)
   readonly expandedMessageBodies = new ThreadViewExpandedMessageBodies(this)
   readonly openOvenPicker = new ThreadViewOpenOvenPicker(this)
+  readonly directReply = new ThreadViewDirectReply(this)
   readonly state = new ThreadViewState(this)
   readonly effects = new ThreadViewEffects(this)
   constructor(readProps: () => ThreadViewSurfaceProps) {

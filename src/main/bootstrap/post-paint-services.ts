@@ -598,6 +598,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
             : null
           const author = assistant ? delegationAuthor(assistant) : thread.dispatchOrigin?.author
           if (!author) return { posted: false, error: 'This conversation has no speaker to name' }
+          const speakingAuthor = {
+            ...author,
+            projectId: thread.projectId,
+            threadId: thread.id
+          }
           const id = `group-chat-reply-${thread.id}-${Date.now()}`
           const now = Date.now()
           await chatEngine.threadManager.upsertMessages(group.projectId, group.threadId, [
@@ -606,7 +611,7 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
               role: 'assistant',
               origin: 'assistant',
               visibility: 'conversation',
-              author,
+              author: speakingAuthor,
               parts: [{ type: 'text', id: `${id}-text`, messageID: id, text }],
               createdAt: now,
               completedAt: now

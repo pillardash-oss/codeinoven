@@ -257,6 +257,34 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
     startAfterThreads: StartAfterThreadReference[] = [],
     threadReferences: ThreadContextReference[] = []
   ): void {
+    // A conversation attached to the composer is where this message goes. The
+    // words leave the open conversation and are delivered to that thread, so the
+    // group chat collects the reply instead of handing the message to its own
+    // assistant. Nothing else in the send path applies: there is no turn here to
+    // steer, no lifecycle choice to confirm and no queue to join.
+    if (this.root.directReply.target) {
+      void (async () => {
+        const delivered = await this.root.directReply.send({
+          text,
+          attachments,
+          projectReferences,
+          taskReferences
+        })
+        if (delivered) return
+        // The composer emptied its buffer when it handed the message over, so a
+        // delivery that failed puts the draft back rather than eating it.
+        rendererRecovery.setDraft(
+          this.root.handleAgentEvent.thread.projectId,
+          this.root.handleAgentEvent.thread.id,
+          text,
+          attachments,
+          projectReferences,
+          taskReferences
+        )
+        this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+      })()
+      return
+    }
     // The user answered the agent's "shall I save it?" with a plain yes. The app
     // owns the commit: save the pending draft, then have the agent post its
     // next-steps list. The yes is consumed as the confirmation and never sent,

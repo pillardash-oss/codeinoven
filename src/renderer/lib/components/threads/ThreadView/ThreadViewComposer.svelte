@@ -42,6 +42,7 @@
   import { rendererRecovery, publishDraftActivity } from '$lib/stores/renderer-recovery.svelte'
   import { forkOrigins } from '$lib/stores/fork-origins.svelte'
   import { modelKey } from '$lib/model-keys'
+  import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { dismissedTodo } from '$lib/stores/dismissed-todo.svelte'
   import { assistantIsScheduled } from '$shared/types'
   import { APP_NAME } from '$shared/brand'
@@ -992,6 +993,14 @@
                                   ? `${APP_NAME} is working · type to queue a message`
                                   : (board.props.composerPlaceholder ?? 'Send a message...')}
                   disabled={board.harnessUsage.specFormulating}
+                  directReply={board.directReply.target}
+                  directReplyBusy={board.directReply.sending}
+                  directReplyError={board.directReply.error}
+                  onClearDirectReply={() => board.directReply.clear()}
+                  onOpenDirectReply={() => {
+                    const target = board.directReply.target
+                    if (target) void openThreadById(target.projectId, target.threadId)
+                  }}
                   working={board.switchProject.busy}
                   onStop={board.abortRun.abortRun}
                   autofocus
