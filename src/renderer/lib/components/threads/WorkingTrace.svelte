@@ -536,7 +536,7 @@
        this trace's work, so folding it is always one click away without a
        scroll back. The body is the transcript's now: one scroller, not two. -->
   <div
-    class="sticky top-0 z-20 {flat ? 'bg-surface' : 'bg-app'}"
+    class="sticky top-0 z-20 {flat ? 'bg-transparent' : 'bg-app'}"
     bind:clientHeight={traceHeaderHeight}
   >
     <WorkingTraceSummary

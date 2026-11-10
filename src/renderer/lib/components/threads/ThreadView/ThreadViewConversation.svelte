@@ -1727,12 +1727,14 @@
             </div>
           {/if}
         {/if}
-        {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
-          {@render turnTraceSegment(
-            segment,
-            board.loadOlderMessages.messages[segment.turnStart] ?? msg
-          )}
-        {/each}
+        {#if !groupThread}
+          {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
+            {@render turnTraceSegment(
+              segment,
+              board.loadOlderMessages.messages[segment.turnStart] ?? msg
+            )}
+          {/each}
+        {/if}
       {/each}
 
       <!-- Dispatched threads answer here, as replies from their own assistant or

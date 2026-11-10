@@ -130,7 +130,7 @@
       <button
         type="button"
         class="sticky z-10 flex w-full items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground {flat
-          ? 'bg-surface'
+          ? 'bg-transparent'
           : 'bg-app'}"
         style="top: var(--cio-trace-header-h, 0px)"
         aria-expanded={open}
