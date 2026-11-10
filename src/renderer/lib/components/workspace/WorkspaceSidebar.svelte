@@ -54,7 +54,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
   import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
-  import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
+  import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { STAGE_COLORS, STAGE_LABELS, STAGE_ORDER, scopeState } from '$lib/stores/scope.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
@@ -1351,7 +1351,13 @@
                             class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
                             aria-label="Env secrets for {project.name}"
                             title="Env secrets"
-                            onclick={() => secretsPageState.open({ projectId: project.id })}
+                            onclick={() =>
+                              projectEnvDock.open({
+                                projectId: project.id,
+                                projectName: project.name,
+                                iconUrl: getProjectIcon(project, projectIcons.get(project.id)),
+                                color: project.color
+                              })}
                           >
                             <CioKey size={12} />
                           </button>

@@ -7,6 +7,7 @@ import {
   projectEnvReference,
   type ProjectEnvEntry,
   type ProjectEnvFile,
+  type ProjectEnvApplyTextResult,
   type ProjectEnvImportResult,
   type ProjectEnvLaunchPreview,
   type ProjectEnvLaunchPreviewEntry,
@@ -48,6 +49,11 @@ export interface EnvFileKeyInput {
   projectId: string
   group: string
   mode: ProjectEnvMode
+}
+
+export interface ApplyEnvTextInput extends EnvFileKeyInput {
+  /** The whole file body, as the user typed it. */
+  text: string
 }
 
 export interface ImportEnvInput extends EnvFileKeyInput {
@@ -134,6 +140,89 @@ export class ProjectEnvService {
     await this.dependencies.store.writeProject(input.projectId, files)
     if (entry) await this.dropRefIfUnused(input.projectId, entry.secretRef)
     return this.listProjectEnv(input.projectId)
+  }
+
+  /**
+   * Replace one managed file with the lines of a typed `.env` body.
+   *
+   * The body is the file: a line with a value writes that value, a line without
+   * one keeps whatever is stored for that name, a name whose line is gone is
+   * removed, and a line that cannot be used is reported rather than guessed. A file
+   * that does not exist yet is created by this call, so the editor can start from an
+   * empty body.
+   */
+  async applyEnvText(input: ApplyEnvTextInput): Promise<ProjectEnvApplyTextResult> {
+    const group = normalizeGroup(input.group)
+    const files = await this.dependencies.store.readProject(input.projectId)
+    let file = files.find((candidate) => candidate.group === group && candidate.mode === input.mode)
+    const lines = parseProjectEnvFile(input.text)
+    const skipped: { line: number; reason: string }[] = []
+    const typed = new Map<string, { value: string | null; line: number }>()
+
+    for (const [index, line] of lines.entries()) {
+      if (line.kind === 'blank' || line.kind === 'comment') continue
+      if (line.kind === 'invalid') {
+        skipped.push({ line: index + 1, reason: line.reason })
+        continue
+      }
+      let name: string
+      try {
+        name = validateProcessEnvironmentVariable(line.name)
+      } catch (error) {
+        skipped.push({
+          line: index + 1,
+          reason: error instanceof Error ? error.message : 'Name is not allowed'
+        })
+        continue
+      }
+      typed.set(name, { value: line.value.length > 0 ? line.value : null, line: index + 1 })
+    }
+
+    if (!file) {
+      if (typed.size === 0) throw new Error('Nothing to save: the file is empty')
+      file = { group, mode: input.mode, entries: [], updatedAt: Date.now() }
+      files.push(file)
+    }
+
+    const stored: string[] = []
+    const kept: string[] = []
+    for (const [name, entry] of typed) {
+      const existing = file.entries.find((candidate) => candidate.name === name)
+      if (entry.value === null) {
+        if (existing) kept.push(name)
+        else {
+          skipped.push({
+            line: entry.line,
+            reason: `${name} has no value yet, so nothing was stored for it`
+          })
+        }
+        continue
+      }
+      const secretRef = await this.dependencies.secrets.save(entry.value, existing?.secretRef, {
+        scope: 'project-env',
+        ownerId: input.projectId,
+        label: `${group || '.'} · ${projectEnvModeFileName(input.mode)} · ${name}`
+      })
+      upsertEntry(file, { name, secretRef, updatedAt: Date.now() })
+      stored.push(name)
+    }
+
+    const removedEntries = file.entries.filter((entry) => !typed.has(entry.name))
+    file.entries = file.entries.filter((entry) => typed.has(entry.name))
+    file.updatedAt = Date.now()
+    await this.dependencies.store.writeProject(input.projectId, files)
+    for (const entry of removedEntries) {
+      await this.dropRefIfUnused(input.projectId, entry.secretRef)
+    }
+    const removed = removedEntries.map((entry) => entry.name)
+
+    return {
+      files: await this.listProjectEnv(input.projectId),
+      stored,
+      kept,
+      removed,
+      skipped
+    }
   }
 
   async createProjectEnvFile(input: EnvFileKeyInput): Promise<ProjectEnvFile[]> {

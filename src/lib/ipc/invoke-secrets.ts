@@ -1,4 +1,6 @@
 import type {
+  ProjectEnvApplyTextRequest,
+  ProjectEnvApplyTextResult,
   ProjectEnvEntry,
   ProjectEnvFile,
   ProjectEnvFileRequest,
@@ -27,6 +29,11 @@ export const invokeSecretsContract = {
   'secrets:envSetValue': {} as Contract<[request: ProjectEnvValueRequest], ProjectEnvFile[]>,
   'secrets:envRemoveEntry': {} as Contract<[request: ProjectEnvEntryRequest], ProjectEnvFile[]>,
   'secrets:envCreateFile': {} as Contract<[request: ProjectEnvFileRequest], ProjectEnvFile[]>,
+  /** Replace one managed file with the lines of a typed `.env` body. */
+  'secrets:envApplyText': {} as Contract<
+    [request: ProjectEnvApplyTextRequest],
+    ProjectEnvApplyTextResult
+  >,
   'secrets:envDeleteFile': {} as Contract<[request: ProjectEnvFileRequest], ProjectEnvFile[]>,
   'secrets:envSetThreadValue': {} as Contract<
     [request: ProjectEnvThreadValueRequest],

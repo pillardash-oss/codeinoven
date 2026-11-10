@@ -25,7 +25,7 @@
   import { findNavState } from '$lib/stores/find-nav.svelte'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
-  import { secretsPageState } from '$lib/stores/secrets-page-state.svelte'
+  import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
   import ProjectFileExplorerDialogs from './ProjectFileExplorerDialogs.svelte'
@@ -1385,7 +1385,13 @@
     onRefresh={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
     envFileOpen={isEnvFile(selectedPath)}
     onOpenSecrets={() =>
-      secretsPageState.open({ projectId, directory: parentDirectory(selectedPath ?? '') })}
+      projectEnvDock.open({
+        projectId,
+        projectName,
+        iconUrl: projectIconUrl,
+        color: projectAccentColor,
+        group: parentDirectory(selectedPath ?? '')
+      })}
   />
 
   <ProjectFileExplorerFilters

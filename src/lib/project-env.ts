@@ -145,6 +145,25 @@ export interface ProjectEnvEntryRequest extends ProjectEnvFileRequest {
   name: string
 }
 
+/** A request that replaces one managed file with the lines of a `.env` body. */
+export interface ProjectEnvApplyTextRequest extends ProjectEnvFileRequest {
+  /** The whole file body, as the user typed it. */
+  text: string
+}
+
+/** What one bulk apply did, described without any value. */
+export interface ProjectEnvApplyTextResult {
+  files: ProjectEnvFile[]
+  /** Keys whose value was written or replaced. */
+  stored: string[]
+  /** Keys left exactly as they were because their line carried no value. */
+  kept: string[]
+  /** Keys removed because their line is gone. */
+  removed: string[]
+  /** Lines that could not be used, so nothing there is guessed. */
+  skipped: { line: number; reason: string }[]
+}
+
 /** A request that imports an existing plaintext env file. */
 export interface ProjectEnvImportRequest extends ProjectEnvFileRequest {
   /** Project-relative path of the file. */

@@ -211,6 +211,70 @@ describe('ProjectEnvService resolution', () => {
   })
 })
 
+describe('ProjectEnvService typed body', () => {
+  it('stores values, keeps empty lines that have a value, and removes what is gone', async () => {
+    await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })
+
+    const first = await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      text: '# app\nDATABASE_URL=postgres://one\nPORT=3000\n'
+    })
+    expect(first.stored).toEqual(['DATABASE_URL', 'PORT'])
+    expect(first.kept).toEqual([])
+
+    // PORT keeps its value because its line carries none; MAIL_KEY is new and has
+    // no value yet, so it is reported instead of stored; DATABASE_URL is rewritten.
+    const second = await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      text: 'DATABASE_URL=postgres://two\nPORT=\nMAIL_KEY=\n'
+    })
+
+    expect(second.stored).toEqual(['DATABASE_URL'])
+    expect(second.kept).toEqual(['PORT'])
+    expect(second.removed).toEqual([])
+    expect(second.skipped).toEqual([
+      { line: 3, reason: 'MAIL_KEY has no value yet, so nothing was stored for it' }
+    ])
+
+    const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })
+    expect(launch.environment).toEqual({ DATABASE_URL: 'postgres://two', PORT: '3000' })
+
+    const third = await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: '',
+      mode: 'default',
+      text: 'PORT=3000\n'
+    })
+    expect(third.removed).toEqual(['DATABASE_URL'])
+    expect(secrets.values.size).toBe(1)
+  })
+
+  it('creates the file from a typed body, and refuses a name it may not set', async () => {
+    const created = await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      mode: 'local',
+      text: 'API_URL=http://localhost:3001\n'
+    })
+    expect(created.files).toEqual([
+      expect.objectContaining({ group: 'packages/api', mode: 'local' })
+    ])
+
+    const refused = await service.applyEnvText({
+      projectId: PROJECT_ID,
+      group: 'packages/api',
+      mode: 'local',
+      text: 'API_URL=http://localhost:3001\nPATH=/tmp\n'
+    })
+    expect(refused.stored).toEqual(['API_URL'])
+    expect(refused.skipped[0]?.line).toBe(2)
+  })
+})
+
 describe('ProjectEnvService import', () => {
   it('previews without writing, then rewrites the file and keeps a private backup', async () => {
     await service.createProjectEnvFile({ projectId: PROJECT_ID, group: '', mode: 'default' })

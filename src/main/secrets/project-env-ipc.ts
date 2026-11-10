@@ -2,6 +2,7 @@ import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { validateEntityId } from '../ipc/ipc-validation'
 import {
   parseProjectEnvMode,
+  type ProjectEnvApplyTextRequest,
   type ProjectEnvEntryRequest,
   type ProjectEnvFileRequest,
   type ProjectEnvImportRequest,
@@ -15,6 +16,8 @@ import type { ProjectEnvService } from './project-env-service'
 /** Longest env key or value the editor may submit. */
 const NAME_LIMIT = 128
 const VALUE_LIMIT = 16_384
+/** Longest env body the editor may submit: generous for a large file, bounded. */
+const TEXT_LIMIT = 256 * 1024
 /** Longest project-relative file path an import may name. */
 const PATH_LIMIT = 1_024
 
@@ -59,6 +62,14 @@ function valueRequest(value: unknown): ProjectEnvValueRequest {
 function entryRequest(value: unknown): ProjectEnvEntryRequest {
   const input = record(value, 'Env entry request')
   return { ...fileRequest(input), name: text(input['name'], 'Env key', NAME_LIMIT) }
+}
+
+function applyTextRequest(value: unknown): ProjectEnvApplyTextRequest {
+  const input = record(value, 'Env file body')
+  const text = input['text']
+  if (typeof text !== 'string') throw new TypeError('Env file body must be a string')
+  if (text.length > TEXT_LIMIT) throw new TypeError('Env file body is too large')
+  return { ...fileRequest(input), text }
 }
 
 function threadValueRequest(value: unknown): ProjectEnvThreadValueRequest {
@@ -125,6 +136,9 @@ export function registerProjectEnvIpc(service: ProjectEnvService): void {
   )
   ipcMain.handle('secrets:envCreateFile', (_, request: unknown) =>
     service.createProjectEnvFile(fileRequest(request))
+  )
+  ipcMain.handle('secrets:envApplyText', (_, request: unknown) =>
+    service.applyEnvText(applyTextRequest(request))
   )
   ipcMain.handle('secrets:envDeleteFile', (_, request: unknown) =>
     service.deleteProjectEnvFile(fileRequest(request))
