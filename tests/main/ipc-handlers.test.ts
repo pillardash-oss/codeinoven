@@ -17,6 +17,9 @@ const { handlers, listeners, showOpenDialog, showSaveDialog, safeStorage } = vi.
   showSaveDialog: vi.fn(),
   safeStorage: {
     isAsyncEncryptionAvailable: vi.fn(async () => true),
+    // The vault reports itself unavailable on Linux when Chromium fell back to
+    // the plaintext `basic_text` backend, so every mock has to answer this too.
+    getSelectedStorageBackend: vi.fn(() => 'gnome_libsecret'),
     encryptStringAsync: vi.fn(async (value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
     decryptStringAsync: vi.fn(async (buffer: Buffer) => ({
       result: buffer.toString('utf-8').replace(/^enc:/u, ''),

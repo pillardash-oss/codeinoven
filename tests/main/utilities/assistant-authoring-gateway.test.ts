@@ -8,6 +8,9 @@ vi.mock('electron', () => ({
   ipcMain: { handle: () => undefined },
   safeStorage: {
     isAsyncEncryptionAvailable: async () => true,
+    // The vault reports itself unavailable on Linux when Chromium fell back to
+    // the plaintext `basic_text` backend, so every mock has to answer this too.
+    getSelectedStorageBackend: () => 'gnome_libsecret',
     encryptStringAsync: async (value: string) => Buffer.from(`encrypted:${value}`),
     decryptStringAsync: async (value: Buffer) => ({
       result: value.toString().replace(/^encrypted:/, ''),
