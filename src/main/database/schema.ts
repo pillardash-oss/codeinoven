@@ -34,9 +34,10 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * the snapshot DDL goes in `SCHEMA_SQL`, and the step that upgrades a database
  * already on disk goes in a new `migrations/v<version>.ts`. A schema change
  * without a bump reaches fresh installs only and silently skips every database
- * already on disk.
+ * already on disk. A data repair that has to run exactly once per install earns
+ * a version the same way, with no DDL in it.
  */
-export const DATABASE_SCHEMA_VERSION = 9
+export const DATABASE_SCHEMA_VERSION = 10
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────

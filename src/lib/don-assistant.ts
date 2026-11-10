@@ -194,6 +194,19 @@ store it with \`cio_user_name\` and use it from then on. Never guess a name and
 never ask twice.`
 
 /**
+ * The neutral accent Don wears everywhere it appears.
+ *
+ * Don is the app's own orchestrator rather than a teammate the user hired, so its
+ * accent carries no colour of its own: a neutral from the project palette keeps the
+ * tile, its sidebar row and its name in the conversation reading as the door the
+ * rest of the assistants stand under, instead of as one more coloured colleague.
+ *
+ * It is a palette value rather than a theme token because the accent is stored on
+ * the assistant row and tinted into SVG marks, where a token cannot resolve.
+ */
+export const DON_ACCENT_COLOR = '#71717a'
+
+/**
  * The assistant row Don is seeded as, so the bootstrap has one definition of Don
  * rather than a literal spread across the manager and the IPC layer.
  *
@@ -207,6 +220,7 @@ export function donAssistantSeed(agents?: AssistantAgents): CreateAssistantInput
     description:
       'Your orchestrator. Tell Don what you want done and it puts the work in the right hands.',
     scheduled: false,
+    color: DON_ACCENT_COLOR,
     knowledge: DON_KNOWLEDGE,
     connections: [],
     agents,
