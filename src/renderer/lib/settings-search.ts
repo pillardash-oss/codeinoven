@@ -62,12 +62,6 @@ interface SettingsSearchEntryBase {
 /** A whole section page: it is a Settings sidebar tab, so it names its category. */
 export interface SettingsPageEntry extends SettingsSearchEntryBase {
   group: SettingsGroupId
-  /**
-   * The page this one is a tab of. A child page keeps its own route and search
-   * entry, but the sidebar lists only its parent, and both render a tab strip
-   * that moves between them, so closely related pages read as one destination.
-   */
-  parent?: SettingsSection
   blockId?: undefined
   harnessesTab?: undefined
 }
@@ -250,7 +244,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'computer-use',
     section: 'computer-use',
-    parent: 'browser',
     group: 'app',
     title: 'Computer use',
     description: 'Bridge settings for computer-control agents.',
@@ -260,7 +253,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'sound',
     section: 'sound',
-    parent: 'general',
     group: 'app',
     title: 'Sound',
     description: 'Local speech models, dictation, cleanup, history, and spoken responses.',
@@ -270,7 +262,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'search',
     section: 'search',
-    parent: 'general',
     group: 'app',
     title: 'Search',
     description:
@@ -293,7 +284,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'keymap',
     section: 'keymap',
-    parent: 'general',
     group: 'app',
     title: 'Keymap',
     description: 'Keyboard shortcuts for every app action.',
@@ -303,7 +293,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'ide-mode',
     section: 'ide-mode',
-    parent: 'general',
     group: 'app',
     title: 'IDE Mode',
     description: 'Configure language servers for project tree editing.',
@@ -323,7 +312,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'local-ai',
     section: 'local-ai',
-    parent: 'ovens',
     group: 'compute',
     title: 'Local AI',
     description: 'Model servers running on this machine, their runtimes, and their logs.',
@@ -369,7 +357,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'archives',
     section: 'archives',
-    parent: 'profile',
     group: 'data',
     title: 'Archives',
     description: 'Archived projects, threads, chats, and assistants.',
@@ -641,25 +628,3 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 export const SETTINGS_PAGE_ENTRIES: readonly SettingsPageEntry[] = SETTINGS_SEARCH_ENTRIES.filter(
   (entry): entry is SettingsPageEntry => !entry.blockId
 )
-
-/** The pages the Settings sidebar lists: every page that is not a tab of another. */
-export const SETTINGS_SIDEBAR_ENTRIES: readonly SettingsPageEntry[] = SETTINGS_PAGE_ENTRIES.filter(
-  (entry) => !entry.parent
-)
-
-/** The sidebar page a section is reached through: its parent, or itself. */
-export function settingsSidebarSection(section: SettingsSection): SettingsSection {
-  return SETTINGS_PAGE_ENTRIES.find((entry) => entry.section === section)?.parent ?? section
-}
-
-/**
- * The tabs shown above a page that has children: the parent first, then each
- * child in registry order. A page with no family has no tab strip.
- */
-export function settingsFamily(section: SettingsSection): readonly SettingsPageEntry[] {
-  const root = settingsSidebarSection(section)
-  const children = SETTINGS_PAGE_ENTRIES.filter((entry) => entry.parent === root)
-  if (children.length === 0) return []
-  const parent = SETTINGS_PAGE_ENTRIES.find((entry) => entry.section === root)
-  return parent ? [parent, ...children] : children
-}

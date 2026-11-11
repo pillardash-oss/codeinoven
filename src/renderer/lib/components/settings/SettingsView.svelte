@@ -22,9 +22,6 @@
   import {
     SETTINGS_GROUPS,
     SETTINGS_PAGE_ENTRIES,
-    SETTINGS_SIDEBAR_ENTRIES,
-    settingsFamily,
-    settingsSidebarSection,
     SETTINGS_SEARCH_ENTRIES
   } from '$lib/settings-search'
   import {
@@ -275,7 +272,7 @@
   const tabGroups = SETTINGS_GROUPS.map((group) => ({
     id: group.id,
     label: group.label,
-    tabs: SETTINGS_SIDEBAR_ENTRIES.filter((entry) => entry.group === group.id).map(
+    tabs: SETTINGS_PAGE_ENTRIES.filter((entry) => entry.group === group.id).map(
       (entry): SettingsSidebarTab => ({
         id: entry.section,
         label: entry.title,
@@ -283,8 +280,6 @@
       })
     )
   })).filter((group) => group.tabs.length > 0)
-
-  const sidebarSection = $derived(settingsSidebarSection(section))
 
   // The header mirrors the section on screen   cleared when Settings closes.
   $effect(() => {
@@ -640,36 +635,17 @@
             {#each group.tabs as tab (tab.id)}
               {@const Icon = tab.icon}
               {@const isActive = section === tab.id}
-              {@const inFamily = sidebarSection === tab.id}
-              {@const children = settingsFamily(tab.id).slice(1)}
               <button
                 class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors {isActive
                   ? 'bg-elevated text-foreground'
-                  : inFamily
-                    ? 'text-foreground hover:bg-elevated'
-                    : 'text-muted hover:bg-elevated hover:text-foreground'}"
+                  : 'text-muted hover:bg-elevated hover:text-foreground'}"
                 aria-current={isActive ? 'page' : undefined}
                 title="{tab.label} settings"
                 onclick={() => navigateSection(tab.id)}
               >
-                <Icon size={14} class={inFamily ? 'text-foreground' : 'text-dimmed'} />
+                <Icon size={14} class={isActive ? 'text-foreground' : 'text-dimmed'} />
                 {tab.label}
               </button>
-              <!-- A page's related pages sit under it in the sidebar rather
-                   than as a second row of tabs inside the page. -->
-              {#each children as child (child.section)}
-                {@const childActive = section === child.section}
-                <button
-                  class="flex w-full items-center py-1 pr-2 pl-8 text-left text-sm transition-colors {childActive
-                    ? 'bg-elevated text-foreground'
-                    : 'text-muted hover:bg-elevated hover:text-foreground'}"
-                  aria-current={childActive ? 'page' : undefined}
-                  title="{child.title} settings"
-                  onclick={() => navigateSection(child.section)}
-                >
-                  {child.title}
-                </button>
-              {/each}
             {/each}
           </div>
         </div>
