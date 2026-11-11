@@ -314,7 +314,7 @@
         <div
           class={scopeState.buckets.length === 1
             ? 'h-full w-full'
-            : 'grid w-full grid-cols-1 items-start gap-3'}
+            : 'grid w-full grid-cols-2 items-start gap-3'}
         >
           {#each scopeState.buckets as bucket (bucket.id)}
             <ScopeBucketView
