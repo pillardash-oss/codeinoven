@@ -775,7 +775,7 @@
                 <p class="text-sm font-medium">Font</p>
                 <p class="text-xs leading-relaxed text-dimmed">Typeface used across the app</p>
               </div>
-              <div class="w-48 shrink-0">
+              <div class="w-56 shrink-0">
                 <EnumSelect
                   options={FONT_FAMILY_OPTIONS}
                   value={config.fontFamily}
@@ -819,7 +819,7 @@
                 <p class="text-sm font-medium">Font weight</p>
                 <p class="text-xs leading-relaxed text-dimmed">Lightness of the app text</p>
               </div>
-              <div class="w-48 shrink-0">
+              <div class="w-56 shrink-0">
                 <EnumSelect
                   options={fontWeightOptions}
                   value={String(config.fontWeight)}
@@ -859,6 +859,10 @@
             </h3>
             <div class="flex items-center justify-between gap-4">
               <div>
+                <p class="text-sm font-medium">System notifications</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  Send a test to check that notifications reach you
+                </p>
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
                     <CioCheckCircle size={13} />
