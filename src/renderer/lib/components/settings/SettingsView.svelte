@@ -22,6 +22,9 @@
   import {
     SETTINGS_GROUPS,
     SETTINGS_PAGE_ENTRIES,
+    SETTINGS_SIDEBAR_ENTRIES,
+    settingsFamily,
+    settingsSidebarSection,
     SETTINGS_SEARCH_ENTRIES
   } from '$lib/settings-search'
   import {
@@ -271,7 +274,7 @@
   const tabGroups = SETTINGS_GROUPS.map((group) => ({
     id: group.id,
     label: group.label,
-    tabs: SETTINGS_PAGE_ENTRIES.filter((entry) => entry.group === group.id).map(
+    tabs: SETTINGS_SIDEBAR_ENTRIES.filter((entry) => entry.group === group.id).map(
       (entry): SettingsSidebarTab => ({
         id: entry.section,
         label: entry.title,
@@ -279,6 +282,9 @@
       })
     )
   })).filter((group) => group.tabs.length > 0)
+
+  const sidebarSection = $derived(settingsSidebarSection(section))
+  const family = $derived(settingsFamily(section))
 
   // The header mirrors the section on screen   cleared when Settings closes.
   $effect(() => {
@@ -620,7 +626,7 @@
           <div class="space-y-0.5">
             {#each group.tabs as tab (tab.id)}
               {@const Icon = tab.icon}
-              {@const isActive = section === tab.id}
+              {@const isActive = sidebarSection === tab.id}
               <button
                 class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors {isActive
                   ? 'bg-elevated text-foreground'
@@ -655,6 +661,30 @@
 
   <!-- Tab content -->
   <div class="min-w-0 flex-1 overflow-y-auto">
+    {#if family.length > 0}
+      <!-- Related pages share one sidebar entry and switch here, as tabs. -->
+      <div
+        class="sticky top-0 z-10 flex gap-1 border-b border-border bg-app px-6 pt-3"
+        role="tablist"
+        aria-label="{family[0]?.title} pages"
+      >
+        {#each family as entry (entry.section)}
+          {@const isCurrent = entry.section === section}
+          <button
+            type="button"
+            role="tab"
+            aria-selected={isCurrent}
+            class="-mb-px border-b-2 px-3 py-1.5 text-sm transition-colors {isCurrent
+              ? 'border-foreground text-foreground'
+              : 'border-transparent text-muted hover:text-foreground'}"
+            title="{entry.title} settings"
+            onclick={() => navigateSection(entry.section)}
+          >
+            {entry.title}
+          </button>
+        {/each}
+      </div>
+    {/if}
     {#if section === 'profile'}
       <ProfileSettingsTab />
     {:else if section === 'general'}
