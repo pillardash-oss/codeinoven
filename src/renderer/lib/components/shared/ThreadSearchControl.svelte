@@ -119,6 +119,16 @@
 
   let results = $derived(fts ? ftsResults : syncResults)
 
+  // Opening the panel is a request to type: the field takes the focus, and the
+  // query that is already there is selected so the next keystroke replaces it.
+  $effect(() => {
+    if (!open) return
+    const field = searchInput
+    if (!field) return
+    field.focus()
+    field.select()
+  })
+
   function closeSearch(): void {
     open = false
     query = ''
@@ -157,57 +167,57 @@
       aria-label="Search {contextLabel}"
       onCloseAutoFocus={(e) => e.preventDefault()}
     >
-      <div class="flex items-center gap-2 border-b px-3 py-2">
-        <CioSearch size={14} class="shrink-0 text-dimmed" />
+      <!-- One field, one dismiss. A `type="search"` input draws Chromium's own
+           clear glyph next to this one, so the panel carried two X's and only
+           the right one meant anything: the field is a plain text input now. -->
+      <div class="flex items-center gap-2 border-b px-2.5 py-1.5">
+        <CioSearch size={12} class="shrink-0 text-dimmed" />
         <input
           bind:this={searchInput}
           bind:value={query}
           oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
             runFtsSearch(e.currentTarget.value)}
-          type="search"
-          class="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search {contextLabel}..."
+          type="text"
+          class="min-w-0 flex-1 bg-transparent text-[0.75rem] text-foreground outline-none placeholder:text-dimmed"
+          placeholder="Search {contextLabel}…"
           aria-label="Search {contextLabel}"
         />
-        {#if query}
-          <button
-            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Clear search"
-            title="Clear search"
-            onclick={() => {
-              query = ''
-              ftsResults = []
-              searching = false
-              searchRequestId++
-              searchInput?.focus()
-            }}
-          >
-            <CioClose size={13} />
-          </button>
-        {/if}
+        <button
+          class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          aria-label="Dismiss search"
+          title="Dismiss search"
+          onclick={() => {
+            // Dismissal already empties the query and its results, so this is
+            // the one control the panel needs, and it always means the same
+            // thing whether something is typed or not.
+            closeSearch()
+          }}
+        >
+          <CioClose size={12} />
+        </button>
       </div>
 
-      <div class="max-h-80 overflow-y-auto p-1">
+      <div class="max-h-72 overflow-y-auto">
         {#if query.trim()}
           {#if searching && results.length === 0}
             <p
-              class="flex items-center justify-center gap-1.5 px-3 py-6 text-center text-xs text-dimmed"
+              class="flex items-center justify-center gap-1.5 px-3 py-3 text-[0.6875rem] text-dimmed"
             >
-              <CioSpinner size={12} class="animate-spin" />
+              <CioSpinner size={11} class="animate-spin" />
               Searching…
             </p>
           {:else if results.length === 0}
-            <p class="px-3 py-6 text-center text-xs text-dimmed">No matching threads</p>
+            <p class="px-3 py-3 text-[0.6875rem] text-dimmed">No matching threads</p>
           {:else}
             {#each results as result (result.thread.id)}
               {@const thread = result.thread}
               <button
-                class="flex w-full flex-col gap-0.5 px-2.5 py-2 text-left transition-colors hover:bg-elevated"
+                class="flex w-full flex-col gap-0.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
                 title={thread.title}
                 onclick={() => void openThread(thread)}
               >
                 <span class="flex min-w-0 items-center gap-2">
-                  <span class="min-w-0 flex-1 truncate text-sm text-foreground">
+                  <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
                     {thread.title}
                   </span>
                   <span class="shrink-0 text-[0.625rem] capitalize text-dimmed">
@@ -227,9 +237,7 @@
             {/each}
           {/if}
         {:else}
-          <p class="px-3 py-6 text-center text-xs text-dimmed">
-            Type to search {contextLabel}
-          </p>
+          <p class="px-3 py-3 text-[0.6875rem] text-dimmed">Type to search {contextLabel}</p>
         {/if}
       </div>
     </Popover.Content>
