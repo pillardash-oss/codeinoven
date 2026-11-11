@@ -1333,9 +1333,21 @@ export class ChatEngineTurnsSessions {
   /** Whether the session is parked on a card the user has not settled: a
    *  question, a permission request, or an image-descriptor decision. */
   sessionAwaitsUserInput(sessionId: string): boolean {
+    const threadId = this.host.sessionRegistry.get(sessionId)?.threadId
     return (
       [...this.host.pendingQuestions.values()].some(
-        (pending) => pending.request.sessionId === sessionId
+        (pending) =>
+          pending.request.sessionId === sessionId ||
+          // A question an artifact session asked on this thread's behalf parks
+          // the thread too. Reading only the turn's own session let that card
+          // wait while the turn settled `completed` and its notice read
+          // done/unread. A side chat's question never counts: it owns no status
+          // of the parent thread.
+          (threadId !== undefined &&
+            pending.request.threadId === threadId &&
+            this.host.units['temporary-chats'].temporaryChatForSession(
+              pending.request.sessionId
+            ) === undefined)
       ) ||
       [...this.host.state.pendingPermissions.values()].some(
         (pending) => pending.request.sessionId === sessionId

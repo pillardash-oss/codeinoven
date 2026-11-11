@@ -664,8 +664,13 @@ export class ChatEngineQuestionsAsk {
     this.host.units['questions'].schedulePendingQuestion(pending)
     // A temporary side chat (including a global browser's agent sidebar) owns no
     // status of its own: its parent thread must not be marked as awaiting input
-    // for a question the side chat asked.
-    if (!session.ephemeral) {
+    // for a question the side chat asked. An artifact-generation session
+    // (Brainstorm, PRD, Spec) is ephemeral for its own lifecycle but its question
+    // belongs to the thread it is drafting for, so it must park the thread: the
+    // interview card was invisible to the row and its notification read
+    // `completed` while the card waited on the user.
+    const sideChat = this.host.units['temporary-chats'].temporaryChatForSession(session.sessionId)
+    if (!sideChat) {
       await this.host.threadManager.setStatus(
         session.projectId,
         session.threadId,

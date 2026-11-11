@@ -407,6 +407,12 @@ export class ChatEngineUtilitiesTools {
           this.host.state.brainstormEngine.getWorkflowState(projectId, threadId) !== null
         this.host.state.brainstormEngine.ensureWorkflow(projectId, threadId)
         try {
+          // A draft is only creatable from the brainstorm entry choice. The UI
+          // sets it before it generates; a tool call had no such step, so every
+          // agent-created Brainstorm failed in `createDraft` with "A brainstorm
+          // draft requires the brainstorm entry choice" after the generation had
+          // already run.
+          this.host.state.brainstormEngine.chooseEntry(projectId, threadId, 'brainstorm')
           // The stage starts only once a draft exists. Starting it before the
           // generation is what left a thread stuck on a Brainstorm entry gate
           // whenever the generator failed: the lifecycle stayed active, the
