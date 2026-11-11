@@ -1698,14 +1698,17 @@
                   title={thread.bookmarked ? 'Remove bookmark' : 'Unpin'}
                   onclick={(e: MouseEvent) => {
                     e.stopPropagation()
-                    if (thread.bookmarked) onBookmark(thread)
-                    else onTogglePin(thread)
+                    // One handler for both marks: the pin toggle already knows
+                    // that a bookmarked thread is un-bookmarked first, which is
+                    // the only removal path the sidebar implements. `onBookmark`
+                    // only ever sets the bookmark, so calling it here was a
+                    // button that did nothing.
+                    onTogglePin(thread)
                   }}
                   onkeydown={(e: KeyboardEvent) => {
                     if (!keymapState.matches('thread-pin', e)) return
                     e.stopPropagation()
-                    if (thread.bookmarked) onBookmark(thread)
-                    else onTogglePin(thread)
+                    onTogglePin(thread)
                   }}
                 >
                   {#if thread.bookmarked}

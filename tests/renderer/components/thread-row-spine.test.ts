@@ -268,9 +268,15 @@ describe('ThreadRow, the detailed spine row', () => {
   it('offers a bookmark removal in the same slot, and puts no pin on a plain row', async () => {
     const bookmarked = render(thread({ bookmarked: true }))
     await tick()
-    expect(
-      bookmarked.target.querySelector('[role="button"][aria-label="Remove bookmark"]')
-    ).not.toBeNull()
+    const mark = bookmarked.target.querySelector(
+      '[role="button"][aria-label="Remove bookmark"]'
+    ) as HTMLElement
+    expect(mark).not.toBeNull()
+    // The sidebar removes a bookmark through the pin toggle, which handles a
+    // bookmarked thread first. A control that called the bookmark setter here
+    // would set it to true again and do nothing at all.
+    mark.click()
+    expect(bookmarked.pinCalls.map((t) => t.id)).toEqual(['t1'])
     unmount(bookmarked.app)
 
     const plain = render(thread())
