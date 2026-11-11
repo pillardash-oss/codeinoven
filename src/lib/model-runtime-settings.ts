@@ -67,6 +67,22 @@ export function modelContextWindowOptions(
   return model.contextWindow === undefined ? [] : [model.contextWindow]
 }
 
+/** The window a 1M-capable Anthropic model runs with when 1M context is off. */
+export const REDUCED_CLAUDE_CONTEXT_WINDOW = 200_000
+
+/**
+ * Windows a Claude Code model can run with, given the limit the model states.
+ *
+ * Claude Code runs a 1M-capable model at its full window by default and lowers
+ * the same model to 200k when 1M context is switched off
+ * (`CLAUDE_CODE_DISABLE_1M_CONTEXT=1`), so both are real choices. A model whose
+ * limit is already 200k has nothing to choose.
+ */
+export function claudeContextWindows(limit: number | undefined): number[] | undefined {
+  if (limit === undefined || limit <= REDUCED_CLAUDE_CONTEXT_WINDOW) return undefined
+  return [REDUCED_CLAUDE_CONTEXT_WINDOW, limit]
+}
+
 /**
  * Whether the model states more than one window, so there is a window to pick.
  *

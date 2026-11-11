@@ -41,7 +41,7 @@ import type {
 import type { TurnStreamEvent } from '../turn-stream'
 
 export interface PersistedProviderCatalog {
-  schemaVersion: 3
+  schemaVersion: 4
   discoveredAt: number
   catalogs: ProviderCatalog[]
   /** Last-seen per-driver catalog-input fingerprints; drift invalidates the snapshot. */

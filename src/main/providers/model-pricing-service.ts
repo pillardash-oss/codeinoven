@@ -1,8 +1,12 @@
 import { Logger } from '../system/logger'
-import type { ProviderCatalog } from '../../lib/types'
+import type { ProviderCatalog, ProviderModel } from '../../lib/types'
+import { claudeContextWindows } from '../../lib/model-runtime-settings'
 import type { ModelPriceEntry } from './pricing'
 import { registerModelPricing } from './pricing'
 import type { StorageEngine } from '../storage/storage-engine'
+
+/** The harness whose catalog leaves a native 1M window unstated. */
+const CLAUDE_HARNESS_ID = 'claude-code'
 
 /** Static pricing JSON served by LLM Pricing (no key; CC BY 4.0). */
 const PRICING_URL = 'https://llmpricing.dev/api/models.json'
@@ -240,36 +244,65 @@ export class ModelPricingService {
   }
 
   /**
-   * Fill only catalog gaps from the same live metadata payload used for prices.
+   * Fill catalog gaps from the same live metadata payload used for prices.
    * Exact IDs win. A bare model ID is used only when all matching labs publish
    * the same limit, so wrapper-specific caps are never guessed.
    *
    * A CLI harness that carries its own catalog is left alone: Codex reports its
    * windows through `codex debug models`, and this feed's API-level figures
    * (1,050,000 for a model Codex runs at 500,000) are not what it budgets.
+   *
+   * Claude Code is the exception on this feed's side: its 2.1.x catalog states
+   * a 1M model as 200k unless the account happens to advertise a `[1m]` row, so
+   * the model's canonical id is looked up here and its windows are corrected.
    */
   async enrichMissingContext(catalogs: ProviderCatalog[]): Promise<ProviderCatalog[]> {
     const fillable = catalogs.filter((catalog) => catalog.harnessId !== 'codex')
-    if (
-      !fillable.some((catalog) => catalog.models.some((model) => model.contextWindow === undefined))
-    ) {
-      return catalogs
-    }
+    const missingLimits = fillable.some((catalog) =>
+      catalog.models.some((model) => model.contextWindow === undefined)
+    )
+    const missingClaudeWindows = fillable.some(
+      (catalog) =>
+        catalog.harnessId === CLAUDE_HARNESS_ID &&
+        catalog.models.some((model) => model.contextWindows === undefined)
+    )
+    if (!missingLimits && !missingClaudeWindows) return catalogs
 
     await this.ensureLoaded()
-    return catalogs.map((catalog) => ({
-      ...catalog,
-      models: catalog.models.map((model) => {
-        if (model.contextWindow !== undefined || catalog.harnessId === 'codex') return model
-        const modelId = normalizeId(model.id)
-        const providerModelId = `${normalizeId(model.providerId)}/${modelId}`
-        const contextWindow =
-          this.contexts.byId.get(providerModelId) ??
-          this.contexts.byId.get(modelId) ??
-          this.contexts.byBareId.get(bareId(modelId))
-        return contextWindow === undefined ? model : { ...model, contextWindow }
-      })
-    }))
+    return catalogs.map((catalog) => {
+      if (catalog.harnessId === 'codex') return catalog
+      const claude = catalog.harnessId === CLAUDE_HARNESS_ID
+      return {
+        ...catalog,
+        models: catalog.models.map((model) => {
+          if (!claude) {
+            if (model.contextWindow !== undefined) return model
+            const limit = this.contextLimit(model)
+            return limit === undefined ? model : { ...model, contextWindow: limit }
+          }
+          // The feed describes the wire model, not the alias the CLI advertises,
+          // and it is the only source that knows a native 1M window.
+          const limit = this.contextLimit({ ...model, id: model.resolvedId ?? model.id })
+          if (limit === undefined) return model
+          const contextWindows = claudeContextWindows(limit)
+          return contextWindows
+            ? { ...model, contextWindow: limit, contextWindows }
+            : { ...model, contextWindow: limit }
+        })
+      }
+    })
+  }
+
+  /** The feed's window for one catalog model, exact ids before bare ids. */
+  private contextLimit(model: ProviderModel): number | undefined {
+    const modelId = normalizeId(model.id)
+    const bare = modelId.replace(/\[[^\]]*\]/gu, '')
+    return (
+      this.contexts.byId.get(`${normalizeId(model.providerId)}/${modelId}`) ??
+      this.contexts.byId.get(modelId) ??
+      this.contexts.byId.get(bare) ??
+      this.contexts.byBareId.get(bareId(bare))
+    )
   }
 
   /** Fetch, normalize, persist, and register fresh pricing. Returns entry count. */

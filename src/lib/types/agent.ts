@@ -188,6 +188,8 @@ export interface ProviderModel {
   id: string
   providerId: string
   name: string
+  /** Canonical wire model an alias id resolves to (Claude Code's `opus` → `claude-opus-5-5`). */
+  resolvedId?: string
   reasoning: boolean
   /** Thinking presets this model supports. When absent or empty, thinking controls are hidden. */
   thinkingPresets?: ThinkingPreset[]
