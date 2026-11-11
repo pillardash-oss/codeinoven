@@ -1289,7 +1289,7 @@
 <div
   {@attach captureRowElement}
   {@attach longPress({ onLongPress: openActionsByTouch, enabled: !picker })}
-  class="relative {picker ? 'hidden' : ''}"
+  class="@container/row relative {picker ? 'hidden' : ''}"
   role="listitem"
   data-thread-row={thread.id}
   aria-hidden={picker}
@@ -1477,7 +1477,7 @@
               {dispatchBadge.label}
             </span>
           {/if}
-          <span class="min-w-0 truncate text-[0.75rem] {titleClass}">
+          <span class="line-clamp-2 min-w-0 break-words text-[0.75rem] {titleClass}">
             {displayTitle}
           </span>
         </span>
@@ -1662,7 +1662,9 @@
               {dispatchBadge.label}
             </span>
           {/if}
-          <span class="min-w-0 truncate text-[0.75rem] {titleClass}">{displayTitle}</span>
+          <span class="line-clamp-2 min-w-0 break-words text-[0.75rem] {titleClass}"
+            >{displayTitle}</span
+          >
         </span>
         {@render peekIndicator()}
         {#if activeIndicators.length > 0}
@@ -1712,6 +1714,14 @@
             title={`Edited ${formatDateTime(thread.lastActivity)}`}>{lastActivityAge}</span
           >
         {/if}
+        {#if hasRowExtras && activeIndicators.length === 0 && !stateWord}
+          <!-- The footer that carries the age hides in a narrow sidebar, so the age
+               moves up here and the row never loses when it was last touched. -->
+          <span
+            class="shrink-0 whitespace-nowrap text-[0.625rem] tabular-nums text-muted @[16rem]/row:hidden"
+            title={`Edited ${formatDateTime(thread.lastActivity)}`}>{lastActivityAge}</span
+          >
+        {/if}
       </span>
 
       {#if hasRowExtras}
@@ -1721,8 +1731,10 @@
              (`max-content` minimum), so neither the harness icons nor the marks
              can be squeezed or overlapped. The scope is no longer here: it moved
              up to the context line, where it belongs with the project name. -->
+        <!-- In a narrow sidebar the footer yields to the title, so the row spends
+             its height on the one thing the user reads. -->
         <span
-          class="grid w-full min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
+          class="hidden w-full @[16rem]/row:grid min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
         >
           {#if harnessIds.length > 0}
             <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
