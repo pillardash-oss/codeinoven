@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
-  import { AssistantDefaultIcon } from '$lib/assistant-icons'
+  import GroupSpeakerMark from './GroupSpeakerMark.svelte'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
 
   /**
@@ -17,6 +17,8 @@
     name: string
     icon?: string | null
     color?: string
+    /** Draw the speaker's mark the way its tile does, for a speaker that owns a plate (Don). */
+    plate?: boolean
     /**
      * The thread this reply belongs to. When it is named, the speaker line opens
      * it; a reply to the conversation's own thread has nowhere to go, so it
@@ -30,7 +32,16 @@
     children: Snippet
   }
 
-  let { name, icon = null, color, projectId, threadId, threadTitle, children }: Props = $props()
+  let {
+    name,
+    icon = null,
+    color,
+    plate = false,
+    projectId,
+    threadId,
+    threadTitle,
+    children
+  }: Props = $props()
 
   const opensThread = $derived(Boolean(projectId && threadId))
   const openTitle = $derived(
@@ -57,13 +68,7 @@
         aria-label={openTitle}
         onclick={open}
       >
-        <span class="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-          {#if icon}
-            <img src={icon} alt="" class="size-4 object-contain" draggable="false" />
-          {:else}
-            <AssistantDefaultIcon size={16} style="color: {color ?? 'var(--color-muted)'}" />
-          {/if}
-        </span>
+        <GroupSpeakerMark {icon} {color} {plate} />
         <span class="truncate font-medium text-foreground">{name}</span>
         {#if threadTitle}
           <span class="shrink-0 truncate text-dimmed">· {threadTitle}</span>
@@ -74,13 +79,7 @@
         class="flex min-w-0 items-center gap-1.5 border-l-2 pl-1.5 text-[0.6875rem]"
         style="border-color: {color ?? 'var(--color-border)'}"
       >
-        <span class="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-          {#if icon}
-            <img src={icon} alt="" class="size-4 object-contain" draggable="false" />
-          {:else}
-            <AssistantDefaultIcon size={16} style="color: {color ?? 'var(--color-muted)'}" />
-          {/if}
-        </span>
+        <GroupSpeakerMark {icon} {color} {plate} />
         <span class="truncate font-medium text-foreground">{name}</span>
         {#if threadTitle}
           <span class="shrink-0 truncate text-dimmed">· {threadTitle}</span>

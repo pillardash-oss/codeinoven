@@ -55,7 +55,7 @@
   import ThreadMessageSpeaker from '../ThreadMessageSpeaker.svelte'
   import DelegatedAttentionStack from '../DelegatedAttentionStack.svelte'
   import CioReplyMark from '$lib/components/icons/cio/CioReplyMark.svelte'
-  import { isGroupThread } from '$shared/types'
+  import { assistantIsDon, isGroupThread } from '$shared/types'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import { conversationAnswerText, conversationProseText } from '../conversation-text'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
@@ -166,6 +166,8 @@
     name: string
     icon: string | null
     color: string
+    /** Whether this speaker owns a plate, so its mark is drawn the way its tile is. */
+    plate: boolean
   }
 
   /**
@@ -188,7 +190,8 @@
       return {
         name: author.name,
         icon: getAssistantIcon(author, assistants.iconUrls.get(author.assistantId) ?? null),
-        color: assistantAccentColor(author)
+        color: assistantAccentColor(author),
+        plate: assistantIsDon({ id: author.assistantId })
       }
     }
     return groupSpeakerForThread()
@@ -203,7 +206,8 @@
     return {
       name: assistant.name,
       icon: getAssistantIcon(assistant, assistants.iconUrls.get(assistant.id) ?? null),
-      color: assistantAccentColor(assistant)
+      color: assistantAccentColor(assistant),
+      plate: assistantIsDon(assistant)
     }
   }
 
@@ -506,6 +510,7 @@
           parts={traceParts}
           open
           compact={inGroupBubble}
+          flat={inGroupBubble}
           bodyMaxHeightRem={inGroupBubble ? 14 : undefined}
           busy={traceBusy}
           done={!traceBusy}
@@ -1370,6 +1375,7 @@
                             name={speaker.name}
                             icon={speaker.icon}
                             color={speaker.color}
+                            plate={speaker.plate}
                             class="mb-1.5"
                             onOpen={replySource &&
                             replySource.threadId !== board.handleAgentEvent.thread.id
@@ -1766,6 +1772,7 @@
             name={liveSpeaker?.name ?? board.handleAgentEvent.thread.title}
             icon={liveSpeaker?.icon ?? null}
             color={liveSpeaker?.color}
+            plate={liveSpeaker?.plate ?? false}
           >
             {@render liveTurnTrace(tracePartsForTurn, traceBusyForTurn, true)}
             {#if traceBusyForTurn}

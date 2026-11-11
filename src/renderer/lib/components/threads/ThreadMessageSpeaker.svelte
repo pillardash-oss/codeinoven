@@ -1,9 +1,6 @@
 <script lang="ts">
-  import {
-    AssistantDefaultIcon,
-    assistantAccentColor,
-    getAssistantIcon
-  } from '$lib/assistant-icons'
+  import { assistantAccentColor, getAssistantIcon } from '$lib/assistant-icons'
+  import GroupSpeakerMark from './GroupSpeakerMark.svelte'
   import type { MessageAuthor } from '$shared/types'
 
   /**
@@ -38,12 +35,22 @@
     author?: MessageAuthor
     /** The accent the rule is drawn in; falls back to the snapshot's own colour. */
     color?: string
+    /** Draw the speaker's mark the way its tile does, for a speaker that owns a plate (Don). */
+    plate?: boolean
     /** Opens the conversation this speaker answered from, when it has one. */
     onOpen?: () => void
     class?: string
   }
 
-  let { name, icon = null, author, color, onOpen, class: className = '' }: Props = $props()
+  let {
+    name,
+    icon = null,
+    author,
+    color,
+    plate = false,
+    onOpen,
+    class: className = ''
+  }: Props = $props()
 
   /** The mark to draw: the caller's resolved icon, then the snapshot's own icon
    *  fields, then null so the default assistant mark stands in. An assistant
@@ -72,22 +79,12 @@
       onclick={onOpen}
     >
       <span class="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-        {#if iconUrl}
-          <img src={iconUrl} alt="" class="size-4 object-contain" draggable="false" />
-        {:else}
-          <AssistantDefaultIcon size={16} style="color: {accent ?? 'var(--color-muted)'}" />
-        {/if}
+        <GroupSpeakerMark icon={iconUrl} {color} {plate} />
       </span>
       <span class="truncate font-medium text-foreground">{name}</span>
     </button>
   {:else}
-    <span class="flex size-4 shrink-0 items-center justify-center" aria-hidden="true">
-      {#if iconUrl}
-        <img src={iconUrl} alt="" class="size-4 object-contain" draggable="false" />
-      {:else}
-        <AssistantDefaultIcon size={16} style="color: {accent ?? 'var(--color-muted)'}" />
-      {/if}
-    </span>
+    <GroupSpeakerMark icon={iconUrl} {color} {plate} />
     <span class="truncate font-medium text-foreground">{name}</span>
   {/if}
 </div>
