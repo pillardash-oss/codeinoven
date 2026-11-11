@@ -87,6 +87,8 @@
   import { dispatchBadgeFor } from './thread-dispatch-badge'
 
   import { Portal } from 'bits-ui'
+  import { fade } from 'svelte/transition'
+  import { motionDuration } from '$lib/motion'
   import type { Component } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
 
@@ -730,10 +732,14 @@
    *  repeat it, and the rail takes the height the glyph held. A secondary status
    *  keeps the slot, because what is waiting on the thread is not what the rail is
    *  showing. */
-  let isSettled = $derived(threadState === 'read' || threadState === 'completed')
+  let isSettled = $derived(primaryMark.tone === 'done' && primaryMark.rail === false)
   let spineGlyphVisible = $derived(
     isSettled ? secondaryMark !== null : markDrawsGlyph(primaryMark, secondaryMark !== null)
   )
+
+  /** A settled row with nothing waiting draws no spine, and its title sits flush
+   *  left; the gutter opens only while the row has a state to show. */
+  let spineVisible = $derived(spineGlyphVisible || spineRailVisible)
 
   /** Whether the rail's light climbs it: work this window is driving, lighting one
    *  whole dash at a time from the bottom to the top. */
@@ -808,7 +814,7 @@
    *  state rail, which runs the full height of the row. */
   let rowLayoutClass = $derived(
     detailed
-      ? 'gap-1 py-1.5 pl-[1.625rem] pr-2.5 mb-3 relative'
+      ? `gap-1 py-1.5 pr-2.5 mb-3 relative transition-[padding] duration-200 motion-reduce:transition-none ${spineVisible ? 'pl-[1.625rem]' : 'pl-2.5'}`
       : compact
         ? 'gap-1 px-2 py-1 mb-1'
         : 'gap-1 px-2 py-1.5 mb-1'
@@ -882,12 +888,12 @@
       dispatchBadge !== null
   )
 
-  /** The detailed row's own context line, shown only when it has something to
-   *  carry: a project icon, a project name, or the scope chip. A project's own
-   *  thread list hides the name and brings no icon, but it still shows the scope,
-   *  so the line must survive on the scope alone or the chip would be lost. */
-  let showProjectLine = $derived(
-    Boolean(projectIconUrl || projectIconGlyph || (projectName && !hideProjectName) || scopeVisible)
+  /** Whether the meta line names the project: a coloured dot and the name, or
+   *  the container glyph for hidden containers. A project's own list hides it. */
+  let showProjectMeta = $derived(Boolean(projectIconGlyph || (projectName && !hideProjectName)))
+
+  let projectDotColor = $derived(
+    project ? (project.color ?? pickColorForSeed(project.id)) : 'var(--color-muted)'
   )
 
   /** Whether the detailed row has anything for its meta line besides the
@@ -903,7 +909,9 @@
       hasNote ||
       hasTemporaryChat ||
       authoredWorkKinds.length > 0 ||
-      dispatchBadge !== null
+      dispatchBadge !== null ||
+      scopeVisible ||
+      showProjectMeta
   )
 
   let scopeColor = $derived(
@@ -1355,58 +1363,27 @@
            The pin is a real control at the top of the column, lit while the
            pointer is on the row or while the thread is pinned, so pinning is
            never hidden behind the context menu alone. -->
-      <span
-        class="pointer-events-none absolute inset-y-0 left-0 flex w-[1.125rem] flex-col items-center {spineRailVisible
-          ? ''
-          : 'justify-center'}"
-      >
-        <!-- A role="button" span, not a real <button>: the whole row is one, and a
-             button cannot be nested inside another. `tabindex={-1}` keeps it out of
-             the tab order for the same reason, and the row's own `thread-pin`
-             keymap binding handles the key. -->
+      {#if spineVisible}
         <span
-          role="button"
-          tabindex={-1}
-          class="flex h-[0.875rem] w-[0.875rem] mb-1 flex-none items-center justify-center transition-opacity duration-150 hover:bg-overlay {pinVisible
-            ? 'pointer-events-auto cursor-pointer opacity-100'
-            : 'pointer-events-none opacity-0'}"
-          aria-label={effectivePinned ? 'Unpin thread' : 'Pin thread'}
-          aria-hidden={!pinVisible}
-          title={effectivePinned ? 'Unpin' : 'Pin'}
-          onclick={(e: MouseEvent) => {
-            e.stopPropagation()
-            onTogglePin(thread)
-          }}
-          onkeydown={(e: KeyboardEvent) => {
-            if (keymapState.matches('thread-pin', e)) {
-              e.stopPropagation()
-              onTogglePin(thread)
-            }
-          }}
+          class="pointer-events-none absolute inset-y-0 left-0 flex w-[1.125rem] flex-col items-center pt-1.5 {spineRailVisible
+            ? ''
+            : 'justify-center pt-0'}"
+          transition:fade={{ duration: motionDuration(180) }}
         >
-          {#if thread.bookmarked}
-            <CioBookmark size={14} class="text-thread-pinned" aria-hidden="true" />
-          {:else}<CioPin
-              size={14}
-              fill={effectivePinned ? 'currentColor' : 'none'}
-              class={effectivePinned ? 'text-thread-pinned' : 'text-dimmed'}
-              aria-hidden="true"
-            />{/if}
-        </span>
-        {#if spineGlyphVisible}
-          <span
-            class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center opacity-60"
-            style="color: {glyphMark.colour};"
-            role="img"
-            title={markLabel}
-            aria-label={markLabel}
-          >
-            <GlyphMarkIcon size={14} strokeWidth={1.8} aria-hidden="true" />
-          </span>
-        {/if}
-        {#if spineRailVisible}
-          {#if spineRailOnLiveGrid}
-            <!-- The spine: short dashes, never more than four, on a grid that
+          {#if spineGlyphVisible}
+            <span
+              class="flex h-[0.875rem] w-[0.875rem] flex-none items-center justify-center opacity-60"
+              style="color: {glyphMark.colour};"
+              role="img"
+              title={markLabel}
+              aria-label={markLabel}
+            >
+              <GlyphMarkIcon size={14} strokeWidth={1.8} aria-hidden="true" />
+            </span>
+          {/if}
+          {#if spineRailVisible}
+            {#if spineRailOnLiveGrid}
+              <!-- The spine: short dashes, never more than four, on a grid that
                  divides the rail's own box. `bind:clientHeight` is what hands the
                  grid its count, and it is the measured height of the box, not a
                  guess at it.
@@ -1420,42 +1397,43 @@
                  The label sits on this box only when it is the row's whole mark. A
                  row that also draws a glyph says its state there, and a second copy
                  here would have the reader hear it twice. -->
-            <span
-              class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1 opacity-60"
-              bind:clientHeight={spineRailHeight}
-              role={spineGlyphVisible ? undefined : 'img'}
-              title={spineGlyphVisible ? undefined : markLabel}
-              aria-label={spineGlyphVisible ? undefined : markLabel}
-            >
-              {#if spineRailClimbs}
-                <span
-                  class="absolute inset-0"
-                  style="background: {spineTrackPaint};"
-                  aria-hidden="true"
-                ></span>
-                <span
-                  class="spine-lit absolute inset-0"
-                  style="background: {spineLivePaint}; --spine-steps: {spineDashCount}; --spine-beat: {LIVE_RAIL_DASH_MS /
-                    1000}s;"
-                  aria-hidden="true"
-                ></span>
-              {:else}
-                <span
-                  class="absolute inset-0"
-                  style="background: {spineLivePaint};"
-                  aria-hidden="true"
-                ></span>
-              {/if}
-            </span>
-          {:else}
-            <span
-              class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1 opacity-60"
-              style="background: {spineRailPaint};"
-              aria-hidden="true"
-            ></span>
+              <span
+                class="relative mt-px min-h-[0.3125rem] w-[0.875rem] flex-1 opacity-60"
+                bind:clientHeight={spineRailHeight}
+                role={spineGlyphVisible ? undefined : 'img'}
+                title={spineGlyphVisible ? undefined : markLabel}
+                aria-label={spineGlyphVisible ? undefined : markLabel}
+              >
+                {#if spineRailClimbs}
+                  <span
+                    class="absolute inset-0"
+                    style="background: {spineTrackPaint};"
+                    aria-hidden="true"
+                  ></span>
+                  <span
+                    class="spine-lit absolute inset-0"
+                    style="background: {spineLivePaint}; --spine-steps: {spineDashCount}; --spine-beat: {LIVE_RAIL_DASH_MS /
+                      1000}s;"
+                    aria-hidden="true"
+                  ></span>
+                {:else}
+                  <span
+                    class="absolute inset-0"
+                    style="background: {spineLivePaint};"
+                    aria-hidden="true"
+                  ></span>
+                {/if}
+              </span>
+            {:else}
+              <span
+                class="mt-px min-h-[0.3125rem] w-[0.875rem] flex-1 opacity-60"
+                style="background: {spineRailPaint};"
+                aria-hidden="true"
+              ></span>
+            {/if}
           {/if}
-        {/if}
-      </span>
+        </span>
+      {/if}
     {/if}
     <!-- Clear gradient bottom edge so a row's end is obvious even with 2-colour rows -->
     <span
@@ -1617,58 +1595,27 @@
         </span>
       {/if}
     {:else}
-      {#if showProjectLine}
-        <!-- Context line: which project the thread belongs to, and which slice of
-             it this thread works on. The project mark, the project name and the
-             scope all answer that one question, so they share this line, exactly
-             as the project mark and the project name already did. A project's own
-             thread list skips the name, since the folder above already names it. -->
-        <span data-thread-context-line class="flex w-full min-w-0 items-center gap-2">
-          {#if projectIconUrl || projectIconGlyph}
-            <!-- The icon box exists only when there is an icon. A project's own
-                 thread list passes none, and an empty box would push the scope
-                 off the left edge it should be flush with. -->
-            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-              {#if projectIconUrl}
-                <img src={projectIconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
-              {:else if projectIconGlyph}
-                {@const ContainerIcon = projectIconGlyph}
-                <ContainerIcon size={12} strokeWidth={1.8} class="text-muted" aria-hidden="true" />
-              {/if}
-            </span>
-          {/if}
-          {#if projectName && !hideProjectName}
-            <!-- The name is the line's flexible track: it takes whatever room the
-                 scope leaves, so the scope lands against the row's right edge and
-                 the name gives up width first, truncating, when the two compete. -->
-            <span class="min-w-0 flex-1 truncate text-[0.6875rem] text-muted" title={projectName}
-              >{projectName}</span
-            >
-          {/if}
-          {#if scopeVisible}
-            <!-- The scope gives way: the project name truncates first and the
-                 scope chip narrows rather than pushing a neighbour off the line.
-                 With the name hidden (a project's own list) there is nothing for
-                 the scope to sit opposite, so it stays flush left. -->
-            {@render scopeChip(
-              projectName && !hideProjectName
-                ? 'shrink-0 max-w-[6.5rem]'
-                : 'min-w-0 shrink max-w-[6.5rem]'
-            )}
-          {/if}
-        </span>
-      {/if}
-
       <!-- Primary line: the title, and the end slot. The rail down the left edge
            carries the state, so this line spends its width on one thing: every
            live action the thread has, else the word for a state that wants the
            user, else the age. Pinning is not here: the row's context menu and
            the pin keymap already do it, so the line keeps no reserved space. -->
       <span class="flex w-full min-w-0 items-center gap-2">
-        <span class="flex min-w-0 flex-1 flex-col">
-          <span class="line-clamp-2 min-w-0 break-words text-[0.75rem] {titleClass}"
-            >{displayTitle}</span
-          >
+        <span class="line-clamp-2 min-w-0 flex-1 break-words text-[0.75rem] {titleClass}">
+          {#if thread.bookmarked}
+            <CioBookmark
+              size={10}
+              class="mr-0.5 inline -translate-y-px text-thread-pinned"
+              aria-label="Bookmarked"
+            />
+          {:else if effectivePinned}
+            <CioPin
+              size={10}
+              fill="currentColor"
+              class="mr-0.5 inline -translate-y-px text-thread-pinned"
+              aria-label="Pinned"
+            />
+          {/if}{displayTitle}
         </span>
         {@render peekIndicator()}
         {#if activeIndicators.length > 0}
@@ -1740,8 +1687,31 @@
         <span
           class="hidden w-full @[16rem]/row:grid min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
         >
-          {#if dispatchBadge || harnessIds.length > 0}
-            <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
+          {#if dispatchBadge || harnessIds.length > 0 || showProjectMeta || scopeVisible}
+            <span class="col-start-1 flex min-w-0 items-center gap-1.5 overflow-hidden">
+              {#if showProjectMeta}
+                <span
+                  class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
+                  title={projectName ?? undefined}
+                >
+                  {#if projectIconGlyph}
+                    {@const ContainerIcon = projectIconGlyph}
+                    <ContainerIcon size={10} strokeWidth={1.8} aria-hidden="true" />
+                  {:else}
+                    <span
+                      class="h-1.5 w-1.5 shrink-0"
+                      style="background-color: {projectDotColor};"
+                      aria-hidden="true"
+                    ></span>
+                  {/if}
+                  {#if projectName && !hideProjectName}
+                    <span class="truncate">{projectName}</span>
+                  {/if}
+                </span>
+              {/if}
+              {#if scopeVisible}
+                {@render scopeChip('shrink max-w-[6.5rem]')}
+              {/if}
               {#if dispatchBadge}
                 <span class="truncate text-[0.625rem] text-muted" title={dispatchBadge.title}
                   >{dispatchBadge.label}</span
