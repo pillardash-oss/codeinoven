@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SeekBar from '../ui/SeekBar.svelte'
   import { onMount, type Component, type Snippet } from 'svelte'
   import { on } from 'svelte/events'
   import { ContextMenu } from 'bits-ui'
@@ -546,17 +547,14 @@
     editor.selection?.kind === 'brush'
   )}
   {#if editor.selection?.kind === 'brush'}<label class="flex items-center gap-1 text-xs text-muted"
-      >Brush<input
-        type="range"
-        min="0.01"
-        max="0.2"
-        step="0.005"
+      >Brush<SeekBar
         class="w-24"
+        min={0.01}
+        max={0.2}
+        step={0.005}
         value={editor.selection.size}
-        aria-label="Blur brush size"
-        title="Blur brush size"
-        oninput={(event) =>
-          editor.select({ kind: 'brush', size: Number(event.currentTarget.value) })}
+        label="Blur brush size"
+        onInput={(size) => editor.select({ kind: 'brush', size })}
       /></label
     >{/if}
   {@render editActions()}

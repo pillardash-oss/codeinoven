@@ -78,6 +78,7 @@
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
   import EnumSelect from '../ui/EnumSelect.svelte'
   import Switch from '../ui/Switch.svelte'
+  import SeekBar from '../ui/SeekBar.svelte'
   import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
   import SecretsSettingsTab from './SecretsSettingsTab.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
@@ -620,6 +621,9 @@
       channelBusy = false
     }
   }
+
+  /** The size the slider is on while it is dragged, before it is saved on release. */
+  let fontSizeDraft = $state<number | null>(null)
 </script>
 
 <svelte:window onkeydown={escHandler} />
@@ -793,20 +797,21 @@
                 <p class="text-xs leading-relaxed text-dimmed">Scales all text in the app</p>
               </div>
               <div class="flex items-center gap-2">
-                <span class="text-xs leading-relaxed text-dimmed">{config.appFontSize}px</span>
-                <input
-                  type="range"
-                  min="12"
-                  max="18"
-                  step="1"
-                  value={config.appFontSize}
+                <span class="text-xs leading-relaxed text-dimmed"
+                  >{fontSizeDraft ?? config.appFontSize}px</span
+                >
+                <SeekBar
+                  class="w-32"
+                  min={12}
+                  max={18}
+                  step={1}
+                  value={fontSizeDraft ?? config.appFontSize}
                   disabled={!settingsReady}
-                  aria-label="Base font size"
+                  label="Base font size"
                   title="Adjust the base font size"
-                  onchange={(event) => {
-                    const input = event.currentTarget
-                    if (!(input instanceof HTMLInputElement)) return
-                    const size = Number(input.value)
+                  onInput={(size) => (fontSizeDraft = size)}
+                  onCommit={(size) => {
+                    fontSizeDraft = null
                     if (Number.isInteger(size) && size >= 12 && size <= 18) {
                       void updateConfig({ appFontSize: size })
                     }

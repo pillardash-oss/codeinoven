@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SeekBar from '../ui/SeekBar.svelte'
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import type { SpeechSettings } from '../../../../lib/speech/types'
   import Switch from '../ui/Switch.svelte'
@@ -219,14 +220,14 @@
   </div>
   <label class="mt-4 flex items-center gap-3 text-xs text-muted">
     Cue volume
-    <input
-      type="range"
-      min="0"
-      max="1"
-      step="0.05"
+    <SeekBar
+      class="w-32"
+      min={0}
+      max={1}
+      step={0.05}
       value={settings.cues.volume}
-      aria-label="Speech cue volume"
-      oninput={(event) => patchCues({ volume: event.currentTarget.valueAsNumber })}
+      label="Speech cue volume"
+      onInput={(volume) => patchCues({ volume })}
     />
   </label>
 </section>
