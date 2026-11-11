@@ -285,7 +285,6 @@
   })).filter((group) => group.tabs.length > 0)
 
   const sidebarSection = $derived(settingsSidebarSection(section))
-  const family = $derived(settingsFamily(section))
 
   // The header mirrors the section on screen   cleared when Settings closes.
   $effect(() => {
@@ -640,18 +639,37 @@
           <div class="space-y-0.5">
             {#each group.tabs as tab (tab.id)}
               {@const Icon = tab.icon}
-              {@const isActive = sidebarSection === tab.id}
+              {@const isActive = section === tab.id}
+              {@const inFamily = sidebarSection === tab.id}
+              {@const children = settingsFamily(tab.id).slice(1)}
               <button
                 class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors {isActive
                   ? 'bg-elevated text-foreground'
-                  : 'text-muted hover:bg-elevated hover:text-foreground'}"
+                  : inFamily
+                    ? 'text-foreground hover:bg-elevated'
+                    : 'text-muted hover:bg-elevated hover:text-foreground'}"
                 aria-current={isActive ? 'page' : undefined}
                 title="{tab.label} settings"
                 onclick={() => navigateSection(tab.id)}
               >
-                <Icon size={14} class={isActive ? 'text-foreground' : 'text-dimmed'} />
+                <Icon size={14} class={inFamily ? 'text-foreground' : 'text-dimmed'} />
                 {tab.label}
               </button>
+              <!-- A page's related pages sit under it in the sidebar rather
+                   than as a second row of tabs inside the page. -->
+              {#each children as child (child.section)}
+                {@const childActive = section === child.section}
+                <button
+                  class="flex w-full items-center py-1 pr-2 pl-8 text-left text-sm transition-colors {childActive
+                    ? 'bg-elevated text-foreground'
+                    : 'text-muted hover:bg-elevated hover:text-foreground'}"
+                  aria-current={childActive ? 'page' : undefined}
+                  title="{child.title} settings"
+                  onclick={() => navigateSection(child.section)}
+                >
+                  {child.title}
+                </button>
+              {/each}
             {/each}
           </div>
         </div>
@@ -675,33 +693,6 @@
 
   <!-- Tab content -->
   <div class="min-w-0 flex-1 overflow-y-auto">
-    {#if family.length > 0}
-      <!-- Related pages share one sidebar entry and switch here, with the same
-           segmented tabs every settings page uses. -->
-      <div class="px-6 pt-6">
-        <div
-          class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
-          role="tablist"
-          aria-label="{family[0]?.title} pages"
-        >
-          {#each family as entry (entry.section)}
-            {@const isCurrent = entry.section === section}
-            <button
-              type="button"
-              role="tab"
-              aria-selected={isCurrent}
-              class="px-3 py-1.5 text-xs font-medium transition-colors {isCurrent
-                ? 'bg-surface text-foreground'
-                : 'text-muted hover:text-foreground'}"
-              title="{entry.title} settings"
-              onclick={() => navigateSection(entry.section)}
-            >
-              {entry.title}
-            </button>
-          {/each}
-        </div>
-      </div>
-    {/if}
     {#if section === 'profile'}
       <ProfileSettingsTab />
     {:else if section === 'general'}
