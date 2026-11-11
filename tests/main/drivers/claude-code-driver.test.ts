@@ -350,6 +350,56 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
     )
   })
 
+  it('keeps one text part when Claude re-emits a message with a shifted block layout', () => {
+    const session: PersistentCliSession = {
+      id: 'session-1',
+      title: 'Claude thread',
+      projectPathHash: 'hash',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const context: CliLineParseContext = { sessionId: 'session-1', session }
+    const prose = 'Writing a scratch reproduction against the real checkpoint manager.'
+
+    const streamed = mapClaudeCodeRecord(
+      {
+        type: 'assistant',
+        session_id: 'native-1',
+        message: {
+          id: 'assistant-1',
+          content: [
+            { type: 'thinking', thinking: 'Plan the reproduction.' },
+            { type: 'text', text: prose }
+          ]
+        }
+      },
+      context
+    )
+    const streamedMessage = streamed?.messages?.[0]
+    expect(streamedMessage).toBeDefined()
+    if (streamedMessage) session.messages.push(streamedMessage)
+
+    const settled = mapClaudeCodeRecord(
+      {
+        type: 'assistant',
+        session_id: 'native-1',
+        message: {
+          id: 'assistant-1',
+          content: [
+            { type: 'text', text: prose },
+            { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'ls' } }
+          ]
+        }
+      },
+      context
+    )
+    const textParts = settled?.messages?.[0]?.parts.filter((part) => part.type === 'text') ?? []
+    expect(textParts).toHaveLength(1)
+    expect(textParts[0]).toEqual(expect.objectContaining({ type: 'text', text: prose }))
+    expect(settled?.messages?.[0]?.parts.filter((part) => part.type === 'tool')).toHaveLength(1)
+  })
+
   it('maps Claude compact boundaries into automatic compaction activity', () => {
     const result = mapClaudeCodeRecord(
       {

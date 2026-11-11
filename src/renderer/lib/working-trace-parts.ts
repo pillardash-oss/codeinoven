@@ -131,6 +131,15 @@ export function groupTraceIntoChains(parts: readonly AgentPart[]): TraceChain[] 
   let steps: AgentPart[] = []
   for (const part of parts) {
     if (part.type === 'text') {
+      // A record re-emitted with a shifted block layout used to land the same
+      // paragraph twice, as an output-only chain beside the chain that already
+      // reported it. Only that shape is dropped: an identical paragraph that
+      // follows real work is a deliberate repeat.
+      const previous = chains[chains.length - 1]
+      if (previous !== undefined && previous.output?.text === part.text) {
+        if (steps.length === 0) continue
+        if (previous.steps.length === 0) chains.pop()
+      }
       chains.push({ id: part.id, steps, output: part })
       steps = []
       continue

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentPart } from '../../../src/lib/types'
 import {
+  groupTraceIntoChains,
   latestWorkingTraceParts,
   mergeTurnSubagents,
   shouldMountWorkingTrace,
@@ -33,6 +34,41 @@ describe('latestWorkingTraceParts', () => {
     const second = toolPart('claude-tool-second', 'pending')
 
     expect(latestWorkingTraceParts([first, second])).toEqual([first, second])
+  })
+})
+
+describe('groupTraceIntoChains', () => {
+  function textPart(id: string, text: string): AgentPart {
+    return { id, messageID: 'message-1', type: 'text', text }
+  }
+
+  it('drops an output-only chain that repeats the chain above it', () => {
+    // Regression: a re-emitted Claude record put the same paragraph at index 0
+    // and index 1, so the trace drew it twice under one set of steps.
+    const prose = 'Writing a scratch reproduction against the checkpoint manager.'
+    const chains = groupTraceIntoChains([
+      toolPart('claude-tool-first', 'completed'),
+      textPart('claude-text-1', prose),
+      textPart('claude-text-0', prose),
+      toolPart('claude-tool-second', 'completed')
+    ])
+
+    expect(chains.map((chain) => chain.output?.text ?? null)).toEqual([prose, null])
+    expect(chains[0]?.steps).toHaveLength(1)
+    expect(chains[1]?.steps).toHaveLength(1)
+  })
+
+  it('keeps an identical paragraph that follows its own work', () => {
+    const prose = 'Same words, said again after new work.'
+    const chains = groupTraceIntoChains([
+      toolPart('claude-tool-first', 'completed'),
+      textPart('claude-text-0', prose),
+      toolPart('claude-tool-second', 'completed'),
+      textPart('claude-text-1', prose)
+    ])
+
+    expect(chains).toHaveLength(2)
+    expect(chains[1]?.steps).toHaveLength(1)
   })
 })
 
