@@ -1,5 +1,10 @@
 import DOMPurify from 'dompurify'
-import { escapeStyleMarkup, htmlPreviewFrame } from '../../document-preview-frame'
+import {
+  escapeStyleMarkup,
+  htmlPreviewFrame,
+  localizeFragmentSvgUses,
+  SVG_REFERENCE_TAGS
+} from '../../document-preview-frame'
 
 /**
  * Inline artifact fences.
@@ -145,11 +150,14 @@ export interface HtmlArtifactDocument {
  * mounted in.
  */
 export function sanitizedHtmlArtifactDocument(code: string): HtmlArtifactDocument {
-  const sanitized = DOMPurify.sanitize(escapeStyleMarkup(code), {
-    FORBID_ATTR: ['ping', 'srcdoc', 'formaction'],
-    FORBID_TAGS: ['base', 'link', 'meta', 'script', 'form'],
-    WHOLE_DOCUMENT: true
-  })
+  const sanitized = localizeFragmentSvgUses(
+    DOMPurify.sanitize(escapeStyleMarkup(code), {
+      FORBID_ATTR: ['ping', 'srcdoc', 'formaction'],
+      FORBID_TAGS: ['base', 'link', 'meta', 'script', 'form'],
+      WHOLE_DOCUMENT: true,
+      ADD_TAGS: SVG_REFERENCE_TAGS
+    })
+  )
   // Parsing a whole document into a template drops the `html`/`head`/`body`
   // wrappers and keeps their children in document order, which is exactly the
   // split wanted here: rules first, markup after.
@@ -205,9 +213,12 @@ function scopeSelectorList(prelude: string): string {
  * insert into the document.
  */
 export function sanitizedSvgArtifact(code: string): string {
-  return DOMPurify.sanitize(escapeStyleMarkup(code.trim()), {
-    USE_PROFILES: { svg: true, svgFilters: true }
-  })
+  return localizeFragmentSvgUses(
+    DOMPurify.sanitize(escapeStyleMarkup(code.trim()), {
+      USE_PROFILES: { svg: true, svgFilters: true },
+      ADD_TAGS: SVG_REFERENCE_TAGS
+    })
+  )
 }
 
 /**
