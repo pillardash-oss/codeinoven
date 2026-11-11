@@ -268,7 +268,12 @@ class ScopeState {
     }
 
     const sequence = ++this.loadSequence
-    this.loading = true
+    // A board seen before paints at once and refreshes in place. Only a project
+    // with nothing cached shows the loading state, so returning to the board
+    // never waits on the database worker's queue.
+    const cached = this.boards.get(projectId)
+    if (cached && projectId === this.activeProjectId) this.board = cached
+    this.loading = !cached
     this.error = null
     try {
       const board = await invoke('scope:get', projectId)

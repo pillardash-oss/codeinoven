@@ -227,6 +227,18 @@ export class ScopeManager {
 
   /** UI reads repair stranded scopes on the database worker, guarded against concurrent edits. */
   async getBoardViaWorker(projectId: string): Promise<ScopeBoard> {
+    const startedAt = performance.now()
+    try {
+      return await this.readBoardViaWorker(projectId)
+    } finally {
+      const durationMs = Math.round(performance.now() - startedAt)
+      // The read itself is one row; a slow answer means the worker was busy
+      // with other work, which is what this report exists to show.
+      if (durationMs >= 1000) Logger.info('Slow scope board read', { projectId, durationMs })
+    }
+  }
+
+  private async readBoardViaWorker(projectId: string): Promise<ScopeBoard> {
     const result = await this.db.queryViaWorker(
       'SELECT data FROM scope_boards WHERE project_id=?',
       [projectId],
