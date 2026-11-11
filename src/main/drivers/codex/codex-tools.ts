@@ -1,5 +1,6 @@
 import type { AgentQuestion, PermissionLevel, ThreadSettings } from '../../../lib/types'
 import type { CodexServerRequest } from './codex-protocol'
+import { codexGitWritableRoots } from './codex-git-roots'
 import { recordValue, stringValue } from './codex-values'
 
 /** Codex question tool, sandbox/approval policy, config and item normalization. */
@@ -178,6 +179,9 @@ export function codexQuestionTool(maxQuestions: number): CodexQuestionToolSpec {
     }
   }
 }
+export const CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION =
+  "Approvals: this session runs under Auto Review. Codex's own sandbox may refuse a command that writes outside what it allows, and the application answers that approval request immediately, granting it unless it is explicitly denied. A refusal followed by a granted approval is a normal step, not a blocker: never report a pending approval, never ask the user for permission, and never end a turn because a command needed approval. Continue the work the user asked for through every step it names, including committing, pushing, opening the pull request and merging when those are the requested outcome."
+
 export const CODEX_QUESTION_INSTRUCTION =
   "The application `question` tool is `cio_ask_user`. Whenever the application instructions require a question or user choice, call `cio_ask_user` immediately; do not render the prompt or options as ordinary assistant text. This tool is available in every mode. When an option asks the user to run or paste something to produce the answer, put that exact text in the option's optional `instruction` field instead of the description, so the user can open and copy it from the answer card. When the decision is about something that does not exist yet (a new mark, layout, flow or screen), or words alone would leave the user guessing between choices they cannot picture, create the picture yourself, copy it inline and put it in the option it describes: `visual.html` for a temporary mockup, `visual.image` for a picture you generated, `visual.svg` for a drawing, or `visual.mermaid` for a flow. A picture belongs to an option, never to the question itself. An option may carry both a picture and a walkthrough, and the card shows both buttons side by side. Keep the picture simple: enough to make the decision, nothing more."
 
@@ -274,6 +278,12 @@ export function codexQuestionIds(params: Record<string, unknown>): string[] {
   })
 }
 
+/** The roots a `workspace-write` session may write, project and its git data. */
+export function codexWritableRoots(projectPath: string): string[] {
+  const roots = [projectPath, ...codexGitWritableRoots(projectPath)]
+  return [...new Set(roots)]
+}
+
 export function codexSandboxPolicy(
   projectPath: string,
   readOnly: boolean,
@@ -283,11 +293,31 @@ export function codexSandboxPolicy(
   if (permissionLevel === 'full_access') return { type: 'dangerFullAccess' }
   return {
     type: 'workspaceWrite',
-    writableRoots: [projectPath],
+    writableRoots: codexWritableRoots(projectPath),
     networkAccess: true,
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false
   }
+}
+
+/**
+ * The `-c` overrides a one-shot `codex exec` needs so its sandbox matches the
+ * policy the app-server path already sends. Codex refuses `.git` writes inside
+ * the workspace and disables network by default, so without these a git
+ * command escalates to an approval request the same turn would auto-approve.
+ */
+export function codexSandboxConfigArgs(
+  projectPath: string,
+  readOnly: boolean,
+  permissionLevel: PermissionLevel
+): string[] {
+  if (readOnly || permissionLevel === 'full_access') return []
+  return [
+    '-c',
+    `sandbox_workspace_write.writable_roots=${tomlStringArray(codexWritableRoots(projectPath))}`,
+    '-c',
+    'sandbox_workspace_write.network_access=true'
+  ]
 }
 
 export function codexEffort(value: ThreadSettings['thinkingLevel']): string {

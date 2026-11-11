@@ -16,7 +16,10 @@ import {
   mapCodexRateLimits,
   mapCodexUsage
 } from '../../../src/main/drivers/codex-driver'
-import { CODEX_QUESTION_INSTRUCTION } from '../../../src/main/drivers/codex/codex-tools'
+import {
+  CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION,
+  CODEX_QUESTION_INSTRUCTION
+} from '../../../src/main/drivers/codex/codex-tools'
 import { InactiveQuestionTurnError } from '../../../src/main/drivers/driver.interface'
 
 const spawnMock = vi.hoisted(() => vi.fn())
@@ -282,7 +285,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       expect.objectContaining({
         method: 'thread/start',
         params: expect.objectContaining({
-          developerInstructions: `Internal memory contract\n\n${CODEX_QUESTION_INSTRUCTION}`,
+          developerInstructions: `Internal memory contract\n\n${CODEX_QUESTION_INSTRUCTION}\n\n${CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION}`,
           dynamicTools: expect.arrayContaining([
             expect.objectContaining({ name: 'cio_ask_user' }),
             ...dynamicTools
