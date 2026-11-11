@@ -1,6 +1,5 @@
 <script lang="ts">
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { STAGE_COLORS, STAGE_LABELS, type ThreadStage } from '$lib/stores/scope.svelte'
   import type { Thread } from '$shared/types'
@@ -50,6 +49,10 @@
     threads.filter((thread) => belongsOnProjectBoard(thread, thread.projectId))
   )
 
+  /** An empty slice folds to a strip: it keeps its count and stays a drop
+   *  target, but no longer takes the width a slice with threads needs. */
+  const folded = $derived(collapsed || boardThreads.length === 0)
+
   function handleDragOver(event: DragEvent): void {
     event.preventDefault()
     dropActive = true
@@ -74,40 +77,53 @@
 </script>
 
 <section
-  class="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border border-border {collapsed
-    ? 'w-16'
+  class="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border border-border {folded
+    ? 'w-9'
     : 'min-w-0 flex-1'} {dropActive ? 'bg-primary/5' : 'bg-surface'}"
   aria-label="{STAGE_LABELS[stage]} threads"
   ondragover={handleDragOver}
   ondragleave={handleDragLeave}
   ondrop={handleDrop}
 >
-  <div
-    class="sticky top-0 z-20 flex h-9 shrink-0 items-center border-b border-border bg-surface"
-    style="border-top: 2px solid {STAGE_COLORS[stage]}"
-  >
+  {#if folded}
     <button
-      class="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated"
-      aria-expanded={!collapsed}
-      aria-label="{collapsed ? 'Expand' : 'Collapse'} {STAGE_LABELS[stage]} slice"
-      title="{collapsed ? 'Expand' : 'Collapse'} {STAGE_LABELS[stage]}"
+      class="flex h-full w-full flex-col items-center gap-2 py-2 transition-colors hover:bg-elevated disabled:cursor-default disabled:hover:bg-transparent"
+      style="border-top: 2px solid {STAGE_COLORS[stage]}"
+      aria-expanded="false"
+      aria-label="Expand {STAGE_LABELS[stage]} slice, {boardThreads.length} threads"
+      title={boardThreads.length === 0
+        ? `${STAGE_LABELS[stage]}: no threads`
+        : `Expand ${STAGE_LABELS[stage]}`}
+      disabled={boardThreads.length === 0}
       onclick={onToggle}
     >
-      {#if collapsed}
-        <CioForward size={13} class="shrink-0 text-dimmed" />
-        <span class="text-[0.625rem] tabular-nums text-dimmed">{boardThreads.length}</span>
-        <span class="sr-only">{STAGE_LABELS[stage]}</span>
-      {:else}
+      <span class="text-[0.625rem] tabular-nums text-dimmed">{boardThreads.length}</span>
+      <span
+        class="rotate-180 text-[0.625rem] font-semibold uppercase tracking-wide text-muted [writing-mode:vertical-rl]"
+      >
+        {STAGE_LABELS[stage]}
+      </span>
+    </button>
+  {:else}
+    <div
+      class="sticky top-0 z-20 flex h-9 shrink-0 items-center border-b border-border bg-surface"
+      style="border-top: 2px solid {STAGE_COLORS[stage]}"
+    >
+      <button
+        class="flex h-full min-w-0 flex-1 items-center gap-2 px-3 text-left transition-colors hover:bg-elevated"
+        aria-expanded="true"
+        aria-label="Collapse {STAGE_LABELS[stage]} slice"
+        title="Collapse {STAGE_LABELS[stage]}"
+        onclick={onToggle}
+      >
         <CioChevronDown size={13} class="shrink-0 text-dimmed" />
         <span class="text-[0.6875rem] font-semibold uppercase tracking-wide text-foreground">
           {STAGE_LABELS[stage]}
         </span>
         <span class="ml-auto text-[0.625rem] tabular-nums text-dimmed">{boardThreads.length}</span>
-      {/if}
-    </button>
-  </div>
+      </button>
+    </div>
 
-  {#if !collapsed}
     <div class="min-h-0 flex-1 space-y-px overflow-y-auto py-1" role="list">
       {#each boardThreads as thread (thread.id)}
         <div data-scope-thread-row="true">
@@ -123,8 +139,6 @@
             onMoveThread={onReorderThread}
           />
         </div>
-      {:else}
-        <p class="px-3 py-4 text-center text-[0.6875rem] text-dimmed">No threads</p>
       {/each}
     </div>
   {/if}
