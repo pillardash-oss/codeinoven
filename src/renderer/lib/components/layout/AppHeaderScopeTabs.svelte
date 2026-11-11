@@ -14,20 +14,6 @@
   /** Tabs shown before the rest fold into the overflow menu. Beyond this the
    *  names shrink to two or three letters and stop identifying anything. */
   const MAX_TABS = 5
-  const RECENT_KEY = 'cio:header-project-recent'
-
-  function readRecent(): string[] {
-    try {
-      const parsed: unknown = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]')
-      return Array.isArray(parsed)
-        ? parsed.filter((id): id is string => typeof id === 'string')
-        : []
-    } catch {
-      return []
-    }
-  }
-
-  let recent = $state<string[]>(readRecent())
   let overflowOpen = $state(false)
   let overflowQuery = $state('')
   let overflowRoot: HTMLDivElement | undefined
@@ -39,38 +25,42 @@
     }
   }
 
-  /** The active project and the most recently opened ones keep a tab, shown in
-   *  the user's own project order so tabs never jump when one is opened. */
-  const visibleIds = $derived.by(() => {
-    const ids: string[] = []
-    if (scopeState.activeProjectId) ids.push(scopeState.activeProjectId)
-    for (const id of recent) {
-      if (ids.length >= MAX_TABS) break
-      if (!ids.includes(id) && scopeState.projects.some((p) => p.id === id)) ids.push(id)
+  /** When each project was last worked on: its newest thread edit, or the
+   *  project's own edit when it has no threads loaded. */
+  const lastActivity = $derived.by(() => {
+    const times: Record<string, number> = {}
+    for (const project of scopeState.projectRecords) times[project.id] = project.updatedAt
+    for (const thread of scopeState.allScopeThreads) {
+      if ((times[thread.projectId] ?? 0) < thread.updatedAt) {
+        times[thread.projectId] = thread.updatedAt
+      }
     }
-    for (const project of scopeState.projects) {
-      if (ids.length >= MAX_TABS) break
-      if (!ids.includes(project.id)) ids.push(project.id)
+    return times
+  })
+
+  /** Projects newest-work first, so what is being worked on is always on display. */
+  const projectsByActivity = $derived(
+    [...scopeState.projects].sort((a, b) => (lastActivity[b.id] ?? 0) - (lastActivity[a.id] ?? 0))
+  )
+
+  /** The most recently worked-on projects keep a tab, and the active project
+   *  always does, taking the last slot when it is not among them. */
+  const visibleIds = $derived.by(() => {
+    const ids = projectsByActivity.slice(0, MAX_TABS).map((project) => project.id)
+    const active = scopeState.activeProjectId
+    if (active && !ids.includes(active) && scopeState.projects.some((p) => p.id === active)) {
+      ids.splice(Math.max(0, MAX_TABS - 1), ids.length, active)
     }
     return ids
   })
-  const visibleProjects = $derived(scopeState.projects.filter((p) => visibleIds.includes(p.id)))
-  const overflowProjects = $derived(scopeState.projects.filter((p) => !visibleIds.includes(p.id)))
+  const visibleProjects = $derived(projectsByActivity.filter((p) => visibleIds.includes(p.id)))
+  const overflowProjects = $derived(projectsByActivity.filter((p) => !visibleIds.includes(p.id)))
   const filteredOverflow = $derived.by(() => {
     const query = overflowQuery.trim().toLowerCase()
     return query
       ? overflowProjects.filter((p) => p.name.toLowerCase().includes(query))
       : overflowProjects
   })
-
-  function rememberProject(projectId: string): void {
-    recent = [projectId, ...recent.filter((id) => id !== projectId)].slice(0, 20)
-    try {
-      localStorage.setItem(RECENT_KEY, JSON.stringify(recent))
-    } catch {
-      // Storage is a convenience: the tabs still work without it.
-    }
-  }
 
   function closeOverflow(): void {
     overflowOpen = false
@@ -120,7 +110,6 @@
   }
 
   async function switchProject(projectId: string): Promise<void> {
-    rememberProject(projectId)
     const project = scopeState.projectRecords.find((p) => p.id === projectId) ?? null
     if (!project) return
 
