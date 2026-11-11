@@ -62,7 +62,7 @@ export function gatewayBatchingInstruction(codeMode: boolean): string {
     'Round-trip contract: batch, always. Every model call re-reads the whole conversation, so a burst of one call per item is a failure of this contract, not a slower path.',
     codeMode
       ? 'Use code mode extensively: cover a list in ONE code-mode script that loops over the inputs with bounded concurrency and returns only the findings, and never issue a separate call for each item when one script could carry them.'
-      : 'This harness has no code mode, so batch in the tools it does have: cover a list in ONE shell command (a `for` loop, `xargs`, or one `rg` with several patterns), issue independent reads, searches and utility calls together in a single assistant message, and use the gateway `batch` operation for up to eight independent read-only app calls. Never issue a separate call for each item.',
+      : 'This harness gives you no code mode tool, so batch in the tools it does have: cover a list in ONE shell command (a for loop, xargs, or one search command that matches several patterns at once), issue independent reads, searches and utility calls together in a single assistant message, and use the gateway batch operation for up to eight independent read-only app calls. Never issue a separate call for each item.',
     'Keep dependent operations, mutations, approvals and retries sequential, inspect every result, and filter large results before returning them to the model.'
   ]
   return contract.join(' ')
