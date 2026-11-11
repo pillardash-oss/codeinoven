@@ -59,9 +59,10 @@ export class BrowserServiceConfiguration {
 
   /**
    * Record that a tab is rendering a design folder. Non-null `design` on the
-   *  published state is what makes the panel offer the element inspector, so only
-   *  the design capability calls this: it is the one caller that knows a served
-   *  folder is a design rather than an arbitrary directory.
+   *  published state is what gives a tab the screen history controls and names the
+   *  folder a pick belongs to, so only the design capability calls this: it is the
+   *  one caller that knows a served folder is a design rather than an arbitrary
+   *  directory.
    *
    *  A composition is recognized rather than marked, because its mark carries the
    *  timeline its manifest declares and that has to be read.
@@ -229,7 +230,10 @@ export class BrowserServiceConfiguration {
     if (isSameTabMark(next, previous)) return
     tab.design = next.design
     tab.composition = next.composition
-    if (next.design === null) this.host.inspector.setArmed(tabId, tab.view.webContents, false, null)
+    // Leaving a design folder does not end element inspection: the inspector
+    // belongs to the tab and reads whatever document it holds, so a page the
+    // reader navigated on to is still a page they can point at. Only the panel's
+    // own toggle, Escape, or a page that stops answering ends the mode.
     this.host.publishState(tabId)
     if (!next.composition) {
       // A tab that left the composition has no playhead to restore, and the mute

@@ -4,17 +4,18 @@ import type { PromptReference } from '$shared/types'
  * Wording for a composer's attached references.
  *
  * A composer can carry six kinds of reference: an excerpt selected from an
- * assistant response, an element picked from a design in the in-app browser, a
- * passage annotated in a project document, a moment noted on a video
- * composition's timeline, a freehand mark drawn on a picture the agent rendered
- * (a still, or one frame of a video), and an element picked inside an inline
- * artifact (HTML or SVG). The strip and its popover both show a count, so the
- * count's noun has to agree with what is actually attached rather than always
- * saying "selections".
+ * assistant response, an element picked from a design in the in-app browser, an
+ * element picked on any other page of that browser, a passage annotated in a
+ * project document, a moment noted on a video composition's timeline, a freehand
+ * mark drawn on a picture the agent rendered (a still, or one frame of a video),
+ * and an element picked inside an inline artifact (HTML or SVG). The strip and
+ * its popover both show a count, so the count's noun has to agree with what is
+ * actually attached rather than always saying "selections".
  */
 export interface ComposerReferenceSummary {
   total: number
-  /** How many references are picked elements, from a design or an inline artifact. */
+  /** How many references are picked elements, from a design, a page or an inline
+   *  artifact. */
   elements: number
   /** How many references are passages annotated in a project document. */
   annotations: number
@@ -38,7 +39,10 @@ export function summarizeComposerReferences(
 ): ComposerReferenceSummary {
   const elements = references.filter(
     (reference) =>
-      reference.kind === 'design' || reference.kind === 'svg' || reference.kind === 'html'
+      reference.kind === 'design' ||
+      reference.kind === 'page' ||
+      reference.kind === 'svg' ||
+      reference.kind === 'html'
   ).length
   const annotations = references.filter((reference) => reference.kind === 'file').length
   const notes = references.filter((reference) => reference.kind === 'video').length

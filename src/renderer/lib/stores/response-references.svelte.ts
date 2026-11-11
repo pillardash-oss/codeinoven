@@ -20,14 +20,15 @@ export interface ResponseReferenceAnchor extends PromptReference {
   messageId?: string
   startOffset?: number
   endOffset?: number
-  /** Design references: the CSS path the page re-resolves the element by after
-   *  a layout shift, so its pin stays on the element. */
+  /** Element picks from a browser page (design and page references): the CSS
+   *  path the page re-resolves the element by after a layout shift, so its pin
+   *  stays on the element. */
   selector?: string
-  /** Design references: the framed screen the selector belongs to, when the
-   *  element was picked inside a canvas frame rather than in the page itself. */
+  /** Element picks: the framed screen the selector belongs to, when the element
+   *  was picked inside a canvas frame rather than in the page itself. */
   frame?: string
-  /** Design references: the browser tab the element was picked from, so the
-   *  panel knows which tab a reference's pin belongs to. */
+  /** Element picks: the browser tab the element was picked from, so the panel
+   *  knows which tab a reference's pin belongs to. */
   tabId?: string
   /** Design references: the page's entry file inside that design folder, so a
    *  comment whose page was closed can be reopened on the very screen the
@@ -42,6 +43,9 @@ export interface ResponseReferenceAnchor extends PromptReference {
    *  references written before it existed, which fall back to `directory` and
    *  `designEntry`. */
   designId?: string
+  /** Page element picks: the URL the element was picked on, so a comment whose
+   *  tab has since been closed can reopen the very page it was written about. */
+  pageUrl?: string
   /** Document annotations: the project-relative path of the document the
    *  passage was annotated in, so a document's preview pins only its own
    *  annotations and the path travels with the prompt. */
@@ -115,6 +119,7 @@ export function referenceHasEditableSurface(
     isResponseSelection(reference) ||
     reference.kind === 'file' ||
     reference.kind === 'design' ||
+    reference.kind === 'page' ||
     reference.kind === 'video' ||
     reference.kind === 'svg' ||
     reference.kind === 'html'
@@ -214,12 +219,13 @@ class ResponseReferencesState {
     return null
   }
 
-  /** Every conversation with a design comment pinned to this browser tab. */
+  /** Every conversation with an element pick pinned to this browser tab. */
   forTab(tabId: string): { projectId: string; threadId: string }[] {
     const owners: { projectId: string; threadId: string }[] = []
     for (const owner of this.owners()) {
       const pinned = this.forThread(owner.projectId, owner.threadId).some(
-        (reference) => reference.kind === 'design' && reference.tabId === tabId
+        (reference) =>
+          (reference.kind === 'design' || reference.kind === 'page') && reference.tabId === tabId
       )
       if (pinned) owners.push(owner)
     }
@@ -287,7 +293,9 @@ class ResponseReferencesState {
               ? `Video note ${index + 1}`
               : reference.kind === 'image'
                 ? `Mark ${index + 1}`
-                : `Design element ${index + 1}`
+                : reference.kind === 'page'
+                  ? `Page element ${index + 1}`
+                  : `Design element ${index + 1}`
       }))
       next[key] = stored
     }
