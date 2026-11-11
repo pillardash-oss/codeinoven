@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { onMount } from 'svelte'
@@ -239,17 +240,16 @@
             Text that is not an address is searched with this engine
           </p>
         </div>
-        <select
-          class="max-w-[14rem] border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+        <EnumSelect
+          options={engines.map((engine) => ({ id: engine.id, label: engine.name }))}
           value={config.browserSearchEngine}
           disabled={!settingsReady}
-          aria-label="Default search engine"
-          onchange={(event) => selectEngine(event.currentTarget.value)}
-        >
-          {#each engines as engine (engine.id)}
-            <option value={engine.id}>{engine.name}</option>
-          {/each}
-        </select>
+          ariaLabel="Default search engine"
+          title="Default search engine"
+          placeholder="Choose an engine"
+          class="w-56"
+          onChange={selectEngine}
+        />
       </div>
 
       <div class="mt-4 border-t pt-4">

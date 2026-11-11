@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
@@ -1088,28 +1089,30 @@
             ? 'grid grid-cols-2 gap-2'
             : 'flex shrink-0 items-center gap-2'}
         >
-          <select
-            class="{variant === 'sidebar'
-              ? 'w-full'
-              : 'w-36'} border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
-            bind:value={filterCategory}
-          >
-            <option value="">All categories</option>
-            {#each Object.entries(categoryLabels) as [value, label] (value)}
-              <option {value}>{label}</option>
-            {/each}
-          </select>
-          <select
-            class="{variant === 'sidebar'
-              ? 'w-full'
-              : 'w-36'} border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
-            bind:value={filterPriority}
-          >
-            <option value="">All priorities</option>
-            {#each Object.entries(priorityLabels) as [value, label] (value)}
-              <option {value}>{label}</option>
-            {/each}
-          </select>
+          <EnumSelect
+            options={[
+              { id: '', label: 'All categories' },
+              ...Object.entries(categoryLabels).map(([id, label]) => ({ id, label }))
+            ]}
+            value={filterCategory}
+            ariaLabel="Filter by category"
+            title="Filter by category"
+            placeholder="All categories"
+            class={variant === 'sidebar' ? 'w-full' : 'w-36'}
+            onChange={(id) => (filterCategory = id as MemoryCategory | '')}
+          />
+          <EnumSelect
+            options={[
+              { id: '', label: 'All priorities' },
+              ...Object.entries(priorityLabels).map(([id, label]) => ({ id, label }))
+            ]}
+            value={filterPriority}
+            ariaLabel="Filter by priority"
+            title="Filter by priority"
+            placeholder="All priorities"
+            class={variant === 'sidebar' ? 'w-full' : 'w-36'}
+            onChange={(id) => (filterPriority = id as MemoryPriority | '')}
+          />
         </div>
       </div>
     </div>

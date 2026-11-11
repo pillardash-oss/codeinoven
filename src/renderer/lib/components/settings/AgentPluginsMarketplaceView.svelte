@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
@@ -330,13 +331,18 @@
                   </label>
                   <label class="block text-[0.6875rem] font-medium text-muted">
                     Catalog format
-                    <select
-                      class="mt-1 h-8 w-full border bg-app px-2.5 text-xs text-foreground"
-                      bind:value={platform}
-                    >
-                      <option value="codex">Codex catalog</option>
-                      <option value="claude">Claude Code catalog</option>
-                    </select>
+                    <EnumSelect
+                      options={[
+                        { id: 'codex', label: 'Codex catalog' },
+                        { id: 'claude', label: 'Claude Code catalog' }
+                      ]}
+                      value={platform}
+                      ariaLabel="Catalog platform"
+                      title="Catalog platform"
+                      placeholder="Choose a catalog"
+                      class="mt-1 w-full"
+                      onChange={(id) => (platform = id)}
+                    />
                   </label>
                   <button
                     class="flex h-8 w-full items-center justify-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary disabled:opacity-50"

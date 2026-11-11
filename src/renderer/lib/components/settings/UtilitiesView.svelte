@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioBook from '@pdslng/cio-icon/CioBook.svelte'
   import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
@@ -1063,17 +1064,20 @@
     <!-- Filters: what is shown (built-ins) first, then the scope and harness tags. -->
     <div class="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filters">
       {#if activeTab === 'tools'}
-        <select
-          class="h-7 border bg-elevated px-2 text-[0.6875rem] font-medium outline-none focus:border-primary"
-          aria-label="Filter tools by source"
+        <EnumSelect
+          options={[
+            { id: 'all', label: 'All sources' },
+            { id: 'application', label: 'Application' },
+            { id: 'harness', label: 'Harnesses' }
+          ]}
           value={agentToolsStore.selectedSource}
-          onchange={(event: Event) =>
-            setToolSource((event.currentTarget as HTMLSelectElement).value)}
-        >
-          <option value="all">All sources</option>
-          <option value="application">Application</option>
-          <option value="harness">Harnesses</option>
-        </select>
+          ariaLabel="Filter tools by source"
+          title="Filter tools by source"
+          placeholder="All sources"
+          compact
+          class="w-36"
+          onChange={setToolSource}
+        />
         {#if toolHarnesses.length && agentToolsStore.selectedSource !== 'application'}
           <button
             type="button"
