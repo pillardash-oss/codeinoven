@@ -92,6 +92,27 @@
     }
   }
 
+  /**
+   * Lift the menu into the browser's top layer. The header is its own stacking
+   * context, so a z-index alone loses to the board's sticky slice headers and
+   * scope cards, which cover the filter field. A manual popover escapes every
+   * stacking context, and is anchored under the trigger by its own rect.
+   */
+  function topLayer(node: HTMLDivElement): () => void {
+    const anchor = overflowRoot?.getBoundingClientRect()
+    if (anchor) {
+      node.style.top = `${anchor.bottom + 4}px`
+      node.style.right = `${Math.max(0, window.innerWidth - anchor.right)}px`
+    }
+    node.showPopover()
+    // The field's own autofocus ran before the popover was shown, so focus it
+    // again now that it is in the top layer.
+    node.querySelector('input')?.focus()
+    return () => {
+      if (node.matches(':popover-open')) node.hidePopover()
+    }
+  }
+
   function onWindowPointerDown(event: PointerEvent): void {
     if (!overflowOpen || !overflowRoot) return
     if (event.target instanceof Node && overflowRoot.contains(event.target)) return
@@ -214,7 +235,11 @@
         +{overflowProjects.length}
       </button>
       {#if overflowOpen}
-        <div class="absolute right-0 top-full z-50 mt-1">
+        <div
+          popover="manual"
+          class="fixed bottom-auto left-auto m-0 overflow-visible border-0 bg-transparent p-0"
+          {@attach topLayer}
+        >
           <PickerMenuShell
             bind:query={overflowQuery}
             label="More projects"
