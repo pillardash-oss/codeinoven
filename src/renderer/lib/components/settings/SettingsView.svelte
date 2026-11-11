@@ -775,16 +775,17 @@
                 <p class="text-sm font-medium">Font</p>
                 <p class="text-xs leading-relaxed text-dimmed">Typeface used across the app</p>
               </div>
-              <EnumSelect
-                options={FONT_FAMILY_OPTIONS}
-                value={config.fontFamily}
-                disabled={!settingsReady}
-                ariaLabel="App font"
-                title="App font"
-                placeholder="Choose a font"
-                class="w-48"
-                onChange={(id) => void updateConfig({ fontFamily: id })}
-              />
+              <div class="w-48 shrink-0">
+                <EnumSelect
+                  options={FONT_FAMILY_OPTIONS}
+                  value={config.fontFamily}
+                  disabled={!settingsReady}
+                  ariaLabel="App font"
+                  title="App font"
+                  placeholder="Choose a font"
+                  onChange={(id) => void updateConfig({ fontFamily: id })}
+                />
+              </div>
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
@@ -818,32 +819,34 @@
                 <p class="text-sm font-medium">Font weight</p>
                 <p class="text-xs leading-relaxed text-dimmed">Lightness of the app text</p>
               </div>
-              <EnumSelect
-                options={fontWeightOptions}
-                value={String(config.fontWeight)}
-                disabled={!settingsReady}
-                ariaLabel="Font weight"
-                title="Font weight"
-                placeholder="Choose a weight"
-                class="w-48"
-                onChange={(id) => void updateConfig({ fontWeight: Number(id) })}
-              />
+              <div class="w-48 shrink-0">
+                <EnumSelect
+                  options={fontWeightOptions}
+                  value={String(config.fontWeight)}
+                  disabled={!settingsReady}
+                  ariaLabel="Font weight"
+                  title="Font weight"
+                  placeholder="Choose a weight"
+                  onChange={(id) => void updateConfig({ fontWeight: Number(id) })}
+                />
+              </div>
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Zoom</p>
                 <p class="text-xs leading-relaxed text-dimmed">Magnify the whole interface</p>
               </div>
-              <EnumSelect
-                options={zoomOptions}
-                value={String(config.zoomLevel)}
-                disabled={!settingsReady}
-                ariaLabel="Interface zoom"
-                title="Interface zoom"
-                placeholder="Choose a zoom"
-                class="w-28"
-                onChange={(id) => void updateConfig({ zoomLevel: Number(id) })}
-              />
+              <div class="w-28 shrink-0">
+                <EnumSelect
+                  options={zoomOptions}
+                  value={String(config.zoomLevel)}
+                  disabled={!settingsReady}
+                  ariaLabel="Interface zoom"
+                  title="Interface zoom"
+                  placeholder="Choose a zoom"
+                  onChange={(id) => void updateConfig({ zoomLevel: Number(id) })}
+                />
+              </div>
             </div>
           </div>
 
@@ -1023,16 +1026,17 @@
                     Pre-selected when merging a pull request from the Git panel
                   </p>
                 </div>
-                <EnumSelect
-                  options={mergeMethodOptions}
-                  value={config.defaultMergeMethod}
-                  disabled={!settingsReady}
-                  ariaLabel="Default merge method"
-                  title="Default merge method"
-                  placeholder="Choose a method"
-                  class="w-48"
-                  onChange={(id) => void updateConfig({ defaultMergeMethod: id })}
-                />
+                <div class="w-48 shrink-0">
+                  <EnumSelect
+                    options={mergeMethodOptions}
+                    value={config.defaultMergeMethod}
+                    disabled={!settingsReady}
+                    ariaLabel="Default merge method"
+                    title="Default merge method"
+                    placeholder="Choose a method"
+                    onChange={(id) => void updateConfig({ defaultMergeMethod: id })}
+                  />
+                </div>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1041,16 +1045,17 @@
                     Ask when pulling, or always use one reconciliation strategy
                   </p>
                 </div>
-                <EnumSelect
-                  options={pullStrategyOptions}
-                  value={config.defaultPullStrategy}
-                  disabled={!settingsReady}
-                  ariaLabel="Default pull strategy"
-                  title="Default pull strategy"
-                  placeholder="Choose a strategy"
-                  class="w-48"
-                  onChange={(id) => void updateConfig({ defaultPullStrategy: id })}
-                />
+                <div class="w-48 shrink-0">
+                  <EnumSelect
+                    options={pullStrategyOptions}
+                    value={config.defaultPullStrategy}
+                    disabled={!settingsReady}
+                    ariaLabel="Default pull strategy"
+                    title="Default pull strategy"
+                    placeholder="Choose a strategy"
+                    onChange={(id) => void updateConfig({ defaultPullStrategy: id })}
+                  />
+                </div>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1240,16 +1245,17 @@
                     after you close the window.
                   </p>
                 </div>
-                <EnumSelect
-                  options={backgroundModeOptions}
-                  value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
-                  disabled={!settingsReady || config.backgroundMode === 'off'}
-                  ariaLabel="Background mode"
-                  title="Background mode"
-                  placeholder="Choose a mode"
-                  class="w-48"
-                  onChange={(id) => void updateConfig({ backgroundMode: id })}
-                />
+                <div class="w-48 shrink-0">
+                  <EnumSelect
+                    options={backgroundModeOptions}
+                    value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
+                    disabled={!settingsReady || config.backgroundMode === 'off'}
+                    ariaLabel="Background mode"
+                    title="Background mode"
+                    placeholder="Choose a mode"
+                    onChange={(id) => void updateConfig({ backgroundMode: id })}
+                  />
+                </div>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>

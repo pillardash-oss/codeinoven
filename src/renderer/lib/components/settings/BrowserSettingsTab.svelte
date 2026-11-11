@@ -240,16 +240,17 @@
             Text that is not an address is searched with this engine
           </p>
         </div>
-        <EnumSelect
-          options={engines.map((engine) => ({ id: engine.id, label: engine.name }))}
-          value={config.browserSearchEngine}
-          disabled={!settingsReady}
-          ariaLabel="Default search engine"
-          title="Default search engine"
-          placeholder="Choose an engine"
-          class="w-56"
-          onChange={selectEngine}
-        />
+        <div class="w-56 shrink-0">
+          <EnumSelect
+            options={engines.map((engine) => ({ id: engine.id, label: engine.name }))}
+            value={config.browserSearchEngine}
+            disabled={!settingsReady}
+            ariaLabel="Default search engine"
+            title="Default search engine"
+            placeholder="Choose an engine"
+            onChange={selectEngine}
+          />
+        </div>
       </div>
 
       <div class="mt-4 border-t pt-4">

@@ -170,15 +170,16 @@
     {#each unloadItems as item (item.key)}
       <label class="flex items-center justify-between gap-3 text-xs text-muted">
         {item.label}
-        <EnumSelect
-          options={unloadOptions.map((option) => ({ id: option.value, label: option.label }))}
-          value={settings[item.key]}
-          ariaLabel={`${item.label} unload delay`}
-          title={`${item.label} unload delay`}
-          placeholder="Choose a delay"
-          class="w-36"
-          onChange={(id) => patch({ [item.key]: id })}
-        />
+        <div class="w-36 shrink-0">
+          <EnumSelect
+            options={unloadOptions.map((option) => ({ id: option.value, label: option.label }))}
+            value={settings[item.key]}
+            ariaLabel={`${item.label} unload delay`}
+            title={`${item.label} unload delay`}
+            placeholder="Choose a delay"
+            onChange={(id) => patch({ [item.key]: id })}
+          />
+        </div>
       </label>
     {/each}
   </div>

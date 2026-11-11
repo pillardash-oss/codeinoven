@@ -1064,20 +1064,21 @@
     <!-- Filters: what is shown (built-ins) first, then the scope and harness tags. -->
     <div class="mt-3 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filters">
       {#if activeTab === 'tools'}
-        <EnumSelect
-          options={[
-            { id: 'all', label: 'All sources' },
-            { id: 'application', label: 'Application' },
-            { id: 'harness', label: 'Harnesses' }
-          ]}
-          value={agentToolsStore.selectedSource}
-          ariaLabel="Filter tools by source"
-          title="Filter tools by source"
-          placeholder="All sources"
-          compact
-          class="w-36"
-          onChange={setToolSource}
-        />
+        <div class="w-36 shrink-0">
+          <EnumSelect
+            options={[
+              { id: 'all', label: 'All sources' },
+              { id: 'application', label: 'Application' },
+              { id: 'harness', label: 'Harnesses' }
+            ]}
+            value={agentToolsStore.selectedSource}
+            ariaLabel="Filter tools by source"
+            title="Filter tools by source"
+            placeholder="All sources"
+            compact
+            onChange={setToolSource}
+          />
+        </div>
         {#if toolHarnesses.length && agentToolsStore.selectedSource !== 'application'}
           <button
             type="button"

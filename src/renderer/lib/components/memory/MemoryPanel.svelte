@@ -1089,30 +1089,32 @@
             ? 'grid grid-cols-2 gap-2'
             : 'flex shrink-0 items-center gap-2'}
         >
-          <EnumSelect
-            options={[
-              { id: '', label: 'All categories' },
-              ...Object.entries(categoryLabels).map(([id, label]) => ({ id, label }))
-            ]}
-            value={filterCategory}
-            ariaLabel="Filter by category"
-            title="Filter by category"
-            placeholder="All categories"
-            class={variant === 'sidebar' ? 'w-full' : 'w-36'}
-            onChange={(id) => (filterCategory = id as MemoryCategory | '')}
-          />
-          <EnumSelect
-            options={[
-              { id: '', label: 'All priorities' },
-              ...Object.entries(priorityLabels).map(([id, label]) => ({ id, label }))
-            ]}
-            value={filterPriority}
-            ariaLabel="Filter by priority"
-            title="Filter by priority"
-            placeholder="All priorities"
-            class={variant === 'sidebar' ? 'w-full' : 'w-36'}
-            onChange={(id) => (filterPriority = id as MemoryPriority | '')}
-          />
+          <div class={variant === 'sidebar' ? 'w-full' : 'w-36 shrink-0'}>
+            <EnumSelect
+              options={[
+                { id: '', label: 'All categories' },
+                ...Object.entries(categoryLabels).map(([id, label]) => ({ id, label }))
+              ]}
+              value={filterCategory}
+              ariaLabel="Filter by category"
+              title="Filter by category"
+              placeholder="All categories"
+              onChange={(id) => (filterCategory = id as MemoryCategory | '')}
+            />
+          </div>
+          <div class={variant === 'sidebar' ? 'w-full' : 'w-36 shrink-0'}>
+            <EnumSelect
+              options={[
+                { id: '', label: 'All priorities' },
+                ...Object.entries(priorityLabels).map(([id, label]) => ({ id, label }))
+              ]}
+              value={filterPriority}
+              ariaLabel="Filter by priority"
+              title="Filter by priority"
+              placeholder="All priorities"
+              onChange={(id) => (filterPriority = id as MemoryPriority | '')}
+            />
+          </div>
         </div>
       </div>
     </div>

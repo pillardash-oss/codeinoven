@@ -225,16 +225,17 @@
       <div class="flex flex-wrap items-center gap-3">
         <label class="flex min-w-0 shrink-0 items-center gap-2 text-xs text-muted">
           <span class="shrink-0">Runs on</span>
-          <EnumSelect
-            options={targetOptions().map((option) => ({ id: option.id, label: option.name }))}
-            value={chosenHarness}
-            disabled={busy}
-            ariaLabel="Harness that runs the pinned judging model"
-            title="Harness that runs the pinned judging model"
-            placeholder="Choose a harness"
-            class="w-44"
-            onChange={(id) => (runsOn = id)}
-          />
+          <div class="w-44 shrink-0">
+            <EnumSelect
+              options={targetOptions().map((option) => ({ id: option.id, label: option.name }))}
+              value={chosenHarness}
+              disabled={busy}
+              ariaLabel="Harness that runs the pinned judging model"
+              title="Harness that runs the pinned judging model"
+              placeholder="Choose a harness"
+              onChange={(id) => (runsOn = id)}
+            />
+          </div>
         </label>
 
         <div class="flex w-64 shrink-0 items-center gap-1.5">
