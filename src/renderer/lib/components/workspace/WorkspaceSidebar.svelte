@@ -908,9 +908,7 @@
                         disabled={projectPageLoading === scopeContext.projectId}
                         onclick={() => void onLoadProjectThreadsPage(scopeContext.projectId)}
                       >
-                        {projectPageLoading === scopeContext.projectId
-                          ? 'Loading…'
-                          : 'Load older threads'}
+                        {projectPageLoading === scopeContext.projectId ? 'Loading…' : 'Show more'}
                       </button>
                     </div>
                   {/if}
@@ -1197,7 +1195,7 @@
                 disabled={historyLoading}
                 onclick={() => void onLoadHistoryPage()}
               >
-                {historyLoading ? 'Loading history…' : 'Load older threads'}
+                {historyLoading ? 'Loading history…' : 'Show more'}
               </button>
             {/if}
           </section>
@@ -1223,7 +1221,7 @@
               disabled={historyLoading}
               onclick={() => void onLoadHistoryPage()}
             >
-              {historyLoading ? 'Loading history…' : 'Load older threads'}
+              {historyLoading ? 'Loading history…' : 'Show more'}
             </button>
           {/if}
         {/each}
@@ -1445,9 +1443,7 @@
                               disabled={projectPageLoading === project.id}
                               onclick={() => void onLoadProjectThreadsPage(project.id)}
                             >
-                              {projectPageLoading === project.id
-                                ? 'Loading…'
-                                : 'Load older threads'}
+                              {projectPageLoading === project.id ? 'Loading…' : 'Show more'}
                             </button>
                           {/if}
                           {#if expanded && sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
@@ -1700,7 +1696,7 @@
                           disabled={projectPageLoading === project.id}
                           onclick={() => void onLoadProjectThreadsPage(project.id)}
                         >
-                          {projectPageLoading === project.id ? 'Loading…' : 'Load older threads'}
+                          {projectPageLoading === project.id ? 'Loading…' : 'Show more'}
                         </button>
                       {/if}
                       {#if expanded && sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
