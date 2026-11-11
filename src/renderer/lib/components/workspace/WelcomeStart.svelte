@@ -6,7 +6,6 @@
   import CioLearn from '@pdslng/cio-icon/CioLearn.svelte'
   import CioMessagePlus from '@pdslng/cio-icon/CioMessagePlus.svelte'
   import CioPanelLeft from '@pdslng/cio-icon/CioPanelLeft.svelte'
-  import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
   import type { Component } from 'svelte'
   import { publicAssetUrl } from '$lib/static-assets'
   import type { WorkspaceTourView } from '$lib/guide/guide-stops'
@@ -36,7 +35,8 @@
     onAddProject?: () => void
     /** Open the clone-from-git flow. */
     onCloneRepo?: () => void
-    /** Open the settings view. */
+    /** Open the settings view. Kept for callers; settings already sit on the
+     *  rail, so the empty state no longer repeats them. */
     onOpenSettings?: () => void
     /** Open this view's own tour. */
     onShowTour?: () => void
@@ -51,7 +51,6 @@
     onNewTask,
     onAddProject,
     onCloneRepo,
-    onOpenSettings,
     onShowTour
   }: Props = $props()
 
@@ -67,20 +66,19 @@
     highlight?: boolean
   }
 
+  const headings: Record<'projects' | 'threads' | 'chats' | 'assistant', string> = {
+    projects: 'Projects',
+    threads: 'Threads',
+    chats: 'Chats',
+    assistant: 'Assistants'
+  }
+
   const subtitles: Record<'projects' | 'threads' | 'chats' | 'assistant', string> = {
     projects: 'What would you like to work on?',
     threads: 'Every project conversation, in one timeline',
     chats: 'Ask a question or start a conversation, no project needed',
     assistant: 'Jobs the agent runs for you, on their own schedule'
   }
-
-  const settingsAction = (): ActionItem => ({
-    id: 'settings',
-    icon: CioTabSettings,
-    title: 'Open settings',
-    description: 'Configure agents, models, and preferences',
-    run: () => onOpenSettings?.()
-  })
 
   const tourAction = (view: WorkspaceTourView): ActionItem => ({
     id: 'tour',
@@ -120,7 +118,6 @@
         run: () => onNewTask?.()
       })
     }
-    if (onOpenSettings) items.push(settingsAction())
     if (onShowTour) items.push(tourAction('assistant'))
     return items
   }
@@ -146,7 +143,6 @@
         run: () => onToggleSidebar?.()
       })
     }
-    if (onOpenSettings) items.push(settingsAction())
     if (onShowTour) items.push(tourAction('chats'))
     return withLeadHighlight(items)
   }
@@ -183,7 +179,6 @@
         run: () => onCloneRepo?.()
       })
     }
-    if (onOpenSettings) items.push(settingsAction())
     if (onNewChat) {
       items.push({
         id: 'new-chat',
@@ -207,8 +202,16 @@
 </script>
 
 <div class="flex h-full flex-col items-center justify-center px-6">
-  <img src={logoUrl} alt="CodeInOven" class="mb-8 h-20 w-20" draggable="false" />
-  <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">CodeInOven</h1>
+  <img
+    src={logoUrl}
+    alt=""
+    class="mb-6 h-12 w-12 opacity-60"
+    draggable="false"
+    onerror={(event) => {
+      if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.hidden = true
+    }}
+  />
+  <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">{headings[variant]}</h1>
   <p class="mt-1 text-[0.8125rem] text-muted">{subtitles[variant]}</p>
 
   <div
