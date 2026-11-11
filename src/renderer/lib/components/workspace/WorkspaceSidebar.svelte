@@ -64,6 +64,7 @@
   import FolderRow from './FolderRow.svelte'
   import SidebarListPane from './SidebarListPane.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
+  import SidebarProjectSearchField from './SidebarProjectSearchField.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import {
@@ -1349,6 +1350,8 @@
                           <SidebarSearchControl
                             open={sidebar.projectSearchOpen.has(project.id)}
                             query={sidebar.projectSearchQueries.get(project.id) ?? ''}
+                            inlineField
+                            fieldId="project-search-{project.id}"
                             onOpenChange={(open) => {
                               if (open) sidebar.openProjectSearch(project.id)
                               else sidebar.closeProjectSearch(project.id)
@@ -1357,6 +1360,7 @@
                               sidebar.projectSearchQueries.set(project.id, value)
                               sidebar.runProjectSearch(project.id, value)
                             }}
+                            loading={sidebar.projectSearching.has(project.id)}
                             ariaLabel="Search threads in {project.name}"
                             title="Search threads"
                             placeholder="Search threads in {project.name}…"
@@ -1420,6 +1424,20 @@
                            so its own `slide` is what plays when the folder closes:
                            folding never drops an ancestor with it. -->
                       <div transition:slide={foldSlide()} class="ml-2">
+                        {#if sidebar.projectSearchOpen.has(project.id)}
+                          <SidebarProjectSearchField
+                            id="project-search-{project.id}"
+                            query={searchQ}
+                            loading={sidebar.projectSearching.has(project.id)}
+                            placeholder="Search threads in {project.name}…"
+                            ariaLabel="Search threads in {project.name}"
+                            onQueryChange={(value) => {
+                              sidebar.projectSearchQueries.set(project.id, value)
+                              sidebar.runProjectSearch(project.id, value)
+                            }}
+                            onClose={() => sidebar.closeProjectSearch(project.id)}
+                          />
+                        {/if}
                         {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                           <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                         {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
@@ -1618,6 +1636,8 @@
                       <SidebarSearchControl
                         open={sidebar.projectSearchOpen.has(project.id)}
                         query={sidebar.projectSearchQueries.get(project.id) ?? ''}
+                        inlineField
+                        fieldId="project-search-{project.id}"
                         onOpenChange={(open) => {
                           if (open) sidebar.openProjectSearch(project.id)
                           else sidebar.closeProjectSearch(project.id)
@@ -1626,6 +1646,7 @@
                           sidebar.projectSearchQueries.set(project.id, value)
                           sidebar.runProjectSearch(project.id, value)
                         }}
+                        loading={sidebar.projectSearching.has(project.id)}
                         ariaLabel="Search threads in {project.name}"
                         title="Search threads"
                         placeholder="Search threads in {project.name}…"
@@ -1674,6 +1695,20 @@
                   <!-- The list the fold owns: the only child of this branch, so its
                        own `slide` plays when the folder closes. See the pinned list. -->
                   <div transition:slide={foldSlide()} class="ml-2">
+                    {#if sidebar.projectSearchOpen.has(project.id)}
+                      <SidebarProjectSearchField
+                        id="project-search-{project.id}"
+                        query={searchQ}
+                        loading={sidebar.projectSearching.has(project.id)}
+                        placeholder="Search threads in {project.name}…"
+                        ariaLabel="Search threads in {project.name}"
+                        onQueryChange={(value) => {
+                          sidebar.projectSearchQueries.set(project.id, value)
+                          sidebar.runProjectSearch(project.id, value)
+                        }}
+                        onClose={() => sidebar.closeProjectSearch(project.id)}
+                      />
+                    {/if}
                     {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                       <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                     {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}

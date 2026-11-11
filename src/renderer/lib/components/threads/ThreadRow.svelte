@@ -71,7 +71,6 @@
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
-  import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import { THREAD_DRAG_TYPE } from '$lib/components/chats/chat-composer-drop-source'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
@@ -857,8 +856,11 @@
     return name !== null && name === hideBranch ? null : name
   })
 
-  /** The branch as the row shows it: four characters, full name on the popover. */
-  let branchLabel = $derived(branch ? threadBranchRowLabel(branch) : null)
+  /** The branch as the row shows it: the whole name, and the browser's own
+   *  ellipsis only when the line genuinely runs out of width. It used to be cut
+   *  to four characters, which hid the part that tells two branches apart while
+   *  the row still had room to spare. */
+  let branchLabel = $derived(branch)
 
   $effect(() => {
     if (isRemote) void ovens.ensure()
@@ -1691,7 +1693,7 @@
                 <span
                   role="button"
                   tabindex={-1}
-                  class="flex h-3.5 shrink-0 items-center justify-center text-thread-pinned hover:bg-overlay"
+                  class="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center text-thread-pinned hover:bg-overlay"
                   aria-label={thread.bookmarked ? 'Remove bookmark' : 'Unpin thread'}
                   title={thread.bookmarked ? 'Remove bookmark' : 'Unpin'}
                   onclick={(e: MouseEvent) => {

@@ -178,6 +178,7 @@ function render(t: Thread, over: Record<string, unknown> = {}) {
   const target = document.createElement('div')
   document.body.appendChild(target)
   const pinCalls: Thread[] = []
+  const openCalls: Thread[] = []
   const app = mount(ThreadRow, {
     target,
     props: {
@@ -186,11 +187,12 @@ function render(t: Thread, over: Record<string, unknown> = {}) {
       projectIconUrl: null,
       projectIconGlyph: null,
       onTogglePin: (thread: Thread) => pinCalls.push(thread),
+      onOpen: (thread: Thread) => openCalls.push(thread),
       ...over
     }
   })
   flushSync()
-  return { target, app, pinCalls }
+  return { target, app, pinCalls, openCalls }
 }
 
 describe('ThreadRow, the detailed spine row', () => {
@@ -246,7 +248,7 @@ describe('ThreadRow, the detailed spine row', () => {
   })
 
   it('puts the pin at the head of the meta line, and unpins from it', async () => {
-    const { target, app, pinCalls } = render(thread({ pinned: true }))
+    const { target, app, pinCalls, openCalls } = render(thread({ pinned: true }))
     await tick()
 
     const pin = target.querySelector('[role="button"][aria-label="Unpin thread"]') as HTMLElement
@@ -255,7 +257,10 @@ describe('ThreadRow, the detailed spine row', () => {
     expect(target.querySelector('[aria-label="Completed"]')).toBeNull()
 
     pin.click()
+    // The pin is the control, not a decoration on the way to the thread: the
+    // click unpins and never opens the thread behind it.
     expect(pinCalls.map((t) => t.id)).toEqual(['t1'])
+    expect(openCalls).toEqual([])
 
     unmount(app)
   })
