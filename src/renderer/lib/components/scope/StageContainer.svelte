@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
+  import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
   import { STAGE_COLORS, STAGE_LABELS, type ThreadStage } from '$lib/stores/scope.svelte'
   import type { Thread } from '$shared/types'
@@ -48,6 +49,16 @@
   let boardThreads = $derived(
     threads.filter((thread) => belongsOnProjectBoard(thread, thread.projectId))
   )
+
+  /** The branch every card in this lane shares, which then reads once from the
+   *  lane instead of on each card. Null when the lane mixes branches. */
+  const sharedBranch = $derived.by(() => {
+    if (boardThreads.length < 2) return null
+    const first = boardThreads[0]?.branch?.trim() || null
+    return first !== null && boardThreads.every((thread) => thread.branch?.trim() === first)
+      ? first
+      : null
+  })
 
   /** An empty slice folds to a strip: it keeps its count and stays a drop
    *  target, but no longer takes the width a slice with threads needs. */
@@ -120,7 +131,18 @@
         <span class="text-[0.6875rem] font-semibold uppercase tracking-wide text-foreground">
           {STAGE_LABELS[stage]}
         </span>
-        <span class="ml-auto text-[0.625rem] tabular-nums text-dimmed">{boardThreads.length}</span>
+        {#if sharedBranch}
+          <span
+            class="ml-auto flex min-w-0 items-center gap-1 text-[0.625rem] text-dimmed"
+            title={`Every thread here is on ${sharedBranch}`}
+          >
+            <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
+            <span class="truncate">{sharedBranch}</span>
+          </span>
+        {/if}
+        <span class="{sharedBranch ? '' : 'ml-auto '}text-[0.625rem] tabular-nums text-dimmed"
+          >{boardThreads.length}</span
+        >
       </button>
     </div>
 
@@ -131,6 +153,7 @@
             {thread}
             selected={activeThreadId === thread.id}
             hideScope
+            hideBranch={sharedBranch}
             {onOpen}
             {onRename}
             {onTogglePin}

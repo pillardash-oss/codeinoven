@@ -116,6 +116,8 @@
     showChangeScope?: boolean
     /** Hide the scope chip   used when the surrounding view is already scoped. */
     hideScope?: boolean
+    /** A branch the surrounding list already names, left off the row when it matches. */
+    hideBranch?: string | null
     onOpen?: (t: Thread) => void
     onRename?: (t: Thread, newName: string) => Promise<void>
     onTogglePin?: (t: Thread) => void
@@ -141,6 +143,7 @@
     projectIconGlyph = null,
     showChangeScope = true,
     hideScope = false,
+    hideBranch = null,
     onOpen = () => {},
     onRename = async () => {},
     onTogglePin = () => {},
@@ -841,7 +844,10 @@
   let oven = $derived(isRemote ? ovens.identity(thread.settings?.ovenId) : null)
 
   /** Git branch the thread's checkout is on, when main resolved one. */
-  let branch = $derived(thread.branch?.trim() || null)
+  let branch = $derived.by(() => {
+    const name = thread.branch?.trim() || null
+    return name !== null && name === hideBranch ? null : name
+  })
 
   /** The branch as the row shows it: four characters, full name on the popover. */
   let branchLabel = $derived(branch ? threadBranchRowLabel(branch) : null)
