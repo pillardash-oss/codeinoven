@@ -77,7 +77,7 @@
     projects: 'What would you like to work on?',
     threads: 'Every project conversation, in one timeline',
     chats: 'Ask a question or start a conversation, no project needed',
-    assistant: 'Jobs the agent runs for you, on their own schedule'
+    assistant: 'Agents that work for you, on demand or on a schedule'
   }
 
   const tourAction = (view: WorkspaceTourView): ActionItem => ({
@@ -104,7 +104,7 @@
         id: 'new-assistant',
         icon: AssistantIcon,
         title: 'Start a new assistant',
-        description: 'Someone you hand something over to, once',
+        description: 'Hand over an area of work, run it now or on a schedule',
         run: () => onNewAssistant?.(),
         highlight: true
       })
