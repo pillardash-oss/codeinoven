@@ -392,6 +392,13 @@
   let previewReloadToken = $derived(
     activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0
   )
+  /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
+   *  touches `workspaceState.selectedThread`, which is reassigned on every
+   *  thread update. Reading it inside the effect would re-run (and cancel)
+   *  the preview load on each thread churn, leaving the loader stuck true. It is
+   *  the same checkout the tree and the editor are mounted on, so every preview
+   *  URL carries it and a scoped project's artwork resolves where it lives. */
+  let scopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
   /** Every rendered file streams from disk through `appfile://`, SVG included:
    *  its response carries `default-src 'none'` and the `<img>` this feeds never
    *  runs the document's scripts, so no blob round-trip is needed. */
@@ -401,7 +408,8 @@
           projectId,
           activeTab.path,
           mountThreadId ?? undefined,
-          previewReloadToken
+          previewReloadToken,
+          scopeBucketId
         )
       : null
   )
@@ -409,11 +417,6 @@
   let documentPreview = $derived(previewFlags.document)
   let previewKindLabel = $derived(previewKindLabelFor(previewFlags))
   const docPreview = new ProjectFilesPanelDocumentPreview()
-  /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
-   *  touches `workspaceState.selectedThread`, which is reassigned on every
-   *  thread update. Reading it inside the effect would re-run (and cancel)
-   *  the preview load on each thread churn, leaving the loader stuck true. */
-  let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
   $effect(() => {
     const tab = activeTab
     docPreview.sync(
@@ -421,7 +424,7 @@
       tab?.path ?? null,
       Boolean(tab && documentPreview && tab.view === 'preview'),
       tab ? (projectState.previewReloadTokens[tab.path] ?? 0) : 0,
-      documentScopeBucketId
+      scopeBucketId
     )
   })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
@@ -437,7 +440,9 @@
     return projectFilePreviewUrl(
       projectId,
       directory ? `${directory}/` : '',
-      mountThreadId ?? undefined
+      mountThreadId ?? undefined,
+      undefined,
+      scopeBucketId
     )
   })
   /** Sanitized page for the active HTML file, built from the live session draft
