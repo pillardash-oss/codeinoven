@@ -47,7 +47,20 @@ interface AgentRunEntry {
   /** When the last busy → idle transition happened, used by the thread row
    *  badge for "last action wins" ordering against side-chat unread marks. */
   settledAt: number
+  /** When a locally submitted turn started waiting for its harness to confirm
+   *  it, or null once a live session has. A turn dispatched here is busy before
+   *  any session reports it: binding a harness session, releasing the one a
+   *  provider or harness switch orphaned, and spawning the new runtime all
+   *  happen first. The persisted row still carries the previous turn's settled
+   *  status during that window, so the settle repair must not read it as this
+   *  turn ending. */
+  awaitingDispatchSince: number | null
 }
+
+/** How long an unconfirmed dispatch may suppress the persisted settle repair.
+ *  Bounds the window in case a send dies without any event reaching this
+ *  window: a real harness start confirms in well under this. */
+const DISPATCH_CONFIRM_WINDOW_MS = 120_000
 
 function threadKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
@@ -75,12 +88,34 @@ class AgentRunsStore {
         retryAt: null,
         traceUserOpened: false,
         traceUserFolded: false,
-        settledAt: 0
+        settledAt: 0,
+        awaitingDispatchSince: null
       }
       this.#runs.set(key, entry)
       this.runs = new Map(this.#runs)
     }
     return entry
+  }
+
+  /**
+   * Mark a locally submitted turn as dispatched but not yet confirmed by any
+   * live session. Called right after the optimistic `setBusy` of a send, and
+   * cleared by the first live run state (or by the run settling), so a
+   * `thread:updated` broadcast that only announces a new session binding cannot
+   * be mistaken for the turn finishing.
+   */
+  beginDispatch(projectId: string, threadId: string): void {
+    const entry = this.entry(projectId, threadId)
+    if (entry.awaitingDispatchSince !== null) return
+    entry.awaitingDispatchSince = Date.now()
+    this.#notify()
+  }
+
+  /** Whether a locally submitted turn is still waiting for its first live run
+   *  state, inside the bounded confirmation window. */
+  isAwaitingDispatch(projectId: string, threadId: string, now = Date.now()): boolean {
+    const since = this.runs.get(threadKey(projectId, threadId))?.awaitingDispatchSince ?? null
+    return since !== null && now - since < DISPATCH_CONFIRM_WINDOW_MS
   }
 
   /** True while the agent is processing a turn for this thread. */
@@ -224,6 +259,9 @@ class AgentRunsStore {
         entry.busySince = Math.min(entry.busySince ?? runStart, runStart)
       }
     }
+    // A live run state is the confirmation an unconfirmed dispatch was waiting
+    // for: from here the persisted row and this entry agree about the turn.
+    if (busy && live) entry.awaitingDispatchSince = null
     entry.busy = busy
     if (busy) entry.activity = activity
     if (busy) entry.live = live
@@ -362,6 +400,7 @@ class AgentRunsStore {
       return
     }
     if (previousBusy) entry.settledAt = Date.now()
+    entry.awaitingDispatchSince = null
     entry.busy = false
     entry.activity = 'session'
     entry.activityDetail = null
@@ -399,6 +438,7 @@ class AgentRunsStore {
     if (previousBusy) {
       entry.settledAt = Date.now()
     }
+    entry.awaitingDispatchSince = null
     entry.busy = false
     entry.activity = 'session'
     entry.activityDetail = null

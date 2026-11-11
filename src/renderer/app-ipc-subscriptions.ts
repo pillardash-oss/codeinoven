@@ -285,10 +285,18 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     // reading as work in progress on the row, the header and the rail. A parked
     // retry keeps its own entry so its clock survives, and `completeSession`
     // still yields the entry to a background workflow that owns it.
+    // A turn this window just dispatched is the exception, and it is why a
+    // provider or harness switch flickered: binding the new session publishes a
+    // thread update while the row still carries the previous turn's settled
+    // status, so this repair cleared a run that had not started yet and the
+    // status read working, idle, then working again seconds later when the new
+    // harness finally reported. An unconfirmed dispatch keeps its entry until a
+    // live session states the run (or the send fails and settles it).
     if (
       thread.status !== 'working-paused' &&
       !isThreadExecutionActiveStatus(thread.status) &&
-      agentRuns.isBusy(thread.projectId, thread.id)
+      agentRuns.isBusy(thread.projectId, thread.id) &&
+      !agentRuns.isAwaitingDispatch(thread.projectId, thread.id)
     ) {
       agentRuns.completeSession(thread.projectId, thread.id)
     }

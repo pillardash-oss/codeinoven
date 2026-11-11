@@ -753,6 +753,7 @@ class ThreadMessagesStore {
       references
     )
     agentRuns.setBusy(projectId, conversationId, true, messageId)
+    agentRuns.beginDispatch(projectId, conversationId)
     try {
       const response = await invoke(
         'agent:sendTemporaryPrompt',
@@ -804,6 +805,7 @@ class ThreadMessagesStore {
       references
     )
     agentRuns.setBusy(projectId, conversationId, true, messageId)
+    agentRuns.beginDispatch(projectId, conversationId)
     try {
       await invoke(
         'agent:steerTemporaryPrompt',
