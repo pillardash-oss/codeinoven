@@ -89,6 +89,10 @@ export async function probeLocalAiServer(
   port: number,
   runtime: LocalAiRuntimeId
 ): Promise<LlamaCppProbeResult> {
+  // An MLX server binds its port and lists models before it has read a single
+  // weight, so `/v1/models` there says "started", not "ready". Its own health
+  // endpoint is what waits for the model, which is the same thing a turn needs.
+  if (runtime === 'mlx') return probeMlxServer(baseUrl, port)
   let response: Response
   try {
     response = await fetch(`${baseUrl}/v1/models`, {
@@ -100,13 +104,30 @@ export async function probeLocalAiServer(
   if (!response.ok) {
     return { ready: false, models: [], error: `The server answered ${response.status}` }
   }
-  if (runtime === 'mlx') return { ready: true, models: await mlxLoadedModels(port), error: '' }
   try {
     const body: unknown = await response.json()
     return { ready: true, models: readModelIds(body), error: '' }
   } catch {
     return { ready: false, models: [], error: 'The server answered with invalid JSON' }
   }
+}
+
+/** Whether an MLX server has finished loading, and which model it loaded. */
+async function probeMlxServer(baseUrl: string, port: number): Promise<LlamaCppProbeResult> {
+  let response: Response
+  try {
+    response = await fetch(`${baseUrl}/health`, {
+      signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
+    })
+  } catch {
+    return { ready: false, models: [], error: 'The server is not answering yet' }
+  }
+  // 503 is the answer while it fetches or reads its weights, which is not a
+  // failure: the readiness poll simply keeps waiting.
+  if (!response.ok) {
+    return { ready: false, models: [], error: 'The model is still loading' }
+  }
+  return { ready: true, models: await mlxLoadedModels(port), error: '' }
 }
 
 /**

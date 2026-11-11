@@ -11,10 +11,11 @@
     localAiServerCommandName,
     nextFreeLlamaCppPort,
     type LlamaCppServerEntry,
+    type LocalAiModelLocation,
     type LocalAiRuntimeId,
     type LocalAiRuntimeStatus
   } from '$shared/llama-cpp'
-  import { onMount } from 'svelte'
+  import { onDestroy, onMount } from 'svelte'
   import { toast } from 'svelte-sonner'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
   import ConfirmDialog from '../../ui/ConfirmDialog.svelte'
@@ -144,10 +145,43 @@
     baseUrlProviderFlow.open({ provider: null, defaultHarnessId: DEFAULT_HARNESS })
   }
 
+  /**
+   * Write the folder a finished download landed in into the saved row.
+   *
+   * A row saved from a Hugging Face tag is a tag only until the weights exist; from
+   * then on the folder is what the next start loads, which is what keeps a
+   * multi-gigabyte model from being fetched again. The record is only rewritten
+   * when it still names the tag that was downloaded, so a row the user edited
+   * meanwhile is left alone.
+   */
+  async function saveLocalizedModel(
+    entry: LlamaCppServerEntry,
+    location: LocalAiModelLocation
+  ): Promise<void> {
+    const saved = config.llamaCppServers ?? []
+    const current = saved.find((candidate) => candidate.id === entry.id)
+    if (!current || current.modelReference !== entry.modelReference) return
+    await updateConfig({
+      llamaCppServers: saved.map((candidate) =>
+        candidate.id === entry.id
+          ? { ...candidate, modelPath: location.path, modelReference: '' }
+          : candidate
+      )
+    })
+    toast.success('Model saved locally', { description: location.path })
+  }
+
   onMount(() => {
+    // Only one engine tab is mounted at a time, so this is the handler for the
+    // rows on screen.
+    localAi.onModelLocalized = (entry, location) => void saveLocalizedModel(entry, location)
     // A renderer reload leaves the main process's servers running; reattach to
     // the ones that answer instead of showing them as stopped.
     for (const entry of entries) void localAi.attach(entry)
+  })
+
+  onDestroy(() => {
+    localAi.onModelLocalized = null
   })
 </script>
 

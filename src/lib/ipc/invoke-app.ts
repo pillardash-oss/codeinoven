@@ -19,6 +19,7 @@ import type { Contract } from './contract-helpers'
 import type {
   LlamaCppLogStream,
   LlamaCppProbeResult,
+  LocalAiModelLocation,
   LocalAiRuntimeId,
   LocalAiRuntimeStatus,
   LocalAiUnloadResult
@@ -72,6 +73,14 @@ export const invokeAppContract = {
   'localAi:logTail': {} as Contract<[entryId: string], string[]>,
   /** Follow a row's log, either over its live PTY or by reading its log file. */
   'localAi:logStream': {} as Contract<[entryId: string, follow: boolean], LlamaCppLogStream>,
+  /**
+   * Where the model this row downloaded was written, so the saved row can name the
+   * folder instead of the tag it came from.
+   */
+  'localAi:modelLocation': {} as Contract<
+    [reference: string, host: string, port: number, runtime: LocalAiRuntimeId],
+    LocalAiModelLocation | null
+  >,
   /** Pick a local model: a `.gguf` file, or an MLX folder. */
   'localAi:pickModel': {} as Contract<[runtime?: LocalAiRuntimeId], string | null>,
   'dialog:pickFolder': {} as Contract<[], string | null>,

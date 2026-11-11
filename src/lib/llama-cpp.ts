@@ -151,6 +151,10 @@ export function localAiModelLabel(entry: LlamaCppServerEntry): string {
   const source = localAiModelSource(entry)
   if (!source) return 'No model'
   if (source.kind === 'local') {
+    // A row rewritten to the folder its download landed in keeps naming the
+    // repository: the snapshot's own folder is a commit hash, which says nothing.
+    const repo = huggingFaceRepoForCachePath(source.path)
+    if (repo.length > 0) return repo
     const segments = source.path.split(/[\\/]/u)
     return segments[segments.length - 1] || source.path
   }
@@ -242,6 +246,41 @@ export function localAiModelId(entry: LlamaCppServerEntry): string {
     return source.kind === 'local' ? source.path : source.reference.repo
   }
   return llamaCppModelAlias(entry)
+}
+
+/**
+ * Every id a started server may report for this row.
+ *
+ * A row that downloaded its model is rewritten to point at the folder it landed
+ * in, and a server started from the earlier tag keeps naming the repository. Both
+ * ids mean this row's model, so adoption matches either one.
+ */
+export function localAiModelAliases(entry: LlamaCppServerEntry): string[] {
+  const ids: string[] = []
+  const primary = localAiModelId(entry)
+  if (primary.length > 0) ids.push(primary)
+  const source = localAiModelSource(entry)
+  if (entry.runtime === 'mlx' && source?.kind === 'local') {
+    const repo = huggingFaceRepoForCachePath(source.path)
+    if (repo.length > 0 && !ids.includes(repo)) ids.push(repo)
+  }
+  return ids
+}
+
+/**
+ * The repository a Hugging Face cache folder belongs to, or an empty string.
+ *
+ * The cache names a repository `models--<owner>--<name>`, so a snapshot path
+ * answers which repository it holds. A name with a single dash keeps it, and a
+ * double dash inside a name is rejoined to the tail.
+ */
+export function huggingFaceRepoForCachePath(path: string): string {
+  const marker = /(?:^|[\\/])models--([^\\/]+)/u.exec(path)
+  const slug = marker?.[1] ?? ''
+  if (slug.length === 0) return ''
+  const [owner, ...rest] = slug.split('--')
+  if (!owner || rest.length === 0) return ''
+  return `${owner}/${rest.join('--')}`
 }
 
 /**
@@ -683,6 +722,14 @@ export interface LocalAiRuntimeStatus {
 export interface LlamaCppLogStream {
   source: 'pty' | 'file'
   lines: string[]
+}
+
+/** Where a downloaded model lives on this machine, and what it costs on disk. */
+export interface LocalAiModelLocation {
+  /** Absolute folder (MLX snapshot) or file (GGUF) the server loaded. */
+  path: string
+  /** Bytes the model occupies, 0 when it could not be measured. */
+  bytes: number
 }
 
 /** The readiness answer for a started server. */

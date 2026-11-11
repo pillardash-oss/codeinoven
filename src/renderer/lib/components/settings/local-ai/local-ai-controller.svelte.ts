@@ -7,16 +7,18 @@
  * The processes themselves live in the main process's PTY service; this class
  * subscribes to their streams and never spawns anything itself.
  */
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
-  localAiModelId,
+  localAiModelAliases,
+  localAiModelSource,
   localAiPtyId,
   localAiServerArgs,
   type LlamaCppBrewJobKind,
   type LlamaCppLogStream,
   type LlamaCppProbeResult,
-  type LlamaCppServerEntry
+  type LlamaCppServerEntry,
+  type LocalAiModelLocation
 } from '$shared/llama-cpp'
 
 export type LlamaCppServerStatus = 'stopped' | 'starting' | 'running' | 'failed'
@@ -144,8 +146,63 @@ export class LocalAiController {
 
   /** Whether a row's own model is among the ids a server answers with. */
   private servesEntry(entry: LlamaCppServerEntry, models: readonly string[]): boolean {
-    const model = localAiModelId(entry)
-    return model.length > 0 && models.some((served) => served === model)
+    const aliases = localAiModelAliases(entry)
+    return models.some((served) => aliases.includes(served))
+  }
+
+  /**
+   * Called once a row's download has finished and the model's folder is known, so
+   * the saved row can name that folder instead of the tag it came from.
+   */
+  onModelLocalized: ((entry: LlamaCppServerEntry, location: LocalAiModelLocation) => void) | null =
+    null
+
+  /** Folders already resolved, so a readiness poll never repeats the lookup. */
+  private locations = new SvelteMap<string, LocalAiModelLocation>()
+  /** Folders already handed to the page, so the record is written once. */
+  private handedOff = new SvelteSet<string>()
+
+  /**
+   * Where the weights this row asks for are on disk right now, or null while they
+   * are still being fetched.
+   *
+   * A row that already names a folder is on disk by definition, so only a tag is
+   * ever asked about. The answer is the same call that decides the row is ready:
+   * a server whose generator is alive but whose weights are still arriving cannot
+   * serve a turn, so "downloaded" is the honest line for both.
+   */
+  private async modelLocationOf(entry: LlamaCppServerEntry): Promise<LocalAiModelLocation | null> {
+    if (localAiModelSource(entry)?.kind !== 'huggingface') return null
+    const key = `${entry.id}\u0000${entry.modelReference}`
+    const known = this.locations.get(key)
+    if (known) return known
+    try {
+      const location = await invoke(
+        'localAi:modelLocation',
+        entry.modelReference,
+        entry.host,
+        entry.port,
+        entry.runtime
+      )
+      if (!location) return null
+      this.locations.set(key, location)
+      return location
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Hand a finished download's folder to the page once, which owns the saved
+   * config. The row is written while it runs, so the next app start loads the
+   * folder instead of asking the hub about a repository it already has.
+   */
+  private localizeModel(entry: LlamaCppServerEntry, location: LocalAiModelLocation | null): void {
+    if (!location) return
+    const key = `${entry.id}\u0000${entry.modelReference}`
+    if (this.handedOff.has(key)) return
+    this.handedOff.add(key)
+    this.onModelLocalized?.(entry, location)
   }
 
   private async probeOf(entry: LlamaCppServerEntry): Promise<LlamaCppProbeResult> {
@@ -255,6 +312,7 @@ export class LocalAiController {
     // instance that launched it; its own log file is what streams instead.
     await this.followLog(entry)
     this.scheduleAdoptedProbe(entry)
+    void this.modelLocationOf(entry).then((location) => this.localizeModel(entry, location))
   }
 
   /** No PTY exit event will come for an adopted server, so a slow probe is what
@@ -451,15 +509,25 @@ export class LocalAiController {
     } catch {
       result = { ready: false, models: [], error: 'The readiness probe failed' }
     }
+    // An MLX server answers its health endpoint from the moment its generator
+    // loop is up, which is before a single weight has been read. Its weights on
+    // disk are the honest ready line, and they are what the row is rewritten to.
+    const location = result.ready ? await this.modelLocationOf(entry) : null
     if (!this.handles.has(entry.id)) return
-    if (result.ready) {
+    if (result.ready && (entry.runtime !== 'mlx' || !this.isReferenceRow(entry) || location)) {
       handle.timer = null
       this.setStatus(entry.id, 'running')
       this.setLoadedModel(entry.id, result.models[0] ?? '')
       this.notice = { ...this.notice, [entry.id]: '' }
+      this.localizeModel(entry, location)
       return
     }
     this.scheduleProbe(entry)
+  }
+
+  /** Whether this row asks for a model that has to be fetched before it runs. */
+  private isReferenceRow(entry: LlamaCppServerEntry): boolean {
+    return localAiModelSource(entry)?.kind === 'huggingface'
   }
 
   private stopHandle(entryId: string): void {

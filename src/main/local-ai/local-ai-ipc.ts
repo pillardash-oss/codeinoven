@@ -30,6 +30,7 @@ import { detectLlamaCppRuntime } from './llama-cpp-runtime'
 import { detectMlxRuntime } from './mlx-runtime'
 import { probeLocalAiServer, stopLocalAiServer } from './local-ai-process'
 import { followLocalAiLog, localAiLogPath, tailLocalAiLog } from './local-ai-log'
+import { resolveModelLocation } from './local-ai-model-location'
 import { sharedLocalAiRuntimeRegistry } from './local-ai-runtime-registry'
 
 /** The engines the page can launch, and the order a bad value falls back through. */
@@ -113,6 +114,25 @@ export function registerLocalAiIpc(
         port,
         readRuntime(rawRuntime)
       )
+    }
+  )
+
+  /**
+   * Where the model this row downloaded lives, so the row stops naming a tag and
+   * names the folder instead. Asked once, when the row answers.
+   */
+  ipcMain.handle(
+    'localAi:modelLocation',
+    async (_, rawReference: unknown, rawHost: unknown, rawPort: unknown, rawRuntime: unknown) => {
+      if (typeof rawReference !== 'string' || rawReference.length > 512) return null
+      if (typeof rawHost !== 'string' || !isLlamaCppHostValid(rawHost)) return null
+      const port = typeof rawPort === 'number' ? rawPort : Number.NaN
+      if (!isLlamaCppPortValid(port)) return null
+      return resolveModelLocation({
+        baseUrl: llamaCppBaseUrl({ host: rawHost, port }),
+        runtime: readRuntime(rawRuntime),
+        reference: rawReference
+      })
     }
   )
 
