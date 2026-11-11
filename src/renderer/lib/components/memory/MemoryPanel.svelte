@@ -871,7 +871,7 @@
                 : 'Show assistant memories in this list'}
               title="Show or hide assistant-scoped memory entries in this list"
             />
-            Assistant
+            Show assistant memories
           </label>
         </div>
         {#if allowTransfer}
@@ -969,7 +969,7 @@
             onclick={addEntry}
           >
             <CioPlus size={14} />
-            <span class="memory-action-label">Add Memory</span>
+            <span class="memory-action-label">Add memory</span>
           </button>
         {/if}
         {#if currentSection !== 'proposed'}
@@ -1089,7 +1089,7 @@
             ? 'grid grid-cols-2 gap-2'
             : 'flex shrink-0 items-center gap-2'}
         >
-          <div class={variant === 'sidebar' ? 'w-full' : 'w-36 shrink-0'}>
+          <div class={variant === 'sidebar' ? 'w-full' : 'w-44 shrink-0'}>
             <EnumSelect
               options={[
                 { id: '', label: 'All categories' },
@@ -1102,7 +1102,7 @@
               onChange={(id) => (filterCategory = id as MemoryCategory | '')}
             />
           </div>
-          <div class={variant === 'sidebar' ? 'w-full' : 'w-36 shrink-0'}>
+          <div class={variant === 'sidebar' ? 'w-full' : 'w-44 shrink-0'}>
             <EnumSelect
               options={[
                 { id: '', label: 'All priorities' },
