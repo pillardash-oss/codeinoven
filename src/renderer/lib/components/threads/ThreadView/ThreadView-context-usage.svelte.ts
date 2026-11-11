@@ -344,10 +344,16 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         // this model   a live session's stale window must never replace the
         // window the user just configured.
         ...(this.root.currentWorkingTraceAttribution.configuredContextWindow === undefined &&
+        this.contextUsage?.contextWindow === undefined &&
         currentUsage.contextWindow !== undefined
           ? { contextWindow: currentUsage.contextWindow }
           : {}),
-        ...(currentUsage.contextUsed !== undefined
+        // A live reading only SEEDS occupancy the thread never reported (an
+        // old thread whose turns predate capture). The thread's own reported
+        // occupancy always wins: a probe answers for whichever session it
+        // reached, and letting it overwrite a real reading is what made the
+        // meter drop from 33% to 1% the moment the indicator was hovered.
+        ...(currentUsage.contextUsed !== undefined && this.contextUsage?.contextUsed === undefined
           ? { contextUsed: currentUsage.contextUsed }
           : {}),
         ...(currentUsage.credits ? { credits: currentUsage.credits } : {})

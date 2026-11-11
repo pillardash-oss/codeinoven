@@ -1005,9 +1005,13 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver readAccountUsage
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('extra_usage')
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('limits')
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('spend')
-    // The get_context_usage control supplies the live context window.
-    expect(telemetry?.contextWindow).toBe(967000)
-    expect(telemetry?.contextUsed).toBe(21401)
+    // The probe above is a brand-new Claude process, so its `get_context_usage`
+    // answer describes an empty window rather than this thread's conversation:
+    // 21k of 967k is a fresh system prompt, and treating it as occupancy is
+    // what dropped the meter to 1% the moment the indicator was hovered.
+    // The account-wide quota still maps, and the context reading is dropped.
+    expect(telemetry?.contextWindow).toBeUndefined()
+    expect(telemetry?.contextUsed).toBeUndefined()
   })
 
   it('returns null when plan rate limits are unavailable', async () => {
