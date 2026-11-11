@@ -662,27 +662,30 @@
   <!-- Tab content -->
   <div class="min-w-0 flex-1 overflow-y-auto">
     {#if family.length > 0}
-      <!-- Related pages share one sidebar entry and switch here, as tabs. -->
-      <div
-        class="sticky top-0 z-10 flex gap-1 border-b border-border bg-app px-6 pt-3"
-        role="tablist"
-        aria-label="{family[0]?.title} pages"
-      >
-        {#each family as entry (entry.section)}
-          {@const isCurrent = entry.section === section}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={isCurrent}
-            class="-mb-px border-b-2 px-3 py-1.5 text-sm transition-colors {isCurrent
-              ? 'border-foreground text-foreground'
-              : 'border-transparent text-muted hover:text-foreground'}"
-            title="{entry.title} settings"
-            onclick={() => navigateSection(entry.section)}
-          >
-            {entry.title}
-          </button>
-        {/each}
+      <!-- Related pages share one sidebar entry and switch here, with the same
+           segmented tabs every settings page uses. -->
+      <div class="px-6 pt-6">
+        <div
+          class="flex w-max items-center gap-0.5 border bg-elevated p-0.5"
+          role="tablist"
+          aria-label="{family[0]?.title} pages"
+        >
+          {#each family as entry (entry.section)}
+            {@const isCurrent = entry.section === section}
+            <button
+              type="button"
+              role="tab"
+              aria-selected={isCurrent}
+              class="px-3 py-1.5 text-xs font-medium transition-colors {isCurrent
+                ? 'bg-surface text-foreground'
+                : 'text-muted hover:text-foreground'}"
+              title="{entry.title} settings"
+              onclick={() => navigateSection(entry.section)}
+            >
+              {entry.title}
+            </button>
+          {/each}
+        </div>
       </div>
     {/if}
     {#if section === 'profile'}
