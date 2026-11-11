@@ -63,7 +63,7 @@
 <div class="p-6 pb-24">
   <div class="mb-4">
     <h1 class="text-xl font-bold tracking-tight">Local AI</h1>
-    <p class="mt-0.5 text-sm text-muted">One engine per tab, each with the models it serves.</p>
+    <p class="mt-0.5 text-sm text-muted">Models that run on this computer, grouped by engine.</p>
   </div>
 
   <div

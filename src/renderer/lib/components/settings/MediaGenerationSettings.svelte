@@ -140,9 +140,8 @@
     Generation backend
   </h3>
   <p class="mt-2 text-xs leading-relaxed text-dimmed">
-    The service that makes images, clips and sound when a design or a composition needs them. One
-    token reaches many models, and you pick which model each craft uses below. Store your own key:
-    it is kept in this device's secure vault, and nothing is generated until you add one.
+    The service that generates images, clips and sound. One key covers many models. It is stored in
+    this device's secure vault, and nothing is generated until you add one.
   </p>
 
   {#if error}

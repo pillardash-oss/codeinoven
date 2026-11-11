@@ -226,8 +226,8 @@
     <div>
       <h1 class="text-xl font-bold tracking-tight">Heartbeat</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Send a lightweight "ping" to a model at set times to start its usage window early so the
-        next 5-hour reset lands before you need it.
+        Ping a model at set times so its 5-hour usage window starts early and resets before you need
+        it.
       </p>
     </div>
     <button

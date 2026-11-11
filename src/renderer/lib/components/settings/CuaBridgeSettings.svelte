@@ -585,15 +585,13 @@
       <div class="border bg-elevated p-3">
         <p class="text-xs font-semibold">Auto Review</p>
         <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
-          Cua runs in standard mode. Assistant desktop actions proceed; explicitly denied boundaries
-          return to the thread for permission.
+          Agents can use desktop apps. Anything you have blocked asks you for permission first.
         </p>
       </div>
       <div class="border bg-elevated p-3">
         <p class="text-xs font-semibold">Full Access</p>
         <p class="mt-1 text-[0.6875rem] leading-relaxed text-muted">
-          Cua runs in unrestricted mode with its required acknowledgement. Platform invariants and
-          managed policies still apply.
+          Agents can use desktop apps without asking. System and managed policies still apply.
         </p>
       </div>
     </div>

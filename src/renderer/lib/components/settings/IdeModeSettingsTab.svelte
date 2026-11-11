@@ -254,8 +254,8 @@
         <CioCode size={18} class="text-muted" />IDE Mode
       </h1>
       <p class="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
-        Language servers provide definitions, references, and documentation when IDE Mode is enabled
-        in a file viewer.
+        Language servers add go to definition, references and hover docs to files opened in IDE
+        Mode.
       </p>
     </div>
   </div>
@@ -311,9 +311,8 @@
         <div class="min-w-0">
           <h2 class="text-sm font-semibold">Format on save</h2>
           <p class="mt-1 max-w-2xl text-xs leading-relaxed text-muted">
-            Re-lay-out a file through its language server when a file viewer saves it with IDE Mode
-            on. A file whose server has no formatter, or whose formatter cannot answer, is saved
-            exactly as written.
+            Format files with their language server when you save in IDE Mode. Files without a
+            formatter are saved as written.
           </p>
         </div>
         <Switch

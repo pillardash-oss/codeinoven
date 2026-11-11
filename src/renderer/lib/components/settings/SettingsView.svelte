@@ -959,7 +959,7 @@
             <h3
               class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
             >
-              Work Behaviour
+              Work
             </h3>
 
             <div class="space-y-4">
@@ -967,7 +967,7 @@
                 <div>
                   <p class="text-sm font-medium">Keep device on while work is in progress</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Prevent sleep while an agent is actively working; spec-ready threads stay idle
+                    Stop this computer from sleeping while an agent is working
                   </p>
                 </div>
                 <Switch
@@ -982,8 +982,7 @@
                 <div>
                   <p class="text-sm font-medium">Resume work on restart</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Threads will be resumed if they were interrupted due to an app closure or
-                    unknown issues
+                    Pick up threads that were interrupted when the app closed or crashed
                   </p>
                 </div>
                 <Switch
@@ -1125,7 +1124,7 @@
                 <div>
                   <p class="text-sm font-medium">Max threads per project</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Oldest unpinned threads are evicted when exceeded
+                    Past this number, the oldest unpinned threads are removed
                   </p>
                 </div>
                 <input
@@ -1249,7 +1248,8 @@
                 <div>
                   <p class="text-sm font-medium">Background mode</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Scheduled parks only when work is running or due; Always never quits on close
+                    Scheduled stays open only while work is running or due. Always keeps running
+                    after you close the window.
                   </p>
                 </div>
                 <select
@@ -1434,8 +1434,8 @@
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">Design and video</h1>
           <p class="mt-0.5 text-sm text-muted">
-            Which model does each kind of design and video work, and the optional video pack. Save
-            folders belong to each project and are changed from its design or video board.
+            Pick the models that make images, clips, sound and copy for design and video work. Each
+            project sets its own save folders from its design or video board.
           </p>
           {#if error}
             <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">

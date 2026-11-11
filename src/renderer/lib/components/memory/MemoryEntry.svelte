@@ -112,7 +112,7 @@
 
   const categoryOptions: { value: MemoryCategory; label: string }[] = [
     { value: 'behavioral', label: 'Behavioral' },
-    { value: 'project-rule', label: 'Project Rule' },
+    { value: 'project-rule', label: 'Project rule' },
     { value: 'identity', label: 'Identity' },
     { value: 'preference', label: 'Preference' },
     { value: 'models', label: 'Models' }

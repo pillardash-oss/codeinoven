@@ -192,9 +192,9 @@
       </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
-          <p class="text-sm font-medium">Open localhost on CIO's browser</p>
+          <p class="text-sm font-medium">Open localhost links in the app browser</p>
           <p class="text-xs leading-relaxed text-dimmed">
-            Keep local development links inside the workspace for testing
+            Test local development sites without leaving the app
           </p>
         </div>
         <Switch
@@ -208,10 +208,10 @@
       <div class="mt-4 border-t pt-4">
         <div class="flex items-center justify-between gap-4">
           <div>
-            <p class="text-sm font-medium">Open all other links on CIO's browser</p>
+            <p class="text-sm font-medium">Open every other link in the app browser</p>
             <p class="text-xs leading-relaxed text-dimmed">
-              Send every non-local link to the workspace browser of the current project or thread
-              instead of your default browser
+              Open web links in the current project or thread's browser instead of your default
+              browser
             </p>
           </div>
           <Switch

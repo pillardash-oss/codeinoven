@@ -110,7 +110,7 @@
 
   const categoryLabels: Record<MemoryCategory, string> = {
     behavioral: 'Behavioral',
-    'project-rule': 'Project Rule',
+    'project-rule': 'Project rule',
     identity: 'Identity',
     preference: 'Preference',
     models: 'Models'
@@ -1079,7 +1079,7 @@
           <CioSearch size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
           <input
             class="w-full border bg-elevated pl-8 pr-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
-            placeholder="Search memories..."
+            placeholder="Search memories…"
             bind:value={searchQuery}
           />
         </div>
