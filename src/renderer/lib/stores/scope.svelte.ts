@@ -572,6 +572,38 @@ class ScopeState {
     })
   }
 
+  /**
+   * Dock a specific scope on the sidebar, replacing whatever is docked now.
+   *
+   * This is what the app-wide history restores with: every recorded location
+   * carries the scope it showed, so stepping back into the scoped view re-docks
+   * that project, bucket, slice and thread instead of landing on a plain
+   * projects page. Unlike the stash restore, the context comes from the caller.
+   */
+  restoreSidebarContext(context: ScopeSidebarContext): void {
+    const current = this.sidebarContext
+    if (
+      current &&
+      current.projectId === context.projectId &&
+      current.bucketId === context.bucketId &&
+      current.stage === context.stage &&
+      current.threadId === context.threadId
+    ) {
+      return
+    }
+    this.sidebarContext = { ...context }
+    this.stashedSidebarContext = null
+    if (context.projectId !== this.activeProjectId) {
+      void this.activateProject(context.projectId)
+    }
+    void this.threads.ensureProjectThreadsLoaded(context.projectId)
+    void this.ensureBoardLoaded(context.projectId)
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
   clearSidebarContext(): void {
     this.sidebarContext = null
     this.stashedSidebarContext = null

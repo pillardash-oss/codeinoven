@@ -69,9 +69,7 @@ export class AppOpenAssistantFromSearch extends BoardUnit<App> {
     if (!entry) return
     navigationHistoryState.beginTraversal()
     try {
-      this.root.onKeydown.navigate(entry.view)
-      this.restoreUtilitiesFromHistory(entry)
-      await this.root.spotlightPalette.restoreThreadFromHistory(entry)
+      await this.root.spotlightPalette.showHistoryEntry(entry)
     } finally {
       navigationHistoryState.endTraversal()
     }

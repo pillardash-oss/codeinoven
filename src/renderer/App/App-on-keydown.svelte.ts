@@ -378,8 +378,11 @@ export class AppOnKeydown extends BoardUnit<App> {
       // An assistant task is only ever shown by the assistant view.
       this.navigate('assistant')
     } else if (inScopeState) {
-      // Stay in the scope state: reveal the thread in the scope sidebar.
-      if (this.activeView !== 'projects') this.navigate('projects')
+      // Stay in the scope state: reveal the thread in the scope sidebar. The
+      // scoped view is its own view, so it is re-entered as itself instead of
+      // as the projects page carrying a docked sidebar, which is what made a
+      // notification drop the scoped state back to a plain project view.
+      if (this.activeView !== 'projects-scope') this.navigate('projects-scope')
       scopeState.showSidebarForThread(thread)
       void scopeState.ensureBoardLoaded(thread.projectId)
     } else if (this.activeView === 'threads') {

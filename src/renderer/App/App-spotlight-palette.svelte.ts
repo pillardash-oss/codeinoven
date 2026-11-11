@@ -468,7 +468,55 @@ export class AppSpotlightPalette extends BoardUnit<App> {
       utilities:
         this.root.onKeydown.activeView === 'settings-utilities'
           ? settingsRouteState.utilities
-          : null
+          : null,
+      // The scoped view is the projects page plus its docked scope, so the scope
+      // is part of the place and not a detail of the page.
+      scope: scopeState.sidebarContext ? { ...scopeState.sidebarContext } : null
+    }
+  }
+
+  /**
+   * The view a recorded location belongs to.
+   *
+   * The scoped view is the workspace page with a scope docked on its sidebar, so
+   * a location is it exactly when it recorded a scope. A location recorded as
+   * the scoped view whose scope is gone has nothing to show and lands on the
+   * plain projects page, and a projects location that carries a scope (a restore
+   * or a landing that docked the sidebar without registering the view) comes
+   * back as the scoped view it actually was.
+   */
+  private historyView(entry: NavigationLocation): NavigationLocation['view'] {
+    if (entry.view !== 'projects' && entry.view !== 'projects-scope') return entry.view
+    return entry.scope ? 'projects-scope' : 'projects'
+  }
+
+  /**
+   * Show a recorded location in full: its view, its Utilities page, the scope
+   * docked in it, and the thread that was open. Traversal wraps this, so the
+   * observer does not record the restore as a new step.
+   */
+  async showHistoryEntry(entry: NavigationLocation): Promise<void> {
+    const view = this.historyView(entry)
+    this.root.onKeydown.navigate(view)
+    this.root.openAssistantFromSearch.restoreUtilitiesFromHistory(entry)
+    // The docked scope means something only on the scoped view. Every other
+    // target keeps whatever the navigation just left it with, so stepping back
+    // into Settings or Chats never quietly re-docks a scope behind the page.
+    if (view === 'projects-scope' && entry.scope) {
+      scopeState.restoreSidebarContext(entry.scope)
+    }
+    await this.restoreThreadFromHistory(entry)
+  }
+
+  /** Navigate to the previously visited location, if any. */
+  async goBack(): Promise<void> {
+    const entry = navigationHistoryState.back(this.currentLocation())
+    if (!entry) return
+    navigationHistoryState.beginTraversal()
+    try {
+      await this.showHistoryEntry(entry)
+    } finally {
+      navigationHistoryState.endTraversal()
     }
   }
 
@@ -542,20 +590,6 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     if (!thread) return
     workspaceState.openThread(thread, project)
     void scopeState.ensureBoardLoaded(thread.projectId)
-  }
-
-  /** Navigate to the previously visited location, if any. */
-  async goBack(): Promise<void> {
-    const entry = navigationHistoryState.back(this.currentLocation())
-    if (!entry) return
-    navigationHistoryState.beginTraversal()
-    try {
-      this.root.onKeydown.navigate(entry.view)
-      this.root.openAssistantFromSearch.restoreUtilitiesFromHistory(entry)
-      await this.restoreThreadFromHistory(entry)
-    } finally {
-      navigationHistoryState.endTraversal()
-    }
   }
 
   capturePaletteFocus(): void {
