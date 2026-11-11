@@ -76,6 +76,7 @@
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import Modal from '../ui/Modal.svelte'
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
+  import EnumSelect from '../ui/EnumSelect.svelte'
   import Switch from '../ui/Switch.svelte'
   import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
   import SecretsSettingsTab from './SecretsSettingsTab.svelte'
@@ -104,7 +105,6 @@
   import SearchSettingsTab from './SearchSettingsTab.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
 
-  type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
     config: AppConfig
     settingsReady: boolean
@@ -302,6 +302,15 @@
     }
   })
 
+  const fontWeightOptions = FONT_WEIGHT_OPTIONS.map((option) => ({
+    id: String(option.id),
+    label: option.label
+  }))
+  const zoomOptions = ZOOM_LEVEL_OPTIONS.map((option) => ({
+    id: String(option.id),
+    label: option.label
+  }))
+
   const themeOptions = [
     { id: 'system' as const, label: 'System', icon: CioDisplay },
     { id: 'light' as const, label: 'Light', icon: CioSun },
@@ -330,9 +339,10 @@
   const backgroundModeOptions: Array<{
     id: 'scheduled' | 'always'
     label: string
+    hint: string
   }> = [
-    { id: 'scheduled', label: 'Scheduled' },
-    { id: 'always', label: 'Always' }
+    { id: 'scheduled', label: 'Scheduled', hint: 'Stays open only while work is running or due' },
+    { id: 'always', label: 'Always', hint: 'Keeps running after the window closes' }
   ]
 
   function saveThreadLimit(event: Event): void {
@@ -765,18 +775,16 @@
                 <p class="text-sm font-medium">Font</p>
                 <p class="text-xs leading-relaxed text-dimmed">Typeface used across the app</p>
               </div>
-              <select
-                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+              <EnumSelect
+                options={FONT_FAMILY_OPTIONS}
                 value={config.fontFamily}
                 disabled={!settingsReady}
-                aria-label="App font"
-                onchange={(event: SelectChangeEvent) =>
-                  void updateConfig({ fontFamily: event.currentTarget.value })}
-              >
-                {#each FONT_FAMILY_OPTIONS as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
+                ariaLabel="App font"
+                title="App font"
+                placeholder="Choose a font"
+                class="w-48"
+                onChange={(id) => void updateConfig({ fontFamily: id })}
+              />
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
@@ -810,44 +818,32 @@
                 <p class="text-sm font-medium">Font weight</p>
                 <p class="text-xs leading-relaxed text-dimmed">Lightness of the app text</p>
               </div>
-              <select
-                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                value={config.fontWeight}
+              <EnumSelect
+                options={fontWeightOptions}
+                value={String(config.fontWeight)}
                 disabled={!settingsReady}
-                aria-label="Font weight"
-                onchange={(event: SelectChangeEvent) => {
-                  const weight = Number(event.currentTarget.value)
-                  if (Number.isInteger(weight) && weight >= 100 && weight <= 800) {
-                    void updateConfig({ fontWeight: weight })
-                  }
-                }}
-              >
-                {#each FONT_WEIGHT_OPTIONS as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
+                ariaLabel="Font weight"
+                title="Font weight"
+                placeholder="Choose a weight"
+                class="w-48"
+                onChange={(id) => void updateConfig({ fontWeight: Number(id) })}
+              />
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Zoom</p>
                 <p class="text-xs leading-relaxed text-dimmed">Magnify the whole interface</p>
               </div>
-              <select
-                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                value={config.zoomLevel}
+              <EnumSelect
+                options={zoomOptions}
+                value={String(config.zoomLevel)}
                 disabled={!settingsReady}
-                aria-label="Interface zoom"
-                onchange={(event: SelectChangeEvent) => {
-                  const zoom = Number(event.currentTarget.value)
-                  if (Number.isFinite(zoom) && zoom >= 0.5 && zoom <= 2) {
-                    void updateConfig({ zoomLevel: zoom })
-                  }
-                }}
-              >
-                {#each ZOOM_LEVEL_OPTIONS as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
+                ariaLabel="Interface zoom"
+                title="Interface zoom"
+                placeholder="Choose a zoom"
+                class="w-28"
+                onChange={(id) => void updateConfig({ zoomLevel: Number(id) })}
+              />
             </div>
           </div>
 
@@ -1027,20 +1023,16 @@
                     Pre-selected when merging a pull request from the Git panel
                   </p>
                 </div>
-                <select
-                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                <EnumSelect
+                  options={mergeMethodOptions}
                   value={config.defaultMergeMethod}
                   disabled={!settingsReady}
-                  aria-label="Default merge method"
-                  onchange={(event: SelectChangeEvent) =>
-                    void updateConfig({
-                      defaultMergeMethod: event.currentTarget.value as PrMergeMethod
-                    })}
-                >
-                  {#each mergeMethodOptions as option (option.id)}
-                    <option value={option.id}>{option.label}</option>
-                  {/each}
-                </select>
+                  ariaLabel="Default merge method"
+                  title="Default merge method"
+                  placeholder="Choose a method"
+                  class="w-48"
+                  onChange={(id) => void updateConfig({ defaultMergeMethod: id })}
+                />
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1049,20 +1041,16 @@
                     Ask when pulling, or always use one reconciliation strategy
                   </p>
                 </div>
-                <select
-                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                <EnumSelect
+                  options={pullStrategyOptions}
                   value={config.defaultPullStrategy}
                   disabled={!settingsReady}
-                  aria-label="Default pull strategy"
-                  onchange={(event: SelectChangeEvent) =>
-                    void updateConfig({
-                      defaultPullStrategy: event.currentTarget.value as GitPullPreference
-                    })}
-                >
-                  {#each pullStrategyOptions as option (option.id)}
-                    <option value={option.id}>{option.label}</option>
-                  {/each}
-                </select>
+                  ariaLabel="Default pull strategy"
+                  title="Default pull strategy"
+                  placeholder="Choose a strategy"
+                  class="w-48"
+                  onChange={(id) => void updateConfig({ defaultPullStrategy: id })}
+                />
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1252,20 +1240,16 @@
                     after you close the window.
                   </p>
                 </div>
-                <select
-                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
+                <EnumSelect
+                  options={backgroundModeOptions}
                   value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
                   disabled={!settingsReady || config.backgroundMode === 'off'}
-                  aria-label="Background mode"
-                  onchange={(event: SelectChangeEvent) =>
-                    void updateConfig({
-                      backgroundMode: event.currentTarget.value as 'scheduled' | 'always'
-                    })}
-                >
-                  {#each backgroundModeOptions as option (option.id)}
-                    <option value={option.id}>{option.label}</option>
-                  {/each}
-                </select>
+                  ariaLabel="Background mode"
+                  title="Background mode"
+                  placeholder="Choose a mode"
+                  class="w-48"
+                  onChange={(id) => void updateConfig({ backgroundMode: id })}
+                />
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
