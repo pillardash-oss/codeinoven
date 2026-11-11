@@ -105,6 +105,12 @@ export class AppHeaderNavigationController {
    *  never lands on a rail item that cannot show project threads. */
   lastProjectViewOption: HeaderViewOptionId = $state('projects')
 
+  /** The layout each folded rail item returns to: Project remembers Thread, and
+   *  Board remembers Scoped, each on its own so visiting one pair never resets
+   *  the other. */
+  private lastProjectLayout: 'projects' | 'threads' = $state('projects')
+  private lastBoardLayout: 'scope-board' | 'scoped-threads' = $state('scope-board')
+
   constructor(options: AppHeaderNavigationOptions) {
     this.getActiveView = options.getActiveView
     this.navigate = options.navigate
@@ -129,6 +135,8 @@ export class AppHeaderNavigationController {
       if (shown && PROJECT_FAMILY_VIEW_OPTIONS.includes(shown)) {
         this.lastProjectViewOption = shown
       }
+      if (shown === 'projects' || shown === 'threads') this.lastProjectLayout = shown
+      if (shown === 'scope-board' || shown === 'scoped-threads') this.lastBoardLayout = shown
     })
   }
 
@@ -322,11 +330,11 @@ export class AppHeaderNavigationController {
     return options
       .filter((option) => !RAIL_FOLDED_OPTIONS.has(option.id))
       .map((option) => {
-        if (option.id === 'projects' && this.lastProjectViewOption === 'threads') {
+        if (option.id === 'projects' && this.lastProjectLayout === 'threads') {
           const threads = options.find((candidate) => candidate.id === 'threads')
           return threads ? { ...option, select: threads.select } : option
         }
-        if (option.id === 'scope-board' && this.lastProjectViewOption === 'scoped-threads') {
+        if (option.id === 'scope-board' && this.lastBoardLayout === 'scoped-threads') {
           const scoped = options.find((candidate) => candidate.id === 'scoped-threads')
           return scoped ? { ...option, select: scoped.select } : option
         }
