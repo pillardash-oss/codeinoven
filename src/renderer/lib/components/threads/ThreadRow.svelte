@@ -888,13 +888,16 @@
       dispatchBadge !== null
   )
 
-  /** Whether the meta line names the project: a coloured dot and the name, or
-   *  the container glyph for hidden containers. A project's own list hides it. */
-  let showProjectMeta = $derived(Boolean(projectIconGlyph || (projectName && !hideProjectName)))
-
-  let projectDotColor = $derived(
-    project ? (project.color ?? pickColorForSeed(project.id)) : 'var(--color-muted)'
+  /** Whether the meta line names the project: the project's own icon and the
+   *  name, or the container glyph for hidden containers. A project's own list
+   *  hides the name but still shows the icon. */
+  let showProjectMeta = $derived(
+    Boolean(projectIconUrl || projectIconGlyph || (projectName && !hideProjectName))
   )
+
+  /** The one mark a row can carry before its project: a pin or a bookmark, in
+   *  the place the user reaches for when they want it gone again. */
+  let pinMarkVisible = $derived(effectivePinned || Boolean(thread.bookmarked))
 
   /** Whether the detailed row has anything for its meta line besides the
    *  last-edited time: what the thread ran with, where it ran, the branch and
@@ -911,7 +914,8 @@
       authoredWorkKinds.length > 0 ||
       dispatchBadge !== null ||
       scopeVisible ||
-      showProjectMeta
+      showProjectMeta ||
+      pinMarkVisible
   )
 
   let scopeColor = $derived(
@@ -1601,22 +1605,9 @@
            user, else the age. Pinning is not here: the row's context menu and
            the pin keymap already do it, so the line keeps no reserved space. -->
       <span class="flex w-full min-w-0 items-center gap-2">
-        <span class="line-clamp-2 min-w-0 flex-1 break-words text-[0.75rem] {titleClass}">
-          {#if thread.bookmarked}
-            <CioBookmark
-              size={10}
-              class="mr-0.5 inline -translate-y-px text-thread-pinned"
-              aria-label="Bookmarked"
-            />
-          {:else if effectivePinned}
-            <CioPin
-              size={10}
-              fill="currentColor"
-              class="mr-0.5 inline -translate-y-px text-thread-pinned"
-              aria-label="Pinned"
-            />
-          {/if}{displayTitle}
-        </span>
+        <span class="line-clamp-2 min-w-0 flex-1 break-words text-[0.75rem] {titleClass}"
+          >{displayTitle}</span
+        >
         {@render peekIndicator()}
         {#if activeIndicators.length > 0}
           <!-- Every live action the thread has, not only the loudest one. A thread
@@ -1685,24 +1676,58 @@
         <!-- In a narrow sidebar the footer yields to the title, so the row spends
              its height on the one thing the user reads. -->
         <span
-          class="hidden w-full @[16rem]/row:grid min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
+          class="hidden w-full @[16rem]/row:grid min-w-0 grid-cols-[minmax(0,1fr)_max-content] items-center gap-2 overflow-hidden"
         >
-          {#if dispatchBadge || harnessIds.length > 0 || showProjectMeta || scopeVisible}
+          {#if dispatchBadge || harnessIds.length > 0 || showProjectMeta || scopeVisible || pinMarkVisible}
             <span class="col-start-1 flex min-w-0 items-center gap-1.5 overflow-hidden">
+              {#if pinMarkVisible}
+                <!-- Pin and bookmark live here, at the head of the line the user
+                     already reads, so the one gesture they want is on the mark
+                     itself. A role="button" span, not a real <button>: the whole
+                     row is one already, and a button cannot be nested. The
+                     `tabindex={-1}` keeps it out of the tab order for the same
+                     reason, and the row's `thread-pin` keymap binding handles
+                     the key. -->
+                <span
+                  role="button"
+                  tabindex={-1}
+                  class="flex h-3.5 shrink-0 items-center justify-center text-thread-pinned hover:bg-overlay"
+                  aria-label={thread.bookmarked ? 'Remove bookmark' : 'Unpin thread'}
+                  title={thread.bookmarked ? 'Remove bookmark' : 'Unpin'}
+                  onclick={(e: MouseEvent) => {
+                    e.stopPropagation()
+                    if (thread.bookmarked) onBookmark(thread)
+                    else onTogglePin(thread)
+                  }}
+                  onkeydown={(e: KeyboardEvent) => {
+                    if (!keymapState.matches('thread-pin', e)) return
+                    e.stopPropagation()
+                    if (thread.bookmarked) onBookmark(thread)
+                    else onTogglePin(thread)
+                  }}
+                >
+                  {#if thread.bookmarked}
+                    <CioBookmark size={11} aria-hidden="true" />
+                  {:else}
+                    <CioPin size={11} fill="currentColor" aria-hidden="true" />
+                  {/if}
+                </span>
+              {/if}
               {#if showProjectMeta}
                 <span
                   class="flex min-w-0 items-center gap-1 text-[0.625rem] text-muted"
                   title={projectName ?? undefined}
                 >
-                  {#if projectIconGlyph}
+                  {#if projectIconUrl}
+                    <img
+                      src={projectIconUrl}
+                      alt=""
+                      class="h-3.5 w-3.5 shrink-0 object-contain"
+                      draggable="false"
+                    />
+                  {:else if projectIconGlyph}
                     {@const ContainerIcon = projectIconGlyph}
-                    <ContainerIcon size={10} strokeWidth={1.8} aria-hidden="true" />
-                  {:else}
-                    <span
-                      class="h-1.5 w-1.5 shrink-0"
-                      style="background-color: {projectDotColor};"
-                      aria-hidden="true"
-                    ></span>
+                    <ContainerIcon size={12} strokeWidth={1.8} aria-hidden="true" />
                   {/if}
                   {#if projectName && !hideProjectName}
                     <span class="truncate">{projectName}</span>
@@ -1752,7 +1777,11 @@
                 title={`Branch: ${branch}`}
               >
                 <CioTabGit size={10} class="shrink-0" aria-hidden="true" />
-                <span class="truncate">{branchLabel}</span>
+                <!-- The branch keeps its text until the row genuinely runs out:
+                     its track is max-content, so only a name longer than this
+                     cap truncates. It used to lose characters while the row
+                     still had room to give. -->
+                <span class="max-w-[10rem] truncate">{branchLabel}</span>
               </span>
             {/if}
             <ThreadFollowUpMark threadId={thread.id} />

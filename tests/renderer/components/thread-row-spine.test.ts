@@ -57,7 +57,9 @@ vi.mock('$lib/stores/foreign-runs.svelte', () => ({
  *     title, and a local thread spends no mark saying it is local;
  *  5. a settled row draws no spine and its title sits flush left; the gutter
  *     opens only while the row has a state to show;
- *  6. a pinned thread says so beside its title, not with a control in the gutter.
+ *  6. a pinned or bookmarked thread puts its pin at the head of the meta line,
+ *     where clicking it is the way to remove it;
+ *  7. the project is named with its own icon, never a coloured dot.
  */
 
 // jsdom ships no ResizeObserver, and the one/two-line row measures its harness
@@ -243,14 +245,33 @@ describe('ThreadRow, the detailed spine row', () => {
     unmount(app)
   })
 
-  it('keeps no pin control in the gutter, and marks a pinned thread by its title', async () => {
-    const { target, app } = render(thread({ pinned: true }))
+  it('puts the pin at the head of the meta line, and unpins from it', async () => {
+    const { target, app, pinCalls } = render(thread({ pinned: true }))
     await tick()
 
-    expect(target.querySelector('[role="button"][aria-label="Unpin thread"]')).toBeNull()
-    expect(target.querySelector('[aria-label="Pinned"]')).not.toBeNull()
+    const pin = target.querySelector('[role="button"][aria-label="Unpin thread"]') as HTMLElement
+    expect(pin).not.toBeNull()
+    // The gutter is the state's own column now: the pin is not in it.
+    expect(target.querySelector('[aria-label="Completed"]')).toBeNull()
+
+    pin.click()
+    expect(pinCalls.map((t) => t.id)).toEqual(['t1'])
 
     unmount(app)
+  })
+
+  it('offers a bookmark removal in the same slot, and puts no pin on a plain row', async () => {
+    const bookmarked = render(thread({ bookmarked: true }))
+    await tick()
+    expect(
+      bookmarked.target.querySelector('[role="button"][aria-label="Remove bookmark"]')
+    ).not.toBeNull()
+    unmount(bookmarked.app)
+
+    const plain = render(thread())
+    await tick()
+    expect(plain.target.querySelector('[role="button"][aria-label="Unpin thread"]')).toBeNull()
+    unmount(plain.app)
   })
 
   it('anchors the mark column to the top when a rail is drawn', async () => {
@@ -381,13 +402,23 @@ describe('ThreadRow, the detailed spine row', () => {
     runs.settled = false
   })
 
-  it('names the project on the meta line with a colour mark, not above the title', async () => {
+  it('names the project on the meta line by its own icon, not a dot', async () => {
     scope.bucket = { id: 'b1', name: 'Future version', color: '#888888', pinned: false }
-    const { target, app } = render(thread())
+    const { target, app } = render(thread(), {
+      projectName: 'milogs',
+      projectIconUrl: 'data:image/svg+xml,%3Csvg/%3E'
+    })
     await tick()
 
     expect(target.querySelector('[data-thread-context-line]')).toBeNull()
     expect(target.querySelector('[title="Future version"]')).not.toBeNull()
+    const icon = target.querySelector('img[src^="data:image/svg+xml"]') as HTMLImageElement
+    expect(icon).not.toBeNull()
+    // It sits on the meta line beside the scope, and the line draws no colour
+    // dot in its place: the project is named by its own icon.
+    const meta = icon.closest('.col-start-1') as HTMLElement
+    expect(meta).not.toBeNull()
+    expect(meta.querySelectorAll('span[style*="background-color"]').length).toBe(0)
 
     unmount(app)
     scope.bucket = null
