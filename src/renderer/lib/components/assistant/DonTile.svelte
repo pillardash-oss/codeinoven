@@ -56,11 +56,12 @@
     disabled={threadId === null}
     onclick={onOpen}
   >
-    <!-- The plate answers hover, focus and selection with a ring, so the tile
-         reads as the door to the group chat rather than as decoration. -->
+    <!-- The plate answers hover, focus and selection with a quiet ring: enough
+         to read as the door to the group chat, never bright enough to pull the
+         eye off the conversation it opens. -->
     <span
-      class="flex size-24 items-center justify-center bg-brand-plate outline-1 outline-offset-2 transition-[outline-color] duration-150 group-hover:outline-border-strong group-focus-visible:outline-foreground {selected
-        ? 'outline-foreground'
+      class="flex size-24 items-center justify-center bg-brand-plate outline-1 outline-offset-2 transition-[outline-color] duration-150 group-hover:outline-border group-focus-visible:outline-border-strong {selected
+        ? 'outline-border-strong'
         : 'outline-transparent'}"
     >
       {#if iconUrl}

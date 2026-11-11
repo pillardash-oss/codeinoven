@@ -77,6 +77,16 @@
      * `pointer-events-none`), so it can never get stuck open.
      */
     flyout?: Snippet
+    /**
+     * Folds the tool into the dock's More menu instead of the rail. A tool that
+     * is not needed right now waits there, and comes out onto the rail the
+     * moment it is (a note written, a memory to review, a design this thread
+     * made).
+     */
+    overflow?: boolean
+    /** Slides up out of the More menu when it reaches the rail, so the user
+     *  sees that this thread holds that kind of work. */
+    emerges?: boolean
     onSelect: () => void
     onContextMenu?: (event: MouseEvent) => void
   }
@@ -88,6 +98,9 @@
   import RailHighlight from './RailHighlight.svelte'
   import type { MediaActivity } from '$shared/media-activity'
   import RailAudioBadge from './RailAudioBadge.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import { fly } from 'svelte/transition'
+  import { motionDuration } from '$lib/motion'
 
   interface Props {
     /** Ordered groups. Empty groups are dropped so no stray hairline renders. */
@@ -96,7 +109,25 @@
 
   let { groups }: Props = $props()
 
-  let visibleGroups = $derived(groups.filter((group) => group.length > 0))
+  let visibleGroups = $derived(
+    groups
+      .map((group) => group.filter((item) => !item.overflow))
+      .filter((group) => group.length > 0)
+  )
+
+  /** Tools that are not needed right now, reached through the More menu. */
+  let moreItems = $derived(groups.flat().filter((item) => item.overflow))
+
+  let moreOpen = $state(false)
+
+  function selectMore(item: ContextDockItem): void {
+    moreOpen = false
+    item.onSelect()
+  }
+
+  function onWindowKeydown(event: KeyboardEvent): void {
+    if (event.key === 'Escape' && moreOpen) moreOpen = false
+  }
 
   /**
    * The item whose hover preview is showing, or null.
@@ -158,6 +189,8 @@
   never scrolls with the panel and never resizes, so the tool icons stay in the
   same place whether the context sidebar is open or closed.
 -->
+<svelte:window onkeydown={onWindowKeydown} />
+
 <nav
   class="relative flex h-full w-10 shrink-0 flex-col items-center gap-0.5 bg-surface py-2"
   aria-label="Context tools"
@@ -172,7 +205,11 @@
     {/if}
     {#each group as item (item.id)}
       {@const Icon = item.icon}
-      <div class="relative">
+      <!-- An emerging tool rises out of the More menu below it. -->
+      <div
+        class="relative"
+        in:fly={{ y: item.emerges ? 24 : 0, duration: item.emerges ? motionDuration(220) : 0 }}
+      >
         <button
           type="button"
           class="relative flex h-8 w-8 shrink-0 items-center justify-center transition-colors duration-150 {toneClass(
@@ -254,4 +291,53 @@
       </div>
     {/each}
   {/each}
+  {#if moreItems.length > 0}
+    <div class="my-1.5 h-px w-5 shrink-0 bg-border" aria-hidden="true"></div>
+    <div class="relative">
+      <button
+        type="button"
+        class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors duration-150 {moreOpen ||
+        moreItems.some((item) => item.active)
+          ? 'text-primary'
+          : 'text-dimmed hover:bg-elevated hover:text-muted'}"
+        aria-label="More tools"
+        title="More tools"
+        aria-haspopup="menu"
+        aria-expanded={moreOpen}
+        onclick={() => (moreOpen = !moreOpen)}
+      >
+        <CioEllipsis size={ICON_SIZE.rail} strokeWidth={RAIL_ICON_STROKE} />
+      </button>
+      {#if moreOpen}
+        <button
+          class="fixed inset-0 z-40 cursor-default"
+          aria-label="Close more tools"
+          title="Close more tools"
+          onclick={() => (moreOpen = false)}
+        ></button>
+        <div
+          class="absolute top-0 right-full z-50 mr-1.5 flex min-w-48 flex-col border bg-surface p-1 shadow-lg"
+          role="menu"
+          aria-label="More tools"
+        >
+          {#each moreItems as item (item.id)}
+            {@const Icon = item.icon}
+            <button
+              type="button"
+              role="menuitem"
+              class="flex items-center gap-2 px-2 py-1.5 text-left text-sm transition-colors duration-150 {item.active
+                ? 'bg-elevated text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'}"
+              onclick={() => selectMore(item)}
+            >
+              {#if Icon}
+                <Icon size={ICON_SIZE.control} strokeWidth={RAIL_ICON_STROKE} />
+              {/if}
+              <span class="flex-1 truncate">{item.label}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  {/if}
 </nav>

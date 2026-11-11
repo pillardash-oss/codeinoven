@@ -116,6 +116,8 @@
       icon: feature('thread-note').icon,
       active: board.switcherPanelTabs.dockKindActive('thread-note'),
       tone: hasThreadNote ? 'warning' : undefined,
+      // Waits in More until there is a note to come back to.
+      overflow: !hasThreadNote,
       onSelect: () =>
         board.switcherPanelTabs.toggleDockPanel('thread-note', () =>
           contextSidebarState.openThreadNote(
@@ -134,6 +136,7 @@
           id: 'assistant-knowledge',
           label: 'Assistant behavior',
           icon: AssistantKnowledgeIcon,
+          overflow: true,
           active: board.switcherPanelTabs.dockKindActive('assistant-knowledge'),
           onSelect: () =>
             board.switcherPanelTabs.toggleDockPanel('assistant-knowledge', () =>
@@ -278,6 +281,7 @@
             : 'Sources',
         icon: CioTabInfo,
         active: board.switcherPanelTabs.dockKindActive('sources'),
+        overflow: workspaceState.sourceProcessCount === 0,
         countBadge:
           workspaceState.sourceProcessCount > 0
             ? String(workspaceState.sourceProcessCount)
@@ -294,6 +298,8 @@
         icon: CioMemory,
         active: board.switcherPanelTabs.dockKindActive('memory'),
         badge: memoryProposalState.hasPending ? 'attention' : undefined,
+        // On the rail only while a suggestion waits for review.
+        overflow: !memoryProposalState.hasPending,
         badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
         onSelect: () =>
           board.switcherPanelTabs.toggleDockPanel(
@@ -308,6 +314,7 @@
         label: 'Cloud deployments',
         icon: CioCloud,
         active: board.switcherPanelTabs.dockKindActive('cloud-deployment'),
+        overflow: true,
         onSelect: () =>
           board.switcherPanelTabs.toggleDockPanel(
             'cloud-deployment',
@@ -321,6 +328,7 @@
         label: 'Debugger',
         icon: CioDebugger,
         active: board.switcherPanelTabs.dockKindActive('debugger'),
+        overflow: true,
         onSelect: () =>
           board.switcherPanelTabs.toggleDockPanel(
             'debugger',
@@ -380,12 +388,19 @@
         const session = designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)
         const sessionKind = session?.active ? session.kind : undefined
         if ((work?.[kind].length ?? 0) === 0 && sessionKind !== kind) continue
+        // The project's work waits in More; work this thread made (or a session it
+        // has open) slides out onto the rail so the thread shows it holds some.
+        const threadOwns =
+          sessionKind === kind ||
+          (work?.[kind].some((entry) => entry.creatorThreadId === selectedThread.id) ?? false)
         authoredWork.push({
           id: `authored-work-${kind}`,
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in ${authoredWorkOwnerLabel(selectedThread.projectId)}`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
           active: board.openThreadFromSwitcher.authoredWorkActive(kind),
           media: browserAudio.boardActivities(selectedThread.id, kind),
+          overflow: !threadOwns,
+          emerges: true,
           onSelect: () => board.openThreadFromSwitcher.openAuthoredWork(kind)
         })
       }
