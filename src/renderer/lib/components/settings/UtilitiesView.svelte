@@ -48,6 +48,7 @@
   } from './utility-vendors'
   import { APP_NAME } from '$shared/brand'
   import { skillSearchKeywords } from '$shared/skill-search-keywords'
+  import { builtInUtilitySummary } from './built-in-utility-summaries'
   import type {
     AgentCapabilityEntry,
     AgentToolDefinition,
@@ -269,8 +270,11 @@
       src: 'registry' as const,
       utility,
       name: utility.name,
-      description: utility.description ?? '',
-      keywords: utility.kind === 'skill' ? skillSearchKeywords(utility.config.instructions) : '',
+      description: builtInUtilitySummary(utility.id) ?? utility.description ?? '',
+      keywords: [
+        builtInUtilitySummary(utility.id) ? (utility.description ?? '') : '',
+        utility.kind === 'skill' ? skillSearchKeywords(utility.config.instructions) : ''
+      ].join(' '),
       enabled: utility.enabled,
       appOwned: Boolean(utility.appOwned),
       tags: registryTags(utility),
@@ -501,7 +505,7 @@
         tool.transportName ?? '',
         tool.description,
         JSON.stringify(tool.inputSchema)
-      ].join(' ')
+      ].join('\u0000')
       const existing = groups.find((group) => group.key === key)
       if (existing) {
         if (!existing.harnessIds.includes(tool.harnessId)) existing.harnessIds.push(tool.harnessId)
