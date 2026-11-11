@@ -829,14 +829,8 @@ export function inspectorInstallScript(key: string): string {
       return null;
     }
 
-    function onClick(event) {
-      if (!state.armed) return;
-      if (ourNode(event)) return;
-      const element = event.target && event.target.nodeType === 1 ? event.target : null;
+    function pickElement(element) {
       if (!element || isDocumentLevel(element)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      event.stopImmediatePropagation();
       state.hovered = element;
       syncCursor();
       const target = describe(element);
@@ -855,6 +849,43 @@ export function inspectorInstallScript(key: string): string {
         target.frame
       );
       emit({ kind: 'pick', id: id, target: target });
+    }
+
+    function onClick(event) {
+      if (!state.armed) return;
+      if (ourNode(event)) return;
+      const element = event.target && event.target.nodeType === 1 ? event.target : null;
+      if (!element || isDocumentLevel(element)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
+      pickElement(element);
+    }
+
+    /**
+     * Swallow a press before the page can act on it.
+     *
+     * An element does not activate on a click. The browser opens a native select
+     * on the press, moves focus, and fires its active state; component menus open
+     * on pointerdown and close on the item's pointerup. Cancelling the click
+     * alone therefore let inspect mode do exactly what the page does: a dropdown
+     * dismissed itself while the reader was trying to comment on one of its
+     * items, and a button ran its action instead of pinning a comment.
+     *
+     * Inspection is stealth. The reader is looking at the page's own state, so no
+     * press may reach an element at all, and the pick is decided from the release
+     * by the app. Hover and pointer movement stay untouched, because a hover
+     * state is one of the states being inspected.
+     */
+    function onPress(event) {
+      if (!state.armed) return;
+      if (ourNode(event)) return;
+      // A touch press is left to the page's own scroll handling and reports its
+      // pick on the browser's click, which is cancelled below either way.
+      if (event.type === 'pointerdown' && event.pointerType === 'touch') return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.stopImmediatePropagation();
     }
 
     function onKeyDown(event) {
@@ -890,6 +921,12 @@ export function inspectorInstallScript(key: string): string {
       ensureCursorStyle(doc);
       doc.addEventListener('pointermove', onPointerMove, true);
       doc.addEventListener('click', onClick, true);
+      doc.addEventListener('pointerdown', onPress, true);
+      doc.addEventListener('mousedown', onPress, true);
+      doc.addEventListener('pointerup', onPress, true);
+      doc.addEventListener('mouseup', onPress, true);
+      doc.addEventListener('dblclick', onPress, true);
+      doc.addEventListener('auxclick', onPress, true);
       doc.addEventListener('keydown', onKeyDown, true);
       doc.addEventListener('load', onFrameLoad, true);
       const view = viewOf(doc);
@@ -925,6 +962,12 @@ export function inspectorInstallScript(key: string): string {
       if (state.listeners) return;
       document.addEventListener('pointermove', onPointerMove, true);
       document.addEventListener('click', onClick, true);
+      document.addEventListener('pointerdown', onPress, true);
+      document.addEventListener('mousedown', onPress, true);
+      document.addEventListener('pointerup', onPress, true);
+      document.addEventListener('mouseup', onPress, true);
+      document.addEventListener('dblclick', onPress, true);
+      document.addEventListener('auxclick', onPress, true);
       document.addEventListener('keydown', onKeyDown, true);
       document.addEventListener('load', onFrameLoad, true);
       // The canvas reports that it panned, zoomed or refitted, which changes
@@ -941,6 +984,12 @@ export function inspectorInstallScript(key: string): string {
       if (!state.listeners) return;
       document.removeEventListener('pointermove', onPointerMove, true);
       document.removeEventListener('click', onClick, true);
+      document.removeEventListener('pointerdown', onPress, true);
+      document.removeEventListener('mousedown', onPress, true);
+      document.removeEventListener('pointerup', onPress, true);
+      document.removeEventListener('mouseup', onPress, true);
+      document.removeEventListener('dblclick', onPress, true);
+      document.removeEventListener('auxclick', onPress, true);
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('load', onFrameLoad, true);
       document.removeEventListener('cio:canvas-view', scheduleHoverFrame);
