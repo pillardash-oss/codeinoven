@@ -24,6 +24,8 @@
     expanded: boolean
     /** How this folder's threads break down: working, attention, and errors. */
     stateCounts?: ThreadStateCountsValue
+    /** Total number of threads in this project, shown on the header. */
+    totalThreads?: number
     onToggle: () => void
     /** Hover actions rendered on the right (e.g. new-thread button, ellipsis menu). */
     actions?: Snippet
@@ -69,6 +71,7 @@
     expanded,
     media = [],
     stateCounts = emptyThreadStateCounts(),
+    totalThreads,
     onToggle,
     actions,
     actionsPinned = false,
@@ -235,11 +238,14 @@
       <CioSpinner size={12} class="animate-spin" />
       {deletingLabel}
     </span>
-  {:else if hasThreadStateCounts(stateCounts)}
+  {:else if hasThreadStateCounts(stateCounts) || (totalThreads !== undefined && totalThreads > 0)}
     <span
-      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
+      class="pointer-events-none absolute inset-y-0 right-1.5 flex items-center gap-1.5 bg-linear-to-l from-elevated from-65% to-transparent pl-4 transition-opacity duration-150 group-hover:opacity-0 group-focus-within:opacity-0"
     >
       <ThreadStateCounts counts={stateCounts} />
+      {#if totalThreads !== undefined && totalThreads > 0}
+        <span class="text-[0.5625rem] font-semibold tabular-nums text-dimmed">{totalThreads}</span>
+      {/if}
     </span>
   {/if}
 

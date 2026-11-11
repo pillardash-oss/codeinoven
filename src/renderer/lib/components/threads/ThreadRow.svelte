@@ -1,7 +1,6 @@
 <script lang="ts">
   import CioBookmark from '@pdslng/cio-icon/CioBookmark.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
-  import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioPin from '@pdslng/cio-icon/CioPin.svelte'
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
@@ -731,7 +730,10 @@
    *  repeat it, and the rail takes the height the glyph held. A secondary status
    *  keeps the slot, because what is waiting on the thread is not what the rail is
    *  showing. */
-  let spineGlyphVisible = $derived(markDrawsGlyph(primaryMark, secondaryMark !== null))
+  let isSettled = $derived(threadState === 'read' || threadState === 'completed')
+  let spineGlyphVisible = $derived(
+    isSettled ? secondaryMark !== null : markDrawsGlyph(primaryMark, secondaryMark !== null)
+  )
 
   /** Whether the rail's light climbs it: work this window is driving, lighting one
    *  whole dash at a time from the bottom to the top. */
@@ -876,7 +878,8 @@
       hasNote ||
       hasTemporaryChat ||
       isRemote ||
-      branch !== null
+      branch !== null ||
+      dispatchBadge !== null
   )
 
   /** The detailed row's own context line, shown only when it has something to
@@ -899,7 +902,8 @@
       isRemote ||
       hasNote ||
       hasTemporaryChat ||
-      authoredWorkKinds.length > 0
+      authoredWorkKinds.length > 0 ||
+      dispatchBadge !== null
   )
 
   let scopeColor = $derived(
@@ -1476,13 +1480,7 @@
         <!-- State indicator / pin toggle   fixed slot, opacity crossfade, zero layout shift -->
         {@render threadStatusSlot(Boolean(projectIconUrl || projectIconGlyph))}
 
-        <!-- Title, with the origin badge above it for a dispatched thread. -->
         <span class="flex min-w-0 flex-1 flex-col">
-          {#if dispatchBadge}
-            <span class="truncate text-xs text-muted" title={dispatchBadge.title}>
-              {dispatchBadge.label}
-            </span>
-          {/if}
           <span class="line-clamp-2 min-w-0 break-words text-[0.75rem] {titleClass}">
             {displayTitle}
           </span>
@@ -1547,11 +1545,16 @@
             ? 'grid-cols-[minmax(3.2rem,1fr)_minmax(0,max-content)_minmax(max-content,1fr)]'
             : 'grid-cols-[minmax(0,1fr)_minmax(0,max-content)_minmax(max-content,1fr)]'}"
         >
-          {#if harnessIds.length > 0}
+          {#if dispatchBadge || harnessIds.length > 0}
             <span
               {@attach captureHarnessRowElement}
               class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden"
             >
+              {#if dispatchBadge}
+                <span class="truncate text-[0.625rem] text-muted" title={dispatchBadge.title}
+                  >{dispatchBadge.label}</span
+                >
+              {/if}
               {#each harnessIds.slice(0, visibleHarnessCount) as harnessId (harnessId)}
                 <AgentIcon
                   class="opacity-50 grayscale"
@@ -1663,11 +1666,6 @@
            the pin keymap already do it, so the line keeps no reserved space. -->
       <span class="flex w-full min-w-0 items-center gap-2">
         <span class="flex min-w-0 flex-1 flex-col">
-          {#if dispatchBadge}
-            <span class="truncate text-xs text-muted" title={dispatchBadge.title}>
-              {dispatchBadge.label}
-            </span>
-          {/if}
           <span class="line-clamp-2 min-w-0 break-words text-[0.75rem] {titleClass}"
             >{displayTitle}</span
           >
@@ -1742,8 +1740,13 @@
         <span
           class="hidden w-full @[16rem]/row:grid min-w-0 grid-cols-[minmax(max-content,1fr)_minmax(max-content,1fr)] items-center gap-2 overflow-hidden"
         >
-          {#if harnessIds.length > 0}
+          {#if dispatchBadge || harnessIds.length > 0}
             <span class="col-start-1 flex min-w-0 items-center gap-1 overflow-hidden">
+              {#if dispatchBadge}
+                <span class="truncate text-[0.625rem] text-muted" title={dispatchBadge.title}
+                  >{dispatchBadge.label}</span
+                >
+              {/if}
               {#each harnessIds.slice(0, MAX_HARNESS_ICONS) as harnessId (harnessId)}
                 <AgentIcon
                   class="opacity-50 grayscale"
@@ -1760,23 +1763,19 @@
             </span>
           {/if}
           <span class="col-start-2 flex min-w-0 items-center justify-end gap-1.5 overflow-hidden">
-            <!-- Where it runs, and the branch it runs on: both always, so a
-                 branch never disappears just because the row also has a scope. -->
-            <span
-              class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
-              title={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-              aria-label={isRemote ? `Oven: ${oven?.name ?? 'unknown'}` : 'Runs on this computer'}
-            >
-              {#if isRemote}
+            {#if isRemote}
+              <span
+                class="flex h-3 w-3 shrink-0 items-center justify-center text-muted"
+                title={`Oven: ${oven?.name ?? 'unknown'}`}
+                aria-label={`Oven: ${oven?.name ?? 'unknown'}`}
+              >
                 {#if oven?.iconUrl}
                   <img src={oven.iconUrl} alt="" class="h-3 w-3 object-contain" draggable="false" />
                 {:else}
                   <CioServer size={11} class="shrink-0" />
                 {/if}
-              {:else}
-                <CioDisplay size={10} class="shrink-0" aria-hidden="true" />
-              {/if}
-            </span>
+              </span>
+            {/if}
             {#if branch}
               <span
                 class="flex min-w-0 items-center gap-0.5 text-[0.625rem] text-muted"

@@ -72,6 +72,7 @@
     groupThreadsByStatus,
     threadHasVisibleWork
   } from './workspace-thread-helpers'
+  import { threadDayLabel } from '$lib/components/threads/thread-day-label'
   import { foldedSectionRows } from '$lib/thread-section-rows'
   import { countThreadStatesByProject, emptyThreadStateCounts } from '$lib/thread-state-counts'
   import { toast } from 'svelte-sonner'
@@ -1132,8 +1133,22 @@
               </div>
             {/if}
             <div class="space-y-px {section.group && !isLastSection ? 'pb-5' : ''}" role="list">
-              {#each sectionThreads as thread (thread.id)}
+              {#each sectionThreads as thread, threadIndex (thread.id)}
                 {@const result = searchPanelActive ? searchResultsById.get(thread.id) : undefined}
+                {@const dayLabel = !section.group
+                  ? threadDayLabel(thread.lastActivity, Date.now())
+                  : null}
+                {@const prevDayLabel =
+                  !section.group && threadIndex > 0
+                    ? threadDayLabel(sectionThreads[threadIndex - 1].lastActivity, Date.now())
+                    : null}
+                {#if dayLabel && dayLabel !== prevDayLabel}
+                  <p
+                    class="px-2 pb-0.5 pt-3 text-[0.625rem] font-semibold uppercase tracking-wider text-dimmed"
+                  >
+                    {dayLabel}
+                  </p>
+                {/if}
                 <SidebarListRow
                   rowKey={thread.id}
                   createdAt={thread.createdAt}
@@ -1315,6 +1330,7 @@
                       {expanded}
                       sticky
                       {stateCounts}
+                      totalThreads={(threadsByProject.get(project.id) ?? []).length}
                       showLocation={hasProjectNameCollision(project, visibleProjects)}
                       deleting={projectDeletionState.isPending(project.id)}
                       deletingLabel={projectDeletionState.label(project.id) ?? undefined}
@@ -1583,6 +1599,7 @@
                   {expanded}
                   sticky
                   {stateCounts}
+                  totalThreads={(threadsByProject.get(project.id) ?? []).length}
                   showLocation={hasProjectNameCollision(project, visibleProjects)}
                   deleting={projectDeletionState.isPending(project.id)}
                   deletingLabel={projectDeletionState.label(project.id) ?? undefined}
