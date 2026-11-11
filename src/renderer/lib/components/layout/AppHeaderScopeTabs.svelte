@@ -30,7 +30,14 @@
   let recent = $state<string[]>(readRecent())
   let overflowOpen = $state(false)
   let overflowQuery = $state('')
-  let overflowRoot: HTMLDivElement | undefined = $state()
+  let overflowRoot: HTMLDivElement | undefined
+
+  function captureOverflowRoot(node: HTMLDivElement): () => void {
+    overflowRoot = node
+    return () => {
+      if (overflowRoot === node) overflowRoot = undefined
+    }
+  }
 
   /** The active project and the most recently opened ones keep a tab, shown in
    *  the user's own project order so tabs never jump when one is opened. */
@@ -192,7 +199,7 @@
     </div>
   </div>
   {#if overflowProjects.length > 0}
-    <div class="relative ml-0.5 shrink-0" bind:this={overflowRoot}>
+    <div class="relative ml-0.5 shrink-0" {@attach captureOverflowRoot}>
       <button
         type="button"
         class="flex min-h-8 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflowOpen
