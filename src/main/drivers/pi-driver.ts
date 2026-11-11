@@ -143,6 +143,7 @@ export class PiDriver extends PersistentCliDriver {
     sessionStatus: true,
     contextUsage: true,
     compaction: true,
+    codeMode: true,
     subagents: true,
     scheduledRetry: true,
     // The core-tools extension reconciles the task list on `agent_settled`

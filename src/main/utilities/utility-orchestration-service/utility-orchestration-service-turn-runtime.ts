@@ -12,6 +12,8 @@ import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
   GATEWAY_DISCOVERY_INSTRUCTION,
+  gatewayBatchingInstruction,
+  gatewayPerItemInstruction,
   initialGatewayTools,
   UTILITY_SEARCH_TOOL_NAME,
   UTILITY_ACTIVATE_TOOL_NAME,
@@ -293,12 +295,16 @@ export class UtilityOrchestrationServiceTurnRuntime {
       request.artifactTools === true &&
       request.permissionLevel !== 'full_access' &&
       (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
+    // One batching contract, worded for the tool surface this harness actually
+    // has: naming code mode to a harness without a script runner is a rule the
+    // model cannot follow, and every per-item call it then makes re-reads the
+    // whole conversation.
+    const codeMode = request.nativeCapabilities.includes('codeMode')
     const toolInstructions = [
       GATEWAY_DISCOVERY_INSTRUCTION,
-      'Use available code mode to batch independent tool calls in one model request. Run independent reads with bounded parallelism and inspect every result; keep dependent operations, mutations, approvals and retries sequential. Filter large results before returning them to the model. Reuse loaded documentation and activated utilities. Read workstation targets only when dispatching work, and the app catalog only when driving the app.',
-      'When you need more than one MCP request or tool call, ALWAYS batch them in ONE code mode script: MAKING EACH REQUEST ONE AT A TIME IS FORBIDDEN, and a burst of individual MCP or tool calls that could have been batched is as good as failing the task. NEVER break this rule, it is of the most importance.',
+      gatewayBatchingInstruction(codeMode),
+      gatewayPerItemInstruction(codeMode),
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
-      `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a needed capability is missing, check first whether your own tools already cover the work: text, code, SVG and HTML are yours to author, and a missing generator is not a missing capability when the request is vector or written work. That covers documents and assets only: an interface, a screen, a prototype or a set of design variations is not one of them and is never hand-written here, it is designed in the app's design session. Only what you genuinely cannot produce yourself earns an installation card: load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer it. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
       `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
