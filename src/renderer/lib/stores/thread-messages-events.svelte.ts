@@ -1,6 +1,8 @@
 import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
 import { subagentStatusIsTerminal } from '$lib/subagent-presentation'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { invoke } from '$lib/ipc.svelte'
+import { SvelteSet } from 'svelte/reactivity'
 import { messageText, threadKey } from './thread-messages-merge'
 import type { ThreadMessagesCache } from './thread-messages-cache.svelte'
 import type {
@@ -20,7 +22,39 @@ import type {
  * ThreadMessagesCache so the reveal/notify batching stays in one place.
  */
 export class ThreadMessagesEvents {
-  constructor(private readonly cache: ThreadMessagesCache) {}
+  constructor(
+    private readonly cache: ThreadMessagesCache,
+    /** Re-read a conversation's turn-aligned tail from the mirror. Supplied by
+     *  the store that owns this cache, so adoption needs no import cycle. */
+    private readonly refreshTail: (projectId: string, threadId: string) => void = () => {}
+  ) {}
+
+  /** Sessions already looked up, so an unroutable stream asks exactly once. */
+  readonly #resolvedSessions = new SvelteSet<string>()
+
+  /**
+   * Bind a session this window has never been told about.
+   *
+   * One lookup per session id, best effort: when the main process still owns the
+   * session, the binding lands and every later event of that turn routes
+   * normally, and the turn-aligned tail read brings back the rows that were
+   * dropped before it. A session the engine no longer knows (a finished run from
+   * another window) resolves to nothing and is never asked about again.
+   */
+  #adoptUnknownSession(sessionId: string): void {
+    if (this.#resolvedSessions.has(sessionId)) return
+    this.#resolvedSessions.add(sessionId)
+    void invoke('agent:threadForSession', sessionId)
+      .then((owner) => {
+        if (!owner) return
+        if (this.cache.conversationForSession(sessionId)) return
+        this.cache.setSessionId(owner.projectId, owner.threadId, sessionId)
+        this.refreshTail(owner.projectId, owner.threadId)
+      })
+      .catch(() => {
+        // Best effort. The next mount re-reads the mirror either way.
+      })
+  }
 
   /** Apply a streaming part update to the cached messages. */
   upsertPart(projectId: string, threadId: string, sessionId: string, part: AgentPart): void {
@@ -335,7 +369,15 @@ export class ThreadMessagesEvents {
       return
     }
     const target = this.cache.conversationForSession(event.sessionId)
-    if (!target) return
+    if (!target) {
+      // A session this window has no binding for: its whole turn would stream
+      // past unseen, which is how a thread paused on a question came back with
+      // its prompt and no working trace. Ask who owns the session, bind it, and
+      // re-read the mirror so the work that streamed while it was unroutable is
+      // on screen rather than waiting for the reader to reopen the thread.
+      this.#adoptUnknownSession(event.sessionId)
+      return
+    }
     const { projectId, conversationId: threadId } = target
 
     // Live streaming activity is authoritative evidence the agent is still

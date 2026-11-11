@@ -253,6 +253,10 @@ export class ChatEngineLifecycleBoot {
     ipcMain.handle('agent:loadTemporaryChatMessages', async (_, temporaryChatId: string) =>
       (await this.host.loadTemporaryConversation(temporaryChatId)).map(withoutTransportParts)
     )
+    ipcMain.handle('agent:threadForSession', (_, sessionId: string) => {
+      const info = this.host.sessionRegistry.get(sessionId)
+      return info ? { projectId: info.projectId, threadId: info.threadId } : null
+    })
     ipcMain.handle('agent:getSessionStatus', (_, projectId: string, threadId: string) =>
       this.host.getSessionStatus(projectId, threadId)
     )
