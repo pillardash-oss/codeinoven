@@ -817,18 +817,20 @@ export class ChatEngineUtilitiesTools {
           // Tool provenance enriches the card when available. A measured file
           // change survives even when the tool's write syntax is opaque.
           const sources = session.changeSources?.get(path) ?? []
-          session.changeSources?.set(
-            path,
-            sources.map((source) =>
-              toolIds.has(source.toolPartId)
-                ? {
-                    ...source,
-                    verification: 'shell-window-and-content',
-                    window: { startedAt: before.capturedAt, endedAt: after.capturedAt }
-                  }
-                : source
-            )
+          const enriched = sources.map((source) =>
+            toolIds.has(source.toolPartId)
+              ? {
+                  ...source,
+                  verification: 'shell-window-and-content' as const,
+                  window: { startedAt: before.capturedAt, endedAt: after.capturedAt }
+                }
+              : source
           )
+          // A path with no source at all is a bare window observation: the file
+          // moved while the command ran, but nothing proves this turn wrote it.
+          // It still belongs in `changedPaths`; storing an empty source list
+          // instead made the checkpoint read the key as write evidence.
+          if (enriched.length > 0) session.changeSources?.set(path, enriched)
           session.changedPaths.add(path)
         }
       } catch (error) {
