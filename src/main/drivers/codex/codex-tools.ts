@@ -326,7 +326,8 @@ export function normalizeAppServerItem(
     ...item,
     type: rawType ? (types[rawType] ?? rawType) : rawType,
     aggregated_output: item['aggregated_output'] ?? item['aggregatedOutput'],
-    exit_code: item['exit_code'] ?? item['exitCode']
+    exit_code: item['exit_code'] ?? item['exitCode'],
+    content_items: item['content_items'] ?? item['contentItems']
   }
 }
 

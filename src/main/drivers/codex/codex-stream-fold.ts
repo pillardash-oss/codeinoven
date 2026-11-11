@@ -14,6 +14,7 @@ import {
   isRecord,
   recordValue,
   stringValue,
+  toolError,
   toolInput,
   toolOutput
 } from './codex-values'
@@ -283,8 +284,18 @@ function parseTool(
   command?: string
 ): CliLineParseResult {
   const providerStatus = stringValue(item['status'])
-  const failed = completed && (providerStatus === 'failed' || providerStatus === 'error')
+  // Dynamic tool calls report their verdict as a boolean instead of a status,
+  // so a failed call used to land here as a completed one with no body.
+  const failed =
+    completed &&
+    (providerStatus === 'failed' || providerStatus === 'error' || item['success'] === false)
   const output = toolOutput(item)
+  // A failed call reports its reason in `error` (MCP) or in `content_items`
+  // (dynamic tools). Publish it as the part's error so the tool card renders a
+  // failure exactly the way a Pi tool result does, instead of an empty card.
+  const explicitError = failed ? toolError(item) : undefined
+  const error = failed ? (explicitError ?? output ?? `Codex ${providerTool} failed`) : undefined
+  const body = error ?? output
   const toolPart = {
     type: 'tool' as const,
     id: `${itemId}:tool`,
@@ -306,13 +317,14 @@ function parseTool(
         ...(typeof item['cwd'] === 'string' ? { cwd: item['cwd'] } : {})
       },
       title: command,
-      output,
-      ...(output === undefined
+      ...(error === undefined ? {} : { error }),
+      ...(explicitError !== undefined || !failed ? (output === undefined ? {} : { output }) : {}),
+      ...(body === undefined
         ? {}
         : {
             metadata: {
               outputBudget: {
-                transcriptCharacters: output.length,
+                transcriptCharacters: body.length,
                 modelFacingCharacters: null,
                 historyTokenBudget: 3000
               }
