@@ -4,6 +4,7 @@
   import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
   import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
@@ -387,6 +388,24 @@
         <CioSearch size={ICON_SIZE.control} />
       </button>
     {:else}
+      {#if navigation.layoutToggle}
+        {@const toggle = navigation.layoutToggle}
+        {@const ToggleIcon = toggle.icon}
+        <!-- The second layout of the rail item on screen: Thread beside the
+             project view, Scoped beside the board. -->
+        <button
+          class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {toggle.pressed
+            ? 'bg-elevated text-foreground'
+            : 'text-muted hover:bg-elevated hover:text-foreground'}"
+          aria-label={toggle.label}
+          aria-pressed={toggle.pressed}
+          title={toggle.label}
+          data-shortcut={encodeShortcutTokens(toggle.keys)}
+          onclick={toggle.select}
+        >
+          <ToggleIcon size={ICON_SIZE.control} />
+        </button>
+      {/if}
       <div class="header-cluster-actions">
         <!-- Folded only when the bar genuinely has no room for them: no panel
              column to spend, and the context panel open, which is what narrows the

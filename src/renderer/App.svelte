@@ -4,6 +4,7 @@
   import GlobalContextSidebar from '$lib/components/layout/GlobalContextSidebar.svelte'
   import InstanceRoleNotice from '$lib/components/layout/InstanceRoleNotice.svelte'
   import AppViewRail from '$lib/components/layout/AppViewRail.svelte'
+  import { railOptionFor } from '$lib/components/layout/AppHeaderNavigationController.svelte'
   import Workspace from '$lib/components/workspace/Workspace.svelte'
   import { fly } from 'svelte/transition'
   import { pageReveal } from '$lib/components/layout/page-reveal'
@@ -63,9 +64,11 @@
 
   <div class="flex min-h-0 flex-1">
     <AppViewRail
-      options={board.openAssistantFromSearch.navigation.headerViewOptions()}
-      shownOption={board.openAssistantFromSearch.navigation.shownHeaderViewOption}
-      projectBadgeOption={board.openAssistantFromSearch.navigation.projectBadgeOption}
+      options={board.openAssistantFromSearch.navigation.railOptions()}
+      shownOption={board.openAssistantFromSearch.navigation.railShownOption}
+      projectBadgeOption={railOptionFor(
+        board.openAssistantFromSearch.navigation.projectBadgeOption
+      )}
       activeView={board.onKeydown.activeView}
       navigate={board.onKeydown.navigate}
       onOptionHover={board.openAssistantFromSearch.handleViewOptionHover}

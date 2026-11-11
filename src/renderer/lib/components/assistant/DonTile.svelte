@@ -42,21 +42,27 @@
 
   const name = $derived(assistant?.name?.trim() || 'Don')
   const title = $derived(
-    ready ? `Open ${name}, your orchestrator` : `${name} needs a model before it can take work`
+    ready ? `Open ${name}'s group chat` : `${name} needs a model before it can take work`
   )
 </script>
 
 <div class="flex justify-center px-3 pt-3.5 pb-1">
   <button
     type="button"
-    class="group flex flex-col items-center gap-2 outline-none"
+    class="group flex cursor-pointer flex-col items-center gap-2 outline-none disabled:cursor-default"
     {title}
     aria-label={title}
     aria-current={selected ? 'page' : undefined}
     disabled={threadId === null}
     onclick={onOpen}
   >
-    <span class="flex size-24 items-center justify-center bg-brand-plate">
+    <!-- The plate answers hover, focus and selection with a ring, so the tile
+         reads as the door to the group chat rather than as decoration. -->
+    <span
+      class="flex size-24 items-center justify-center bg-brand-plate outline-1 outline-offset-2 transition-[outline-color] duration-150 group-hover:outline-border-strong group-focus-visible:outline-foreground {selected
+        ? 'outline-foreground'
+        : 'outline-transparent'}"
+    >
       {#if iconUrl}
         <img src={iconUrl} alt="" aria-hidden="true" class="size-14 object-contain" />
       {:else}
@@ -77,5 +83,6 @@
         />
       {/if}
     </span>
+    <span class="-mt-1.5 text-xs text-dimmed group-hover:text-muted">Group chat</span>
   </button>
 </div>
