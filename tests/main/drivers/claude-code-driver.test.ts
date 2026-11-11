@@ -350,6 +350,56 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver', () => {
     )
   })
 
+  it('keeps one text part when Claude re-emits a message with a shifted block layout', () => {
+    const session: PersistentCliSession = {
+      id: 'session-1',
+      title: 'Claude thread',
+      projectPathHash: 'hash',
+      messages: [],
+      createdAt: 1,
+      updatedAt: 1
+    }
+    const context: CliLineParseContext = { sessionId: 'session-1', session }
+    const prose = 'Writing a scratch reproduction against the real checkpoint manager.'
+
+    const streamed = mapClaudeCodeRecord(
+      {
+        type: 'assistant',
+        session_id: 'native-1',
+        message: {
+          id: 'assistant-1',
+          content: [
+            { type: 'thinking', thinking: 'Plan the reproduction.' },
+            { type: 'text', text: prose }
+          ]
+        }
+      },
+      context
+    )
+    const streamedMessage = streamed?.messages?.[0]
+    expect(streamedMessage).toBeDefined()
+    if (streamedMessage) session.messages.push(streamedMessage)
+
+    const settled = mapClaudeCodeRecord(
+      {
+        type: 'assistant',
+        session_id: 'native-1',
+        message: {
+          id: 'assistant-1',
+          content: [
+            { type: 'text', text: prose },
+            { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'ls' } }
+          ]
+        }
+      },
+      context
+    )
+    const textParts = settled?.messages?.[0]?.parts.filter((part) => part.type === 'text') ?? []
+    expect(textParts).toHaveLength(1)
+    expect(textParts[0]).toEqual(expect.objectContaining({ type: 'text', text: prose }))
+    expect(settled?.messages?.[0]?.parts.filter((part) => part.type === 'tool')).toHaveLength(1)
+  })
+
   it('maps Claude compact boundaries into automatic compaction activity', () => {
     const result = mapClaudeCodeRecord(
       {
@@ -955,9 +1005,13 @@ describe.skipIf(process.platform === 'win32')('ClaudeCodeDriver readAccountUsage
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('extra_usage')
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('limits')
     expect(telemetry?.rateLimits.map((limit) => limit.id)).not.toContain('spend')
-    // The get_context_usage control supplies the live context window.
-    expect(telemetry?.contextWindow).toBe(967000)
-    expect(telemetry?.contextUsed).toBe(21401)
+    // The probe above is a brand-new Claude process, so its `get_context_usage`
+    // answer describes an empty window rather than this thread's conversation:
+    // 21k of 967k is a fresh system prompt, and treating it as occupancy is
+    // what dropped the meter to 1% the moment the indicator was hovered.
+    // The account-wide quota still maps, and the context reading is dropped.
+    expect(telemetry?.contextWindow).toBeUndefined()
+    expect(telemetry?.contextUsed).toBeUndefined()
   })
 
   it('returns null when plan rate limits are unavailable', async () => {

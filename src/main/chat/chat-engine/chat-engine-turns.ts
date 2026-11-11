@@ -43,6 +43,7 @@ import {
 } from './chat-engine-changes'
 import { turnStreamPath } from './chat-engine-pure'
 import { toolActionLabelForPart } from '../../../lib/tool-action-label'
+import { displayDeviceAttention } from '../../display/display-device-attention'
 import { ChatEngine, isTurnBoundaryPrompt } from '../chat-engine'
 
 /** ChatEngine turns: one concern, moved verbatim from the composition root. */
@@ -540,6 +541,10 @@ export class ChatEngineTurns {
         event.part,
         eventOwner.projectPath
       )
+      // An agent that goes straight to a device with adb or simctl never calls
+      // the mirroring tool, so the panel follows the device command it did run
+      // instead of waiting for an announcement that will not come.
+      displayDeviceAttention.noteToolCall(eventOwner.threadId, event.part.state.input)
     }
     if (eventOwner) {
       this.host.state.projectIdleSince.delete(eventOwner.projectId)

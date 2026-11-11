@@ -15,7 +15,7 @@ export const BROWSER_PLAYBOOK = [
   '',
   '## Drive a flow in one call',
   '- Read with `snapshot` (elements, stable refs, live values), `screenshot` when pixels matter, and `console` for what the page logged. Mutate with `click`, `type`, `press`, `select`, `check`, `mouse`, `drag`, `scroll`, `navigate`, `reload`, `viewport`, `upload` and `evaluate`.',
-  '- Sequence a multi-step flow inside ONE code-mode script. One gateway invocation per click, per field or per snapshot is the failure mode here: each one is its own model step and its own round trip.',
+  '- Sequence a multi-step flow in as few round trips as the harness allows: inside ONE code-mode script when the harness has code mode, otherwise one gateway `batch` for the independent read-only reads plus independent operations issued together in a single message. One gateway invocation per click, per field or per snapshot is the failure mode here: each one is its own model step and its own round trip.',
   '- `page` names the target: "agent" for a tab you opened, "user" for the page the conversation\'s thread browser resolved for this thread, "strip" for whatever that browser shows right now. On the user\'s page only reading operations are yours to run; a mutation is reviewed before it runs.',
   '- `wait` holds in the page for a condition without failing the call: an element appears or goes away, text appears, the address changes, or the page content changes. It resolves with `timedOut: true` and what the page looked like instead of throwing, so a timeout is an answer to read, not an error to retry blindly.',
   '',

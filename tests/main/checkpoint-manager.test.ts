@@ -677,6 +677,59 @@ describe('CheckpointManager', () => {
     expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
   })
 
+  // Regression: a shell window records any path that moved while its command
+  // ran, and it used to store that as a source entry with no source at all.
+  // Completion's rescue step read the bare key as this turn's own write
+  // evidence, so a read-only turn in a contested project claimed the whole room
+  // of files the other running thread was writing.
+  it('does not claim a file only a bare shell window saw move while a turn runs', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'theirs.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'reader', projectRoot, 'Reader turn', false)
+    await writeFile(join(projectRoot, 'theirs.txt'), 'another turn mid-write', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'reader',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      {
+        changeSources: new Map([['theirs.txt', []]]),
+        contestedDiff: true
+      }
+    )
+
+    expect(completed.changes).toEqual([])
+    expect(completed.changeFilterApplied).toBe(true)
+  })
+
+  // The other half: alone in the project, a file a shell command wrote belongs
+  // on the turn's card even when no tool names it as a target.
+  it('keeps a file a shell window measured on an uncontested turn', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'generated.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'writer', projectRoot, 'Writer turn', false)
+    await writeFile(join(projectRoot, 'generated.txt'), 'written by a script', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'writer',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      { changeSources: new Map([['generated.txt', []]]) }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['generated.txt'])
+  })
+
   // Regression: the harness published no live part events at all, and the
   // finish-time transcript re-read came back without tool calls, so the source
   // map was empty. The mirrored transcript still held the turn's own edit; the

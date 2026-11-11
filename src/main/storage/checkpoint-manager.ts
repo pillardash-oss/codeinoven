@@ -478,10 +478,16 @@ export class CheckpointManager {
       // path and keep the change only when its content really differs from the
       // turn's own baseline, so a no-op write is never invented as a change.
       const rescued = new Set(changes.map((change) => change.path))
-      const evidencedPaths = new Set<string>([
-        ...(options.changeSources?.keys() ?? []),
-        ...(options.evidencedPaths ?? [])
-      ])
+      // Only a recorded source is this turn's evidence. A path that sits in the
+      // source map with no source at all is a bare shell window: the file moved
+      // while the command ran, which is exactly what another turn writing here
+      // looks like. Counting the bare key as proof let a contested diff rescue a
+      // room full of another thread's files back onto a read-only turn's card.
+      const evidencedPaths = new Set<string>(options.evidencedPaths ?? [])
+      for (const [path, sources] of options.changeSources ??
+        new Map<string, FileChangeSource[]>()) {
+        if (sources.length > 0) evidencedPaths.add(path)
+      }
       if (Object.keys(checkpoint.before.files).length > 0) {
         let rescueCount = 0
         for (const path of evidencedPaths) {

@@ -64,6 +64,7 @@
   import FolderRow from './FolderRow.svelte'
   import SidebarListPane from './SidebarListPane.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
+  import SidebarProjectSearchField from './SidebarProjectSearchField.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import {
@@ -72,6 +73,7 @@
     groupThreadsByStatus,
     threadHasVisibleWork
   } from './workspace-thread-helpers'
+  import { threadDayLabel } from '$lib/components/threads/thread-day-label'
   import { foldedSectionRows } from '$lib/thread-section-rows'
   import { countThreadStatesByProject, emptyThreadStateCounts } from '$lib/thread-state-counts'
   import { toast } from 'svelte-sonner'
@@ -908,9 +910,7 @@
                         disabled={projectPageLoading === scopeContext.projectId}
                         onclick={() => void onLoadProjectThreadsPage(scopeContext.projectId)}
                       >
-                        {projectPageLoading === scopeContext.projectId
-                          ? 'Loading…'
-                          : 'Load older threads'}
+                        {projectPageLoading === scopeContext.projectId ? 'Loading…' : 'Show more'}
                       </button>
                     </div>
                   {/if}
@@ -1134,8 +1134,22 @@
               </div>
             {/if}
             <div class="space-y-px {section.group && !isLastSection ? 'pb-5' : ''}" role="list">
-              {#each sectionThreads as thread (thread.id)}
+              {#each sectionThreads as thread, threadIndex (thread.id)}
                 {@const result = searchPanelActive ? searchResultsById.get(thread.id) : undefined}
+                {@const dayLabel = !section.group
+                  ? threadDayLabel(thread.lastActivity, Date.now())
+                  : null}
+                {@const prevDayLabel =
+                  !section.group && threadIndex > 0
+                    ? threadDayLabel(sectionThreads[threadIndex - 1].lastActivity, Date.now())
+                    : null}
+                {#if dayLabel && dayLabel !== prevDayLabel}
+                  <p
+                    class="px-2 pb-0.5 pt-3 text-[0.625rem] font-semibold uppercase tracking-wider text-dimmed"
+                  >
+                    {dayLabel}
+                  </p>
+                {/if}
                 <SidebarListRow
                   rowKey={thread.id}
                   createdAt={thread.createdAt}
@@ -1197,7 +1211,7 @@
                 disabled={historyLoading}
                 onclick={() => void onLoadHistoryPage()}
               >
-                {historyLoading ? 'Loading history…' : 'Load older threads'}
+                {historyLoading ? 'Loading history…' : 'Show more'}
               </button>
             {/if}
           </section>
@@ -1223,7 +1237,7 @@
               disabled={historyLoading}
               onclick={() => void onLoadHistoryPage()}
             >
-              {historyLoading ? 'Loading history…' : 'Load older threads'}
+              {historyLoading ? 'Loading history…' : 'Show more'}
             </button>
           {/if}
         {/each}
@@ -1317,6 +1331,7 @@
                       {expanded}
                       sticky
                       {stateCounts}
+                      totalThreads={(threadsByProject.get(project.id) ?? []).length}
                       showLocation={hasProjectNameCollision(project, visibleProjects)}
                       deleting={projectDeletionState.isPending(project.id)}
                       deletingLabel={projectDeletionState.label(project.id) ?? undefined}
@@ -1335,6 +1350,8 @@
                           <SidebarSearchControl
                             open={sidebar.projectSearchOpen.has(project.id)}
                             query={sidebar.projectSearchQueries.get(project.id) ?? ''}
+                            inlineField
+                            fieldId="project-search-{project.id}"
                             onOpenChange={(open) => {
                               if (open) sidebar.openProjectSearch(project.id)
                               else sidebar.closeProjectSearch(project.id)
@@ -1343,6 +1360,7 @@
                               sidebar.projectSearchQueries.set(project.id, value)
                               sidebar.runProjectSearch(project.id, value)
                             }}
+                            loading={sidebar.projectSearching.has(project.id)}
                             ariaLabel="Search threads in {project.name}"
                             title="Search threads"
                             placeholder="Search threads in {project.name}…"
@@ -1406,6 +1424,20 @@
                            so its own `slide` is what plays when the folder closes:
                            folding never drops an ancestor with it. -->
                       <div transition:slide={foldSlide()} class="ml-2">
+                        {#if sidebar.projectSearchOpen.has(project.id)}
+                          <SidebarProjectSearchField
+                            id="project-search-{project.id}"
+                            query={searchQ}
+                            loading={sidebar.projectSearching.has(project.id)}
+                            placeholder="Search threads in {project.name}…"
+                            ariaLabel="Search threads in {project.name}"
+                            onQueryChange={(value) => {
+                              sidebar.projectSearchQueries.set(project.id, value)
+                              sidebar.runProjectSearch(project.id, value)
+                            }}
+                            onClose={() => sidebar.closeProjectSearch(project.id)}
+                          />
+                        {/if}
                         {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                           <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                         {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
@@ -1445,9 +1477,7 @@
                               disabled={projectPageLoading === project.id}
                               onclick={() => void onLoadProjectThreadsPage(project.id)}
                             >
-                              {projectPageLoading === project.id
-                                ? 'Loading…'
-                                : 'Load older threads'}
+                              {projectPageLoading === project.id ? 'Loading…' : 'Show more'}
                             </button>
                           {/if}
                           {#if expanded && sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
@@ -1587,6 +1617,7 @@
                   {expanded}
                   sticky
                   {stateCounts}
+                  totalThreads={(threadsByProject.get(project.id) ?? []).length}
                   showLocation={hasProjectNameCollision(project, visibleProjects)}
                   deleting={projectDeletionState.isPending(project.id)}
                   deletingLabel={projectDeletionState.label(project.id) ?? undefined}
@@ -1605,6 +1636,8 @@
                       <SidebarSearchControl
                         open={sidebar.projectSearchOpen.has(project.id)}
                         query={sidebar.projectSearchQueries.get(project.id) ?? ''}
+                        inlineField
+                        fieldId="project-search-{project.id}"
                         onOpenChange={(open) => {
                           if (open) sidebar.openProjectSearch(project.id)
                           else sidebar.closeProjectSearch(project.id)
@@ -1613,6 +1646,7 @@
                           sidebar.projectSearchQueries.set(project.id, value)
                           sidebar.runProjectSearch(project.id, value)
                         }}
+                        loading={sidebar.projectSearching.has(project.id)}
                         ariaLabel="Search threads in {project.name}"
                         title="Search threads"
                         placeholder="Search threads in {project.name}…"
@@ -1661,6 +1695,20 @@
                   <!-- The list the fold owns: the only child of this branch, so its
                        own `slide` plays when the folder closes. See the pinned list. -->
                   <div transition:slide={foldSlide()} class="ml-2">
+                    {#if sidebar.projectSearchOpen.has(project.id)}
+                      <SidebarProjectSearchField
+                        id="project-search-{project.id}"
+                        query={searchQ}
+                        loading={sidebar.projectSearching.has(project.id)}
+                        placeholder="Search threads in {project.name}…"
+                        ariaLabel="Search threads in {project.name}"
+                        onQueryChange={(value) => {
+                          sidebar.projectSearchQueries.set(project.id, value)
+                          sidebar.runProjectSearch(project.id, value)
+                        }}
+                        onClose={() => sidebar.closeProjectSearch(project.id)}
+                      />
+                    {/if}
                     {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
                       <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
                     {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
@@ -1700,7 +1748,7 @@
                           disabled={projectPageLoading === project.id}
                           onclick={() => void onLoadProjectThreadsPage(project.id)}
                         >
-                          {projectPageLoading === project.id ? 'Loading…' : 'Load older threads'}
+                          {projectPageLoading === project.id ? 'Loading…' : 'Show more'}
                         </button>
                       {/if}
                       {#if expanded && sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}

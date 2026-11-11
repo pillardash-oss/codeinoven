@@ -713,9 +713,10 @@ export class BrowserServiceIpcSurface {
       if (typeof rawArmed !== 'boolean') {
         throw new TypeError('Inspect mode must be a boolean')
       }
-      if (!tab.design && rawArmed) {
-        throw new TypeError('The element inspector is available on a design preview only')
-      }
+      // Every tab is inspectable, not only one serving a design folder: a page a
+      // thread opened from the project tree, a dev server or any site is a place
+      // the user points at while giving feedback, and the injected overlay reads
+      // the same document in all of them.
       this.host.inspector.setArmed(
         tabId,
         tab.view.webContents,

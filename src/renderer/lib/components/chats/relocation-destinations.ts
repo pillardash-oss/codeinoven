@@ -19,6 +19,14 @@ import { STAGE_ORDER, type ThreadStage } from '$lib/stores/scope-board'
  * Walking the board's scopes and their slices is the same walk the sidebar
  * makes, so a destination the user can see there can be found here in the same
  * place.
+ *
+ * The one thing the sidebar cannot answer is which scope goes first. It draws a
+ * single scope at a time, and a picker is one flat list, so ranking the scopes
+ * by the board's own order handed the top of the picker to whichever scope
+ * merely sorts first: a project whose recent work lives in a later scope opened
+ * the picker on last week's threads while the sidebar was showing today's. The
+ * scope on screen therefore ranks before every other scope, and only then does
+ * the board's order decide.
  */
 
 /** The sidebar slice a destination sits in. */
@@ -32,6 +40,13 @@ export interface RelocationDestinationOrdering {
   buckets: readonly { id: string }[]
   /** Where the sidebar stages the thread: its scope, and its slice. */
   sliceFor: (thread: Thread) => RelocationDestinationSlice
+  /**
+   * The scope the sidebar is showing, which leads the list.
+   *
+   * Null when no scope describes this project, in which case the board's own
+   * order leads, exactly as it used to.
+   */
+  currentBucketId?: string | null
 }
 
 const STAGE_RANK = new Map<string, number>(STAGE_ORDER.map((stage, index) => [stage, index]))
@@ -50,11 +65,15 @@ export function orderRelocationDestinations(
   // A thread whose scope the loaded board does not hold is still a destination:
   // it sorts after the scopes the sidebar can name rather than disappearing.
   const unrankedBucket = ordering.buckets.length
+  const currentBucketId = ordering.currentBucketId ?? null
   return threads
     .map((thread) => {
       const slice = ordering.sliceFor(thread)
       return {
         thread,
+        // Two tiers: the scope on screen, then every other scope in the
+        // board's order.
+        scopeTier: currentBucketId !== null && slice.bucketId === currentBucketId ? 0 : 1,
         bucket: bucketRank.get(slice.bucketId) ?? unrankedBucket,
         stage: STAGE_RANK.get(slice.stage) ?? UNRANKED_STAGE,
         pinnedAt: thread.pinnedAt ?? -1,
@@ -63,6 +82,7 @@ export function orderRelocationDestinations(
       }
     })
     .sort((a, b) => {
+      if (a.scopeTier !== b.scopeTier) return a.scopeTier - b.scopeTier
       if (a.bucket !== b.bucket) return a.bucket - b.bucket
       if (a.stage !== b.stage) return a.stage - b.stage
       if (a.stage === PINNED_STAGE) {

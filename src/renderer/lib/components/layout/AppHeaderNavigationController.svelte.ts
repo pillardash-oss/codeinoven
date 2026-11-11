@@ -46,6 +46,25 @@ export interface HeaderViewOption {
   select: () => void
 }
 
+/** Options the rail folds into their pair's icon (Thread into Project, Scoped into Board). */
+const RAIL_FOLDED_OPTIONS: ReadonlySet<HeaderViewOptionId> = new Set(['threads', 'scoped-threads'])
+
+/** The rail item an option is shown under once the pairs are folded. */
+export function railOptionFor(id: HeaderViewOptionId | null): HeaderViewOptionId | null {
+  if (id === 'threads') return 'projects'
+  if (id === 'scoped-threads') return 'scope-board'
+  return id
+}
+
+/** The header button that switches between the two layouts of a folded pair. */
+export interface LayoutToggle {
+  label: string
+  icon: Component
+  pressed: boolean
+  keys: readonly string[]
+  select: () => void
+}
+
 type PrimaryView = 'projects' | 'chats' | 'threads' | 'assistant'
 
 export interface AppHeaderNavigationOptions {
@@ -86,6 +105,12 @@ export class AppHeaderNavigationController {
    *  never lands on a rail item that cannot show project threads. */
   lastProjectViewOption: HeaderViewOptionId = $state('projects')
 
+  /** The layout each folded rail item returns to: Project remembers Thread, and
+   *  Board remembers Scoped, each on its own so visiting one pair never resets
+   *  the other. */
+  private lastProjectLayout: 'projects' | 'threads' = $state('projects')
+  private lastBoardLayout: 'scope-board' | 'scoped-threads' = $state('scope-board')
+
   constructor(options: AppHeaderNavigationOptions) {
     this.getActiveView = options.getActiveView
     this.navigate = options.navigate
@@ -110,6 +135,8 @@ export class AppHeaderNavigationController {
       if (shown && PROJECT_FAMILY_VIEW_OPTIONS.includes(shown)) {
         this.lastProjectViewOption = shown
       }
+      if (shown === 'projects' || shown === 'threads') this.lastProjectLayout = shown
+      if (shown === 'scope-board' || shown === 'scoped-threads') this.lastBoardLayout = shown
     })
   }
 
@@ -293,6 +320,34 @@ export class AppHeaderNavigationController {
     ]
   }
 
+  /**
+   * The rail's own items. Thread folds into Project and Scoped into Board: each
+   * pair is one surface with two layouts, so the rail carries one icon per pair
+   * and the header carries the toggle between the two (`layoutToggle`).
+   */
+  railOptions(): HeaderViewOption[] {
+    const options = this.headerViewOptions()
+    return options
+      .filter((option) => !RAIL_FOLDED_OPTIONS.has(option.id))
+      .map((option) => {
+        if (option.id === 'projects' && this.lastProjectLayout === 'threads') {
+          const threads = options.find((candidate) => candidate.id === 'threads')
+          return threads ? { ...option, select: threads.select } : option
+        }
+        if (option.id === 'scope-board' && this.lastBoardLayout === 'scoped-threads') {
+          const scoped = options.find((candidate) => candidate.id === 'scoped-threads')
+          return scoped ? { ...option, select: scoped.select } : option
+        }
+        return option
+      })
+  }
+
+  private selectOption(id: HeaderViewOptionId): void {
+    this.headerViewOptions()
+      .find((option) => option.id === id)
+      ?.select()
+  }
+
   /** The currently active option is shown with brighter text in the menu. */
   activeHeaderViewOption = $derived.by((): HeaderViewOptionId => {
     const activeView = this.getActiveView()
@@ -367,6 +422,38 @@ export class AppHeaderNavigationController {
       ? this.shownHeaderViewOption
       : this.lastProjectViewOption
   )
+
+  /** The rail item that stands for the shown option once the pairs are folded. */
+  railShownOption = $derived<HeaderViewOptionId | null>(railOptionFor(this.shownHeaderViewOption))
+
+  /**
+   * The header toggle for the folded layout of the shown pair: Thread on the
+   * project view, Scoped on the board. Null on every other view.
+   */
+  layoutToggle = $derived.by((): LayoutToggle | null => {
+    const shown = this.shownHeaderViewOption
+    if (shown === 'projects' || shown === 'threads') {
+      const pressed = shown === 'threads'
+      return {
+        label: pressed ? 'Show project view' : 'Show thread view',
+        icon: CioThreads,
+        pressed,
+        keys: keymapState.keysFor('nav-threads'),
+        select: () => this.selectOption(pressed ? 'projects' : 'threads')
+      }
+    }
+    if (shown === 'scope-board' || shown === 'scoped-threads') {
+      const pressed = shown === 'scoped-threads'
+      return {
+        label: pressed ? 'Show board view' : 'Show scoped view',
+        icon: CioScoped,
+        pressed,
+        keys: keymapState.keysFor('nav-projects-with-scope'),
+        select: () => this.selectOption(pressed ? 'scope-board' : 'scoped-threads')
+      }
+    }
+    return null
+  })
 
   /** Name of the view the rail has selected, shown in the app header between
    *  the nav buttons and the view's own action buttons. Settings is the one

@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import type { ModelInfo, SDKUserMessage, SpawnOptions } from '@anthropic-ai/claude-agent-sdk'
 import type { ProviderModel, ThinkingPreset } from '../../../lib/types'
+import { claudeContextWindows } from '../../../lib/model-runtime-settings'
 import { buildWslProcessEnvironment, resolveHarnessRuntime } from '../harness-runtime'
 import { buildClaudeEnvironment } from './claude-environment'
 import { record, string } from './claude-values'
@@ -51,10 +52,24 @@ export function claudeAuthenticationResult(value: unknown): boolean | undefined 
   return string(record(entry?.['event'])?.['type']) === 'message_start' ? true : undefined
 }
 
+/**
+ * Claude Code ships two description shapes. Older rows lead with the versioned
+ * name (`Opus 5.5 · Best for everyday, complex tasks`), so the name is the
+ * segment before the separator. Newer `main` rows put only the picker subtitle
+ * there (`For complex work and everyday tasks`) and keep the name in
+ * `displayName`, so a subtitle is never read back as a model name.
+ */
 export function claudeModelName(model: ModelInfo): string {
-  const resolvedName = model.description.split(' · ', 1)[0]?.trim()
-  if (!resolvedName) return model.displayName
-  if (model.value === 'default') return model.displayName
+  const displayName = model.displayName.trim()
+  const headline = model.description.split(' · ', 1)[0]?.trim() ?? ''
+  const family = displayName.split(' ', 1)[0]?.trim() ?? ''
+  const headlineNamesModel =
+    headline !== '' &&
+    family !== '' &&
+    headline.toLocaleLowerCase().startsWith(family.toLocaleLowerCase())
+  const resolvedName = headlineNamesModel ? headline : displayName || headline
+  if (!resolvedName) return model.value
+  if (model.value === 'default') return displayName || resolvedName
   return model.resolvedModel && model.resolvedModel !== model.value
     ? `${resolvedName} (latest)`
     : resolvedName
@@ -68,6 +83,7 @@ export function mapClaudeModel(model: ModelInfo): ProviderModel {
     id: model.value,
     providerId: 'anthropic',
     name: claudeModelName(model),
+    ...(model.resolvedModel ? { resolvedId: model.resolvedModel } : {}),
     reasoning,
     thinkingPresets: reasoning ? thinkingPresets : undefined,
     attachment: true,
@@ -128,18 +144,19 @@ export async function discoverClaudeModels(
         )
       })
     ])
-    const extendedIds = new Set(
-      models.filter((model) => model.value.endsWith('[1m]')).map((model) => model.value)
-    )
+    // Claude Code advertises a 1M window either as its own `[1m]` row or in the
+    // row it resolves to; the newest catalog states it in neither place, so a
+    // row that says nothing keeps 200k here and the model metadata feed states
+    // the real limit.
     return models.map((model) => {
-      const mapped = mapClaudeModel(model)
-      const baseId = model.value.replace(/\[1m\]$/u, '')
-      const extended = extendedIds.has(`${baseId}[1m]`)
+      const extended = /\[1m\]$/u.test(model.value) || /\[1m\]$/u.test(model.resolvedModel ?? '')
       const nativeExtended = /(?:1m|1 million)/iu.test(model.description)
+      const contextWindow = extended || nativeExtended ? 1_000_000 : 200_000
+      const contextWindows = claudeContextWindows(contextWindow)
       return {
-        ...mapped,
-        contextWindow: model.value.endsWith('[1m]') || nativeExtended ? 1_000_000 : 200_000,
-        contextWindows: extended || nativeExtended ? [200_000, 1_000_000] : [200_000]
+        ...mapClaudeModel(model),
+        contextWindow,
+        ...(contextWindows ? { contextWindows } : {})
       }
     })
   } finally {

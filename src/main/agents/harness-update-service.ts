@@ -15,6 +15,7 @@ import {
 } from '../drivers/acp/acp-agents-store'
 import { acpCommandName, acpUpdateCommandFor } from '../drivers/acp/acp-update-recipes'
 import { resolvedOpenCodeCommand } from './opencode-installation'
+import { homebrewPackageFor, homebrewUpgradeArgs, homebrewVersions } from './harness-homebrew'
 import { parseMajorVersion, compareVersions } from '../../lib/version-compare'
 import type { ProviderConnectionService } from '../providers/provider-connection'
 import { Logger } from '../system/logger'
@@ -149,6 +150,25 @@ function isAppOwnedInstall(resolvedPath: string | undefined): boolean {
   // otherwise report an app-owned path as user-owned.
   const lowerRelative = relative(appRoot.toLowerCase(), resolvedPath.toLowerCase())
   return lowerRelative === '' || (!lowerRelative.startsWith('..') && !isAbsolute(lowerRelative))
+}
+
+/**
+ * The command that upgrades a Homebrew-owned install, or `undefined` when the
+ * harness was installed some other way.
+ *
+ * A Homebrew-owned harness has to be updated by Homebrew. Its vendor updater
+ * either refuses outright   Claude Code answers `claude update` with "Claude is
+ * managed by Homebrew"   or writes a second copy the app never drives, so the
+ * Update action would leave the install exactly where it was.
+ */
+async function homebrewUpgradeArgsFor(
+  provider: ProviderConnectionInfo | undefined
+): Promise<string[] | undefined> {
+  // A WSL install is a Linux binary inside the distribution, not this host's
+  // Homebrew, so its own updater stays the truth there.
+  if (provider?.executionTarget?.kind === 'wsl') return undefined
+  const pkg = await homebrewPackageFor(provider?.resolvedPath)
+  return pkg ? homebrewUpgradeArgs(pkg) : undefined
 }
 
 /** Pull the first `major.minor.patch` sequence out of a `--version` line. */
@@ -336,6 +356,10 @@ export class HarnessUpdateService {
         detail: 'Bundled with CodeInOven   updates with the app.'
       })
     }
+    // A Homebrew-owned install answers to Homebrew, and Homebrew is the only
+    // thing that can tell the user whether there is anything to install.
+    const viaHomebrew = await this.homebrewUpdateStatus(harnessId, provider, currentVersion)
+    if (viaHomebrew) return this.settle(harnessId, viaHomebrew)
     const source = UPDATE_SOURCES[harnessId]
     if (!source) {
       return this.settle(harnessId, {
@@ -379,7 +403,34 @@ export class HarnessUpdateService {
     })
   }
 
-  /** Build, but do not execute, the update handoff for the embedded terminal. */
+  /**
+   * Update availability as Homebrew sees it, or `undefined` when Homebrew does
+   * not own this install or could not answer.
+   *
+   * A Homebrew-owned harness is measured against what Homebrew can install. The
+   * published feed the app tracks may be a different channel on a different
+   * version line, and a badge a `brew upgrade` cannot clear is a dead end.
+   */
+  private async homebrewUpdateStatus(
+    harnessId: string,
+    provider: ProviderConnectionInfo | undefined,
+    currentVersion: string | undefined
+  ): Promise<HarnessUpdateStatus | undefined> {
+    if (provider?.executionTarget?.kind === 'wsl') return undefined
+    const pkg = await homebrewPackageFor(provider?.resolvedPath)
+    if (!pkg) return undefined
+    const versions = await homebrewVersions(pkg)
+    const installed = versions?.installed ? extractHarnessVersion(versions.installed) : undefined
+    const latest = versions?.latest ? extractHarnessVersion(versions.latest) : undefined
+    const from = installed ?? currentVersion
+    if (!from || !latest) return undefined
+    return {
+      ...idleStatus(harnessId),
+      currentVersion: from,
+      latestVersion: latest,
+      state: compareVersions(latest, from) > 0 ? 'update_available' : 'current'
+    }
+  }
   async handoff(harnessId: string): Promise<HarnessUpdateHandoff> {
     if (isAcpAgentId(harnessId)) return this.acpHandoff(harnessId)
     const definition = findHarness(harnessId)
@@ -394,6 +445,18 @@ export class HarnessUpdateService {
       isAppOwnedInstall(provider?.resolvedPath)
     ) {
       throw new Error(`${definition.name} is bundled with CodeInOven   it updates with the app.`)
+    }
+    // Homebrew owns its installs outright: `brew upgrade` is the only command
+    // that moves them, so it replaces the harness's own updater entirely.
+    const brewArgs = await homebrewUpgradeArgsFor(provider)
+    if (brewArgs) {
+      const prepared = await prepareHarnessTerminalHandoff('brew', brewArgs)
+      return {
+        kind: 'terminal',
+        command: prepared.command,
+        args: prepared.args,
+        title: `Update ${definition.name} with Homebrew`
+      }
     }
     // OpenCode is the one harness whose current release is a different version
     // line under the same command, so a V1 install updates through the V2
@@ -454,6 +517,8 @@ export class HarnessUpdateService {
       })
     }
     const currentVersion = provider.version ? extractHarnessVersion(provider.version) : undefined
+    const viaHomebrew = await this.homebrewUpdateStatus(harnessId, provider, currentVersion)
+    if (viaHomebrew) return this.settle(harnessId, viaHomebrew)
     const updateCommand = acpUpdateCommandFor(agent)
     if (!updateCommand) {
       return this.settle(harnessId, {
@@ -496,6 +561,19 @@ export class HarnessUpdateService {
   private async acpHandoff(harnessId: string): Promise<HarnessUpdateHandoff> {
     const agent = await findAcpAgent(harnessId)
     if (!agent) throw new Error('This ACP agent is no longer configured.')
+    // An ACP agent is the user's own binary, so its install method decides how it
+    // updates: a Homebrew-owned agent is upgraded by Homebrew like any harness.
+    const provider = this.providers.getAll().find((candidate) => candidate.id === harnessId)
+    const brewArgs = await homebrewUpgradeArgsFor(provider)
+    if (brewArgs) {
+      const prepared = await prepareHarnessTerminalHandoff('brew', brewArgs)
+      return {
+        kind: 'terminal',
+        command: prepared.command,
+        args: prepared.args,
+        title: `Update ${agent.name} with Homebrew`
+      }
+    }
     const line = acpUpdateCommandFor(agent)
     if (!line) {
       throw new Error(`${agent.name} has no update command. Set one while editing the agent.`)

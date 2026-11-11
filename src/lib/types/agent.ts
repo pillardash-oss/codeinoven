@@ -188,6 +188,8 @@ export interface ProviderModel {
   id: string
   providerId: string
   name: string
+  /** Canonical wire model an alias id resolves to (Claude Code's `opus` → `claude-opus-5-5`). */
+  resolvedId?: string
   reasoning: boolean
   /** Thinking presets this model supports. When absent or empty, thinking controls are hidden. */
   thinkingPresets?: ThinkingPreset[]
@@ -317,17 +319,18 @@ export interface PromptReference {
    *
    * `selection` (the default when absent) is an excerpt of an assistant
    * response; `design` is an element the user picked from a design in the
-   * in-app browser; `file` is a passage the user annotated in a project
-   * document's preview, whose `label` names that document's path; `video` is a
-   * moment the user noted on a composition's timeline; `image` is a freehand
-   * mark the user drew on a picture an inline artifact published, which is a
-   * still image or one frame of a video; `svg` is an element the user picked
-   * inside an inline SVG artifact, and `html` is an element the user picked
-   * inside an inline HTML artifact. Main validates only `id`, `label`, `text`
-   * and `comment`, so this drives presentation rather than the send: every kind
-   * reaches the model the same way a selection does.
+   * in-app browser, and `page` is an element the user picked on any other page
+   * that browser was showing; `file` is a passage the user annotated in a
+   * project document's preview, whose `label` names that document's path;
+   * `video` is a moment the user noted on a composition's timeline; `image` is a
+   * freehand mark the user drew on a picture an inline artifact published, which
+   * is a still image or one frame of a video; `svg` is an element the user
+   * picked inside an inline SVG artifact, and `html` is an element the user
+   * picked inside an inline HTML artifact. Main validates only `id`, `label`,
+   * `text` and `comment`, so this drives presentation rather than the send:
+   * every kind reaches the model the same way a selection does.
    */
-  kind?: 'selection' | 'design' | 'file' | 'video' | 'image' | 'svg' | 'html'
+  kind?: 'selection' | 'design' | 'page' | 'file' | 'video' | 'image' | 'svg' | 'html'
 }
 
 /**

@@ -142,8 +142,8 @@
     <div>
       <h1 class="text-xl font-bold tracking-tight">Behavior</h1>
       <p class="mt-0.5 max-w-2xl text-[0.6875rem] leading-relaxed text-muted">
-        Work ethics and the PR review brief are the only standing instructions you can customize.
-        Every Engineering lifecycle stage is an application-owned tool the agent calls on its own.
+        Edit the standing instructions agents follow for implementation work and pull request
+        reviews.
       </p>
     </div>
     <div class="shrink-0 border bg-elevated px-2.5 py-1.5 font-mono text-[0.6875rem] text-muted">

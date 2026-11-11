@@ -268,7 +268,12 @@ class ScopeState {
     }
 
     const sequence = ++this.loadSequence
-    this.loading = true
+    // A board seen before paints at once and refreshes in place. Only a project
+    // with nothing cached shows the loading state, so returning to the board
+    // never waits on the database worker's queue.
+    const cached = this.boards.get(projectId)
+    if (cached && projectId === this.activeProjectId) this.board = cached
+    this.loading = !cached
     this.error = null
     try {
       const board = await invoke('scope:get', projectId)
@@ -561,6 +566,38 @@ class ScopeState {
     if (this.sidebarContext.projectId !== this.activeProjectId) {
       void this.activateProject(this.sidebarContext.projectId)
     }
+    persistScopeSnapshot({
+      activeProjectId: this.activeProjectId,
+      sidebarContext: this.sidebarContext
+    })
+  }
+
+  /**
+   * Dock a specific scope on the sidebar, replacing whatever is docked now.
+   *
+   * This is what the app-wide history restores with: every recorded location
+   * carries the scope it showed, so stepping back into the scoped view re-docks
+   * that project, bucket, slice and thread instead of landing on a plain
+   * projects page. Unlike the stash restore, the context comes from the caller.
+   */
+  restoreSidebarContext(context: ScopeSidebarContext): void {
+    const current = this.sidebarContext
+    if (
+      current &&
+      current.projectId === context.projectId &&
+      current.bucketId === context.bucketId &&
+      current.stage === context.stage &&
+      current.threadId === context.threadId
+    ) {
+      return
+    }
+    this.sidebarContext = { ...context }
+    this.stashedSidebarContext = null
+    if (context.projectId !== this.activeProjectId) {
+      void this.activateProject(context.projectId)
+    }
+    void this.threads.ensureProjectThreadsLoaded(context.projectId)
+    void this.ensureBoardLoaded(context.projectId)
     persistScopeSnapshot({
       activeProjectId: this.activeProjectId,
       sidebarContext: this.sidebarContext

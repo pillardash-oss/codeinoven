@@ -1031,16 +1031,31 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
   }
 
-  private mapAccountUsage(telemetry: Record<string, unknown> | null): ClaudeAccountUsage | null {
+  /**
+   * Map a `get_usage` / `get_context_usage` answer onto the shared shape.
+   *
+   * `conversation` names the live session the answer was read from, and it is
+   * the only thing that makes `contextUsed` trustworthy: occupancy describes
+   * ONE conversation, so a process that holds no conversation (a freshly
+   * spawned probe) can only report account-wide quota. Passing `null` keeps
+   * that answer's rate limits and drops its context reading.
+   */
+  private mapAccountUsage(
+    telemetry: Record<string, unknown> | null,
+    conversation: { sessionId: string } | null
+  ): ClaudeAccountUsage | null {
     if (!telemetry) return null
     const usage = record(telemetry['rateLimits'])
     const context = record(telemetry['context'])
     const rateLimits = usage ? rateLimitWindows(usage['rate_limits']) : []
-    if (rateLimits.length === 0 && !context) return null
-    const contextWindow =
-      context === null ? undefined : numberProperty(context, 'maxTokens', 'max_tokens')
-    const contextUsed =
-      context === null ? undefined : numberProperty(context, 'totalTokens', 'total_tokens')
+    const describesConversation = conversation !== null && context !== null
+    if (rateLimits.length === 0 && !describesConversation) return null
+    const contextWindow = describesConversation
+      ? numberProperty(context, 'maxTokens', 'max_tokens')
+      : undefined
+    const contextUsed = describesConversation
+      ? numberProperty(context, 'totalTokens', 'total_tokens')
+      : undefined
     return {
       rateLimits,
       ...(contextWindow === undefined ? {} : { contextWindow }),
@@ -1057,9 +1072,14 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * (API key, Bedrock, Vertex) or on any failure.
    */
   async readAccountUsage(projectPath: string): Promise<ClaudeAccountUsage | null> {
-    const activeSessionId = this.activeSessionIds()[0]
+    // Only a session that holds a real conversation can state this thread's
+    // occupancy. Auxiliary sessions (title generation, probes) are somebody
+    // else's context and would report a nearly empty window under this thread.
+    const activeSessionId = this.activeSessionIds().find((id) => !this.isAuxiliarySession(id))
     if (activeSessionId) {
-      return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId))
+      return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId), {
+        sessionId: activeSessionId
+      })
     }
     try {
       const prepared = await prepareHarnessInvocation(
@@ -1165,7 +1185,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
             )
           })
       )
-      return this.mapAccountUsage(telemetry)
+      // The probe below is a brand-new process with no conversation behind it,
+      // so its context answer describes an empty window, never this thread's.
+      // The quota it reports is account-wide and therefore always valid.
+      return this.mapAccountUsage(telemetry, null)
     } catch (error) {
       Logger.dev('Claude on-demand account usage refresh unavailable:', error)
       return null

@@ -69,7 +69,16 @@ interface PtySession {
 /** How often the watchdog sweeps for idle sessions. */
 const IDLE_WATCHDOG_INTERVAL_MS = 5_000
 
-const ALLOWED_COMMANDS = new Set([
+/**
+ * The commands a renderer may run in their own PTY, before the ACP agents the user
+ * configured are considered.
+ *
+ * The Local AI page launches the server of each engine it manages (`llama-server`
+ * for GGUF and `mlx_lm.server` for MLX) through the same PTY, and runs Homebrew for
+ * their install and update steps, which is why those three are here. Nothing else
+ * joins this set, so a renderer still cannot ask for an arbitrary process.
+ */
+export const ALLOWED_PTY_COMMANDS: ReadonlySet<string> = new Set([
   'opencode',
   'claude',
   'codex',
@@ -82,9 +91,10 @@ const ALLOWED_COMMANDS = new Set([
   'brew',
   'winget',
   'rm',
-  // Llama.cpp: the server binary itself, launched from the Llama.cpp settings
-  // page. Homebrew is already allowed above for the install and update steps.
+  // The Local AI page's own servers. Homebrew is already allowed above for the
+  // install and update steps.
   'llama-server',
+  'mlx_lm.server',
   'git',
   'wsl',
   'sh',
@@ -93,7 +103,7 @@ const ALLOWED_COMMANDS = new Set([
 ])
 
 /** Environment a renderer may hand a command, never arbitrary values: account
- *  directories follow the account a session runs as, and the Llama.cpp page
+ *  directories follow the account a session runs as, and the Local AI page
  *  needs Homebrew to run a job without waiting for a keypress (`HOMEBREW_NO_ASK`). */
 const COMMAND_ENVIRONMENT_KEYS = new Set([
   'PI_CODING_AGENT_DIR',
@@ -111,6 +121,15 @@ function normalizedCommandName(command: string): string {
   return basename(command)
     .replace(/\.(?:exe|cmd|bat|ps1)$/iu, '')
     .toLowerCase()
+}
+
+/**
+ * Whether a command may run in its own PTY without consulting the user's ACP
+ * agents. Exported so the Local AI engines' names can be checked in one place,
+ * which is what a missing entry here looks like from the outside.
+ */
+export function isAllowedPtyCommand(command: string): boolean {
+  return ALLOWED_PTY_COMMANDS.has(normalizedCommandName(command))
 }
 
 function safeCommandEnvironment(environment?: Record<string, string>): Record<string, string> {
@@ -803,7 +822,7 @@ export class PtyService {
    * joins this set, so a renderer still cannot ask for an arbitrary process.
    */
   private async isAllowedHarnessCommand(name: string): Promise<boolean> {
-    if (ALLOWED_COMMANDS.has(name)) return true
+    if (ALLOWED_PTY_COMMANDS.has(name)) return true
     await ensureAcpAgentsLoaded().catch(() => undefined)
     return currentAcpAgents().some((agent) => {
       if (acpCommandName(agent.command) === name) return true

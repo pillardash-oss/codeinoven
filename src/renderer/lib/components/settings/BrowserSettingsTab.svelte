@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { onMount } from 'svelte'
@@ -192,9 +193,9 @@
       </h3>
       <div class="flex items-center justify-between gap-4">
         <div>
-          <p class="text-sm font-medium">Open localhost on CIO's browser</p>
+          <p class="text-sm font-medium">Open localhost links in the app browser</p>
           <p class="text-xs leading-relaxed text-dimmed">
-            Keep local development links inside the workspace for testing
+            Test local development sites without leaving the app
           </p>
         </div>
         <Switch
@@ -208,10 +209,10 @@
       <div class="mt-4 border-t pt-4">
         <div class="flex items-center justify-between gap-4">
           <div>
-            <p class="text-sm font-medium">Open all other links on CIO's browser</p>
+            <p class="text-sm font-medium">Open every other link in the app browser</p>
             <p class="text-xs leading-relaxed text-dimmed">
-              Send every non-local link to the workspace browser of the current project or thread
-              instead of your default browser
+              Open web links in the current project or thread's browser instead of your default
+              browser
             </p>
           </div>
           <Switch
@@ -239,17 +240,17 @@
             Text that is not an address is searched with this engine
           </p>
         </div>
-        <select
-          class="max-w-[14rem] border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-          value={config.browserSearchEngine}
-          disabled={!settingsReady}
-          aria-label="Default search engine"
-          onchange={(event) => selectEngine(event.currentTarget.value)}
-        >
-          {#each engines as engine (engine.id)}
-            <option value={engine.id}>{engine.name}</option>
-          {/each}
-        </select>
+        <div class="w-56 shrink-0">
+          <EnumSelect
+            options={engines.map((engine) => ({ id: engine.id, label: engine.name }))}
+            value={config.browserSearchEngine}
+            disabled={!settingsReady}
+            ariaLabel="Default search engine"
+            title="Default search engine"
+            placeholder="Choose an engine"
+            onChange={selectEngine}
+          />
+        </div>
       </div>
 
       <div class="mt-4 border-t pt-4">

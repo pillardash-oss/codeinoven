@@ -19,9 +19,9 @@ import type { Contract } from './contract-helpers'
 import type {
   LlamaCppLogStream,
   LlamaCppProbeResult,
-  LlamaCppRuntimeStatus,
+  LocalAiModelLocation,
   LocalAiRuntimeId,
-  LocalAiRuntimeSummary,
+  LocalAiRuntimeStatus,
   LocalAiUnloadResult
 } from '../llama-cpp'
 /** One file the user explicitly chooses to save from the renderer. */
@@ -57,23 +57,32 @@ export const invokeAppContract = {
     [role: AgentRole, selection: AgentModelSelection],
     AppConfig
   >,
-  /** The local inference runtimes this machine can drive, for the Local AI page. */
-  'localAi:runtimes': {} as Contract<[], LocalAiRuntimeSummary[]>,
+  /** The engine's binary, its version, and the installer that manages it here. */
+  'localAi:detect': {} as Contract<[runtime: LocalAiRuntimeId], LocalAiRuntimeStatus>,
   'localAi:unloadNow': {} as Contract<[], LocalAiUnloadResult>,
-  /** The `llama-server` the app can launch here, its version and its installer. */
-  'llamaCpp:detect': {} as Contract<[], LlamaCppRuntimeStatus>,
   /** Ask a started server for its loaded model ids, which is what readiness means. */
-  'llamaCpp:probe': {} as Contract<[host: string, port: number], LlamaCppProbeResult>,
-  /** End the llama-server holding a port when no PTY of the app owns it. */
-  'llamaCpp:stopServer': {} as Contract<[port: number], boolean>,
-  /** The file a row's server writes its log to. */
-  'llamaCpp:logPath': {} as Contract<[entryId: string], string>,
+  'localAi:probe': {} as Contract<
+    [host: string, port: number, runtime: LocalAiRuntimeId],
+    LlamaCppProbeResult
+  >,
+  /** End the server holding a port when no PTY of the app owns it. */
+  'localAi:stopServer': {} as Contract<[port: number, runtime: LocalAiRuntimeId], boolean>,
+  /** The file a row's server writes its log to, for llama.cpp rows only. */
+  'localAi:logPath': {} as Contract<[entryId: string], string>,
   /** What a row's log file already holds, so an adopted server shows its history. */
-  'llamaCpp:logTail': {} as Contract<[entryId: string], string[]>,
+  'localAi:logTail': {} as Contract<[entryId: string], string[]>,
   /** Follow a row's log, either over its live PTY or by reading its log file. */
-  'llamaCpp:logStream': {} as Contract<[entryId: string, follow: boolean], LlamaCppLogStream>,
-  /** Pick a local `.gguf` file; the row references it where it lives. */
-  'llamaCpp:pickModel': {} as Contract<[runtime?: LocalAiRuntimeId], string | null>,
+  'localAi:logStream': {} as Contract<[entryId: string, follow: boolean], LlamaCppLogStream>,
+  /**
+   * Where the model this row downloaded was written, so the saved row can name the
+   * folder instead of the tag it came from.
+   */
+  'localAi:modelLocation': {} as Contract<
+    [reference: string, host: string, port: number, runtime: LocalAiRuntimeId],
+    LocalAiModelLocation | null
+  >,
+  /** Pick a local model: a `.gguf` file, or an MLX folder. */
+  'localAi:pickModel': {} as Contract<[runtime?: LocalAiRuntimeId], string | null>,
   'dialog:pickFolder': {} as Contract<[], string | null>,
   'dialog:pickCloneDestination': {} as Contract<[], string | null>,
   'clipboard:saveImage': {} as Contract<[scope: AttachmentStorageScope], string | null>,

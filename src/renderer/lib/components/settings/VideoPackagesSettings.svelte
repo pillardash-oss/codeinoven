@@ -44,10 +44,7 @@
     Video pack
   </h3>
   <p class="mt-2 text-xs leading-relaxed text-dimmed">
-    Background removal on the GPU is the only video operation the base install does not cover. It
-    needs a separate pack of matting libraries, downloaded once into this app's own folder. Probe,
-    filmstrip, waveform, listen, transcribe, cut, export, captions, runtime and tracking all run on
-    the bundled decoder and need nothing else.
+    Needed only for GPU background removal. Every other video tool works without it.
   </p>
 
   {#if packages.error}

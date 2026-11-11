@@ -48,6 +48,33 @@ export const CORE_GATEWAY_TOOL_NAMES: ReadonlySet<string> = new Set([
 export const GATEWAY_DISCOVERY_INSTRUCTION =
   'Optional app, workstation, engineering and utility-setup tools are available through the built-in cio:gateway capability, already active. Use cio_util_use with utility_id "cio:gateway", operation "catalog", and input {names:["tool_name"]} to load only the needed schemas, or input {} for a compact index. Then operation "call" with input {tool:"tool_name",arguments:{...}} executes it with the original permissions. Operation "batch" accepts input {calls:[{tool,arguments}]} for up to eight independent read-only calls. Inspect every result; dependent calls, mutations and approvals remain sequential. Do not call optional tool names directly or use shell gateway requests.'
 
+/**
+ * The round-trip contract for one harness's tool surface.
+ *
+ * Every model call re-reads the whole conversation, so the cost of a turn is
+ * its request count as much as its context size. A harness with a script
+ * runner batches inside one script; a harness without one batches in the
+ * tools it does have, because a rule that names a tool the session does not
+ * have is ignored and each per-item call is billed in full.
+ */
+export function gatewayBatchingInstruction(codeMode: boolean): string {
+  const contract = [
+    'Round-trip contract: batch, always. Every model call re-reads the whole conversation, so a burst of one call per item is a failure of this contract, not a slower path.',
+    codeMode
+      ? 'Use code mode extensively: cover a list in ONE code-mode script that loops over the inputs with bounded concurrency and returns only the findings, and never issue a separate call for each item when one script could carry them.'
+      : 'This harness gives you no code mode tool, so batch in the tools it does have: cover a list in ONE shell command (a for loop, xargs, or one search command that matches several patterns at once), issue independent reads, searches and utility calls together in a single assistant message, and use the gateway batch operation for up to eight independent read-only app calls. Never issue a separate call for each item.',
+    'Keep dependent operations, mutations, approvals and retries sequential, inspect every result, and filter large results before returning them to the model.'
+  ]
+  return contract.join(' ')
+}
+
+/** One utility invocation per item is the most expensive shape a turn can take. */
+export function gatewayPerItemInstruction(codeMode: boolean): string {
+  return codeMode
+    ? "One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched."
+    : 'One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs, drive it from ONE shell command that loops over the inputs and prints only the findings, or from one gateway `batch` when the calls are independent app tools. Never invoke a utility once per item when one command can cover the list, and never call the gateway through the shell.'
+}
+
 export function initialGatewayTools(
   tools: readonly GatewayToolDefinition[]
 ): GatewayToolDefinition[] {

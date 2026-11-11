@@ -119,7 +119,7 @@ export class CodexDriverPrompting {
           ]
       const developerInstructions = options.minimalContext
         ? 'Return only the requested auxiliary answer.'
-        : codexDeveloperInstructions(options.systemPrompt)
+        : codexDeveloperInstructions(options.systemPrompt, options.settings.permissionLevel)
       const contextWindow = this.host.codexContextWindowOverride(options.settings)
       const contextConfig = {
         config: {

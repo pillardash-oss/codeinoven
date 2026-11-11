@@ -2,8 +2,8 @@ import { promises as fs } from 'fs'
 import { basename, join } from 'path'
 import { randomUUID } from 'node:crypto'
 import { fileURLToPath } from 'url'
-import type { PromptAttachment } from '../../../lib/types'
-import { CODEX_QUESTION_INSTRUCTION } from './codex-tools'
+import type { PermissionLevel, PromptAttachment } from '../../../lib/types'
+import { CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION, CODEX_QUESTION_INSTRUCTION } from './codex-tools'
 
 export async function codexAuxiliaryConfig(projectPath: string): Promise<Record<string, unknown>> {
   const folder = join(projectPath, '.cio/tmp/auxiliary')
@@ -36,8 +36,13 @@ export function composePrompt(systemPrompt: string | undefined, text: string): s
   return systemPrompt ? `${systemPrompt}\n\n${text}` : text
 }
 
-export function codexDeveloperInstructions(systemPrompt: string | undefined): string {
-  return [systemPrompt?.trim(), CODEX_QUESTION_INSTRUCTION].filter(Boolean).join('\n\n')
+export function codexDeveloperInstructions(
+  systemPrompt: string | undefined,
+  permissionLevel?: PermissionLevel
+): string {
+  const approvals =
+    permissionLevel === 'auto_review' ? CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION : undefined
+  return [systemPrompt?.trim(), CODEX_QUESTION_INSTRUCTION, approvals].filter(Boolean).join('\n\n')
 }
 
 export async function localAttachmentPath(attachment: PromptAttachment): Promise<string> {

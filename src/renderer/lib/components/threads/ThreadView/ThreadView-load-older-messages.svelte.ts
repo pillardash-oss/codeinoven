@@ -899,9 +899,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
             this.root.unmirroredTraceStartTime.autoRetryAfterReset =
               config.autoRetryAfterReset === true
             this.root.contextUsage.auditSettings = this.root.sources.auditSettingsForThread()
-            if (threadData?.sessionId) {
-              threadMessages.setSessionId(projectId, id, threadData.sessionId)
-            }
+            this.bindPersistedSession(threadData?.sessionId)
             this.root.abortRun.syncOpenSubagentTabs()
             this.root.studioTemporaryChatContext.seedContextUsageSnapshot(threadData?.contextUsage)
             this.root.steerQueuedMessage.restoreQueuedMessage()
@@ -939,12 +937,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         config.imageDescriptorAskAgain === true
       this.root.unmirroredTraceStartTime.autoRetryAfterReset = config.autoRetryAfterReset === true
       this.root.contextUsage.auditSettings = this.root.sources.auditSettingsForThread()
-      // Re-bind the thread's persisted session so its live events keep routing
-      // to this cache (and the background queue dispatcher) even when the
-      // renderer never sent a message on this mount.
-      if (threadData?.sessionId) {
-        threadMessages.setSessionId(projectId, id, threadData.sessionId)
-      }
+      this.bindPersistedSession(threadData?.sessionId)
       this.root.abortRun.syncOpenSubagentTabs()
       // The live session status (connectSession) is authoritative; only fall
       // back to the persisted thread status when no live status was seen.
@@ -967,6 +960,28 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       }
       this.root.composerScope.beginInitialPaintReveal()
     }
+  }
+
+  /**
+   * Re-bind the thread's persisted session so its live events keep routing to
+   * this cache (and the background queue dispatcher) even when the renderer
+   * never sent a message on this mount.
+   *
+   * The read that carries it is asynchronous, so it can land after the session
+   * this view is actually running on was already bound   a harness switch
+   * replaces the session mid-mount, and the row read before the switch still
+   * names the old one. Writing it anyway pointed the routing table at a parked
+   * session and every streamed part of the live turn was dropped on the floor:
+   * the reader opened a thread that had stopped to ask them something and found
+   * their own prompt with no work under it. A stale id therefore never
+   * overwrites the live one.
+   */
+  bindPersistedSession(sessionId: string | undefined): void {
+    if (!sessionId) return
+    const live = this.root.handleAgentEvent.sessionId
+    if (live && live !== sessionId) return
+    const { projectId, id } = this.root.handleAgentEvent.thread
+    threadMessages.setSessionId(projectId, id, sessionId)
   }
 
   /**

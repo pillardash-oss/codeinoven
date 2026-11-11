@@ -10,6 +10,7 @@ import { getConfigRoot } from '../../lib/utils'
 import { BootUnavailableError } from '../bootstrap/boot-gate'
 import { previewTypeForPath, type PreviewType } from '../../lib/preview-types'
 import { byteRange, previewHeaders } from '../../lib/preview-range'
+import { previewScope } from '../../lib/preview-scope'
 import { Logger } from '../system/logger'
 import { openWithService } from '../system/open-with-service'
 import { MediaServer } from './media-server/media-server'
@@ -245,10 +246,12 @@ export function installFilePreviewProtocol(deps: FilePreviewProtocolDeps): void 
         if (!PROJECT_ID_PATTERN.test(projectId)) return notFound()
         const relativePath = segments.slice(1).join('/')
         if (!relativePath) return notFound()
+        const scope = previewScope(url)
+        if (scope === null) return notFound()
         const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
         const files = await deps.projectFiles()
-        const absolutePath = await files.resolveForExternalEditor(projectId, relativePath)
+        const absolutePath = await files.resolveForExternalEditor(projectId, relativePath, scope)
         return serveLocalFile(mediaServer, absolutePath, type, request)
       }
 
@@ -260,6 +263,8 @@ export function installFilePreviewProtocol(deps: FilePreviewProtocolDeps): void 
         if (!THREAD_ID_PATTERN.test(threadId)) return notFound()
         const relativePath = segments.slice(2).join('/')
         if (!relativePath) return notFound()
+        const scope = previewScope(url)
+        if (scope === null) return notFound()
         const type = previewTypeForPath(relativePath, url.searchParams.get('mime') ?? undefined)
         if (!type) return notFound()
         const files = await deps.projectFiles()
@@ -268,7 +273,7 @@ export function installFilePreviewProtocol(deps: FilePreviewProtocolDeps): void 
         const absolutePath = await files.resolveForExternalEditor(
           projectId,
           relativePath,
-          undefined,
+          scope,
           threadId
         )
         return serveLocalFile(mediaServer, absolutePath, type, request)

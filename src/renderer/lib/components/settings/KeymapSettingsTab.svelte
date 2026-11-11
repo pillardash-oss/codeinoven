@@ -16,10 +16,7 @@
       Keymap
     </h1>
     <p class="mt-0.5 text-sm text-muted">
-      {totalShortcuts} keyboard shortcuts. {isMac ? '⌘' : 'Ctrl'} is the primary modifier ({isMac
-        ? '⌘ Command on macOS'
-        : 'Ctrl on Windows and Linux'}) and is shown as
-      {isMac ? '⌘' : 'Ctrl'} below.
+      {totalShortcuts} keyboard shortcuts across the app.
     </p>
   </div>
 

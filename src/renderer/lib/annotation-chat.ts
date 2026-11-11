@@ -115,3 +115,20 @@ export function designElementChatContext(
     '</design-element>'
   ].join('\n\n')
 }
+
+/**
+ * An element picked on a page the app's browser is showing.
+ *
+ * The page is not a design folder, so there is no folder to read: what the model
+ * gets is where the element was found, and the instruction to look for that page
+ * in the project (a file previewed from the tree, a dev server route) rather than
+ * assuming a served design.
+ */
+export function pageElementChatContext(url: string | undefined, title: string | undefined): string {
+  const lines = [
+    `The user inspected a page the app's browser is showing and selected an element of it. The attached selection is that element's descriptor (its URL, title, viewport, scroll offset, CSS path, identity attributes, state, text and opening markup). The page is a live render, so find where this project renders that page and change the element there rather than a page that merely resembles it.`,
+    url ? `Page: ${url}` : null,
+    title ? `Title: ${title}` : null
+  ].filter((line): line is string => line !== null)
+  return lines.join('\n\n')
+}

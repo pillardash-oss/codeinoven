@@ -154,9 +154,21 @@ export function messageFromAssistant(message: Record<string, unknown>): AgentMes
   const content = Array.isArray(message['content']) ? message['content'] : []
   const parts: AgentPart[] = []
   const now = Date.now()
-  for (const [index, blockValue] of content.entries()) {
+  // Block indexes are counted per type, never by position in the content array.
+  // Claude Code re-emits the same assistant message with a *different* block
+  // layout: a record that arrives while a thinking block is still streaming
+  // holds only `[text]`, and the settled record holds `[thinking, text, ...]`.
+  // A positional index put the same text at 0 in the first record and at 1 in
+  // the second, so merging the two records by id kept both and the trace drew
+  // the identical paragraph twice. Counting per type anchors the id to the
+  // block's own content, so the later record overwrites the earlier one.
+  const blockCounts = new Map<string, number>()
+  for (const blockValue of content) {
     const block = record(blockValue)
     if (!block) continue
+    const type = string(block['type']) ?? ''
+    const index = blockCounts.get(type) ?? 0
+    blockCounts.set(type, index + 1)
     const part = partFromBlock(messageId, block, index)
     if (part) parts.push(part)
   }

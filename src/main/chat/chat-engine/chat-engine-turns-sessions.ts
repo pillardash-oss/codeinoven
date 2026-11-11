@@ -23,6 +23,7 @@ import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provi
 import type { PendingQuestionInfo, SessionCompletionWaiter, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { broadcastToast, initialSpecWorkingStatus, probeSessionLiveness } from './chat-engine-pure'
+import { displayDeviceAttention } from '../../display/display-device-attention'
 import { ChatEngine } from '../chat-engine'
 
 /** ChatEngine turns-sessions: one concern, moved verbatim from the composition root. */
@@ -483,6 +484,7 @@ export class ChatEngineTurnsSessions {
   }
 
   retireSessionState(sessionId: string): void {
+    const retiring = this.host.sessionRegistry.get(sessionId)
     this.host.state.planningSessions.delete(sessionId)
     this.host.state.preparedImplementationSessions.delete(sessionId)
     this.host.sessionRegistry.delete(sessionId)
@@ -504,6 +506,9 @@ export class ChatEngineTurnsSessions {
     this.host.state.artifactRenderedSessions.delete(sessionId)
     this.host.state.todoReconcileAttempts.delete(sessionId)
     this.host.units['permissions'].dropSessionCreations(sessionId)
+    // A retired session ends the display panel's patience with its thread: the
+    // next turn on that thread may be working on a different device.
+    if (retiring) displayDeviceAttention.forget(retiring.threadId)
     this.host.state.sessionNativeHistory.delete(sessionId)
     this.host.state.parkedSessionReplay.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
@@ -1333,9 +1338,21 @@ export class ChatEngineTurnsSessions {
   /** Whether the session is parked on a card the user has not settled: a
    *  question, a permission request, or an image-descriptor decision. */
   sessionAwaitsUserInput(sessionId: string): boolean {
+    const threadId = this.host.sessionRegistry.get(sessionId)?.threadId
     return (
       [...this.host.pendingQuestions.values()].some(
-        (pending) => pending.request.sessionId === sessionId
+        (pending) =>
+          pending.request.sessionId === sessionId ||
+          // A question an artifact session asked on this thread's behalf parks
+          // the thread too. Reading only the turn's own session let that card
+          // wait while the turn settled `completed` and its notice read
+          // done/unread. A side chat's question never counts: it owns no status
+          // of the parent thread.
+          (threadId !== undefined &&
+            pending.request.threadId === threadId &&
+            this.host.units['temporary-chats'].temporaryChatForSession(
+              pending.request.sessionId
+            ) === undefined)
       ) ||
       [...this.host.state.pendingPermissions.values()].some(
         (pending) => pending.request.sessionId === sessionId

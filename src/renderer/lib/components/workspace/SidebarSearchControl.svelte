@@ -36,6 +36,14 @@
     placeholder: string
     /** Trigger size   'sm' for dense rows, 'md' for sidebar header toolbars. */
     size?: 'sm' | 'md'
+    /**
+     * Draw the field in the list the search belongs to instead of opening a
+     * floating panel beside the trigger. A narrow sidebar has nowhere beside it
+     * to put a 20rem panel without landing on the rows below.
+     */
+    inlineField?: boolean
+    /** The id of that inline field, so the trigger can point at it. */
+    fieldId?: string
   }
 
   let {
@@ -47,7 +55,9 @@
     title,
     placeholder,
     loading = false,
-    size = 'sm'
+    size = 'sm',
+    inlineField = false,
+    fieldId
   }: Props = $props()
 
   const triggerClass = $derived(
@@ -60,7 +70,9 @@
   // Editable popovers use the live host shared by DockableModal. Projection-only
   // floating docks deliberately refuse editable fields because they cannot own typing.
   const native = new NativeFloatingPanel(nativeId)
-  const nativeArmed = $derived(open && browserVisibility.canUseNativeDock && !native.failed)
+  const nativeArmed = $derived(
+    !inlineField && open && browserVisibility.canUseNativeDock && !native.failed
+  )
   let box = $state<BrowserViewBounds | null>(null)
   const mountNative: Attachment<HTMLElement> = (element) => native.mount(element)
 
@@ -116,7 +128,7 @@
   // and would close underneath the query being typed, taking the search with it.
   const panel = hasSidebarPanelContext() ? getSidebarPanelContext() : null
   $effect(() => {
-    if (!open || !panel) return
+    if (inlineField || !open || !panel) return
     panel.hold()
     return () => panel.releaseHold()
   })
@@ -126,75 +138,91 @@
   }
 </script>
 
-<Popover.Root {open} {onOpenChange}>
-  <Popover.Trigger class={`titlebar-no-drag ${triggerClass}`} aria-label={ariaLabel} {title}>
+{#if inlineField}
+  <!-- The field is drawn by the list itself, so this is only the switch for it:
+       no panel, no floating content, nothing that can land on a row. -->
+  <button
+    type="button"
+    class="titlebar-no-drag {triggerClass}"
+    aria-label={ariaLabel}
+    aria-expanded={open}
+    aria-controls={fieldId}
+    {title}
+    onclick={() => onOpenChange(!open)}
+  >
     <CioSearch size={size === 'md' ? 15 : 12} strokeWidth={size === 'md' ? 1.8 : undefined} />
-  </Popover.Trigger>
+  </button>
+{:else}
+  <Popover.Root {open} {onOpenChange}>
+    <Popover.Trigger class={`titlebar-no-drag ${triggerClass}`} aria-label={ariaLabel} {title}>
+      <CioSearch size={size === 'md' ? 15 : 12} strokeWidth={size === 'md' ? 1.8 : undefined} />
+    </Popover.Trigger>
 
-  <Popover.Portal>
-    <Popover.Content
-      side="right"
-      align="start"
-      sideOffset={8}
-      collisionPadding={16}
-      onCloseAutoFocus={(event) => event.preventDefault()}
-      onInteractOutside={(e) => e.preventDefault()}
-      class="titlebar-no-drag z-50"
-      trapFocus={!nativeArmed}
-      aria-label={ariaLabel}
-    >
-      <div
-        {@attach measureFrame}
-        class="h-11 w-80"
-        style:opacity={nativeArmed && !native.live ? 0 : 1}
+    <Popover.Portal>
+      <Popover.Content
+        side="right"
+        align="start"
+        sideOffset={8}
+        collisionPadding={16}
+        onCloseAutoFocus={(event) => event.preventDefault()}
+        onInteractOutside={(e) => e.preventDefault()}
+        class="titlebar-no-drag z-50"
+        trapFocus={!nativeArmed}
+        aria-label={ariaLabel}
       >
         <div
-          {@attach mountNative}
-          class="titlebar-no-drag flex h-11 w-80 items-center overflow-hidden border bg-surface p-1.5 shadow-lg"
+          {@attach measureFrame}
+          class="h-11 w-80"
+          style:opacity={nativeArmed && !native.live ? 0 : 1}
         >
-          <div class="flex w-full items-center gap-1.5">
-            <CioSearch size={14} class="shrink-0 text-dimmed" />
-            <input
-              {@attach focusSearchInput}
-              type="text"
-              class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
-              {placeholder}
-              aria-label={ariaLabel}
-              onkeydown={(event) => {
-                if (event.key === 'Escape') {
-                  event.preventDefault()
-                  onOpenChange(false)
-                }
-              }}
-              value={query}
-              oninput={(e: Event) => onQueryChange((e.currentTarget as HTMLInputElement).value)}
-            />
-            {#if loading}
-              <span
-                class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed"
-                role="status"
-                aria-label="Searching"
-              >
-                <CioSpinner size={13} class="animate-spin" />
-              </span>
-            {/if}
-            <!-- One control, one meaning: the X dismisses the whole search. It used
+          <div
+            {@attach mountNative}
+            class="titlebar-no-drag flex h-11 w-80 items-center overflow-hidden border bg-surface p-1.5 shadow-lg"
+          >
+            <div class="flex w-full items-center gap-1.5">
+              <CioSearch size={14} class="shrink-0 text-dimmed" />
+              <input
+                {@attach focusSearchInput}
+                type="text"
+                class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
+                {placeholder}
+                aria-label={ariaLabel}
+                onkeydown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault()
+                    onOpenChange(false)
+                  }
+                }}
+                value={query}
+                oninput={(e: Event) => onQueryChange((e.currentTarget as HTMLInputElement).value)}
+              />
+              {#if loading}
+                <span
+                  class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed"
+                  role="status"
+                  aria-label="Searching"
+                >
+                  <CioSpinner size={13} class="animate-spin" />
+                </span>
+              {/if}
+              <!-- One control, one meaning: the X dismisses the whole search. It used
              to be two X's side by side ("clear" and "close"), so clicking the
              left one emptied the query, wiped the sidebar results and left the
              panel open - a dismiss that only looked like one. Dismissal already
              clears the query and its results. -->
-            <button
-              type="button"
-              class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Dismiss search"
-              title="Dismiss search"
-              onclick={() => onOpenChange(false)}
-            >
-              <CioClose size={13} />
-            </button>
+              <button
+                type="button"
+                class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+                aria-label="Dismiss search"
+                title="Dismiss search"
+                onclick={() => onOpenChange(false)}
+              >
+                <CioClose size={13} />
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-    </Popover.Content>
-  </Popover.Portal>
-</Popover.Root>
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
+{/if}

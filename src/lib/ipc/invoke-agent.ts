@@ -106,6 +106,18 @@ export const invokeAgentContract = {
    */
   'agent:warmSession': {} as Contract<[projectId: string, threadId: string], boolean>,
   'agent:ensureInitialSpec': {} as Contract<[projectId: string, threadId: string], EngineeringSpec>,
+  /**
+   * The conversation that owns a live harness session.
+   *
+   * A window routes streamed parts by session id, so a binding it never learned
+   * (or one a slower read overwrote with the thread's previous session) makes it
+   * drop a whole turn's work in silence. This is the lookup that lets it adopt
+   * the right binding from the first event it cannot place.
+   */
+  'agent:threadForSession': {} as Contract<
+    [sessionId: string],
+    { projectId: string; threadId: string } | null
+  >,
   'agent:getSessionStatus': {} as Contract<
     [projectId: string, threadId: string],
     AgentSessionStatus | null

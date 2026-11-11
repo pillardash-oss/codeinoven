@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import { DropdownMenu } from 'bits-ui'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioCircle from '@pdslng/cio-icon/CioCircle.svelte'
@@ -254,8 +255,8 @@
         <CioCode size={18} class="text-muted" />IDE Mode
       </h1>
       <p class="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
-        Language servers provide definitions, references, and documentation when IDE Mode is enabled
-        in a file viewer.
+        Language servers add go to definition, references and hover docs to files opened in IDE
+        Mode.
       </p>
     </div>
   </div>
@@ -311,9 +312,8 @@
         <div class="min-w-0">
           <h2 class="text-sm font-semibold">Format on save</h2>
           <p class="mt-1 max-w-2xl text-xs leading-relaxed text-muted">
-            Re-lay-out a file through its language server when a file viewer saves it with IDE Mode
-            on. A file whose server has no formatter, or whose formatter cannot answer, is saved
-            exactly as written.
+            Format files with their language server when you save in IDE Mode. Files without a
+            formatter are saved as written.
           </p>
         </div>
         <Switch
@@ -507,16 +507,20 @@
 <Modal open={adding} title="Add language server" onClose={() => (adding = false)}>
   <label class="block text-xs text-muted"
     >Server
-    <select
-      aria-label="Language server preset"
-      class="mt-2 w-full border border-border bg-app px-2 py-2 text-sm text-foreground"
-      bind:value={presetId}
-    >
-      {#each DEFAULT_IDE_LANGUAGE_SERVERS.filter((preset) => !servers.some((server) => server.id === preset.id)) as preset (preset.id)}<option
-          value={preset.id}>{preset.name}</option
-        >{/each}
-      <option value="custom">Custom server</option>
-    </select>
+    <EnumSelect
+      options={[
+        ...DEFAULT_IDE_LANGUAGE_SERVERS.filter(
+          (preset) => !servers.some((server) => server.id === preset.id)
+        ).map((preset) => ({ id: preset.id, label: preset.name })),
+        { id: 'custom', label: 'Custom server' }
+      ]}
+      value={presetId}
+      ariaLabel="Language server preset"
+      title="Language server preset"
+      placeholder="Choose a language server"
+      class="mt-2 w-full"
+      onChange={(id) => (presetId = id)}
+    />
   </label>
   {#snippet footer()}
     <button type="button" class={buttonClass} onclick={() => (adding = false)}>Cancel</button>

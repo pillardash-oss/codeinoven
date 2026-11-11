@@ -504,10 +504,11 @@ export const invokeBrowserContract = {
    *  means. */
   'browser:stopFindInPage': {} as Contract<[tabId: string, action: BrowserFindStopAction], void>,
   /**
-   * Arm or disarm the element inspector on a design tab. Arming injects the
-   * page-side inspector and starts reporting picks; disarming stops picking but
-   * leaves the pins in place, and both keep reporting a pin the user clicks.
-   * Only meaningful on a tab whose `BrowserPageState.design` is set.
+   * Arm or disarm the element inspector on a tab. Arming injects the page-side
+   * inspector and starts reporting picks; disarming stops picking but leaves the
+   * pins in place, and both keep reporting a pin the user clicks. Every
+   * thread-browser tab offers it, whether it shows a served design folder, a
+   * project file previewed from the tree, or any other page.
    *
    * The theme rides on the arm so the injected overlay is themed by the time it
    * draws its first box, instead of racing a separate theme push.

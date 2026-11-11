@@ -14,8 +14,8 @@
   import type { MenuItem } from '../../shared/ThreadDropdown.svelte'
   import ThreadDropdown from '../../shared/ThreadDropdown.svelte'
   import {
-    describeLlamaServerCommand,
-    llamaCppModelLabel,
+    describeLocalAiServerCommand,
+    localAiModelLabel,
     type LlamaCppServerEntry
   } from '$shared/llama-cpp'
   import { slide } from 'svelte/transition'
@@ -34,7 +34,7 @@
     onStop: () => void
     onEdit: () => void
     onDelete: () => void
-    /** False for an engine whose server the user runs themselves. */
+    /** False for a row the app only registers, never launches. */
     managed?: boolean
   }
 
@@ -56,7 +56,7 @@
 
   let copied = $state(false)
 
-  const command = $derived(describeLlamaServerCommand(entry, executable))
+  const command = $derived(describeLocalAiServerCommand(entry, executable))
   const logText = $derived(
     logLines.length > 0
       ? logLines.join('\n')
@@ -135,12 +135,16 @@
       <div
         class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
       >
-        <VendorIcon name="llama.cpp" id="llamacpp" size={20} />
+        <VendorIcon
+          name={entry.runtime === 'mlx' ? 'Apple' : 'llama.cpp'}
+          id={entry.runtime === 'mlx' ? 'apple' : 'llamacpp'}
+          size={20}
+        />
       </div>
       <div class="min-w-0">
         <p class="truncate text-sm font-medium">{entry.name}</p>
-        <p class="truncate text-[0.625rem] text-dimmed" title={llamaCppModelLabel(entry)}>
-          {llamaCppModelLabel(entry)}
+        <p class="truncate text-[0.625rem] text-dimmed" title={localAiModelLabel(entry)}>
+          {localAiModelLabel(entry)}
         </p>
       </div>
     </div>

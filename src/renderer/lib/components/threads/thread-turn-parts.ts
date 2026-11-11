@@ -613,12 +613,38 @@ export function turnStartIndexForEnd(
   for (let index = endMsgIndex; index >= 0; index--) {
     const message = messages[index]
     if (!message) break
+    if (message.role === 'assistant' && startsItsOwnTurn(message)) {
+      return index === endMsgIndex ? index : index + 1
+    }
     if (message.role !== 'user') continue
     if (isTransparent(message)) continue
     return index + 1
   }
   return endMsgIndex
 }
+
+/**
+ * True for a finished assistant row the app wrote into the conversation itself,
+ * rather than one an agent run produced.
+ *
+ * A run's rows carry the harness and model that answered. These do not: they are
+ * reports written straight into the transcript, such as a delegated run's answer
+ * landing in the group that asked for it. Such a row opens its own turn, so it
+ * arrives as a new message under its speaker instead of taking over the closing
+ * statement of the turn above it, which is what made a dispatched thread's
+ * announcement turn into its answer.
+ */
+export function startsItsOwnTurn(message: AgentMessage): boolean {
+  if (message.role !== 'assistant') return false
+  return APP_REPORT_MESSAGE_ID.test(message.id)
+}
+
+/**
+ * The ids the app itself gives a message it writes into a conversation: a
+ * delegated run's outcome, and a group member's reply. Everything else in a
+ * transcript came from a run.
+ */
+const APP_REPORT_MESSAGE_ID = /^(?:don-delegation-|group-chat-reply-)/u
 
 /**
  * Deduped turn-start prompt indices before `fromIndex`, newest-first.

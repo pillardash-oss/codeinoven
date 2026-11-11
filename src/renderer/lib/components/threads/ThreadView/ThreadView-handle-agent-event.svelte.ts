@@ -691,6 +691,13 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     this.root.buildSpecActionPrompt.beginLocalTurn(userMessageId)
     this.root.currentWorkingTraceAttribution.captureLiveWorkingSelection()
     agentRuns.setBusy(projectId, id, true, userMessageId)
+    // Nothing has reported this turn yet: the harness session still has to be
+    // bound (and, after a provider or harness switch, created and spawned while
+    // the orphaned one is released). The persisted row keeps the previous turn's
+    // settled status for that whole window, and the session binding is published
+    // as a thread update, so the settle repair has to know this turn is waiting
+    // on its first live state instead of reading that row as its end.
+    agentRuns.beginDispatch(projectId, id)
 
     // Set the moment the dispatch settles: from that instant the prompt is the
     // agent's, and everything the rest of this block does (the scroll, the

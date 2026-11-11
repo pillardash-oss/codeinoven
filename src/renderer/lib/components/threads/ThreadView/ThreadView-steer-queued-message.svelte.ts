@@ -261,7 +261,7 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
       this.root.studioTemporaryChatContext.editDocumentAnnotation(reference)
       return
     }
-    if (reference.kind === 'design') {
+    if (reference.kind === 'design' || reference.kind === 'page') {
       this.root.studioTemporaryChatContext.editDesignAnnotation(reference)
       return
     }

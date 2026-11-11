@@ -133,7 +133,12 @@
 
   async function togglePin(thread: Thread): Promise<void> {
     try {
-      const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
+      // A bookmarked thread carries the bookmark in the mark slot, so the one
+      // control removes the bookmark first: the same rule the workspace row
+      // applies, so the mark means the same thing in every list.
+      const updated = thread.bookmarked
+        ? await invoke('thread:setBookmarked', thread.projectId, thread.id, false)
+        : await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
       scopeState.updateThread(updated)
       workspaceState.updateThread(updated)
     } catch (error) {

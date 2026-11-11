@@ -22,6 +22,23 @@ All notable changes to CodeInOven are documented here. This project follows
   and tailwindcss-language-server report nothing numeric while they load and only
   servers that do (TypeScript, Pyright and friends) fill the bar.
 
+### Changed
+
+- **The runtime moved to Electron 45.3.0 (Chromium 156), and the embedded
+  browser's extension surface was re-measured rather than assumed.** The
+  permission list that is stripped from an installed manifest was recorded on
+  Chromium 152, so it was re-taken against the shipped runtime: all 103 names
+  are still unknown to the loader, and no name warned on the new runtime that
+  did not already warn on Electron 44, so no extension gains a warning and none
+  loses a permission it had. The other v45 changes were checked against the code
+  they would touch: sandboxed preloads keep no removed `events`/`timers`/`url`
+  shims, no `Buffer` or `setImmediate`, and `out/preload/index.cjs` requires
+  only `electron`; every browser view, popup, side panel and extension page is
+  already `sandbox: true`, so the new `window.open` child sandbox rule changes
+  nothing; screen capture already answers the new `display-capture` permission
+  (`src/lib/browser/site-permissions.ts`), and no code reads an ASAR file
+  descriptor across a process boundary.
+
 ### Fixed
 
 - **A page can no longer drag the app window, which is what made an Azure

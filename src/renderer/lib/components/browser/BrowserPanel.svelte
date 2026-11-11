@@ -12,7 +12,11 @@
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { designElementChatContext, openAnnotationChat } from '$lib/annotation-chat'
+  import {
+    designElementChatContext,
+    openAnnotationChat,
+    pageElementChatContext
+  } from '$lib/annotation-chat'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
@@ -252,6 +256,16 @@
   const screenEntry = $derived(
     authoredWork ? designScreenEntryFromUrl(pageState.url, authoredWork.origin) : null
   )
+  /**
+   * Whether this tab offers the element inspector.
+   *
+   * Every page the thread browser is showing does, not only a served design
+   * folder: a project file opened from the tree, a dev server or any site is a
+   * place the reader points at while giving feedback, and a pick there is the same
+   * descriptor a design pick is. A blank tab and a page that failed to load have
+   * no document to inspect, and a composition watched full screen is a player.
+   */
+  const canInspect = $derived(!compositionPlayer && !showsDomCard)
   let inspectArmed = $derived(browserInspector.isArmed(tabId))
   /**
    * The comment bubble this tab has open, and what it takes to draw it.
@@ -265,7 +279,7 @@
     const open = browserInspector.commentFor(tabId)
     if (!open) return null
     const { reference } = open
-    const named = (reference.text.split('\n')[0] ?? '').replace(/^Design element:\s*/u, '')
+    const named = (reference.text.split('\n')[0] ?? '').replace(/^(?:Design|Page) element:\s*/u, '')
     return {
       referenceId: reference.id,
       anchor: open.anchor,
@@ -614,7 +628,6 @@
 
   /** Arm or disarm element inspection for this tab, through the shared session. */
   function toggleInspect(): void {
-    if (!inspectArmed && !pageState.design) return
     browserInspector.toggle(tabId)
   }
 
@@ -661,19 +674,23 @@
    *
    * The one comment bubble carries the read-only chat pair every annotation
    * offers, so the user can question an element they already picked. The
-   * element's own descriptor is the selection, and the design folder it was
-   * picked from is the context the answer is read from; the bubble then closes
-   * the way its Cancel does, keeping the reference and its draft.
+   * element's own descriptor is the selection, and what it was picked from is the
+   * context the answer is read from: a design folder for a design pick, the page's
+   * own URL for a pick on any other page. The bubble then closes the way its
+   * Cancel does, keeping the reference and its draft.
    */
-  function openDesignElementChat(mode: 'elaborate' | 'quick'): void {
+  function openElementChat(mode: 'elaborate' | 'quick'): void {
     const open = designComment
     if (!open) return
+    const isPage = open.reference.kind !== 'design'
     openAnnotationChat({
       projectId: open.projectId,
       threadId: open.threadId,
       mode,
       selection: open.reference.text,
-      context: designElementChatContext(open.reference.directory, open.reference.designEntry)
+      context: isPage
+        ? pageElementChatContext(open.reference.pageUrl, pageState.title)
+        : designElementChatContext(open.reference.directory, open.reference.designEntry)
     })
     browserInspector.closeComment(tabId)
   }
@@ -921,7 +938,7 @@
           {/key}
         {/if}
       {/if}
-      {#if pageState.design}
+      {#if canInspect}
         <button
           type="button"
           class={[
@@ -935,7 +952,7 @@
           aria-pressed={inspectArmed}
           title={inspectArmed
             ? 'Stop inspecting: hover an element and click to comment, Escape to exit'
-            : 'Pick an element in this design to comment on'}
+            : 'Pick an element on this page to comment on'}
           onclick={toggleInspect}
         >
           <CioMarquee size={13} />
@@ -1083,7 +1100,7 @@
     onDone={commitDesignComment}
     onRemove={removeDesignComment}
     onClose={() => browserInspector.closeComment(tabId)}
-    onExplain={() => openDesignElementChat('elaborate')}
-    onQuickChat={() => openDesignElementChat('quick')}
+    onExplain={() => openElementChat('elaborate')}
+    onQuickChat={() => openElementChat('quick')}
   />
 </div>

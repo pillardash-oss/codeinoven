@@ -440,6 +440,30 @@ export function previewRuns<T>(runs: readonly T[], expanded: boolean): T[] {
 }
 
 /**
+ * One execution problem the Issues section reports: a rate-limited retry, a run
+ * waiting on the user, a failure or an interruption.
+ *
+ * `condition` fingerprints the occurrence the row is about, so dismissing it
+ * silences exactly that occurrence and nothing else. A retry is fingerprinted by
+ * its retry time and a thread problem by its status plus the dispatch it belongs
+ * to, which means the next attempt or the next run raises the issue again on its
+ * own instead of the row staying hidden for good.
+ */
+export interface RunIssue {
+  /** `${threadId}:${kind}`, which is what the row is keyed by. */
+  id: string
+  task: Thread
+  kind: string
+  detail: string
+  condition: string
+}
+
+/** Identity of a run problem's dismissal notice, scoped to the thread and kind. */
+export function runIssueNoticeId(issueId: string): string {
+  return `assistantRunIssue:${issueId}`
+}
+
+/**
  * The task row icon key: a custom icon when the task carries one, otherwise the
  * Hammer for an assistant's knowledge ("Getting started") thread, otherwise a run
  * mark for one execution of a task, otherwise the plain task clock. The

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SeekBar from '../ui/SeekBar.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
@@ -637,21 +638,18 @@
           {/await}
         </div>
         <div>
-          <label
-            class="mb-2 flex items-center justify-between text-xs font-medium text-muted"
-            for={`annotation-stroke-${threadId}`}
-          >
+          <div class="mb-2 flex items-center justify-between text-xs font-medium text-muted">
             <span>Stroke width</span>
             <span class="font-mono text-foreground">{annotationTool.strokeWidth}px</span>
-          </label>
-          <input
-            id={`annotation-stroke-${threadId}`}
-            type="range"
+          </div>
+          <SeekBar
+            class="w-full"
             min={MARK_MIN_STROKE_WIDTH}
             max={MARK_MAX_STROKE_WIDTH}
             step={1}
-            class="w-full"
-            bind:value={annotationTool.strokeWidth}
+            value={annotationTool.strokeWidth}
+            label="Stroke width"
+            onInput={(width) => (annotationTool.strokeWidth = width)}
           />
           <div class="mt-3 flex h-10 items-center border bg-elevated px-2">
             <svg

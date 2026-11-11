@@ -14,14 +14,15 @@
  * observer until the target location has been fully restored.
  */
 import type { MainView, SelectedThreadReference } from './renderer-recovery'
+import type { ScopeSidebarContext } from './scope-board'
 import { sameUtilitiesRoute, type UtilitiesRoute } from './settings-route.svelte'
 
 const MAX_HISTORY_DEPTH = 50
 /** After a view change, thread churn within this window is treated as settling. */
 const SETTLE_WINDOW_MS = 250
 
-/** The project workspace can be viewed as Projects, Scope, or Threads. */
-export type ProjectViewMode = 'projects' | 'scope' | 'threads'
+/** The project workspace can be viewed as Projects, Scoped, Scope, or Threads. */
+export type ProjectViewMode = 'projects' | 'projects-scope' | 'scope' | 'threads'
 
 /** A place in the app: a top-level view plus the thread open in it. */
 export interface NavigationLocation {
@@ -29,17 +30,33 @@ export interface NavigationLocation {
   thread: SelectedThreadReference | null
   /** The Utilities page on screen, or null outside the Utilities section. */
   utilities: UtilitiesRoute | null
+  /**
+   * The scope docked on the sidebar, or null when none is.
+   *
+   * The scoped view is its own location, so the scope it was showing travels
+   * with it: walking back into that location re-docks the same project, bucket,
+   * slice and thread instead of landing on a plain projects page.
+   */
+  scope: ScopeSidebarContext | null
 }
 
 function isProjectView(view: MainView): view is ProjectViewMode {
-  // 'projects-scope' is the scoped projects state — same page, sidebar focus.
-  if (view === 'projects-scope') return true
-  return view === 'projects' || view === 'scope' || view === 'threads'
+  return view === 'projects' || view === 'projects-scope' || view === 'scope' || view === 'threads'
 }
 
 function sameThread(a: SelectedThreadReference | null, b: SelectedThreadReference | null): boolean {
   if (a === null || b === null) return a === b
   return a.projectId === b.projectId && a.threadId === b.threadId
+}
+
+function sameScope(a: ScopeSidebarContext | null, b: ScopeSidebarContext | null): boolean {
+  if (a === null || b === null) return a === b
+  return (
+    a.projectId === b.projectId &&
+    a.bucketId === b.bucketId &&
+    a.stage === b.stage &&
+    a.threadId === b.threadId
+  )
 }
 
 function sameLocation(a: NavigationLocation, b: NavigationLocation): boolean {
@@ -61,7 +78,12 @@ class NavigationHistoryState {
   /** Locations the user backed away from, nearest first. */
   forwardStack: NavigationLocation[] = $state([])
   /** The location currently on screen, mirroring the app's active state. */
-  current: NavigationLocation = $state({ view: 'projects', thread: null, utilities: null })
+  current: NavigationLocation = $state({
+    view: 'projects',
+    thread: null,
+    utilities: null,
+    scope: null
+  })
   /** The last project view visited — what the header button shows away from it. */
   lastProjectView: ProjectViewMode = $state('projects')
   /** Non-zero while a back/forward traversal is applying its target location. */
@@ -89,7 +111,14 @@ class NavigationHistoryState {
   /** Sync the history with the app's current location. */
   observe(location: NavigationLocation): void {
     if (this.traversalDepth > 0) return
-    if (sameLocation(location, this.current)) return
+    if (sameLocation(location, this.current)) {
+      // Same place, but the scope docked in it can move (another bucket, another
+      // slice, another thread). That is not a step in the journey, so it is not
+      // recorded; the location the journey sits on simply follows it, which is
+      // what the next Back returns to.
+      if (!sameScope(location.scope, this.current.scope)) this.current = location
+      return
+    }
 
     const viewChanged = location.view !== this.current.view
     const utilitiesChanged = !sameUtilitiesRoute(location.utilities, this.current.utilities)

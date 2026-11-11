@@ -35,7 +35,10 @@ import { createWorkQueue } from '../../lib/bounded-work'
 import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
-import { CheckpointManager } from '../storage/checkpoint-manager'
+import {
+  prepareCheckpointIndexes,
+  runOneTimeCheckpointRepairs
+} from '../storage/checkpoint/checkpoint-startup-maintenance'
 import { Logger } from '../system/logger'
 import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
 import {
@@ -1439,7 +1442,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const [
       { registerProviderAccountIpc },
       { registerBaseUrlProviderIpc },
-      { registerLlamaCppIpc },
       { registerLocalAiIpc },
       { registerUtilityIpc },
       { registerTypesafeIpc },
@@ -1447,7 +1449,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     ] = await Promise.all([
       import('../ipc/provider-account-ipc'),
       import('../providers/base-url-provider-ipc'),
-      import('../llama-cpp/llama-cpp-ipc'),
       import('../local-ai/local-ai-ipc'),
       import('../ipc/utility-ipc'),
       import('../ipc/typesafe-ipc'),
@@ -1486,12 +1487,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // Local servers never touch the provider registry: a custom base-URL
     // provider is the user's to create, and starting or stopping a server here
     // must leave it exactly as it was.
-    registerLlamaCppIpc({
+    registerLocalAiIpc({
       hasPtySession: (terminalId) => state.ptyService?.hasSession(terminalId) ?? false
     })
-    // The Local AI page lists every runtime the app can drive beside the
-    // llama.cpp rows, and owns the one unload window they all share.
-    registerLocalAiIpc()
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,
@@ -1712,6 +1710,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           // The watcher keeps the same pass available for the moment the last
           // sibling exits, so arm it before the launch pass can fail.
           state.stopInstanceTakeOverListener = watchForInstanceTakeOver(state, database)
+          // The recovery lookup reads through this index; building it first keeps
+          // that lookup from parsing every checkpoint on the worker.
+          await prepareCheckpointIndexes(database)
           // Settles and resumes work left in flight by a process that stopped, while
           // leaving every turn a sibling instance is still running alone.
           await reconcileInterruptedWork(state, database, 'launch')
@@ -1719,75 +1720,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           Logger.error('Restart recovery failed (non-fatal):', error)
         }
 
-        // The repair passes stay one task, in this order. Each is a bounded,
-        // idempotent pass over the same checkpoint tables, so overlapping them
-        // would trade a few milliseconds of wall time for two writers on one
-        // SQLite file, which is exactly what this app does not do.
-        //
-        // One-time repair of file-change cards whose line counts were recorded as
-        // truncated by the previous whole-file gating (large files with small
-        // edits showed +0 −0). Bounded, idempotent, and batched; a no-op once every
-        // candidate has been repaired.
-        try {
-          const repaired = await new CheckpointManager(database).repairTruncatedLineStats()
-          if (repaired > 0) {
-            Logger.info(`Restored line counts for ${repaired} file-change checkpoints`)
-          }
-        } catch (error) {
-          Logger.error('Line-stats repair failed (non-fatal):', error)
-        }
-
-        // One-time repair of file-change cards misattributed to hidden internal
-        // prompts (search nudges, mermaid repairs, incomplete-turn continuations)
-        // by turns that ran before internal attribution existed. Bounded,
-        // idempotent, and batched; a no-op once every candidate is repaired.
-        try {
-          const repaired = await new CheckpointManager(
-            database
-          ).repairMisattributedInternalCheckpoints()
-          if (repaired > 0) {
-            Logger.info(`Reattributed ${repaired} internal-turn file-change checkpoints`)
-          }
-        } catch (error) {
-          Logger.error('Internal-attribution repair failed (non-fatal):', error)
-        }
-
-        // One-time cleanup of cards that only hold another turn's abandoned work:
-        // a turn with no write evidence of its own cannot own a project-wide diff
-        // while a sibling turn was in flight in the same window.
-        try {
-          const repaired = await new CheckpointManager(database).dropUnprovenOverlappingChanges()
-          if (repaired > 0) {
-            Logger.info(`Cleared ${repaired} file-change checkpoints of unproven work`)
-          }
-        } catch (error) {
-          Logger.error('Unproven-change repair failed (non-fatal):', error)
-        }
-
-        // One-time cleanup of cards that listed the app's scratch folder or build
-        // output as the turn's work. Bounded, idempotent, and batched; a no-op once
-        // every candidate is repaired.
-        try {
-          const repaired = await new CheckpointManager(database).dropExcludedPathChanges()
-          if (repaired > 0) {
-            Logger.info(`Dropped scratch paths from ${repaired} file-change checkpoints`)
-          }
-        } catch (error) {
-          Logger.error('Excluded-path repair failed (non-fatal):', error)
-        }
-
-        // One-time repair of file-change cards that recorded nothing while the turn
-        // did write files: their contested diff was filtered away and the write
-        // evidence for those paths was mis-parsed. Bounded, idempotent, and batched;
-        // a no-op once every candidate is repaired.
-        try {
-          const repaired = await new CheckpointManager(database).repairEvidenceDroppedCheckpoints()
-          if (repaired > 0) {
-            Logger.info(`Restored files for ${repaired} empty file-change checkpoints`)
-          }
-        } catch (error) {
-          Logger.error('Evidence repair failed (non-fatal):', error)
-        }
+        // Legacy checkpoint repairs, in order on the database worker. A pass that
+        // has already finished is skipped instead of rescanning every checkpoint.
+        await runOneTimeCheckpointRepairs(database)
       },
       async () => {
         try {

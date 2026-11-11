@@ -1,5 +1,6 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { parseOvenRootKey } from '$shared/oven-root-routing'
+import { ovenRootKey } from '$lib/oven-root-target'
 import {
   deploymentDetailKey,
   deploymentKey,
@@ -542,6 +543,25 @@ export class GitState {
   get branch(): string | null {
     return this.status?.branch ?? null
   }
+
+  /**
+   * The working-tree read this store holds for one thread's checkout, or null
+   * when the active target is another one or nothing has been read yet.
+   *
+   * A surface that names a branch needs the difference between two nulls that
+   * `branch` alone cannot state: "the live read looked, and HEAD is detached"
+   * and "this store has not read this checkout". The header chip reads its own
+   * thread's durable branch as the first paint and hands over to this the
+   * moment it exists, so a chip opened ahead of the deferred read states a
+   * branch instead of a blank, and a genuinely detached HEAD still says
+   * nothing once the read has answered.
+   */
+  statusFor(projectId: string, scopeBucketId?: string | null): GitStatus | null {
+    const target = ovenRootKey(projectId) ?? scopeBucketId ?? null
+    if (this.activeProjectId !== projectId || this.activeScopeBucketId !== target) return null
+    return this.status
+  }
+
   activate(projectId: string, scopeBucketId?: string): void {
     return this.units['lifecycle'].activate(projectId, scopeBucketId)
   }

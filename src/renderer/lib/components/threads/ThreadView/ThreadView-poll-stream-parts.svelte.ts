@@ -24,7 +24,6 @@ import {
   isActivityOnlyUserMessage,
   isTurnCompleted,
   isTurnTransparentUserMessage,
-  lastTurnStartIndex,
   pendingTurnAnchorIndex,
   splitTurnTraceParts,
   streamWorkingPartsForTurn,
@@ -160,11 +159,15 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     if (this.conversationBusy || this.root.unmirroredTraceStartTime.brainstormReportRefreshing)
       return []
     if (pendingTurnAnchorIndex(this.root.buildSpecActionPrompt.structureMessages) === -1) return []
-    // Only when no assistant row exists at all. An earlier assistant turn is
-    // itself a mount point for this fold (`streamWorkingPartsForTurn` keeps
-    // every part the mirror does not already carry before that turn), so
-    // mounting a second card here would render the same work twice.
-    if (lastTurnStartIndex(this.root.buildSpecActionPrompt.structureMessages) !== -1) return []
+    // Only when no assistant turn is going to mount this fold itself. An
+    // assistant turn keeps the fold's parts (`streamWorkingPartsForTurn`) while
+    // it is the transcript's active turn, and mounting a second card here would
+    // render the same work twice. Once a newer prompt has opened a turn of its
+    // own, that older turn is settled and merges nothing, so the fold belongs
+    // here   which is the window a thread paused on a question sits in: the run
+    // is not busy, no assistant row is mirrored yet, and the work that led to
+    // the question is only in the log.
+    if (this.root.buildSpecActionPrompt.latestTurnInfo.active) return []
     const parts = this.streamWorkingPartsForPendingTurn()
     return latestWorkingTraceParts(parts).length > 0 ? parts : []
   })
@@ -593,11 +596,17 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
    *  a resumed Pi process may restart its local message counter, so an old and
    *  current part can temporarily carry the same provider-generated ID. */
   streamWorkingPartsForPendingTurn(): AgentPart[] {
-    const prompt = this.root.buildSpecActionPrompt.pendingLiveTurn
-      ? this.root.buildSpecActionPrompt.structureMessages[
-          this.root.buildSpecActionPrompt.pendingLiveTurn.userMessageIndex
-        ]
-      : undefined
+    // The prompt that opened the pending turn. A live turn names its own index;
+    // a turn that is not busy (paused on a question, stopped, errored) still has
+    // one, and it is needed here, because it is what keeps an older turn's fold
+    // from rendering under the new prompt.
+    const pendingIndex = this.root.buildSpecActionPrompt.pendingLiveTurn
+      ? this.root.buildSpecActionPrompt.pendingLiveTurn.userMessageIndex
+      : pendingTurnAnchorIndex(this.root.buildSpecActionPrompt.structureMessages)
+    const prompt =
+      pendingIndex === -1
+        ? undefined
+        : this.root.buildSpecActionPrompt.structureMessages[pendingIndex]
     // Delivery and the durable poll arrive separately. Until the fold catches
     // up, its parts still belong above the new prompt, never below it.
     if (

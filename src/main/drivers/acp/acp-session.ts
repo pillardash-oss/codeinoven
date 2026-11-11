@@ -67,13 +67,28 @@ function acpToolContentText(content: unknown): string {
  * One assistant message per turn: ACP streams chunks, not separate messages,
  * and the app's timeline expects the answer, its reasoning and every tool call
  * of a turn on the message that turn produced.
+ *
+ * A turn writes prose more than once. An ACP agent narrates the step it is about
+ * to take ("I'll pull the schema, then ask"), calls a tool, and narrates again,
+ * and ACP streams every one of those as `agent_message_chunk` on the same turn.
+ * Each stretch of prose is therefore its own text block, closed by the next
+ * provider message or by the tool call that follows it, because the app reads a
+ * turn's closing text block as the answer and every earlier one as commentary
+ * for the working trace (see `getTurnFinalText`). Folding a whole turn into one
+ * text block shipped that running commentary as the answer, glued together with
+ * no separator between the steps.
  */
 export class AcpTurnFold {
   readonly createdAt = Date.now()
   private readonly parts: AgentPart[] = []
-  private text = ''
+  /** Every text block this turn wrote, in the order it wrote them. */
+  private readonly textParts: TextPart[] = []
   private reasoning = ''
   private textPart: TextPart | null = null
+  /** Provider message the open text block belongs to, when ACP reports one. */
+  private textPartMessageId: string | undefined
+  /** Set once the open text block is closed by a tool call or a new message. */
+  private textPartSettled = true
   private reasoningPart: ReasoningPart | null = null
   private readonly tools = new Map<string, ToolPart>()
   /** Context occupancy the agent reported during the turn. */
@@ -92,12 +107,15 @@ export class AcpTurnFold {
   apply(update: AcpSessionUpdate): void {
     switch (update.sessionUpdate) {
       case 'agent_message_chunk':
-        this.appendText(textOfChunk(update.content))
+        this.appendText(textOfChunk(update.content), update.messageId)
         return
       case 'agent_thought_chunk':
         this.appendReasoning(textOfChunk(update.content))
         return
       case 'tool_call':
+        // The prose before a call has made its point; anything the agent writes
+        // after it answers the result and starts a block of its own.
+        this.closeTextBlock()
         this.upsertTool({
           toolCallId: update.toolCallId,
           title: update.title,
@@ -127,10 +145,18 @@ export class AcpTurnFold {
    * late chunk a second time after the message was already stored.
    */
   message(): AgentMessage {
+    const answer = this.answerPart()
     return {
       id: this.messageId,
       role: 'assistant',
-      parts: this.parts.map((part) => ({ ...part })),
+      parts: this.parts.map((part) =>
+        part.type === 'text'
+          ? {
+              ...part,
+              phase: part === answer ? ('final_answer' as const) : ('commentary' as const)
+            }
+          : { ...part }
+      ),
       createdAt: this.createdAt,
       harnessId: this.harnessId
     }
@@ -138,24 +164,53 @@ export class AcpTurnFold {
 
   /** Answer text the turn produced, used by the one-shot helpers. */
   answerText(): string {
-    return this.text
+    return this.answerPart()?.text ?? ''
   }
 
-  private appendText(delta: string): void {
-    if (delta.length === 0) return
-    if (!this.textPart) {
-      this.textPart = {
-        type: 'text',
-        id: `${this.messageId}:text`,
-        messageID: this.messageId,
-        text: ''
-      }
-      this.parts.push(this.textPart)
-      this.sink.partUpdated(this.textPart)
+  /** The block the turn stopped on: the answer, never the commentary before it. */
+  private answerPart(): TextPart | null {
+    for (let index = this.textParts.length - 1; index >= 0; index -= 1) {
+      const part = this.textParts[index]
+      if (part && part.text.trim().length > 0) return part
     }
-    this.text += delta
-    this.textPart.text = this.text
-    this.sink.partDelta(this.textPart.id, 'text', delta)
+    return null
+  }
+
+  private appendText(delta: string, messageId: string | undefined): void {
+    if (delta.length === 0) return
+    const continuesOpenBlock =
+      this.textPart !== null &&
+      !this.textPartSettled &&
+      (messageId === undefined ||
+        this.textPartMessageId === undefined ||
+        messageId === this.textPartMessageId)
+    const part = continuesOpenBlock && this.textPart ? this.textPart : this.openTextBlock(messageId)
+    part.text += delta
+    this.sink.partDelta(part.id, 'text', delta)
+  }
+
+  private openTextBlock(messageId: string | undefined): TextPart {
+    const part: TextPart = {
+      type: 'text',
+      id: `${this.messageId}:text:${this.textParts.length + 1}`,
+      messageID: this.messageId,
+      text: ''
+    }
+    this.textParts.push(part)
+    this.parts.push(part)
+    this.textPart = part
+    this.textPartMessageId = messageId
+    this.textPartSettled = false
+    this.sink.partUpdated(part)
+    return part
+  }
+
+  /** Close the open block so the next chunk starts a new stretch of prose. */
+  private closeTextBlock(): void {
+    if (this.textPart === null) return
+    this.textPartSettled = true
+    this.textPart = null
+    this.textPartMessageId = undefined
   }
 
   private appendReasoning(delta: string): void {

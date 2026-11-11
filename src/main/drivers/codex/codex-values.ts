@@ -38,8 +38,33 @@ export function toolInput(item: Record<string, unknown>): Record<string, unknown
 }
 
 export function toolOutput(item: Record<string, unknown>): string | undefined {
-  for (const key of ['result', 'output', 'aggregated_output']) {
+  // `content_items` is how Codex reports a dynamic tool result (the app's own
+  // tool round trip), MCP calls report `result`/`content`, and shell commands
+  // report `aggregated_output`.
+  for (const key of [
+    'result',
+    'output',
+    'aggregated_output',
+    'content_items',
+    'contentItems',
+    'content'
+  ]) {
     const text = outputText(item[key])
+    if (text) return text
+  }
+  return undefined
+}
+
+/**
+ * The failure text of a Codex tool item. A failed MCP or dynamic call carries
+ * no `result`, only `error` (a string or an object with `message`/`content`),
+ * so reading just the output fields left the tool card empty on failure.
+ */
+export function toolError(item: Record<string, unknown>): string | undefined {
+  for (const key of ['error', 'failure', 'failure_reason']) {
+    const value = item[key]
+    const message = stringValue(value) ?? stringValue(recordValue(value)?.['message'])
+    const text = message?.trim() || outputText(value)
     if (text) return text
   }
   return undefined
