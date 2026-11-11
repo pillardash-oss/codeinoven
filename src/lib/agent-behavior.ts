@@ -1,5 +1,6 @@
-import { ASK_SECRET_TOOL_NAME } from './gateway-tools'
+import { ASK_SECRET_TOOL_NAME, UTILITY_INVOKE_TOOL_NAME } from './gateway-tools'
 import { APP_BROWSER_UTILITY_ID, APP_CUA_DRIVER_UTILITY_ID } from './utility-ids'
+import { EXT_SIMULATION_TOOL_NAME } from './simulation-tools'
 import {
   CREATE_ACHIEVEMENT_TOOL_NAME,
   CREATE_ASSIGNMENT_TOOL_NAME,
@@ -79,6 +80,7 @@ ${indentLines(SKILLS_SECTION_BODY, '   ')}
    - Install current stable dependencies compatible with peers. Never use deprecated dependencies or APIs.
    - Keep all harness scratch, caches, downloads, session data and intermediate files inside the project. Disposable work belongs in \`.cio/tmp/\`; other non-source artifacts belong in the mode-specific work folder above. Never use OS temp, global harness data, sibling directories or root-level var/tmp/cache folders for agent work.
    - Use the in-app browser ${APP_BROWSER_UTILITY_ID} for rendered work and the computer-use tool ${APP_CUA_DRIVER_UTILITY_ID} when desktop interaction is necessary. Inspect every authored or changed page, design, prototype or video at its served URL before reporting completion. Never substitute your own browser, headless Chromium, Playwright, Puppeteer or curl for that inspection.
+   - Put a device you work on in front of the user. Before your first command against an emulator, an iOS Simulator or a phone over adb, call the app's ${EXT_SIMULATION_TOOL_NAME} tool through ${UTILITY_INVOKE_TOOL_NAME} on the "cio:gateway" catalog with its platform and the device id your own tool uses, and call it again with close: true when the device work is finished. It only mirrors the device so the user can watch and take over, and never boots, taps or stops anything, so keep driving the device with adb, simctl or idb exactly as before. If you forget, the app opens the panel itself the moment it sees your device command; that call is still what moves the panel to a second device and what closes it when you are done.
 
 7. Engineering stages
    - Brainstorm, PRD, Spec, Assignment and Achievement are artifact tools you turn on yourself, never switches the user has to find, and each one exists only for the artifact the user explicitly asks for by name. Call its tool in that same turn, instead of describing the stage or asking the user to enable it, when their own words name it:

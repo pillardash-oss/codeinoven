@@ -23,6 +23,7 @@ import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provi
 import type { PendingQuestionInfo, SessionCompletionWaiter, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { broadcastToast, initialSpecWorkingStatus, probeSessionLiveness } from './chat-engine-pure'
+import { displayDeviceAttention } from '../../display/display-device-attention'
 import { ChatEngine } from '../chat-engine'
 
 /** ChatEngine turns-sessions: one concern, moved verbatim from the composition root. */
@@ -483,6 +484,7 @@ export class ChatEngineTurnsSessions {
   }
 
   retireSessionState(sessionId: string): void {
+    const retiring = this.host.sessionRegistry.get(sessionId)
     this.host.state.planningSessions.delete(sessionId)
     this.host.state.preparedImplementationSessions.delete(sessionId)
     this.host.sessionRegistry.delete(sessionId)
@@ -504,6 +506,9 @@ export class ChatEngineTurnsSessions {
     this.host.state.artifactRenderedSessions.delete(sessionId)
     this.host.state.todoReconcileAttempts.delete(sessionId)
     this.host.units['permissions'].dropSessionCreations(sessionId)
+    // A retired session ends the display panel's patience with its thread: the
+    // next turn on that thread may be working on a different device.
+    if (retiring) displayDeviceAttention.forget(retiring.threadId)
     this.host.state.sessionNativeHistory.delete(sessionId)
     this.host.state.parkedSessionReplay.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
