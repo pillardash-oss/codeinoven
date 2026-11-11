@@ -59,8 +59,17 @@ const WEB_TLDS = [
 
 const HOST_LABEL = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
 
-/** A host followed by an optional port and path, starting at a word boundary. */
-const BARE_WEB_URL_SOURCE = `(^|[\\s([{"'\\u2018\\u201c<])((?:${HOST_LABEL}\\.)+(?:${WEB_TLDS.join('|')}))(?::\\d{1,5})?(?:[/?#][^\\s<>"'\`]*)?`
+/**
+ * A host followed by an optional port and path, starting at a word boundary.
+ *
+ * The trailing lookahead is what keeps a filename out of the TLD: without it
+ * `capacitor.config` matched the host `capacitor.co` and linked a URL nobody
+ * wrote, leaving the `nfig.` tail behind. A host therefore may not continue
+ * with a word character or another dot-qualified label (`example.com.au` is
+ * still matched whole by the greedy label run), and sentence punctuation after
+ * it stays outside the link.
+ */
+const BARE_WEB_URL_SOURCE = `(^|[\\s([{"'\\u2018\\u201c<])((?:${HOST_LABEL}\\.)+(?:${WEB_TLDS.join('|')}))(?![a-z0-9_-])(?!\\.[a-z0-9])(?::\\d{1,5})?(?:[/?#][^\\s<>"'\`]*)?`
 
 const TRAILING_PUNCTUATION = /[.,;:!?'"\u2019\u201d]+$/u
 
