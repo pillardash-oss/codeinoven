@@ -62,7 +62,14 @@ export class GitStateQueries {
     // Claim the target synchronously so the panel can never show another
     // scope's state, then read the new one *after* the switch has painted.
     this.host.activate(project.id, thread?.scopeBucketId ?? undefined)
-    if (!targetChanged) return
+    // A target that is already claimed but holds no working tree read is a read
+    // that never landed: it failed, or a scope moved while it ran and its answer
+    // was discarded as stale. Nothing else on a thread open asks again, so this
+    // one retry is what keeps the header chip, the file list and the panel from
+    // sitting branchless and dirty-less until the panel is clicked open (which
+    // refreshes as a side effect). Re-reading a target that answered is still
+    // skipped, so switching between two threads of one scope stays free.
+    if (!targetChanged && this.host.status) return
     this.host.units['runtime'].scheduleRefresh(project.id)
   }
 

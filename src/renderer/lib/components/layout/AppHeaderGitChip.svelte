@@ -25,11 +25,42 @@
   )
   const inWorktree = $derived(worktreeBucket?.root.kind === 'worktree')
 
+  /**
+   * The live read of this thread's own checkout, or null when the store has not
+   * read it yet.
+   *
+   * The chip draws before that read exists: opening a thread schedules the Git
+   * read behind the switch frame, and the chip's target is claimed at open time,
+   * so for that first stretch the store holds nothing about this checkout. It is
+   * also the read that can fail or be discarded under a scope that moved while
+   * it ran, which is why the chip cannot take its name from here alone.
+   */
+  const liveStatus = $derived.by(() => {
+    const thread = workspaceState.selectedThread
+    return thread ? gitState.statusFor(thread.projectId, thread.scopeBucketId) : null
+  })
+
+  /** The branch the thread itself records, which main settles and pushes on
+   *  `thread:branchUpdated`: the same durable source the composer's shoe states,
+   *  and the reason its copy never goes blank. */
+  const recordedBranch = $derived(workspaceState.selectedThread?.branch?.trim() || null)
+
+  /** The branch a managed worktree scope declares, for a thread whose own record
+   *  has not settled yet. */
+  const worktreeBranch = $derived(
+    worktreeBucket?.root.kind === 'worktree' ? worktreeBucket.root.branch : null
+  )
+
   /** The branch the thread is on. The bar is quiet enough for the name again, and a
    *  name says more than the icon alone ever did: the icon only promised that
    *  something git-shaped was behind it. It also names the tree that branch is in,
-   *  which is why the worktree icon it used to sit beside is gone. */
-  let branchName = $derived(gitState.branch)
+   *  which is why the worktree icon it used to sit beside is gone.
+   *
+   * The live read wins the moment it exists, so a checkout that moved out of band
+   * is corrected rather than left on the thread's memory of it, and a detached
+   * HEAD states no branch at all. Until then the thread's own record answers, so
+   * the chip never shows an icon with no branch for a checkout it knows. */
+  let branchName = $derived(liveStatus ? liveStatus.branch : (recordedBranch ?? worktreeBranch))
 
   function openGitPanel(): void {
     const thread = workspaceState.selectedThread
