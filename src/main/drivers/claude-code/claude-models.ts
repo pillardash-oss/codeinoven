@@ -51,10 +51,24 @@ export function claudeAuthenticationResult(value: unknown): boolean | undefined 
   return string(record(entry?.['event'])?.['type']) === 'message_start' ? true : undefined
 }
 
+/**
+ * Claude Code ships two description shapes. Older rows lead with the versioned
+ * name (`Opus 5.5 · Best for everyday, complex tasks`), so the name is the
+ * segment before the separator. Newer `main` rows put only the picker subtitle
+ * there (`For complex work and everyday tasks`) and keep the name in
+ * `displayName`, so a subtitle is never read back as a model name.
+ */
 export function claudeModelName(model: ModelInfo): string {
-  const resolvedName = model.description.split(' · ', 1)[0]?.trim()
-  if (!resolvedName) return model.displayName
-  if (model.value === 'default') return model.displayName
+  const displayName = model.displayName.trim()
+  const headline = model.description.split(' · ', 1)[0]?.trim() ?? ''
+  const family = displayName.split(' ', 1)[0]?.trim() ?? ''
+  const headlineNamesModel =
+    headline !== '' &&
+    family !== '' &&
+    headline.toLocaleLowerCase().startsWith(family.toLocaleLowerCase())
+  const resolvedName = headlineNamesModel ? headline : displayName || headline
+  if (!resolvedName) return model.value
+  if (model.value === 'default') return displayName || resolvedName
   return model.resolvedModel && model.resolvedModel !== model.value
     ? `${resolvedName} (latest)`
     : resolvedName
