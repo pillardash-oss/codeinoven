@@ -245,6 +245,9 @@ type ResultForRequest<K extends DatabaseWorkerRequest['kind']> = Extract<
 const UNAVAILABLE =
   'Database maintenance worker is not available on this connection (in-memory test database)'
 
+/** A worker job at or above this many milliseconds is reported as slow. */
+const SLOW_WORKER_JOB_MS = 500
+
 /** Bounded forced-termination window for a shutdown that does not exit cleanly. */
 export const WORKER_SHUTDOWN_TIMEOUT_MS = 2000
 
@@ -567,9 +570,13 @@ export class DatabaseWorker {
             resolve({ kind: request.kind, ok: false, error: UNAVAILABLE } as DatabaseWorkerResult)
             return
           }
+          const startedAt = performance.now()
           this.pending.set(id, {
             kind: request.kind,
-            resolve
+            resolve: (outcome) => {
+              this.reportSlowJob(request, performance.now() - startedAt)
+              resolve(outcome)
+            }
           })
           try {
             worker.postMessage({ type: 'request', id, request } satisfies DatabaseWorkerOutbound)
@@ -584,6 +591,21 @@ export class DatabaseWorker {
       () => undefined
     )
     return result as Promise<ResultForRequest<K>>
+  }
+
+  /**
+   * Name a job that held the worker for long. Requests run one at a time, so a
+   * slow job delays every read queued behind it (a board, a thread list); this
+   * report is what attributes that wait to the job that caused it.
+   */
+  private reportSlowJob(request: DatabaseWorkerRequest, durationMs: number): void {
+    if (durationMs < SLOW_WORKER_JOB_MS) return
+    const sql = 'sql' in request && typeof request.sql === 'string' ? request.sql : undefined
+    this.logger.info('Slow database worker job', {
+      kind: request.kind,
+      durationMs: Math.round(durationMs),
+      ...(sql ? { sql: sql.replace(/\s+/g, ' ').trim().slice(0, 160) } : {})
+    })
   }
 
   private rejectAll(): void {
