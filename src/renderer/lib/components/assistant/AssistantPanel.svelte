@@ -14,6 +14,7 @@
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
   import type { AssistantPanelTab } from '$lib/stores/context-sidebar-types'
+  import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -45,10 +46,12 @@
     assistantKnowledgeSections,
     parseKnowledgeSections,
     resolveConnections,
+    runIssueNoticeId,
     serializeKnowledgeSections,
     withKnowledgePersonality,
     type ConnectionSetupRequest,
-    type ConnectionView
+    type ConnectionView,
+    type RunIssue
   } from './assistant-view'
   import {
     buildConnectionLibrary,
@@ -491,25 +494,33 @@
    *  runs. Tasks and their run threads are both checked, since execution status
    *  lives on the run thread. */
   const runIssues = $derived.by(() => {
-    const issues: Array<{ id: string; task: Thread; kind: string; detail: string }> = []
+    const issues: RunIssue[] = []
     const seen = new SvelteSet<string>()
-    const pushIssue = (thread: Thread, kind: string, detail: string): void => {
+    const pushIssue = (thread: Thread, kind: string, detail: string, condition: string): void => {
       const id = `${thread.id}:${kind}`
       if (seen.has(id)) return
       seen.add(id)
-      issues.push({ id, task: thread, kind, detail })
+      issues.push({ id, task: thread, kind, detail, condition })
     }
     const collectFrom = (thread: Thread): void => {
       const retryAt = agentRuns.retryAt(thread.projectId, thread.id)
       if (retryAt !== null) {
-        pushIssue(thread, 'Rate limited', `Retrying ${describeRelativeTime(retryAt, Date.now())}`)
+        pushIssue(
+          thread,
+          'Rate limited',
+          `Retrying ${describeRelativeTime(retryAt, Date.now())}`,
+          `rate-limited:${retryAt}`
+        )
       }
+      // A status problem belongs to the dispatch that produced it, so the next run
+      // that fails, waits or is interrupted is a different occurrence and shows.
+      const occurrence = `${thread.status}:${thread.lastDispatchedAt ?? 0}`
       if (thread.status === 'awaiting_approval') {
-        pushIssue(thread, 'Needs attention', 'Waiting on you')
+        pushIssue(thread, 'Needs attention', 'Waiting on you', occurrence)
       } else if (thread.status === 'failed') {
-        pushIssue(thread, 'Failed', 'The last run failed')
+        pushIssue(thread, 'Failed', 'The last run failed', occurrence)
       } else if (thread.status === 'interrupted') {
-        pushIssue(thread, 'Interrupted', 'The last run was interrupted')
+        pushIssue(thread, 'Interrupted', 'The last run was interrupted', occurrence)
       }
     }
     for (const entry of assistantTasks) collectFrom(entry)
@@ -520,7 +531,14 @@
     return issues
   })
 
-  const issueCount = $derived(missedRuns.length + runIssues.length)
+  /** The live problems: the rows the user has not dismissed for this occurrence. */
+  const visibleRunIssues = $derived(
+    runIssues.filter(
+      (issue) => !noticeDismissals.isDismissed(runIssueNoticeId(issue.id), issue.condition)
+    )
+  )
+
+  const issueCount = $derived(missedRuns.length + visibleRunIssues.length)
 
   /**
    * The panel's tabs as the full screen strip's tabs. The strip carries no badge
@@ -870,7 +888,7 @@
           {reportingBrief}
           {deliveryReady}
           missedCount={missedRuns.length}
-          runIssueCount={runIssues.length}
+          runIssueCount={visibleRunIssues.length}
           onRunNow={() => void runNow()}
           onSelect={(tab) => (panelTab = tab)}
         />
@@ -991,7 +1009,7 @@
       <AssistantIssuesTab
         {scheduled}
         {missedRuns}
-        {runIssues}
+        runIssues={visibleRunIssues}
         {backgroundRuns}
         {onOpenTask}
         onDismissMissed={(id) => void dismissRun(id)}
