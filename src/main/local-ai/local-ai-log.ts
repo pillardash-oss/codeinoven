@@ -1,5 +1,5 @@
 /**
- * The log file a `llama-server` row writes while it runs.
+ * The log file a llama.cpp row writes while it runs.
  *
  * A server can outlive the app instance that launched it, and with it the PTY
  * pipe that used to carry its output. Asking llama.cpp to write the same log to
@@ -18,16 +18,16 @@ const TAIL_BYTES = 256 * 1024
 const MAX_TAIL_LINES = 400
 
 /** Absolute path of a row's log, with its directory created on first use. */
-export async function llamaCppLogPath(entryId: string): Promise<string> {
-  if (!SAFE_LOG_ID.test(entryId)) throw new Error('Unknown llama.cpp server id')
-  const path = join(getConfigRoot(), 'llama-cpp', 'logs', `${entryId}.log`)
+export async function localAiLogPath(entryId: string): Promise<string> {
+  if (!SAFE_LOG_ID.test(entryId)) throw new Error('Unknown local AI server id')
+  const path = join(getConfigRoot(), 'local-ai', 'logs', `${entryId}.log`)
   await mkdir(dirname(path), { recursive: true })
   return path
 }
 
 /** The last lines of a row's log, empty when the row never wrote one. */
-export async function tailLlamaCppLog(entryId: string): Promise<string[]> {
-  const path = await llamaCppLogPath(entryId)
+export async function tailLocalAiLog(entryId: string): Promise<string[]> {
+  const path = await localAiLogPath(entryId)
   let size: number
   try {
     size = (await stat(path)).size
@@ -49,7 +49,7 @@ export async function tailLlamaCppLog(entryId: string): Promise<string[]> {
   return lines.slice(-MAX_TAIL_LINES)
 }
 
-export interface LlamaCppLogFollower {
+export interface LocalAiLogFollower {
   /** Stop watching; safe to call twice. */
   stop: () => void
 }
@@ -59,11 +59,11 @@ export interface LlamaCppLogFollower {
  * `onChunk`. The watcher is one event source, never a timer, and stops as soon
  * as the card stops asking for it.
  */
-export async function followLlamaCppLog(
+export async function followLocalAiLog(
   entryId: string,
   onChunk: (chunk: string) => void
-): Promise<LlamaCppLogFollower> {
-  const path = await llamaCppLogPath(entryId)
+): Promise<LocalAiLogFollower> {
+  const path = await localAiLogPath(entryId)
   let offset = 0
   try {
     offset = (await stat(path)).size

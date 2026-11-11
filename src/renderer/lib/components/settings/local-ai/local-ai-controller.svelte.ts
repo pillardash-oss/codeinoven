@@ -1,6 +1,6 @@
 /**
- * Live state for the Local AI page's llama.cpp servers: which rows the app started, what their
- * logs say, and whether the server actually answers.
+ * Live state for the Local AI page's servers: which rows the app started, what
+ * their logs say, and whether the server actually answers.
  *
  * A row is only "running" once its `/v1/models` endpoint answers, because a
  * process that is alive but still loading a 2 GB model cannot serve a turn yet.
@@ -10,9 +10,9 @@
 import { SvelteMap } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
-  buildLlamaServerArgs,
-  llamaCppModelAlias,
-  llamaCppPtyId,
+  localAiModelId,
+  localAiPtyId,
+  localAiServerArgs,
   type LlamaCppBrewJobKind,
   type LlamaCppLogStream,
   type LlamaCppProbeResult,
@@ -134,7 +134,7 @@ export class LocalAiController {
     }
     // Anything else on the port (a server of an earlier app instance) has no
     // handle of ours to stop through.
-    await invoke('llamaCpp:stopServer', pending.entry.port)
+    await invoke('localAi:stopServer', pending.entry.port, pending.entry.runtime)
     await this.spawn(pending.entry, pending.executable)
   }
 
@@ -144,13 +144,13 @@ export class LocalAiController {
 
   /** Whether a row's own model is among the ids a server answers with. */
   private servesEntry(entry: LlamaCppServerEntry, models: readonly string[]): boolean {
-    const alias = llamaCppModelAlias(entry)
-    return models.some((model) => model === alias)
+    const model = localAiModelId(entry)
+    return model.length > 0 && models.some((served) => served === model)
   }
 
   private async probeOf(entry: LlamaCppServerEntry): Promise<LlamaCppProbeResult> {
     try {
-      return await invoke('llamaCpp:probe', entry.host, entry.port)
+      return await invoke('localAi:probe', entry.host, entry.port, entry.runtime)
     } catch {
       return { ready: false, models: [], error: 'The readiness probe failed' }
     }
@@ -158,7 +158,12 @@ export class LocalAiController {
 
   /** Launch the row in a terminal, streaming its output into the card. */
   private async spawn(entry: LlamaCppServerEntry, executable: string): Promise<void> {
-    const args = buildLlamaServerArgs(entry, await this.logPathOf(entry.id))
+    // Only llama.cpp can be told to keep a log file; MLX prints to its terminal,
+    // so its card is empty until the server is started from this page again.
+    const args = localAiServerArgs(
+      entry,
+      entry.runtime === 'llama.cpp' ? await this.logPathOf(entry.id) : undefined
+    )
     if (args.length === 0) {
       this.setStatus(entry.id, 'failed')
       this.notice = { ...this.notice, [entry.id]: 'This server has no model to load' }
@@ -180,7 +185,7 @@ export class LocalAiController {
     this.loadedModel = { ...this.loadedModel, [entry.id]: '' }
     this.logs = { ...this.logs, [entry.id]: [] }
 
-    const ptyId = llamaCppPtyId(entry.id)
+    const ptyId = localAiPtyId(entry.id)
     handle.unsubscribe.push(
       subscribe(`pty:data:${ptyId}`, (chunk) => {
         if (typeof chunk === 'string') this.appendOutput(entry.id, chunk)
@@ -219,13 +224,13 @@ export class LocalAiController {
     }
     // Nothing of this row is answering, so show what the last run left in its
     // log file instead of an empty terminal.
-    await this.seedLog(entry.id)
+    await this.seedLog(entry)
   }
 
   /** Take over a server that is already answering this row's model. */
   private async adopt(entry: LlamaCppServerEntry, modelId: string): Promise<void> {
     if (this.handles.has(entry.id)) return
-    const ptyId = llamaCppPtyId(entry.id)
+    const ptyId = localAiPtyId(entry.id)
     const handle: RunningHandle = {
       entry,
       unsubscribe: [],
@@ -264,7 +269,7 @@ export class LocalAiController {
     if (!this.handles.has(entry.id)) return
     let ready: boolean
     try {
-      ready = (await invoke('llamaCpp:probe', entry.host, entry.port)).ready
+      ready = (await invoke('localAi:probe', entry.host, entry.port, entry.runtime)).ready
     } catch {
       ready = false
     }
@@ -282,19 +287,22 @@ export class LocalAiController {
   /** The log file a row's server writes, empty when main refuses the id. */
   private async logPathOf(entryId: string): Promise<string | undefined> {
     try {
-      return await invoke('llamaCpp:logPath', entryId)
+      return await invoke('localAi:logPath', entryId)
     } catch {
       return undefined
     }
   }
 
   /** Show what a row's log file already holds, without following it. */
-  private async seedLog(entryId: string): Promise<void> {
-    if ((this.logs[entryId] ?? []).length > 0) return
+  private async seedLog(entry: LlamaCppServerEntry): Promise<void> {
+    // An MLX server writes no log file, so there is nothing to seed and the card
+    // keeps its empty state until the row is started here again.
+    if (entry.runtime !== 'llama.cpp') return
+    if ((this.logs[entry.id] ?? []).length > 0) return
     try {
-      const lines = await invoke('llamaCpp:logTail', entryId)
-      if (lines.length === 0 || this.handles.has(entryId)) return
-      this.logs = { ...this.logs, [entryId]: lines.slice(-LOG_LINE_LIMIT) }
+      const lines = await invoke('localAi:logTail', entry.id)
+      if (lines.length === 0 || this.handles.has(entry.id)) return
+      this.logs = { ...this.logs, [entry.id]: lines.slice(-LOG_LINE_LIMIT) }
     } catch {
       // A row with no log file keeps the empty state.
     }
@@ -307,10 +315,10 @@ export class LocalAiController {
    */
   private async followLog(entry: LlamaCppServerEntry): Promise<void> {
     const handle = this.handles.get(entry.id)
-    if (!handle) return
+    if (!handle || entry.runtime !== 'llama.cpp') return
     let stream: LlamaCppLogStream
     try {
-      stream = await invoke('llamaCpp:logStream', entry.id, true)
+      stream = await invoke('localAi:logStream', entry.id, true)
     } catch {
       return
     }
@@ -328,9 +336,9 @@ export class LocalAiController {
     if (handle?.adopted) {
       // This server has no PTY of ours to destroy (it outlived the app that
       // launched it), so the process that holds the port is what stops it.
-      await invoke('llamaCpp:stopServer', handle.entry.port)
+      await invoke('localAi:stopServer', handle.entry.port, handle.entry.runtime)
     } else {
-      await invoke('pty:destroy', llamaCppPtyId(entryId))
+      await invoke('pty:destroy', localAiPtyId(entryId))
     }
     this.stopHandle(entryId)
     this.setStatus(entryId, 'stopped')
@@ -359,7 +367,7 @@ export class LocalAiController {
       // leaving the page is not a reason to stop it.
       if (handle && !handle.adopted) {
         handle.stopping = true
-        void invoke('pty:destroy', llamaCppPtyId(entryId))
+        void invoke('pty:destroy', localAiPtyId(entryId))
       }
       this.stopHandle(entryId)
       this.setStatus(entryId, 'stopped')
@@ -403,7 +411,11 @@ export class LocalAiController {
    *  raw exit code. Another llama-server is handled before the start instead. */
   private portBusyNotice(entry: LlamaCppServerEntry): string {
     const lines = this.logs[entry.id] ?? []
-    const busy = lines.some((line) => /couldn't bind HTTP server socket/iu.test(line))
+    // llama.cpp says `couldn't bind HTTP server socket`, and the MLX server
+    // surfaces the operating system's own `[Errno 48]` for the same thing.
+    const busy = lines.some((line) =>
+      /couldn't bind HTTP server socket|address already in use|errno 48/iu.test(line)
+    )
     if (!busy) return ''
     return `Another program is using port ${entry.port}. Pick another port, or stop it first.`
   }
@@ -418,7 +430,7 @@ export class LocalAiController {
     if (!handle) return
     if (handle.probes >= PROBE_LIMIT) {
       this.stopHandle(entry.id)
-      void invoke('pty:destroy', llamaCppPtyId(entry.id))
+      void invoke('pty:destroy', localAiPtyId(entry.id))
       this.setStatus(entry.id, 'failed')
       this.notice = {
         ...this.notice,
@@ -435,7 +447,7 @@ export class LocalAiController {
     handle.probes++
     let result: LlamaCppProbeResult
     try {
-      result = await invoke('llamaCpp:probe', entry.host, entry.port)
+      result = await invoke('localAi:probe', entry.host, entry.port, entry.runtime)
     } catch {
       result = { ready: false, models: [], error: 'The readiness probe failed' }
     }
@@ -455,7 +467,7 @@ export class LocalAiController {
     if (!handle) return
     // The file watcher lives in main, so it is closed explicitly instead of
     // waiting for the unsubscribe below to be noticed.
-    if (handle.following) void invoke('llamaCpp:logStream', entryId, false)
+    if (handle.following) void invoke('localAi:logStream', entryId, false)
     for (const unsubscribe of handle.unsubscribe) unsubscribe()
     if (handle.timer) clearTimeout(handle.timer)
     this.handles.delete(entryId)

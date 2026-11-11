@@ -1,9 +1,10 @@
 /**
- * Llama.cpp server entries: the shared model behind the Settings page.
+ * Local AI server entries: the shared model behind the Settings page.
  *
- * A row is a `llama-server` launch the app owns: one model (an imported local
- * `.gguf` or a Hugging Face reference llama.cpp downloads itself), a bind
- * address, and any extra flags the user needs. Nothing here touches the
+ * A row is a server launch the app owns: one model (a local file or folder, or a
+ * Hugging Face reference the server downloads itself), a bind address, and any
+ * extra flags the user needs. Two engines are launched this way: `llama-server`
+ * for GGUF, and `mlx_lm.server` for MLX repositories. Nothing here touches the
  * filesystem or the network, so the renderer can validate a row before it is
  * saved and the main process can validate it again on the way in.
  */
@@ -33,21 +34,21 @@ export const MAX_LLAMA_CPP_PORT = 65_535
  */
 export interface LlamaCppServerEntry {
   id: string
-  /** Engine this server belongs to. Only llama.cpp is launched by the app. */
+  /** Engine that runs this server. */
   runtime: LocalAiRuntimeId
   name: string
-  /** Absolute path of an imported local `.gguf` file. */
+  /** Absolute path of an imported local model: a `.gguf` file, or an MLX folder. */
   modelPath: string
   /** Hugging Face repo, `repo:quant`, or a repository file URL. */
   modelReference: string
   host: string
   port: number
-  /** Extra llama-server flags, space separated with optional quoting. */
+  /** Extra server flags, space separated with optional quoting. */
   extraFlags: string
 }
 
-/** What `llama-server` gets as its model selector. */
-export type LlamaCppModelSource =
+/** What a server gets as its model selector. */
+export type LocalAiModelSource =
   { kind: 'local'; path: string } | { kind: 'huggingface'; reference: HuggingFaceModelReference }
 
 /** A parsed Hugging Face reference, always in the shape llama.cpp understands. */
@@ -134,7 +135,7 @@ export function formatHuggingFaceModelReference(reference: HuggingFaceModelRefer
 }
 
 /** Which model a row launches, or null when the row names none validly. */
-export function llamaCppModelSource(entry: LlamaCppServerEntry): LlamaCppModelSource | null {
+export function localAiModelSource(entry: LlamaCppServerEntry): LocalAiModelSource | null {
   const path = entry.modelPath.trim()
   const reference = entry.modelReference.trim()
   if (path.length > 0 && reference.length === 0) return { kind: 'local', path }
@@ -146,8 +147,8 @@ export function llamaCppModelSource(entry: LlamaCppServerEntry): LlamaCppModelSo
 }
 
 /** A short human label for the model, for the card and the log header. */
-export function llamaCppModelLabel(entry: LlamaCppServerEntry): string {
-  const source = llamaCppModelSource(entry)
+export function localAiModelLabel(entry: LlamaCppServerEntry): string {
+  const source = localAiModelSource(entry)
   if (!source) return 'No model'
   if (source.kind === 'local') {
     const segments = source.path.split(/[\\/]/u)
@@ -201,7 +202,7 @@ export function tokenizeLlamaCppFlags(value: string): string[] {
  * hold.
  */
 export function llamaCppModelAlias(entry: LlamaCppServerEntry): string {
-  const label = llamaCppModelLabel(entry)
+  const label = localAiModelLabel(entry)
   const alias = label
     .replace(/[^A-Za-z0-9._-]+/gu, '-')
     .replace(/^-+|-+$/gu, '')
@@ -226,6 +227,40 @@ export function llamaCppAddressableModelId(id: string): string {
 }
 
 /**
+ * The id a started server reports for a row's model, which is what an address is
+ * matched against.
+ *
+ * llama.cpp is told an alias, so its served id is stable. `mlx_lm.server` names
+ * the model after exactly the `--model` value it was started with, and it lists
+ * every downloaded MLX repository on `/v1/models` instead of the one it holds, so
+ * the row's own selector is the only identity that answers "is this my model?".
+ */
+export function localAiModelId(entry: LlamaCppServerEntry): string {
+  const source = localAiModelSource(entry)
+  if (!source) return ''
+  if (entry.runtime === 'mlx') {
+    return source.kind === 'local' ? source.path : source.reference.repo
+  }
+  return llamaCppModelAlias(entry)
+}
+
+/**
+ * The id to record for a model an OpenAI-compatible endpoint reports.
+ *
+ * An MLX server may answer with the absolute folder it loaded, and a selection
+ * is written as `provider/model`, so an absolute path would carry the user's
+ * home directory into every request. It is reduced to its last segment; a GGUF
+ * path keeps the llama.cpp rule above, and every other id is kept as served.
+ */
+export function localAiAddressableModelId(id: string, runtime: LocalAiRuntimeId): string {
+  if (runtime === 'llama.cpp') return llamaCppAddressableModelId(id)
+  const absolute = id.startsWith('/') || /^[a-zA-Z]:[\\/]/u.test(id)
+  if (!absolute) return id
+  const segments = id.split(/[\\/]/u)
+  return segments[segments.length - 1] || id
+}
+
+/**
  * The argv `llama-server` is launched with. The model selector comes first so
  * the generated command reads the same as the one the user would type.
  *
@@ -234,7 +269,7 @@ export function llamaCppAddressableModelId(id: string): string {
  * out of the copyable command: that path belongs to the app, not the user.
  */
 export function buildLlamaServerArgs(entry: LlamaCppServerEntry, logFile?: string): string[] {
-  const source = llamaCppModelSource(entry)
+  const source = localAiModelSource(entry)
   if (!source) return []
   const args = source.kind === 'local' ? ['-m', source.path] : huggingFaceArgs(source.reference)
   args.push('--host', entry.host.trim(), '--port', String(entry.port))
@@ -267,6 +302,49 @@ export function describeLlamaServerCommand(
   return [executable, ...args.map(quoteArg)].join(' ')
 }
 
+/**
+ * The argv `mlx_lm.server` is launched with.
+ *
+ * MLX has no alias and no log file: the server names the model after the
+ * selector it was given, and prints its log to the terminal it runs in. A
+ * Hugging Face reference is the repository alone, because an MLX repository is
+ * one model; the server fetches it on the first load.
+ */
+export function buildMlxServerArgs(entry: LlamaCppServerEntry): string[] {
+  const source = localAiModelSource(entry)
+  if (!source) return []
+  const model = source.kind === 'local' ? source.path : source.reference.repo
+  return [
+    '--model',
+    model,
+    '--host',
+    entry.host.trim(),
+    '--port',
+    String(entry.port),
+    ...tokenizeLlamaCppFlags(entry.extraFlags)
+  ]
+}
+
+/** The argv a row is launched with, whichever engine owns it. */
+export function localAiServerArgs(entry: LlamaCppServerEntry, logFile?: string): string[] {
+  return entry.runtime === 'mlx' ? buildMlxServerArgs(entry) : buildLlamaServerArgs(entry, logFile)
+}
+
+/** The command line shown in the card, for the user to copy. */
+export function describeLocalAiServerCommand(
+  entry: LlamaCppServerEntry,
+  executable: string
+): string {
+  const args = localAiServerArgs(entry)
+  if (args.length === 0) return ''
+  return [executable, ...args.map(quoteArg)].join(' ')
+}
+
+/** What a row's server binary is called when the app has not resolved it yet. */
+export function localAiServerCommandName(runtime: LocalAiRuntimeId): string {
+  return runtime === 'mlx' ? 'mlx_lm.server' : 'llama-server'
+}
+
 function quoteArg(value: string): string {
   return /^[A-Za-z0-9_./:=@+-]+$/u.test(value) ? value : `"${value.replaceAll('"', '\\"')}"`
 }
@@ -288,8 +366,8 @@ export function llamaCppBaseUrl(entry: Pick<LlamaCppServerEntry, 'host' | 'port'
 }
 
 /** Stable PTY id for a row, so a renderer reload reattaches to the live process. */
-export function llamaCppPtyId(entryId: string): string {
-  return `llama-cpp:${entryId}`
+export function localAiPtyId(entryId: string): string {
+  return `local-ai:${entryId}`
 }
 
 const HOST_LABEL =
@@ -382,9 +460,9 @@ export interface LocalAiModelCopy {
 /**
  * The words one engine's model uses.
  *
- * An MLX server loads a model folder of safetensors, and a Core ML server loads a
- * compiled `.mlpackage`; neither has anything to do with GGUF, and saying so in
- * the editor is how a user ends up pointing an engine at a file it cannot read.
+ * An MLX server loads a model folder of safetensors, which has nothing to do with
+ * GGUF; saying "GGUF" in the editor is how a user ends up pointing an engine at a
+ * file it cannot read.
  */
 export function localAiModelCopy(runtime: LocalAiRuntimeId): LocalAiModelCopy {
   if (runtime === 'mlx') {
@@ -397,16 +475,6 @@ export function localAiModelCopy(runtime: LocalAiRuntimeId): LocalAiModelCopy {
       pickTitle: 'Choose an MLX model folder'
     }
   }
-  if (runtime === 'coreml') {
-    return {
-      localTitle: 'Local Core ML model',
-      localHint: 'A compiled .mlpackage or .mlmodelc folder.',
-      localPlaceholder: '/path/to/Model.mlpackage',
-      referencePlaceholder: '',
-      huggingFace: false,
-      pickTitle: 'Choose a Core ML model'
-    }
-  }
   return {
     localTitle: 'Local GGUF file',
     localHint: 'A file already on this machine, referenced where it lives.',
@@ -417,15 +485,23 @@ export function localAiModelCopy(runtime: LocalAiRuntimeId): LocalAiModelCopy {
   }
 }
 
-export function llamaCppEntryProblem(entry: LlamaCppServerEntry): string | null {
+export function localAiEntryProblem(entry: LlamaCppServerEntry): string | null {
   const name = entry.name.trim()
   if (name.length === 0) return 'Give the server a name'
   if (name.length > LLAMA_CPP_NAME_MAX_LENGTH) return 'The name is too long'
-  if (llamaCppModelSource(entry) === null) {
+  const source = localAiModelSource(entry)
+  if (source === null) {
     const copy = localAiModelCopy(entry.runtime)
     return copy.huggingFace
       ? 'Choose a local model or a Hugging Face reference'
       : `Choose a ${copy.localTitle.toLowerCase()}`
+  }
+  // An MLX repository is one model, so a quantisation tag or a file name inside
+  // it names something the server cannot load; it fetches the whole repository.
+  if (source.kind === 'huggingface' && entry.runtime === 'mlx') {
+    if (source.reference.quant || source.reference.file) {
+      return 'An MLX model is one repository: use owner/repo without a quant tag or file'
+    }
   }
   if (!isLlamaCppHostValid(entry.host)) return 'Enter a host such as 127.0.0.1'
   if (!isLlamaCppPortValid(entry.port)) return 'Enter a port between 1 and 65535'
@@ -451,7 +527,12 @@ function boundedString(value: unknown, max: number): string | null {
  */
 /** The engine an entry belongs to; an older save without one is llama.cpp. */
 function readEntryRuntime(value: unknown): LocalAiRuntimeId {
-  return value === 'mlx' || value === 'coreml' ? value : 'llama.cpp'
+  return value === 'mlx' ? 'mlx' : 'llama.cpp'
+}
+
+/** A row saved for the Core ML engine, which the app no longer serves. */
+function isRetiredCoreMlRow(raw: Record<string, unknown>): boolean {
+  return raw.runtime === 'coreml'
 }
 
 export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
@@ -463,6 +544,10 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
   const ids = new Set<string>()
   for (const raw of value) {
     if (!isRecord(raw)) continue
+    // Core ML never had a server the app could launch, so a saved row is a
+    // leftover rather than a server: it is dropped instead of being shown as a
+    // llama.cpp row it is not.
+    if (isRetiredCoreMlRow(raw)) continue
     const id = boundedString(raw.id, 128)
     if (!id || ids.has(id)) continue
     const name = boundedString(raw.name, LLAMA_CPP_NAME_MAX_LENGTH)
@@ -483,7 +568,7 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
       port: isLlamaCppPortValid(port) ? port : DEFAULT_LLAMA_CPP_PORT,
       extraFlags
     }
-    if (llamaCppEntryProblem(entry) !== null) continue
+    if (localAiEntryProblem(entry) !== null) continue
     ids.add(id)
     entries.push(entry)
   }
@@ -491,24 +576,29 @@ export function validateLlamaCppServers(value: unknown): LlamaCppServerEntry[] {
 }
 
 /**
- * The local inference runtimes the app can drive.
+ * The local inference runtimes whose server process the app owns.
  *
- * `llama.cpp` runs as a `llama-server` process the app spawns, while `mlx` and
- * `coreml` are bound into the speech workers. All three are listed together on
- * the Local AI page, which is the one place a local model's memory policy is set.
+ * `llama.cpp` runs as a `llama-server` process and `mlx` as `mlx_lm.server`, both
+ * spawned and stopped by the Local AI page. Core ML is not here: it is bound into
+ * the bundled speech workers, so it is a speech runtime rather than a server.
  */
-export type LocalAiRuntimeId = 'llama.cpp' | 'mlx' | 'coreml'
-
-/** One runtime row on the Local AI page. */
-export interface LocalAiRuntimeSummary {
+export type LocalAiRuntimeId = 'llama.cpp' | 'mlx'
+/** One engine on the Local AI page, as a tab. */
+export interface LocalAiRuntimeTab {
   id: LocalAiRuntimeId
   label: string
-  available: boolean
-  /** Version and path when available, the reason it is not when it is not. */
-  detail: string
-  /** The jobs the app runs on this runtime. */
-  uses: string[]
+  title: string
 }
+
+/** The two engines the page serves, in tab order. */
+export const LOCAL_AI_RUNTIME_TABS: readonly LocalAiRuntimeTab[] = [
+  {
+    id: 'llama.cpp',
+    label: 'llama.cpp',
+    title: 'The llama.cpp engine and its GGUF servers'
+  },
+  { id: 'mlx', label: 'MLX', title: 'The MLX engine and the models it serves' }
+]
 
 /**
  * How long a resident local model stays loaded after its last use.
@@ -561,18 +651,20 @@ export function localAiUnloadMs(option: LocalAiUnloadOption): number | null {
   return option === 'keep' ? null : LOCAL_AI_UNLOAD_MS[option]
 }
 
-/** What the binary card states about the machine it is running on. */
-export interface LlamaCppRuntimeStatus {
+/** What the binary card states about the engine it runs. */
+export interface LocalAiRuntimeStatus {
+  /** The engine this status was read for. */
+  runtime: LocalAiRuntimeId
   platform: NodeJS.Platform
   installed: boolean
-  /** Absolute path of the resolved `llama-server`, empty when there is none. */
+  /** Absolute path of the resolved server, empty when there is none. */
   path: string
-  /** Version and build, empty when the binary could not report one. */
+  /** Version, empty when the binary could not report one. */
   version: string
-  /** Package manager that can install or update llama.cpp here. */
+  /** Package manager that can install or update this engine here. */
   installer: 'homebrew' | null
   installerPath: string
-  /** True when the installer reports a newer llama.cpp than the one on disk. */
+  /** True when the installer reports a newer build than the one on disk. */
   updateAvailable: boolean
   /** Version the installer would move to, empty when there is nothing newer. */
   latestVersion: string
@@ -603,8 +695,8 @@ export interface LlamaCppProbeResult {
 }
 
 /**
- * The Homebrew work the Llama.cpp page runs in its docked terminal: install it,
- * move it to the newest build, or remove it.
+ * The Homebrew work the Local AI page runs in its docked terminal: install an
+ * engine, move it to the newest build, or remove it.
  */
 export type LlamaCppBrewJobKind = 'install' | 'update' | 'uninstall'
 
@@ -621,19 +713,25 @@ export type LlamaCppBrewJobKind = 'install' | 'update' | 'uninstall'
  * older Homebrew releases predate the flag and would reject the command, while
  * they ignore a variable they do not know.
  */
-export const LLAMA_CPP_BREW_ENVIRONMENT: Readonly<Record<string, string>> = {
+export const LOCAL_AI_BREW_ENVIRONMENT: Readonly<Record<string, string>> = {
   HOMEBREW_NO_ASK: '1'
 }
 
+/** The formula that installs one engine here. */
+export function localAiBrewFormula(runtime: LocalAiRuntimeId): string {
+  return runtime === 'mlx' ? 'mlx-lm' : 'llama.cpp'
+}
+
 /** The Homebrew arguments that carry out one job, always non-interactive. */
-export function llamaCppBrewArgs(kind: LlamaCppBrewJobKind): string[] {
+export function localAiBrewArgs(runtime: LocalAiRuntimeId, kind: LlamaCppBrewJobKind): string[] {
+  const formula = localAiBrewFormula(runtime)
   switch (kind) {
     case 'install':
-      return ['install', 'llama.cpp']
+      return ['install', formula]
     case 'update':
-      return ['upgrade', 'llama.cpp']
+      return ['upgrade', formula]
     case 'uninstall':
-      return ['uninstall', 'llama.cpp']
+      return ['uninstall', formula]
   }
 }
 

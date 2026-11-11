@@ -1439,7 +1439,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     const [
       { registerProviderAccountIpc },
       { registerBaseUrlProviderIpc },
-      { registerLlamaCppIpc },
       { registerLocalAiIpc },
       { registerUtilityIpc },
       { registerTypesafeIpc },
@@ -1447,7 +1446,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     ] = await Promise.all([
       import('../ipc/provider-account-ipc'),
       import('../providers/base-url-provider-ipc'),
-      import('../llama-cpp/llama-cpp-ipc'),
       import('../local-ai/local-ai-ipc'),
       import('../ipc/utility-ipc'),
       import('../ipc/typesafe-ipc'),
@@ -1486,12 +1484,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // Local servers never touch the provider registry: a custom base-URL
     // provider is the user's to create, and starting or stopping a server here
     // must leave it exactly as it was.
-    registerLlamaCppIpc({
+    registerLocalAiIpc({
       hasPtySession: (terminalId) => state.ptyService?.hasSession(terminalId) ?? false
     })
-    // The Local AI page lists every runtime the app can drive beside the
-    // llama.cpp rows, and owns the one unload window they all share.
-    registerLocalAiIpc()
     registerTypesafeIpc(typesafe)
     registerUtilityIpc(
       storage,
