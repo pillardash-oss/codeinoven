@@ -11,7 +11,6 @@
   import { scale } from 'svelte/transition'
   import { motionDuration } from '$lib/motion'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
-  import AttachmentPreview from './AttachmentPreview.svelte'
   import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
   import ChatComposerAttachmentStrip from './ChatComposerAttachmentStrip.svelte'
@@ -233,21 +232,23 @@
 
 {#if board.handleDropData.preview.file}
   {@const previewAttachment = board.handleDropData.preview.file}
-  <AttachmentPreview
-    attachment={previewAttachment}
-    src={board.handleDropData.preview.urls[previewAttachment.url]}
-    text={board.handleDropData.preview.texts[previewAttachment.url]}
-    documentHtml={board.handleDropData.preview.documents[previewAttachment.url]}
-    documentLoading={board.handleDropData.preview.documentLoading[previewAttachment.url] ?? false}
-    onSaveText={isEditablePastedTextAttachment(previewAttachment)
-      ? board.handleDropData.savePreviewText
-      : undefined}
-    pager={board.handleDropData.previewPager}
-    onClose={() => {
-      board.handleDropData.preview.close()
-      board.submit.focusComposerAtSavedCaret()
-    }}
-  />
+  {#await import('./AttachmentPreview.svelte') then { default: AttachmentPreview }}
+    <AttachmentPreview
+      attachment={previewAttachment}
+      src={board.handleDropData.preview.urls[previewAttachment.url]}
+      text={board.handleDropData.preview.texts[previewAttachment.url]}
+      documentHtml={board.handleDropData.preview.documents[previewAttachment.url]}
+      documentLoading={board.handleDropData.preview.documentLoading[previewAttachment.url] ?? false}
+      onSaveText={isEditablePastedTextAttachment(previewAttachment)
+        ? board.handleDropData.savePreviewText
+        : undefined}
+      pager={board.handleDropData.previewPager}
+      onClose={() => {
+        board.handleDropData.preview.close()
+        board.submit.focusComposerAtSavedCaret()
+      }}
+    />
+  {/await}
 {/if}
 
 <ChatComposerDropZone
