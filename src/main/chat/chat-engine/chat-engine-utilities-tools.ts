@@ -403,23 +403,35 @@ export class ChatEngineUtilitiesTools {
 
     switch (operation) {
       case 'brainstorm': {
+        const hadWorkflow =
+          this.host.state.brainstormEngine.getWorkflowState(projectId, threadId) !== null
         this.host.state.brainstormEngine.ensureWorkflow(projectId, threadId)
-        // The stage starts only once a draft exists. Starting it before the
-        // generation is what left a thread stuck on a Brainstorm entry gate
-        // whenever the generator failed: the lifecycle stayed active, the
-        // workflow kept no entry choice, and every later message was swallowed
-        // as an answer to a card that was never produced.
-        const document = await this.host.units['brainstorm'].createBrainstormSessionReport(
-          projectId,
-          threadId,
-          instructions
-        )
-        this.enableEngineeringStage(projectId, threadId, 'brainstorm')
-        return {
-          artifact: 'brainstorm',
-          id: document.id,
-          version: document.version,
-          message: `The Brainstorm draft v${document.version} is ready for review.`
+        try {
+          // The stage starts only once a draft exists. Starting it before the
+          // generation is what left a thread stuck on a Brainstorm entry gate
+          // whenever the generator failed: the lifecycle stayed active, the
+          // workflow kept no entry choice, and every later message was swallowed
+          // as an answer to a card that was never produced.
+          const document = await this.host.units['brainstorm'].createBrainstormSessionReport(
+            projectId,
+            threadId,
+            instructions
+          )
+          this.enableEngineeringStage(projectId, threadId, 'brainstorm')
+          return {
+            artifact: 'brainstorm',
+            id: document.id,
+            version: document.version,
+            message: `The Brainstorm draft v${document.version} is ready for review.`
+          }
+        } catch (error) {
+          // A generation that never produced a draft must not leave the entry
+          // card behind. The workflow is the card: a `choice_pending` row with no
+          // entry choice renders an entry card that waits on the user while the
+          // thread row settles `completed`, so the notification reports "done"
+          // for a conversation that is visibly asking for a choice.
+          if (!hadWorkflow) this.host.state.brainstormEngine.resetWorkflow(projectId, threadId)
+          throw error
         }
       }
       case 'prd': {
