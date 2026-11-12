@@ -1,6 +1,7 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import CioPin from '@pdslng/cio-icon/CioPin.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { tick } from 'svelte'
@@ -340,29 +341,32 @@
       class="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
       aria-label="{groupLabel} threads"
     >
-      <!-- Right-aligned: the strip grows towards the name, so the pinned group
-           sits closest to it and the newest work is the nearest thing to reach. -->
-      <div class="ml-auto flex h-full w-max max-w-full items-center gap-0.5">
-        {#each visiblePinned as thread (thread.id)}
-          {@render threadTab(thread)}
-        {/each}
+      <!-- Pinned threads hold the left edge, right beside the assistant they
+           belong to, and the open group keeps the right: the spacer between them
+           is what keeps the two apart when both are narrow. -->
+      <div class="flex h-full w-full max-w-full items-center gap-0.5">
+        <div class="flex shrink-0 items-center gap-0.5">
+          {#each visiblePinned as thread (thread.id)}
+            {@render threadTab(thread, true)}
+          {/each}
 
-        {#if hiddenPinned.length > 0}
-          <button
-            type="button"
-            class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
-            'pinned'
-              ? 'bg-selected text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-haspopup="menu"
-            aria-expanded={overflow === 'pinned'}
-            aria-label="Show {hiddenPinned.length} more pinned threads"
-            title="Show {hiddenPinned.length} more pinned threads"
-            onclick={(event: MouseEvent) => toggleOverflow('pinned', event)}
-          >
-            +{hiddenPinned.length}
-          </button>
-        {/if}
+          {#if hiddenPinned.length > 0}
+            <button
+              type="button"
+              class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
+              'pinned'
+                ? 'bg-selected text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'}"
+              aria-haspopup="menu"
+              aria-expanded={overflow === 'pinned'}
+              aria-label="Show {hiddenPinned.length} more pinned threads"
+              title="Show {hiddenPinned.length} more pinned threads"
+              onclick={(event: MouseEvent) => toggleOverflow('pinned', event)}
+            >
+              +{hiddenPinned.length}
+            </button>
+          {/if}
+        </div>
 
         {#if pinnedGroup.length > 0 && openGroup.length > 0}
           <!-- The two groups never mix: the rule is the boundary a tab crosses
@@ -370,26 +374,30 @@
           <div class="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden="true"></div>
         {/if}
 
-        {#each visibleOpen as thread (thread.id)}
-          {@render threadTab(thread)}
-        {/each}
+        <div class="flex-1"></div>
 
-        {#if hiddenOpen.length > 0}
-          <button
-            type="button"
-            class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
-            'open'
-              ? 'bg-selected text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-haspopup="menu"
-            aria-expanded={overflow === 'open'}
-            aria-label="Show {hiddenOpen.length} more threads"
-            title="Show {hiddenOpen.length} more threads"
-            onclick={(event: MouseEvent) => toggleOverflow('open', event)}
-          >
-            +{hiddenOpen.length}
-          </button>
-        {/if}
+        <div class="flex shrink-0 items-center gap-0.5">
+          {#each visibleOpen as thread (thread.id)}
+            {@render threadTab(thread, false)}
+          {/each}
+
+          {#if hiddenOpen.length > 0}
+            <button
+              type="button"
+              class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
+              'open'
+                ? 'bg-selected text-foreground'
+                : 'text-muted hover:bg-elevated hover:text-foreground'}"
+              aria-haspopup="menu"
+              aria-expanded={overflow === 'open'}
+              aria-label="Show {hiddenOpen.length} more threads"
+              title="Show {hiddenOpen.length} more threads"
+              onclick={(event: MouseEvent) => toggleOverflow('open', event)}
+            >
+              +{hiddenOpen.length}
+            </button>
+          {/if}
+        </div>
       </div>
     </div>
 
@@ -463,13 +471,15 @@
   </Portal>
 {/if}
 
-{#snippet threadTab(thread: Thread)}
+{#snippet threadTab(thread: Thread, pinned: boolean)}
   {@const active = thread.id === activeId}
   {@const status = statusBadgeForThread(thread, isThreadLiveWorking(thread))}
   <div
     role="group"
     aria-label={thread.title}
-    class="relative flex min-h-8 min-w-[4rem] max-w-44 items-center gap-1 overflow-hidden pl-2 pr-0.5 text-[0.6875rem] transition-colors {active
+    class="relative flex min-h-8 min-w-[3rem] items-center gap-1 overflow-hidden pl-1 pr-0.5 text-[0.6875rem] transition-colors {pinned
+      ? 'max-w-28'
+      : 'max-w-44'} {active
       ? 'bg-selected text-foreground'
       : 'text-muted hover:bg-elevated hover:text-foreground'}"
     onpointerenter={(event: PointerEvent) => tabEnter(event, thread)}
@@ -479,9 +489,22 @@
       void openThreadMenu(thread, event.currentTarget as HTMLElement)
     }}
   >
-    <!-- The left slot is the tab's state: a thin square that fills with the
-         state's colour while work is live or waiting on the user, and keeps only
-         its outline once the thread is done. -->
+    {#if pinned}
+      <!-- A pinned tab says so at its left edge, and the pin is the way back:
+           clicking it unpins the thread and the tab leaves this group. -->
+      <button
+        type="button"
+        class="flex size-4 shrink-0 items-center justify-center text-accent transition-colors hover:text-foreground"
+        aria-label="Unpin thread {thread.title}"
+        title="Unpin thread"
+        onclick={() => assistantHeaderTabs.togglePinThread(thread)}
+      >
+        <CioPin size={10} />
+      </button>
+    {/if}
+    <!-- The state slot: a thin square that fills with the state's colour while
+         work is live or waiting on the user, and keeps only its outline once the
+         thread is done. -->
     <StatusBadge
       stage={status.stage}
       tone={status.tone}
