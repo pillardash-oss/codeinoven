@@ -77,9 +77,44 @@
 
   const group = $derived(projectEnvDock.group)
   const groupLabel = $derived(group || '/')
+  /** The directory as a prefix, so a label built from it reads as one path. */
+  const groupPrefix = $derived(group ? `${group}/` : '')
   const groupFiles = $derived(
     files.filter((file) => file.group === group).map((file) => file.fileName)
   )
+  /**
+   * Every stored file of the project as one picker.
+   *
+   * A project keeps its secrets per directory, and remembering which directory
+   * holds the key you want means walking the file tree first. The picker names the
+   * location instead, so any file is one click away.
+   */
+  const storedTargets = $derived(
+    [...files]
+      .sort((left, right) =>
+        left.group === right.group
+          ? left.fileName.localeCompare(right.fileName)
+          : left.group.localeCompare(right.group)
+      )
+      .map((file) => ({
+        value: `${file.group}/${file.fileName}`,
+        label: file.group ? `${file.group}/${file.fileName}` : file.fileName
+      }))
+  )
+  const selectedTarget = $derived(`${group}/${fileName}`)
+  const selectedTargetListed = $derived(
+    storedTargets.some((target) => target.value === selectedTarget)
+  )
+
+  /** Jump the panel to another stored file, keeping its editor surface. */
+  function selectStoredTarget(value: string): void {
+    const target = files.find((file) => `${file.group}/${file.fileName}` === value)
+    if (!target) return
+    // The name is updated here as well, so the picker shows the chosen location
+    // right away instead of waiting for the file's values to load.
+    fileName = target.fileName
+    projectEnvDock.select({ group: target.group, fileName: target.fileName })
+  }
   const currentFile = $derived(
     files.find((file) => file.group === group && file.fileName === fileName) ?? null
   )
@@ -433,7 +468,7 @@
   onClose={() => projectEnvDock.close()}
   {storageKey}
   dragLabel="Drag to move the env file panel"
-  defaultHeight={520}
+  defaultHeight={640}
   flushBody
   onPrimaryAction={() => {
     if (saving || loading || !dirty) return false
@@ -502,6 +537,26 @@
             }
           }}
         />
+      </label>
+
+      <label class="flex min-w-0 items-center gap-2" for="env-file-picker">
+        <span class="text-[0.6875rem] font-medium text-muted">Stored</span>
+        <select
+          id="env-file-picker"
+          class="h-7 max-w-64 min-w-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none transition-colors hover:bg-overlay focus:border-primary disabled:opacity-50"
+          value={selectedTarget}
+          disabled={loading || storedTargets.length === 0}
+          title="Show the secrets stored for another file in this project"
+          aria-label="Secrets stored for this project"
+          onchange={(event) => selectStoredTarget(event.currentTarget.value)}
+        >
+          {#if !selectedTargetListed}
+            <option value={selectedTarget}>{groupPrefix}{fileName}</option>
+          {/if}
+          {#each storedTargets as target (target.value)}
+            <option value={target.value}>{target.label}</option>
+          {/each}
+        </select>
       </label>
 
       <div
@@ -587,7 +642,7 @@
               ? 'bg-elevated text-foreground'
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-pressed={existing === fileName}
-            title="Edit {groupLabel}{existing}"
+            title="Edit {groupPrefix}{existing}"
             onclick={() => void openFile(existing)}
           >
             {existing}
@@ -599,7 +654,7 @@
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if loading}
         <div class="flex items-center gap-2 px-3 py-3 text-xs text-muted">
-          <CioSpinner size={13} class="animate-spin" /> Reading {groupLabel}{fileName}...
+          <CioSpinner size={13} class="animate-spin" /> Reading {groupPrefix}{fileName}...
         </div>
       {:else if surface === 'editor'}
         <textarea
@@ -756,10 +811,10 @@
   onConfirm={writeToProject}
 >
   <p>
-    <span class="font-mono text-foreground">{groupLabel}{fileName}</span>
+    <span class="font-mono text-foreground">{groupPrefix}{fileName}</span>
     is rewritten to hold one <span class="font-mono">NAME=cio://&lt;ref&gt;</span> line per key. Any
     content already there is kept at
-    <span class="font-mono">.cio/secrets/{groupLabel}{fileName}</span>, inside the ignored
+    <span class="font-mono">.cio/secrets/{groupPrefix}{fileName}</span>, inside the ignored
     <span class="font-mono">.cio</span> folder.
   </p>
 </ConfirmDialog>
