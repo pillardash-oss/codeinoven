@@ -1,0 +1,51 @@
+diff --git a/dist/ghostty-web.js b/dist/ghostty-web.js
+index a4ca427b95288e70c782ce303013cd644893dcec..a504fb73d31b6b371aa70de45d88285eac90f088 100644
+--- a/dist/ghostty-web.js
++++ b/dist/ghostty-web.js
+@@ -2624,7 +2624,7 @@ class IA {
+    */
+   dispose() {
+     if (!this.isDisposed) {
+-      this.isDisposed = !0, this.isOpen = !1, this.animationFrameId && (cancelAnimationFrame(this.animationFrameId), this.animationFrameId = void 0), this.scrollAnimationFrame && (cancelAnimationFrame(this.scrollAnimationFrame), this.scrollAnimationFrame = void 0), this.mouseMoveThrottleTimeout && (clearTimeout(this.mouseMoveThrottleTimeout), this.mouseMoveThrottleTimeout = void 0), this.pendingMouseMove = void 0;
++      this.isDisposed = !0, this.isOpen = !1, this.renderVisibilityObserver && (this.renderVisibilityObserver.disconnect(), this.renderVisibilityObserver = void 0), this.handleRenderVisibility && (document.removeEventListener("visibilitychange", this.handleRenderVisibility), this.handleRenderVisibility = void 0), this.animationFrameId && (cancelAnimationFrame(this.animationFrameId), this.animationFrameId = void 0), this.scrollAnimationFrame && (cancelAnimationFrame(this.scrollAnimationFrame), this.scrollAnimationFrame = void 0), this.mouseMoveThrottleTimeout && (clearTimeout(this.mouseMoveThrottleTimeout), this.mouseMoveThrottleTimeout = void 0), this.pendingMouseMove = void 0;
+       for (const A of this.addons)
+         A.dispose();
+       this.addons = [], this.cleanupComponents(), this.dataEmitter.dispose(), this.resizeEmitter.dispose(), this.bellEmitter.dispose(), this.selectionChangeEmitter.dispose(), this.keyEmitter.dispose(), this.titleChangeEmitter.dispose(), this.scrollEmitter.dispose(), this.renderEmitter.dispose(), this.cursorMoveEmitter.dispose();
+@@ -2637,13 +2637,33 @@ class IA {
+    * Start the render loop
+    */
+   startRenderLoop() {
++    // Patched (CodeInOven): the loop only runs while the terminal is on screen.
++    // A terminal scrolled away, inside a hidden panel or in a hidden window
++    // stops requesting frames; output keeps landing in the buffer and the first
++    // frame back repaints everything.
+     const A = () => {
+-      if (!this.isDisposed && this.isOpen) {
+-        this.renderer.render(this.wasmTerm, !1, this.viewportY, this, this.scrollbarOpacity);
+-        const B = this.wasmTerm.getCursor();
+-        B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire()), this.animationFrameId = requestAnimationFrame(A);
++      this.animationFrameId = void 0;
++      if (this.isDisposed || !this.isOpen) return;
++      if (!this.renderOnScreen || document.visibilityState === "hidden") {
++        this.renderStale = !0;
++        return;
+       }
++      this.renderer.render(this.wasmTerm, this.renderStale === !0, this.viewportY, this, this.scrollbarOpacity), this.renderStale = !1;
++      const B = this.wasmTerm.getCursor();
++      B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire()), this.animationFrameId = requestAnimationFrame(A);
++    };
++    this.resumeRenderLoop = () => {
++      this.animationFrameId === void 0 && !this.isDisposed && this.isOpen && (this.animationFrameId = requestAnimationFrame(A));
+     };
++    if (this.renderOnScreen = !0, typeof IntersectionObserver < "u" && this.element) {
++      this.renderVisibilityObserver = new IntersectionObserver((C) => {
++        const E = C[C.length - 1];
++        E && (this.renderOnScreen = E.isIntersecting, E.isIntersecting && this.resumeRenderLoop());
++      }), this.renderVisibilityObserver.observe(this.element);
++    }
++    this.handleRenderVisibility = () => {
++      document.visibilityState === "visible" && this.resumeRenderLoop();
++    }, document.addEventListener("visibilitychange", this.handleRenderVisibility);
+     A();
+   }
+   /**
