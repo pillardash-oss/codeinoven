@@ -648,23 +648,27 @@
   timeline's own thread filters. The app header keeps none of these for the
   Projects, Threads and Chats views, so they live with the list they act on.
 -->
-{#snippet sidebarPanelActions(pane: 'folders' | 'threads' | 'chats')}
+{#snippet sidebarPanelActions(pane: 'folders' | 'threads' | 'chats', compact: boolean)}
   {#if pane === 'chats'}
     <button
       type="button"
-      class="flex h-7 min-w-0 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 items-center gap-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground {compact
+        ? 'w-7 justify-center'
+        : 'w-full justify-start px-2 text-[0.6875rem] font-medium'}"
       aria-label="New chat"
       title="New chat"
       data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
       onclick={board.markThreadReadAndApply.startNewChat}
     >
-      <CioPencil size={13} class="shrink-0" />
-      <span class="truncate">New chat</span>
+      <CioPencil size={compact ? 15 : 13} class="shrink-0" />
+      {#if !compact}
+        <span class="truncate">New chat</span>
+      {/if}
     </button>
   {:else}
     <ProjectCreateControl
       title="New project"
-      label="New project"
+      label={compact ? undefined : 'New project'}
       onProjectCreated={board.switcherPanelTabs.handleProjectCreated}
       onExisting={board.switcherPanelTabs.handleExistingProject}
       triggerAddProject={board.state.projectCreateTrigger}
@@ -672,7 +676,9 @@
     />
     <button
       type="button"
-      class="flex h-7 min-w-0 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 items-center gap-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground {compact
+        ? 'w-7 justify-center'
+        : 'w-full justify-start px-2 text-[0.6875rem] font-medium'}"
       aria-label="New thread"
       title="New thread"
       data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
@@ -684,8 +690,10 @@
         else board.newThreadPicker.request()
       }}
     >
-      <CioPlus size={13} class="shrink-0" />
-      <span class="truncate">New thread</span>
+      <CioPlus size={compact ? 15 : 13} class="shrink-0" />
+      {#if !compact}
+        <span class="truncate">New thread</span>
+      {/if}
     </button>
   {/if}
 {/snippet}

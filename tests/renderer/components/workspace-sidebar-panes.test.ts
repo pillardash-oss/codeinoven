@@ -16,7 +16,7 @@ import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte'
 
 /** The panel action row the sidebar draws under its tabs; the tests only
  *  exercise the lists, so it renders nothing. */
-const emptyPanelActions = createRawSnippet<['folders' | 'threads' | 'chats']>(() => ({
+const emptyPanelActions = createRawSnippet<['folders' | 'threads' | 'chats', boolean]>(() => ({
   render: () => '<span></span>'
 }))
 

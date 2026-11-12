@@ -190,7 +190,7 @@
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
       class="flex {label
-        ? 'h-7 min-w-0 gap-1.5 px-2'
+        ? 'h-7 min-w-0 justify-start gap-1.5 px-2'
         : `${triggerBox} justify-center`} items-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}

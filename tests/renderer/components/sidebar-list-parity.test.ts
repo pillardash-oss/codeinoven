@@ -19,7 +19,7 @@ import type { Assistant, Project, Thread } from '$shared/types'
 
 /** The panel action row the sidebar draws under its tabs; the tests only
  *  exercise the lists, so it renders nothing. */
-const emptyPanelActions = createRawSnippet<['folders' | 'threads' | 'chats']>(() => ({
+const emptyPanelActions = createRawSnippet<['folders' | 'threads' | 'chats', boolean]>(() => ({
   render: () => '<span></span>'
 }))
 

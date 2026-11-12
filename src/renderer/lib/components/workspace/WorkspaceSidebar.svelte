@@ -156,7 +156,7 @@
      * door of the list on screen, or the thread list's own filters. It is drawn
      * where the list's controls belong instead of in the app header.
      */
-    panelActions: Snippet<[panelPane: 'folders' | 'threads' | 'chats']>
+    panelActions: Snippet<[panelPane: 'folders' | 'threads' | 'chats', compact: boolean]>
   }
 
   let {
@@ -212,6 +212,26 @@
    */
   let scopedSidebarVisible = $derived(mode === 'projects' && scopeState.sidebarContext !== null)
   let projectsTreeVisible = $derived(mode === 'projects' && scopeState.sidebarContext === null)
+
+  /**
+   * Whether the panel's list has been scrolled away from its top.
+   *
+   * The actions under the tabs name themselves while the list is at the top and
+   * fold into one line of marks once it is not, so the rows get the height back.
+   * The scroller belongs to the shell (it is bound in), so this watches the
+   * element it hands over and nothing else.
+   */
+  let panelCompact = $state(false)
+  $effect(() => {
+    const element = scroller
+    if (!element) return
+    const onScroll = (): void => {
+      panelCompact = element.scrollTop > 8
+    }
+    element.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => element.removeEventListener('scroll', onScroll)
+  })
 
   /**
    * Whether the list is showing search results instead of the timeline.
@@ -730,8 +750,11 @@
   }}
 />
 
-{#snippet listActions()}
-  {@render panelActions(mode === 'threads' ? 'threads' : mode === 'chats' ? 'chats' : 'folders')}
+{#snippet listActions(compact: boolean)}
+  {@render panelActions(
+    mode === 'threads' ? 'threads' : mode === 'chats' ? 'chats' : 'folders',
+    compact
+  )}
 {/snippet}
 
 <!-- Shared sidebar   shows Projects or Chats depending on the shell mode.
@@ -767,7 +790,12 @@
         tabs={mode === 'chats' ? [] : panelTabs}
         search={panelSearch}
         searchShortcut={keymapState.keysFor('panel-search')}
-        searchLabel={mode === 'chats' ? 'Search' : undefined}
+        searchLabel={mode === 'chats'
+          ? 'Search chats'
+          : mode === 'threads'
+            ? 'Search threads'
+            : 'Search projects'}
+        compact={panelCompact}
         row={listActions}
       />
     {/if}
