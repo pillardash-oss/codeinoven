@@ -4,6 +4,7 @@
   import AssistantRow from './AssistantRow.svelte'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
+  import { lastViewedAssistantThreadId } from '$lib/stores/assistant-last-viewed.svelte'
   import { sortAssistants } from '$shared/assistant-order'
   import { DON_ASSISTANT_ID, assistantIsBuiltin, assistantReady } from '$shared/types'
   import type { Assistant, Thread } from '$shared/types'
@@ -139,13 +140,20 @@
   }
 
   /**
-   * Open an assistant: its most recently worked thread carries the header's tabs
-   * from there. An assistant with no task yet opens its setup conversation, which
-   * is also what gives it one.
+   * Open an assistant where the user left it: the thread they last viewed of
+   * that assistant, or its latest thread when they have not opened one yet. A
+   * run counts too, since it is a thread the user can have been reading.
+   * An assistant with no task yet opens its setup conversation, which is also
+   * what gives it one.
    */
   function openAssistant(assistant: Assistant): void {
-    const latest = assistantTasks(assistant.id)[0]
-    if (latest) onOpenTask(latest)
+    const rememberedId = lastViewedAssistantThreadId(assistant.id)
+    const remembered = rememberedId
+      ? (assistantTasks(assistant.id).find((task) => task.id === rememberedId) ??
+        runsOfAssistant(assistant.id).find((run) => run.id === rememberedId))
+      : undefined
+    const target = remembered ?? assistantTasks(assistant.id)[0]
+    if (target) onOpenTask(target)
     else onOpenAssistantKnowledge(assistant)
   }
 </script>

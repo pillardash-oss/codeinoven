@@ -17,6 +17,7 @@
   import { feature } from '$lib/feature-registry'
   import { motionDuration } from '$lib/motion'
   import { assistantHeaderTabs } from '$lib/stores/assistant-header-tabs.svelte'
+  import { rememberAssistantThread } from '$lib/stores/assistant-last-viewed.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -624,6 +625,11 @@
    */
   const selectedThread = $derived(board.openThreadFromSwitcher.selectedThread)
   const activeProject = $derived(board.openThreadFromSwitcher.activeProject)
+
+  // Opening an assistant later returns to the conversation the user was last in,
+  // so the assistant view's own navigation is remembered as it happens, whoever
+  // opened the thread (a tab, the sidebar, a notification, or a shortcut).
+  $effect(() => rememberAssistantThread(selectedThread))
 </script>
 
 <svelte:document onpointerdowncapture={board.switcherPanelTabs.handleComposerPointerDown} />

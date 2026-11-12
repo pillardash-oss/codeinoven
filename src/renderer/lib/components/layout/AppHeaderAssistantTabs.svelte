@@ -9,7 +9,9 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import AssistantOptionsMenu from '$lib/components/assistant/AssistantOptionsMenu.svelte'
+  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
   import {
     AssistantDefaultIcon,
     assistantAccentColor,
@@ -21,12 +23,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
-  import {
-    DON_ASSISTANT_ID,
-    isAssistantSetupThread,
-    isThreadWorking,
-    type Thread
-  } from '$shared/types'
+  import { DON_ASSISTANT_ID, isAssistantSetupThread, type Thread } from '$shared/types'
 
   /**
    * The assistant view's header centre.
@@ -234,12 +231,11 @@
 
 <div
   bind:this={stripElement}
-  class="titlebar-no-drag relative flex min-w-0 flex-1 items-center self-stretch pl-3"
+  class="titlebar-no-drag relative flex min-w-0 flex-1 items-center self-stretch"
 >
-  <div class="mr-2 h-5 w-px shrink-0 bg-border/50" aria-hidden="true"></div>
-
   <!-- The assistant's name never scrolls away with its tabs: it is the fixed
-       label the row of tabs belongs to. -->
+       label the row of tabs belongs to, sitting flush against the panel edge it
+       hugs once the sidebar is open. -->
   <span
     class="group/label mr-1 flex min-w-0 shrink-0 items-center gap-1.5 px-1 text-[0.6875rem] font-semibold text-foreground"
     title={groupAssistant ? `${groupLabel}'s threads` : groupLabel}
@@ -298,7 +294,7 @@
       <div class="ml-auto flex h-full w-max max-w-full items-center gap-0.5">
         {#each visibleThreads as thread (thread.id)}
           {@const active = thread.id === activeId}
-          {@const working = isThreadWorking(thread)}
+          {@const status = statusBadgeForThread(thread, isThreadLiveWorking(thread))}
           <div
             role="group"
             aria-label={thread.title}
@@ -310,6 +306,18 @@
               void openThreadMenu(thread, event.currentTarget as HTMLElement)
             }}
           >
+            <!-- The left slot is the tab's state: a thin square that fills with
+                 the state's colour while work is live or waiting on the user, and
+                 keeps only its outline once the thread is done. -->
+            <StatusBadge
+              stage={status.stage}
+              tone={status.tone}
+              kind={status.kind}
+              variant="square"
+              hollow={status.stage === 'done'}
+              title={status.label}
+              class="shrink-0"
+            />
             <button
               type="button"
               class="min-w-0 flex-1 truncate text-left"
@@ -319,13 +327,6 @@
             >
               {thread.title}
             </button>
-            {#if working}
-              <span
-                class="block size-1 shrink-0 rounded-full bg-info"
-                title="Working"
-                aria-label="Working"
-              ></span>
-            {/if}
             <button
               type="button"
               class="flex size-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
