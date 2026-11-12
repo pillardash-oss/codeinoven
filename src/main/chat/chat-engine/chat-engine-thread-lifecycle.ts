@@ -1,13 +1,18 @@
 import { stat } from 'fs/promises'
 import { isAbsolute, join, resolve } from 'path'
-import { withHandedOffWorkersNote } from '../thread-transfer-service/thread-transfer-workers'
+import {
+  interruptedSubagentsNote,
+  runningWorkers,
+  withHandedOffWorkersNote,
+  type HandedOffWorker
+} from '../thread-transfer-service/thread-transfer-workers'
 import { Logger } from '../../system/logger'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { broadcastThreadUpdate, updateRetryWakeWindow } from '../thread-events'
 import { validateEntityId, validateThreadSettings } from '../../ipc/ipc-validation'
 import type { CompactionFallbackContext, HarnessDriver } from '../../drivers/driver.interface'
 import type { PendingRetryRecord } from '../../system/retry-scheduler-service'
-import type { AgentProviderIssue, ThreadStatus, Thread } from '../../../lib/types'
+import type { AgentMessage, AgentProviderIssue, ThreadStatus, Thread } from '../../../lib/types'
 import {
   ASSISTANT_SPACE_ID,
   INBOX_PROJECT_ID,
@@ -46,6 +51,17 @@ import type { ChatEngine } from '../chat-engine'
 /** ChatEngine thread-lifecycle: one concern, moved verbatim from the composition root. */
 export class ChatEngineThreadLifecycle {
   constructor(private readonly host: ChatEngine) {}
+
+  /**
+   * Why a sub-agent card is closed when the run that spawned it was interrupted.
+   *
+   * A nested sub-agent is a session inside the harness process its parent turn
+   * owns, so the process going down with the app ends the worker with it. The
+   * card is corrected rather than left spinning, and the note the resumed agent
+   * receives explains what to do about it.
+   */
+  private static readonly INTERRUPTED_SUBAGENT_ERROR =
+    'This sub-agent was still running when the app closed, so it ended without producing a result. Its work did not complete.'
 
   /**
    * Locate the plan and progress this thread is executing.
@@ -383,6 +399,10 @@ export class ChatEngineThreadLifecycle {
     }
     const activeSpec = await this.host.units['spec'].getActiveSpec(thread.projectId, thread.id)
     const resumesSpecContract = activeSpec?.status === 'approved' && !thread.auditState
+    // Sub-agents the closure killed are closed before the turn continues: their
+    // cards cannot keep claiming to be running, and the note below is what tells
+    // the agent which of them produced nothing.
+    const interruptedSubagents = await this.settleInterruptedSubagents(thread)
     const continuation = await this.host.units['turns'].continuationTurnRequest(
       thread.projectId,
       thread.id,
@@ -392,8 +412,9 @@ export class ChatEngineThreadLifecycle {
     // move did to the workers this thread was running. It rides the same turn
     // rather than a second one, so the agent sees it before it decides what
     // finished and what failed.
-    const continuationText = options.note
-      ? withHandedOffWorkersNote(continuation.text, options.note)
+    const mergedNote = [interruptedSubagents, options.note].filter(Boolean).join('\n\n')
+    const continuationText = mergedNote
+      ? withHandedOffWorkersNote(continuation.text, mergedNote)
       : continuation.text
     await this.host.sendPrompt(
       thread.projectId,
@@ -409,6 +430,86 @@ export class ChatEngineThreadLifecycle {
       'internal'
     )
     return true
+  }
+
+  /**
+   * Close the sub-agents an interrupted run left running.
+   *
+   * A nested sub-agent owns no thread and no process of its own: it is a session
+   * inside the harness process its parent turn runs in, so an app closure kills
+   * it silently. Nothing in the harness reports that, and the card stayed
+   * `running` forever, which is exactly what made the parent come back believing
+   * its delegation was still in flight. This corrects the transcript and hands
+   * back the note that tells the agent what happened.
+   *
+   * Only `nested` cards are closed here: a pawn is a real thread, so it is
+   * resumed as a thread instead (see `resumeTransferredPawns`).
+   */
+  private async settleInterruptedSubagents(thread: Thread): Promise<string> {
+    let messages: AgentMessage[]
+    let workers: readonly HandedOffWorker[]
+    try {
+      messages = await this.host.threadManager.loadMessages(thread.projectId, thread.id)
+      workers = runningWorkers(messages)
+    } catch (error) {
+      Logger.dev('Interrupted sub-agent reconcile skipped:', {
+        threadId: thread.id,
+        error: rawErrorMessage(error)
+      })
+      return ''
+    }
+    const nested = workers.filter((worker) => worker.kind === 'nested')
+    if (nested.length === 0) return ''
+    const endedAt = Date.now()
+    const correctedParts: Extract<AgentMessage['parts'][number], { type: 'subagent' }>[] = []
+    const correctedMessages: AgentMessage[] = []
+    for (const message of messages) {
+      let changed = false
+      const parts = message.parts.map((part) => {
+        if (
+          part.type !== 'subagent' ||
+          part.activity.pawn === true ||
+          (part.activity.status !== 'running' && part.activity.status !== 'pending')
+        ) {
+          return part
+        }
+        changed = true
+        const time = part.activity.time ?? { start: endedAt }
+        const corrected = {
+          ...part,
+          activity: {
+            ...part.activity,
+            status: 'error' as const,
+            error: ChatEngineThreadLifecycle.INTERRUPTED_SUBAGENT_ERROR,
+            time: { ...time, end: endedAt }
+          }
+        }
+        correctedParts.push(corrected)
+        return corrected
+      })
+      if (changed)
+        correctedMessages.push({ ...message, parts, completedAt: message.completedAt ?? endedAt })
+    }
+    if (correctedMessages.length > 0) {
+      try {
+        await this.host.threadManager.upsertMessages(thread.projectId, thread.id, correctedMessages)
+      } catch (error) {
+        Logger.dev('Interrupted sub-agent cards could not be corrected:', {
+          threadId: thread.id,
+          error: rawErrorMessage(error)
+        })
+      }
+      if (thread.sessionId) {
+        for (const part of correctedParts) {
+          this.host.broadcast({
+            type: 'message.part.updated',
+            sessionId: thread.sessionId,
+            part
+          })
+        }
+      }
+    }
+    return interruptedSubagentsNote(nested)
   }
 
   async resolveThreadPath(projectId: string, threadId: string): Promise<string> {
