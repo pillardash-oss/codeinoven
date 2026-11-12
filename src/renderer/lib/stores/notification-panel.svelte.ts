@@ -4,7 +4,6 @@ import { SvelteSet } from 'svelte/reactivity'
 import { invoke } from '$lib/ipc.svelte'
 import type {
   AgentNotificationPayload,
-  NotificationFamily,
   NotificationInboxSnapshot,
   NotificationSource
 } from '$shared/ipc-contract'
@@ -24,22 +23,12 @@ import {
 } from '$shared/thread-status-policy'
 
 /**
- * Which source the panel's single list draws from.
+ * The filters on the panel's single list.
  *
- * `all` merges every family into one newest-first list, so a parked gate never
- * requires hunting through Projects, Chats and Assistants to find it. The other
- * values narrow that same list to one family.
+ * `all` is every notice, run and fire the app raised. `exceptions` is the app's
+ * own error log: it is not a notification, so it is never part of the others.
  */
-export type NotificationTopTab = 'all' | 'projects' | 'chats' | 'assistants' | 'app-errors'
-
-/** Kind filters applied to the list, whichever source it draws from. */
-export type NotificationSubFilter = 'all' | 'done' | 'attention' | 'spec' | 'issues'
-
-/**
- * The assistant-subject narrowing behind the Assistants tab's filter button:
- * everything, only runs owned by an assistant, or only standalone task runs.
- */
-export type NotificationAssistantSubject = 'all' | 'assistant' | 'task'
+export type NotificationSubFilter = 'all' | 'attention' | 'done' | 'spec' | 'exceptions'
 
 export interface InAppNotification {
   id: string
@@ -94,30 +83,33 @@ export interface RailAttentionSummary {
   label: string
 }
 
-const SUB_FILTER_KINDS: Record<Exclude<NotificationSubFilter, 'all'>, InAppNotification['kind']> = {
-  done: 'completed',
-  attention: 'attention',
-  spec: 'spec',
-  issues: 'error'
+const SUB_FILTER_KINDS: Record<
+  Exclude<NotificationSubFilter, 'all' | 'exceptions'>,
+  readonly InAppNotification['kind'][]
+> = {
+  done: ['completed', 'chat-completed'],
+  // A failure is waiting on the user exactly as a parked request is, so the two
+  // are one filter rather than two.
+  attention: ['attention', 'error'],
+  spec: ['spec']
 }
 
 /**
- * Whether a notification kind answers to a sub-filter. `all` accepts every
- * kind; the rest accept the one kind they name. Shared with the panel so the
- * assistant runs it renders straight from the assistant store filter on exactly
- * the same rule as the notifications the store owns.
+ * Whether a notification kind answers to a filter. `all` accepts every kind and
+ * `exceptions` none, because the app's own errors are not notifications.
  */
 export function notificationMatchesSubFilter(
   kind: InAppNotification['kind'],
   sub: NotificationSubFilter
 ): boolean {
-  return sub === 'all' || SUB_FILTER_KINDS[sub] === kind
+  if (sub === 'all') return true
+  if (sub === 'exceptions') return false
+  return SUB_FILTER_KINDS[sub].includes(kind)
 }
 
 /**
  * Which sub-filter an unattended (background) run answers to: a finished run is
- * Done, a failure is an Issue, and anything still running or parked on the user
- * is Attention.
+ * Done, and anything failed, still running or parked on the user is Attention.
  */
 export function backgroundRunNotificationKind(
   outcome: BackgroundRunOutcome | undefined
@@ -195,11 +187,8 @@ class NotificationPanelState {
    * next restore, and what seeds that restore.
    */
   private _dismissed = new SvelteSet<string>()
-  topTab: NotificationTopTab = $state('all')
   /** Opens on what is waiting on the user; every other kind is one chip away. */
   subFilter: NotificationSubFilter = $state('attention')
-  /** The Assistants tab's assistants/tasks narrowing. Ignored by every other tab. */
-  assistantSubject: NotificationAssistantSubject = $state('all')
 
   /**
    * Chats live in the Inbox project or arrive through a chat source.
@@ -236,16 +225,6 @@ class NotificationPanelState {
   private byKind(items: InAppNotification[], sub: NotificationSubFilter): InAppNotification[] {
     if (sub === 'all') return items
     return items.filter((n) => notificationMatchesSubFilter(n.kind, sub))
-  }
-
-  /**
-   * Whether an assistant entry (a notice, a missed fire, or an unattended run)
-   * answers to the assistants/tasks filter. An assistant-owned entry has an assistant;
-   * a standalone task run does not.
-   */
-  matchesAssistantSubject(hasAssistant: boolean): boolean {
-    if (this.assistantSubject === 'all') return true
-    return this.assistantSubject === 'assistant' ? hasAssistant : !hasAssistant
   }
 
   get projectNotifications(): InAppNotification[] {
@@ -299,71 +278,34 @@ class NotificationPanelState {
     )
   }
 
-  /**
-   * Clear everything the Attention filter shows.
-   *
-   * The inbox has no `attention` family to clear, so each waiting notice is
-   * retired by id on both sides: the tombstone is what keeps thread-state
-   * hydration from rebuilding it on the next scope load or launch. The
-   * assistant rows are cleared by the panel itself, through the assistant
-   * store's own acknowledgements.
-   */
-  dismissAttention(): void {
-    const ids: string[] = []
-    const kept: InAppNotification[] = []
-    for (const n of this._notifications) {
-      if (n.kind === 'attention') ids.push(n.id)
-      else kept.push(n)
-    }
-    if (ids.length === 0) return
-    for (const id of ids) this._dismissed.add(id)
-    this._notifications = kept
-    for (const id of ids) void invoke('notification:dismissInbox', id).catch(() => {})
+  /** Pending missed fires the active filter admits. A missed fire is an Attention
+   *  state, so it answers only to a filter that admits one. */
+  get visibleMissedRuns(): MissedRun[] {
+    return this.missedRunsFor(this.subFilter)
   }
 
-  /** Assistant notices that survive both the sub-filter and the subject filter. */
-  get assistantVisibleNotifications(): InAppNotification[] {
-    return this.assistantNotifications.filter(
-      (n) =>
-        notificationMatchesSubFilter(n.kind, this.subFilter) &&
-        this.matchesAssistantSubject(Boolean(n.assistantId))
-    )
+  /** Unattended runs the active filter admits, minus the run whose own failure
+   *  notice is already on the list. Runs read by their outcome. */
+  get visibleBackgroundRuns(): BackgroundRun[] {
+    return this.backgroundRunsFor(this.subFilter)
   }
 
-  /** Pending missed fires the Assistants tab shows under the active filters. A
-   *  missed fire is an Attention state, so it answers only to a filter that
-   *  admits one. */
-  get assistantVisibleMissedRuns(): MissedRun[] {
-    return this.assistantMissedRunsFor(this.subFilter)
-  }
-
-  /** Unattended runs the tab shows under the active filters, minus the run whose
-   *  own failure notice is already on it. Runs read by their outcome. */
-  get assistantVisibleBackgroundRuns(): BackgroundRun[] {
-    return this.assistantBackgroundRunsFor(this.subFilter)
-  }
-
-  private assistantMissedRunsFor(sub: NotificationSubFilter): MissedRun[] {
-    return assistants.missedRuns.filter(
-      (run) =>
-        notificationMatchesSubFilter('attention', sub) &&
-        this.matchesAssistantSubject(Boolean(run.assistantId))
-    )
+  private missedRunsFor(sub: NotificationSubFilter): MissedRun[] {
+    return notificationMatchesSubFilter('attention', sub) ? assistants.missedRuns : []
   }
 
   /**
    * Unattended runs for one filter, dropping the run whose notice is already on
-   * the tab. A failed run is marked unread, so it raises an assistant error
+   * the list. A failed run is marked unread, so it raises an assistant error
    * notice *and* leaves a ledger entry; the two are one event, and counting or
    * rendering both would show the same failure twice.
    */
-  private assistantBackgroundRunsFor(sub: NotificationSubFilter): BackgroundRun[] {
+  private backgroundRunsFor(sub: NotificationSubFilter): BackgroundRun[] {
     const noticedRunThreads = new Set(this.assistantNotifications.map((n) => n.threadId))
     return assistants.recentBackgroundRuns.filter(
       (run) =>
         !noticedRunThreads.has(run.runThreadId) &&
-        notificationMatchesSubFilter(backgroundRunNotificationKind(run.outcome), sub) &&
-        this.matchesAssistantSubject(Boolean(run.assistantId))
+        notificationMatchesSubFilter(backgroundRunNotificationKind(run.outcome), sub)
     )
   }
 
@@ -373,7 +315,7 @@ class NotificationPanelState {
    *
    * A failed unattended run is recorded twice: the scheduler writes the ledger
    * entry and the failure raises the notice. The panel draws the two as one row
-   * (`assistantBackgroundRunsFor`), so a reader acknowledging the notice has to
+   * (`backgroundRunsFor`), so a reader acknowledging the notice has to
    * retire the ledger entry with it. Dismissing only the notice would un-hide the
    * hidden half and ask the same run to be dismissed a second time.
    */
@@ -382,54 +324,23 @@ class NotificationPanelState {
     return assistants.recentBackgroundRuns.find((run) => run.runThreadId === n.threadId) ?? null
   }
 
-  /** Items for the currently active top tab + sub filter. Project and chat
-   *  listings lead with their newest entry; app errors are rendered by the panel
-   *  straight from `appErrorState` (already newest first), so this returns an
-   *  empty list for that tab. */
+  /** Notices the active filter admits, newest first. The app's own errors are
+   *  rendered by the panel straight from `appErrorState`, so `exceptions` is
+   *  empty here. */
   get visible(): InAppNotification[] {
-    switch (this.topTab) {
-      case 'projects':
-        return newestFirst(this.byKind(this.projectNotifications, this.subFilter))
-      case 'chats':
-        return newestFirst(this.byKind(this.chatNotifications, this.subFilter))
-      case 'assistants':
-        return this.assistantVisibleNotifications
-      case 'all':
-        return newestFirst(this.byKind(this._notifications, this.subFilter))
-      case 'app-errors':
-        return []
-    }
-  }
-
-  private count(items: InAppNotification[], sub: NotificationSubFilter): number {
-    return this.byKind(items, sub).length
-  }
-
-  projectCount(sub: NotificationSubFilter): number {
-    return this.count(this.projectNotifications, sub)
-  }
-
-  chatCount(sub: NotificationSubFilter): number {
-    return this.count(this.chatNotifications, sub)
+    return newestFirst(this.byKind(this._notifications, this.subFilter))
   }
 
   /**
-   * Rows the Assistants tab shows for a sub-filter. The tab carries three lists
-   * that the panel renders straight from the assistant store   notices here,
-   * pending missed fires, and unattended runs   so its counts are the sum of
-   * what survives the active sub-filter and subject filter in all three. A
-   * missed fire is an Attention state; an unattended run reads by its outcome.
+   * Rows a filter shows: notices, missed fires and unattended runs. These are
+   * the three lists the panel merges, so a chip's count always matches the rows
+   * on screen once it is selected.
    */
-  assistantCount(sub: NotificationSubFilter): number {
-    const notices = this.assistantNotifications.filter(
-      (n) =>
-        notificationMatchesSubFilter(n.kind, sub) &&
-        this.matchesAssistantSubject(Boolean(n.assistantId))
-    ).length
+  count(sub: NotificationSubFilter): number {
     return (
-      notices +
-      this.assistantMissedRunsFor(sub).length +
-      this.assistantBackgroundRunsFor(sub).length
+      this.byKind(this._notifications, sub).length +
+      this.missedRunsFor(sub).length +
+      this.backgroundRunsFor(sub).length
     )
   }
 
@@ -631,16 +542,6 @@ class NotificationPanelState {
     void invoke('notification:dismissInbox', id).catch(() => {})
   }
 
-  /**
-   * Clear every notification under the given top tab. Missed runs belong to
-   * the assistant store and keep their own per-entry dismiss, so clearing the
-   * assistants tab drops only its notifications.
-   */
-  dismissTab(tab: Exclude<NotificationTopTab, 'app-errors' | 'all'>): void {
-    this.retireBy((n) => this.survivesTabClear(n, tab))
-    void invoke('notification:clearInbox', this.familyOf(tab)).catch(() => {})
-  }
-
   dismissAll(): void {
     this.retireBy(() => false)
     void invoke('notification:clearInbox').catch(() => {})
@@ -660,28 +561,6 @@ class NotificationPanelState {
       (n) => n.projectId !== projectId || n.threadId !== threadId
     )
     void invoke('notification:dismissInboxForThread', projectId, threadId).catch(() => {})
-  }
-
-  /** The tab being cleared, as the store groups it. Clearing a tab removes the
-   *  family it names, so this is the tab itself rather than its complement. */
-  private familyOf(tab: Exclude<NotificationTopTab, 'app-errors' | 'all'>): NotificationFamily {
-    if (tab === 'chats') return 'chat'
-    return tab === 'assistants' ? 'assistant' : 'project'
-  }
-
-  /**
-   * Whether an entry survives clearing the given top tab.
-   *
-   * Clearing a tab removes that tab's own family, so the projects tab keeps the
-   * chat and assistant families   its complement, not the family it names.
-   */
-  private survivesTabClear(
-    n: InAppNotification,
-    tab: Exclude<NotificationTopTab, 'app-errors' | 'all'>
-  ): boolean {
-    if (tab === 'projects') return this.isChat(n) || this.isAssistant(n)
-    if (tab === 'chats') return !this.isChat(n)
-    return !this.isAssistant(n)
   }
 
   /**
@@ -753,19 +632,8 @@ class NotificationPanelState {
     if (next.length !== this._notifications.length) this._notifications = next
   }
 
-  /** Narrow the list to one source. The kind filter is kept: the reader chose
-   *  what to look for, and switching source should not undo that. */
-  setSource(source: NotificationTopTab): void {
-    this.topTab = source
-    this.assistantSubject = 'all'
-  }
-
   setSubFilter(sub: NotificationSubFilter): void {
     this.subFilter = sub
-  }
-
-  setAssistantSubject(subject: NotificationAssistantSubject): void {
-    this.assistantSubject = subject
   }
 
   /**

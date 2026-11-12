@@ -5,22 +5,16 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioDebugger from '@pdslng/cio-icon/CioDebugger.svelte'
-  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
-  import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
   import {
     notificationPanelState,
-    type NotificationAssistantSubject,
     type NotificationSubFilter,
-    type NotificationTopTab,
     type InAppNotification
   } from '$lib/stores/notification-panel.svelte'
-  import NotificationFilterMenu from './NotificationFilterMenu.svelte'
   import { appErrorState, errorHeadline, type AppErrorEntry } from '$lib/stores/app-errors.svelte'
-  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { scopeState, STATUS_TONE_COLORS } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
@@ -29,9 +23,7 @@
     backgroundRunOutcomeLabel,
     backgroundRunReasonText,
     backgroundRunTone,
-    groupActivityByAssistant,
-    missedRunReasonText,
-    UNGROUPED_MISSED_RUNS
+    missedRunReasonText
   } from '$lib/components/assistant/assistant-view'
   import { SvelteSet } from 'svelte/reactivity'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -39,7 +31,6 @@
   import { copyText } from '$lib/copy-text'
   import {
     ASSISTANT_SPACE_ID,
-    INBOX_PROJECT_ID,
     type BackgroundRun,
     type MissedRun,
     type Thread
@@ -56,43 +47,14 @@
   }
 
   /**
-   * One row the Assistants tab can show under an assistant: a notice, a missed
-   * fire, or an unattended run, each tagged with the moment it reports and the
-   * assistant it belongs to, so all three fold together per assistant.
-   */
-  type AssistantActivity =
-    | {
-        kind: 'notice'
-        id: string
-        at: number
-        assistantId: string | undefined
-        notification: InAppNotification
-      }
-    | {
-        kind: 'missed'
-        id: string
-        at: number
-        assistantId: string | undefined
-        run: MissedRun
-      }
-    | {
-        kind: 'background'
-        id: string
-        at: number
-        assistantId: string | undefined
-        run: BackgroundRun
-      }
-
-  /**
-   * One row of the merged list, tagged with the moment it reports so the four
-   * sources (a notice, a missed fire, an unattended run, and an app error) read
-   * as one newest-first list instead of separate sections.
+   * One row of the merged list, tagged with the moment it reports so the three
+   * sources (a notice, a missed fire and an unattended run) read as one
+   * newest-first list instead of separate sections.
    */
   type FeedRow =
     | { kind: 'notice'; id: string; at: number; notification: InAppNotification }
     | { kind: 'missed'; id: string; at: number; run: MissedRun }
     | { kind: 'background'; id: string; at: number; run: BackgroundRun }
-    | { kind: 'error'; id: string; at: number; entry: AppErrorEntry }
 
   let { onOpenThread }: Props = $props()
 
@@ -124,60 +86,20 @@
     clearTimeout(preloadTimer)
   }
 
-  const sources: Array<{ id: NotificationTopTab; label: string; hint: string }> = [
-    { id: 'all', label: 'All sources', hint: 'Projects, chats, assistants and app errors' },
-    { id: 'projects', label: 'Projects', hint: 'Threads in your projects' },
-    { id: 'chats', label: 'Chats', hint: 'Chats outside any project' },
-    { id: 'assistants', label: 'Assistants', hint: 'Assistant runs and scheduled fires' },
-    { id: 'app-errors', label: 'App errors', hint: 'Errors the app itself raised' }
-  ]
+  const filters: NotificationSubFilter[] = ['all', 'attention', 'done', 'spec', 'exceptions']
 
-  const subFilterLabels: Record<NotificationSubFilter, string> = {
+  const filterLabels: Record<NotificationSubFilter, string> = {
     all: 'All',
-    done: 'Done',
     attention: 'Attention',
+    done: 'Done',
     spec: 'Spec',
-    issues: 'Issues'
+    exceptions: 'Exceptions'
   }
 
-  function subFiltersFor(source: NotificationTopTab): NotificationSubFilter[] {
-    switch (source) {
-      case 'all':
-      case 'projects':
-        return ['all', 'attention', 'done', 'spec', 'issues']
-      // Chats and assistants never raise a spec.
-      case 'chats':
-      case 'assistants':
-        return ['all', 'attention', 'done', 'issues']
-      // App errors are one kind, so there is nothing to narrow.
-      case 'app-errors':
-        return []
-    }
-  }
-
-  /** App errors are issues, so they join the merged list under All and Issues. */
-  function errorsShownFor(sub: NotificationSubFilter): boolean {
-    return sub === 'all' || sub === 'issues'
-  }
-
-  function subCount(source: NotificationTopTab, sub: NotificationSubFilter): number {
-    switch (source) {
-      case 'all':
-        return (
-          notificationPanelState.projectCount(sub) +
-          notificationPanelState.chatCount(sub) +
-          notificationPanelState.assistantCount(sub) +
-          (errorsShownFor(sub) ? appErrorState.count : 0)
-        )
-      case 'projects':
-        return notificationPanelState.projectCount(sub)
-      case 'chats':
-        return notificationPanelState.chatCount(sub)
-      case 'assistants':
-        return notificationPanelState.assistantCount(sub)
-      case 'app-errors':
-        return 0
-    }
+  /** Exceptions are the app's own error log, kept apart from the notifications
+   *  every other filter counts. */
+  function filterCount(sub: NotificationSubFilter): number {
+    return sub === 'exceptions' ? appErrorState.count : notificationPanelState.count(sub)
   }
 
   let busyId = $state<string | null>(null)
@@ -203,54 +125,34 @@
     return trimmed !== undefined && trimmed.length > 0 && trimmed !== headline.trim()
   }
 
-  let showingAppErrors = $derived(notificationPanelState.topTab === 'app-errors')
-  let showingAssistants = $derived(notificationPanelState.topTab === 'assistants')
+  let showingExceptions = $derived(notificationPanelState.subFilter === 'exceptions')
 
   /**
-   * The merged list: every notice the active kind filter admits, plus, for the
-   * all-sources view, the assistant store's missed fires and unattended runs and
-   * the app's own errors, newest first. Projects and Chats are the same list
-   * narrowed to their own notices.
+   * The merged list: every notice the active filter admits, plus the assistant
+   * store's missed fires and unattended runs, newest first. Exceptions are not
+   * part of it; they render from the app's error log.
    */
   const feedRows = $derived.by<FeedRow[]>(() => {
-    const source = notificationPanelState.topTab
-    if (source !== 'all' && source !== 'projects' && source !== 'chats') return []
+    if (showingExceptions) return []
     const rows: FeedRow[] = []
     for (const n of notificationPanelState.visible) {
       rows.push({ kind: 'notice', id: `notice:${n.id}`, at: n.timestamp, notification: n })
     }
-    if (source === 'all') {
-      for (const run of notificationPanelState.assistantVisibleMissedRuns) {
-        rows.push({ kind: 'missed', id: `missed:${run.id}`, at: run.dueAt, run })
-      }
-      for (const run of notificationPanelState.assistantVisibleBackgroundRuns) {
-        rows.push({
-          kind: 'background',
-          id: `background:${run.runThreadId}`,
-          at: run.settledAt ?? run.startedAt,
-          run
-        })
-      }
-      if (errorsShownFor(notificationPanelState.subFilter)) {
-        for (const entry of appErrorState.entries) {
-          rows.push({ kind: 'error', id: `error:${entry.id}`, at: entry.timestamp, entry })
-        }
-      }
+    for (const run of notificationPanelState.visibleMissedRuns) {
+      rows.push({ kind: 'missed', id: `missed:${run.id}`, at: run.dueAt, run })
+    }
+    for (const run of notificationPanelState.visibleBackgroundRuns) {
+      rows.push({
+        kind: 'background',
+        id: `background:${run.runThreadId}`,
+        at: run.settledAt ?? run.startedAt,
+        run
+      })
     }
     return rows.sort((x, y) => y.at - x.at)
   })
 
-  let hasVisibleItems = $derived(
-    showingAppErrors
-      ? appErrorState.count > 0
-      : showingAssistants
-        ? notificationPanelState.assistantCount(notificationPanelState.subFilter) > 0
-        : feedRows.length > 0
-  )
-
-  const sourceLabel = $derived(
-    sources.find((entry) => entry.id === notificationPanelState.topTab)?.label ?? 'All sources'
-  )
+  let hasVisibleItems = $derived(showingExceptions ? appErrorState.count > 0 : feedRows.length > 0)
 
   // Missed runs are surfaced per assistant: one group per owning assistant, plus a
   // single group for assistant-less tasks. Both the groups and the panel's tab
@@ -258,101 +160,6 @@
   const assistantNameById = $derived(
     new Map(assistants.assistants.map((assistant) => [assistant.id, assistant.name]))
   )
-
-  /**
-   * The missed fires and unattended runs the panel shows both come straight
-   * from the store (`assistantVisibleMissedRuns` / `assistantVisibleBackgroundRuns`),
-   * which applies the same sub-filter, assistants/tasks filter, and run/notice
-   * de-duplication to them as it does to the notices it owns. Keeping the rule in
-   * one place is what makes the tab badge match the rows on screen.
-   */
-
-  /**
-   * One entry per row an assistant section can show: a notice, a missed fire, or
-   * an unattended run, each carrying the moment it reports and the assistant it
-   * belongs to.
-   */
-  const assistantActivity = $derived.by<AssistantActivity[]>(() => {
-    const entries: AssistantActivity[] = []
-    for (const n of notificationPanelState.assistantVisibleNotifications) {
-      entries.push({
-        kind: 'notice',
-        id: `notice:${n.id}`,
-        at: n.timestamp,
-        assistantId: n.assistantId,
-        notification: n
-      })
-    }
-    for (const run of notificationPanelState.assistantVisibleMissedRuns) {
-      entries.push({
-        kind: 'missed',
-        id: `missed:${run.id}`,
-        at: run.dueAt,
-        assistantId: run.assistantId,
-        run
-      })
-    }
-    for (const run of notificationPanelState.assistantVisibleBackgroundRuns) {
-      entries.push({
-        kind: 'background',
-        id: `background:${run.runThreadId}`,
-        at: run.settledAt ?? run.startedAt,
-        assistantId: run.assistantId,
-        run
-      })
-    }
-    return entries
-  })
-
-  /**
-   * The Assistants tab folds per assistant: one section per assistant (plus one for
-   * activity owned by no assistant), newest update first inside each section and
-   * across them, so an assistant that just updated rises to the top of the list.
-   */
-  const assistantSections = $derived(
-    groupActivityByAssistant(assistantActivity, assistantNameById, { key: UNGROUPED_MISSED_RUNS })
-  )
-
-  // Sections the user folded shut, keyed by assistant (or the assistant-less
-  // bucket). Open is the default, so a fresh assistant stays visible until folded.
-  const collapsedAssistantSections = new SvelteSet<string>()
-
-  function toggleAssistantSection(key: string): void {
-    if (collapsedAssistantSections.has(key)) collapsedAssistantSections.delete(key)
-    else collapsedAssistantSections.add(key)
-  }
-
-  // The assistants tab's assistants/tasks narrowing, behind the filter button at
-  // the end of the sub-filter row.
-  const assistantSubjectOptions: Array<{
-    id: NotificationAssistantSubject
-    label: string
-    hint: string
-  }> = [
-    { id: 'all', label: 'Assistants and tasks', hint: 'Everything the assistant ran' },
-    { id: 'assistant', label: 'Assistants only', hint: 'Runs owned by a scheduled assistant' },
-    { id: 'task', label: 'Tasks only', hint: 'Runs of tasks that belong to no assistant yet' }
-  ]
-
-  const assistantSubjectLabel = $derived(
-    assistantSubjectOptions.find((option) => option.id === notificationPanelState.assistantSubject)
-      ?.label ?? 'Assistants and tasks'
-  )
-
-  /** Whether any assistant activity exists before either filter narrows it. */
-  const assistantHasActivity = $derived(
-    notificationPanelState.assistantNotifications.length > 0 ||
-      assistants.missedRuns.length > 0 ||
-      assistants.recentBackgroundRuns.length > 0
-  )
-
-  /** Whether the active filters hide everything there is to show. */
-  const assistantFilteredEmpty = $derived(assistantHasActivity && assistantSections.length === 0)
-
-  function resetAssistantFilters(): void {
-    notificationPanelState.setSubFilter('all')
-    notificationPanelState.setAssistantSubject('all')
-  }
 
   /**
    * The task a run row reports for, resolved from the loaded thread list. A
@@ -490,57 +297,33 @@
   }
 
   function dismissAll(): void {
-    const { topTab: source, subFilter: sub } = notificationPanelState
-    if (source === 'app-errors') {
+    const sub = notificationPanelState.subFilter
+    if (sub === 'exceptions') {
       appErrorState.dismissAll()
       return
     }
-    // The Assistants list is two stores: the notices the notification panel owns,
-    // and the missed fires and unattended runs the assistant store owns. Clearing
-    // only the notices left the run rows behind with no button left to clear
-    // them, so it is retired through both in one action.
-    if (source === 'assistants') {
-      notificationPanelState.dismissTab(source)
-      void dismissAssistantRuns()
+    if (sub === 'all') {
+      // Everything goes in one pass: the notices the notification panel owns,
+      // then the missed fires and unattended runs the assistant store owns.
+      notificationPanelState.dismissAll()
+      void dismissRunActivity()
       return
     }
-    if (source === 'all' && sub === 'attention') {
-      notificationPanelState.dismissAttention()
-      void dismissAttentionRuns()
-      return
-    }
-    if (source !== 'all' && sub === 'all') {
-      notificationPanelState.dismissTab(source)
-      contextSidebarState.hide()
-      return
-    }
-    // Any other narrowing clears exactly the rows on screen, nothing hidden.
+    // Any narrower filter clears exactly the rows on screen, nothing hidden.
     for (const row of feedRows) {
       if (row.kind === 'notice') acknowledgeNotification(row.notification)
       else if (row.kind === 'missed') void dismissMissedRun(row.run.id)
-      else if (row.kind === 'background') void dismissBackgroundRun(row.run.runThreadId)
-      else appErrorState.dismiss(row.entry.id)
+      else void dismissBackgroundRun(row.run.runThreadId)
     }
   }
 
-  /** Retire the Attention filter's run rows: missed fires and parked runs. A run
-   *  that already settled is not on this list, so it is left in the ledger. */
-  async function dismissAttentionRuns(): Promise<void> {
-    const missed = notificationPanelState.attentionMissedRuns
-    const runs = notificationPanelState.attentionBackgroundRuns
-    await Promise.all([
-      ...missed.map((run) => dismissMissedRun(run.id)),
-      ...runs.map((run) => dismissBackgroundRun(run.runThreadId))
-    ])
-  }
-
-  /** Retire the Assistants tab's run rows: missed fires and unattended runs. */
-  async function dismissAssistantRuns(): Promise<void> {
+  /** Retire every missed fire and unattended run in one call. */
+  async function dismissRunActivity(): Promise<void> {
     try {
       await assistants.dismissRunActivity()
     } catch {
       // The scheduler pushes its fresh lists on the next change; a failure here
-      // simply leaves the rows on the tab instead of clearing a list that is
+      // simply leaves the rows on the list instead of clearing one that is
       // still there.
     }
   }
@@ -594,8 +377,11 @@
    * is derived here rather than trusted from the stored body.
    */
   function displayBody(n: InAppNotification): string {
-    if (notificationPanelState.isAssistant(n) && n.kind === 'completed') return 'Run completed'
-    return n.body
+    if (!notificationPanelState.isAssistant(n) || n.kind !== 'completed') return n.body
+    // A finished assistant run names the thread it ran, not the outcome. Notices
+    // stored before the title was carried still say "Run completed", which is no
+    // information at all, so they show nothing until the thread resolves.
+    return runTask(n.threadId)?.title.trim() || (n.body === 'Run completed' ? '' : n.body)
   }
 
   function kindLabel(kind: InAppNotification['kind']): string {
@@ -650,7 +436,7 @@
   {/if}
 {/snippet}
 
-{#snippet notificationCard(n: InAppNotification, showSource = false)}
+{#snippet notificationCard(n: InAppNotification)}
   {@const active = busyId === n.id}
   <div
     class="group flex cursor-pointer items-start gap-2 border-l-2 bg-surface px-3 py-2.5 transition-colors hover:bg-elevated {active
@@ -682,42 +468,6 @@
         <span class="truncate text-[0.6875rem] font-medium text-foreground">{n.title}</span>
         <span class="shrink-0 text-[0.625rem] text-dimmed">{formatCompactAge(n.timestamp)}</span>
       </div>
-      <!--
-        An assistant notice drops the source line on the Assistants tab, where
-        the reader is already inside that assistant's section. The Attention tab
-        mixes every family into one list, so there it names the source it came
-        from instead of leaving the row unattributed.
-      -->
-      {#if showSource || !notificationPanelState.isAssistant(n)}
-        <div class="mt-1 flex items-center gap-1 text-[0.625rem] text-dimmed">
-          {#if n.source === 'chat'}
-            <CioMessage size={10} class="shrink-0" />
-            <span>Chat</span>
-          {:else if notificationPanelState.isAssistant(n)}
-            <CioSubagent size={10} class="shrink-0" />
-            <span class="truncate">{assistantNameFor(n.assistantId) ?? 'Assistant'}</span>
-          {:else}
-            <span
-              class="h-1.5 w-1.5 shrink-0"
-              style="background: {n.projectColor ?? 'var(--color-border)'}"
-              role="presentation"
-            ></span>
-            <span class="truncate">{n.projectId === INBOX_PROJECT_ID ? 'Chat' : n.projectName}</span
-            >
-            {#if n.source === 'temporary-chat'}
-              <span class="shrink-0">·</span>
-              <!-- The dashed circle marks the side chat; it wears the row's own
-                   neutral icon colour, never an identity hue. -->
-              <CioTemporaryChat
-                size={10}
-                class="shrink-0"
-                title="Temporary chat"
-                aria-hidden="true"
-              />
-            {/if}
-          {/if}
-        </div>
-      {/if}
       {#if displayBody(n)}
         <p class="mt-0.5 line-clamp-2 text-[0.6875rem] leading-relaxed text-muted">
           {displayBody(n)}
@@ -943,101 +693,45 @@
 {/snippet}
 
 <div class="flex h-full flex-col">
-  <!-- One list, narrowed by kind (chips) and by source (menu) -->
+  <!-- One list, narrowed by kind -->
   <div class="flex shrink-0 items-center gap-0.5 border-b border-border px-2 py-1.5">
-    {#each subFiltersFor(notificationPanelState.topTab) as sub (sub)}
-      {@const count = subCount(notificationPanelState.topTab, sub)}
+    {#each filters as sub (sub)}
+      {@const count = filterCount(sub)}
       {@const active = notificationPanelState.subFilter === sub}
       <button
         class="flex items-center gap-1.5 px-2 py-0.5 text-[0.6875rem] font-medium transition-colors {active
           ? 'bg-elevated text-foreground'
           : 'text-muted hover:bg-raised hover:text-foreground'}"
         aria-pressed={active}
-        aria-label={`Show ${subFilterLabels[sub]} notifications`}
-        title={`Show ${subFilterLabels[sub]} notifications`}
+        aria-label={`Show ${filterLabels[sub]}`}
+        title={`Show ${filterLabels[sub]}`}
         onclick={() => notificationPanelState.setSubFilter(sub)}
       >
-        {subFilterLabels[sub]}
+        {filterLabels[sub]}
         {#if count > 0}
           <span class="tabular-nums text-dimmed">{count}</span>
         {/if}
       </button>
     {/each}
-    <div class="ml-auto flex items-center gap-0.5">
-      {#if showingAssistants}
-        <NotificationFilterMenu
-          value={notificationPanelState.assistantSubject}
-          options={assistantSubjectOptions}
-          onValueChange={(next) => notificationPanelState.setAssistantSubject(next)}
-          label="Filter assistant notifications by assistants or tasks"
-          current={assistantSubjectLabel}
-          narrowed={notificationPanelState.assistantSubject !== 'all'}
-        />
-      {/if}
-      <NotificationFilterMenu
-        value={notificationPanelState.topTab}
-        options={sources}
-        onValueChange={(next) => notificationPanelState.setSource(next)}
-        label="Filter notifications by source"
-        current={sourceLabel}
-        narrowed={notificationPanelState.topTab !== 'all'}
-      />
-      {#if hasVisibleItems}
-        <button
-          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label={showingAppErrors ? 'Dismiss all app errors' : 'Dismiss all notifications'}
-          title={showingAppErrors ? 'Dismiss all errors' : 'Dismiss all'}
-          onclick={dismissAll}
-        >
-          <CioClose size={12} />
-        </button>
-      {/if}
-    </div>
+    {#if hasVisibleItems}
+      <button
+        class="ml-auto flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label={showingExceptions ? 'Dismiss all exceptions' : 'Dismiss all notifications'}
+        title={showingExceptions ? 'Dismiss all exceptions' : 'Dismiss all'}
+        onclick={dismissAll}
+      >
+        <CioClose size={12} />
+      </button>
+    {/if}
   </div>
 
   <!-- Content -->
   <div class="min-h-0 flex-1 overflow-y-auto">
-    {#if !showingAppErrors && !showingAssistants}
-      {#if feedRows.length === 0}
-        <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-          {#if notificationPanelState.subFilter === 'attention'}
-            <CioAttention size={20} class="text-dimmed" />
-            <p class="text-xs text-muted">Nothing needs attention</p>
-          {:else}
-            <CioNotifications size={20} class="text-dimmed" />
-            <p class="text-xs text-muted">No notifications</p>
-          {/if}
-          {#if notificationPanelState.subFilter !== 'all' && subCount(notificationPanelState.topTab, 'all') > 0}
-            <button
-              class="px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              title="Show every kind of notification"
-              aria-label="Show every kind of notification"
-              onclick={() => notificationPanelState.setSubFilter('all')}
-            >
-              Show all
-            </button>
-          {/if}
-        </div>
-      {:else}
-        <div class="space-y-1 p-1.5">
-          {#each feedRows as row (row.id)}
-            {#if row.kind === 'notice'}
-              {@render notificationCard(row.notification, notificationPanelState.topTab === 'all')}
-            {:else if row.kind === 'missed'}
-              {@render missedRunRow(row.run)}
-            {:else if row.kind === 'background'}
-              {@render backgroundRunRow(row.run)}
-            {:else}
-              {@render appErrorRow(row.entry)}
-            {/if}
-          {/each}
-        </div>
-      {/if}
-    {:else if showingAppErrors}
+    {#if showingExceptions}
       {#if appErrorState.count === 0}
         <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
           <CioDebugger size={20} class="text-dimmed" />
-          <p class="text-xs text-muted">No app errors</p>
+          <p class="text-xs text-muted">No exceptions</p>
         </div>
       {:else}
         <div class="space-y-px p-1.5">
@@ -1046,70 +740,38 @@
           {/each}
         </div>
       {/if}
-    {:else if showingAssistants}
-      {#if !assistantHasActivity}
-        <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
-          <CioSubagent size={20} class="text-dimmed" />
-          <p class="text-xs text-muted">No assistant activity</p>
-        </div>
-      {:else if assistantFilteredEmpty}
-        <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
+    {:else if feedRows.length === 0}
+      <div class="flex h-full flex-col items-center justify-center gap-2 px-6">
+        {#if notificationPanelState.subFilter === 'attention'}
+          <CioAttention size={20} class="text-dimmed" />
+          <p class="text-xs text-muted">Nothing needs attention</p>
+        {:else}
           <CioNotifications size={20} class="text-dimmed" />
-          <p class="text-xs text-muted">Nothing matches this filter</p>
+          <p class="text-xs text-muted">No notifications</p>
+        {/if}
+        {#if notificationPanelState.subFilter !== 'all' && filterCount('all') > 0}
           <button
             class="px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-            title="Clear the assistant filters"
-            aria-label="Clear the assistant filters"
-            onclick={resetAssistantFilters}
+            title="Show every notification"
+            aria-label="Show every notification"
+            onclick={() => notificationPanelState.setSubFilter('all')}
           >
             Show all
           </button>
-        </div>
-      {:else}
-        <div class="space-y-1 p-1.5">
-          {#each assistantSections as section (section.key)}
-            {@const collapsed = collapsedAssistantSections.has(section.key)}
-            <div class="overflow-hidden border border-border bg-surface">
-              <button
-                type="button"
-                class="flex w-full items-center gap-2 px-2.5 py-2 text-left transition-colors hover:bg-elevated"
-                aria-expanded={!collapsed}
-                aria-label="{collapsed ? 'Expand' : 'Collapse'} {section.label}"
-                title="{collapsed ? 'Expand' : 'Collapse'} {section.label}"
-                onclick={() => toggleAssistantSection(section.key)}
-              >
-                <CioChevronDown
-                  size={12}
-                  class="shrink-0 text-dimmed transition-transform {collapsed ? '-rotate-90' : ''}"
-                />
-                <span
-                  class="truncate text-[0.6875rem] font-semibold uppercase tracking-wide text-dimmed"
-                  >{section.label}</span
-                >
-                <span class="ml-auto shrink-0 tabular-nums text-[0.625rem] text-dimmed"
-                  >{section.items.length}</span
-                >
-                <span class="shrink-0 text-[0.625rem] text-dimmed"
-                  >{formatCompactAge(section.latestAt)}</span
-                >
-              </button>
-              {#if !collapsed}
-                <div class="space-y-px border-t border-border pt-px">
-                  {#each section.items as item (item.id)}
-                    {#if item.kind === 'notice'}
-                      {@render notificationCard(item.notification)}
-                    {:else if item.kind === 'missed'}
-                      {@render missedRunRow(item.run)}
-                    {:else}
-                      {@render backgroundRunRow(item.run)}
-                    {/if}
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/each}
-        </div>
-      {/if}
+        {/if}
+      </div>
+    {:else}
+      <div class="space-y-1 p-1.5">
+        {#each feedRows as row (row.id)}
+          {#if row.kind === 'notice'}
+            {@render notificationCard(row.notification)}
+          {:else if row.kind === 'missed'}
+            {@render missedRunRow(row.run)}
+          {:else}
+            {@render backgroundRunRow(row.run)}
+          {/if}
+        {/each}
+      </div>
     {/if}
   </div>
 </div>

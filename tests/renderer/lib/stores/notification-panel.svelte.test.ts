@@ -20,6 +20,7 @@ vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
 vi.mock('$lib/stores/assistants.svelte', () => ({ assistants: assistantStore }))
 
 import { APP_SLUG } from '$shared/brand'
+import { notificationMatchesSubFilter } from '$lib/stores/notification-panel.svelte'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
 import type { Thread } from '$shared/types'
@@ -124,35 +125,6 @@ describe('dismissing a notification', () => {
 })
 
 describe('bulk dismissal', () => {
-  it('tombstones a cleared tab so hydration cannot rebuild it', () => {
-    panel.add(payload('project', { projectId: 'project-1' }))
-    panel.add(
-      payload('chat', { projectId: INBOX_PROJECT_ID, source: 'chat', kind: 'chat-completed' })
-    )
-
-    panel.dismissTab('chats')
-
-    expect(panel.chatNotifications).toEqual([])
-    expect(invoke).toHaveBeenCalledWith('notification:clearInbox', 'chat')
-    // The chat entry is gone from the tab, and it must stay gone: clearing a tab
-    // is the one-line dismissal many times over.
-    panel.add(payload('chat', { projectId: INBOX_PROJECT_ID, source: 'chat' }))
-    expect(panel.chatNotifications).toEqual([])
-  })
-
-  it('clears the projects tab by its complement, keeping chat and assistant', () => {
-    panel.add(payload('project'))
-    panel.add(payload('chat', { projectId: INBOX_PROJECT_ID, source: 'chat' }))
-    panel.add(payload('assistant', { projectId: ASSISTANT_SPACE_ID, source: 'assistant' }))
-
-    panel.dismissTab('projects')
-
-    expect(panel.projectNotifications).toEqual([])
-    expect(panel.chatNotifications.map((n) => n.id)).toEqual(['chat'])
-    expect(panel.assistantNotifications.map((n) => n.id)).toEqual(['assistant'])
-    expect(invoke).toHaveBeenCalledWith('notification:clearInbox', 'project')
-  })
-
   it('clears everything and asks the store to clear without a family', () => {
     panel.add(payload(FAILED_ENTRY_ID, { kind: 'error' }))
     panel.add(payload('assistant', { projectId: ASSISTANT_SPACE_ID, source: 'assistant' }))
@@ -164,28 +136,34 @@ describe('bulk dismissal', () => {
     panel.hydrateFromThreads([thread()], [])
     expect(panel.totalCount).toBe(0)
   })
-
-  it('does not tombstone the entries a tab clear keeps', () => {
-    panel.add(payload('project'))
-    panel.add(payload('chat', { projectId: INBOX_PROJECT_ID, source: 'chat' }))
-
-    panel.dismissTab('chats')
-    // The surviving project entry must still be hydratable, or clearing one tab
-    // would silently retire the others too.
-    panel.add(payload('project'))
-    expect(panel.projectNotifications.map((n) => n.id)).toEqual(['project'])
-  })
 })
 
-describe('the attention filter', () => {
-  it('is what the panel opens on, across every source', () => {
-    expect(panel.topTab).toBe('all')
+describe('the filters', () => {
+  it('open on Attention, which is what waits on the user', () => {
     expect(panel.subFilter).toBe('attention')
   })
 
-  it('survives a change of source', () => {
-    panel.setSource('chats')
-    expect(panel.subFilter).toBe('attention')
+  it('count a failure under Attention, so there is no separate Issues filter', () => {
+    panel.add(payload('failed', { kind: 'error' }))
+    panel.add(payload('parked', { kind: 'attention' }))
+    panel.add(payload('settled', { kind: 'completed' }))
+
+    expect(panel.count('attention')).toBe(2)
+    expect(notificationMatchesSubFilter('error', 'attention')).toBe(true)
+    expect(notificationMatchesSubFilter('completed', 'attention')).toBe(false)
+  })
+
+  it('count a side chat response under Done', () => {
+    expect(notificationMatchesSubFilter('chat-completed', 'done')).toBe(true)
+    expect(notificationMatchesSubFilter('completed', 'done')).toBe(true)
+    expect(notificationMatchesSubFilter('spec', 'done')).toBe(false)
+  })
+
+  it('keep the app error log out of every notification filter', () => {
+    panel.add(payload('failed', { kind: 'error' }))
+
+    expect(notificationMatchesSubFilter('error', 'exceptions')).toBe(false)
+    expect(panel.count('exceptions')).toBe(0)
   })
 
   it('collects a waiting notice from every family into one list', () => {
@@ -204,22 +182,6 @@ describe('the attention filter', () => {
       new Set(['project', 'chat', 'assistant'])
     )
     expect(panel.attentionCount).toBe(3)
-  })
-
-  it('clears only the waiting notices and tombstones them', () => {
-    const attentionId = `${APP_SLUG}-project-1-thread-1-awaiting_approval-100`
-    panel.add(payload(attentionId, { kind: 'attention' }))
-    panel.add(payload('settled', { kind: 'completed' }))
-
-    panel.dismissAttention()
-
-    expect(panel.attentionNotifications).toEqual([])
-    expect(panel.projectNotifications.map((n) => n.id)).toEqual(['settled'])
-    expect(invoke).toHaveBeenCalledWith('notification:dismissInbox', attentionId)
-    // The durable side is told one id at a time, and the tombstone keeps the
-    // parked thread from rebuilding the notice on the next scope load.
-    panel.hydrateFromThreads([thread({ status: 'awaiting_approval' })], [])
-    expect(panel.attentionNotifications).toEqual([])
   })
 
   it('drops the unattended runs a run row already stands for', async () => {
