@@ -408,7 +408,12 @@ class WorkspaceState {
   private consumedCreateThreadRequestCount = 0
   /** Scope bucket to create the next thread in (null = default scope). */
   pendingScopeBucketId: string | null = $state(null)
-  /** Incremented to signal ThreadView to refocus its composer. */
+  /**
+   * Incremented to signal ThreadView to refocus the composer it is showing.
+   *
+   * Focus only: the mounted composer holds the words the user is writing, so a
+   * focus request must never rebuild it and re-fill it from the stored draft.
+   */
   focusComposerCount = $state(0)
 
   requestFocusComposer(): void {
