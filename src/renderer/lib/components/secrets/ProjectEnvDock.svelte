@@ -19,7 +19,7 @@
     validateEnvFileName,
     type ProjectEnvFile
   } from '$shared/project-env'
-  import { SvelteSet } from 'svelte/reactivity'
+  import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { onMount, tick } from 'svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
@@ -56,10 +56,35 @@
     rows: KeyRow[]
   }
 
+  /** A document parked while the panel shows another target. */
+  interface DockDraft {
+    body: string
+    rows: KeyRow[]
+    savedBody: string
+    undoStack: Snapshot[]
+    redoStack: Snapshot[]
+    surface: Surface
+    skipped: { line: number; reason: string }[]
+  }
+
   let files = $state<ProjectEnvFile[]>([])
   let fileName = $state(DEFAULT_ENV_FILE_NAME)
+  /** The directory the rows and editor currently hold, so a switch can park it. */
+  let loadedGroup = $state('')
   /** The file the rows and editor currently hold, so a stray blur cannot reload. */
   let loadedFileName = $state('')
+  /** The project the loaded document belongs to, so a new one starts clean. */
+  let loadedProjectId = $state('')
+  /** Everything opened here, so the picker still offers a file with no keys yet. */
+  let visited = $state<{ group: string; fileName: string }[]>([])
+  /**
+   * Documents with unsaved edits, one per target.
+   *
+   * Switching the picker used to reload the target and throw the draft away. A
+   * document being edited is parked here instead and restored when its target is
+   * opened again, so a key typed in one file survives a look at another.
+   */
+  const drafts = new SvelteMap<string, DockDraft>()
   let body = $state('')
   let rows = $state<KeyRow[]>([])
   let savedBody = $state('')
@@ -85,37 +110,70 @@
     files.filter((file) => file.group === group).map((file) => file.fileName)
   )
   /**
-   * Every stored file of the project as one picker.
+   * Every file the picker offers.
    *
    * A project keeps its secrets per directory, and remembering which directory
    * holds the key you want means walking the file tree first. The picker names the
-   * location instead, so any file is one click away.
+   * location instead, so any file is one click away. It lists every stored file of
+   * the project plus every target opened here, because a draft the user opened in
+   * a directory that holds no stored keys yet must stay reachable.
    */
-  const storedTargets = $derived(
-    [...files]
-      .sort((left, right) =>
-        left.group === right.group
-          ? left.fileName.localeCompare(right.fileName)
-          : left.group.localeCompare(right.group)
-      )
-      .map((file) => ({
-        value: `${file.group}/${file.fileName}`,
-        label: file.group ? `${file.group}/${file.fileName}` : file.fileName
-      }))
-  )
+  const pickerTargets = $derived.by(() => {
+    const targets: { value: string; label: string; group: string; fileName: string }[] = []
+    const add = (targetGroup: string, name: string): void => {
+      const value = `${targetGroup}/${name}`
+      if (targets.some((target) => target.value === value)) return
+      targets.push({
+        value,
+        group: targetGroup,
+        fileName: name,
+        label: targetGroup ? `${targetGroup}/${name}` : name
+      })
+    }
+    for (const file of files) add(file.group, file.fileName)
+    for (const entry of visited) add(entry.group, entry.fileName)
+    add(group, fileName)
+    return targets.sort((left, right) =>
+      left.group === right.group
+        ? left.label.localeCompare(right.label)
+        : left.group.localeCompare(right.group)
+    )
+  })
   const selectedTarget = $derived(`${group}/${fileName}`)
-  const selectedTargetListed = $derived(
-    storedTargets.some((target) => target.value === selectedTarget)
-  )
 
-  /** Jump the panel to another stored file, keeping its editor surface. */
+  /** Jump the panel to another target, keeping every target's own draft. */
   function selectStoredTarget(value: string): void {
-    const target = files.find((file) => `${file.group}/${file.fileName}` === value)
-    if (!target) return
+    // The location is `group/fileName` and a group holds slashes, so the file name
+    // is what follows the last one.
+    const split = value.lastIndexOf('/')
+    const targetFileName = split < 0 ? value : value.slice(split + 1)
+    if (!targetFileName) return
+    const targetGroup = split < 0 ? '' : value.slice(0, split)
     // The name is updated here as well, so the picker shows the chosen location
     // right away instead of waiting for the file's values to load.
-    fileName = target.fileName
-    projectEnvDock.select({ group: target.group, fileName: target.fileName })
+    fileName = targetFileName
+    projectEnvDock.select({ group: targetGroup, fileName: targetFileName })
+  }
+
+  /** Whether a target holds edits that were never saved. */
+  function isTargetDirty(targetGroup: string, targetFileName: string): boolean {
+    if (targetGroup === loadedGroup && targetFileName === loadedFileName) {
+      return dirty || hasUnnamedRow
+    }
+    return drafts.has(targetKey(targetGroup, targetFileName))
+  }
+
+  /** A draft is keyed by the project and the location it belongs to. */
+  function targetKey(targetGroup: string, targetFileName: string): string {
+    return `${projectEnvDock.projectId ?? ''}\u0000${targetGroup}\u0000${targetFileName}`
+  }
+
+  /** Remember a target for as long as this dock is open. */
+  function markVisited(targetGroup: string, targetFileName: string): void {
+    if (visited.some((entry) => entry.group === targetGroup && entry.fileName === targetFileName)) {
+      return
+    }
+    visited = [...visited, { group: targetGroup, fileName: targetFileName }]
   }
   const currentFile = $derived(
     files.find((file) => file.group === group && file.fileName === fileName) ?? null
@@ -135,6 +193,10 @@
    */
   const draft = $derived(surface === 'keys' ? serializeRows(rows) : body)
   const dirty = $derived(draft !== savedBody)
+  /** A key whose name is still being typed: not in the file, but not disposable. */
+  const hasUnnamedRow = $derived(
+    surface === 'keys' && rows.some((row) => row.name.trim().length === 0)
+  )
 
   const skipNoticeId = $derived(`secrets.envSkip.${projectEnvDock.projectId}.${group}.${fileName}`)
   const skipCondition = $derived(skipped.map((entry) => `${entry.line}:${entry.reason}`).join('|'))
@@ -184,6 +246,15 @@
   async function readFiles(): Promise<void> {
     const projectId = projectEnvDock.projectId
     if (!projectId) return
+    if (projectId !== loadedProjectId) {
+      loadedProjectId = projectId
+      visited = []
+      drafts.clear()
+    } else {
+      // The store's target already moved, so the document being left is parked
+      // first; otherwise its unsaved edits are gone.
+      stashDraft()
+    }
     loading = true
     error = ''
     try {
@@ -203,8 +274,7 @@
             available[0] ??
             null))
       fileName = initial?.fileName ?? preferred ?? DEFAULT_ENV_FILE_NAME
-      await resetDocument(initial)
-      loadedFileName = fileName
+      await loadDocument(group, fileName, initial)
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not read this path’s env files'
     } finally {
@@ -268,28 +338,130 @@
       .join('\n')
   }
 
-  async function openFile(name: string): Promise<void> {
-    let next = ''
+  /** Read a target into both surfaces, preferring the draft parked there. */
+  async function loadDocument(
+    targetGroup: string,
+    targetFileName: string,
+    file: ProjectEnvFile | null
+  ): Promise<void> {
+    const key = targetKey(targetGroup, targetFileName)
+    const draft = drafts.get(key)
+    if (draft) {
+      // The restored document is the live one now, so the parked copy is done; a
+      // later switch parks it again from what the user has by then.
+      drafts.delete(key)
+      restoreDraft(draft)
+    } else {
+      await resetDocument(file)
+    }
+    loadedGroup = targetGroup
+    loadedFileName = targetFileName
+    markVisited(targetGroup, targetFileName)
+  }
+
+  /** Park the loaded document when it holds edits, drop it when it does not. */
+  function stashDraft(): void {
+    if (!loadedFileName) return
+    const key = targetKey(loadedGroup, loadedFileName)
+    if (dirty || hasUnnamedRow) drafts.set(key, captureDraft())
+    else drafts.delete(key)
+  }
+
+  function captureDraft(): DockDraft {
+    return {
+      body,
+      rows: rows.map((row) => ({ ...row })),
+      savedBody,
+      undoStack: [...undoStack],
+      redoStack: [...redoStack],
+      surface,
+      skipped: [...skipped]
+    }
+  }
+
+  function restoreDraft(draft: DockDraft): void {
+    body = draft.body
+    rows = draft.rows.map((row) => ({ ...row }))
+    savedBody = draft.savedBody
+    undoStack = [...draft.undoStack]
+    redoStack = [...draft.redoStack]
+    surface = draft.surface
+    skipped = [...draft.skipped]
+    revealed.clear()
+  }
+
+  /** Validate a name a header field or a sibling button submitted. */
+  function validateName(name: string): string | null {
     try {
-      next = validateEnvFileName(name)
+      return validateEnvFileName(name)
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'That file name is not allowed'
+      return null
+    }
+  }
+
+  /** Open another file of the same directory, parking the current draft first. */
+  async function openSibling(name: string): Promise<void> {
+    const next = validateName(name)
+    if (next === null) return
+    if (next === loadedFileName && group === loadedGroup) {
+      fileName = next
       return
     }
     error = ''
     outcome = ''
     skipped = []
+    stashDraft()
+    fileName = next
+    const file =
+      files.find((candidate) => candidate.group === group && candidate.fileName === next) ?? null
+    await loadDocument(group, next, file)
+  }
+
+  /**
+   * Rename the open file in place.
+   *
+   * A rename is not a move to another document, so a draft being edited travels
+   * with the name instead of being thrown away and reloaded from its stored keys.
+   */
+  async function renameFile(name: string): Promise<void> {
+    const next = validateName(name)
+    if (next === null) return
     // The header field doubles as the file's name, so a blur that changed nothing
     // must not reopen the file and throw away its undo history.
     if (next === loadedFileName) {
       fileName = next
       return
     }
+    error = ''
+    outcome = ''
+    skipped = []
+    const carried = dirty ? captureDraft() : null
+    drafts.delete(targetKey(loadedGroup, loadedFileName))
+    if (carried) {
+      drafts.set(targetKey(loadedGroup, next), carried)
+      fileName = next
+      loadedFileName = next
+      markVisited(loadedGroup, next)
+      return
+    }
+    const sequence = projectEnvDock.sequence
+    const file =
+      files.find((candidate) => candidate.group === loadedGroup && candidate.fileName === next) ??
+      null
+    const key = targetKey(loadedGroup, next)
+    const draft = drafts.get(key)
+    if (draft) {
+      drafts.delete(key)
+      restoreDraft(draft)
+    } else {
+      await resetDocument(file)
+    }
+    // The picker moved on while this read ran, so its target owns the panel now.
+    if (projectEnvDock.sequence !== sequence) return
     fileName = next
-    await resetDocument(
-      files.find((candidate) => candidate.group === group && candidate.fileName === next) ?? null
-    )
     loadedFileName = next
+    markVisited(loadedGroup, next)
   }
 
   function undo(): void {
@@ -379,6 +551,8 @@
         keep: untouchedNames(text)
       })
       files = result.files
+      // The stored file is what the panel now holds, so its parked draft is done.
+      drafts.delete(targetKey(group, fileName))
       savedBody = text
       if (surface === 'keys') {
         rows = parseRows(text)
@@ -439,6 +613,31 @@
     }
   }
 
+  let confirmDiscard = $state(false)
+  /** Unsaved work anywhere in this panel, the open target or a parked draft. */
+  const hasUnsaved = $derived(dirty || hasUnnamedRow || drafts.size > 0)
+  /** Every target that still holds edits, named the way the picker names it. */
+  const unsavedLabels = $derived(
+    visited
+      .filter((entry) => isTargetDirty(entry.group, entry.fileName))
+      .map((entry) => (entry.group ? `${entry.group}/${entry.fileName}` : entry.fileName))
+  )
+
+  /** Closing is the only thing that discards a draft, so it asks first. */
+  function requestClose(): void {
+    if (hasUnsaved) {
+      confirmDiscard = true
+      return
+    }
+    loseAndClose()
+  }
+
+  function loseAndClose(): void {
+    drafts.clear()
+    confirmDiscard = false
+    projectEnvDock.close()
+  }
+
   function handleEditKeydown(event: KeyboardEvent): void {
     if (!(event.metaKey || event.ctrlKey)) return
     const key = event.key.toLowerCase()
@@ -475,7 +674,7 @@
   minimized={projectEnvDock.minimized}
   closable
   onMinimize={() => projectEnvDock.minimize()}
-  onClose={() => projectEnvDock.close()}
+  onClose={requestClose}
   {storageKey}
   dragLabel="Drag to move the env file panel"
   defaultHeight={640}
@@ -497,11 +696,11 @@
       title="Rename this env file"
       value={fileName}
       oninput={(event) => (fileName = event.currentTarget.value)}
-      onblur={() => void openFile(fileName)}
+      onblur={() => void renameFile(fileName)}
       onkeydown={(event) => {
         if (event.key === 'Enter') {
           event.preventDefault()
-          void openFile(fileName)
+          void renameFile(fileName)
         }
       }}
     />
@@ -556,16 +755,17 @@
           id="env-file-picker"
           class="h-7 max-w-64 min-w-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none transition-colors hover:bg-overlay focus:border-primary disabled:opacity-50"
           value={selectedTarget}
-          disabled={loading || storedTargets.length === 0}
+          disabled={loading || pickerTargets.length === 0}
           title="Show the secrets stored for another file in this project"
           aria-label="Secrets stored for this project"
           onchange={(event) => selectStoredTarget(event.currentTarget.value)}
         >
-          {#if !selectedTargetListed}
-            <option value={selectedTarget}>{groupPrefix}{fileName}</option>
-          {/if}
-          {#each storedTargets as target (target.value)}
-            <option value={target.value}>{target.label}</option>
+          {#each pickerTargets as target (target.value)}
+            <option value={target.value}
+              >{target.label}{isTargetDirty(target.group, target.fileName)
+                ? ' (unsaved)'
+                : ''}</option
+            >
           {/each}
         </select>
       </label>
@@ -654,7 +854,7 @@
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             aria-pressed={existing === fileName}
             title="Edit {groupPrefix}{existing}"
-            onclick={() => void openFile(existing)}
+            onclick={() => void openSibling(existing)}
           >
             {existing}
           </button>
@@ -785,7 +985,7 @@
       type="button"
       class="border px-3 py-1.5 text-sm"
       data-modal-dismiss
-      onclick={() => projectEnvDock.close()}
+      onclick={requestClose}
     >
       Close
     </button>
@@ -827,5 +1027,27 @@
     content already there is kept at
     <span class="font-mono">.cio/secrets/{groupPrefix}{fileName}</span>, inside the ignored
     <span class="font-mono">.cio</span> folder.
+  </p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={confirmDiscard}
+  title="Discard unsaved changes?"
+  confirmLabel="Discard and close"
+  onCancel={() => (confirmDiscard = false)}
+  onConfirm={loseAndClose}
+>
+  <p>
+    {#if unsavedLabels.length > 1}
+      These files hold edits that were never saved:
+      {#each unsavedLabels as label (label)}
+        <span class="block font-mono text-foreground">{label}</span>
+      {/each}
+    {:else}
+      <span class="font-mono text-foreground"
+        >{unsavedLabels[0] ?? `${groupPrefix}${fileName}`}</span
+      > has edits that were never saved.
+    {/if}
+    Closing now discards {unsavedLabels.length > 1 ? 'them' : 'it'}.
   </p>
 </ConfirmDialog>
