@@ -108,6 +108,9 @@ export interface ProviderErrorPresentation {
   rawError?: string
 }
 
+/** Electron's prefix on a rejected `ipcRenderer.invoke`. */
+const IPC_REJECTION_WRAPPER = /^Error invoking remote method '[^']+':\s*/u
+
 /**
  * Split a provider/harness failure string into the short message the provider
  * error card body may render and the full diagnostic text reserved for the Raw
@@ -129,7 +132,12 @@ export interface ProviderErrorPresentation {
 export function presentProviderError(raw: string): ProviderErrorPresentation {
   const detail = raw.trim()
   if (!detail) return { message: '' }
-  const body = extractProviderErrorEnvelope(detail).message.trim()
+  // A rejected IPC call reaches the card still wrapped in Electron's
+  // `Error invoking remote method 'channel':` sentence, which names the app's
+  // own plumbing instead of the problem. The wrapper stays in `rawError`.
+  const body = extractProviderErrorEnvelope(detail)
+    .message.replace(IPC_REJECTION_WRAPPER, '')
+    .trim()
   const lines = body.split('\n')
   const frameIndex = lines.findIndex((line) => STACK_FRAME_LINE.test(line))
   const header = (frameIndex === -1 ? lines : lines.slice(0, frameIndex)).join('\n').trim()
@@ -243,6 +251,12 @@ export function classifyProviderIssue(
   // and a scheduled usage-reset wait renders as a terminal error.
   const normalized = envelope.message.replaceAll(/[_-]+/gu, ' ').toLowerCase()
   const normalizedType = (envelope.type ?? '').replaceAll(/[_-]+/gu, ' ').toLowerCase()
+  // A missing or unhealthy managed checkout says "unavailable" too, but no
+  // provider is involved: Change and Retry cannot fix it, so it must not be
+  // filed as a provider outage.
+  if (normalized.includes('managed scope root') || normalized.includes('managed checkout')) {
+    return 'unknown'
+  }
   // A provider-load 429 ("overloaded_error", "temporarily unavailable") is a
   // transient condition, not a usage/rate cap   check it before the blanket
   // `statusCode === 429` branch below, or it always loses to `rate_limit` and

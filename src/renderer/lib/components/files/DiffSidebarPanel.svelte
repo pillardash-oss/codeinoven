@@ -1000,8 +1000,15 @@
                       onclick={() => controller.toggleDiff(fileDiff.path)}
                     >
                       <FileTypeIcon path={fileDiff.path} size={13} />
-                      <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
-                        {fileDiff.path}
+                      <span class="flex min-w-0 flex-1 items-baseline font-mono text-[0.625rem]">
+                        {#if fileDiff.path.includes('/')}
+                          <span class="min-w-0 truncate text-muted"
+                            >{fileDiff.path.slice(0, fileDiff.path.lastIndexOf('/') + 1)}</span
+                          >
+                        {/if}
+                        <span class="shrink-0 text-foreground"
+                          >{fileDiff.path.slice(fileDiff.path.lastIndexOf('/') + 1)}</span
+                        >
                       </span>
                       {#if fileDiff.binary}
                         <span class="shrink-0 text-[0.5625rem] text-dimmed">binary</span>
