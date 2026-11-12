@@ -22,7 +22,7 @@ import { OvenRegistry } from './oven-registry'
 import { resolveOvenThreadRoot } from './oven-thread-root'
 import { OvenService } from './oven-service'
 import { syncOvenAccount } from './oven-accounts'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type {
   PersistentCliSession,
   CliLineParseResult
@@ -99,7 +99,7 @@ export class OvenChat {
 
   constructor(
     private readonly storage: StorageEngine,
-    vault: SecretVault,
+    vault: SecretsService,
     private readonly threads: ThreadManager,
     private readonly accounts: HarnessAccountRegistry,
     private readonly projects: ProjectManager,

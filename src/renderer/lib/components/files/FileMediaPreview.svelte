@@ -1,7 +1,6 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import AudioPlayer from '../ui/AudioPlayer.svelte'
-  import VideoPlayer from '../ui/VideoPlayer.svelte'
 
   interface Props {
     src: string | null
@@ -20,9 +19,13 @@
            the same surface as a conversation's media, so it plays the same way,
            down to the failure it reports. -->
       {#if kind === 'video'}
-        <VideoPlayer {src} label={alt} fit="fill" class="max-h-full max-w-full" />
+        {#await loadCachedPanelModule('module:lib/components/ui/VideoPlayer.svelte', () => import('../ui/VideoPlayer.svelte')) then { default: VideoPlayer }}
+          <VideoPlayer {src} label={alt} fit="fill" class="max-h-full max-w-full" />
+        {/await}
       {:else}
-        <AudioPlayer {src} label={alt} class="w-full max-w-xl" />
+        {#await loadCachedPanelModule('module:lib/components/ui/AudioPlayer.svelte', () => import('../ui/AudioPlayer.svelte')) then { default: AudioPlayer }}
+          <AudioPlayer {src} label={alt} class="w-full max-w-xl" />
+        {/await}
       {/if}
     {/key}
   {:else if failed}

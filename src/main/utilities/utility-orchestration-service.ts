@@ -11,7 +11,7 @@ import type {
   ThreadSearchResult
 } from '../../lib/types'
 import { StorageEngine } from '../storage/storage-engine'
-import { SecretVault } from '../storage/secret-vault'
+import { SecretsService } from '../secrets/secrets-service'
 import { UtilityRegistryService } from './utility-registry-service'
 import { CuaBridgeService } from './cua-bridge-service'
 import { type DesignSessionMode } from './cio-design-prompt'
@@ -81,6 +81,19 @@ export interface UtilityTurnRequest {
    * that carries this contract is offered the targets, dispatch and status
    * operations, so an ordinary chat can never start a run on a machine.
    */
+  /**
+   * Whether this turn runs on Don's own thread. It is the gate for Don's tools:
+   * only the orchestrator may read the assistant roster, delegate work to another
+   * assistant, or record what the user asked to be called. No other assistant can
+   * hand its work sideways or rename the person it serves.
+   */
+  donTurn?: boolean
+  /**
+   * Whether this turn belongs to a conversation started from a group chat, so
+   * the assistant doing the work may say something back into that chat while it
+   * runs. Granted by the run's own dispatch origin, never by the group itself.
+   */
+  groupChatTurn?: boolean
   orchestrationSession?: OrchestrationSessionMode
   /**
    * Whether this turn may delegate real work whether or not the user opened a
@@ -375,6 +388,18 @@ export type OrchestrationSessionMode = 'off' | 'start' | 'continue'
  * supplies it because it owns thread creation, prompt sending and the turn
  * lifecycle the tools act on.
  */
+/**
+ * Runs one of Don's own operations for the turn that asked for it: read the
+ * assistant roster, hand the request to one assistant, or read and store what the
+ * user asked to be called. The chat engine supplies it because it owns assistant
+ * lookup, thread creation and the turn lifecycle a delegation starts.
+ */
+export type DonExecutor = (
+  operation: import('../../lib/don-tools').DonToolOperation,
+  input: Record<string, unknown>,
+  context: OrchestrationToolContext
+) => Promise<unknown>
+
 export type OrchestrationExecutor = (
   operation: OrchestrationToolOperation,
   input: Record<string, unknown>,
@@ -390,7 +415,7 @@ export interface OrchestrationToolContext {
   harnessId: string
 }
 
-export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status'
+export type OrchestrationToolOperation = 'targets' | 'dispatch' | 'status' | 'answer' | 'continue'
 
 /** The two app-control operations, mirrored from the tool catalog. */
 export type AppControlOperation = 'catalog' | 'call'
@@ -544,7 +569,7 @@ export class UtilityOrchestrationService {
    */
   readonly units = buildUtilityOrchestrationServiceUnits(this)
   readonly registry: UtilityRegistryService
-  readonly vault: SecretVault
+  readonly vault: SecretsService
   /** Install folders for scoped utilities; resolved on first use. */
   scopeFootprint: UtilityScopeFootprintService | null = null
   scopeFootprintResolved = false
@@ -577,6 +602,8 @@ export class UtilityOrchestrationService {
   utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
   mcpSignInExecutor: McpSignInExecutor | null = null
   orchestrationExecutor: OrchestrationExecutor | null = null
+  /** Don's own executor: the assistant roster, delegation and the user's name. */
+  donExecutor: DonExecutor | null = null
   appControlExecutor: AppControlExecutor | null = null
   engineeringExecutor: EngineeringToolExecutor | null = null
   pawnExecutor: PawnToolExecutor | null = null
@@ -596,7 +623,7 @@ export class UtilityOrchestrationService {
     readonly mcpOAuth: McpOAuthService | null = null
   ) {
     this.registry = new UtilityRegistryService(storage)
-    this.vault = new SecretVault(storage)
+    this.vault = SecretsService.for(storage)
     this.bridgeHandlers = this.buildBridgeHandlers()
     this.structuredRoutes = this.buildStructuredRoutes()
   }
@@ -670,6 +697,11 @@ export class UtilityOrchestrationService {
   }
   setOrchestrationExecutor(executor: OrchestrationExecutor | null): void {
     return this.units['executors'].setOrchestrationExecutor(executor)
+  }
+
+  /** Register the executor behind Don's own tools. */
+  setDonExecutor(executor: DonExecutor | null): void {
+    return this.units['executors'].setDonExecutor(executor)
   }
   setAppControlExecutor(executor: AppControlExecutor | null): void {
     return this.units['executors'].setAppControlExecutor(executor)

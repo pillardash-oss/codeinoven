@@ -18,7 +18,7 @@ import { resolveFastModelId } from '../../lib/fast-inference'
 import { COMPACT_LINE_SHARE } from '../../lib/prompt-budget'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { type UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
-import { SecretVault } from '../storage/secret-vault'
+import { SecretsService } from '../secrets/secrets-service'
 import { type StorageEngine } from '../storage/storage-engine'
 import { buildProcessEnvironmentAsync } from './cli-environment'
 import { prependHistoryRecap } from './history-recap-prompt'
@@ -52,7 +52,12 @@ import {
   type CodexContextUsageWaiter,
   type CodexServerRequest
 } from './codex/codex-protocol'
-import { sandboxFor, tomlString } from './codex/codex-tools'
+import {
+  CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION,
+  codexSandboxConfigArgs,
+  sandboxFor,
+  tomlString
+} from './codex/codex-tools'
 import { type CodexComputerUseReadiness } from './codex/codex-computer-use'
 import { mapCodexRateLimits, mapCodexUsage } from './codex/codex-usage'
 import { codexAuxiliaryConfig, composePrompt, localAttachmentPath } from './codex/codex-prompts'
@@ -167,7 +172,7 @@ export class CodexDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     public readonly baseUrlProviders?: BaseUrlProviderService,
-    public readonly secretVault?: SecretVault,
+    public readonly secretVault?: SecretsService,
     public readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)
@@ -330,6 +335,13 @@ export class CodexDriver extends PersistentCliDriver {
     args.push('--json')
     if (nativeSessionId) args.push('-c', `sandbox_mode=${tomlString(sandbox)}`)
     else args.push('--sandbox', sandbox)
+    args.push(
+      ...codexSandboxConfigArgs(
+        projectPath,
+        options.readOnly === true,
+        options.settings.permissionLevel
+      )
+    )
 
     if (options.settings.modelId) args.push('--model', options.settings.modelId)
     const fastInference =
@@ -379,7 +391,10 @@ export class CodexDriver extends PersistentCliDriver {
     const promptBody = [
       inlineSvg,
       ...attachmentPrompts,
-      composePrompt(options.systemPrompt, prependHistoryRecap(options.text, options.historyRecap))
+      composePrompt(options.systemPrompt, prependHistoryRecap(options.text, options.historyRecap)),
+      options.settings.permissionLevel === 'auto_review'
+        ? CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION
+        : undefined
     ]
       .filter(Boolean)
       .join('\n\n')

@@ -16,6 +16,7 @@ import type {
   NormalizedUsage,
   UsagePricingProvenance
 } from './usage'
+import type { TraceSpan } from '../working-trace-span'
 
 /**
  * A picture the agent drew to make one option judgeable.
@@ -344,6 +345,31 @@ export type AgentPart =
       messageID: string
       presentation: UserMessagePresentation
     }
+  /**
+   * The conversation message a user answered directly, shown above their words.
+   *
+   * A group conversation collects replies from several threads, so answering one
+   * of them is a reply in the ordinary sense: the bubble says what is being
+   * answered and opens it, and the words underneath went to that thread. The
+   * excerpt and the title are snapshots, because the answer keeps reading as the
+   * reply it was even after the other conversation is renamed or removed.
+   */
+  | {
+      type: 'reply'
+      id: string
+      messageID: string
+      /** The conversation the user replied into. */
+      projectId: string
+      threadId: string
+      /** That conversation's title when the reply was written. */
+      title: string
+      /** Who spoke the answered reply. */
+      speakerName: string
+      /** The message in this conversation that was answered, for the jump back. */
+      repliedMessageId: string
+      /** A short excerpt of what was answered. */
+      excerpt: string
+    }
   | {
       type: 'cited'
       id: string
@@ -378,12 +404,48 @@ export interface AgentArtifact {
   relativePath?: string
 }
 
+/**
+ * The assistant that spoke a message in a group thread, captured as a snapshot.
+ *
+ * A group conversation shows several speakers in one transcript, and the speaker
+ * is a fact about the message, not about the thread: two replies from two
+ * assistants sit side by side. The name, icon and colour are copied at write
+ * time so history renders the speaker it had then, and renaming or deleting an
+ * assistant never rewrites what the conversation recorded.
+ */
+export interface MessageAuthor {
+  assistantId: string
+  name: string
+  /**
+   * The conversation this reply was spoken from, when it belongs to another
+   * thread than the one it is written into. A group chat shows replies from the
+   * thread each answer came from, and this is what lets a bubble be answered
+   * back in that thread instead of in the group.
+   */
+  projectId?: string
+  threadId?: string
+  /** Stored icon image filename, resolved through the assistant icon cache. */
+  icon?: string
+  /** Selected SVG icon key. */
+  iconType?: string
+  /** Sanitized custom SVG pasted by the user. */
+  customSvg?: string
+  /** Accent colour the speaker's row wears in the assistant panel. */
+  color?: string
+}
+
 /** A message in the agent conversation. */
 export interface AgentMessage {
   /** App-published artifact row independent of the assistant turn trace. */
   inlineArtifact?: boolean
   id: string
   role: 'user' | 'assistant'
+  /**
+   * The assistant that spoke this message in a group thread. Absent on every
+   * other message   an ordinary thread's single author is implied by the thread
+   * itself, and a user message's author is the user.
+   */
+  author?: MessageAuthor
   /** Who produced the display-facing record. */
   origin?: AgentMessageOrigin
   /** Which UI channel may load this record. */
@@ -556,6 +618,23 @@ export interface TurnStreamCompletedTurn {
   endTs: number
   /** This turn's newest window of trace entries, oldest to newest. */
   parts: AgentPart[]
+  /**
+   * Every sub-agent step the whole turn delegated to, in fold order, whether or
+   * not it falls inside `parts`.
+   *
+   * Delegation rides beside the window for the same reason the task list does:
+   * a trace mounts one bounded page at a time, and the header has to state that
+   * the turn spawned sub-agents even while the step that did it sits on a page
+   * nobody has scrolled to.
+   */
+  subagentParts: AgentPart[]
+  /** True when any step of the whole turn compacted the conversation's context,
+   *  whether or not that step is inside `parts`. */
+  turnCompacted: boolean
+  /** Earliest start to latest end across the whole turn's steps, so the header
+   *  states how long the turn took without every page being mounted. Null when
+   *  no step reported a timestamp. */
+  turnSpan: TraceSpan | null
   /** Total trace entries the turn holds, whether or not all are mounted. */
   total: number
   /** Of `total`, the thinking and tool steps (text excluded). */
@@ -595,6 +674,24 @@ export interface TurnStreamPartsPage {
   /** Newest durable task-list tool parts for the turn, so the task card never
    *  depends on which trace page happens to be mounted. */
   todoParts: AgentPart[]
+  /**
+   * Every sub-agent step the whole turn delegated to, in fold order, whether or
+   * not it falls inside `parts`.
+   *
+   * The same out-of-band rule as `todoParts`: the header reports the turn's
+   * delegation from here, because a mounted page can easily hold none of them
+   * (sub-agents are spawned near the start of a long turn and the window opens
+   * on its newest entries). A change read does not need it: the entries that
+   * moved travel in `parts`, so a reader merges the sub-agent snapshots it finds
+   * there.
+   */
+  subagentParts: AgentPart[]
+  /** True when any step of the whole turn compacted the conversation's context,
+   *  whether or not that step is inside `parts`. */
+  turnCompacted: boolean
+  /** Earliest start to latest end across the whole turn's steps. See
+   *  `TurnStreamCompletedTurn.turnSpan`. */
+  turnSpan: TraceSpan | null
   /** Start time of the logical turn `todoParts` was folded for (the newest
    *  non-activity prompt in the mirror), or null on a thread with no such
    *  prompt. The card compares it against the transcript's own turn anchor: a
@@ -628,6 +725,13 @@ export interface TurnStreamPartsChange {
   cursor: number
   /** Newest durable task-list tool parts for the turn. */
   todoParts: AgentPart[]
+  /** True when any step of the whole turn compacted the conversation's context.
+   *  A change read reports it so the header's compaction mark can never depend
+   *  on which page happens to hold the compaction step. */
+  turnCompacted: boolean
+  /** Earliest start to latest end across the whole turn's steps. See
+   *  `TurnStreamCompletedTurn.turnSpan`. */
+  turnSpan: TraceSpan | null
   /** Start time of the logical turn `todoParts` was folded for, or null on a
    *  thread with no prompt yet. See `TurnStreamPartsPage.turnStartTs`. */
   turnStartTs: number | null

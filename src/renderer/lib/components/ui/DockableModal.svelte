@@ -61,6 +61,16 @@
      * itself.
      */
     layer?: 'surface' | 'top'
+    /**
+     * Dictation targets this panel hosts, if it holds a microphone.
+     *
+     * A floating panel is an overlay, so it claims Escape; without this a
+     * recording made in the panel would lose the key to the panel's own close,
+     * and Escape would close the panel instead of stopping the microphone.
+     * Naming the targets keeps Escape with the recorder while this panel is the
+     * surface on top.
+     */
+    recordingTargets?: () => readonly string[]
     /** Initial panel height before viewport clamping. */
     defaultHeight?: number
     /** Tooltip/aria label shown on the draggable header. */
@@ -116,6 +126,7 @@
     footer,
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
     layer = 'surface',
+    recordingTargets,
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
     headerActions,
@@ -381,13 +392,18 @@
   // for an off-screen chip.
   $effect(() => {
     if (!open || minimized) return
-    return registerOverlayClose(() => {
-      if (closable) {
-        onClose()
-      } else {
-        onMinimize()
-      }
-    })
+    return registerOverlayClose(
+      () => {
+        if (closable) {
+          onClose()
+        } else {
+          onMinimize()
+        }
+      },
+      true,
+      // A recording in this panel keeps Escape for itself (see the prop).
+      () => recordingTargets?.() ?? []
+    )
   })
 
   let panelEl = $state<HTMLElement | null>(null)
@@ -502,6 +518,9 @@
     // user restores the panel from it, and the key stays free for everything
     // else that owns Escape behind the chip.
     if (!open || minimized || !keymapState.matches('ui-close-modal', e)) return
+    // A recording in this panel owns the key and consumes the event in its own
+    // capture-phase listener, so reaching this point means nothing is being
+    // recorded here and the panel closes (or minimizes) as usual.
     if (closable) {
       onClose()
     } else {

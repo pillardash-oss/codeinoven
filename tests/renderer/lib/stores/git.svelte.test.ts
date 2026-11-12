@@ -203,3 +203,62 @@ describe('GitState scope-keyed operations', () => {
     expect(callArgs?.[3]).toBe('feature-scope')
   })
 })
+
+describe('GitState target-scoped status', () => {
+  afterEach(() => {
+    invoke.mockReset()
+    vi.unstubAllGlobals()
+    gitState.deactivate()
+  })
+
+  it('answers only for the checkout the store has actually read', async () => {
+    mockInvokeForRefresh()
+    gitState.activate('project-1')
+    await gitState.refresh('project-1')
+
+    expect(gitState.statusFor('project-1')?.branch).toBe('feature/x')
+    // A project it never read, and another scope of the same project, are both
+    // unknown rather than "detached": the caller has to be able to tell those
+    // two nulls apart.
+    expect(gitState.statusFor('project-2')).toBeNull()
+    expect(gitState.statusFor('project-1', 'feature-scope')).toBeNull()
+  })
+
+  it('re-reads a claimed target it never published, and only then', async () => {
+    // The scheduler takes its two-frame path, drained synchronously here so the
+    // deferred read lands on the idle timer the test awaits.
+    vi.stubGlobal('requestAnimationFrame', (callback: (time: number) => void) => {
+      callback(0)
+      return 1
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => undefined)
+    mockInvokeForRefresh()
+    const project = {
+      id: 'project-1',
+      name: 'Project',
+      path: '/tmp/repo',
+      source: 'local' as const,
+      providerId: 'provider-1',
+      workflowId: 'workflow-1',
+      threadLimit: 10,
+      changeTrackingMode: 'git' as const,
+      createdAt: 0,
+      updatedAt: 0
+    }
+
+    gitState.activate('project-1')
+    gitState.notifyThreadOpened(project)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    const statusCalls = (): number =>
+      invoke.mock.calls.filter(([channel]) => channel === 'git:status').length
+    expect(statusCalls()).toBe(1)
+    expect(gitState.status?.branch).toBe('feature/x')
+
+    // The target answered, so opening another thread in the same scope reads
+    // nothing: the retry is only for a read that never landed.
+    gitState.notifyThreadOpened(project)
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(statusCalls()).toBe(1)
+  })
+})

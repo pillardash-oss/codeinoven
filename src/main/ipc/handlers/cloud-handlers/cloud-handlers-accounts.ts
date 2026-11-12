@@ -13,6 +13,7 @@ import type {
   CloudDeploymentProviderAccount,
   CloudDeploymentProviderKind
 } from '../../../../lib/types'
+import { providerTokenRef } from '../../../secrets/secret-refs'
 import type { IpcHandlerContext } from '../context'
 
 /**
@@ -49,7 +50,11 @@ export function registerCloudDeploymentAccountHandlers(
         throw new TypeError(`A provider account named "${safeLabel}" already exists`)
       }
       const accountId = randomUUID()
-      const secretRef = await vault.saveProviderToken(accountId, safeToken)
+      const secretRef = await vault.save(safeToken, providerTokenRef(accountId), {
+        scope: 'cloud-provider',
+        ownerId: accountId,
+        label: safeLabel
+      })
       const now = Date.now()
       const account: CloudDeploymentProviderAccount = {
         id: accountId,
@@ -115,7 +120,11 @@ export function registerCloudDeploymentAccountHandlers(
       const registry = await storage.getCloudDeploymentAccounts()
       const account = registry.accounts.find((entry) => entry.id === safeAccountId)
       if (!account) throw new TypeError('Provider account not found')
-      account.secretRef = await vault.saveProviderToken(safeAccountId, safeToken)
+      account.secretRef = await vault.save(safeToken, providerTokenRef(safeAccountId), {
+        scope: 'cloud-provider',
+        ownerId: safeAccountId,
+        label: account.label
+      })
       account.configured = true
       account.updatedAt = Date.now()
       await storage.saveCloudDeploymentAccounts(registry)
@@ -150,7 +159,7 @@ export function registerCloudDeploymentAccountHandlers(
       token =
         typeof input.token === 'string' && input.token.trim() !== ''
           ? validateProviderToken(input.token)
-          : await vault.resolveProviderToken(account.id)
+          : await vault.resolve(providerTokenRef(account.id))
       if (typeof input.baseUrl === 'string' && input.baseUrl.trim() !== '') {
         baseUrl = validateProviderBaseUrl(input.baseUrl, kind)
       }
@@ -229,7 +238,7 @@ export function registerCloudDeploymentAccountHandlers(
     }
     registry.accounts = registry.accounts.filter((entry) => entry.id !== safeAccountId)
     await storage.saveCloudDeploymentAccounts(registry)
-    await vault.removeProviderToken(safeAccountId)
+    await vault.remove(providerTokenRef(safeAccountId))
     // Detach the account from every project and drop the container mappings
     // monitored through it, so no project keeps polling (or erroring on) an
     // account that no longer exists.

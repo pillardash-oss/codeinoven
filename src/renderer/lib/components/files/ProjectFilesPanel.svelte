@@ -25,6 +25,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import ErrorStrip from '$lib/components/ui/ErrorStrip.svelte'
   import {
     conflictSaveActionLabels,
     conflictSaveActionTitle,
@@ -51,7 +52,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import EditorOpenControl from './EditorOpenControl.svelte'
-  import FileDiffView from './FileDiffView.svelte'
+  import FileDiffView from './DeferredFileDiffView.svelte'
   import { FileDiffState } from './file-diff-state.svelte'
   import { wrapTextState } from '$lib/stores/wrap-text.svelte'
   import { appConfigState } from '$lib/stores/app-config.svelte'
@@ -85,6 +86,7 @@
     type DocumentReadAloud
   } from './project-files-panel-read-aloud'
   import ProjectTextEditor from './ProjectTextEditor.svelte'
+  import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
   import type { AgentEvent, ProjectFileInfo, TurnCheckpointSummary } from '$shared/types'
   import { posixDirname } from '$shared/paths'
   import { ovenRootThread } from '$lib/oven-root-target'
@@ -175,7 +177,10 @@
   let renderOnlyFile = $derived(activeMime !== null && hasNoTextSource(activeMime))
   let checkpointDiff = $derived(activeTab?.checkpointDiff ?? null)
   const diffComputation = new FileDiffState(() =>
-    activeTab?.view === 'diff' && checkpointDiff && !checkpointDiff.binary
+    activeTab?.view === 'diff' &&
+    checkpointDiff &&
+    !checkpointDiff.binary &&
+    !checkpointDiff.contentUnavailable
       ? {
           before: checkpointDiff.before,
           after: checkpointDiff.after,
@@ -344,6 +349,27 @@
     const editor = fullscreenOpen ? fullscreenTextEditor : sidebarTextEditor
     editor?.findProjectFile()
   }
+
+  /**
+   * Open the secret panel for a `cio://` reference the reader opened in the buffer.
+   *
+   * The link names a key, and the file it sits in names the group and the file, so
+   * the panel opens on that exact key and the reader only has to reveal it.
+   */
+  function openSecretReference(name: string): void {
+    const path = activeTab?.path
+    if (!path) return
+    const directory = posixDirname(path)
+    projectEnvDock.open({
+      projectId,
+      projectName,
+      iconUrl: projectIconUrl,
+      color: projectAccentColor,
+      group: directory === '.' ? '' : directory,
+      fileName: path.split('/').at(-1) ?? '',
+      focusName: name
+    })
+  }
   let documentFindAvailable = $derived.by(() => {
     if (!activeTab) return false
     if (activeTab.view === 'annotate') return showAnnotateToggle && activeThreadId !== null
@@ -367,6 +393,13 @@
   let previewReloadToken = $derived(
     activeTab ? (projectState.previewReloadTokens[activeTab.path] ?? 0) : 0
   )
+  /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
+   *  touches `workspaceState.selectedThread`, which is reassigned on every
+   *  thread update. Reading it inside the effect would re-run (and cancel)
+   *  the preview load on each thread churn, leaving the loader stuck true. It is
+   *  the same checkout the tree and the editor are mounted on, so every preview
+   *  URL carries it and a scoped project's artwork resolves where it lives. */
+  let scopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
   /** Every rendered file streams from disk through `appfile://`, SVG included:
    *  its response carries `default-src 'none'` and the `<img>` this feeds never
    *  runs the document's scripts, so no blob round-trip is needed. */
@@ -376,7 +409,8 @@
           projectId,
           activeTab.path,
           mountThreadId ?? undefined,
-          previewReloadToken
+          previewReloadToken,
+          scopeBucketId
         )
       : null
   )
@@ -384,11 +418,6 @@
   let documentPreview = $derived(previewFlags.document)
   let previewKindLabel = $derived(previewKindLabelFor(previewFlags))
   const docPreview = new ProjectFilesPanelDocumentPreview()
-  /** Scope bucket is read as a derived value OUTSIDE the effect: the getter
-   *  touches `workspaceState.selectedThread`, which is reassigned on every
-   *  thread update. Reading it inside the effect would re-run (and cancel)
-   *  the preview load on each thread churn, leaving the loader stuck true. */
-  let documentScopeBucketId = $derived(workspaceState.activeScopeBucketIdFor(projectId))
   $effect(() => {
     const tab = activeTab
     docPreview.sync(
@@ -396,7 +425,7 @@
       tab?.path ?? null,
       Boolean(tab && documentPreview && tab.view === 'preview'),
       tab ? (projectState.previewReloadTokens[tab.path] ?? 0) : 0,
-      documentScopeBucketId
+      scopeBucketId
     )
   })
   let historicalContent = $derived(checkpointDiff?.after ?? checkpointDiff?.before ?? '')
@@ -412,7 +441,9 @@
     return projectFilePreviewUrl(
       projectId,
       directory ? `${directory}/` : '',
-      mountThreadId ?? undefined
+      mountThreadId ?? undefined,
+      undefined,
+      scopeBucketId
     )
   })
   /** Sanitized page for the active HTML file, built from the live session draft
@@ -1253,11 +1284,7 @@
       {@render staleVersionAlert('top-[4.5rem]')}
 
       {#if activeSession?.error}
-        <div
-          class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-2 text-[0.625rem] leading-relaxed text-danger"
-        >
-          {activeSession.error}
-        </div>
+        <ErrorStrip title="This file could not be opened" message={activeSession.error} />
       {/if}
 
       {#if findNavState.fileDocumentFindOpen && documentFindAvailable && !fullscreenOpen}
@@ -1353,6 +1380,10 @@
       {:else if activeTab.view === 'diff' && checkpointDiff}
         {#if diffComputation.error}
           <p class="px-3 py-4 text-xs text-muted" role="note">{diffComputation.error}</p>
+        {:else if checkpointDiff.contentUnavailable}
+          <p class="px-3 py-4 text-xs text-muted" role="note">
+            The checkpoint no longer holds this file's content, so its diff cannot be shown.
+          </p>
         {:else if diffStats || checkpointDiff.binary}
           <FileDiffView diff={checkpointDiff} preparedDetails={diffStats} />
         {:else}
@@ -1438,6 +1469,7 @@
               !ovenFile}
             value={visibleContent}
             path={activeTab.path}
+            onSecretReference={openSecretReference}
             readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
             ariaLabel={`${deletedAtCheckpoint ? 'View' : 'Edit'} ${activeTab.path}`}
             spellcheck={markdown}
@@ -1757,6 +1789,10 @@
         {:else if activeTab?.view === 'diff' && checkpointDiff}
           {#if diffComputation.error}
             <p class="px-3 py-4 text-xs text-muted" role="note">{diffComputation.error}</p>
+          {:else if checkpointDiff.contentUnavailable}
+            <p class="px-3 py-4 text-xs text-muted" role="note">
+              The checkpoint no longer holds this file's content, so its diff cannot be shown.
+            </p>
           {:else if diffStats || checkpointDiff.binary}
             <FileDiffView diff={checkpointDiff} preparedDetails={diffStats} />
           {:else}
@@ -1827,6 +1863,7 @@
                   !ovenFile}
                 value={visibleContent}
                 path={activeTab.path}
+                onSecretReference={openSecretReference}
                 readonly={deletedAtCheckpoint || Boolean(projectState.loadingPaths[activeTab.path])}
                 ariaLabel={`${deletedAtCheckpoint ? 'View' : 'Edit'} ${activeTab.path} fullscreen`}
                 spellcheck={markdown}

@@ -113,15 +113,27 @@ export interface PeakHoursRegistration {
  * Lookup precedence when several entries could apply: exact model id wins over
  * family pattern wins over provider id; ties resolve in registration order.
  * This lets a provider-wide billing scheme be overridden for single models.
+ * Family patterns are tested against every identity form of a model (its id, the
+ * bare model part of a namespaced id, and its display name), never against the
+ * harness or provider serving it.
  */
 const PEAK_HOURS_REGISTRY: PeakHoursRegistration[] = [
   {
     // Paid DeepSeek V4 family: every `deepseek-v4…` variant (flash/pro and
     // future versions like `deepseek-v4.1`) bills the same time-of-day scheme.
     // Family patterns may match anywhere after a string start or a `/`, so
-    // provider-namespaced ids (e.g. `cline-pass/deepseek-v4-flash`) resolve.
-    // The `-free` tier is matched separately below and never billed.
-    match: { kind: 'family', pattern: /(?:^|\/)deepseek-v4(?:[.-]|$)/iu },
+    // provider-namespaced ids (e.g. `cline-pass/deepseek-v4-flash`) resolve, and
+    // the version may run straight into the family marker because a harness id
+    // is not the vendor's own spelling (`deepseek-v41-flash-1017`). The `-free`
+    // tier is matched separately below and never billed.
+    match: { kind: 'family', pattern: /(?:^|\/)deepseek-v4(?=[.-]|\d|$)/iu },
+    schedule: DEEPSEEK_V4_PEAK_HOURS
+  },
+  {
+    // Pi's own DeepSeek provider does not spell the family at all: it lists the
+    // V4.1 flash model as `deepseek-flash`, so both the badge and the cost
+    // estimate have to recognize that id as the flash model it is.
+    match: { kind: 'model', modelId: 'deepseek-flash' },
     schedule: DEEPSEEK_V4_PEAK_HOURS
   }
 ]
@@ -143,27 +155,79 @@ export function registerPeakHours(registration: PeakHoursRegistration): () => vo
 /** Free-tier model ids are never billed, so no peak/off-peak badge applies. */
 const FREE_MODEL_PATTERN = /-free\b/iu
 
-/** The peak/off-peak schedule for a catalog model id (and, for provider-level
+/**
+ * The catalog reference a peak-hours lookup reads: the model id the harness
+ * reports plus the model's display name.
+ *
+ * The id alone is not the model's identity. A vendor or gateway ships the same
+ * model under ids that carry no family marker at all   Pi's `deepseek-flash` is
+ * "DeepSeek V4.1 Flash", Cursor's is `deepseek-v41-flash-1017`   so the name is
+ * matched as well. Billing follows the MODEL, never the harness that drives it
+ * or the provider that serves it, which is why only the id and name decide the
+ * family and the provider id is only consulted for provider-wide schedules.
+ */
+export interface PeakHoursModelRef {
+  /** Model id as the harness reports it. */
+  id: string
+  /** Display name shown in the catalog, when the catalog carries one. */
+  name?: string
+}
+
+/**
+ * Normalize one id or display name into the id-like form the matchers read.
+ *
+ * Runtime labels a harness appends are dropped (`deepseek-…[reasoning_effort=high]`)
+ * and every word separator collapses to a hyphen, so a display name
+ * ("DeepSeek V4.1 Flash") reads as the id spelling it belongs to
+ * (`deepseek-v4.1-flash`).
+ */
+function peakHoursIdentityForm(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/\[[^\]]*\]/gu, '')
+    .replace(/[\s_]+/gu, '-')
+    .replace(/-{2,}/gu, '-')
+    .replace(/^-+|-+$/gu, '')
+}
+
+/** Every id-like form one catalog model answers to: its id, the bare model part
+ *  of a gateway-namespaced id, and its display name. */
+function peakHoursIdentityForms(model: PeakHoursModelRef): string[] {
+  const forms: string[] = []
+  const push = (value: string | undefined): void => {
+    if (!value) return
+    const form = peakHoursIdentityForm(value)
+    if (form && !forms.includes(form)) forms.push(form)
+  }
+  push(model.id)
+  const slash = model.id.lastIndexOf('/')
+  if (slash !== -1) push(model.id.slice(slash + 1))
+  push(model.name)
+  return forms
+}
+
+/** The peak/off-peak schedule for a catalog model (and, for provider-level
  *  registrations, its provider id), or null when the model has no time-of-day
  *  pricing. */
 export function peakHoursScheduleFor(
-  modelId: string,
+  model: PeakHoursModelRef,
   providerId?: string
 ): PeakHoursSchedule | null {
-  const id = modelId.trim().toLowerCase()
-  if (!id || FREE_MODEL_PATTERN.test(id)) return null
-  // Namespaced catalog ids (`vendor/model`) resolve by their model suffix too.
-  const suffix = id.includes('/') ? (id.split('/').pop() ?? id) : id
+  if (!model.id.trim()) return null
+  const forms = peakHoursIdentityForms(model)
+  // A free tier is never billed, and its display name says so too
+  // ("DeepSeek V4.1 Flash Free").
+  if (forms.some((form) => FREE_MODEL_PATTERN.test(form))) return null
   const provider = providerId?.trim().toLowerCase() ?? null
   for (const kind of ['model', 'family', 'provider'] as const) {
     for (const { match, schedule } of PEAK_HOURS_REGISTRY) {
       if (match.kind !== kind) continue
       const hit =
         match.kind === 'model'
-          ? match.modelId.trim().toLowerCase() === id ||
-            match.modelId.trim().toLowerCase() === suffix
+          ? forms.includes(peakHoursIdentityForm(match.modelId))
           : match.kind === 'family'
-            ? match.pattern.test(id)
+            ? forms.some((form) => match.pattern.test(form))
             : provider !== null && match.providerId.trim().toLowerCase() === provider
       if (hit) return schedule
     }
@@ -195,8 +259,7 @@ export function isPeakHour(schedule: PeakHoursSchedule, now = new Date()): boole
   if (schedule.days && !schedule.days.includes(now.getUTCDay())) return false
   const utcMinutes = now.getUTCHours() * 60 + now.getUTCMinutes()
   return schedule.windows.some(
-    (window) =>
-      utcMinutes >= window.startHour * 60 && utcMinutes < window.endHour * 60
+    (window) => utcMinutes >= window.startHour * 60 && utcMinutes < window.endHour * 60
   )
 }
 
@@ -223,15 +286,14 @@ export function peakHoursLocalLabel(schedule: PeakHoursSchedule, now = new Date(
   return windows.join(', ')
 }
 
-/** Badge data for a catalog model id (and, for provider-level registrations,
- *  its provider id) right now, or null when the model has no time-of-day
- *  pricing. */
+/** Badge data for a catalog model (and, for provider-level registrations, its
+ *  provider id) right now, or null when the model has no time-of-day pricing. */
 export function peakHoursBadgeFor(
-  modelId: string,
+  model: PeakHoursModelRef,
   providerId?: string,
   now = new Date()
 ): PeakHoursBadge | null {
-  const schedule = peakHoursScheduleFor(modelId, providerId)
+  const schedule = peakHoursScheduleFor(model, providerId)
   if (!schedule) return null
   const peak = isPeakHour(schedule, now)
   // Day scope rides inside the tooltip   e.g. `Peak (Mon–Fri): 3:00 AM–6:00 AM`

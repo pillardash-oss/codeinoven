@@ -127,6 +127,13 @@
           "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view."
         },
         {
+          "id": "panel-search",
+          "keys": ["mod", "shift", "f"],
+          "label": "Search this panel",
+          "description": "Opens the search of the active view's own panel: the project or thread list on the left, or the assistant panel. The conversation keeps its own find on Cmd/Ctrl+F.",
+          "scenario": "Projects, Threads, Chats or Assistant view."
+        },
+        {
           "id": "threads-toggle-grouping",
           "keys": [],
           "label": "Group threads by status",
@@ -220,8 +227,15 @@
           "id": "chat-voice-dictation",
           "keys": ["alt", "alt"],
           "label": "Dictate with voice",
-          "description": "Starts voice dictation in whatever input with a microphone is on view   the chat composer, a selection comment, the temporary chat, or an open editor. Defaults to double-pressing the left Alt key (Option on macOS) and can be remapped in Sound > Preferences; Escape stops an active recording.",
+          "description": "Starts voice dictation in whatever input with a microphone is on view   the chat composer, a selection comment, the temporary chat, or an open editor. Defaults to double-pressing the left Alt key (Option on macOS) and can be remapped in Sound > Preferences; Escape stops an active recording and starts transcribing it, and pressing Escape twice in a row cancels that dictation entirely   nothing is transcribed, sent, or kept in the history.",
           "scenario": "Anywhere a microphone input is visible."
+        },
+        {
+          "id": "don-listening",
+          "keys": ["alt", "alt", "alt"],
+          "label": "Open Don Listening",
+          "description": "Presses the dictation modifier three times in a row to open the Don Listening panel, where dictation lands in a markdown editor that sends into Don's thread. The first two presses still start and stop dictation, so the third press asks Don to listen instead of recording. Follows the dictation binding set in Sound > Preferences.",
+          "scenario": "Anywhere in the app window."
         },
         {
           "id": "chat-focus-composer",
@@ -1042,13 +1056,27 @@
         {
           "id": "video-edit-frame-back",
           "keys": ["arrowleft"],
-          "label": "Step back one frame",
-          "description": "Step back one frame.",
+          "label": "Step back five frames",
+          "description": "Step back five frames.",
           "scenario": "Focus is inside the video editor, outside a text field."
         },
         {
           "id": "video-edit-frame-forward",
           "keys": ["arrowright"],
+          "label": "Step forward five frames",
+          "description": "Step forward five frames.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-frame-back-one",
+          "keys": ["shift", "arrowleft"],
+          "label": "Step back one frame",
+          "description": "Step back one frame.",
+          "scenario": "Focus is inside the video editor, outside a text field."
+        },
+        {
+          "id": "video-edit-frame-forward-one",
+          "keys": ["shift", "arrowright"],
           "label": "Step forward one frame",
           "description": "Step forward one frame.",
           "scenario": "Focus is inside the video editor, outside a text field."
@@ -1146,6 +1174,13 @@
           "keys": [],
           "label": "Find project file",
           "description": "Find project file in IDE Mode.",
+          "scenario": "A project source editor with IDE Mode enabled."
+        },
+        {
+          "id": "ide-complete",
+          "keys": ["ctrl", "space"],
+          "label": "Trigger suggestions",
+          "description": "Opens the IDE Mode suggestion dropdown at the caret and asks the file's language server for completions, including imports, even when nothing has been typed yet.",
           "scenario": "A project source editor with IDE Mode enabled."
         },
         {

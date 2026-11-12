@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import CioChat from '@pdslng/cio-icon/CioChat.svelte'
   import ContextSidebar from '$lib/components/layout/ContextSidebar.svelte'
@@ -471,7 +472,7 @@
 </script>
 
 {#snippet popupContent(id: string)}
-  {#await import('./BrowserPopupWindowPanel.svelte') then { default: BrowserPopupWindowPanel }}
+  {#await loadCachedPanelModule('module:lib/components/browser/BrowserPopupWindowPanel.svelte', () => import('./BrowserPopupWindowPanel.svelte')) then { default: BrowserPopupWindowPanel }}
     <BrowserPopupWindowPanel popupId={id} />
   {/await}
 {/snippet}
@@ -486,11 +487,11 @@
       {@render popupContent(activePopup?.id ?? '')}
     {/if}
   {:else if globalBrowser.downloadsSidebarShown}
-    {#await import('./BrowserDownloadsPanel.svelte') then { default: BrowserDownloadsPanel }}
+    {#await loadCachedPanelModule('module:lib/components/browser/BrowserDownloadsPanel.svelte', () => import('./BrowserDownloadsPanel.svelte')) then { default: BrowserDownloadsPanel }}
       <BrowserDownloadsPanel />
     {/await}
   {:else if globalBrowser.historySidebarShown}
-    {#await import('./BrowserHistoryPanel.svelte') then { default: BrowserHistoryPanel }}
+    {#await loadCachedPanelModule('module:lib/components/browser/BrowserHistoryPanel.svelte', () => import('./BrowserHistoryPanel.svelte')) then { default: BrowserHistoryPanel }}
       <BrowserHistoryPanel
         scopeKey={browserHistory.scopeFor(
           BROWSER_HISTORY_GLOBAL_SCOPE,
@@ -500,15 +501,15 @@
       />
     {/await}
   {:else if globalBrowser.bookmarksSidebarShown}
-    {#await import('./BrowserBookmarksPanel.svelte') then { default: BrowserBookmarksPanel }}
+    {#await loadCachedPanelModule('module:lib/components/browser/BrowserBookmarksPanel.svelte', () => import('./BrowserBookmarksPanel.svelte')) then { default: BrowserBookmarksPanel }}
       <BrowserBookmarksPanel />
     {/await}
   {:else if globalBrowser.boxesSidebarShown}
-    {#await import('./BrowserBoxesPanel.svelte') then { default: BrowserBoxesPanel }}
+    {#await loadCachedPanelModule('module:lib/components/browser/BrowserBoxesPanel.svelte', () => import('./BrowserBoxesPanel.svelte')) then { default: BrowserBoxesPanel }}
       <BrowserBoxesPanel />
     {/await}
   {:else if globalBrowser.extensionsSidebarShown}
-    {#await import('./BrowserExtensionsPanel.svelte') then { default: BrowserExtensionsPanel }}
+    {#await loadCachedPanelModule('module:lib/components/browser/BrowserExtensionsPanel.svelte', () => import('./BrowserExtensionsPanel.svelte')) then { default: BrowserExtensionsPanel }}
       <BrowserExtensionsPanel />
     {/await}
   {:else if globalBrowser.extensionSidePanelSidebarShown}
@@ -516,21 +517,21 @@
       <!-- Keyed by extension so one panel's frame and native document are torn
            down and parked before the next extension's are placed. -->
       {#key activeExtensionPanel.extensionId}
-        {#await import('./BrowserExtensionSidePanel.svelte') then { default: BrowserExtensionSidePanel }}
+        {#await loadCachedPanelModule('module:lib/components/browser/BrowserExtensionSidePanel.svelte', () => import('./BrowserExtensionSidePanel.svelte')) then { default: BrowserExtensionSidePanel }}
           <BrowserExtensionSidePanel extensionId={activeExtensionPanel.extensionId} />
         {/await}
       {/key}
     {/if}
   {:else if globalBrowser.agentSidebarShown}
     {#if artifactTab && activeFilesTab}
-      {#await import('../files/ProjectFilesPanel.svelte') then { default: ProjectFilesPanel }}
+      {#await loadCachedPanelModule('module:lib/components/files/ProjectFilesPanel.svelte', () => import('../files/ProjectFilesPanel.svelte')) then { default: ProjectFilesPanel }}
         <ProjectFilesPanel projectId={GLOBAL_BROWSER_PROJECT_ID} projectName="Artifacts" />
       {/await}
     {:else if agentChat}
       <!-- Keyed by thread id so switching browser tabs swaps the whole
            conversation, including the controller, which binds once at mount. -->
       {#key agentChat.threadId}
-        {#await import('./BrowserAssistantChatView.svelte') then { default: BrowserAssistantChatView }}
+        {#await loadCachedPanelModule('module:lib/components/browser/BrowserAssistantChatView.svelte', () => import('./BrowserAssistantChatView.svelte')) then { default: BrowserAssistantChatView }}
           <BrowserAssistantChatView threadId={agentChat.threadId} />
         {/await}
       {/key}
@@ -552,7 +553,7 @@
       </div>
     {/if}
   {:else if noteTab}
-    {#await import('$lib/components/threads/ThreadNotePanel.svelte') then { default: ThreadNotePanel }}
+    {#await loadCachedPanelModule('module:lib/components/threads/ThreadNotePanel.svelte', () => import('$lib/components/threads/ThreadNotePanel.svelte')) then { default: ThreadNotePanel }}
       <ThreadNotePanel tab={noteTab} />
     {/await}
   {/if}

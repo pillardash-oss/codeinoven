@@ -300,7 +300,14 @@ export class BrowserServiceIpcSurface {
         }
         // A hide or a newer show may have arrived while the jar was loading.
         // Never let that old continuation recreate or display a departed tab.
-        if (this.host.pendingShow !== request) throw new Error('Browser show was superseded')
+        //
+        // Answered with `null` rather than thrown: this is the normal outcome of
+        // two surfaces racing over one native view, and Electron prints every
+        // rejected `invoke` handler as "Error occurred in handler for
+        // 'browser:show'", which made a routine supersede read like a crash. The
+        // renderer already treats "nothing was shown" as "keep the state you
+        // have", and the newer show answers for the tab that won.
+        if (this.host.pendingShow !== request) return null
         const tab = this.host.ensureTab(tabId, projectId, threadId, boxId)
 
         // A show that lands inside the grace window of a hide is a surface switch
@@ -706,9 +713,10 @@ export class BrowserServiceIpcSurface {
       if (typeof rawArmed !== 'boolean') {
         throw new TypeError('Inspect mode must be a boolean')
       }
-      if (!tab.design && rawArmed) {
-        throw new TypeError('The element inspector is available on a design preview only')
-      }
+      // Every tab is inspectable, not only one serving a design folder: a page a
+      // thread opened from the project tree, a dev server or any site is a place
+      // the user points at while giving feedback, and the injected overlay reads
+      // the same document in all of them.
       this.host.inspector.setArmed(
         tabId,
         tab.view.webContents,

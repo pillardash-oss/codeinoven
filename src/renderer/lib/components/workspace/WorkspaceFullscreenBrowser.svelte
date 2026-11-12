@@ -9,6 +9,7 @@
   import { browserTabIndicators } from '$lib/stores/browser-tab-status'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { faviconState } from '$lib/stores/favicons.svelte'
+  import { agentTabThread } from '$lib/browser-agent-thread'
 
   interface Props {
     tabId: string | null
@@ -39,7 +40,13 @@
       indicatorCount: browserTabIndicators(
         contextSidebarState.browserRuntime(tab.id),
         browserStore()?.hasPeek(tab.id)
-      ).length
+      ).length,
+      // The strip draws the load in the same slot as the page's mark, so a page
+      // that is still coming up never looks finished.
+      loading: contextSidebarState.browserTabLoading(tab.id),
+      // Whose agent holds the tab, so the full screen strip names the thread
+      // exactly as the panel's chips do.
+      agent: agentTabThread(tab.id, tab.threadId)
     }))
   )
 

@@ -30,6 +30,7 @@ import type {
 } from '../../../lib/types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { withoutTransportParts } from './chat-engine-message-merge'
+import type { DirectReplyTarget } from '../../../lib/types'
 import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine lifecycle-boot: one concern, moved verbatim from the composition root. */
@@ -252,6 +253,10 @@ export class ChatEngineLifecycleBoot {
     ipcMain.handle('agent:loadTemporaryChatMessages', async (_, temporaryChatId: string) =>
       (await this.host.loadTemporaryConversation(temporaryChatId)).map(withoutTransportParts)
     )
+    ipcMain.handle('agent:threadForSession', (_, sessionId: string) => {
+      const info = this.host.sessionRegistry.get(sessionId)
+      return info ? { projectId: info.projectId, threadId: info.threadId } : null
+    })
     ipcMain.handle('agent:getSessionStatus', (_, projectId: string, threadId: string) =>
       this.host.getSessionStatus(projectId, threadId)
     )
@@ -348,6 +353,24 @@ export class ChatEngineLifecycleBoot {
           presentation,
           taskReferences
         )
+    )
+    ipcMain.handle(
+      'agent:replyToThread',
+      (
+        _,
+        fromProjectId: string,
+        fromThreadId: string,
+        target: DirectReplyTarget,
+        text: string,
+        attachments: PromptAttachment[]
+      ) =>
+        this.host.sendDirectReply({
+          fromProjectId,
+          fromThreadId,
+          target,
+          text,
+          attachments
+        })
     )
     ipcMain.handle(
       'agent:chooseBrainstormEntry',
@@ -572,6 +595,26 @@ export class ChatEngineLifecycleBoot {
     )
     ipcMain.handle('agent:listQuestions', (_, projectId: string, threadId: string) =>
       this.host.listQuestions(projectId, threadId)
+    )
+    // The attention the threads this conversation dispatched are waiting on. The
+    // cards are the children's own requests, so the answer settles them directly
+    // instead of travelling through the agent that dispatched the work.
+    ipcMain.handle(
+      'agent:listDelegatedAttention',
+      async (_, projectId: string, threadId: string) => {
+        const { listDelegatedAttention, logDelegatedAttentionFailure } =
+          await import('../delegated-attention-service')
+        try {
+          return await listDelegatedAttention(
+            this.host,
+            validateEntityId(projectId, 'Project ID'),
+            validateEntityId(threadId, 'Thread ID')
+          )
+        } catch (error) {
+          logDelegatedAttentionFailure(error)
+          return []
+        }
+      }
     )
     // A side chat opened from a card keeps the user active while it is in use,
     // so the card's countdown stays held. This carries no answer or decision.

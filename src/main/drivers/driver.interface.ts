@@ -103,6 +103,13 @@ export interface HarnessCapabilities {
   contextUsage: boolean
   /** Supports an explicit user-requested context compaction. */
   compaction: boolean
+  /**
+   * The harness supplies a script runner (pi's `codemode`) that can drive
+   * many independent operations inside one model call. Turn instructions name
+   * it only when it exists, because a batching rule that references a missing
+   * tool is ignored.
+   */
+  codeMode?: boolean
   /** Emits provider-normalized child-agent lifecycle activity. */
   subagents: boolean
   /**

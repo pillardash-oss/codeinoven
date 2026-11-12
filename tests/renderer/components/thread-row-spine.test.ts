@@ -53,10 +53,13 @@ vi.mock('$lib/stores/foreign-runs.svelte', () => ({
  *  2. the rail always speaks for the thread's own state, and what is waiting on
  *     it rides the glyph above;
  *  3. the secondary slot is the flexible one, and the last action wins;
- *  4. the scope rides the context line beside the project name, and its presence
- *     never pushes the Oven or the branch off the row;
- *  5. no reserved pin slot sits on the primary line, so the title starts at a
- *     constant x.
+ *  4. project, scope, branch and where it runs share one meta line under the
+ *     title, and a local thread spends no mark saying it is local;
+ *  5. a settled row draws no spine and its title sits flush left; the gutter
+ *     opens only while the row has a state to show;
+ *  6. a pinned or bookmarked thread puts its pin at the head of the meta line,
+ *     where clicking it is the way to remove it;
+ *  7. the project is named with its own icon, never a coloured dot.
  */
 
 // jsdom ships no ResizeObserver, and the one/two-line row measures its harness
@@ -175,6 +178,7 @@ function render(t: Thread, over: Record<string, unknown> = {}) {
   const target = document.createElement('div')
   document.body.appendChild(target)
   const pinCalls: Thread[] = []
+  const openCalls: Thread[] = []
   const app = mount(ThreadRow, {
     target,
     props: {
@@ -183,11 +187,12 @@ function render(t: Thread, over: Record<string, unknown> = {}) {
       projectIconUrl: null,
       projectIconGlyph: null,
       onTogglePin: (thread: Thread) => pinCalls.push(thread),
+      onOpen: (thread: Thread) => openCalls.push(thread),
       ...over
     }
   })
   flushSync()
-  return { target, app, pinCalls }
+  return { target, app, pinCalls, openCalls }
 }
 
 describe('ThreadRow, the detailed spine row', () => {
@@ -208,77 +213,76 @@ describe('ThreadRow, the detailed spine row', () => {
     pip.threads.delete('t1')
   })
 
-  it('keeps the Oven and branch on the row when a scope is present', async () => {
+  it('keeps the branch on the meta line, and says nothing about running locally', async () => {
+    scope.bucket = { id: 'b1', name: 'Future version', color: '#888888', pinned: false }
     const { target, app } = render(thread())
     await tick()
 
-    // The branch mark and the Oven mark are the row's own, not the sidebar's.
-    const branchMarks = [...target.querySelectorAll('[title^="Branch:"]')]
-    expect(branchMarks.length).toBeGreaterThan(0)
-    const ovenMarks = [...target.querySelectorAll('[title="Runs on this computer"]')]
-    expect(ovenMarks.length).toBeGreaterThan(0)
+    expect(target.querySelectorAll('[title^="Branch:"]').length).toBeGreaterThan(0)
+    expect(target.querySelector('[title="Runs on this computer"]')).toBeNull()
 
     unmount(app)
+    scope.bucket = null
   })
 
-  it('offers a pin control at the top of the mark column', async () => {
-    const { target, app } = render(thread({ pinned: false }))
-    await tick()
-
-    // The control is hidden until the row is hovered, but always in the DOM so
-    // the user can pin from the row without hunting the context menu.
-    const pin = target.querySelector('[role="button"][aria-label="Pin thread"]')
-    expect(pin).not.toBeNull()
-
-    unmount(app)
-  })
-
-  it('pins the thread when the pin is clicked, and unpins it when pinned', async () => {
-    // The click must reach the handler: the mark column is pointer-events-none so
-    // it cannot swallow clicks meant for the row, and the pin has to opt back in.
-    const first = render(thread({ pinned: false }))
-    await tick()
-
-    const pin = first.target.querySelector('[role="button"][aria-label="Pin thread"]')
-    expect(pin).not.toBeNull()
-    ;(pin as HTMLElement).click()
-    expect(first.pinCalls.length).toBe(1)
-    expect(first.pinCalls[0].id).toBe('t1')
-    unmount(first.app)
-
-    // A pinned row offers the opposite action, and clicking it unpins.
-    const second = render(thread({ pinned: true }))
-    await tick()
-
-    const unpin = second.target.querySelector('[role="button"][aria-label="Unpin thread"]')
-    expect(unpin).not.toBeNull()
-    ;(unpin as HTMLElement).click()
-    expect(second.pinCalls.length).toBe(1)
-    unmount(second.app)
-  })
-
-  it('makes the pin clickable, not just visible', async () => {
-    const { target, app } = render(thread({ pinned: true }))
-    await tick()
-
-    const pin = target.querySelector('[role="button"][aria-label="Unpin thread"]') as HTMLElement
-    // Visible alone is not enough: the column it sits in is pointer-events-none.
-    expect(pin.className).toContain('pointer-events-auto')
-    expect(pin.className).not.toContain('pointer-events-none')
-
-    unmount(app)
-  })
-
-  it('centres the mark column when no rail is drawn', async () => {
+  it('draws no spine on a settled thread, and its title sits flush left', async () => {
     const { target, app } = render(thread({ status: 'completed' }))
     await tick()
 
-    const column = target.querySelector('[aria-label="Completed"]')?.parentElement as HTMLElement
-    // Without a rail there is no flexible child to push the mark to the top, so
-    // the column centres its contents against the text beside it.
-    expect(column.className).toContain('justify-center')
+    expect(target.querySelector('[aria-label="Completed"]')).toBeNull()
+    const row = target.querySelector('button') as HTMLElement
+    expect(row.className).toContain('pl-2.5')
+    expect(row.className).not.toContain('pl-[1.625rem]')
 
     unmount(app)
+  })
+
+  it('opens the gutter for a thread that has a state to show', async () => {
+    const { target, app } = render(thread({ status: 'awaiting_approval' }))
+    await tick()
+
+    const row = target.querySelector('button') as HTMLElement
+    expect(row.className).toContain('pl-[1.625rem]')
+
+    unmount(app)
+  })
+
+  it('puts the pin at the head of the meta line, and unpins from it', async () => {
+    const { target, app, pinCalls, openCalls } = render(thread({ pinned: true }))
+    await tick()
+
+    const pin = target.querySelector('[role="button"][aria-label="Unpin thread"]') as HTMLElement
+    expect(pin).not.toBeNull()
+    // The gutter is the state's own column now: the pin is not in it.
+    expect(target.querySelector('[aria-label="Completed"]')).toBeNull()
+
+    pin.click()
+    // The pin is the control, not a decoration on the way to the thread: the
+    // click unpins and never opens the thread behind it.
+    expect(pinCalls.map((t) => t.id)).toEqual(['t1'])
+    expect(openCalls).toEqual([])
+
+    unmount(app)
+  })
+
+  it('offers a bookmark removal in the same slot, and puts no pin on a plain row', async () => {
+    const bookmarked = render(thread({ bookmarked: true }))
+    await tick()
+    const mark = bookmarked.target.querySelector(
+      '[role="button"][aria-label="Remove bookmark"]'
+    ) as HTMLElement
+    expect(mark).not.toBeNull()
+    // The sidebar removes a bookmark through the pin toggle, which handles a
+    // bookmarked thread first. A control that called the bookmark setter here
+    // would set it to true again and do nothing at all.
+    mark.click()
+    expect(bookmarked.pinCalls.map((t) => t.id)).toEqual(['t1'])
+    unmount(bookmarked.app)
+
+    const plain = render(thread())
+    await tick()
+    expect(plain.target.querySelector('[role="button"][aria-label="Unpin thread"]')).toBeNull()
+    unmount(plain.app)
   })
 
   it('anchors the mark column to the top when a rail is drawn', async () => {
@@ -293,39 +297,14 @@ describe('ThreadRow, the detailed spine row', () => {
     unmount(app)
   })
 
-  it('lights the pin on a pinned row', async () => {
-    const { target, app } = render(thread({ pinned: true }))
-    await tick()
-
-    const pin = target.querySelector('[role="button"][aria-label="Unpin thread"]')
-    expect(pin).not.toBeNull()
-    // A pinned thread shows its pin without the pointer finding it first.
-    expect(pin?.className).toContain('opacity-100')
-
-    unmount(app)
-  })
-
-  it('draws no rail on a settled thread, so its glyph stands alone', async () => {
-    const { target, app } = render(thread({ status: 'completed' }))
-    await tick()
-
-    const glyph = target.querySelector('[aria-label="Completed"]')
-    expect(glyph).not.toBeNull()
-    // The column is pin, glyph, and nothing else: a settled row asks for nothing.
-    const column = glyph?.parentElement as HTMLElement
-    expect(column.children.length).toBe(2)
-
-    unmount(app)
-  })
-
   it('keeps the rail on a thread that is still asking for something', async () => {
     const { target, app } = render(thread({ status: 'awaiting_approval' }))
     await tick()
 
     const glyph = target.querySelector('[aria-label="Needs attention"]')
     const column = glyph?.parentElement as HTMLElement
-    // pin, glyph, rail
-    expect(column.children.length).toBe(3)
+    // glyph, rail
+    expect(column.children.length).toBe(2)
 
     unmount(app)
   })
@@ -434,23 +413,23 @@ describe('ThreadRow, the detailed spine row', () => {
     runs.settled = false
   })
 
-  it('flushes the context line left when there is no project icon', async () => {
-    // A project's own thread list passes no icon and hides the name, so the
-    // scope must start at the row's own left edge rather than floating right.
+  it('names the project on the meta line by its own icon, not a dot', async () => {
     scope.bucket = { id: 'b1', name: 'Future version', color: '#888888', pinned: false }
-    const { target, app } = render(thread(), { hideProjectName: true })
+    const { target, app } = render(thread(), {
+      projectName: 'milogs',
+      projectIconUrl: 'data:image/svg+xml,%3Csvg/%3E'
+    })
     await tick()
 
-    const line = target.querySelector('[data-thread-context-line]')
-    expect(line).not.toBeNull()
-    // No empty icon box: the first thing in the line is the scope itself.
-    const first = line?.firstElementChild as HTMLElement
-    expect(first.className).not.toContain('h-4 w-4')
-    // And nothing claims the remaining width to push it away.
-    const grower = [...(line?.children ?? [])].find((n) =>
-      (n as HTMLElement).className.includes('flex-1')
-    )
-    expect(grower).toBeUndefined()
+    expect(target.querySelector('[data-thread-context-line]')).toBeNull()
+    expect(target.querySelector('[title="Future version"]')).not.toBeNull()
+    const icon = target.querySelector('img[src^="data:image/svg+xml"]') as HTMLImageElement
+    expect(icon).not.toBeNull()
+    // It sits on the meta line beside the scope, and the line draws no colour
+    // dot in its place: the project is named by its own icon.
+    const meta = icon.closest('.col-start-1') as HTMLElement
+    expect(meta).not.toBeNull()
+    expect(meta.querySelectorAll('span[style*="background-color"]').length).toBe(0)
 
     unmount(app)
     scope.bucket = null
@@ -479,9 +458,9 @@ describe('ThreadRow, the detailed spine row', () => {
     const glyph = target.querySelector('[aria-label="Working · Message queued"]')
     expect(glyph).not.toBeNull()
     const column = glyph?.parentElement as HTMLElement
-    // pin, glyph, rail
-    expect(column.children.length).toBe(3)
-    const rail = column.children[2] as HTMLElement
+    // glyph, rail
+    expect(column.children.length).toBe(2)
+    const rail = column.children[1] as HTMLElement
     expect(rail).not.toBeNull()
     // A live working rail paints its colour on the inner spans (track + light),
     // not on the rail box itself, so read the painted child.
@@ -551,9 +530,9 @@ describe('ThreadRow, the detailed spine row', () => {
     const glyph = target.querySelector('[aria-label="Completed · Message queued"]')
     expect(glyph).not.toBeNull()
     // The primary status is settled, so no rail is drawn: the waiting mark and
-    // the pin are the whole column, and the row gains no attention for it.
+    // nothing else is in the column, and the row gains no attention for it.
     const column = glyph?.parentElement as HTMLElement
-    expect(column.children.length).toBe(2)
+    expect(column.children.length).toBe(1)
     expect(column.className).toContain('justify-center')
 
     unmount(app)

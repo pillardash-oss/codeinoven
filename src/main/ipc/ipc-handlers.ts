@@ -40,7 +40,8 @@ import { createThreadWorkspaceRoots } from '../editor/project-files/thread-works
 import { RepositoryService } from '../git/repository-service'
 import { GitService } from '../git/git-service'
 import { SyncPeerService, syncPeerGit } from '../git/sync-peer-service'
-import { SecretVault } from '../storage/secret-vault'
+import { gitCredentialRef } from '../secrets/secret-refs'
+import { SecretsService } from '../secrets/secrets-service'
 import { registerOvenIpc } from '../ovens/oven-ipc'
 import { GitHubAuthService } from '../git/github-auth-service'
 import { DiagnosticsService } from '../system/diagnostics-service'
@@ -61,6 +62,7 @@ import {
   broadcastThreadUpdate,
   dismissThreadNotifications
 } from '../chat/thread-events'
+import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
 import { registerEngineeringLifecycleHandlers } from './handlers/lifecycle-handlers'
 import { registerFilesHandlers } from './handlers/files-handlers'
 import { registerConfigHandlers } from './handlers/config-handlers'
@@ -83,6 +85,7 @@ import { registerHistoryHandlers } from './handlers/history-handlers'
 import { registerSearchHandlers } from './handlers/search-handlers'
 import { registerPlanHandlers } from './handlers/plan-handlers'
 import { registerUpdaterHandlers } from './handlers/updater-handlers'
+import { ensureDonOrchestrator } from '../don/don-bootstrap'
 import { registerAssistantHandlers } from './handlers/assistant-handlers'
 import { registerCioCleanupHandlers } from './handlers/cio-cleanup-handlers'
 import { registerOrchestrationHandlers } from './handlers/orchestration-handlers'
@@ -168,6 +171,24 @@ export function registerIpcHandlers(
   )
   // Intent (semantic) search rides the same thread search: the provider
   // returns semantic matches that the search service merges with keyword hits.
+  // Don, the orchestrator, is seeded before any window asks for it: the assistant
+  // sidebar draws it as the first row and the listening panel resolves its thread,
+  // and neither can do that until the row and the thread exist.
+  //
+  // The seed is asynchronous, and on a first install a renderer that reads the
+  // assistant list while it runs gets an empty list it never asks for again: its
+  // store initializes once and only a broadcast refreshes it. So whatever the
+  // seed created is pushed the moment the seed finishes, instead of leaving Don
+  // invisible until the next launch.
+  void ensureDonOrchestrator({ assistantManager, threadManager, storage }).then((result) => {
+    if (result.assistantCreated) {
+      broadcastAssistantsChanged(assistantManager.listAssistants())
+    }
+    if (result.thread && (result.threadCreated || result.threadSettingsRepaired)) {
+      broadcastThreadUpdate(result.thread)
+    }
+  })
+
   threadManager.setIntentSearchProvider(
     options.searchService
       ? (query, searchOptions) =>
@@ -179,9 +200,10 @@ export function registerIpcHandlers(
       : null
   )
   // An assistant's threads (its hidden knowledge thread included) are deleted through
-  // this same canonical path when the assistant is removed.
-  assistantManager.attachThreadDeleter((threadId) =>
-    threadManager.deleteThread(ASSISTANT_SPACE_ID, threadId)
+  // this same canonical path when the assistant is removed, which is the one sweep
+  // allowed to take a behavior thread away.
+  assistantManager.attachThreadDeleter((threadId, options) =>
+    threadManager.deleteThread(ASSISTANT_SPACE_ID, threadId, options)
   )
   // The merge lifecycle deletes/moves threads in the source scope after the
   // git merge lands; the thread manager is created after the worktree service,
@@ -241,7 +263,7 @@ export function registerIpcHandlers(
     store: threadManager,
     onSettled: broadcastThreadBranchUpdated
   }
-  const vault = options.vault ?? new SecretVault(storage)
+  const vault = options.vault ?? SecretsService.for(storage)
   const ovenService = registerOvenIpc(
     storage,
     vault,
@@ -268,7 +290,6 @@ export function registerIpcHandlers(
     threads: threadManager,
     projects: projectManager
   }).reader
-  const gitCredentialRef = (projectId: string): string => `git_pat_${projectId}`
 
   const githubAuthService = options.githubAuthService ?? new GitHubAuthService(vault)
   const diagnosticsService = new DiagnosticsService(database, () =>

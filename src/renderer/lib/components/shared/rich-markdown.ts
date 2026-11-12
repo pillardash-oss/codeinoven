@@ -4,12 +4,13 @@ import {
   isQuotedMentionPosition
 } from '$shared/mention-context'
 import { selectBlockMarkup } from '@pdslng/cio-icon/markup/select-block'
+import { inlineTagChipHtml } from './inline-tag-chip'
 
 const INLINE_CODE_CLASS = 'border border-border bg-elevated px-1 py-0.5 font-mono text-[0.9em]'
-const INLINE_BADGE_CLASS =
-  'mx-0.5 inline-flex max-w-48 items-center gap-1 whitespace-nowrap border border-border bg-elevated px-1.5 py-0.5 align-baseline text-[0.85em] font-medium leading-none text-foreground'
-const INLINE_BADGE_ICON_CLASS = 'h-3.5 w-3.5 shrink-0'
-const INLINE_BADGE_LABEL_CLASS = 'min-w-0 truncate'
+// Sizing only: `inline-tag-chip.ts` owns the chip's structure and baseline.
+const INLINE_BADGE_CLASS = 'mx-0.5 whitespace-nowrap text-[0.85em] text-foreground'
+const INLINE_BADGE_ICON_CLASS = 'h-3.5 w-3.5 text-[0.875rem]'
+const INLINE_BADGE_LABEL_CLASS = 'min-w-0'
 const LIST_CLASS = 'my-1 pl-5'
 const LIST_ITEM_CLASS = 'my-0.5'
 const PARAGRAPH_CLASS = 'mb-1 last:mb-0'
@@ -212,13 +213,20 @@ function renderInline(
       ) {
         return match
       }
-      const icon = badge.iconSvg
-        ? `<span class="${INLINE_BADGE_ICON_CLASS} inline-flex shrink-0 text-[0.875rem]">${badge.iconSvg}</span>`
-        : ''
-      const accent = badge.accentColor
-        ? ` style="border-left:2px solid ${escapeHtml(badge.accentColor)}"`
-        : ''
-      const html = `<span contenteditable="false" data-editor-inline-badge="true" data-editor-value="${escapeHtml(badge.value)}" title="${escapeHtml(badge.title)}" class="${INLINE_BADGE_CLASS}"${accent}>${icon}<span class="${INLINE_BADGE_LABEL_CLASS}">${escapeHtml(badge.label)}</span></span>`
+      const html = inlineTagChipHtml({
+        label: badge.label,
+        title: badge.title,
+        markHtml: badge.iconSvg,
+        accentColor: badge.accentColor,
+        attributes: {
+          contenteditable: 'false',
+          'data-editor-inline-badge': 'true',
+          'data-editor-value': badge.value
+        },
+        className: INLINE_BADGE_CLASS,
+        labelClassName: INLINE_BADGE_LABEL_CLASS,
+        markClassName: INLINE_BADGE_ICON_CLASS
+      })
       const index = badges.push(html)
       const caretSeparator = offset + badge.value.length === source.length ? '\u00a0' : ''
       return `\uE002${index - 1}\uE003${caretSeparator}`

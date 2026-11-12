@@ -46,6 +46,9 @@
   let target = $state<TextMenuTarget | null>(null)
   let spelling = $state.raw<EditorSpelling | null>(null)
   let menuEl: HTMLDivElement | null = null
+  /** Identifies the open menu, so an IDE answer that lands after the reader has
+   *  already opened another one cannot replace its items. */
+  let menuSequence = 0
 
   function captureMenu(element: HTMLDivElement): () => void {
     menuEl = element
@@ -237,7 +240,23 @@
     if (!resolved) return
     event.preventDefault()
     event.stopPropagation()
-    target = { ...resolved, ideActions: ideContextActions(event) }
+    const sequence = ++menuSequence
+    const ideActions = ideContextActions(event)
+    target = {
+      ...resolved,
+      ideActions: Array.isArray(ideActions) ? ideActions : []
+    }
+    if (!Array.isArray(ideActions)) {
+      // The menu opens immediately with its local items; the language server's
+      // own actions are appended when they arrive, so a cold server never
+      // leaves the reader waiting on a right-click.
+      void Promise.resolve(ideActions)
+        .then((loaded) => {
+          if (sequence !== menuSequence || !target) return
+          target = { ...target, ideActions: loaded }
+        })
+        .catch(() => undefined)
+    }
     spelling =
       resolved.kind === 'editable' && resolved.editable
         ? editorSpellingAt(event, resolved.editable)
@@ -245,6 +264,7 @@
   }
 
   function close(): void {
+    menuSequence++
     target = null
     spelling = null
   }

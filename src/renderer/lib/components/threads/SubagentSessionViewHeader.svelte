@@ -1,14 +1,15 @@
 <script lang="ts">
-  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import { formatDurationSeconds } from '$lib/format/duration'
-  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
-  import type { AgentToolStatus } from '$shared/types'
+  import type { AgentToolStatus, ThinkingLevel } from '$shared/types'
   import SubagentModeBadge from './SubagentModeBadge.svelte'
   import SubagentStatusIcon from './SubagentStatusIcon.svelte'
+  import WorkingTraceMetadata from './WorkingTraceMetadata.svelte'
 
   interface Props {
     taskLabel: string
     taskDetail: string | null
+    /** The agent definition that ran the task, when it is not the title. */
+    agentType: string | null
     /** Lifecycle chip: its glyph, wording, and tone. */
     headerStatus: { icon: AgentToolStatus; label: string; tone: string }
     showDuration: boolean
@@ -17,16 +18,18 @@
     modelLabel: string | null
     providerName?: string
     providerId?: string
+    harnessId?: string | null
+    harnessName?: string | null
+    thinkingLevel: ThinkingLevel | null
     background: boolean
     providerTaskId?: string
     sessionId?: string
-    /** Opens the thread this worker was spawned from, so the chain is walkable. */
-    onOpenParent: () => void
   }
 
   let {
     taskLabel,
     taskDetail,
+    agentType,
     headerStatus,
     showDuration,
     elapsed,
@@ -34,11 +37,19 @@
     modelLabel,
     providerName,
     providerId,
+    harnessId,
+    harnessName,
+    thinkingLevel,
     background,
     providerTaskId,
-    sessionId,
-    onOpenParent
+    sessionId
   }: Props = $props()
+
+  /** The attribution line explains how this worker ran, so it appears as soon
+   *  as any of those facts is known, even before the model catalog resolves. */
+  const showAttribution = $derived(
+    modelLabel !== null || harnessId !== undefined || thinkingLevel !== null
+  )
 </script>
 
 <header class="shrink-0 border-b border-border px-4 py-3">
@@ -61,23 +72,26 @@
     {/if}
   </div>
   <div class="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[0.625rem] text-dimmed">
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-1 border border-border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted uppercase transition-colors hover:bg-dimmed/20 hover:text-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-border"
-      title="Open the thread that spawned this sub-agent"
-      aria-label="Open the parent thread"
-      onclick={onOpenParent}
-    >
-      <CioArrowLeft size={10} />
-      Parent thread
-    </button>
-    {#if modelLabel}
-      <span class="flex min-w-0 items-center gap-1">
-        <VendorIcon name={providerName ?? modelLabel} id={providerId} size={11} />
-        <span class="truncate">
-          {providerName ? `${providerName} · ${modelLabel}` : modelLabel}
-        </span>
+    {#if agentType}
+      <span
+        class="shrink-0 border border-border px-1.5 py-0.5 text-[0.5625rem] font-semibold tracking-wide text-muted"
+        title="Agent definition that ran this task"
+        aria-label="Agent definition: {agentType}"
+      >
+        {agentType}
       </span>
+    {/if}
+    {#if showAttribution}
+      <WorkingTraceMetadata
+        {modelLabel}
+        isFast={false}
+        {thinkingLevel}
+        {providerName}
+        {providerId}
+        showProviderName
+        {harnessId}
+        {harnessName}
+      />
     {/if}
     <SubagentModeBadge {background} variant="chip" />
     {#if providerTaskId && providerTaskId !== sessionId}

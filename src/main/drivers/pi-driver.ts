@@ -10,7 +10,7 @@ import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { buildProcessEnvironmentAsync } from './cli-environment'
 import { PiAuthConfigService, piAuthFileIo } from '../providers/pi-auth-config'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 import { DevStepClock } from '../system/dev-timing'
@@ -143,6 +143,7 @@ export class PiDriver extends PersistentCliDriver {
     sessionStatus: true,
     contextUsage: true,
     compaction: true,
+    codeMode: true,
     subagents: true,
     scheduledRetry: true,
     // The core-tools extension reconciles the task list on `agent_settled`
@@ -177,7 +178,7 @@ export class PiDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault,
+    private readonly secretVault?: SecretsService,
     private readonly accountEnvironment: NodeJS.ProcessEnv = {}
   ) {
     super(storage)

@@ -10,10 +10,15 @@ import { displayService } from './display-runtime'
 /**
  * What the agent asked the panel to mirror, and which thread asked for it.
  *
- * Monitoring is agent-initiated and explicit: an agent calls `ext_simulation` with
- * the device it is working on, and this store is the whole of what the app keeps.
- * There is no watch, no device scan and no process read behind it, so an app whose
- * agents are not working on a device costs nothing at all.
+ * A request here is what puts a device on screen. Two things make one: the agent
+ * calling `ext_simulation` with the device it is working on, and the app reading a
+ * device command (`adb`, `emulator`, `simctl`) out of a tool call the thread
+ * already ran. The second exists because an agent that goes straight to adb has no
+ * reason to look for a mirroring tool first, and the person watching that thread
+ * should not have to ask for the picture.
+ *
+ * Both are event-driven: no watch, no timer and no scan behind them, so an app
+ * whose agents are not working on a device costs nothing at all.
  *
  * The store owns only the notification. Resolving a device id to a label and a
  * mark is the display service's own listing, so the panel shows exactly what its

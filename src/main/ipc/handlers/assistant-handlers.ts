@@ -27,6 +27,7 @@ import {
   broadcastAssistantsChanged
 } from '../../scheduler/assistant-events'
 import { broadcastThreadUpdate } from '../../chat/thread-events'
+import { Logger } from '../../system/logger'
 import { raiseStartAtLoginOffer } from '../../system/start-at-login-offer'
 import type { IpcHandlerContext } from './context'
 import type {
@@ -45,6 +46,9 @@ import type {
 import { ASSISTANT_NAME_LIMIT, ASSISTANT_SCHEDULE_NAME_LIMIT } from '../../../lib/types'
 import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import { validateCustomIconImage } from '../../../lib/custom-icon'
+import { ASSISTANT_SPACE_ID } from '../../../lib/types'
+import { DON_THREAD_ID } from '../../don/don-bootstrap'
+import { DON_FIRST_RUN_ACTION, DON_FIRST_RUN_PROMPT } from '../../../lib/don-assistant'
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
 const DELIVERY_CHANNELS = new Set<string>(ASSISTANT_DELIVERY_CHANNEL_IDS)
@@ -320,6 +324,12 @@ function validateUpdateInput(value: unknown): UpdateAssistantInput {
       throw new TypeError('Assistant knowledge must be a string')
     patch.knowledge = record.knowledge.slice(0, MAX_KNOWLEDGE)
   }
+  if (record.authoringThreadId !== undefined) {
+    patch.authoringThreadId = validateEntityId(
+      requireString(record.authoringThreadId, 'Authoring thread ID'),
+      'Authoring thread ID'
+    )
+  }
   if (record.connections !== undefined) patch.connections = sanitizeConnections(record.connections)
   if (record.agents !== undefined) {
     const agents = sanitizeAgents(record.agents)
@@ -383,6 +393,108 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   }
   ipcMain.handle('assistant:list', () => assistantManager.listAssistants())
 
+  /**
+   * One last-line excerpt per assistant for the assistant list.
+   *
+   * The query is bounded to the assistant space's threads and walks the message
+   * timeline index, so it stays a handful of seeks and never loads a transcript.
+   */
+  ipcMain.handle('assistant:previews', async () =>
+    ctx.threadManager.listAssistantPreviews(ASSISTANT_SPACE_ID)
+  )
+
+  /**
+   * Don's one thread, or null while it has not been seeded yet.
+   *
+   * Every surface that hands the orchestrator a message without opening the
+   * assistant view resolves it here instead of searching the assistant space, so
+   * there is exactly one answer to "which thread is Don's".
+   */
+  ipcMain.handle('assistant:donThread', async () => {
+    const thread = await ctx.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+    return { threadId: thread?.id ?? null }
+  })
+
+  /**
+   * Open Don's first conversation, once, the way every assistant opens theirs.
+   *
+   * The orchestrator's thread is seeded without a transcript on purpose: its
+   * introduction is a real turn, so the user answers a person rather than a
+   * pre-written question. Opening it again with a conversation already in it is
+   * a no-op, and one call is in flight at a time so a double click never asks
+   * the same question twice.
+   */
+  let donFirstRunInFlight = false
+  ipcMain.handle('assistant:startDonSetup', async () => {
+    const chatEngine = ctx.chatEngine
+    if (!chatEngine || donFirstRunInFlight) return
+    donFirstRunInFlight = true
+    const openingMessageId = 'don-first-run'
+    try {
+      const thread = await ctx.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+      if (!thread?.settings) return
+      // The introduction is a one-time event per install, written down where a
+      // failed transcript read cannot lose it. Everything after the first open
+      // is a plain read of the conversation.
+      if (thread.settings.donIntroAskedAt) return
+      const messages = await ctx.threadManager.loadMessages(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+      const alreadyStarted =
+        messages.some(
+          (message) =>
+            message.visibility === 'conversation' &&
+            (message.role === 'user' || message.role === 'assistant')
+        ) || messages.some((message) => message.id === openingMessageId)
+      if (alreadyStarted) {
+        await ctx.threadManager.updateSettings(ASSISTANT_SPACE_ID, DON_THREAD_ID, {
+          ...thread.settings,
+          donIntroAskedAt: Date.now()
+        })
+        return
+      }
+      await chatEngine.sendPrompt(
+        thread.projectId,
+        thread.id,
+        thread.settings,
+        DON_FIRST_RUN_PROMPT,
+        [],
+        undefined,
+        openingMessageId,
+        undefined,
+        undefined,
+        undefined,
+        'user',
+        { action: DON_FIRST_RUN_ACTION }
+      )
+      // Marked only after the turn was accepted, so a failure rolls back to a
+      // state the next open can retry, while a success can never repeat.
+      await ctx.threadManager.updateSettings(ASSISTANT_SPACE_ID, DON_THREAD_ID, {
+        ...thread.settings,
+        donIntroAskedAt: Date.now()
+      })
+    } catch (error) {
+      // An install with no provider account yet cannot run the introduction.
+      // The app-owned opening turn is rolled back with the failure, so Don does
+      // not keep a prompt nobody answered and the next open (after the user
+      // connects a provider) asks again instead of reading as already started.
+      await ctx.threadManager
+        .deleteAppMessages(ASSISTANT_SPACE_ID, DON_THREAD_ID, [openingMessageId])
+        .catch(() => undefined)
+      const thread = await ctx.threadManager
+        .getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+        .catch(() => null)
+      if (thread?.status === 'failed') {
+        await ctx.threadManager
+          .setStatus(ASSISTANT_SPACE_ID, DON_THREAD_ID, 'created')
+          .catch(() => undefined)
+      }
+      Logger.dev('Don could not open its first conversation', {
+        error: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      donFirstRunInFlight = false
+    }
+  })
+
   ipcMain.handle('assistant:create', (_, input: unknown) => {
     const assistant = assistantManager.createAssistant(validateCreateInput(input))
     assistantsChanged()
@@ -392,7 +504,21 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   ipcMain.handle('assistant:update', async (_, assistantId: unknown, input: unknown) => {
     const safeId = validateEntityId(assistantId, 'Assistant ID')
     const existing = assistantManager.getAssistant(safeId)
-    const assistant = assistantManager.updateAssistant(safeId, validateUpdateInput(input))
+    const { authoringThreadId, ...patch } = validateUpdateInput(input)
+    // Instructions are only ever committed from the conversation that authored
+    // them. A save whose thread belongs to another assistant is refused rather
+    // than written, because the two drifting apart is how one assistant's
+    // instructions, name and schedule once landed on a different assistant
+    // entirely, and every later run of that assistant then did its neighbour's
+    // job.
+    if (patch.knowledge !== undefined && authoringThreadId !== undefined) {
+      if (!assistantManager.threadAuthoringBelongsTo(authoringThreadId, safeId)) {
+        throw new Error(
+          'This conversation does not belong to that assistant, so its instructions cannot be saved here'
+        )
+      }
+    }
+    const assistant = assistantManager.updateAssistant(safeId, patch)
     assistantsChanged()
     // The first knowledge an assistant ever gets is the moment its owner has work they
     // expect to run, so it is the one moment the app offers to start at login.

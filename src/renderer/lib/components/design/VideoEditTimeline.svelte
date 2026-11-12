@@ -37,7 +37,11 @@
   import type { VideoEditChange } from '$shared/video/edit'
   import { snapEditTime, videoTrackHasAudio } from '$shared/video/edit'
   import { videoTimecode } from '$shared/video/timeline'
-  import { visibleClipFrames, videoThumbnailClips } from '$shared/video/frame-grid'
+  import {
+    visibleClipFrames,
+    videoThumbnailClips,
+    ARROW_FRAME_STEP
+  } from '$shared/video/frame-grid'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { newVideoNoteId, videoNoteReference } from '$lib/video-note-reference'
   import {
@@ -490,6 +494,20 @@
     scrubbing = true
     ;(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId)
     editor.seek(at(event))
+  }
+  /**
+   * The frames an arrow press moves the playhead, signed, or zero for another key.
+   *
+   * The rule answers the same bindings the editor does, so a ruler that has the
+   * focus steps here what it steps from anywhere else: five frames a press, and the
+   * single frame beside it under Shift.
+   */
+  function keymapStep(event: KeyboardEvent): number {
+    if (keymapState.matches('video-edit-frame-back', event)) return -ARROW_FRAME_STEP
+    if (keymapState.matches('video-edit-frame-forward', event)) return ARROW_FRAME_STEP
+    if (keymapState.matches('video-edit-frame-back-one', event)) return -1
+    if (keymapState.matches('video-edit-frame-forward-one', event)) return 1
+    return 0
   }
   function drop(event: DragEvent, trackId: string): void {
     event.preventDefault()
@@ -1123,13 +1141,10 @@
             onpointerup={() => (scrubbing = false)}
             onpointercancel={() => (scrubbing = false)}
             onkeydown={(event) => {
-              if (keymapState.matches('video-edit-frame-back', event)) {
-                event.preventDefault()
-                editor.seek(editor.time - 1 / editor.fps)
-              } else if (keymapState.matches('video-edit-frame-forward', event)) {
-                event.preventDefault()
-                editor.seek(editor.time + 1 / editor.fps)
-              }
+              const direction = keymapStep(event)
+              if (direction === 0) return
+              event.preventDefault()
+              editor.seek(editor.time + direction / editor.fps)
             }}
           >
             {#each ticks as tick (tick)}<span

@@ -77,6 +77,16 @@
      * `pointer-events-none`), so it can never get stuck open.
      */
     flyout?: Snippet
+    /**
+     * Folds the tool into the dock's More menu instead of the rail. A tool that
+     * is not needed right now waits there, and comes out onto the rail the
+     * moment it is (a note written, a memory to review, a design this thread
+     * made).
+     */
+    overflow?: boolean
+    /** Slides up out of the More menu when it reaches the rail, so the user
+     *  sees that this thread holds that kind of work. */
+    emerges?: boolean
     onSelect: () => void
     onContextMenu?: (event: MouseEvent) => void
   }
@@ -88,6 +98,9 @@
   import RailHighlight from './RailHighlight.svelte'
   import type { MediaActivity } from '$shared/media-activity'
   import RailAudioBadge from './RailAudioBadge.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
+  import { fly, slide } from 'svelte/transition'
+  import { motionDuration } from '$lib/motion'
 
   interface Props {
     /** Ordered groups. Empty groups are dropped so no stray hairline renders. */
@@ -96,7 +109,16 @@
 
   let { groups }: Props = $props()
 
-  let visibleGroups = $derived(groups.filter((group) => group.length > 0))
+  let visibleGroups = $derived(
+    groups
+      .map((group) => group.filter((item) => !item.overflow))
+      .filter((group) => group.length > 0)
+  )
+
+  /** Tools that are not needed right now, folded behind the More button. */
+  let moreItems = $derived(groups.flat().filter((item) => item.overflow))
+
+  let moreOpen = $state(false)
 
   /**
    * The item whose hover preview is showing, or null.
@@ -137,7 +159,8 @@
   let highlightRevision = $derived(
     visibleGroups
       .map((group) => group.map((item) => `${item.id}:${item.active}`).join(','))
-      .join('|')
+      .join('|') +
+      (moreOpen ? `|more:${moreItems.map((item) => `${item.id}:${item.active}`).join(',')}` : '')
   )
 
   /** Keep idle tools muted and light up the current tool. */
@@ -171,87 +194,123 @@
       <div class="my-1.5 h-px w-5 shrink-0 bg-border" aria-hidden="true"></div>
     {/if}
     {#each group as item (item.id)}
-      {@const Icon = item.icon}
-      <div class="relative">
-        <button
-          type="button"
-          class="relative flex h-8 w-8 shrink-0 items-center justify-center transition-colors duration-150 {toneClass(
-            item
-          )}"
-          aria-label={item.label}
-          aria-current={item.active ? 'true' : undefined}
-          title={item.label}
-          onpointerenter={item.flyout ? () => showFlyout(item.id) : undefined}
-          onpointerleave={item.flyout ? () => hideFlyout(item.id) : undefined}
-          onclick={item.onSelect}
-          oncontextmenu={item.onContextMenu}
-        >
-          {#if item.countLabel !== undefined}
-            <span class="text-[0.6875rem] font-semibold tabular-nums">{item.countLabel}</span>
-          {:else if item.appearance}
-            {#if item.appearance.iconUrl}
-              <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 object-contain" />
-            {:else}
-              <span class="h-3.5 w-3.5" style="background-color: {item.appearance.color}"></span>
-            {/if}
-          {:else if Icon}
-            <Icon size={ICON_SIZE.rail} strokeWidth={RAIL_ICON_STROKE} />
-          {/if}
-          {#if item.media?.length || item.playing || item.recording}
-            <RailAudioBadge
-              label={item.label}
-              activities={item.media ?? [
-                ...(item.playing ? ['audio' as const] : []),
-                ...(item.recording ? ['microphone' as const] : [])
-              ]}
-            />
-          {/if}
-          {#if item.badge || item.badgeColor}
-            <span class="absolute -top-0.5 -right-0.5 flex items-start">
-              {#if item.badge === 'working' || item.badge === 'working-paused'}
-                <StatusBadge
-                  tone={item.badge}
-                  variant="spinner"
-                  title={item.badgeTitle ?? item.label}
-                />
-              {:else}
-                <StatusBadge
-                  tone={item.badge}
-                  color={item.badgeColor}
-                  title={item.badgeTitle ?? item.label}
-                />
-              {/if}
-            </span>
-          {/if}
-          {#if item.countBadge !== undefined}
-            <span
-              class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center px-1 text-[0.5625rem] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
-              'working'
-                ? 'bg-thread-working text-on-primary ring-thread-working'
-                : 'bg-raised text-muted ring-border'}"
-              aria-hidden="true"
-            >
-              {item.countBadge}
-            </span>
-          {/if}
-          {#if item.countText && item.countText.length > 0}
-            <span
-              class="absolute -top-1 right-1 flex items-center text-[0.5625rem] font-semibold leading-none tabular-nums whitespace-nowrap"
-              aria-hidden="true"
-            >
-              {#each item.countText as token, tokenIndex (tokenIndex)}
-                <span class={countTextClass(token.tone)}>{token.text}</span>
-              {/each}
-            </span>
-          {/if}
-        </button>
-        {#if item.flyout && hoveredId === item.id}
-          <div class="pointer-events-none absolute top-1/2 right-full z-50 mr-1.5 -translate-y-1/2">
-            {@render item.flyout()}
-          </div>
-        {/if}
-        {@render item.menu?.()}
-      </div>
+      {@render tool(item, item.emerges ? 24 : 0)}
     {/each}
   {/each}
+  {#if moreItems.length > 0}
+    <div class="my-1.5 h-px w-5 shrink-0 bg-border" aria-hidden="true"></div>
+    <button
+      type="button"
+      class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors duration-150 {moreOpen ||
+      moreItems.some((item) => item.active)
+        ? 'text-primary'
+        : 'text-dimmed hover:bg-elevated hover:text-muted'}"
+      aria-label={moreOpen ? 'Hide more tools' : 'Show more tools'}
+      title={moreOpen ? 'Hide more tools' : 'Show more tools'}
+      aria-expanded={moreOpen}
+      aria-controls="context-dock-more"
+      onclick={() => (moreOpen = !moreOpen)}
+    >
+      <CioEllipsis size={ICON_SIZE.rail} strokeWidth={RAIL_ICON_STROKE} />
+    </button>
+    {#if moreOpen}
+      <!-- The rest of the tools slide out of the More button as real rail
+           icons, and the same button folds them away again. -->
+      <div
+        id="context-dock-more"
+        class="flex flex-col items-center gap-0.5"
+        transition:slide={{ duration: motionDuration(200) }}
+      >
+        {#each moreItems as item (item.id)}
+          {@render tool(item, -12)}
+        {/each}
+      </div>
+    {/if}
+  {/if}
 </nav>
+
+{#snippet tool(item: ContextDockItem, rise: number)}
+  {@const Icon = item.icon}
+  <!-- An emerging tool rises out of More below it; an expanded one drops
+       out of the More button above it. -->
+  <div class="relative" in:fly={{ y: rise, duration: rise === 0 ? 0 : motionDuration(220) }}>
+    <button
+      type="button"
+      class="relative flex h-8 w-8 shrink-0 items-center justify-center transition-colors duration-150 {toneClass(
+        item
+      )}"
+      aria-label={item.label}
+      aria-current={item.active ? 'true' : undefined}
+      title={item.label}
+      onpointerenter={item.flyout ? () => showFlyout(item.id) : undefined}
+      onpointerleave={item.flyout ? () => hideFlyout(item.id) : undefined}
+      onclick={item.onSelect}
+      oncontextmenu={item.onContextMenu}
+    >
+      {#if item.countLabel !== undefined}
+        <span class="text-[0.6875rem] font-semibold tabular-nums">{item.countLabel}</span>
+      {:else if item.appearance}
+        {#if item.appearance.iconUrl}
+          <img src={item.appearance.iconUrl} alt="" class="h-4 w-4 object-contain" />
+        {:else}
+          <span class="h-3.5 w-3.5" style="background-color: {item.appearance.color}"></span>
+        {/if}
+      {:else if Icon}
+        <Icon size={ICON_SIZE.rail} strokeWidth={RAIL_ICON_STROKE} />
+      {/if}
+      {#if item.media?.length || item.playing || item.recording}
+        <RailAudioBadge
+          label={item.label}
+          activities={item.media ?? [
+            ...(item.playing ? ['audio' as const] : []),
+            ...(item.recording ? ['microphone' as const] : [])
+          ]}
+        />
+      {/if}
+      {#if item.badge || item.badgeColor}
+        <span class="absolute -top-0.5 -right-0.5 flex items-start">
+          {#if item.badge === 'working' || item.badge === 'working-paused'}
+            <StatusBadge
+              tone={item.badge}
+              variant="spinner"
+              title={item.badgeTitle ?? item.label}
+            />
+          {:else}
+            <StatusBadge
+              tone={item.badge}
+              color={item.badgeColor}
+              title={item.badgeTitle ?? item.label}
+            />
+          {/if}
+        </span>
+      {/if}
+      {#if item.countBadge !== undefined}
+        <span
+          class="absolute -top-1 -right-1 flex h-3.5 min-w-3.5 items-center justify-center px-1 text-[0.5625rem] font-semibold leading-none tabular-nums ring-1 {item.countBadgeTone ===
+          'working'
+            ? 'bg-thread-working text-on-primary ring-thread-working'
+            : 'bg-raised text-muted ring-border'}"
+          aria-hidden="true"
+        >
+          {item.countBadge}
+        </span>
+      {/if}
+      {#if item.countText && item.countText.length > 0}
+        <span
+          class="absolute -top-1 right-1 flex items-center text-[0.5625rem] font-semibold leading-none tabular-nums whitespace-nowrap"
+          aria-hidden="true"
+        >
+          {#each item.countText as token, tokenIndex (tokenIndex)}
+            <span class={countTextClass(token.tone)}>{token.text}</span>
+          {/each}
+        </span>
+      {/if}
+    </button>
+    {#if item.flyout && hoveredId === item.id}
+      <div class="pointer-events-none absolute top-1/2 right-full z-50 mr-1.5 -translate-y-1/2">
+        {@render item.flyout()}
+      </div>
+    {/if}
+    {@render item.menu?.()}
+  </div>
+{/snippet}

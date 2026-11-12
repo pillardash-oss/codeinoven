@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -9,6 +9,7 @@ import {
 } from '../../src/main/storage/checkpoint-manager'
 import type { Database } from '../../src/main/database/database'
 import type { FileChangeSource } from '../../src/lib/types'
+import { getConfigRoot } from '../../src/lib/utils'
 import { createTestDb, destroyTestDb } from './database/test-helper'
 
 const temporaryPaths: string[] = []
@@ -188,6 +189,57 @@ describe('CheckpointManager', () => {
     expect(diff).toMatchObject({ kind: 'created', binary: false, truncated: true })
     expect(diff.after).toBe('a'.repeat(64 * 1024))
     expect(diff.before).toBeUndefined()
+  })
+
+  // The app's own scratch folder is never the turn's work: a card that offers
+  // `.cio/tmp/report.txt` beside the real files is noise the user has to clear
+  // by hand, so write evidence for it is dropped like any excluded directory.
+  it('never records the scratch folder as a change, even with write evidence', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'tracked.txt'), 'before', 'utf-8')
+    const turn = await manager.beginTurn('project1', 'thread1', projectRoot, 'Scratch note', false)
+    await writeFile(join(projectRoot, 'tracked.txt'), 'after', 'utf-8')
+    const scratchPath = '.cio/work/feature/progress.md'
+    await mkdir(join(projectRoot, '.cio/work/feature'), { recursive: true })
+    await writeFile(join(projectRoot, scratchPath), '# Progress', 'utf-8')
+
+    const completed = await manager.completeTurn(
+      'project1',
+      'thread1',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      { changeSources: new Map([[scratchPath, [claimedSource(scratchPath)]]]) }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['tracked.txt'])
+    expect(completed.changeSourceRefs?.[scratchPath]).toBeUndefined()
+    expect(completed.toolSources && Object.keys(completed.toolSources)).toHaveLength(0)
+  })
+
+  it('reports a diff whose content blob is gone instead of failing the read', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'existing.txt'), 'before', 'utf-8')
+    const turn = await manager.beginTurn('project1', 'thread1', projectRoot, 'Content gone', false)
+    await writeFile(join(projectRoot, 'existing.txt'), 'after-missing-blob', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'thread1',
+      turn.id,
+      projectRoot,
+      'completed'
+    )
+    const afterHash = completed.changes[0]?.after?.hash
+    if (!afterHash) throw new Error('Expected the completed change to record an after hash')
+    await rm(join(getConfigRoot(), 'projects', 'project1', 'blobs', afterHash), { force: true })
+
+    await expect(
+      manager.getFileDiff('project1', 'thread1', turn.id, 'existing.txt')
+    ).resolves.toMatchObject({ kind: 'modified', binary: false, contentUnavailable: true })
   })
 
   it('marks an active turn as interrupted for restart recovery', async () => {
@@ -623,6 +675,59 @@ describe('CheckpointManager', () => {
     )
 
     expect(completed.changes.map((change) => change.path)).toEqual(['mine.txt'])
+  })
+
+  // Regression: a shell window records any path that moved while its command
+  // ran, and it used to store that as a source entry with no source at all.
+  // Completion's rescue step read the bare key as this turn's own write
+  // evidence, so a read-only turn in a contested project claimed the whole room
+  // of files the other running thread was writing.
+  it('does not claim a file only a bare shell window saw move while a turn runs', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'theirs.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'reader', projectRoot, 'Reader turn', false)
+    await writeFile(join(projectRoot, 'theirs.txt'), 'another turn mid-write', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'reader',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      {
+        changeSources: new Map([['theirs.txt', []]]),
+        contestedDiff: true
+      }
+    )
+
+    expect(completed.changes).toEqual([])
+    expect(completed.changeFilterApplied).toBe(true)
+  })
+
+  // The other half: alone in the project, a file a shell command wrote belongs
+  // on the turn's card even when no tool names it as a target.
+  it('keeps a file a shell window measured on an uncontested turn', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const manager = await testCheckpointManager()
+    await writeFile(join(projectRoot, 'generated.txt'), 'before', 'utf-8')
+
+    const turn = await manager.beginTurn('project1', 'writer', projectRoot, 'Writer turn', false)
+    await writeFile(join(projectRoot, 'generated.txt'), 'written by a script', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project1',
+      'writer',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      { changeSources: new Map([['generated.txt', []]]) }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual(['generated.txt'])
   })
 
   // Regression: the harness published no live part events at all, and the

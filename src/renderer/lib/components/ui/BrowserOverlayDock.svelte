@@ -111,6 +111,7 @@
     element.addEventListener('scroll', scroll, true)
     element.addEventListener('focusin', focusChanged)
     element.addEventListener('focusout', focusChanged)
+    window.addEventListener('focus', restoreControlFocus)
     if (dock.modal) {
       void invoke('browser:overlayCursor')
         .then((point) => {
@@ -131,6 +132,7 @@
       element.removeEventListener('scroll', scroll, true)
       element.removeEventListener('focusin', focusChanged)
       element.removeEventListener('focusout', focusChanged)
+      window.removeEventListener('focus', restoreControlFocus)
       cancelAnimationFrame(frame)
       if (origin) onDragging(false)
     }
@@ -140,6 +142,21 @@
       if (!row.dataset.nativeDockAction) continue
       row.setAttribute('aria-selected', String(row.dataset.nativeDockAction === action))
     }
+  }
+  /**
+   * The control this document last held the keyboard in.
+   *
+   * Kept across a window blur so returning to the app puts the caret back where
+   * the user left it instead of on the panel's first field.
+   */
+  let lastControl: HTMLElement | null = null
+  /** The identified control that currently owns the keyboard, if any. */
+  function focusedControl(element: HTMLElement): HTMLElement | null {
+    const active = document.activeElement
+    if (!(active instanceof Element) || !element.contains(active)) return null
+    return active.closest<HTMLElement>(
+      '[data-native-dock-field], [data-native-dock-action], [data-native-dock-focus-key]'
+    )
   }
   /**
    * Focus the panel's own first control in the native document.
@@ -154,15 +171,7 @@
     // and the document body are reachable through the panel but answer nothing,
     // and treating them as "already focused" is what left a redrawn panel with
     // no caret and a dead keyboard.
-    const active = document.activeElement
-    if (
-      active instanceof Element &&
-      element.contains(active) &&
-      active.closest(
-        '[data-native-dock-field], [data-native-dock-action], [data-native-dock-focus-key]'
-      )
-    )
-      return
+    if (focusedControl(element)) return
     const field = element.querySelector<HTMLInputElement | HTMLTextAreaElement>(
       '[data-native-dock-focus], input:not([disabled]):not([readonly]), textarea:not([disabled]):not([readonly])'
     )
@@ -175,18 +184,32 @@
     if (field?.hasAttribute('data-native-dock-select')) field.select()
   }
   /**
+   * Take the keyboard back when the host window is activated again.
+   *
+   * The overlay window is shown inactive while the app stays in front, and it is
+   * hidden outright while another application is. Chromium drops the focused
+   * element when the widget it belongs to loses focus, so a user who left the app
+   * from a search field came back to a dialog whose caret was gone. The control
+   * they were in is restored, falling back to the panel's own first field.
+   */
+  function restoreControlFocus(): void {
+    if (!dock.modal || !modalRoot) return
+    if (focusedControl(modalRoot)) return
+    const remembered = lastControl
+    if (remembered?.isConnected && modalRoot.contains(remembered)) {
+      remembered.focus({ preventScroll: true })
+      return
+    }
+    focusPanel(modalRoot)
+  }
+  /**
    * Tell the app which control owns the keyboard, so a forwarded key can be
    * delivered to the element that answers for it.
    */
   function focusChanged(): void {
     void tick().then(() => {
-      const active = document.activeElement
-      const control =
-        active instanceof Element
-          ? active.closest<HTMLElement>(
-              '[data-native-dock-field], [data-native-dock-action], [data-native-dock-focus-key]'
-            )
-          : null
+      const control = modalRoot ? focusedControl(modalRoot) : null
+      if (control) lastControl = control
       const field = control?.dataset.nativeDockField
       const action = control?.dataset.nativeDockAction
       const focus = control?.dataset.nativeDockFocusKey

@@ -48,19 +48,52 @@ export function trackEscapeMenu(isOpen: () => boolean, close: CloseHandler): voi
 
 const closeHandlers: CloseHandler[] = []
 const nonBlockingHandlers = new SvelteSet<CloseHandler>()
+/**
+ * The dictation targets each overlay hosts, named by the overlays that hold a
+ * microphone.
+ *
+ * A floating dockable panel is an overlay, so it claims Escape: a recording made
+ * in its own editor then lost the key to the panel's close, and Escape closed
+ * the panel instead of stopping the microphone. An overlay that names the
+ * targets it hosts gives Escape back to the recording made inside it, and only
+ * while that overlay is the surface on top.
+ */
+const escapeRecordingHosts = new WeakMap<CloseHandler, () => readonly string[]>()
 
 /** Register an overlay's close behavior. Returns an unsubscribe function. */
-export function registerOverlayClose(handler: CloseHandler, blocksSwitching = true): () => void {
+export function registerOverlayClose(
+  handler: CloseHandler,
+  blocksSwitching = true,
+  recordingTargets?: () => readonly string[]
+): () => void {
   closeHandlers.push(handler)
   if (!blocksSwitching) nonBlockingHandlers.add(handler)
+  if (recordingTargets) escapeRecordingHosts.set(handler, recordingTargets)
   let removed = false
   return () => {
     if (removed) return
     removed = true
     nonBlockingHandlers.delete(handler)
+    escapeRecordingHosts.delete(handler)
     const index = closeHandlers.indexOf(handler)
     if (index !== -1) closeHandlers.splice(index, 1)
   }
+}
+
+/**
+ * The dictation targets hosted by the overlay that owns Escape right now.
+ *
+ * Only the topmost overlay that owns the window is consulted, including when it
+ * names no targets: an overlay opened above a recording panel still takes
+ * Escape for itself.
+ */
+export function topOverlayRecordingTargets(): readonly string[] {
+  for (let index = closeHandlers.length - 1; index >= 0; index--) {
+    const handler = closeHandlers[index]
+    if (nonBlockingHandlers.has(handler)) continue
+    return escapeRecordingHosts.get(handler)?.() ?? []
+  }
+  return []
 }
 
 /** Invoke the topmost registered overlay's close behavior. */

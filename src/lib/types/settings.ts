@@ -89,8 +89,6 @@ export function isContrastLevel(value: unknown): value is ContrastLevel {
   return typeof value === 'string' && (CONTRAST_LEVELS as readonly string[]).includes(value)
 }
 
-export type SlashCommandMode = 'app' | 'passthrough'
-
 export type MemoryCategory = 'behavioral' | 'project-rule' | 'identity' | 'preference' | 'models'
 
 export type MemoryPriority = 'critical' | 'high' | 'medium' | 'low'
@@ -413,8 +411,12 @@ export interface AppConfig {
   /** Format a file through its language server before the editor writes it. */
   ideFormatOnSave?: boolean
   keybindings: Record<string, string>
-  /** How slash commands are handled: in-app actions or forwarded to the harness. */
-  slashCommandMode: SlashCommandMode
+  /**
+   * What the user asked Don to call them, captured the first time they answered
+   * Don's "How should I address you?" question. It is the name a group thread puts
+   * on the user's own messages, and it is empty until they say.
+   */
+  userPreferredName?: string
   /** Preferred editor used by “Open in Editor”. `system` falls back to the OS default. */
   preferredEditor: EditorId
   /** Last directory chosen in the folder-picker dialog, so it opens there next time. */
@@ -559,6 +561,14 @@ export interface AppConfig {
    * sweepable; the settings page toggles the list.
    */
   cioCleanupExcludedCategories: CioCleanupCategoryId[]
+  /**
+   * Whether an agent may see which connected account still has subscription
+   * capacity. Absent means ON. When OFF, `cio_orchestrate_targets` reports no
+   * account capacity at all and the agent cannot learn which account has
+   * remaining quota, so it must reuse the current thread's own account and
+   * model for its sub-agents instead of hunting for another one.
+   */
+  agentAccountVisibility?: boolean
 }
 
 /** Bounds for `AppConfig.cioCleanupRetentionDays`. */
@@ -594,7 +604,6 @@ export type AppConfigPatch = Partial<
     | 'switcherThreadBrowserTabs'
     | 'questionTimeoutMs'
     | 'agentQuestionCap'
-    | 'slashCommandMode'
     | 'ideLanguageServers'
     | 'ideFormatOnSave'
     | 'preferredEditor'
@@ -638,5 +647,6 @@ export type AppConfigPatch = Partial<
     | 'llamaCppUnload'
     | 'cioCleanupRetentionDays'
     | 'cioCleanupExcludedCategories'
+    | 'agentAccountVisibility'
   >
 >

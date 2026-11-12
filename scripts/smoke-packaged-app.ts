@@ -136,12 +136,23 @@ async function runIteration(
   let stderr = ''
   try {
     const sandboxFlag = options.target === 'linux' ? '--no-sandbox' : null
+    // Never let the verification launch touch the login keychain. Chromium reads
+    // its cookie and password key from the keychain through OSCrypt, and a bundle
+    // that carries a new ad-hoc signature (every package run re-signs it) asks
+    // macOS for the login-keychain password before it can open that item. The
+    // prompt blocks the main thread, so it cannot be timed out from JavaScript and
+    // the smoke only fails after its whole deadline, or hangs until a human types
+    // the password. Passing the switch at launch silences the prompt for the
+    // child process without changing how the packaged app behaves when a user
+    // starts it.
+    const keychainFlag = options.target === 'mac' ? '--use-mock-keychain' : null
     const child = spawn(
       executable,
       [
         `--user-data-dir=${join(runRoot, 'chromium')}`,
         '--enable-logging=stderr',
-        ...(sandboxFlag ? [sandboxFlag] : [])
+        ...(sandboxFlag ? [sandboxFlag] : []),
+        ...(keychainFlag ? [keychainFlag] : [])
       ],
       {
         cwd: options.appDir,

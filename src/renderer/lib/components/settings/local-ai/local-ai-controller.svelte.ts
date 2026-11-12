@@ -1,22 +1,24 @@
 /**
- * Live state for the Local AI page's llama.cpp servers: which rows the app started, what their
- * logs say, and whether the server actually answers.
+ * Live state for the Local AI page's servers: which rows the app started, what
+ * their logs say, and whether the server actually answers.
  *
  * A row is only "running" once its `/v1/models` endpoint answers, because a
  * process that is alive but still loading a 2 GB model cannot serve a turn yet.
  * The processes themselves live in the main process's PTY service; this class
  * subscribes to their streams and never spawns anything itself.
  */
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
-  buildLlamaServerArgs,
-  llamaCppModelAlias,
-  llamaCppPtyId,
+  localAiModelAliases,
+  localAiModelSource,
+  localAiPtyId,
+  localAiServerArgs,
   type LlamaCppBrewJobKind,
   type LlamaCppLogStream,
   type LlamaCppProbeResult,
-  type LlamaCppServerEntry
+  type LlamaCppServerEntry,
+  type LocalAiModelLocation
 } from '$shared/llama-cpp'
 
 export type LlamaCppServerStatus = 'stopped' | 'starting' | 'running' | 'failed'
@@ -134,7 +136,7 @@ export class LocalAiController {
     }
     // Anything else on the port (a server of an earlier app instance) has no
     // handle of ours to stop through.
-    await invoke('llamaCpp:stopServer', pending.entry.port)
+    await invoke('localAi:stopServer', pending.entry.port, pending.entry.runtime)
     await this.spawn(pending.entry, pending.executable)
   }
 
@@ -144,13 +146,68 @@ export class LocalAiController {
 
   /** Whether a row's own model is among the ids a server answers with. */
   private servesEntry(entry: LlamaCppServerEntry, models: readonly string[]): boolean {
-    const alias = llamaCppModelAlias(entry)
-    return models.some((model) => model === alias)
+    const aliases = localAiModelAliases(entry)
+    return models.some((served) => aliases.includes(served))
+  }
+
+  /**
+   * Called once a row's download has finished and the model's folder is known, so
+   * the saved row can name that folder instead of the tag it came from.
+   */
+  onModelLocalized: ((entry: LlamaCppServerEntry, location: LocalAiModelLocation) => void) | null =
+    null
+
+  /** Folders already resolved, so a readiness poll never repeats the lookup. */
+  private locations = new SvelteMap<string, LocalAiModelLocation>()
+  /** Folders already handed to the page, so the record is written once. */
+  private handedOff = new SvelteSet<string>()
+
+  /**
+   * Where the weights this row asks for are on disk right now, or null while they
+   * are still being fetched.
+   *
+   * A row that already names a folder is on disk by definition, so only a tag is
+   * ever asked about. The answer is the same call that decides the row is ready:
+   * a server whose generator is alive but whose weights are still arriving cannot
+   * serve a turn, so "downloaded" is the honest line for both.
+   */
+  private async modelLocationOf(entry: LlamaCppServerEntry): Promise<LocalAiModelLocation | null> {
+    if (localAiModelSource(entry)?.kind !== 'huggingface') return null
+    const key = `${entry.id}\u0000${entry.modelReference}`
+    const known = this.locations.get(key)
+    if (known) return known
+    try {
+      const location = await invoke(
+        'localAi:modelLocation',
+        entry.modelReference,
+        entry.host,
+        entry.port,
+        entry.runtime
+      )
+      if (!location) return null
+      this.locations.set(key, location)
+      return location
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Hand a finished download's folder to the page once, which owns the saved
+   * config. The row is written while it runs, so the next app start loads the
+   * folder instead of asking the hub about a repository it already has.
+   */
+  private localizeModel(entry: LlamaCppServerEntry, location: LocalAiModelLocation | null): void {
+    if (!location) return
+    const key = `${entry.id}\u0000${entry.modelReference}`
+    if (this.handedOff.has(key)) return
+    this.handedOff.add(key)
+    this.onModelLocalized?.(entry, location)
   }
 
   private async probeOf(entry: LlamaCppServerEntry): Promise<LlamaCppProbeResult> {
     try {
-      return await invoke('llamaCpp:probe', entry.host, entry.port)
+      return await invoke('localAi:probe', entry.host, entry.port, entry.runtime)
     } catch {
       return { ready: false, models: [], error: 'The readiness probe failed' }
     }
@@ -158,7 +215,12 @@ export class LocalAiController {
 
   /** Launch the row in a terminal, streaming its output into the card. */
   private async spawn(entry: LlamaCppServerEntry, executable: string): Promise<void> {
-    const args = buildLlamaServerArgs(entry, await this.logPathOf(entry.id))
+    // Only llama.cpp can be told to keep a log file; MLX prints to its terminal,
+    // so its card is empty until the server is started from this page again.
+    const args = localAiServerArgs(
+      entry,
+      entry.runtime === 'llama.cpp' ? await this.logPathOf(entry.id) : undefined
+    )
     if (args.length === 0) {
       this.setStatus(entry.id, 'failed')
       this.notice = { ...this.notice, [entry.id]: 'This server has no model to load' }
@@ -180,7 +242,7 @@ export class LocalAiController {
     this.loadedModel = { ...this.loadedModel, [entry.id]: '' }
     this.logs = { ...this.logs, [entry.id]: [] }
 
-    const ptyId = llamaCppPtyId(entry.id)
+    const ptyId = localAiPtyId(entry.id)
     handle.unsubscribe.push(
       subscribe(`pty:data:${ptyId}`, (chunk) => {
         if (typeof chunk === 'string') this.appendOutput(entry.id, chunk)
@@ -219,13 +281,13 @@ export class LocalAiController {
     }
     // Nothing of this row is answering, so show what the last run left in its
     // log file instead of an empty terminal.
-    await this.seedLog(entry.id)
+    await this.seedLog(entry)
   }
 
   /** Take over a server that is already answering this row's model. */
   private async adopt(entry: LlamaCppServerEntry, modelId: string): Promise<void> {
     if (this.handles.has(entry.id)) return
-    const ptyId = llamaCppPtyId(entry.id)
+    const ptyId = localAiPtyId(entry.id)
     const handle: RunningHandle = {
       entry,
       unsubscribe: [],
@@ -250,6 +312,7 @@ export class LocalAiController {
     // instance that launched it; its own log file is what streams instead.
     await this.followLog(entry)
     this.scheduleAdoptedProbe(entry)
+    void this.modelLocationOf(entry).then((location) => this.localizeModel(entry, location))
   }
 
   /** No PTY exit event will come for an adopted server, so a slow probe is what
@@ -264,7 +327,7 @@ export class LocalAiController {
     if (!this.handles.has(entry.id)) return
     let ready: boolean
     try {
-      ready = (await invoke('llamaCpp:probe', entry.host, entry.port)).ready
+      ready = (await invoke('localAi:probe', entry.host, entry.port, entry.runtime)).ready
     } catch {
       ready = false
     }
@@ -282,19 +345,22 @@ export class LocalAiController {
   /** The log file a row's server writes, empty when main refuses the id. */
   private async logPathOf(entryId: string): Promise<string | undefined> {
     try {
-      return await invoke('llamaCpp:logPath', entryId)
+      return await invoke('localAi:logPath', entryId)
     } catch {
       return undefined
     }
   }
 
   /** Show what a row's log file already holds, without following it. */
-  private async seedLog(entryId: string): Promise<void> {
-    if ((this.logs[entryId] ?? []).length > 0) return
+  private async seedLog(entry: LlamaCppServerEntry): Promise<void> {
+    // An MLX server writes no log file, so there is nothing to seed and the card
+    // keeps its empty state until the row is started here again.
+    if (entry.runtime !== 'llama.cpp') return
+    if ((this.logs[entry.id] ?? []).length > 0) return
     try {
-      const lines = await invoke('llamaCpp:logTail', entryId)
-      if (lines.length === 0 || this.handles.has(entryId)) return
-      this.logs = { ...this.logs, [entryId]: lines.slice(-LOG_LINE_LIMIT) }
+      const lines = await invoke('localAi:logTail', entry.id)
+      if (lines.length === 0 || this.handles.has(entry.id)) return
+      this.logs = { ...this.logs, [entry.id]: lines.slice(-LOG_LINE_LIMIT) }
     } catch {
       // A row with no log file keeps the empty state.
     }
@@ -307,10 +373,10 @@ export class LocalAiController {
    */
   private async followLog(entry: LlamaCppServerEntry): Promise<void> {
     const handle = this.handles.get(entry.id)
-    if (!handle) return
+    if (!handle || entry.runtime !== 'llama.cpp') return
     let stream: LlamaCppLogStream
     try {
-      stream = await invoke('llamaCpp:logStream', entry.id, true)
+      stream = await invoke('localAi:logStream', entry.id, true)
     } catch {
       return
     }
@@ -328,9 +394,9 @@ export class LocalAiController {
     if (handle?.adopted) {
       // This server has no PTY of ours to destroy (it outlived the app that
       // launched it), so the process that holds the port is what stops it.
-      await invoke('llamaCpp:stopServer', handle.entry.port)
+      await invoke('localAi:stopServer', handle.entry.port, handle.entry.runtime)
     } else {
-      await invoke('pty:destroy', llamaCppPtyId(entryId))
+      await invoke('pty:destroy', localAiPtyId(entryId))
     }
     this.stopHandle(entryId)
     this.setStatus(entryId, 'stopped')
@@ -359,7 +425,7 @@ export class LocalAiController {
       // leaving the page is not a reason to stop it.
       if (handle && !handle.adopted) {
         handle.stopping = true
-        void invoke('pty:destroy', llamaCppPtyId(entryId))
+        void invoke('pty:destroy', localAiPtyId(entryId))
       }
       this.stopHandle(entryId)
       this.setStatus(entryId, 'stopped')
@@ -403,7 +469,11 @@ export class LocalAiController {
    *  raw exit code. Another llama-server is handled before the start instead. */
   private portBusyNotice(entry: LlamaCppServerEntry): string {
     const lines = this.logs[entry.id] ?? []
-    const busy = lines.some((line) => /couldn't bind HTTP server socket/iu.test(line))
+    // llama.cpp says `couldn't bind HTTP server socket`, and the MLX server
+    // surfaces the operating system's own `[Errno 48]` for the same thing.
+    const busy = lines.some((line) =>
+      /couldn't bind HTTP server socket|address already in use|errno 48/iu.test(line)
+    )
     if (!busy) return ''
     return `Another program is using port ${entry.port}. Pick another port, or stop it first.`
   }
@@ -418,7 +488,7 @@ export class LocalAiController {
     if (!handle) return
     if (handle.probes >= PROBE_LIMIT) {
       this.stopHandle(entry.id)
-      void invoke('pty:destroy', llamaCppPtyId(entry.id))
+      void invoke('pty:destroy', localAiPtyId(entry.id))
       this.setStatus(entry.id, 'failed')
       this.notice = {
         ...this.notice,
@@ -435,19 +505,29 @@ export class LocalAiController {
     handle.probes++
     let result: LlamaCppProbeResult
     try {
-      result = await invoke('llamaCpp:probe', entry.host, entry.port)
+      result = await invoke('localAi:probe', entry.host, entry.port, entry.runtime)
     } catch {
       result = { ready: false, models: [], error: 'The readiness probe failed' }
     }
+    // An MLX server answers its health endpoint from the moment its generator
+    // loop is up, which is before a single weight has been read. Its weights on
+    // disk are the honest ready line, and they are what the row is rewritten to.
+    const location = result.ready ? await this.modelLocationOf(entry) : null
     if (!this.handles.has(entry.id)) return
-    if (result.ready) {
+    if (result.ready && (entry.runtime !== 'mlx' || !this.isReferenceRow(entry) || location)) {
       handle.timer = null
       this.setStatus(entry.id, 'running')
       this.setLoadedModel(entry.id, result.models[0] ?? '')
       this.notice = { ...this.notice, [entry.id]: '' }
+      this.localizeModel(entry, location)
       return
     }
     this.scheduleProbe(entry)
+  }
+
+  /** Whether this row asks for a model that has to be fetched before it runs. */
+  private isReferenceRow(entry: LlamaCppServerEntry): boolean {
+    return localAiModelSource(entry)?.kind === 'huggingface'
   }
 
   private stopHandle(entryId: string): void {
@@ -455,7 +535,7 @@ export class LocalAiController {
     if (!handle) return
     // The file watcher lives in main, so it is closed explicitly instead of
     // waiting for the unsubscribe below to be noticed.
-    if (handle.following) void invoke('llamaCpp:logStream', entryId, false)
+    if (handle.following) void invoke('localAi:logStream', entryId, false)
     for (const unsubscribe of handle.unsubscribe) unsubscribe()
     if (handle.timer) clearTimeout(handle.timer)
     this.handles.delete(entryId)

@@ -694,7 +694,7 @@
     <div>
       <h1 class="text-xl font-bold tracking-tight">Harnesses</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Connect the AI coding harnesses you use. {APP_NAME} wraps them it doesn't replace them.
+        Connect the AI coding harnesses you use. {APP_NAME} works with them, it does not replace them.
       </p>
     </div>
   </div>

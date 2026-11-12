@@ -12,7 +12,11 @@
   import { onMount, tick } from 'svelte'
   import type { Attachment } from 'svelte/attachments'
   import { invoke, subscribe } from '$lib/ipc.svelte'
-  import { designElementChatContext, openAnnotationChat } from '$lib/annotation-chat'
+  import {
+    designElementChatContext,
+    openAnnotationChat,
+    pageElementChatContext
+  } from '$lib/annotation-chat'
   import { loadBrowser } from '$lib/stores/browser-access.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import DesignScreenHistoryControls from '../design/DesignScreenHistoryControls.svelte'
@@ -24,7 +28,6 @@
   import BrowserExtensionDropdown from './BrowserExtensionDropdown.svelte'
   import { openThreadBrowserExtensionMenu } from './browser-extension-bar-menus'
   import BrowserFindBar from './BrowserFindBar.svelte'
-  import BrowserHistorySuggestions from './BrowserHistorySuggestions.svelte'
   import BrowserLoadErrorView from './BrowserLoadErrorView.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import { browserDownloads } from '$lib/stores/browser-downloads.svelte'
@@ -33,7 +36,6 @@
   import { storeExtensionOfferForPage } from '$lib/stores/browser-extension-store-offer'
   import { browserFindState } from '$lib/stores/browser-find.svelte'
   import { browserVisibility, type BrowserSurface } from '$lib/stores/browser-visibility.svelte'
-  import { browserAddressDrawer } from '$lib/stores/browser-address-drawer.svelte'
   import { browserBlankDraft } from '$lib/stores/browser-blank-draft.svelte'
   import { browserAddressFocus } from '$lib/stores/browser-address-focus'
   import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
@@ -185,12 +187,6 @@
   $effect(synchronizePageFrame)
 
   let panelVisible = $derived(browserVisibility.isVisible(tabId, contentRect, surface))
-
-  /** The history drawer this tab's address field has open, which this column
-   *  draws as a row under the toolbar so the live page shrinks to make room for
-   *  it instead of being parked (see `BrowserAddressBar`). */
-  const addressDrawer = $derived(browserAddressDrawer.forTab(tabId))
-
   /**
    * Whether this row is watching a picture the reader can see.
    *
@@ -246,6 +242,9 @@
    * below it rather than on Chromium.
    */
   let showsDomCard = $derived(pageState.loadError !== null || isBlank)
+  /** Whether a native page is really on screen for this surface, which is what
+   *  decides whether the address drawer has to be drawn by the native host. */
+  let pageOnScreen = $derived(panelVisible && !showsDomCard)
   /**
    * Whether element inspection is armed on this tab.
    *
@@ -257,6 +256,16 @@
   const screenEntry = $derived(
     authoredWork ? designScreenEntryFromUrl(pageState.url, authoredWork.origin) : null
   )
+  /**
+   * Whether this tab offers the element inspector.
+   *
+   * Every page the thread browser is showing does, not only a served design
+   * folder: a project file opened from the tree, a dev server or any site is a
+   * place the reader points at while giving feedback, and a pick there is the same
+   * descriptor a design pick is. A blank tab and a page that failed to load have
+   * no document to inspect, and a composition watched full screen is a player.
+   */
+  const canInspect = $derived(!compositionPlayer && !showsDomCard)
   let inspectArmed = $derived(browserInspector.isArmed(tabId))
   /**
    * The comment bubble this tab has open, and what it takes to draw it.
@@ -270,7 +279,7 @@
     const open = browserInspector.commentFor(tabId)
     if (!open) return null
     const { reference } = open
-    const named = (reference.text.split('\n')[0] ?? '').replace(/^Design element:\s*/u, '')
+    const named = (reference.text.split('\n')[0] ?? '').replace(/^(?:Design|Page) element:\s*/u, '')
     return {
       referenceId: reference.id,
       anchor: open.anchor,
@@ -549,7 +558,10 @@
         // that jar rather than the scope's own.
         tabBoxId
       )
-      if (stateRevision === revision) applyPageState(snapshot)
+      // A null answer means a hide or a newer show reached main while this tab's
+      // jar was loading: nothing was attached, so the state on screen stays as it
+      // is and the newer show answers for the tab that won.
+      if (snapshot && stateRevision === revision) applyPageState(snapshot)
       // The store's answer can change while that call is in flight: another
       // surface may claim the view, an overlay may appear, or the sidebar may
       // move on. Only one native view can exist at a time, so a stale attach
@@ -616,7 +628,6 @@
 
   /** Arm or disarm element inspection for this tab, through the shared session. */
   function toggleInspect(): void {
-    if (!inspectArmed && !pageState.design) return
     browserInspector.toggle(tabId)
   }
 
@@ -663,19 +674,23 @@
    *
    * The one comment bubble carries the read-only chat pair every annotation
    * offers, so the user can question an element they already picked. The
-   * element's own descriptor is the selection, and the design folder it was
-   * picked from is the context the answer is read from; the bubble then closes
-   * the way its Cancel does, keeping the reference and its draft.
+   * element's own descriptor is the selection, and what it was picked from is the
+   * context the answer is read from: a design folder for a design pick, the page's
+   * own URL for a pick on any other page. The bubble then closes the way its
+   * Cancel does, keeping the reference and its draft.
    */
-  function openDesignElementChat(mode: 'elaborate' | 'quick'): void {
+  function openElementChat(mode: 'elaborate' | 'quick'): void {
     const open = designComment
     if (!open) return
+    const isPage = open.reference.kind !== 'design'
     openAnnotationChat({
       projectId: open.projectId,
       threadId: open.threadId,
       mode,
       selection: open.reference.text,
-      context: designElementChatContext(open.reference.directory, open.reference.designEntry)
+      context: isPage
+        ? pageElementChatContext(open.reference.pageUrl, pageState.title)
+        : designElementChatContext(open.reference.directory, open.reference.designEntry)
     })
     browserInspector.closeComment(tabId)
   }
@@ -823,6 +838,7 @@
         boxId={tabBoxId}
         {secure}
         loading={pageState.loading}
+        {pageOnScreen}
         {siteMenuOpen}
         onOpenSiteMenu={openSiteMenu}
         onNavigate={navigate}
@@ -922,7 +938,7 @@
           {/key}
         {/if}
       {/if}
-      {#if pageState.design}
+      {#if canInspect}
         <button
           type="button"
           class={[
@@ -936,7 +952,7 @@
           aria-pressed={inspectArmed}
           title={inspectArmed
             ? 'Stop inspecting: hover an element and click to comment, Escape to exit'
-            : 'Pick an element in this design to comment on'}
+            : 'Pick an element on this page to comment on'}
           onclick={toggleInspect}
         >
           <CioMarquee size={13} />
@@ -945,33 +961,6 @@
           {/if}
         </button>
       {/if}
-    </div>
-  {/if}
-  {#if panelVisible && !compositionPlayer && !isBlank && addressDrawer}
-    <!--
-      The address field's history drawer, drawn as a row of this column.
-
-      The page is a native view composited above every DOM node, so a drawer over
-      it could only be seen by parking the page, which blanked the browser for as
-      long as the user was typing an address. As a row it shrinks the content rect
-      instead, and the observers above place the live page under it, exactly as
-      the find bar does.
-
-      Gated on a real page: a blank tab has no native view to park and already
-      draws its own drawer in its empty state (`BrowserBlankTab`), so this row
-      would only duplicate it.
-    -->
-    <div class="shrink-0 border-b border-border bg-surface p-1.5">
-      <div class="max-h-[min(16rem,50vh)] overflow-y-auto">
-        <BrowserHistorySuggestions
-          listId={addressDrawer.listId}
-          suggestions={addressDrawer.entries}
-          highlight={addressDrawer.highlight}
-          compact
-          onHighlight={(index) => addressBar?.highlightSuggestion(index)}
-          onOpen={(entry) => addressBar?.openSuggestion(entry.url)}
-        />
-      </div>
     </div>
   {/if}
   {#if findOpen && panelVisible && !compositionPlayer}
@@ -1111,7 +1100,7 @@
     onDone={commitDesignComment}
     onRemove={removeDesignComment}
     onClose={() => browserInspector.closeComment(tabId)}
-    onExplain={() => openDesignElementChat('elaborate')}
-    onQuickChat={() => openDesignElementChat('quick')}
+    onExplain={() => openElementChat('elaborate')}
+    onQuickChat={() => openElementChat('quick')}
   />
 </div>

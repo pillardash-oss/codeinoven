@@ -35,12 +35,25 @@ export const ORCHESTRATION_TARGETS_TOOL_NAME = 'cio_orchestrate_targets'
 export const ORCHESTRATION_DISPATCH_TOOL_NAME = 'cio_orchestrate_dispatch'
 /** Read the status and latest result of a thread this session dispatched. */
 export const ORCHESTRATION_STATUS_TOOL_NAME = 'cio_orchestrate_status'
+/**
+ * Keep talking to a thread this session already dispatched: send it a follow-up
+ * and/or change how it runs, without starting a new thread for every addition.
+ */
+export const ORCHESTRATION_CONTINUE_TOOL_NAME = 'cio_orchestrate_continue'
+/**
+ * Answer what a dispatched thread is waiting for: a question, a secret, or a
+ * permission. It is how the decision a blocked thread needs gets back to it after
+ * the dispatcher has asked the user in its own conversation.
+ */
+export const ORCHESTRATION_ANSWER_TOOL_NAME = 'cio_orchestrate_answer'
 
 /** Every orchestration tool name, for gate checks and the Pi extension. */
 export const ORCHESTRATION_TOOL_NAMES: readonly string[] = [
   ORCHESTRATION_TARGETS_TOOL_NAME,
   ORCHESTRATION_DISPATCH_TOOL_NAME,
-  ORCHESTRATION_STATUS_TOOL_NAME
+  ORCHESTRATION_STATUS_TOOL_NAME,
+  ORCHESTRATION_ANSWER_TOOL_NAME,
+  ORCHESTRATION_CONTINUE_TOOL_NAME
 ]
 
 /** Whether a gateway tool name belongs to the orchestration family. */
@@ -93,10 +106,15 @@ const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
       description:
         'The complete instruction the dispatched agent receives, self-contained and written as if the user typed it into that thread.'
     },
+    assistantId: {
+      type: 'string',
+      description:
+        'Exact assistantId from the `assistants` list in cio_orchestrate_targets. Use this for research, ideas, writing and tasks that belong to an assistant. Omit it to dispatch work into a project. Never send both assistantId and projectId.'
+    },
     projectId: {
       type: 'string',
       description:
-        'Project the thread belongs to, from the `projects` list in cio_orchestrate_targets. Omit to dispatch inside the project this conversation is already working on.'
+        'Project the thread belongs to, from the `projects` list in cio_orchestrate_targets. Use this for coding and other work in a repository. Omit to dispatch inside the project this conversation is already working on, or when targeting an assistant.'
     },
     ovenId: {
       type: 'string',
@@ -111,15 +129,17 @@ const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
     harnessId: {
       type: 'string',
       description:
-        'Exact harness id from cio_orchestrate_targets, for example pi, codex or claude-code.'
+        'Exact harness id from cio_orchestrate_targets, for example pi, codex or claude-code. Omit to run on the model this conversation is already using.'
     },
     providerId: {
       type: 'string',
-      description: 'Exact provider id from the selected harness catalog in cio_orchestrate_targets.'
+      description:
+        'Exact provider id from the selected harness catalog in cio_orchestrate_targets. Omit to run on the model this conversation is already using.'
     },
     modelId: {
       type: 'string',
-      description: 'Exact model id from the selected provider in cio_orchestrate_targets.'
+      description:
+        'Exact model id from the selected provider in cio_orchestrate_targets. Omit to run on the model this conversation is already using, which is the right default unless the user asked for another model.'
     },
     accountId: {
       type: 'string',
@@ -143,7 +163,7 @@ const DISPATCH_INPUT_SCHEMA: Record<string, unknown> = {
       description: 'Permission tier for the dispatched run. Omit to inherit the requesting thread.'
     }
   },
-  required: ['title', 'prompt', 'harnessId', 'providerId', 'modelId'],
+  required: ['title', 'prompt'],
   additionalProperties: false
 }
 
@@ -152,15 +172,134 @@ const STATUS_INPUT_SCHEMA: Record<string, unknown> = {
   properties: {
     threadId: {
       type: 'string',
-      description: 'Thread id returned by cio_orchestrate_dispatch or listed in this project.'
+      description:
+        'Thread id returned by cio_orchestrate_dispatch or cio_orchestrate_continue, or one of the ids this conversation dispatched. Omit it to list every thread this conversation dispatched, with their ids and current settings.'
     },
     projectId: {
       type: 'string',
       description:
-        'Project the thread belongs to. Omit to look in the project this conversation is working on.'
+        'Project the thread belongs to, when you know it. Omit to resolve the thread by its id alone.'
+    }
+  },
+  additionalProperties: false
+}
+
+const CONTINUE_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    threadId: {
+      type: 'string',
+      description:
+        'The existing thread to continue, from cio_orchestrate_dispatch, cio_orchestrate_status, or the message that reported it. Never create a new thread to say one more thing to work you already dispatched.'
+    },
+    prompt: {
+      type: 'string',
+      description:
+        'The follow-up instruction the thread receives, self-contained and written as if the user typed it into that thread. Omit it only to change how the thread runs before its next turn.'
+    },
+    harnessId: {
+      type: 'string',
+      description:
+        'Exact harness id from cio_orchestrate_targets, to move this thread onto another harness. Requires providerId and modelId.'
+    },
+    providerId: {
+      type: 'string',
+      description: 'Exact provider id from the new harness catalog. Requires harnessId and modelId.'
+    },
+    modelId: {
+      type: 'string',
+      description: 'Exact model id from the new provider. Requires harnessId and providerId.'
+    },
+    accountId: {
+      type: 'string',
+      description:
+        'Exact account id for the harness from cio_orchestrate_targets. Omit to keep the account the thread already uses for that harness.'
+    },
+    thinkingLevel: {
+      type: 'string',
+      enum: [...THINKING_LEVEL_ORDER],
+      description: 'New reasoning effort for this thread. Omit to keep the one it uses.'
+    },
+    inferenceMode: {
+      type: 'string',
+      enum: [...MODEL_PROFILE_INFERENCE_MODES],
+      description: 'New speed tier. Omit to keep the one the thread uses.'
+    },
+    permissionLevel: {
+      type: 'string',
+      enum: [...MODEL_PROFILE_PERMISSION_LEVELS],
+      description: 'New permission tier for this thread. Omit to keep the one it uses.'
+    },
+    ovenId: {
+      type: 'string',
+      description:
+        'Exact Oven id from cio_orchestrate_targets, to move this thread onto another machine. Omit to keep the machine it runs on.'
+    },
+    ovenPath: {
+      type: 'string',
+      description:
+        "Absolute workspace path on a new Oven. Omit to keep the thread's current checkout."
     }
   },
   required: ['threadId'],
+  additionalProperties: false
+}
+
+const ANSWER_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    kind: {
+      type: 'string',
+      enum: ['question', 'secret', 'permission'],
+      description:
+        'What the blocked thread is waiting for, exactly as this conversation was told when it stopped.'
+    },
+    requestId: {
+      type: 'string',
+      description: 'The request id from the message that told you this thread stopped.'
+    },
+    threadId: {
+      type: 'string',
+      description: 'The blocked thread id, from the same message. Never invent one.'
+    },
+    projectId: {
+      type: 'string',
+      description: 'The project the blocked thread lives in, from the same message.'
+    },
+    answers: {
+      type: 'array',
+      description:
+        'kind "question": one entry per question, in the order they were asked. Each entry holds the answer the user gave for that question, as one or more strings (a single choice is a one-item array).',
+      items: {
+        type: 'array',
+        items: { type: 'string' }
+      }
+    },
+    secrets: {
+      type: 'array',
+      description:
+        'kind "secret": one entry per requested secret. The value itself never travels here: it stays in the vault and is read by the app.',
+      items: {
+        type: 'object',
+        properties: {
+          secretId: { type: 'string', description: 'The secret id the blocked thread asked for.' },
+          environmentVariable: {
+            type: 'string',
+            description:
+              'The variable you collected this value under with cio_ask_secret, in this conversation.'
+          }
+        },
+        required: ['secretId', 'environmentVariable'],
+        additionalProperties: false
+      }
+    },
+    permission: {
+      type: 'string',
+      enum: ['once', 'always', 'reject'],
+      description: 'kind "permission": the decision the user gave.'
+    }
+  },
+  required: ['kind', 'requestId', 'threadId', 'projectId'],
   additionalProperties: false
 }
 
@@ -168,7 +307,7 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
   {
     name: ORCHESTRATION_TARGETS_TOOL_NAME,
     description:
-      'Read the CodeInOven workstation: the Ovens (machines) and which harnesses each one has installed, the harness catalog, the model catalogs with the thinking levels each model offers, the saved model profiles, the accounts per harness with the one the app marks as default, and every project with its id. Call this before cio_orchestrate_dispatch: it is the only source of the exact ids a dispatch accepts. Its results also carry the current project, the default Oven and the default harness, so a request that names none of them still has a real value to propose and confirm with the user.',
+      "Read the CodeInOven workstation: every project with its id, every assistant with its id and what it is for, the Ovens (machines) and which harnesses each one has installed, the harness catalog, the model catalogs with the thinking levels each model offers, the saved model profiles, and the accounts per harness with the one the app marks as default. Each account also carries its remaining subscription capacity when the user allows it to be seen. When accounts carry no capacity the user has turned that off: run on this thread's own account and model, and inherit the same for sub-agents, instead of hunting for another account. Call this before cio_orchestrate_dispatch: it is the only source of the exact ids a dispatch accepts. Its results also carry the current project, the default Oven and the default harness, so a request that names none of them still has a real value to propose and confirm with the user.",
     inputSchema: TARGETS_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-targets',
@@ -177,16 +316,36 @@ export const ORCHESTRATION_TOOLS: GatewayToolDefinition[] = [
   {
     name: ORCHESTRATION_DISPATCH_TOOL_NAME,
     description:
-      'Create a real CodeInOven thread and run a prompt in it, on a chosen Oven with a chosen harness, provider, model, thinking level, account and permission tier. This is also the one call that starts a thread in another project with a first message: pass that project id from cio_orchestrate_targets and the user never sees an empty thread. The thread appears in the sidebar like any other, bound to the Oven and streaming its status, exactly as if the user had configured and started it by hand. Use only exact ids read from cio_orchestrate_targets. Before calling, resolve every field the user named; for a field the user left out and the app has no default for, ask the user with the harness question tool and offer the real options. The call returns as soon as the run is accepted: do not block, and do not claim the work is finished. The app reports back into this conversation when the dispatched thread settles.',
+      'Start real work from this conversation, on another assistant or in a project. Pass `assistantId` from cio_orchestrate_targets for research, ideas, writing and tasks that belong to an assistant; pass `projectId` for coding and other work in a repository. The thread is created with the first prompt already in it, so the user never sees an empty thread, and it appears in the sidebar like any other. Omit harnessId, providerId and modelId to run on the model this conversation is already using, which is the right default; name them only when the user asked for another model, thinking level, account or Oven. Use only exact ids read from cio_orchestrate_targets. Use this only for new work: to add to a thread this conversation already dispatched, or to change its model, thinking level, harness or permission level, call cio_orchestrate_continue instead. The call returns as soon as the run is accepted: do not block, and do not claim the work is finished. An assistant answers here under its own name; a project run reports its outcome here when it settles.',
     inputSchema: DISPATCH_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-dispatch',
     sentWhen: 'An @cio-hey turn once every dispatch field is resolved or confirmed'
   },
   {
+    name: ORCHESTRATION_ANSWER_TOOL_NAME,
+    description:
+      'Hand the user\'s decision back to a dispatched thread that stopped to ask for it. Use the ids from the message that told you the thread stopped, and the answer the user gave in this conversation, never one you chose for them. A question takes `answers`; a secret takes `secrets` naming the vault variable you collected it under, so the value never enters a conversation; a permission takes "once", "always" or "reject". The blocked thread continues on its own once the answer is accepted.',
+    inputSchema: ANSWER_INPUT_SCHEMA,
+    outputSchema: ORCHESTRATION_RESULT_SCHEMA,
+    route: '/orchestrate-answer',
+    sentWhen:
+      'A dispatched thread stopped on a question, a secret or a permission and the user answered here'
+  },
+  {
+    name: ORCHESTRATION_CONTINUE_TOOL_NAME,
+    description:
+      'Continue a thread this conversation already dispatched: send it a follow-up instruction, and/or change how it runs (harness, model, thinking level, account, permission tier, machine). The thread keeps its own history and its id, so nothing has to be started over. Use this every time the user adds to work already in flight or settled, or asks that a dispatched thread change model, thinking level, harness or permission level. Only call cio_orchestrate_dispatch when the user wants genuinely new work. A change made while the thread is running applies to its next turn, and the follow-up steers the live turn.',
+    inputSchema: CONTINUE_INPUT_SCHEMA,
+    outputSchema: ORCHESTRATION_RESULT_SCHEMA,
+    route: '/orchestrate-continue',
+    sentWhen:
+      'The user adds to work already dispatched, or asks to change how an existing dispatched thread runs'
+  },
+  {
     name: ORCHESTRATION_STATUS_TOOL_NAME,
     description:
-      "Read one dispatched thread's status and latest result by its id. Use it for a follow-up question about work already dispatched. A thread that is still running answers with its working status; a settled one answers with its final status, its title and the machine it ran on.",
+      "Read one dispatched thread's status, latest result and current settings by its id. Use it for a follow-up question about work already dispatched. Omit threadId to list every thread this conversation dispatched, with their ids, titles, statuses and the model, thinking level and permission tier each one runs with: that list is where the threadId for cio_orchestrate_continue comes from.",
     inputSchema: STATUS_INPUT_SCHEMA,
     outputSchema: ORCHESTRATION_RESULT_SCHEMA,
     route: '/orchestrate-status',

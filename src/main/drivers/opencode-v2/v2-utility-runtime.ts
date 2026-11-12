@@ -5,7 +5,7 @@ import type {
 } from '../driver.interface'
 import type { BaseUrlProviderService } from '../../providers/base-url-provider-service'
 import { hasNativeProviderCatalog } from '../../agents/native-provider-config-service'
-import type { SecretVault } from '../../storage/secret-vault'
+import type { SecretsService } from '../../secrets/secrets-service'
 import { STANDARD_THINKING_VARIANTS } from '../opencode/opencode-models'
 import { utilityKey } from '../opencode/opencode-values'
 import { OPENCODE_V2_CONFIG_CONTENT_ENV } from '../../opencode-v2/opencode-v2-server'
@@ -33,7 +33,7 @@ export async function prepareOpenCodeV2UtilityRuntime(
   request: UtilityRuntimePreparationRequest,
   driverId: string,
   baseUrlProviders?: BaseUrlProviderService,
-  secretVault?: SecretVault
+  secretVault?: SecretsService
 ): Promise<UtilityRuntimeOverlay> {
   const servers: Record<string, Record<string, unknown>> = {}
   const provider: Record<string, Record<string, unknown>> = {}

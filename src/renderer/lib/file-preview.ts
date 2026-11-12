@@ -11,19 +11,29 @@ const SCHEME = 'appfile'
  *  task's `assistant-cwd/<assistantId ?? threadId>`) instead of a project root.
  *  `version`, when provided, is appended as a `?v=` query so a changed URL
  *  re-creates the preview element and re-reads the file from disk (the main
- *  process ignores the query). */
+ *  process ignores the query).
+ *  `scopeBucketId` names the managed scope checkout a scoped project's tree is
+ *  mounted on, and travels with the URL because the request is resolved from
+ *  the URL alone: without it the main process answers from the project's own
+ *  directory, where a scoped file does not exist, and every image, PDF and
+ *  media preview in that scope renders as nothing. */
 export function projectFilePreviewUrl(
   projectId: string,
   relativePath: string,
   mountThreadId?: string,
-  version?: number
+  version?: number,
+  scopeBucketId?: string
 ): string {
   mountThreadId ??= ovenRootThread(projectId)?.id
   const encoded = toPosixPath(relativePath).split('/').map(encodeURIComponent).join('/')
   const base = mountThreadId
     ? `${SCHEME}://thread/${projectId}/${mountThreadId}/${encoded}`
     : `${SCHEME}://project/${projectId}/${encoded}`
-  return version === undefined ? base : `${base}?v=${version}`
+  const params = new URLSearchParams()
+  if (version !== undefined) params.set('v', String(version))
+  if (scopeBucketId) params.set('scope', scopeBucketId)
+  const query = params.toString()
+  return query ? `${base}?${query}` : base
 }
 
 /** Build an `appfile://` URL for an out-of-project attachment stored in

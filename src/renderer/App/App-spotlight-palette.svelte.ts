@@ -37,7 +37,6 @@ import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
 import { providerConnectFlow } from '$lib/stores/provider-connect-flow.svelte'
 import { githubSignIn } from '$lib/stores/github-sign-in.svelte'
 import { loadProjectIcons } from '$lib/project-icons'
-import { actionContext } from '$lib/stores/action-context.svelte'
 import {
   captureElementSelection,
   restoreElementSelection,
@@ -50,16 +49,11 @@ import {
   type Thread,
   type ThreadSearchResult
 } from '$shared/types'
-import {
-  buildPaletteContextActions,
-  navigationActions,
-  settingsActions
-} from '../app-palette-actions'
+import { buildPaletteContextActions, navigationActions } from '../app-palette-actions'
 import { ThreadSearchPaletteController } from '../app-thread-search.svelte'
 import { BrowserTabPaletteController } from '../app-browser-tab-search.svelte'
 import { ProjectSwitchPaletteController } from '../app-project-switch.svelte'
 import { type OsHandoffDeps } from '../app-os-handoff'
-import { warmIntentSearch } from '../app-search-warm'
 import { type GuideActionKind } from '$lib/guide/guide-stops'
 import { guideState } from '$lib/guide/guide-state.svelte'
 import type { View, SpotlightScreenId } from './App-types'
@@ -84,24 +78,6 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     { openThread: (thread) => void this.openThreadFromSearch(thread) },
     'all'
   )
-
-  /**
-   * The same unified ranking, shown inline on the spotlight home while the user
-   * types there.
-   *
-   * The home prompt has always promised threads, and until now it only listed
-   * actions: a query that named a conversation answered "No matching actions".
-   * Its rows are handed to the palette as leading rows, so the server's ranking
-   * is never re-filtered by the client and a meaning-based hit whose text does
-   * not repeat the query still shows.
-   */
-  homeThreadSearch = new ThreadSearchPaletteController(
-    { openThread: (thread) => void this.openThreadFromSearch(thread) },
-    'all'
-  )
-
-  /** The query the home screen is on, mirrored for its inline thread search. */
-  homeQuery = $state('')
 
   browserTabSearch = new BrowserTabPaletteController({
     openTab: (tabId) => this.openBrowserTabFromSearch(tabId)
@@ -131,14 +107,17 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     })
   )
 
-  paletteActions = $derived([
-    ...this.paletteContextActions,
-    ...navigationActions,
-    ...settingsActions,
-    // Harness-bound actions (model pickers, slash commands) belong to the inline
-    // menus   the global Cmd+K surface keeps app-level and cross-harness actions.
-    ...actionContext.actions.filter((action) => action.source.kind !== 'harness')
-  ])
+  /**
+   * Everything the spotlight home can run, and nothing else.
+   *
+   * Its actions are the app's own: every search (which is what the home is for),
+   * then the primary action of the current view, project actions, the two
+   * browsers, the open thread's panels, settings and the rest. Harness-bound
+   * actions (model pickers, slash commands) and the composer's run controls
+   * (thinking level, permissions, compaction) belong to the inline composer
+   * menus they are part of, so the global surface never mirrors them.
+   */
+  paletteActions = $derived([...this.paletteContextActions, ...navigationActions])
 
   /** The screen on top. A nested screen outranks the actions list, because
    *  picking one closes the actions list in the same flush. */
@@ -259,6 +238,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.root.onKeydown.fileSearch.actions,
           title: 'Search files across projects',
           placeholder: 'Type at least two characters…',
+          initialQuery: this.root.onKeydown.fileSearch.initialQuery,
           emptyLabel: this.root.onKeydown.fileSearch.loading
             ? 'Searching project files…'
             : 'No matching files',
@@ -280,6 +260,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.allThreadSearch.actions,
           title: 'Search all threads',
           placeholder: 'Search project threads, chats, and assistant tasks…',
+          initialQuery: this.allThreadSearch.initialQuery,
           emptyLabel: this.allThreadSearch.loading
             ? 'Searching every thread…'
             : 'Type at least two characters to search every thread',
@@ -301,6 +282,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.root.onKeydown.threadSearch.actions,
           title: 'Search threads across projects',
           placeholder: 'Search thread titles and messages across all projects…',
+          initialQuery: this.root.onKeydown.threadSearch.initialQuery,
           emptyLabel: this.root.onKeydown.threadSearch.loading
             ? 'Searching threads…'
             : 'Type at least two characters to search all projects',
@@ -327,6 +309,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.chatSearch.actions,
           title: 'Search chats',
           placeholder: 'Search chat titles and messages…',
+          initialQuery: this.chatSearch.initialQuery,
           emptyLabel: this.chatSearch.loading
             ? 'Searching chats…'
             : 'Type at least two characters to search chats',
@@ -346,6 +329,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.root.onKeydown.assistantSearch.actions,
           title: 'Search assistant tasks',
           placeholder: 'Search assistants, tasks, and messages…',
+          initialQuery: this.root.onKeydown.assistantSearch.initialQuery,
           emptyLabel: this.root.onKeydown.assistantSearch.loading
             ? 'Searching assistant tasks…'
             : 'Type at least two characters to search assistant tasks and assistants',
@@ -370,6 +354,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.browserTabSearch.actions,
           title: 'Search browser tabs',
           placeholder: 'Search open tabs by title, address, or group…',
+          initialQuery: this.browserTabSearch.initialQuery,
           emptyLabel: browserStore() ? 'No matching tabs' : 'Opening the browser…',
           headerIcon: CioBrowser,
           headerIconBadge: true,
@@ -401,20 +386,12 @@ export class AppSpotlightPalette extends BoardUnit<App> {
         return {
           ...shell,
           actions: this.paletteActions,
-          // Thread hits rank above the action list and are never re-filtered: the
-          // search already decided they match.
-          leadingActions: this.homeQuery.trim().length >= 2 ? this.homeThreadSearch.actions : [],
           title: 'Search actions',
-          placeholder: 'Search actions, threads, and files…',
-          emptyLabel:
-            this.homeQuery.trim().length >= 2
-              ? 'No matching actions or threads'
-              : 'No matching actions',
-          statusNote: this.homeThreadSearch.rankingByMeaning ? 'Ranking by meaning…' : '',
-          onQueryChange: (query) => this.handleHomeQuery(query),
+          placeholder: 'Search actions…',
+          emptyLabel: 'No matching actions',
           onSelect: (selection) => void this.selectFromHome(selection),
-          // The home surface decides for itself whether the pick closes the
-          // spotlight, because a thread row needs its target before it does.
+          // The home surface closes the spotlight itself, once it knows whether
+          // the pick opened a nested screen or navigated away.
           closeOnSelect: false,
           shortcutLabel: 'Ctrl K'
         }
@@ -497,7 +474,55 @@ export class AppSpotlightPalette extends BoardUnit<App> {
       utilities:
         this.root.onKeydown.activeView === 'settings-utilities'
           ? settingsRouteState.utilities
-          : null
+          : null,
+      // The scoped view is the projects page plus its docked scope, so the scope
+      // is part of the place and not a detail of the page.
+      scope: scopeState.sidebarContext ? { ...scopeState.sidebarContext } : null
+    }
+  }
+
+  /**
+   * The view a recorded location belongs to.
+   *
+   * The scoped view is the workspace page with a scope docked on its sidebar, so
+   * a location is it exactly when it recorded a scope. A location recorded as
+   * the scoped view whose scope is gone has nothing to show and lands on the
+   * plain projects page, and a projects location that carries a scope (a restore
+   * or a landing that docked the sidebar without registering the view) comes
+   * back as the scoped view it actually was.
+   */
+  private historyView(entry: NavigationLocation): NavigationLocation['view'] {
+    if (entry.view !== 'projects' && entry.view !== 'projects-scope') return entry.view
+    return entry.scope ? 'projects-scope' : 'projects'
+  }
+
+  /**
+   * Show a recorded location in full: its view, its Utilities page, the scope
+   * docked in it, and the thread that was open. Traversal wraps this, so the
+   * observer does not record the restore as a new step.
+   */
+  async showHistoryEntry(entry: NavigationLocation): Promise<void> {
+    const view = this.historyView(entry)
+    this.root.onKeydown.navigate(view)
+    this.root.openAssistantFromSearch.restoreUtilitiesFromHistory(entry)
+    // The docked scope means something only on the scoped view. Every other
+    // target keeps whatever the navigation just left it with, so stepping back
+    // into Settings or Chats never quietly re-docks a scope behind the page.
+    if (view === 'projects-scope' && entry.scope) {
+      scopeState.restoreSidebarContext(entry.scope)
+    }
+    await this.restoreThreadFromHistory(entry)
+  }
+
+  /** Navigate to the previously visited location, if any. */
+  async goBack(): Promise<void> {
+    const entry = navigationHistoryState.back(this.currentLocation())
+    if (!entry) return
+    navigationHistoryState.beginTraversal()
+    try {
+      await this.showHistoryEntry(entry)
+    } finally {
+      navigationHistoryState.endTraversal()
     }
   }
 
@@ -573,20 +598,6 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     void scopeState.ensureBoardLoaded(thread.projectId)
   }
 
-  /** Navigate to the previously visited location, if any. */
-  async goBack(): Promise<void> {
-    const entry = navigationHistoryState.back(this.currentLocation())
-    if (!entry) return
-    navigationHistoryState.beginTraversal()
-    try {
-      this.root.onKeydown.navigate(entry.view)
-      this.root.openAssistantFromSearch.restoreUtilitiesFromHistory(entry)
-      await this.restoreThreadFromHistory(entry)
-    } finally {
-      navigationHistoryState.endTraversal()
-    }
-  }
-
   capturePaletteFocus(): void {
     const active = document.activeElement
     if (
@@ -619,55 +630,30 @@ export class AppSpotlightPalette extends BoardUnit<App> {
     }
     this.capturePaletteFocus()
     this.commandPaletteOpen = true
-    // The spotlight is where the semantic ranking lives; its thread search is
-    // one hop away. Start the embedding model boot behind the keystroke (main
-    // no-ops it unless intent search is enabled).
-    warmIntentSearch()
   }
 
   /** Step back to the actions list from a nested spotlight screen. */
   backToSpotlightHome(): void {
-    this.resetHomeSearch()
     this.root.onKeydown.closeSpotlight()
     this.commandPaletteOpen = true
   }
 
-  /** Feed the home input to the unified thread search, or stand it down. */
-  handleHomeQuery(query: string): void {
-    this.homeQuery = query
-    const searching = query.trim().length >= 2
-    this.homeThreadSearch.setInlineActive(searching)
-    if (searching) this.homeThreadSearch.handleQuery(query)
-  }
-
-  /** Stop the inline home search and drop its rows. */
-  resetHomeSearch(): void {
-    this.homeQuery = ''
-    this.homeThreadSearch.setInlineActive(false)
-  }
-
   /**
-   * A pick on the home screen: a thread row opens its thread, anything else is an
-   * app action.
+   * A pick on the home screen is an app action.
    *
-   * The thread rows come from this screen's inline search, so only it can resolve
-   * the row's target. Opening one closes the whole spotlight, exactly as picking
-   * a row on the dedicated search screen does.
+   * The home screen lists actions and nothing else: every thread search is a
+   * row of its own that opens its own screen, so a pick here never has to
+   * resolve a thread target.
    */
   async selectFromHome(selection: ActionSelection): Promise<void> {
-    if (this.homeThreadSearch.ownsAction(selection.action.id)) {
-      // Resolve the row while its target still exists: the controller's own
-      // select closes and resets itself, then the whole spotlight goes with it.
-      this.homeThreadSearch.select(selection)
-      this.root.onKeydown.closeSpotlight()
-      return
-    }
-    this.resetHomeSearch()
     await this.root.onKeydown.handlePaletteSelection(selection)
-    // A nested screen the action opened (another search, project switch, the new
-    // project flow) keeps the spotlight open; anything else is a navigation or a
-    // command, which closes it the way it always has.
-    if (!this.spotlightScreenId) this.root.onKeydown.closeSpotlight()
+    // A pick that opened a nested screen (a search, the project switch) leaves the
+    // spotlight up on that screen, which is the page the pick asked for. Every
+    // other pick is an action that already ran: a navigation, a command, a panel
+    // or a modal of its own, so the surface closes behind it instead of staying
+    // over the result it just produced. The home screen is itself `actions`, so
+    // "still on the home screen" is exactly the case that has to close.
+    if (this.spotlightScreenId === 'actions') this.root.onKeydown.closeSpotlight()
   }
 
   /** Preserve the current content view / project sidebar state when opening a
@@ -694,9 +680,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
       this.root.onKeydown.threadSearch.applyIntentResults(payload)
     else if (this.allThreadSearch.paletteOpen) this.allThreadSearch.applyIntentResults(payload)
     else if (this.chatSearch.paletteOpen) this.chatSearch.applyIntentResults(payload)
-    else if (this.root.onKeydown.assistantSearch.paletteOpen)
-      this.root.onKeydown.assistantSearch.applyIntentResults(payload)
-    else this.homeThreadSearch.applyIntentResults(payload)
+    else this.root.onKeydown.assistantSearch.applyIntentResults(payload)
   }
 
   /** Focus a tab picked in browser search: land on the Browser view and switch

@@ -460,7 +460,13 @@
                   </div>
                 {:else}
                   {@render resizeHandle(action, 'top')}
-                  <div class="min-h-0 flex-1">
+                  <!--
+                    The entry is draggable to reorder it, and dragability is
+                    inherited. A drag that starts inside the run output must
+                    select the log instead of dragging the entry, so the
+                    terminal's container opts out.
+                  -->
+                  <div class="min-h-0 flex-1" draggable="false">
                     {#key run.terminalId}<ActionTerminal
                         terminalId={run.terminalId}
                         {projectId}

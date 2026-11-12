@@ -139,15 +139,22 @@ function showAgentNotification(
       payload.temporaryChatId
     )
   if (
-    !readingTemporaryChat &&
     payload.source === 'temporary-chat' &&
     payload.kind === 'chat-completed' &&
     payload.temporaryChatId
   ) {
-    // The side chat finished while the user was not reading it: flag it so the
-    // response is discoverable from the thread list and the context rail's own
-    // icon. Cleared when the side-chat panel is focused.
-    temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
+    if (readingTemporaryChat) {
+      // The response landed in the panel the user is reading, so it is read on
+      // arrival: a mark left over from a turn that finished while the panel was
+      // away must not keep the row and rail dots lit over a response that is on
+      // screen right now.
+      temporaryChatUnread.clear(payload.projectId, payload.threadId, payload.temporaryChatId)
+    } else {
+      // The side chat finished while the user was not reading it: flag it so the
+      // response is discoverable from the thread list and the context rail's own
+      // icon. Cleared when the side-chat panel is focused.
+      temporaryChatUnread.markUnread(payload.projectId, payload.threadId, payload.temporaryChatId)
+    }
   }
   if (onSelectedThread) {
     return
@@ -278,10 +285,18 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     // reading as work in progress on the row, the header and the rail. A parked
     // retry keeps its own entry so its clock survives, and `completeSession`
     // still yields the entry to a background workflow that owns it.
+    // A turn this window just dispatched is the exception, and it is why a
+    // provider or harness switch flickered: binding the new session publishes a
+    // thread update while the row still carries the previous turn's settled
+    // status, so this repair cleared a run that had not started yet and the
+    // status read working, idle, then working again seconds later when the new
+    // harness finally reported. An unconfirmed dispatch keeps its entry until a
+    // live session states the run (or the send fails and settles it).
     if (
       thread.status !== 'working-paused' &&
       !isThreadExecutionActiveStatus(thread.status) &&
-      agentRuns.isBusy(thread.projectId, thread.id)
+      agentRuns.isBusy(thread.projectId, thread.id) &&
+      !agentRuns.isAwaitingDispatch(thread.projectId, thread.id)
     ) {
       agentRuns.completeSession(thread.projectId, thread.id)
     }

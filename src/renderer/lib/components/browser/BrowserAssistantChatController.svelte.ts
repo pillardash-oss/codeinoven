@@ -179,6 +179,7 @@ export class BrowserAssistantChatController implements ConversationController {
     if (!text) return
     const userMessageId = messageId()
     agentRuns.setBusy(this.projectId, this.conversationId, true, userMessageId)
+    agentRuns.beginDispatch(this.projectId, this.conversationId)
     try {
       await threadMessages.send(
         this.projectId,

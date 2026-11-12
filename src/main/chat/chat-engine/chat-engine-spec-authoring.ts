@@ -11,7 +11,8 @@ import type {
   AgentSessionStatus,
   EngineeringSpec,
   EngineeringSpecContent,
-  SpecGenerationRequest
+  SpecGenerationRequest,
+  ThreadSettings
 } from '../../../lib/types'
 import { modelKey } from '../../../lib/model-keys'
 import { ensureFeatureSlug, featureArtifactDirectory } from '../../../lib/project-artifacts'
@@ -115,7 +116,20 @@ export class ChatEngineSpecAuthoring {
     }
 
     const driverId = settings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, threadId)
+    // Same account as the thread's turns: the artifact session must run where
+    // the thread's provider and credentials exist, not in the harness default.
+    const account = await this.host.state.accountRegistry.resolveForProvider(
+      driverId,
+      settings.providerId,
+      settings.accountId
+    )
+    const generationSettings: ThreadSettings = { ...settings, accountId: account.id }
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      threadId,
+      account.id
+    )
     let source = instructions
     if (request.mode === 'conversation') {
       const messages = await this.host.threadManager.loadMessageRecords(projectId, threadId)
@@ -202,7 +216,7 @@ export class ChatEngineSpecAuthoring {
       try {
         const prompt: SendPromptOptions = {
           sessionId,
-          settings,
+          settings: generationSettings,
           text: [source, repairError ? specRepairInstruction(repairError) : '']
             .filter(Boolean)
             .join('\n\n'),
@@ -255,7 +269,7 @@ export class ChatEngineSpecAuthoring {
                 threadId,
                 attempt: Math.max(1, pendingWorkflow?.attempts ?? 1),
                 format: useStructuredOutput ? 'structured' : 'json',
-                settings,
+                settings: generationSettings,
                 error
               })
             : null

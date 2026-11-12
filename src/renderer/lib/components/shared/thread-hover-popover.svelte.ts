@@ -5,7 +5,7 @@ import {
 } from './thread-hover-popover-layout'
 
 /** How long the pointer must rest on a row before its info popover appears. */
-export const THREAD_HOVER_POPOVER_DELAY_MS = 550
+export const THREAD_HOVER_POPOVER_DELAY_MS = 800
 
 export interface ThreadHoverPopoverOptions {
   /** Reveal delay in milliseconds. */

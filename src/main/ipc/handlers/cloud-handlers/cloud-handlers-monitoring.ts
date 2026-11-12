@@ -16,6 +16,7 @@ import type {
   CloudDeploymentProviderKind
 } from '../../../../lib/types'
 import type { DeploymentProviderContext } from '../../../providers/deployment-provider.interface'
+import { providerTokenRef } from '../../../secrets/secret-refs'
 import type { IpcHandlerContext } from '../context'
 
 /**
@@ -93,9 +94,10 @@ export function registerCloudDeploymentMonitoringHandlers(
     // Both overrides are optional: a blank token keeps the stored secret, and a
     // blank base URL keeps the stored one.
     if (typeof input.token === 'string' && input.token.trim() !== '') {
-      account.secretRef = await vault.saveProviderToken(
-        safeAccountId,
-        validateProviderToken(input.token)
+      account.secretRef = await vault.save(
+        validateProviderToken(input.token),
+        providerTokenRef(safeAccountId),
+        { scope: 'cloud-provider', ownerId: safeAccountId }
       )
       account.configured = true
     }
@@ -218,7 +220,7 @@ export function registerCloudDeploymentMonitoringHandlers(
     if (!activeAccount.enabled) {
       throw new TypeError(`Cloud deployment account "${activeAccount.label}" is disabled`)
     }
-    const token = await vault.resolveProviderToken(activeAccount.id)
+    const token = await vault.resolve(providerTokenRef(activeAccount.id))
     return {
       ...(activeAccount.baseUrl === undefined ? {} : { baseUrl: activeAccount.baseUrl }),
       token
@@ -430,6 +432,11 @@ export function registerCloudDeploymentMonitoringHandlers(
     }
   )
 
+  /**
+   * Read a container's log: one deployment's build log, or   when `serviceName`
+   * names one of the container's log sources   that compose service's runtime
+   * output.
+   */
   ipcMain.handle(
     'cloudDeploy:containerLog',
     async (
@@ -438,7 +445,8 @@ export function registerCloudDeploymentMonitoringHandlers(
       providerKind: unknown,
       containerId: unknown,
       deploymentId?: unknown,
-      accountId?: unknown
+      accountId?: unknown,
+      serviceName?: unknown
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
@@ -447,11 +455,13 @@ export function registerCloudDeploymentMonitoringHandlers(
         deploymentId === undefined ? undefined : requireString(deploymentId, 'Deployment ID')
       const safeAccountId =
         accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
+      const safeServiceName =
+        serviceName === undefined ? undefined : requireString(serviceName, 'Service name')
       const provider = resolveDeploymentProvider(
         kind,
         await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
       )
-      const log = await provider.getLogs(safeContainerId, safeDeploymentId)
+      const log = await provider.getLogs(safeContainerId, safeDeploymentId, safeServiceName)
       return { containerId: safeContainerId, deploymentId: safeDeploymentId ?? null, log }
     }
   )

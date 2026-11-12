@@ -18,6 +18,25 @@ function findThread(projectId: string, threadId: string): Thread | null {
 }
 
 /**
+ * Why this window would refuse to move a thread into another scope right now,
+ * or `null` when the move is fine or the thread is not in hand yet.
+ *
+ * Shared with the Change Scope dialog, which greys out the targets this window
+ * already knows it would refuse instead of letting the user pick one and then
+ * undoing the choice with a toast.
+ */
+export function scopeMoveRefusal(
+  projectId: string,
+  threadId: string,
+  bucketId: string
+): string | null {
+  const thread = findThread(projectId, threadId)
+  const board = scopeState.boards.get(projectId)
+  if (!thread || !board) return null
+  return scopeSwapRefusal({ thread, targetBucketId: bucketId, buckets: board.buckets })
+}
+
+/**
  * Move a thread into another scope, and keep both stores in step.
  *
  * Returns the moved thread, or `null` when the app refused the move. A refusal
@@ -37,12 +56,7 @@ export async function moveThreadToScope(
   threadId: string,
   bucketId: string
 ): Promise<Thread | null> {
-  const thread = findThread(projectId, threadId)
-  const board = scopeState.boards.get(projectId)
-  const refusal =
-    thread && board
-      ? scopeSwapRefusal({ thread, targetBucketId: bucketId, buckets: board.buckets })
-      : null
+  const refusal = scopeMoveRefusal(projectId, threadId, bucketId)
   if (refusal) {
     toast(refusal, { id: refusal })
     return null

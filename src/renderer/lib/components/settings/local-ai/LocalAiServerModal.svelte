@@ -9,15 +9,15 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import {
     DEFAULT_LLAMA_CPP_HOST,
-    buildLlamaServerArgs,
-    describeLlamaServerCommand,
+    describeLocalAiServerCommand,
     formatHuggingFaceModelReference,
     groupLlamaCppServers,
     isLlamaCppHostValid,
     isLlamaCppPortValid,
-    llamaCppEntryProblem,
-    llamaCppModelLabel,
+    localAiEntryProblem,
     localAiModelCopy,
+    localAiModelLabel,
+    localAiServerArgs,
     parseHuggingFaceModelReference,
     type LlamaCppServerEntry,
     type LocalAiRuntimeId
@@ -29,20 +29,20 @@
   import { stripTerminalEscapes } from './local-ai-controller.svelte'
 
   interface Props {
-    /** Engine the saved row belongs to. Only llama.cpp can be launched here. */
-    runtime?: LocalAiRuntimeId
+    /** Engine the saved row belongs to. */
+    runtime: LocalAiRuntimeId
     initial: LlamaCppServerEntry
     entries: readonly LlamaCppServerEntry[]
-    /** The resolved `llama-server` a row would launch. */
+    /** The resolved server binary a row would launch. */
     executable: string
     onClose: () => void
     onSave: (entry: LlamaCppServerEntry) => void | Promise<void>
   }
 
-  let { runtime = 'llama.cpp', initial, entries, executable, onClose, onSave }: Props = $props()
+  let { runtime, initial, entries, executable, onClose, onSave }: Props = $props()
 
-  /** The engine whose server the app starts itself. */
-  const managed = $derived(runtime === 'llama.cpp')
+  /** The server this engine runs, named the way the command line names it. */
+  const engine = $derived(runtime === 'mlx' ? 'mlx_lm.server' : 'llama-server')
 
   const fieldClass = 'h-9 w-full border bg-elevated px-3 text-sm outline-none focus:border-primary'
   const monoFieldClass =
@@ -100,7 +100,7 @@
   })
   const existingServerModels = $derived(
     (existingServer?.entries ?? [])
-      .map((entry) => entry.name.trim() || llamaCppModelLabel(entry))
+      .map((entry) => entry.name.trim() || localAiModelLabel(entry))
       .join(', ')
   )
 
@@ -132,7 +132,7 @@
   })
 
   const command = $derived(
-    buildLlamaServerArgs(draft).length > 0 ? describeLlamaServerCommand(draft) : ''
+    localAiServerArgs(draft).length > 0 ? describeLocalAiServerCommand(draft, executable) : ''
   )
 
   /** What this engine calls its model, so no tab tells an MLX user about GGUF. */
@@ -170,7 +170,7 @@
   }
 
   async function pickFile(): Promise<void> {
-    const path = await invoke('llamaCpp:pickModel', runtime)
+    const path = await invoke('localAi:pickModel', runtime)
     if (!path) return
     modelPath = path
     if (!name.trim() || name.trim() === 'Local server') {
@@ -192,7 +192,7 @@
     }
     testing = true
     try {
-      const result = await invoke('llamaCpp:probe', host.trim(), Number(port))
+      const result = await invoke('localAi:probe', host.trim(), Number(port), runtime)
       if (result.ready) {
         const models = result.models.slice(0, 3).join(', ')
         testResult = {
@@ -200,13 +200,13 @@
           ok: true,
           message:
             result.models.length > 0
-              ? `llama-server is already running on ${address} and serving ${models}${result.models.length > 3 ? ` and ${result.models.length - 3} more` : ''}.`
-              : `llama-server is already running on ${address}.`
+              ? `${engine} is already running on ${address} and serving ${models}${result.models.length > 3 ? ` and ${result.models.length - 3} more` : ''}.`
+              : `${engine} is already running on ${address}.`
         }
       } else {
         // Nothing answers yet, so prove the row itself: launch it exactly as
-        // Start would, watch for llama.cpp beginning to load the model, and
-        // stop it right there. A full load is not what this test is for.
+        // Start would, watch the engine begin to load the model, and stop it
+        // right there. A full load is not what this test is for.
         await startAndStop(address)
       }
       testing = false
@@ -275,11 +275,11 @@
         tail.push(line)
         if (tail.length > 60) tail.shift()
         if (LOAD_MARKERS.some((marker) => marker.test(line))) {
-          finish(true, `llama-server started and began loading ${llamaCppModelLabel(draft)}.`)
+          finish(true, `${engine} started and began loading ${localAiModelLabel(draft)}.`)
           return
         }
         if (DOWNLOAD_MARKER.test(line)) {
-          finish(true, 'llama-server started and is fetching the model from Hugging Face.')
+          finish(true, `${engine} started and is fetching the model from Hugging Face.`)
           return
         }
       }
@@ -293,29 +293,32 @@
       }),
       subscribe(`pty:exit:${terminalId}`, (code) => {
         const exitCode = typeof code === 'number' ? code : 0
-        finish(false, `llama-server exited with code ${exitCode}: ${tailText()}`)
+        finish(false, `${engine} exited with code ${exitCode}: ${tailText()}`)
       })
     )
-    testTimer = setTimeout(() => {
-      finish(false, `llama-server never reached the model load in 20s: ${tailText()}`)
-    }, 20_000)
+    testTimer = setTimeout(
+      () => {
+        // MLX says almost nothing while it fetches and reads its weights, so a
+        // process that is still alive after this long is a server that started;
+        // only an exit before the timer proves the row wrong.
+        if (runtime === 'mlx') {
+          finish(true, `mlx_lm.server is starting on ${address}; it loads its weights as it runs.`)
+          return
+        }
+        finish(false, `llama-server never reached the model load in 20s: ${tailText()}`)
+      },
+      runtime === 'mlx' ? 6_000 : 20_000
+    )
 
     try {
-      await invoke(
-        'pty:createCommand',
-        terminalId,
-        executable,
-        buildLlamaServerArgs(draft),
-        100,
-        30
-      )
+      await invoke('pty:createCommand', terminalId, executable, localAiServerArgs(draft), 100, 30)
     } catch (error) {
-      finish(false, error instanceof Error ? error.message : 'llama-server could not be started.')
+      finish(false, error instanceof Error ? error.message : `${engine} could not be started.`)
     }
   }
 
   function submit(): void {
-    const problem = llamaCppEntryProblem(draft)
+    const problem = localAiEntryProblem(draft)
     if (problem) {
       error = problem
       return
@@ -410,13 +413,22 @@
               </p>
             {:else if modelReference.trim().length > 0}
               <p class="text-[0.6875rem] text-danger">
-                Use <span class="font-mono">owner/repo</span>,
-                <span class="font-mono">owner/repo:quant</span>, or a huggingface.co file URL.
+                {#if runtime === 'mlx'}
+                  Use <span class="font-mono">owner/repo</span>: an MLX repository is the whole
+                  model.
+                {:else}
+                  Use <span class="font-mono">owner/repo</span>,
+                  <span class="font-mono">owner/repo:quant</span>, or a huggingface.co file URL.
+                {/if}
               </p>
             {:else}
               <p class="text-[0.6875rem] leading-relaxed text-muted">
-                Paste <span class="font-mono">{copy.referencePlaceholder}</span>, or a specific file
-                URL.
+                {#if runtime === 'mlx'}
+                  Paste <span class="font-mono">{copy.referencePlaceholder}</span> or another MLX repository.
+                {:else}
+                  Paste <span class="font-mono">{copy.referencePlaceholder}</span>, or a specific
+                  file URL.
+                {/if}
               </p>
             {/if}
           {/if}
@@ -485,7 +497,7 @@
       {/if}
     </fieldset>
 
-    {#if command && managed}
+    {#if command}
       <div class="border bg-raised p-3">
         <p class="text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">Command</p>
         <p class="mt-1 break-all font-mono text-[0.6875rem] leading-relaxed text-muted">
@@ -508,10 +520,8 @@
         </button>
         <button
           type="button"
-          class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50 {managed
-            ? ''
-            : 'hidden'}"
-          title="Start the row on {testedAddress}, stop it once llama.cpp begins loading the model"
+          class="flex h-9 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium hover:bg-overlay disabled:opacity-50"
+          title="Start the row on {testedAddress}, stop it once the engine begins loading the model"
           disabled={testing}
           onclick={() => void testConnection()}
         >

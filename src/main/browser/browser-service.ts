@@ -664,6 +664,12 @@ export class BrowserService {
       resolveTabId: (_projectId, contentsId) => this.tabForContents(contentsId)?.id ?? null,
       tabReplay: (projectId, boxId) => this.extensionTabReplay(projectId, boxId),
       publishActivity: (update) => this.publishExtensionActivity(update),
+      reportCompanionSilent: (extensionId, extensionName, application) =>
+        this.extensionRuntimeUnit.publishExtensionCompanionSilent({
+          extensionId,
+          extensionName,
+          application
+        }),
       publish: () => this.publishExtensions(),
       releaseViews: (extensionId, projectId, boxId) => {
         const partition = browserPartitionFor(projectId, boxId)
@@ -804,6 +810,14 @@ export class BrowserService {
 
   applyScrollbarTheme(tabId: string, contents: WebContents): void {
     this.configurationUnit.applyScrollbarTheme(tabId, contents)
+  }
+
+  applyPageStyles(tabId: string, contents: WebContents): void {
+    this.configurationUnit.applyPageStyles(tabId, contents)
+  }
+
+  applyPageDragIsolation(contents: WebContents): void {
+    this.configurationUnit.applyPageDragIsolation(contents)
   }
 
   refreshTabMark(tabId: string, tab: BrowserTab): void {

@@ -1,23 +1,16 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
-  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
   import CioLogIn from '@pdslng/cio-icon/CioLogIn.svelte'
   import CioSquare from '@pdslng/cio-icon/CioSquare.svelte'
   import CioTimerReset from '@pdslng/cio-icon/CioTimerReset.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { createSubscriber } from 'svelte/reactivity'
-  import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
-  import CardFoot from '../shared/CardFoot.svelte'
-  import CardFrame from '../shared/CardFrame.svelte'
-  import CardHead from '../shared/CardHead.svelte'
   import CardTag from '../shared/CardTag.svelte'
+  import ErrorStrip, { type ErrorStripAction } from '../ui/ErrorStrip.svelte'
   import type { CardChipData } from '../shared/CardTimer.svelte'
-  import { foldSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import type {
     AgentSessionStatus,
@@ -25,15 +18,16 @@
     ThinkingLevel,
     ThreadSettings
   } from '$shared/types'
-  import { copyText } from '$lib/copy-text'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import { harnessAccountCache } from '$lib/stores/harness-accounts'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { normalizeFastInference, supportsFastInference } from '$shared/fast-inference'
-  import { presentProviderError, providerIssueTitle } from '$shared/provider-issue'
+  import {
+    presentProviderError,
+    providerIssueTitle,
+    providerIssueTone
+  } from '$shared/provider-issue'
   import { formatDateTimeWithWeekday } from '$shared/date-time-format'
-  import Modal from '../ui/Modal.svelte'
-  import ProviderSignInPanel from '../providers/ProviderSignInPanel.svelte'
 
   interface Props {
     status: Extract<AgentSessionStatus, { state: 'waiting' | 'error' }>
@@ -114,8 +108,6 @@
       else threadCardFold.setFolded(threadId, foldKey, value)
     }
   }
-  let showRawError = $state(false)
-  let copiedRawError = $state(false)
   let signInOpen = $state(false)
   /** Account the sign-in must write into, bound when the card opened the panel. */
   let signInAccountId = $state<string | undefined>(undefined)
@@ -146,15 +138,6 @@
    */
   const displayMessage = $derived(presentProviderError(issue.message).message)
 
-  async function copyRawError(): Promise<void> {
-    try {
-      await copyText(rawError, null)
-      copiedRawError = true
-      setTimeout(() => (copiedRawError = false), 1500)
-    } catch {
-      // clipboard not available
-    }
-  }
   const waiting = $derived(status.state === 'waiting')
   /**
    * A usage/rate-limit reset that the app will (or can) auto-resume: a terminal
@@ -229,6 +212,28 @@
     return { text: 'Stopped', tone: 'urgent' }
   })
 
+  /** The card's one primary action: signing in when that is the fix, otherwise
+   *  retrying. It sits in the header while the card is folded. */
+  const primary = $derived.by<ErrorStripAction | undefined>(() => {
+    if (issue.kind === 'authentication') {
+      return {
+        label: 'Sign in',
+        title: 'Sign in to the AI account',
+        icon: CioLogIn,
+        onclick: beginSignIn
+      }
+    }
+    if (!onRetry) return undefined
+    return {
+      label: waiting ? 'Retry now' : retryLabel,
+      title: waiting ? 'Retry the request now' : retryLabel,
+      icon: retrying ? undefined : CioUndo,
+      loading: retrying,
+      disabled: retrying,
+      onclick: () => void onRetry?.()
+    }
+  })
+
   /**
    * Open the shared sign-in panel for this thread's account.
    *
@@ -293,216 +298,139 @@
   }
 </script>
 
-<!-- The live region wraps the frame so a status change still announces the whole
-card, the way it did before the head moved onto the shared primitives. -->
-<div role={waiting ? 'status' : 'alert'} aria-live="polite">
-  <CardFrame placement="top" label="Provider status" {stackedAbove} {joinsBelow}>
-    <CardHead
-      icon={waiting || autoResume ? CioClock : CioAttention}
-      title={sourceLabel ? 'Worker output error' : title}
-      {chip}
-      bind:folded={foldState.folded}
-      foldLabel="provider status"
-    >
-      {#snippet meta()}
-        <CardTag text={providerName} />
-        {#if sourceLabel}
-          <CardTag text={`Worker · ${sourceLabel}`} tone="err" />
-        {/if}
-      {/snippet}
-    </CardHead>
-
-    {#if !foldState.folded}
-      <div
-        transition:slide={foldSlide()}
-        class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
-      >
-        {#if sourceDetail}
-          <p class="font-medium text-foreground">Task · {sourceDetail}</p>
-        {/if}
-
-        <p class="select-text">
-          {#each messageParts(displayMessage) as part, index (index)}
-            {#if part.isLink}
-              <a
-                href={part.text}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="break-all text-accent underline underline-offset-2 hover:text-accent/80"
-                >{part.text}</a
-              >
-            {:else}
-              {part.text}
-            {/if}
-          {/each}
-        </p>
-
-        {#if waiting && issue.kind === 'network'}
-          <p class="font-medium text-foreground">
-            Waiting for connection. Will resume automatically when the device reconnects.
-          </p>
-        {:else if autoRetryEnabled && resumeAt !== undefined}
-          <p class="flex items-center gap-1.5 font-medium text-info tabular-nums">
-            <CioTimerReset size={13} class="shrink-0" aria-hidden="true" />
-            {#if queued}
-              Queued for auto-resume
-            {:else}
-              Auto-resume {formatDateTimeWithWeekday(resumeAt)} · in {relativeRetryTime(resumeAt)}
-            {/if}
-            {#if issue.attempt}
-              · attempt {issue.attempt}
-            {/if}
-          </p>
-        {:else if issue.retryAt}
-          <p class="font-medium text-foreground tabular-nums">
-            Available again {formatDateTimeWithWeekday(issue.retryAt)}
-          </p>
-        {:else if waiting}
-          <p class="font-medium text-foreground">
-            Automatic retry is not scheduled. Retry now when the provider is ready.
-          </p>
-        {/if}
-      </div>
+<ErrorStrip
+  role={waiting ? 'status' : 'alert'}
+  label="Provider status"
+  placement="top"
+  icon={waiting || autoResume ? CioClock : CioAttention}
+  title={sourceLabel ? 'Worker output error' : title}
+  tone={providerIssueTone(issue.kind, waiting)}
+  {chip}
+  bind:folded={foldState.folded}
+  foldLabel="provider status"
+  rawError={waiting ? undefined : rawError}
+  onDismiss={waiting ? undefined : onDismiss}
+  {primary}
+  {stackedAbove}
+  {joinsBelow}
+>
+  {#snippet meta()}
+    <CardTag text={providerName} />
+    {#if sourceLabel}
+      <CardTag text={`Worker · ${sourceLabel}`} tone="err" />
     {/if}
+  {/snippet}
 
-    {#if !foldState.folded}
-      <CardFoot yields="right">
-        {#snippet left()}
-          {#if !waiting && onDismiss}
-            <CardButton
-              label="Dismiss"
-              title="Dismiss provider error"
-              icon={CioClose}
-              variant="ghost"
-              onclick={onDismiss}
-            />
-          {/if}
-          {#if waiting && onStop}
-            <CardButton
-              label="Stop request"
-              title="Stop the waiting request"
-              icon={CioSquare}
-              variant="ghost-danger"
-              disabled={retrying}
-              onclick={onStop}
-            />
-          {/if}
-          {#if !waiting && rawError}
-            <CardButton
-              label="Raw Error"
-              title="Show the raw provider error"
-              icon={CioCode}
-              variant="ghost"
-              onclick={() => (showRawError = true)}
-            />
-          {/if}
-        {/snippet}
+  {#if sourceDetail}
+    <p class="font-medium text-foreground">Task · {sourceDetail}</p>
+  {/if}
 
-        {#snippet right()}
-          {#if settings && providers.length > 0 && onModelChange}
-            <ModelPicker
-              {providers}
-              {projectId}
-              harnessId={settings.harnessId}
-              providerId={settings.providerId}
-              modelId={settings.modelId}
-              accountId={settings.accountId}
-              {favoriteModels}
-              {recentModels}
-              {onRemoveRecent}
-              side="top"
-              label="Change"
-              variant="action"
-              onSelect={chooseModel}
-              thinkingLevel={settings.thinkingLevel}
-              runtimeSettings={settings}
-              onSelectThinking={chooseThinking}
-              onSelectRuntime={chooseRuntime}
-              {onToggleFavorite}
-              {onReorderFavorite}
-            />
-          {/if}
-
-          {#if issue.kind === 'authentication'}
-            {#if !waiting && onRetry}
-              <CardButton
-                label={retryLabel}
-                title={retryLabel}
-                icon={retrying ? undefined : CioUndo}
-                variant="secondary"
-                loading={retrying}
-                disabled={retrying}
-                onclick={() => void onRetry?.()}
-              />
-            {/if}
-            <CardButton
-              label="Sign in"
-              title="Sign in to the AI account"
-              icon={CioLogIn}
-              variant="primary"
-              onclick={beginSignIn}
-            />
-          {:else if waiting && onRetry}
-            <CardButton
-              label="Retry now"
-              title="Retry the request now"
-              icon={retrying ? undefined : CioUndo}
-              variant="primary"
-              loading={retrying}
-              disabled={retrying}
-              onclick={() => void onRetry?.()}
-            />
-          {:else if !waiting && onRetry}
-            <CardButton
-              label={retryLabel}
-              title={retryLabel}
-              icon={retrying ? undefined : CioUndo}
-              variant="primary"
-              loading={retrying}
-              disabled={retrying}
-              onclick={() => void onRetry?.()}
-            />
-          {/if}
-        {/snippet}
-      </CardFoot>
-    {/if}
-  </CardFrame>
-</div>
-
-{#if rawError}
-  <Modal
-    open={showRawError}
-    title={`${providerName} Raw Error`}
-    onClose={() => (showRawError = false)}
-  >
-    <button
-      class="mb-2 inline-flex h-8 items-center gap-1.5 border border-border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated"
-      aria-label={copiedRawError ? 'Raw error copied' : 'Copy raw error to clipboard'}
-      title={copiedRawError ? 'Copied' : 'Copy raw error'}
-      onclick={() => void copyRawError()}
-    >
-      {#if copiedRawError}
-        <CioCheck size={13} class="text-success" />
-        Copied
+  <p class="select-text">
+    {#each messageParts(displayMessage) as part, index (index)}
+      {#if part.isLink}
+        <a
+          href={part.text}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="break-all text-accent underline underline-offset-2 hover:text-accent/80"
+          >{part.text}</a
+        >
       {:else}
-        <CioCopy size={13} />
-        Copy
+        {part.text}
       {/if}
-    </button>
-    <pre
-      class="max-h-96 overflow-auto border border-border bg-raised p-3 text-xs leading-relaxed text-foreground"><code
-        >{rawError}</code
-      ></pre>
-  </Modal>
-{/if}
+    {/each}
+  </p>
+
+  {#if waiting && issue.kind === 'network'}
+    <p class="font-medium text-foreground">
+      Waiting for connection. Will resume automatically when the device reconnects.
+    </p>
+  {:else if autoRetryEnabled && resumeAt !== undefined}
+    <p class="flex items-center gap-1.5 font-medium text-info tabular-nums">
+      <CioTimerReset size={13} class="shrink-0" aria-hidden="true" />
+      {#if queued}
+        Queued for auto-resume
+      {:else}
+        Auto-resume {formatDateTimeWithWeekday(resumeAt)} · in {relativeRetryTime(resumeAt)}
+      {/if}
+      {#if issue.attempt}
+        · attempt {issue.attempt}
+      {/if}
+    </p>
+  {:else if issue.retryAt}
+    <p class="font-medium text-foreground tabular-nums">
+      Available again {formatDateTimeWithWeekday(issue.retryAt)}
+    </p>
+  {:else if waiting}
+    <p class="font-medium text-foreground">
+      Automatic retry is not scheduled. Retry now when the provider is ready.
+    </p>
+  {/if}
+
+  {#snippet footerStart()}
+    {#if waiting && onStop}
+      <CardButton
+        label="Stop request"
+        title="Stop the waiting request"
+        icon={CioSquare}
+        variant="ghost-danger"
+        disabled={retrying}
+        onclick={onStop}
+      />
+    {/if}
+  {/snippet}
+
+  {#snippet footerEnd()}
+    {#if settings && providers.length > 0 && onModelChange}
+      <ModelPicker
+        {providers}
+        {projectId}
+        harnessId={settings.harnessId}
+        providerId={settings.providerId}
+        modelId={settings.modelId}
+        accountId={settings.accountId}
+        {favoriteModels}
+        {recentModels}
+        {onRemoveRecent}
+        side="top"
+        label="Change"
+        variant="action"
+        onSelect={chooseModel}
+        thinkingLevel={settings.thinkingLevel}
+        runtimeSettings={settings}
+        onSelectThinking={chooseThinking}
+        onSelectRuntime={chooseRuntime}
+        {onToggleFavorite}
+        {onReorderFavorite}
+      />
+    {/if}
+    {#if issue.kind === 'authentication' && !waiting && onRetry}
+      <CardButton
+        label={retryLabel}
+        title={retryLabel}
+        icon={retrying ? undefined : CioUndo}
+        variant="secondary"
+        loading={retrying}
+        disabled={retrying}
+        onclick={() => void onRetry?.()}
+      />
+    {/if}
+  {/snippet}
+</ErrorStrip>
 
 {#if signInOpen}
-  <ProviderSignInPanel
-    harnessId={issue.harnessId}
-    harnessName={providerName}
-    providerId={signInProviderId}
-    accountId={signInAccountId}
-    onClose={() => (signInOpen = false)}
-    onComplete={signedIn}
-  />
+  <!-- Signing in is a gesture, never part of the first screen: the card shows a
+       status line, and the panel behind it is the sign-in flow with every
+       provider form. Importing it here keeps that flow in its own chunk instead
+       of charging the launch for a dialog most sessions never open. -->
+  {#await loadCachedPanelModule('module:lib/components/providers/ProviderSignInPanel.svelte', () => import('../providers/ProviderSignInPanel.svelte')) then { default: ProviderSignInPanel }}
+    <ProviderSignInPanel
+      harnessId={issue.harnessId}
+      harnessName={providerName}
+      providerId={signInProviderId}
+      accountId={signInAccountId}
+      onClose={() => (signInOpen = false)}
+      onComplete={signedIn}
+    />
+  {/await}
 {/if}

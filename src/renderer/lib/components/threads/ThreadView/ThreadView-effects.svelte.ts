@@ -9,7 +9,6 @@ import { findNavState } from '$lib/stores/find-nav.svelte'
 import { appQuitState } from '$lib/stores/app-quit.svelte'
 import { isImageMime, isVideoMime, isAudioMime } from '$lib/mime'
 import { mayReanchorToLatest } from '$lib/scroll-anchor'
-import { actionContext } from '$lib/stores/action-context.svelte'
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { chatDraft } from '$lib/stores/chat-draft'
@@ -31,7 +30,7 @@ import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
-import { WORKING_TRACE_PAGE_SIZE } from '$shared/types'
+import { WORKING_TRACE_PAGE_SIZE, isGroupThread } from '$shared/types'
 import type { Thread, AgentEvent, RemoteAgentEventPayload } from '$shared/types'
 import { releaseAnnotationHighlights } from '$lib/selection-anchors'
 import { registerSelectionAnnotationClaim, trackLiveSelection } from '$lib/selection-menu'
@@ -40,7 +39,6 @@ import { messageText, tracePreviewByUserMessage } from '../thread-message-presen
 import { mergedUserMessageSummaries } from '../thread-history'
 import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ThreadView } from './ThreadView-board.svelte'
-import type { ActionDefinition } from '$lib/actions'
 import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ThreadView board. */
 export class ThreadViewEffects extends BoardUnit<ThreadView> {
@@ -52,12 +50,6 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
    * The header's actions, built by the surface because a row carries the snippet
    * that draws it; the surface hands the provider over once.
    */
-  private activeActionsProvider: () => ActionDefinition[] = () => []
-
-  /** Called by the surface with the live action list. */
-  setActiveActions(read: () => ActionDefinition[]): void {
-    this.activeActionsProvider = read
-  }
   /**
    * The work the surface used to do as it set itself up: effects, the
    * subscriptions it opened and the first load it kicked off. It runs from
@@ -345,6 +337,10 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     $effect(() => {
       if (this.root.submitBrainstormDecision.coordinatorKind !== null) return
       const thread = this.root.handleAgentEvent.thread
+      // A group conversation asks for the work and receives the answer as a
+      // reply, so a board of spawned threads beside it would duplicate what the
+      // transcript already says. The reply carries the link to the work instead.
+      if (isGroupThread(thread)) return
       const rowThreadId = this.root.currentWorkingTraceAttribution.coordinatorDockThreadId
       const hasPawns = pawnAgentsState.hasWorkers(rowThreadId)
       if (!hasPawns && !orchestrationCoordinatorState.hasDispatches(thread.projectId, rowThreadId))
@@ -532,16 +528,6 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           createdAt: message.createdAt
         }))
         .filter((message) => message.content.trim().length > 0)
-    })
-
-    // Publish only the currently mounted thread's actions to the global palette.
-    // Identity-safe cleanup prevents an older keyed view from clearing a newer one.
-    $effect(() => {
-      const actions = this.activeActionsProvider()
-      return actionContext.register({
-        actions,
-        onSelect: this.root.switchProject.handleActionSelection
-      })
     })
 
     // A persisted studio document remains available from the header. A missing

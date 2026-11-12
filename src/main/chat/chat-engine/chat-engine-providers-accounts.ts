@@ -429,7 +429,7 @@ export class ChatEngineProvidersAccounts {
       })
     )
     this.host.state.sharedProviderCatalog = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       discoveredAt: Date.now(),
       catalogs: merged
     }
@@ -465,14 +465,14 @@ export class ChatEngineProvidersAccounts {
       if (Array.isArray(stored)) {
         const catalogs = await filterInstalledProviderCatalogs(stored)
         this.host.state.sharedProviderCatalog = {
-          schemaVersion: 3,
+          schemaVersion: 4,
           discoveredAt: Date.now(),
           catalogs
         }
         return catalogs
       }
       if (
-        stored?.schemaVersion === 3 &&
+        stored?.schemaVersion === 4 &&
         Array.isArray(stored.catalogs) &&
         Date.now() - stored.discoveredAt < PROVIDER_CATALOG_TTL_MS
       ) {
@@ -512,7 +512,7 @@ export class ChatEngineProvidersAccounts {
       const base =
         this.host.state.sharedProviderCatalog ??
         ({
-          schemaVersion: 3,
+          schemaVersion: 4,
           discoveredAt: Date.now(),
           catalogs
         } satisfies PersistedProviderCatalog)
@@ -596,7 +596,7 @@ export class ChatEngineProvidersAccounts {
       ...replacements.flatMap((entry) => entry.catalogs)
     ])
     this.host.state.sharedProviderCatalog = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       discoveredAt: Date.now(),
       catalogs: refreshed
     }
@@ -738,6 +738,17 @@ export class ChatEngineProvidersAccounts {
           await this.host.threadManager.setStatus(info.projectId, info.threadId, 'working-paused', {
             read: false
           })
+        }
+        // A delegation parked here would otherwise be silent in the
+        // conversation that asked for it: the run thread shows the retry card,
+        // Don's thread said nothing. One line there names the wait and links the
+        // run, so the user can see why the answer has not arrived.
+        const delegation = this.host.don?.delegations.peek(info.threadId)
+        if (delegation) {
+          void this.host.units['turns-dispatch'].reportDonDelegationStatus(
+            delegation,
+            `Waiting to retry: ${issue.message}`
+          )
         }
       }
       await this.host.units['turns-sessions'].onSessionError(sessionId, error, true, issue.rawError)

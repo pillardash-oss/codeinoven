@@ -140,10 +140,6 @@
         />
       </div>
     </div>
-    <p class="mt-2 text-xs leading-relaxed text-muted">
-      Threads this one started: helper agents it spawned for itself, and runs it dispatched into any
-      project. Opening one takes you to it.
-    </p>
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto pt-2">

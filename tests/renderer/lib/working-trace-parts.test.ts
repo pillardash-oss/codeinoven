@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentPart } from '../../../src/lib/types'
 import {
+  groupTraceIntoChains,
   latestWorkingTraceParts,
-  shouldMountWorkingTrace
+  mergeTurnSubagents,
+  shouldMountWorkingTrace,
+  type SubagentPart
 } from '../../../src/renderer/lib/working-trace-parts'
 
 function toolPart(id: string, status: 'pending' | 'running' | 'completed'): AgentPart {
@@ -34,6 +37,41 @@ describe('latestWorkingTraceParts', () => {
   })
 })
 
+describe('groupTraceIntoChains', () => {
+  function textPart(id: string, text: string): AgentPart {
+    return { id, messageID: 'message-1', type: 'text', text }
+  }
+
+  it('drops an output-only chain that repeats the chain above it', () => {
+    // Regression: a re-emitted Claude record put the same paragraph at index 0
+    // and index 1, so the trace drew it twice under one set of steps.
+    const prose = 'Writing a scratch reproduction against the checkpoint manager.'
+    const chains = groupTraceIntoChains([
+      toolPart('claude-tool-first', 'completed'),
+      textPart('claude-text-1', prose),
+      textPart('claude-text-0', prose),
+      toolPart('claude-tool-second', 'completed')
+    ])
+
+    expect(chains.map((chain) => chain.output?.text ?? null)).toEqual([prose, null])
+    expect(chains[0]?.steps).toHaveLength(1)
+    expect(chains[1]?.steps).toHaveLength(1)
+  })
+
+  it('keeps an identical paragraph that follows its own work', () => {
+    const prose = 'Same words, said again after new work.'
+    const chains = groupTraceIntoChains([
+      toolPart('claude-tool-first', 'completed'),
+      textPart('claude-text-0', prose),
+      toolPart('claude-tool-second', 'completed'),
+      textPart('claude-text-1', prose)
+    ])
+
+    expect(chains).toHaveLength(2)
+    expect(chains[1]?.steps).toHaveLength(1)
+  })
+})
+
 describe('shouldMountWorkingTrace', () => {
   it('mounts a live turn even before its first part has streamed in', () => {
     // Regression: a busy thread with zero parts must still show the trace
@@ -51,5 +89,52 @@ describe('shouldMountWorkingTrace', () => {
 
   it('keeps a live turn with parts mounted', () => {
     expect(shouldMountWorkingTrace(2, true)).toBe(true)
+  })
+})
+
+describe('mergeTurnSubagents', () => {
+  function subagent(id: string, status: 'pending' | 'running' | 'completed'): SubagentPart {
+    return {
+      type: 'subagent',
+      id,
+      messageID: `message-${id}`,
+      activity: {
+        status,
+        agent: 'implementation',
+        description: `task ${id}`,
+        background: false
+      }
+    }
+  }
+
+  it('reports a delegated worker the mounted page never held', () => {
+    // Regression: the header read sub-agents from the mounted window, so a long
+    // turn whose delegation sat on an older page showed no sub-agent at all.
+    const merged = mergeTurnSubagents([subagent('worker', 'running')], [])
+    expect(merged.map((part) => part.id)).toEqual(['worker'])
+  })
+
+  it('keeps the fold order and appends workers only the stream has shown', () => {
+    const merged = mergeTurnSubagents(
+      [subagent('first', 'running'), subagent('second', 'running')],
+      [subagent('third', 'pending')]
+    )
+    expect(merged.map((part) => part.id)).toEqual(['first', 'second', 'third'])
+  })
+
+  it('takes the mounted snapshot when the live stream has advanced it', () => {
+    const merged = mergeTurnSubagents(
+      [subagent('worker', 'running')],
+      [subagent('worker', 'completed')]
+    )
+    expect(merged.map((part) => part.activity.status)).toEqual(['completed'])
+  })
+
+  it('never takes a stale running snapshot back over a settled worker', () => {
+    const merged = mergeTurnSubagents(
+      [subagent('worker', 'completed')],
+      [subagent('worker', 'running')]
+    )
+    expect(merged.map((part) => part.activity.status)).toEqual(['completed'])
   })
 })

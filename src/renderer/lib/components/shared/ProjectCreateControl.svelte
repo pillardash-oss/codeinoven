@@ -14,6 +14,7 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { encodeShortcutTokens } from '$lib/keymap/keymap'
+  import { ICON_SIZE } from '$lib/components/icons/cio/scale'
   import { APP_NAME } from '$shared/brand'
   import type { ChangeTrackingMode, Project, RepositoryPreflightResult } from '$shared/types'
   import { folderBaseName } from '$lib/project-location'
@@ -30,6 +31,20 @@
     /** Spotlight mode: controlled visibility. */
     open?: boolean
     onClose?: () => void
+    /**
+     * The button's step on the icon scale. The app bar's action slot draws it at
+     * the compact step (28px box, 15px mark), beside controls of the same size;
+     * a row of full-size header controls asks for `control` (32px box, 17px mark)
+     * so this button is never the one mark that reads a step smaller than its
+     * neighbours.
+     */
+    size?: 'compact' | 'control'
+    /**
+     * Text beside the mark on the trigger. A labelled trigger grows with its
+     * label (which truncates) instead of keeping the square mark-only box, so
+     * the control can sit in a panel's action row as a named button.
+     */
+    label?: string
   }
 
   let {
@@ -40,8 +55,14 @@
     triggerKind = 'local',
     mode = 'dropdown',
     open = false,
-    onClose = () => {}
+    onClose = () => {},
+    size = 'compact',
+    label = undefined
   }: Props = $props()
+
+  /** The trigger's box and the mark inside it, one step apart by request. */
+  let triggerBox = $derived(size === 'control' ? 'h-8 w-8' : 'h-7 w-7')
+  let triggerIconSize = $derived(size === 'control' ? ICON_SIZE.control : ICON_SIZE.row)
 
   /** Highest trigger value already handled. The control unmounts in other modes
    *  (e.g. Chats) and remounts later; re-initialising from the live value keeps
@@ -168,12 +189,17 @@
 {#if mode === 'dropdown'}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex {label
+        ? 'h-8 w-full min-w-0 justify-start gap-1.5 px-2'
+        : `${triggerBox} justify-center`} items-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}
       data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-project'))}
     >
-      <CioProjects size={15} strokeWidth={1.8} />
+      <CioProjects size={triggerIconSize} strokeWidth={1.8} class="shrink-0" />
+      {#if label}
+        <span class="truncate text-[0.6875rem] font-medium">{label}</span>
+      {/if}
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content

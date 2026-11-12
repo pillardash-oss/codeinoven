@@ -1097,7 +1097,10 @@
 
 {#snippet modelRow(entry: ModelEntry, rowKey: string, recentKey?: string)}
   {@const key = modelKey(entry.provider.harnessId, entry.provider.id, entry.model.id)}
-  {@const peak = peakHoursBadgeFor(entry.model.id, entry.provider.id)}
+  {@const peak = peakHoursBadgeFor(
+    { id: entry.model.id, name: entry.model.name },
+    entry.provider.id
+  )}
   {@const unavailable = isUnavailableHarness(entry.provider.harnessId)}
   {@const providerLabel = providerDisplayName(entry.provider.name)}
   <button

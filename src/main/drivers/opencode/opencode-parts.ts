@@ -112,6 +112,7 @@ function mapOpenCodeTaskPart(
       agent: stringValue(input['subagent_type']) ?? '',
       description: taskDescription(input, state, envelope),
       prompt: stringValue(input['prompt']),
+      harnessId: 'opencode',
       childSessionId:
         stringValue(metadata['sessionId']) ?? envelope?.id ?? stringValue(input['task_id']),
       providerTaskId: stringValue(metadata['jobId']) ?? stringValue(input['task_id']),

@@ -89,7 +89,6 @@ import type {
 } from '../../../lib/types'
 
 const THEMES = new Set(['light', 'dark', 'system'])
-const SLASH_COMMAND_MODES = new Set(['app', 'passthrough'])
 const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
 const LOCAL_USAGE_RECORD_STORES = new Set<LocalUsageRecordStore>([
   'agentResponses',
@@ -192,7 +191,6 @@ const CONFIG_PATCH_FIELDS = new Set([
   'switcherThreadBrowserTabs',
   'questionTimeoutMs',
   'agentQuestionCap',
-  'slashCommandMode',
   'preferredEditor',
   'ideLanguageServers',
   'ideFormatOnSave',
@@ -236,6 +234,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'sound',
   'cioCleanupRetentionDays',
   'cioCleanupExcludedCategories',
+  'agentAccountVisibility',
   'llamaCppServers',
   'llamaCppUnload'
 ])
@@ -1069,16 +1068,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
     }
   }
 
-  if ('slashCommandMode' in value) {
-    if (
-      typeof value.slashCommandMode !== 'string' ||
-      !SLASH_COMMAND_MODES.has(value.slashCommandMode)
-    ) {
-      throw new TypeError('Invalid slash command mode')
-    }
-    patch.slashCommandMode = value.slashCommandMode as AppConfigPatch['slashCommandMode']
-  }
-
   if ('ideLanguageServers' in value)
     patch.ideLanguageServers = validateIdeLanguageServers(value.ideLanguageServers)
 
@@ -1182,6 +1171,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('resumeWorkOnRestart must be a boolean')
     }
     patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
+  if ('agentAccountVisibility' in value) {
+    if (typeof value.agentAccountVisibility !== 'boolean') {
+      throw new TypeError('agentAccountVisibility must be a boolean')
+    }
+    patch.agentAccountVisibility = value.agentAccountVisibility
   }
 
   if ('backgroundMode' in value) {

@@ -4,6 +4,7 @@
   import CioBan from '@pdslng/cio-icon/CioBan.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import NoticeDismissButton from '$lib/components/ui/NoticeDismissButton.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { formatDateTime } from '$shared/date-time-format'
   import type { BackgroundRun, MissedRun, Thread } from '$shared/types'
@@ -13,7 +14,9 @@
     backgroundRunTone,
     missedRunReasonText,
     previewRuns,
-    TASK_RUN_PREVIEW
+    runIssueNoticeId,
+    TASK_RUN_PREVIEW,
+    type RunIssue
   } from '../assistant-view'
 
   /**
@@ -26,7 +29,7 @@
     scheduled: boolean
     missedRuns: readonly MissedRun[]
     /** Execution problems, one entry per task and kind, already de-duplicated. */
-    runIssues: ReadonlyArray<{ id: string; task: Thread; kind: string; detail: string }>
+    runIssues: readonly RunIssue[]
     /** Ledger-entried unattended runs, newest first. */
     backgroundRuns: readonly BackgroundRun[]
     onOpenTask: (thread: Thread) => void
@@ -150,32 +153,46 @@
     {:else}
       <div class="flex flex-col">
         {#each runIssues as issue (issue.id)}
-          <button
-            type="button"
-            class="flex items-start gap-2 border-t border-border py-2 text-left transition-colors first:border-t-0 hover:bg-elevated"
-            title="Open {issue.task.title}"
-            aria-label="Open {issue.task.title}"
-            onclick={() => onOpenTask(issue.task)}
-          >
-            <span class="mt-0.5 shrink-0" style="color: var(--color-warning)">
-              {#if issue.kind === 'Rate limited'}
-                <CioActions size={13} strokeWidth={1.8} />
-              {:else if issue.kind === 'Interrupted'}
-                <CioBan size={13} strokeWidth={1.8} />
-              {:else}
-                <CioAttention size={13} strokeWidth={1.8} />
-              {/if}
-            </span>
-            <span class="min-w-0 flex-1">
-              <span class="flex items-center gap-1.5">
-                <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
-                  {issue.task.title}
-                </span>
-                <span class="shrink-0 text-[0.625rem] text-muted">{issue.kind}</span>
+          <!-- The row opens the problem and the dismissal beside it closes this
+               occurrence: a row with no way out is a row that lives in the panel
+               for good. The dismissal survives a remount and returns on the next
+               occurrence, see `RunIssue.condition`. -->
+          <div class="flex items-start gap-1 border-t border-border first:border-t-0">
+            <button
+              type="button"
+              class="flex min-w-0 flex-1 items-start gap-2 py-2 text-left transition-colors hover:bg-elevated"
+              title="Open {issue.task.title}"
+              aria-label="Open {issue.task.title}"
+              onclick={() => onOpenTask(issue.task)}
+            >
+              <span class="mt-0.5 shrink-0" style="color: var(--color-warning)">
+                {#if issue.kind === 'Rate limited'}
+                  <CioActions size={13} strokeWidth={1.8} />
+                {:else if issue.kind === 'Interrupted'}
+                  <CioBan size={13} strokeWidth={1.8} />
+                {:else}
+                  <CioAttention size={13} strokeWidth={1.8} />
+                {/if}
               </span>
-              <span class="mt-0.5 block text-[0.625rem] text-dimmed">{issue.detail}</span>
+              <span class="min-w-0 flex-1">
+                <span class="flex items-center gap-1.5">
+                  <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">
+                    {issue.task.title}
+                  </span>
+                  <span class="shrink-0 text-[0.625rem] text-muted">{issue.kind}</span>
+                </span>
+                <span class="mt-0.5 block text-[0.625rem] text-dimmed">{issue.detail}</span>
+              </span>
+            </button>
+            <span class="mt-1.5 shrink-0">
+              <NoticeDismissButton
+                id={runIssueNoticeId(issue.id)}
+                condition={issue.condition}
+                title="Dismiss the {issue.kind.toLowerCase()} issue on {issue.task.title}"
+                size="sm"
+              />
             </span>
-          </button>
+          </div>
         {/each}
       </div>
     {/if}

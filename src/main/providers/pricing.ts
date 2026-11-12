@@ -349,8 +349,8 @@ function resolveWindow(
   // The schedule matches the requested id first, then the entry that priced it,
   // so a gateway-namespaced or aliased id still lands in its vendor's windows.
   const schedule =
-    peakHoursScheduleFor(modelId ?? '', providerId ?? undefined) ??
-    peakHoursScheduleFor(entry.id, providerId ?? undefined)
+    peakHoursScheduleFor({ id: modelId ?? '' }, providerId ?? undefined) ??
+    peakHoursScheduleFor({ id: entry.id }, providerId ?? undefined)
   if (!schedule || !isPeakHour(schedule, at)) return null
   return {
     label: schedule.label,

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
@@ -42,6 +43,8 @@
   import Switch from '../ui/Switch.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import { memoryProposalState } from '$lib/stores/memory-proposals.svelte'
+  import { registerPrimaryAction } from '$lib/modal-primary-action.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   import type { ScopeBucket, Thread } from '$shared/types'
 
@@ -108,7 +111,7 @@
 
   const categoryLabels: Record<MemoryCategory, string> = {
     behavioral: 'Behavioral',
-    'project-rule': 'Project Rule',
+    'project-rule': 'Project rule',
     identity: 'Identity',
     preference: 'Preference',
     models: 'Models'
@@ -782,6 +785,18 @@
 
   $effect(loadForContext)
 
+  // ⌘/Ctrl+Enter runs this panel's primary action, exactly as it does inside a
+  // modal. The resolver registers on the shared primary-action stack, so a modal
+  // opened above the panel registers later and keeps the shortcut; the panel only
+  // answers it when it has something to save.
+  $effect(() =>
+    registerPrimaryAction(() => {
+      if (saving || loading || !hasUnsavedChanges) return false
+      void save()
+      return true
+    })
+  )
+
   /** Keep the Thread and Scope pickers' lists warm for the projects an entry can choose. */
   function warmThreadPickers(): void {
     if (surface !== 'sidebar-projects') return
@@ -856,7 +871,7 @@
                 : 'Show assistant memories in this list'}
               title="Show or hide assistant-scoped memory entries in this list"
             />
-            Assistant
+            Show assistant memories
           </label>
         </div>
         {#if allowTransfer}
@@ -954,14 +969,16 @@
             onclick={addEntry}
           >
             <CioPlus size={14} />
-            <span class="memory-action-label">Add Memory</span>
+            <span class="memory-action-label">Add memory</span>
           </button>
         {/if}
         {#if currentSection !== 'proposed'}
           <button
             class="memory-action-btn flex items-center gap-1.5 bg-primary px-4 py-1.5 text-sm font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
             disabled={saving || loading || !hasUnsavedChanges}
-            title={saved ? 'All memories saved' : 'Save all memory entries'}
+            title={saved
+              ? 'All memories saved'
+              : `Save all memory entries (${keymapState.labelFor('ui-modal-primary-action')})`}
             aria-label={saved ? 'All memories saved' : 'Save all memory entries'}
             type="button"
             onclick={() => void save()}
@@ -1063,7 +1080,7 @@
           <CioSearch size={14} class="absolute left-2.5 top-1/2 -translate-y-1/2 text-dimmed" />
           <input
             class="w-full border bg-elevated pl-8 pr-3 py-1.5 text-sm text-foreground outline-none focus:border-primary"
-            placeholder="Search memories..."
+            placeholder="Search memories…"
             bind:value={searchQuery}
           />
         </div>
@@ -1072,28 +1089,32 @@
             ? 'grid grid-cols-2 gap-2'
             : 'flex shrink-0 items-center gap-2'}
         >
-          <select
-            class="{variant === 'sidebar'
-              ? 'w-full'
-              : 'w-36'} border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
-            bind:value={filterCategory}
-          >
-            <option value="">All categories</option>
-            {#each Object.entries(categoryLabels) as [value, label] (value)}
-              <option {value}>{label}</option>
-            {/each}
-          </select>
-          <select
-            class="{variant === 'sidebar'
-              ? 'w-full'
-              : 'w-36'} border bg-elevated px-2.5 py-1.5 text-[0.6875rem] text-foreground outline-none focus:border-primary"
-            bind:value={filterPriority}
-          >
-            <option value="">All priorities</option>
-            {#each Object.entries(priorityLabels) as [value, label] (value)}
-              <option {value}>{label}</option>
-            {/each}
-          </select>
+          <div class={variant === 'sidebar' ? 'w-full' : 'w-44 shrink-0'}>
+            <EnumSelect
+              options={[
+                { id: '', label: 'All categories' },
+                ...Object.entries(categoryLabels).map(([id, label]) => ({ id, label }))
+              ]}
+              value={filterCategory}
+              ariaLabel="Filter by category"
+              title="Filter by category"
+              placeholder="All categories"
+              onChange={(id) => (filterCategory = id as MemoryCategory | '')}
+            />
+          </div>
+          <div class={variant === 'sidebar' ? 'w-full' : 'w-44 shrink-0'}>
+            <EnumSelect
+              options={[
+                { id: '', label: 'All priorities' },
+                ...Object.entries(priorityLabels).map(([id, label]) => ({ id, label }))
+              ]}
+              value={filterPriority}
+              ariaLabel="Filter by priority"
+              title="Filter by priority"
+              placeholder="All priorities"
+              onChange={(id) => (filterPriority = id as MemoryPriority | '')}
+            />
+          </div>
         </div>
       </div>
     </div>

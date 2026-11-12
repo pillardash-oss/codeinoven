@@ -1,6 +1,9 @@
 import { flushSync, mount, unmount } from 'svelte'
 import type { Attachment } from 'svelte/attachments'
-import type { NativeFloatingPanelBounds } from '$shared/native-floating-panel'
+import type {
+  NativeFloatingPanelBounds,
+  NativeFloatingPanelOptions
+} from '$shared/native-floating-panel'
 import { invoke } from '$lib/ipc.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
 import {
@@ -35,7 +38,21 @@ export class NativeFloatingPanel {
   private movedFocus: HTMLElement | null = null
   private focusPending = false
 
-  constructor(readonly id: string) {}
+  constructor(
+    readonly id: string,
+    /**
+     * How the host behaves. A panel that adopted an editor or a terminal takes
+     * focus when it expands; a dropdown anchored to a field the user is typing in
+     * must not, or the caret leaves the field it hangs under (`takesFocus`).
+     */
+    private readonly options: NativeFloatingPanelOptions = {}
+  ) {}
+
+  /** Whether the host may activate its window, which main and this controller
+   *  both have to agree on. */
+  private get takesFocus(): boolean {
+    return this.options.takesFocus ?? true
+  }
 
   /** A newly opened editor in an already-live panel needs its caret activated. */
   focusContent(): void {
@@ -99,7 +116,7 @@ export class NativeFloatingPanel {
 
   private async create(): Promise<void> {
     try {
-      const token = await invoke('app:prepareFloatingPanel', this.id, this.bounds)
+      const token = await invoke('app:prepareFloatingPanel', this.id, this.bounds, this.options)
       if (this.disposed || !this.enabled) {
         await invoke('app:releaseFloatingPanel', this.id)
         return
@@ -171,6 +188,7 @@ export class NativeFloatingPanel {
   }
 
   private focusExpandedPanel(): void {
+    if (!this.takesFocus) return
     const root = this.root
     if (!root || !this.popup || !this.visible || !this.live || !this.enabled || this.disposed)
       return

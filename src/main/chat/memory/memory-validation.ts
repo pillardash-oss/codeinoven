@@ -16,6 +16,7 @@ import {
   readMemoryScopes
 } from '../../../lib/memory/memory-scopes'
 import { MEMORY_LIMITS } from './memory-constants'
+import { repairSlicedTitle } from './memory-title'
 
 export const VALID_CATEGORIES: MemoryCategory[] = [
   'behavioral',
@@ -259,8 +260,13 @@ export function normalizeStoredProposal(value: unknown): MemoryProposal | null {
     const id = text(value.id, 'Proposal ID', 1, 128)
     if (!SAFE_ID.test(id)) return null
     const status = enumValue(value.status, VALID_PROPOSAL_STATUSES, 'pending', 'Proposal status')
-    const label = text(value.label, 'Proposal label', 1, MEMORY_LIMITS.maxLabelCharacters)
     const content = text(value.content, 'Proposal content', 1, MEMORY_LIMITS.maxEntryCharacters)
+    // Titles written by an earlier build are the proposal's content sliced at 80
+    // characters; re-derive a complete one before it reaches the review card.
+    const label = repairSlicedTitle(
+      text(value.label, 'Proposal label', 1, MEMORY_LIMITS.maxLabelCharacters),
+      content
+    )
     const category = enumValue(value.category, VALID_CATEGORIES, 'preference', 'Proposal category')
     const priority = enumValue(value.priority, VALID_PRIORITIES, 'medium', 'Proposal priority')
     const projectId = optionalEntityId(value.projectId, 'Proposal project ID')

@@ -503,14 +503,11 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
       return
     }
     if (this.root.harnessUsage.specFormulating && specAction !== 'request') return
+    // Achievement implements autonomously: its audit contract is the approved
+    // Spec when the thread has one, and otherwise the goal captured from the
+    // request or this conversation. Blocking the send on an approved Spec is what
+    // stopped a thread told to keep going until the goal was reached.
     if (specAction === undefined && this.engineeringLifecycle?.activeStage === 'achievement') {
-      if (
-        !this.root.submitBrainstormDecision.spec ||
-        this.root.submitBrainstormDecision.spec.status !== 'approved'
-      ) {
-        this.errorMessage = 'Achievement requires an approved Spec.'
-        return
-      }
       specAction = 'implement'
     }
     const dependencyThreads = startAfterThreads.filter(
@@ -691,6 +688,13 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     this.root.buildSpecActionPrompt.beginLocalTurn(userMessageId)
     this.root.currentWorkingTraceAttribution.captureLiveWorkingSelection()
     agentRuns.setBusy(projectId, id, true, userMessageId)
+    // Nothing has reported this turn yet: the harness session still has to be
+    // bound (and, after a provider or harness switch, created and spawned while
+    // the orphaned one is released). The persisted row keeps the previous turn's
+    // settled status for that whole window, and the session binding is published
+    // as a thread update, so the settle repair has to know this turn is waiting
+    // on its first live state instead of reading that row as its end.
+    agentRuns.beginDispatch(projectId, id)
 
     // Set the moment the dispatch settles: from that instant the prompt is the
     // agent's, and everything the rest of this block does (the scroll, the

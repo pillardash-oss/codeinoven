@@ -34,9 +34,10 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * the snapshot DDL goes in `SCHEMA_SQL`, and the step that upgrades a database
  * already on disk goes in a new `migrations/v<version>.ts`. A schema change
  * without a bump reaches fresh installs only and silently skips every database
- * already on disk.
+ * already on disk. A data repair that has to run exactly once per install earns
+ * a version the same way, with no DDL in it.
  */
-export const DATABASE_SCHEMA_VERSION = 8
+export const DATABASE_SCHEMA_VERSION = 11
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
@@ -158,6 +159,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   assignment_task_id   TEXT,
   coordinator_thread_id TEXT,
   achievement_role     TEXT CHECK(achievement_role IN ('coordinator','auditor')),
+  achievement_goal     TEXT,
   auditor_thread_id    TEXT,
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
   engineering          INTEGER NOT NULL DEFAULT 0,
@@ -173,6 +175,8 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   last_success_at      INTEGER,
   assistant_getting_started INTEGER NOT NULL DEFAULT 0,
   assistant_task_id    TEXT,
+  group_participants   TEXT,
+  group_title          TEXT,
   last_error           TEXT,
   last_error_at        INTEGER,
   last_outcome         TEXT CHECK(last_outcome IN ('completed','failed','parked')),
@@ -287,6 +291,9 @@ CREATE TABLE IF NOT EXISTS agent_messages (
   thinking_level  TEXT,
   references_json TEXT,
   project_references_json TEXT,
+  -- The assistant that spoke this message in a group thread, as a JSON snapshot
+  -- (see MessageAuthor). NULL on every ordinary message.
+  author          TEXT,
   created_at      INTEGER NOT NULL,
   completed_at    INTEGER,
   cost            REAL,
@@ -1128,6 +1135,10 @@ CREATE TABLE IF NOT EXISTS assistants (
   pinned              INTEGER NOT NULL DEFAULT 0,
   pinned_at           INTEGER,
   sort_order          INTEGER,
+  -- An assistant the app itself seeds and owns (Don, the orchestrator). It is
+  -- always present, always first, and the manager refuses to rename, delete or
+  -- reorder it, so the flag is the single rule every surface reads.
+  builtin             INTEGER NOT NULL DEFAULT 0,
   created_at          INTEGER NOT NULL,
   updated_at          INTEGER NOT NULL
 );

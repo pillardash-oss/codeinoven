@@ -154,3 +154,27 @@ export function withHandedOffWorkersNote(nudge: string, note: string): string {
   if (!note) return nudge
   return `${nudge}\n\n${note}`
 }
+
+/**
+ * The note a resumed agent receives about the sub-agents an app closure killed.
+ *
+ * A nested sub-agent is a session inside the harness process its parent turn
+ * owns, so the process goes down with the app and the worker with it. Nothing in
+ * the harness ever reports that, and the parent came back believing its workers
+ * were still in flight. The note says three things it cannot discover: they are
+ * gone, they produced nothing, and there is a way to find an account that can
+ * still pay for the retry.
+ */
+export function interruptedSubagentsNote(workers: readonly HandedOffWorker[]): string {
+  const nested = workers.filter((worker) => worker.kind === 'nested')
+  if (nested.length === 0) return ''
+  const { named, omitted } = boundedWorkerRoster(nested)
+  const lines = named.map((worker) => `- ${worker.label} (${worker.agentId})`)
+  if (omitted > 0) lines.push(`- and ${omitted} more`)
+  const noun = nested.length === 1 ? 'sub-agent' : 'sub-agents'
+  return [
+    `This app closed while it was running ${nested.length} ${noun}, so they ended without reporting. Their work is not in progress and will produce no result:`,
+    ...lines,
+    'Before you redo that work yourself, call cio_orchestrate_targets to see which connected account still has subscription capacity, then spawn the work again on an account and model that has capacity. If no account has capacity, do the work yourself on the model this thread already uses.'
+  ].join('\n')
+}

@@ -166,6 +166,9 @@ export function mapClaudeCodeRecord(
             .filter((text): text is string => Boolean(text))
             .join('\n')
         : undefined
+      // The part keeps the message just reported, never the run: the panel
+      // accumulates what it is shown, so a worker nobody is watching writes one
+      // bounded record per message instead of an ever-growing transcript.
       const part: Extract<AgentPart, { type: 'subagent' }> = {
         ...existing,
         activity: {

@@ -648,6 +648,10 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
    * A drop out of a web page hands over a link and no file (Chromium keeps the
    * files to itself across documents), so a drop that brought no files is read as
    * the media links it named and those are fetched into attachment storage.
+   *
+   * Every file a drop carries puts its chip up before the first transfer starts,
+   * so a screenshot moved out of the system temp directory is answered at the
+   * gesture instead of after the copy.
    */
   async handleDropData(dt: DataTransfer | null): Promise<void> {
     if (this.root.props.readOnlyMode && !this.root.props.allowAttachments) return
@@ -671,19 +675,15 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     }
     const { files, urls } = readComposerDrop(dt)
     let attached = 0
-    for (const file of files) {
-      try {
-        const filePath = await window.api.registerFileSelection(
-          file,
-          this.root.props.attachmentStorage
-        )
-        if (!filePath) continue
-        await this.addFileAttachment(filePath, file)
-        attached += 1
-      } catch {
-        // Not a local file (e.g., an image dragged from a web page); its link
-        // reading is handled below.
-      }
+    const dropped = files.map((file) => ({
+      file,
+      pendingId: this.root.submit.beginPendingAttachment(
+        file.name || 'file',
+        file.type || mimeFromPath(file.name)
+      )
+    }))
+    for (const { file, pendingId } of dropped) {
+      if (await this.retainDroppedFile(file, pendingId)) attached += 1
     }
     if (attached > 0) return
     // A drag can hand over a file the app cannot take and the link to the same
@@ -699,24 +699,88 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     }
   }
 
+  /**
+   * Move one dropped file into attachment storage and swap its placeholder for
+   * the real chip. The chip exists before this runs, so failure only has to take
+   * the placeholder down.
+   */
+  private async retainDroppedFile(file: File, pendingId: string): Promise<boolean> {
+    try {
+      const filePath = await window.api.registerFileSelection(
+        file,
+        this.root.props.attachmentStorage
+      )
+      if (!filePath) {
+        this.root.submit.failPendingAttachment(pendingId)
+        return false
+      }
+      return await this.adoptTransferredAttachment(
+        pendingId,
+        filePath,
+        file.type || mimeFromPath(filePath),
+        file.name || posixBasename(filePath)
+      )
+    } catch {
+      // Not a local file (e.g., an image dragged from a web page); its link
+      // reading is handled by the caller.
+      this.root.submit.failPendingAttachment(pendingId)
+      return false
+    }
+  }
+
+  /** Replace a placeholder with the file that landed in attachment storage. */
+  private async adoptTransferredAttachment(
+    pendingId: string,
+    filePath: string,
+    mime: string,
+    filename: string
+  ): Promise<boolean> {
+    const attachment = this.root.submit.settlePendingAttachment(pendingId, {
+      mime,
+      url: pathToFileUrl(filePath),
+      filename: filename || posixBasename(filePath) || 'file'
+    })
+    if (!attachment) return false
+    await this.preview.load(attachment)
+    return true
+  }
+
   /** Fetch the links one drop named and attach each file that comes back. */
   async attachRemoteMedia(urls: readonly string[]): Promise<void> {
     if (!this.root.props.attachmentStorage) {
       showToastWarning('This chat has nowhere to store an attachment.')
       return
     }
+    // A fetch can take a while on a slow link, so each named link gets its
+    // placeholder now and is replaced by the file when the bytes arrive.
+    const pending = urls.map((url) => {
+      const path = url.split(/[?#]/u)[0] ?? ''
+      return {
+        url,
+        pendingId: this.root.submit.beginPendingAttachment(
+          posixBasename(path) || 'Attachment',
+          mimeFromPath(path)
+        )
+      }
+    })
     let attached = 0
     let failure: unknown = null
-    for (const url of urls) {
+    for (const { url, pendingId } of pending) {
       try {
         const filePath = await invoke(
           'attachment:retainRemote',
           this.root.props.attachmentStorage,
           url
         )
-        await this.addFileAttachment(filePath)
-        attached += 1
+        const adopted = await this.adoptTransferredAttachment(
+          pendingId,
+          filePath,
+          mimeFromPath(filePath),
+          posixBasename(filePath)
+        )
+        if (adopted) attached += 1
       } catch (error) {
+        this.root.submit.failPendingAttachment(pendingId)
         failure ??= error
       }
     }

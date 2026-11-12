@@ -1,5 +1,9 @@
 import { failedJobLogEvidence } from '$shared/github-job-log'
-import { UTILITY_INVOKE_TOOL_NAME, UTILITY_SEARCH_TOOL_NAME } from '$shared/gateway-tools'
+import {
+  UTILITY_ACTIVATE_TOOL_NAME,
+  UTILITY_INVOKE_TOOL_NAME,
+  UTILITY_SEARCH_TOOL_NAME
+} from '$shared/gateway-tools'
 import { APP_SCOPE_UTILITY_ID } from '$shared/utility-ids'
 import { SCOPE_CAPABILITY_SEARCH_QUERY } from '$shared/scope-tool'
 import type {
@@ -402,16 +406,96 @@ export function prCheckAssignmentPrompt(
 }
 
 /**
- * The first message the conflict-resolution agent receives. The agent resolves
- * and stages; on a merge it stops there, because the merge commit is the
- * user's step (Complete merge writes it, pushes the resolution, merges the pull
- * request and deletes the temporary branch when one is involved). A rebase stop has no
- * such step in this panel, so that brief still asks for the commit.
+ * Where a conflict resolution has to land when it is published.
+ *
+ * The agent publishes through the app-owned scope capability, which is scoped by
+ * the panel, so the brief carries the exact scope the panel prepared: a
+ * resolution in a managed worktree must be published from that worktree, never
+ * guessed from the project root.
+ */
+export interface ConflictResolutionTarget {
+  scopeBucketId: string
+  /** The remote the resolution is published to, e.g. `origin`. */
+  remote: string
+  /** The branch this checkout had before the resolution started. */
+  returnBranch: string
+}
+
+/**
+ * The step that ends a local resolution: the commit, and nothing after it.
+ *
+ * A local merge or rebase is the user's own unpublished branch, so the agent
+ * finishes the integration and leaves it committed and clean. Publishing is
+ * the one step that stays with the user, and the panel's push button is already
+ * pointed at this branch.
+ */
+function localResolutionHandOff(integration: 'merge' | 'rebase'): string[] {
+  return [
+    'Finish the integration yourself, then stop before publishing:',
+    ...(integration === 'merge'
+      ? [
+          '1. Stage exactly the files you resolved, one `git add <path>` per file   never `git add -A`.',
+          '2. Write the merge commit: `git commit --no-edit`. Git already has a message for this merge; use `git commit -m "<what the resolution kept>"` only when it has none, and move on when Git says there is nothing left to commit.'
+        ]
+      : [
+          '1. `git add -A`',
+          '2. `git rebase --continue`. Expect to stop again on the next commit that conflicts: resolve it the same way and continue, until the rebase reports it is done. `git rebase --skip` the commits that become empty.'
+        ]),
+    '3. Stop there. Do NOT push and do NOT open a pull request: publishing this branch is the one step that stays with me.',
+    'Check `git status` before you answer: nothing may be left conflicted, staged, or mid-integration, and your answer names the files you resolved and the checks you ran.'
+  ]
+}
+
+/**
+ * The step that ends a pull request resolution: the whole flow, including the
+ * pull request that carries it.
+ *
+ * A conflict on a pull request cannot be resolved by asking the user to do the
+ * last part, so the agent pushes the resolution on its own branch and opens the
+ * pull request that merges that branch into the branch the conflict sits on. The
+ * pull request's head branch is never written to directly, and nothing is merged
+ * on the user's behalf: the link is what is handed back, and merging it there is
+ * the user's decision.
+ */
+function pullRequestResolutionHandOff(
+  pullRequest: PullRequestSummary,
+  target: ConflictResolutionTarget
+): string[] {
+  const number = pullRequest.number
+  const branch = `cio/resolve-${number}`
+  const invoke = `\`${UTILITY_INVOKE_TOOL_NAME}\` with utility_id "${APP_SCOPE_UTILITY_ID}"`
+  return [
+    'Finish the whole resolution yourself, up to and including the pull request that carries it:',
+    '1. Stage exactly the files you resolved, one `git add <path>` per file   never `git add -A`.',
+    `2. Write the merge commit on \`pr-${number}\`: \`git commit --no-edit\`. If Git says there is nothing left to commit, the merge already landed, so go on with it in place.`,
+    `3. Publish the resolution on its own branch, so the head branch of #${number} is never written to behind my back: \`git checkout -b ${branch}\`.`,
+    '4. Publish that branch and open its pull request through the app, which owns the GitHub credential. Activate the capability, then invoke it:',
+    `   - \`${UTILITY_SEARCH_TOOL_NAME}\` with query "${SCOPE_CAPABILITY_SEARCH_QUERY}", then \`${UTILITY_ACTIVATE_TOOL_NAME}\` with utility_id "${APP_SCOPE_UTILITY_ID}".`,
+    `   - ${invoke}, operation "publish_branch", input { "scope": "${target.scopeBucketId}", "branch": "${branch}", "remote": "${target.remote}" }`,
+    `   - ${invoke}, operation "open_pull_request", input { "scope": "${target.scopeBucketId}", "title": "Resolve conflicts in #${number}", "body": "<one short paragraph on what the resolution kept from each side>", "head": "${branch}", "base": "${pullRequest.headRef}" }`,
+    `   The second call answers with the pull request number and URL. Do not merge, close, or otherwise write to pull request #${number} yourself, and never run \`git push\` or handle a token: the app resolves the credential.`,
+    `5. Put the checkout back where I left it: \`git checkout ${target.returnBranch}\`, then \`git branch -D ${branch}\` and \`git branch -D pr-${number}\`.`,
+    `6. End your answer with that pull request link and one line on what the resolution kept from each side. Merging it clears the conflicts on #${number}, and #${number} then merges on its own.`,
+    'If the capability reports that it could not publish or open the pull request (the head comes from a fork, the repository forbids the branch, or no GitHub account is connected), do not force anything and do not ask for credentials: report the branch you committed and exactly which step stopped, so I can finish that one step myself.'
+  ]
+}
+
+/**
+ * The first message the conflict-resolution agent receives.
+ *
+ * The handoff exists because nobody wants to resolve conflict markers by hand,
+ * so the brief is a completion order rather than a to-do list: the agent
+ * resolves, verifies and writes the commit itself. What is left is deliberately
+ * small. A local merge or rebase ends committed and clean, ready for the panel's
+ * push button. A pull request conflict ends with the resolution published on its
+ * own branch and a pull request carrying it into the conflicted branch, whose
+ * link the agent hands back, so the user only merges.
  */
 export function conflictResolutionPrompt(
   conflictedPaths: string[],
   pullRequest: PullRequestSummary | null,
-  integration: 'merge' | 'rebase'
+  integration: 'merge' | 'rebase',
+  target: ConflictResolutionTarget | null
 ): string {
   const subject = pullRequest
     ? [
@@ -422,18 +506,6 @@ export function conflictResolutionPrompt(
         `Resolve the conflicts left by the in-progress ${integration} in this worktree.`,
         'The conflicts are already in the working tree, in the files listed below.'
       ]
-  const handOff =
-    integration === 'merge'
-      ? [
-          'Then stage exactly the files you resolved, one `git add <path>` per file   never `git add -A`.',
-          `Do NOT commit and do NOT push   the user completes the merge from the Git panel, which writes the merge commit${pullRequest ? ', pushes the resolution back to the pull request, merges that pull request, and deletes the temporary branch' : ''}.`
-        ]
-      : [
-          'Then stage and commit the resolutions:',
-          '1. `git add -A`',
-          '2. `git commit -m "Resolve conflicts"`',
-          'Do NOT push   the user finishes from the Git panel.'
-        ]
   return [
     ...subject,
     '',
@@ -445,7 +517,9 @@ export function conflictResolutionPrompt(
     '1. Read it and resolve the `<<<<<<<`, `=======`, and `>>>>>>>` conflict markers, keeping the correct merged content.',
     '2. Run the relevant project checks/tests to make sure the resolution is sound.',
     '',
-    ...handOff
+    ...(pullRequest !== null && target !== null
+      ? pullRequestResolutionHandOff(pullRequest, target)
+      : localResolutionHandOff(integration))
   ].join('\n')
 }
 

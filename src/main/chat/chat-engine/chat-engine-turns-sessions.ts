@@ -18,10 +18,12 @@ import { workerReportsToCoordinator } from '../../../lib/types'
 import { decideModelSwitchCompaction } from '../../../lib/model-switch-compaction'
 import { handoffTailTokenBudget } from '../../../lib/prompt-budget'
 import { selectHistoryTail } from './chat-engine-message-text'
+import { groupConversationTranscript } from './chat-engine-group-transcript'
 import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provider-issue'
 import type { PendingQuestionInfo, SessionCompletionWaiter, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { broadcastToast, initialSpecWorkingStatus, probeSessionLiveness } from './chat-engine-pure'
+import { displayDeviceAttention } from '../../display/display-device-attention'
 import { ChatEngine } from '../chat-engine'
 
 /** ChatEngine turns-sessions: one concern, moved verbatim from the composition root. */
@@ -305,8 +307,11 @@ export class ChatEngineTurnsSessions {
       if (!nativeHistoryBound && !switchedRuntime) {
         try {
           const editedMirror = await this.host.threadManager.loadMessageRecords(projectId, threadId)
+          // A group chat is several conversations on one screen: only the host's
+          // own exchange is this assistant's history.
+          const hostMirror = groupConversationTranscript(thread, editedMirror)
           const priorMirror =
-            editedMirror.at(-1)?.role === 'user' ? editedMirror.slice(0, -1) : editedMirror
+            hostMirror.at(-1)?.role === 'user' ? hostMirror.slice(0, -1) : hostMirror
           const tailBudget = handoffTailTokenBudget(
             this.host.units['runtime-agents'].selectedModelInputBudget(
               thread.settings?.providerId,
@@ -479,6 +484,7 @@ export class ChatEngineTurnsSessions {
   }
 
   retireSessionState(sessionId: string): void {
+    const retiring = this.host.sessionRegistry.get(sessionId)
     this.host.state.planningSessions.delete(sessionId)
     this.host.state.preparedImplementationSessions.delete(sessionId)
     this.host.sessionRegistry.delete(sessionId)
@@ -500,6 +506,9 @@ export class ChatEngineTurnsSessions {
     this.host.state.artifactRenderedSessions.delete(sessionId)
     this.host.state.todoReconcileAttempts.delete(sessionId)
     this.host.units['permissions'].dropSessionCreations(sessionId)
+    // A retired session ends the display panel's patience with its thread: the
+    // next turn on that thread may be working on a different device.
+    if (retiring) displayDeviceAttention.forget(retiring.threadId)
     this.host.state.sessionNativeHistory.delete(sessionId)
     this.host.state.parkedSessionReplay.delete(sessionId)
     this.clearSessionWatchdog(sessionId)
@@ -842,6 +851,11 @@ export class ChatEngineTurnsSessions {
   markSessionWorking(sessionId: string): void {
     const changed = this.host.sessionStatuses.get(sessionId)?.state !== 'working'
     this.host.handledIdleSessions.delete(sessionId)
+    // A dispatched turn starts a fresh silence clock: without this a session
+    // that emits nothing at all would be measured against the previous turn's
+    // last event and read as stalled the moment the watchdog first fired.
+    const info = this.host.sessionRegistry.get(sessionId)
+    if (info) info.lastWorkEventAt = Date.now()
     if (changed) {
       this.host.sessionStatuses.set(sessionId, { state: 'working' })
       this.host.broadcast({
@@ -1324,9 +1338,21 @@ export class ChatEngineTurnsSessions {
   /** Whether the session is parked on a card the user has not settled: a
    *  question, a permission request, or an image-descriptor decision. */
   sessionAwaitsUserInput(sessionId: string): boolean {
+    const threadId = this.host.sessionRegistry.get(sessionId)?.threadId
     return (
       [...this.host.pendingQuestions.values()].some(
-        (pending) => pending.request.sessionId === sessionId
+        (pending) =>
+          pending.request.sessionId === sessionId ||
+          // A question an artifact session asked on this thread's behalf parks
+          // the thread too. Reading only the turn's own session let that card
+          // wait while the turn settled `completed` and its notice read
+          // done/unread. A side chat's question never counts: it owns no status
+          // of the parent thread.
+          (threadId !== undefined &&
+            pending.request.threadId === threadId &&
+            this.host.units['temporary-chats'].temporaryChatForSession(
+              pending.request.sessionId
+            ) === undefined)
       ) ||
       [...this.host.state.pendingPermissions.values()].some(
         (pending) => pending.request.sessionId === sessionId
@@ -1338,23 +1364,48 @@ export class ChatEngineTurnsSessions {
   }
 
   /**
+   * Milliseconds this session has gone without a harness event.
+   *
+   * Anchored on the newest event the session reported, and on first use for a
+   * session that has never reported one, so a stall is always measured from a
+   * real moment instead of from process start.
+   */
+  silentStallElapsedMs(info: SessionInfo): number {
+    const now = Date.now()
+    if (info.lastWorkEventAt === undefined) {
+      info.lastWorkEventAt = now
+      return 0
+    }
+    return Math.max(0, now - info.lastWorkEventAt)
+  }
+
+  /**
    * Called when the watchdog fires   the session has been silent for one check window.
    * When the session is demonstrably still working (an in-flight shell tool or
    * a running sub-agent), the silence is legitimate and the window is extended
    * instead of aborting. Otherwise we try to fetch the conversation history
    * from the agent to surface the actual error (rate-limit, credit exhaustion,
    * provider deprecated, etc.) before cleaning up.
+   *
+   * Every "it is still working" exemption is bounded by
+   * {@link ChatEngine.SILENT_STALL_CEILING_MS}. In-flight tool bookkeeping and
+   * a driver that still calls itself busy both survive the event that would
+   * have closed them, so on their own they would let a half-open provider
+   * stream park a thread for as long as the app stays open.
    */
   async fireSessionWatchdog(sessionId: string): Promise<void> {
     this.host.state.sessionWatchdogs.delete(sessionId)
     const info = this.host.sessionRegistry.get(sessionId)
     if (!info) return
 
+    const silentMs = this.silentStallElapsedMs(info)
+    const stalled = silentMs >= ChatEngine.SILENT_STALL_CEILING_MS
+
     // A genuinely-working-but-silent session must never be aborted: a long CLI
     // action can legitimately produce no events for far longer than the
     // activity window. Extend the window (re-evaluating when it fires again) so
     // live work survives; only silence with no in-flight work is treated as dead.
-    if (this.host.units['misc'].hasInFlightWork(sessionId, info)) {
+    if (!stalled && this.host.units['misc'].hasInFlightWork(sessionId, info)) {
       Logger.info('Session silent but demonstrably working   extending watchdog', {
         sessionId,
         projectId: info.projectId,
@@ -1374,6 +1425,13 @@ export class ChatEngineTurnsSessions {
       // user has not settled is the same bargain from the other side: the turn
       // is waiting on a human, so the card's own timer ends the wait.
       const waitingOnUser = this.sessionAwaitsUserInput(sessionId)
+      if (stalled && !waitingOnUser) {
+        // Nothing left to wait for: the exemption that kept this turn alive has
+        // outlived the ceiling, so holding it any longer would park the thread
+        // silently. Surface the stall as a retryable failure the user can see.
+        await this.failStalledSession(info, sessionId, silentMs)
+        return
+      }
       Logger.info(
         waitingOnUser
           ? 'Session is waiting on the user   extending watchdog'
@@ -1398,6 +1456,7 @@ export class ChatEngineTurnsSessions {
       info.accountId
     )
     if (
+      !stalled &&
       watchdogDriver?.hasActiveTurn &&
       watchdogDriver.hasActiveTurn(sessionId) &&
       watchdogDriver.isSessionBusy &&
@@ -1483,6 +1542,30 @@ export class ChatEngineTurnsSessions {
     } catch {
       /* abort is best-effort */
     }
+  }
+
+  /**
+   * Surface a turn the watchdog gave up waiting on: the harness still claims to
+   * be busy, but it has reported nothing for longer than the stall ceiling, so
+   * the exemption that was keeping the turn alive no longer has anything behind
+   * it. Routed through {@link failWatchedSession} so the user gets the same
+   * visible, retryable failure a dead harness produces rather than a thread
+   * that looks busy and never moves again.
+   */
+  async failStalledSession(info: SessionInfo, sessionId: string, silentMs: number): Promise<void> {
+    const minutes = Math.max(1, Math.round(silentMs / 60_000))
+    Logger.info('Session silent past the stall ceiling   surfacing the parked turn', {
+      sessionId,
+      projectId: info.projectId,
+      threadId: info.threadId,
+      silentMinutes: minutes
+    })
+    await this.failWatchedSession(info, sessionId, {
+      kind: 'network',
+      message: `The ${info.driverId} session reported itself busy but produced no output for ${minutes} minutes. The turn was stopped instead of staying parked; retry to continue.`,
+      harnessId: info.driverId,
+      retryable: true
+    })
   }
 
   // ─── Completion waiter   used by ephemeral sessions ─────────────────────

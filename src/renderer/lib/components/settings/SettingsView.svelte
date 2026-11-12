@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
@@ -61,7 +62,6 @@
     type CioCleanupCategoryId,
     type GitPullPreference,
     type PrMergeMethod,
-    type SlashCommandMode,
     type ThemePreference
   } from '$shared/types'
   import { onMount, tick, type Component } from 'svelte'
@@ -74,8 +74,11 @@
   import DownloadProgress from '../ui/DownloadProgress.svelte'
   import Modal from '../ui/Modal.svelte'
   import UpdateBlockersModal from '../layout/UpdateBlockersModal.svelte'
+  import EnumSelect from '../ui/EnumSelect.svelte'
   import Switch from '../ui/Switch.svelte'
+  import SeekBar from '../ui/SeekBar.svelte'
   import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
+  import SecretsSettingsTab from './SecretsSettingsTab.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -101,7 +104,6 @@
   import SearchSettingsTab from './SearchSettingsTab.svelte'
   import UtilitiesView from './UtilitiesView.svelte'
 
-  type SelectChangeEvent = Event & { currentTarget: HTMLSelectElement }
   interface Props {
     config: AppConfig
     settingsReady: boolean
@@ -296,27 +298,19 @@
     }
   })
 
+  const fontWeightOptions = FONT_WEIGHT_OPTIONS.map((option) => ({
+    id: String(option.id),
+    label: option.label
+  }))
+  const zoomOptions = ZOOM_LEVEL_OPTIONS.map((option) => ({
+    id: String(option.id),
+    label: option.label
+  }))
+
   const themeOptions = [
     { id: 'system' as const, label: 'System', icon: CioDisplay },
     { id: 'light' as const, label: 'Light', icon: CioSun },
     { id: 'dark' as const, label: 'Dark', icon: CioMoon }
-  ]
-
-  const slashCommandOptions: Array<{
-    id: SlashCommandMode
-    label: string
-    description: string
-  }> = [
-    {
-      id: 'app',
-      label: `${APP_NAME} actions`,
-      description: `${APP_NAME} handles supported slash commands in the app.`
-    },
-    {
-      id: 'passthrough',
-      label: 'Harness passthrough',
-      description: 'Forward slash commands to the active agent harness.'
-    }
   ]
 
   const mergeMethodOptions: Array<{
@@ -341,9 +335,10 @@
   const backgroundModeOptions: Array<{
     id: 'scheduled' | 'always'
     label: string
+    hint: string
   }> = [
-    { id: 'scheduled', label: 'Scheduled' },
-    { id: 'always', label: 'Always' }
+    { id: 'scheduled', label: 'Scheduled', hint: 'Stays open only while work is running or due' },
+    { id: 'always', label: 'Always', hint: 'Keeps running after the window closes' }
   ]
 
   function saveThreadLimit(event: Event): void {
@@ -621,6 +616,9 @@
       channelBusy = false
     }
   }
+
+  /** The size the slider is on while it is dragged, before it is saved on release. */
+  let fontSizeDraft = $state<number | null>(null)
 </script>
 
 <svelte:window onkeydown={escHandler} />
@@ -749,18 +747,17 @@
                 <p class="text-sm font-medium">Font</p>
                 <p class="text-xs leading-relaxed text-dimmed">Typeface used across the app</p>
               </div>
-              <select
-                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                value={config.fontFamily}
-                disabled={!settingsReady}
-                aria-label="App font"
-                onchange={(event: SelectChangeEvent) =>
-                  void updateConfig({ fontFamily: event.currentTarget.value })}
-              >
-                {#each FONT_FAMILY_OPTIONS as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
+              <div class="w-56 shrink-0">
+                <EnumSelect
+                  options={FONT_FAMILY_OPTIONS}
+                  value={config.fontFamily}
+                  disabled={!settingsReady}
+                  ariaLabel="App font"
+                  title="App font"
+                  placeholder="Choose a font"
+                  onChange={(id) => void updateConfig({ fontFamily: id })}
+                />
+              </div>
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
@@ -768,20 +765,21 @@
                 <p class="text-xs leading-relaxed text-dimmed">Scales all text in the app</p>
               </div>
               <div class="flex items-center gap-2">
-                <span class="text-xs leading-relaxed text-dimmed">{config.appFontSize}px</span>
-                <input
-                  type="range"
-                  min="12"
-                  max="18"
-                  step="1"
-                  value={config.appFontSize}
+                <span class="text-xs leading-relaxed text-dimmed"
+                  >{fontSizeDraft ?? config.appFontSize}px</span
+                >
+                <SeekBar
+                  class="w-32"
+                  min={12}
+                  max={18}
+                  step={1}
+                  value={fontSizeDraft ?? config.appFontSize}
                   disabled={!settingsReady}
-                  aria-label="Base font size"
+                  label="Base font size"
                   title="Adjust the base font size"
-                  onchange={(event) => {
-                    const input = event.currentTarget
-                    if (!(input instanceof HTMLInputElement)) return
-                    const size = Number(input.value)
+                  onInput={(size) => (fontSizeDraft = size)}
+                  onCommit={(size) => {
+                    fontSizeDraft = null
                     if (Number.isInteger(size) && size >= 12 && size <= 18) {
                       void updateConfig({ appFontSize: size })
                     }
@@ -794,44 +792,34 @@
                 <p class="text-sm font-medium">Font weight</p>
                 <p class="text-xs leading-relaxed text-dimmed">Lightness of the app text</p>
               </div>
-              <select
-                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                value={config.fontWeight}
-                disabled={!settingsReady}
-                aria-label="Font weight"
-                onchange={(event: SelectChangeEvent) => {
-                  const weight = Number(event.currentTarget.value)
-                  if (Number.isInteger(weight) && weight >= 100 && weight <= 800) {
-                    void updateConfig({ fontWeight: weight })
-                  }
-                }}
-              >
-                {#each FONT_WEIGHT_OPTIONS as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
+              <div class="w-56 shrink-0">
+                <EnumSelect
+                  options={fontWeightOptions}
+                  value={String(config.fontWeight)}
+                  disabled={!settingsReady}
+                  ariaLabel="Font weight"
+                  title="Font weight"
+                  placeholder="Choose a weight"
+                  onChange={(id) => void updateConfig({ fontWeight: Number(id) })}
+                />
+              </div>
             </div>
             <div class="mt-3 flex items-center justify-between gap-4">
               <div>
                 <p class="text-sm font-medium">Zoom</p>
                 <p class="text-xs leading-relaxed text-dimmed">Magnify the whole interface</p>
               </div>
-              <select
-                class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                value={config.zoomLevel}
-                disabled={!settingsReady}
-                aria-label="Interface zoom"
-                onchange={(event: SelectChangeEvent) => {
-                  const zoom = Number(event.currentTarget.value)
-                  if (Number.isFinite(zoom) && zoom >= 0.5 && zoom <= 2) {
-                    void updateConfig({ zoomLevel: zoom })
-                  }
-                }}
-              >
-                {#each ZOOM_LEVEL_OPTIONS as option (option.id)}
-                  <option value={option.id}>{option.label}</option>
-                {/each}
-              </select>
+              <div class="w-28 shrink-0">
+                <EnumSelect
+                  options={zoomOptions}
+                  value={String(config.zoomLevel)}
+                  disabled={!settingsReady}
+                  ariaLabel="Interface zoom"
+                  title="Interface zoom"
+                  placeholder="Choose a zoom"
+                  onChange={(id) => void updateConfig({ zoomLevel: Number(id) })}
+                />
+              </div>
             </div>
           </div>
 
@@ -844,8 +832,10 @@
             </h3>
             <div class="flex items-center justify-between gap-4">
               <div>
-                
-                
+                <p class="text-sm font-medium">System notifications</p>
+                <p class="text-xs leading-relaxed text-dimmed">
+                  Send a test to check that notifications reach you
+                </p>
                 {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
                     <CioCheckCircle size={13} />
@@ -906,7 +896,7 @@
 
             <div class="mt-4 pt-4">
               <p class="text-sm font-medium">In-app notification sounds</p>
-              
+
               <div class="mt-3 space-y-3">
                 <div class="flex items-center justify-between gap-4">
                   <div>
@@ -945,31 +935,30 @@
             <h3
               class="mb-3 border-b border-border pb-2 text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase"
             >
-              Work Behaviour
+              Work
             </h3>
-            
+
             <div class="space-y-4">
               <div class="flex items-center justify-between gap-4">
-              <div>
-                <p class="text-sm font-medium">Keep device on while work is in progress</p>
-                <p class="text-xs leading-relaxed text-dimmed">
-                  Prevent sleep while an agent is actively working; spec-ready threads stay idle
-                </p>
+                <div>
+                  <p class="text-sm font-medium">Keep device on while work is in progress</p>
+                  <p class="text-xs leading-relaxed text-dimmed">
+                    Stop this computer from sleeping while an agent is working
+                  </p>
+                </div>
+                <Switch
+                  checked={config.keepAwakeWhileWorking}
+                  onchange={() =>
+                    void updateConfig({ keepAwakeWhileWorking: !config.keepAwakeWhileWorking })}
+                  aria-label="Toggle keeping the device awake while work is in progress"
+                  disabled={!settingsReady}
+                />
               </div>
-              <Switch
-                checked={config.keepAwakeWhileWorking}
-                onchange={() =>
-                  void updateConfig({ keepAwakeWhileWorking: !config.keepAwakeWhileWorking })}
-                aria-label="Toggle keeping the device awake while work is in progress"
-                disabled={!settingsReady}
-              />
-            </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-sm font-medium">Resume work on restart</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Threads will be resumed if they were interrupted due to an app closure or
-                    unknown issues
+                    Pick up threads that were interrupted when the app closed or crashed
                   </p>
                 </div>
                 <Switch
@@ -1014,20 +1003,17 @@
                     Pre-selected when merging a pull request from the Git panel
                   </p>
                 </div>
-                <select
-                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                  value={config.defaultMergeMethod}
-                  disabled={!settingsReady}
-                  aria-label="Default merge method"
-                  onchange={(event: SelectChangeEvent) =>
-                    void updateConfig({
-                      defaultMergeMethod: event.currentTarget.value as PrMergeMethod
-                    })}
-                >
-                  {#each mergeMethodOptions as option (option.id)}
-                    <option value={option.id}>{option.label}</option>
-                  {/each}
-                </select>
+                <div class="w-48 shrink-0">
+                  <EnumSelect
+                    options={mergeMethodOptions}
+                    value={config.defaultMergeMethod}
+                    disabled={!settingsReady}
+                    ariaLabel="Default merge method"
+                    title="Default merge method"
+                    placeholder="Choose a method"
+                    onChange={(id) => void updateConfig({ defaultMergeMethod: id })}
+                  />
+                </div>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1036,20 +1022,17 @@
                     Ask when pulling, or always use one reconciliation strategy
                   </p>
                 </div>
-                <select
-                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                  value={config.defaultPullStrategy}
-                  disabled={!settingsReady}
-                  aria-label="Default pull strategy"
-                  onchange={(event: SelectChangeEvent) =>
-                    void updateConfig({
-                      defaultPullStrategy: event.currentTarget.value as GitPullPreference
-                    })}
-                >
-                  {#each pullStrategyOptions as option (option.id)}
-                    <option value={option.id}>{option.label}</option>
-                  {/each}
-                </select>
+                <div class="w-48 shrink-0">
+                  <EnumSelect
+                    options={pullStrategyOptions}
+                    value={config.defaultPullStrategy}
+                    disabled={!settingsReady}
+                    ariaLabel="Default pull strategy"
+                    title="Default pull strategy"
+                    placeholder="Choose a strategy"
+                    onChange={(id) => void updateConfig({ defaultPullStrategy: id })}
+                  />
+                </div>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1111,7 +1094,7 @@
                 <div>
                   <p class="text-sm font-medium">Max threads per project</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Oldest unpinned threads are evicted when exceeded
+                    Past this number, the oldest unpinned threads are removed
                   </p>
                 </div>
                 <input
@@ -1125,29 +1108,6 @@
                   aria-label="Maximum threads per project"
                   onchange={saveThreadLimit}
                 />
-              </div>
-              <div class="flex items-center justify-between">
-                <div>
-                  <p class="text-sm font-medium">Slash command behavior</p>
-                  <p class="text-xs leading-relaxed text-dimmed">
-                    {slashCommandOptions.find((option) => option.id === config.slashCommandMode)
-                      ?.description}
-                  </p>
-                </div>
-                <select
-                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                  value={config.slashCommandMode}
-                  disabled={!settingsReady}
-                  aria-label="Slash command behavior"
-                  onchange={(event: SelectChangeEvent) =>
-                    void updateConfig({
-                      slashCommandMode: event.currentTarget.value as SlashCommandMode
-                    })}
-                >
-                  {#each slashCommandOptions as option (option.id)}
-                    <option value={option.id}>{option.label}</option>
-                  {/each}
-                </select>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1258,23 +1218,21 @@
                 <div>
                   <p class="text-sm font-medium">Background mode</p>
                   <p class="text-xs leading-relaxed text-dimmed">
-                    Scheduled parks only when work is running or due; Always never quits on close
+                    Scheduled stays open only while work is running or due. Always keeps running
+                    after you close the window.
                   </p>
                 </div>
-                <select
-                  class="border bg-elevated px-2.5 py-1.5 text-xs font-medium outline-none focus:border-primary disabled:opacity-50"
-                  value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
-                  disabled={!settingsReady || config.backgroundMode === 'off'}
-                  aria-label="Background mode"
-                  onchange={(event: SelectChangeEvent) =>
-                    void updateConfig({
-                      backgroundMode: event.currentTarget.value as 'scheduled' | 'always'
-                    })}
-                >
-                  {#each backgroundModeOptions as option (option.id)}
-                    <option value={option.id}>{option.label}</option>
-                  {/each}
-                </select>
+                <div class="w-48 shrink-0">
+                  <EnumSelect
+                    options={backgroundModeOptions}
+                    value={config.backgroundMode === 'off' ? 'scheduled' : config.backgroundMode}
+                    disabled={!settingsReady || config.backgroundMode === 'off'}
+                    ariaLabel="Background mode"
+                    title="Background mode"
+                    placeholder="Choose a mode"
+                    onChange={(id) => void updateConfig({ backgroundMode: id })}
+                  />
+                </div>
               </div>
               <div class="flex items-center justify-between gap-4">
                 <div>
@@ -1443,8 +1401,8 @@
         <div class="mb-6">
           <h1 class="text-xl font-bold tracking-tight">Design and video</h1>
           <p class="mt-0.5 text-sm text-muted">
-            Which model does each kind of design and video work, and the optional video pack. Save
-            folders belong to each project and are changed from its design or video board.
+            Pick the models that make images, clips, sound and copy for design and video work. Each
+            project sets its own save folders from its design or video board.
           </p>
           {#if error}
             <p class="mt-2 bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
@@ -1486,7 +1444,7 @@
         settings page needs; importing it here statically made every page in
         Settings pay for Harnesses before it could paint.
       -->
-      {#await import('../providers/ProvidersView.svelte') then { default: ProvidersView }}
+      {#await loadCachedPanelModule('module:lib/components/providers/ProvidersView.svelte', () => import('../providers/ProvidersView.svelte')) then { default: ProvidersView }}
         <ProvidersView />
       {/await}
     {:else if section === 'utilities'}
@@ -1577,6 +1535,8 @@
       <CloudDeploymentsSettingsTab />
     {:else if section === 'archives'}
       <ArchivesSettingsTab />
+    {:else if section === 'secrets'}
+      <SecretsSettingsTab />
     {:else if section === 'about'}
       <div class="px-6 pb-8 pt-2">
         <!-- Identity: icon, version, copyright -->

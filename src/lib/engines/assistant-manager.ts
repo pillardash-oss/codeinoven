@@ -9,6 +9,7 @@ import {
   isAssistantRunThread
 } from '../types'
 import { pickRandomColor } from '../project-colors'
+import { DON_ASSISTANT_ID } from '../don-assistant'
 import { sortAssistants } from '../assistant-order'
 import { assistantOwnedDirectories } from '../thread-storage-paths'
 import { Logger } from '../../main/system/logger'
@@ -18,6 +19,7 @@ import { AssistantKnowledgeRevisionRepo } from '../../main/database/repositories
 import { ThreadRepo } from '../../main/database/repositories/thread-repo'
 import {
   assistantFirstKnowledgeSave,
+  assistantIsBuiltin,
   assistantIsScheduled,
   type CreateAssistantInput,
   type Assistant,
@@ -59,7 +61,9 @@ export class AssistantManager {
    * disk artifacts). Attached by the IPC layer once the thread manager exists,
    * so deleting an assistant sweeps its threads instead of orphaning them.
    */
-  private threadDeleter: ((threadId: string) => Promise<void>) | null = null
+  private threadDeleter:
+    | ((threadId: string, options?: { allowAssistantSetupThread?: boolean }) => Promise<void>)
+    | null = null
 
   constructor(
     private database: Database,
@@ -72,7 +76,9 @@ export class AssistantManager {
   }
 
   /** Attach the canonical thread deleter used when an assistant is deleted. */
-  attachThreadDeleter(deleter: (threadId: string) => Promise<void>): void {
+  attachThreadDeleter(
+    deleter: (threadId: string, options?: { allowAssistantSetupThread?: boolean }) => Promise<void>
+  ): void {
     this.threadDeleter = deleter
   }
 
@@ -105,13 +111,40 @@ export class AssistantManager {
   }
 
   createAssistant(input: CreateAssistantInput): Assistant {
+    return this.writeNewAssistant(input, generateId())
+  }
+
+  /**
+   * Ensure the app's own orchestrator exists, and report whether this call is what
+   * created it.
+   *
+   * Seeding is idempotent and idempotent by identity, not by name: an install that
+   * predates Don gets the row on the next launch, and an install that already has
+   * it is left completely alone, so a user who changed Don's model or connections
+   * keeps them. The row is written under a reserved id so no amount of renaming,
+   * importing or restoring can produce a second Don.
+   */
+  ensureBuiltinAssistant(input: CreateAssistantInput): { assistant: Assistant; created: boolean } {
+    const existing = this.assistantRepo.get(DON_ASSISTANT_ID)
+    if (existing) return { assistant: existing, created: false }
+    const assistant = this.writeNewAssistant({ ...input, builtin: true }, DON_ASSISTANT_ID, {
+      pinned: true
+    })
+    return { assistant, created: true }
+  }
+
+  private writeNewAssistant(
+    input: CreateAssistantInput,
+    id: string,
+    overrides: { pinned?: boolean } = {}
+  ): Assistant {
     const now = this.now()
     // An unscheduled assistant has no schedule at all: the flag is authoritative,
     // so a caller that passes both is read as unscheduled and its schedule is
     // dropped rather than kept hidden behind the flag.
     const scheduled = input.scheduled ?? true
     const assistant: Assistant = {
-      id: generateId(),
+      id,
       name: input.name.trim() || ASSISTANT_PLACEHOLDER_NAME,
       description: input.description?.trim() || undefined,
       scheduled,
@@ -133,6 +166,8 @@ export class AssistantManager {
       agents: input.agents,
       execution: input.execution,
       paused: input.paused ?? false,
+      ...(input.builtin ? { builtin: true } : {}),
+      ...(overrides.pinned ? { pinned: true, pinnedAt: now } : {}),
       sortOrder: this.topPosition(),
       createdAt: now,
       updatedAt: now
@@ -186,9 +221,13 @@ export class AssistantManager {
         ? input.schedule
         : existing.schedule
       : null
+    // A built-in assistant's identity is the app's, not a patch's: its name and its
+    // paused state are ignored here so no panel, migration or restore can rename or
+    // silence the orchestrator. Everything it actually works with stays editable.
+    const builtin = assistantIsBuiltin(existing)
     const updated: Assistant = {
       ...existing,
-      name: input.name?.trim() || existing.name,
+      name: builtin ? existing.name : input.name?.trim() || existing.name,
       description:
         'description' in input ? input.description?.trim() || undefined : existing.description,
       scheduled,
@@ -214,7 +253,7 @@ export class AssistantManager {
       priority: 'priority' in input ? (input.priority ?? undefined) : existing.priority,
       agents: input.agents !== undefined ? input.agents : existing.agents,
       execution: 'execution' in input ? (input.execution ?? undefined) : existing.execution,
-      paused: input.paused !== undefined ? input.paused : existing.paused,
+      paused: builtin ? existing.paused : (input.paused ?? existing.paused),
       updatedAt: now
     }
     this.assistantRepo.upsert(updated)
@@ -351,6 +390,13 @@ export class AssistantManager {
    * the user what was swept.
    */
   async deleteAssistant(assistantId: string): Promise<AssistantDeletionResult> {
+    // The app's own orchestrator is not the user's to delete: Don's thread is the
+    // one place delegated work reports back to, so removing it would strand every
+    // delegation and leave the front door missing on the next launch.
+    const target = this.assistantRepo.get(assistantId)
+    if (target && assistantIsBuiltin(target)) {
+      throw new Error(`${target.name} is part of CodeInOven and cannot be deleted`)
+    }
     // Collected across both passes, keyed by id, so a run an earlier pass already
     // swept is still counted and reported.
     const owned = new Map<string, Thread>()
@@ -419,7 +465,10 @@ export class AssistantManager {
       return
     }
     try {
-      await this.threadDeleter(thread.id)
+      // Removing an assistant removes its behavior thread with it: that is the one
+      // sweep allowed to take a Getting started thread away, because there is no
+      // assistant left for it to belong to.
+      await this.threadDeleter(thread.id, { allowAssistantSetupThread: true })
     } catch (error) {
       if (!this.threadRepo.get(thread.id)) return
       throw error
@@ -430,6 +479,9 @@ export class AssistantManager {
   setPinned(assistantId: string, pinned: boolean): Assistant {
     const existing = this.assistantRepo.get(assistantId)
     if (!existing) throw new Error(`Assistant not found: ${assistantId}`)
+    // A built-in assistant already holds the first slot, so pinning it is not a
+    // state the sidebar can express and unpinning it cannot move it.
+    if (assistantIsBuiltin(existing)) return existing
     const updated: Assistant = {
       ...existing,
       pinned,
@@ -450,6 +502,12 @@ export class AssistantManager {
     for (let index = 0; index < orderedIds.length; index++) {
       const existing = this.assistantRepo.get(orderedIds[index])
       if (!existing) continue
+      // The built-in assistant keeps the first slot whatever the drag produced, so
+      // its stored position is never rewritten by an arrangement.
+      if (assistantIsBuiltin(existing)) {
+        result.push(existing)
+        continue
+      }
       const updated: Assistant = { ...existing, sortOrder: index }
       this.assistantRepo.upsert(updated)
       result.push(updated)
@@ -530,10 +588,43 @@ export class AssistantManager {
     return updated
   }
 
-  /** Group a task into an assistant, or ungroup it with `null`. */
+  /**
+   * Whether a thread's conversation is an assistant's own authoring
+   * conversation.
+   *
+   * A knowledge write is the app committing what one assistant's Getting started
+   * conversation produced, so the two must belong together: the assistant whose
+   * instructions are being replaced is the assistant that owns the thread the draft
+   * was read from. This is what the write path checks before it replaces anything,
+   * because the two drifting apart is how one assistant's instructions, name and
+   * schedule once landed on another.
+   */
+  threadAuthoringBelongsTo(threadId: string, assistantId: string): boolean {
+    const thread = this.threadRepo.get(threadId)
+    return thread?.projectId === ASSISTANT_SPACE_ID && thread.assistantId === assistantId
+  }
+
+  /**
+   * Group a task into an assistant, or ungroup it with `null`.
+   *
+   * A Getting started thread is never regrouped: it is the record of the
+   * conversation that wrote its assistant's instructions, so moving it under
+   * another assistant would leave that assistant's next recap save committing the
+   * previous assistant's knowledge, name, schedule and connections. The two belong
+   * together for the assistant's whole life, which is why this refuses to move it.
+   */
   assignTask(threadId: string, assistantId: string | null): Thread {
     const existing = this.threadRepo.get(threadId)
     if (!existing) throw new Error(`Thread not found: ${threadId}`)
+    if (
+      existing.assistantId &&
+      existing.assistantId !== assistantId &&
+      isAssistantSetupThread(existing)
+    ) {
+      throw new Error(
+        'The Getting started thread writes the instructions of the assistant it belongs to, so it cannot be moved to another assistant'
+      )
+    }
     const updated: Thread = {
       ...existing,
       assistantId: assistantId ?? undefined,

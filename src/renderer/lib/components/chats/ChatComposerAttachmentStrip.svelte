@@ -8,6 +8,7 @@
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import AttachmentPill from './AttachmentPill.svelte'
+  import DirectReplyPill from './DirectReplyPill.svelte'
   import ThreadContextPill from './ThreadContextPill.svelte'
   import ComposerRelocationMenu from './ComposerRelocationMenu.svelte'
   import SelectionListPopover from './SelectionListPopover.svelte'
@@ -19,15 +20,23 @@
     type ComposerRelocationItem,
     type ComposerRelocationRequest
   } from './composer-relocation'
-  import type { StartAfterSelection } from './chat-composer-attachments'
+  import type { StartAfterSelection, PendingAttachment } from './chat-composer-attachments'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import type { ThreadContextReference } from '$lib/thread-context'
-  import type { PromptAttachment, PromptReference } from '$shared/types'
+  import type { DirectReplyTarget, PromptAttachment, PromptReference } from '$shared/types'
 
   interface Props {
     attachments: PromptAttachment[]
+    /** Files the composer accepted that are still being stored. */
+    pendingAttachments?: readonly PendingAttachment[]
     references: readonly PromptReference[]
     startAfterThreads: StartAfterSelection[]
+    /** The conversation the composer is answering, when one is attached. */
+    directReply?: DirectReplyTarget | null
+    directReplyBusy?: boolean
+    directReplyError?: string
+    onClearDirectReply?: () => void
+    onOpenDirectReply?: () => void
     /** Conversations attached to this message as context. */
     threadReferences: readonly ThreadContextReference[]
     /** The thread this conversation was forked from, drawn with the attachments. */
@@ -40,6 +49,7 @@
     previewUrls: Record<string, string>
     onPreviewAttachment: (file: PromptAttachment) => void
     onRemoveAttachment: (index: number) => void
+    onRemovePendingAttachment?: (id: string) => void
     onToggleFileSystemMode: () => void
     startAfterPopoverOpen: boolean
     onOpenStartAfterPopover: () => void
@@ -68,7 +78,13 @@
 
   let {
     attachments,
+    pendingAttachments = [],
     references,
+    directReply = null,
+    directReplyBusy = false,
+    directReplyError = '',
+    onClearDirectReply,
+    onOpenDirectReply,
     startAfterThreads,
     threadReferences,
     forkParentReference,
@@ -77,6 +93,7 @@
     previewUrls,
     onPreviewAttachment,
     onRemoveAttachment,
+    onRemovePendingAttachment,
     onToggleFileSystemMode,
     startAfterPopoverOpen,
     onOpenStartAfterPopover,
@@ -128,9 +145,18 @@
 </script>
 
 <!-- Attachment chips (project identity + type + branch now live on the scope shoe) -->
-{#if attachments.length > 0 || references.length > 0 || startAfterThreads.length > 0 || threadReferences.length > 0 || forkParentReference !== null || (showChatModes && fileSystemMode)}
+{#if attachments.length > 0 || pendingAttachments.length > 0 || references.length > 0 || directReply !== null || startAfterThreads.length > 0 || threadReferences.length > 0 || forkParentReference !== null || (showChatModes && fileSystemMode)}
   <div class="flex flex-col gap-1.5 px-3 pt-2.5">
     <div class="flex flex-wrap items-center gap-1.5">
+      {#if directReply}
+        <DirectReplyPill
+          target={directReply}
+          busy={directReplyBusy}
+          error={directReplyError}
+          onClear={() => onClearDirectReply?.()}
+          onOpen={() => onOpenDirectReply?.()}
+        />
+      {/if}
       {#if showChatModes && fileSystemMode}
         <div class="flex flex-wrap items-center gap-1.5" aria-label="Active chat modes">
           {#if fileSystemMode}
@@ -331,7 +357,7 @@
         {/if}
       </div>
     {/if}
-    {#if attachments.length > 0}
+    {#if attachments.length > 0 || pendingAttachments.length > 0}
       <div class="flex flex-wrap gap-1.5">
         <!-- Keyed by the `file://` URL, which the duplicate guard above keeps
              unique across drops, picks, pastes, and restored drafts. -->
@@ -350,6 +376,21 @@
               onRemove={() => onRemoveAttachment(i)}
             />
           </ComposerRelocationMenu>
+        {/each}
+        <!-- Files the gesture already handed over, drawn before their transfer
+             finishes so the drop is answered on the spot. -->
+        {#each pendingAttachments as pending (pending.id)}
+          <AttachmentPill
+            attachment={{
+              mime: pending.mime,
+              url: `pending:${pending.id}`,
+              filename: pending.filename
+            }}
+            pending
+            onRemove={onRemovePendingAttachment
+              ? () => onRemovePendingAttachment(pending.id)
+              : undefined}
+          />
         {/each}
       </div>
     {/if}

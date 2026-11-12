@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
+  import SeekBar from '../ui/SeekBar.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
   import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
@@ -625,7 +627,7 @@
           <span class="mb-2 block text-xs font-medium text-muted">Colour</span>
           <!-- The palette only exists while the pen popover is open, so its chunk
                waits for the popover instead of loading with the first screen. -->
-          {#await import('../shared/ColorSwatches.svelte') then { default: ColorSwatches }}
+          {#await loadCachedPanelModule('module:lib/components/shared/ColorSwatches.svelte', () => import('../shared/ColorSwatches.svelte')) then { default: ColorSwatches }}
             <ColorSwatches
               size="sm"
               allowNone={false}
@@ -637,21 +639,18 @@
           {/await}
         </div>
         <div>
-          <label
-            class="mb-2 flex items-center justify-between text-xs font-medium text-muted"
-            for={`annotation-stroke-${threadId}`}
-          >
+          <div class="mb-2 flex items-center justify-between text-xs font-medium text-muted">
             <span>Stroke width</span>
             <span class="font-mono text-foreground">{annotationTool.strokeWidth}px</span>
-          </label>
-          <input
-            id={`annotation-stroke-${threadId}`}
-            type="range"
+          </div>
+          <SeekBar
+            class="w-full"
             min={MARK_MIN_STROKE_WIDTH}
             max={MARK_MAX_STROKE_WIDTH}
             step={1}
-            class="w-full"
-            bind:value={annotationTool.strokeWidth}
+            value={annotationTool.strokeWidth}
+            label="Stroke width"
+            onInput={(width) => (annotationTool.strokeWidth = width)}
           />
           <div class="mt-3 flex h-10 items-center border bg-elevated px-2">
             <svg

@@ -8,6 +8,7 @@ import {
   type TurnStreamPartsQuery
 } from '../../lib/types'
 import { isTodoToolName } from '../../lib/agent-interactions'
+import { isCompactionPart, traceSpanOfParts } from '../../lib/working-trace-span'
 import type { TurnStreamEvent } from './turn-stream'
 
 /** Upper bound on the task-list snapshot returned alongside every read. */
@@ -26,6 +27,41 @@ export function isTodoTracePart(part: AgentPart): boolean {
 }
 
 /**
+ * Every sub-agent step a turn delegated to, whether or not it falls inside the
+ * page being read.
+ *
+ * Delegation is the one part of a trace whose summary must never depend on how
+ * much of the turn is mounted: a sub-agent is spawned early in a long turn, so a
+ * reader that only holds the newest page has no sub-agent row at all, and the
+ * trace header was reporting "no sub-agents" for work it demonstrably delegated.
+ * The list therefore rides beside the window, the way the task list does, and the
+ * header and its dropdown read it instead of the mounted rows.
+ */
+export function turnSubagentParts(trace: readonly AgentPart[]): AgentPart[] {
+  return trace.filter((part) => part.type === 'subagent')
+}
+
+/**
+ * The facts the trace header states about a whole turn, independent of which
+ * page of it a reader has mounted: whether it compacted its context, and the
+ * wall-clock span its steps occupied.
+ *
+ * Every one of them comes from the durable fold rather than from the window, for
+ * the same reason `totalSteps` does: a bounded page is a slice of the turn, and a
+ * header that reports a slice states less than the truth (a compaction that never
+ * happened, a duration covering only the newest minutes).
+ */
+export function turnTraceMarkers(trace: readonly AgentPart[]): {
+  turnCompacted: boolean
+  turnSpan: { start: number; end: number } | null
+} {
+  return {
+    turnCompacted: trace.some(isCompactionPart),
+    turnSpan: traceSpanOfParts(trace)
+  }
+}
+
+/**
  * Cut one bounded window out of a completed turn's folded entries.
  *
  * A completed turn is read the same way the live one is   newest entries first,
@@ -40,13 +76,17 @@ export function completedTurnWindow(
 ): TurnStreamCompletedTurn {
   const trace = turn.parts.filter((part) => !isTodoTracePart(part))
   const totalSteps = trace.reduce((count, part) => count + (part.type === 'text' ? 0 : 1), 0)
+  const markers = turnTraceMarkers(trace)
   if (query.summaryOnly === true) {
-    // Totals without rows: the transcript's folded header needs the count and
-    // the span of a settled turn, and nothing else until the reader opens it.
+    // Totals without rows: the transcript's folded header needs the count, the
+    // span and the delegation of a settled turn, and nothing else until the
+    // reader opens it.
     return {
       startTs: turn.startTs,
       endTs: turn.endTs,
       parts: [],
+      subagentParts: turnSubagentParts(trace),
+      ...markers,
       total: trace.length,
       totalSteps,
       start: trace.length,
@@ -71,6 +111,8 @@ export function completedTurnWindow(
     startTs: turn.startTs,
     endTs: turn.endTs,
     parts: trace.slice(start, end),
+    subagentParts: turnSubagentParts(trace),
+    ...markers,
     total: trace.length,
     totalSteps,
     start,
@@ -103,6 +145,12 @@ export function completedTurnWindow(
  * decide whether the task card can render, so the newest slice always travels
  * with the read.
  *
+ * Sub-agent steps ride out of band for the same reason (`subagentParts`), from
+ * the other direction: they do render in the trace, but they are spawned early
+ * in a long turn while the window opens on its newest entries, so a page-sized
+ * view of a turn can hold none of them. The trace header states the turn's
+ * delegation from this list, never from the mounted rows.
+ *
  * The read also carries `turnStartTs`, the boundary the fold was scoped to, so
  * the card can tell whether the snapshot still describes the turn the
  * transcript is on. The card refreshes only while a view watches a live turn,
@@ -122,6 +170,7 @@ export function pageTurnStreamParts(
   // The header reports how much thinking and tool work the whole turn holds,
   // independent of how many steps the renderer has mounted.
   const totalSteps = trace.reduce((count, part) => count + (part.type === 'text' ? 0 : 1), 0)
+  const markers = turnTraceMarkers(trace)
 
   if (query.changedSince !== undefined) {
     return {
@@ -129,6 +178,7 @@ export function pageTurnStreamParts(
       parts: touchedTraceParts(trace, events, query.changedSince),
       total: trace.length,
       totalSteps,
+      ...markers,
       cursor,
       todoParts,
       turnStartTs
@@ -168,6 +218,8 @@ export function pageTurnStreamParts(
     hasOlder: start > 0,
     cursor,
     todoParts,
+    subagentParts: turnSubagentParts(trace),
+    ...markers,
     turnStartTs
   }
 }

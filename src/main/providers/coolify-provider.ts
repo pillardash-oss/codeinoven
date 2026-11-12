@@ -1,9 +1,11 @@
 import type {
   CloudDeploymentContainer,
   CloudDeploymentDeployment,
+  CloudDeploymentLogSource,
   CloudDeploymentProviderKind,
   CloudDeploymentStatus
 } from '../../lib/types'
+import { load as parseYaml } from 'js-yaml'
 import type {
   CloudDeploymentProviderInfo,
   DeploymentProvider,
@@ -26,6 +28,12 @@ const MAX_CONTAINER_LOG_BYTES = MAX_DEPLOYMENT_LOG_CHARACTERS
 
 /** Runtime log lines requested when no deployment log is available. */
 const DEFAULT_LOG_LINES = 200
+
+/** Coolify build pack that runs a whole docker-compose file as one resource. */
+const DOCKER_COMPOSE_BUILD_PACK = 'dockercompose'
+
+/** Largest compose file whose service list is parsed on the main process. */
+const MAX_COMPOSE_PARSE_CHARACTERS = 512_000
 
 /** How many recent deployments the detail view surfaces at once. */
 const CloudDeploymentDeploymentLimit = 10
@@ -64,7 +72,11 @@ export class CoolifyProviderError extends Error {
  *   `Application` schema, so records are only trusted as deployments when they
  *   carry deployment-shaped fields.
  * - `GET /applications/{uuid}/logs?lines=200` returns `{ logs: string }` runtime
- *   container output, used as a fallback when no deployment record exists.
+ *   container output, used as a fallback when no deployment record exists. A
+ *   docker-compose resource runs several containers, and without a
+ *   `service_name` Coolify serves exactly one of them (the first that is
+ *   running), so the adapter asks for a named service whenever the panel picked
+ *   one from the container's `logSources`.
  */
 export class CoolifyProvider implements DeploymentProvider {
   readonly kind: CloudDeploymentProviderKind = 'coolify'
@@ -104,18 +116,26 @@ export class CoolifyProvider implements DeploymentProvider {
     if (application === null) return null
     const container = this.toApplicationContainer(application)
     if (!container) return null
+    const logSources = this.readComposeLogSources(application)
     const [latest] = await this.fetchDeployments(containerId, 'latest')
-    if (!latest) return container
+    const withSources = logSources.length > 1 ? { ...container, logSources } : container
+    if (!latest) return withSources
     return {
-      ...container,
+      ...withSources,
       status: latest.status,
       ...(latest.updatedAt !== undefined ? { updatedAt: latest.updatedAt } : {}),
       ...(latest.log !== undefined ? { log: latest.log } : {})
     }
   }
 
-  /** Capped raw log text for a deployment, or the latest deployment when no id is given. */
-  async getLogs(containerId: string, deploymentId?: string): Promise<string> {
+  /**
+   * Capped raw log text for a deployment, or the latest deployment when no id
+   * is given, or one container's runtime output when `serviceName` is set.
+   */
+  async getLogs(containerId: string, deploymentId?: string, serviceName?: string): Promise<string> {
+    // A named compose service is a runtime read: the deployment record holds the
+    // whole stack's build log, never one container's output.
+    if (serviceName) return this.runtimeLogs(containerId, serviceName)
     // One deployment's log is asked for at a time, so read that deployment
     // instead of pulling every log in the history just to drop all but one.
     if (deploymentId) {
@@ -128,13 +148,60 @@ export class CoolifyProvider implements DeploymentProvider {
       : deployments[0]
     if (target?.log) return target.log
     // No deployment log available   fall back to the runtime container output.
+    return this.runtimeLogs(containerId)
+  }
+
+  /**
+   * Read an application's runtime container output. With `serviceName` Coolify
+   * filters to that compose service's container; without it Coolify serves the
+   * first running container of the stack.
+   */
+  private async runtimeLogs(containerId: string, serviceName?: string): Promise<string> {
+    const serviceQuery = serviceName ? `&service_name=${encodeURIComponent(serviceName)}` : ''
     const response = await this.request(
-      `/applications/${encodeURIComponent(containerId)}/logs?lines=${DEFAULT_LOG_LINES}`,
+      `/applications/${encodeURIComponent(containerId)}/logs?lines=${DEFAULT_LOG_LINES}${serviceQuery}`,
       { method: 'GET' }
     )
     const record = this.asRecord(response)
     const logs = typeof record['logs'] === 'string' ? record['logs'] : ''
     return this.capLog(logs)
+  }
+
+  /**
+   * The containers inside a docker-compose resource, in the order the compose
+   * file declares them.
+   *
+   * Coolify's compose resources carry the file it deploys in `docker_compose`
+   * (already parsed, plain text) and the user's original in `docker_compose_raw`,
+   * so the service names are read from those services. Anything that is not a
+   * compose resource   or a file that does not parse   reports no streams, which
+   * keeps a single-container deployment on its deployment log alone.
+   */
+  private readComposeLogSources(payload: unknown): CloudDeploymentLogSource[] {
+    if (typeof payload !== 'object' || payload === null) return []
+    const record = payload as Record<string, unknown>
+    const buildPack = this.readString(record, 'build_pack')
+    const composeFile =
+      this.readString(record, 'docker_compose') ?? this.readString(record, 'docker_compose_raw')
+    if (!composeFile) return []
+    // Parsing runs on the main process, so an unbounded file is refused rather
+    // than turned into a stall: a compose file this large is not one whose
+    // service list this panel needs, and the container keeps its deployment log.
+    if (composeFile.length > MAX_COMPOSE_PARSE_CHARACTERS) return []
+    if (buildPack !== null && buildPack !== DOCKER_COMPOSE_BUILD_PACK) return []
+    let services: unknown
+    try {
+      const parsed: unknown = parseYaml(composeFile)
+      if (typeof parsed !== 'object' || parsed === null) return []
+      services = (parsed as Record<string, unknown>)['services']
+    } catch {
+      return []
+    }
+    if (typeof services !== 'object' || services === null || Array.isArray(services)) return []
+    const names = Object.keys(services as Record<string, unknown>).filter(
+      (name) => name.trim() !== ''
+    )
+    return names.map((name) => ({ id: name, label: name }))
   }
 
   /**

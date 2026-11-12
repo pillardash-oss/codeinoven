@@ -3,7 +3,7 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { appPanelHost } from '$lib/app-panel-portal'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
-  import { loadPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
+  import { loadCachedPanelModule, PANEL_KEYS, resetPanelModule } from '$lib/lazy-panel'
   import { logRendererError } from '$lib/system/renderer-logger'
 
   /**
@@ -73,7 +73,7 @@
   <div class="h-full min-h-0" {@attach appPanelHost}>
     {#key reloadNonce}
       {#if activePanel === 'notifications'}
-        {#await loadPanelModule(PANEL_KEYS.notifications, () => import('$lib/components/notifications/NotificationPanel.svelte'))}
+        {#await loadCachedPanelModule(PANEL_KEYS.notifications, () => import('$lib/components/notifications/NotificationPanel.svelte'))}
           {@render panelLoading('Notifications')}
         {:then { default: NotificationPanel }}
           <NotificationPanel />
@@ -81,7 +81,7 @@
           {@render panelLoadFailed(PANEL_KEYS.notifications, 'Notifications', error)}
         {/await}
       {:else if activePanel === 'sticky-notes'}
-        {#await loadPanelModule(PANEL_KEYS.stickyNotes, () => import('$lib/components/notes/StickyNotesPanel.svelte'))}
+        {#await loadCachedPanelModule(PANEL_KEYS.stickyNotes, () => import('$lib/components/notes/StickyNotesPanel.svelte'))}
           {@render panelLoading('Sticky notes')}
         {:then { default: StickyNotesPanel }}
           <StickyNotesPanel />

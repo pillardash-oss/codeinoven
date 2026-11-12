@@ -17,6 +17,7 @@
 </script>
 
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { fileTabLabels } from '$lib/file-tab-labels'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioActions from '@pdslng/cio-icon/CioActions.svelte'
@@ -33,6 +34,7 @@
   import CioPanelBottom from '@pdslng/cio-icon/CioPanelBottom.svelte'
   import CioPanelRight from '@pdslng/cio-icon/CioPanelRight.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioTabBoxes from '@pdslng/cio-icon/CioTabBoxes.svelte'
   import CioTabExtensions from '@pdslng/cio-icon/CioTabExtensions.svelte'
@@ -43,6 +45,7 @@
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
+  import { agentTabThread, type AgentTabThread } from '$lib/browser-agent-thread'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { feature } from '$lib/feature-registry'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
@@ -67,6 +70,7 @@
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import DisplaySourceIcon from '../display/DisplaySourceIcon.svelte'
+  import SubagentModelMark from '../threads/SubagentModelMark.svelte'
 
   const failedPopupIcons = new SvelteSet<string>()
 
@@ -240,6 +244,11 @@
       return { projectId: tab.projectId, conversationId: tab.threadId }
     }
     return null
+  }
+
+  /** The conversation whose agent is working on one browser tab, when one is. */
+  function agentThreadFor(tab: ContextSidebarTab): AgentTabThread | null {
+    return tab.kind === 'browser' ? agentTabThread(tab.id, tab.threadId) : null
   }
 
   /** Closing a popup rail tab destroys that popup page. */
@@ -500,15 +509,9 @@
     {:else if tab.kind === 'sources'}
       <CioTabInfo size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'subagent'}
-      <!-- The sub-agent mark is the one a sub-agent wears on every surface; a
-           hue would make it a second class of tab rather than one more tab. A
-           pawn agent wears the assistant mark instead, so the rail tells the two
-           apart at a glance while the tab body stays the same. -->
-      {#if tab.activity.pawn}
-        <AssistantIcon mark="agent" size={ICON_SIZE.row} class="shrink-0" />
-      {:else}
-        <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
-      {/if}
+      <!-- A worker wears the mark of the model running it, so the strip says
+           whose tokens are being spent before the tab is opened. -->
+      <SubagentModelMark activity={tab.activity} size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'temporary-chat'}
       <!-- The dashed bubble is the tool's mark: a side chat wears the same
            neutral glyph as every other tab. Its unread state is a status, so it
@@ -569,6 +572,9 @@
     {@const runtime = contextSidebarState.browserRuntime(tab.id)}
     {@const indicators = browserTabIndicators(runtime, browserStore()?.hasPeek(tab.id))}
     {@const conversation = badgeConversation(tab)}
+    {@const agentThread = agentThreadFor(tab)}
+    {@const loading = tab.kind === 'browser' && contextSidebarState.browserTabLoading(tab.id)}
+    {@const closeTakesIcon = tab.kind === 'browser' && indicators.length === 0}
     <div
       class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
       tab.id
@@ -604,7 +610,9 @@
       ></div>
       <button
         type="button"
-        class="flex min-w-0 flex-1 items-center gap-1.5 py-2 pl-3 text-left"
+        class="flex min-w-0 flex-1 items-center gap-1.5 py-1 pl-3 text-left {closeTakesIcon
+          ? 'pr-1.5'
+          : ''}"
         aria-current={activeTabId === tab.id ? 'page' : undefined}
         data-active-tab={activeTabId === tab.id ? 'true' : undefined}
         title={titleFor(tab)}
@@ -619,7 +627,23 @@
             aria-hidden="true"
           ></span>
         {:else}
-          {@render tabIcon(tab)}
+          <!-- The leading slot is a browser tab's one status surface: the page's
+               mark, a spinner while the page is still coming up, and the close
+               control while the pointer is on the row. The chip therefore spends
+               no width on a second button and the title keeps the rest. -->
+          <span class="flex w-3 shrink-0 items-center justify-center">
+            {#if loading}
+              <CioSpinner size={11} class="animate-spin text-dimmed" />
+            {:else}
+              <span
+                class="flex items-center justify-center transition-opacity duration-100 {closeTakesIcon
+                  ? 'group-hover:opacity-0'
+                  : ''}"
+              >
+                {@render tabIcon(tab)}
+              </span>
+            {/if}
+          </span>
         {/if}
         {#if renamingTabId === tab.id}
           <input
@@ -644,11 +668,37 @@
             ondragstart={(event) => event.preventDefault()}
           />
         {:else}
-          <span
-            class="truncate text-[0.6875rem] font-medium {tab.kind === 'files' && tab.preview
-              ? 'italic'
-              : ''}">{tab.title}</span
-          >
+          <span class="flex min-w-0 flex-col">
+            <span
+              class="truncate text-[0.6875rem] leading-[0.875rem] font-medium {tab.kind ===
+                'files' && tab.preview
+                ? 'italic'
+                : ''}">{tab.title}</span
+            >
+            {#if agentThread}
+              <!-- Which conversation's agent is on this tab. It sits under the
+                   page title because the page is the tab and the agent is who is
+                   using it, and it is what makes a strip shared by a project's
+                   threads readable: the tab says whose work it is without opening
+                   it. -->
+              <span
+                class="flex min-w-0 items-center gap-1 leading-3"
+                title={`Agent working here in ${agentThread.title}`}
+              >
+                {#if agentThread.iconUrl}
+                  <img
+                    src={agentThread.iconUrl}
+                    alt=""
+                    class="h-2.5 w-2.5 shrink-0 object-contain"
+                    aria-hidden="true"
+                  />
+                {/if}
+                <span class="truncate text-[0.625rem] leading-3 text-dimmed"
+                  >{agentThread.title}</span
+                >
+              </span>
+            {/if}
+          </span>
           {#if tab.kind === 'popup-window' && tab.boxName}
             <span class="shrink-0 border-l border-border pl-1.5 text-[0.625rem] text-dimmed">
               {tab.boxName}
@@ -675,15 +725,31 @@
           ></span>
         {/if}
       </button>
-      <button
-        type="button"
-        class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
-        aria-label={closeLabel(tab)}
-        title={closeLabel(tab)}
-        onclick={() => onClose(tab.id)}
-      >
-        <CioClose size={11} />
-      </button>
+      {#if closeTakesIcon}
+        <!-- Drawn over the tab's own mark, so closing a browser tab costs the
+             strip nothing: the control appears where the eye already is and goes
+             away with the pointer. A sibling of the select button, because a
+             button cannot nest a button. -->
+        <button
+          type="button"
+          class="absolute left-2.5 top-1/2 z-20 flex h-4 w-4 -translate-y-1/2 items-center justify-center text-dimmed opacity-0 transition-opacity duration-100 hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+          aria-label={closeLabel(tab)}
+          title={closeLabel(tab)}
+          onclick={() => onClose(tab.id)}
+        >
+          <CioClose size={11} />
+        </button>
+      {:else}
+        <button
+          type="button"
+          class="mr-1 flex h-6 w-6 shrink-0 items-center justify-center text-dimmed opacity-70 transition-colors hover:bg-raised hover:text-foreground group-hover:opacity-100"
+          aria-label={closeLabel(tab)}
+          title={closeLabel(tab)}
+          onclick={() => onClose(tab.id)}
+        >
+          <CioClose size={11} />
+        </button>
+      {/if}
       {#if indicators.length > 0}
         <!-- Painted over the tab's own icon slot. A sibling of the
              select button, because a button cannot nest a button. -->
@@ -693,7 +759,7 @@
                status module into the first-paint chunk. An indicator
                only ever appears on a tab that is playing or
                capturing, so the browser is open and it is warm. -->
-          {#await import('$lib/components/browser/BrowserTabIndicator.svelte') then { default: BrowserTabIndicator }}
+          {#await loadCachedPanelModule('module:lib/components/browser/BrowserTabIndicator.svelte', () => import('$lib/components/browser/BrowserTabIndicator.svelte')) then { default: BrowserTabIndicator }}
             <BrowserTabIndicator tabId={tab.id} />
           {/await}
         </div>
@@ -708,7 +774,9 @@
   {#if !headerless}
     <div class="flex h-10 shrink-0 items-center border-b border-border">
       {#if tabbedMode}
-        <div class="min-w-0 flex-1 overflow-x-auto" bind:this={stripScroller}>
+        <!-- Only ever horizontal: a chip is as tall as the strip, so a wrapped or
+             over-tall title must be cut, never turned into a second scroll axis. -->
+        <div class="min-w-0 flex-1 overflow-x-auto overflow-y-hidden" bind:this={stripScroller}>
           <div class="flex h-10 min-w-max items-stretch">
             {#each stripTabs as tab (tab.id)}
               {@render stripRow(tab)}

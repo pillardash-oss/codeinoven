@@ -77,6 +77,14 @@ export interface AgentDefaultsConfig {
 
 /** Per-thread agent configuration. Active-thread settings seed siblings; last-used is the fallback. */
 export interface ThreadSettings {
+  /**
+   * When the app posted its one app-owned opening turn on an orchestrator
+   * thread. It is durable on purpose: the orchestrator introduces itself once
+   * per install, and opening its conversation later is a plain read, never
+   * another introduction. A read of the transcript decides nothing here, because
+   * a transient read failure would ask the user to meet Don a second time.
+   */
+  donIntroAskedAt?: number
   /** An explicitly opened behavior-editing session on an assistant's Getting started thread. */
   assistantBehaviorSession?: {
     startedAt: number
@@ -180,6 +188,8 @@ export interface ProviderModel {
   id: string
   providerId: string
   name: string
+  /** Canonical wire model an alias id resolves to (Claude Code's `opus` → `claude-opus-5-5`). */
+  resolvedId?: string
   reasoning: boolean
   /** Thinking presets this model supports. When absent or empty, thinking controls are hidden. */
   thinkingPresets?: ThinkingPreset[]
@@ -309,17 +319,40 @@ export interface PromptReference {
    *
    * `selection` (the default when absent) is an excerpt of an assistant
    * response; `design` is an element the user picked from a design in the
-   * in-app browser; `file` is a passage the user annotated in a project
-   * document's preview, whose `label` names that document's path; `video` is a
-   * moment the user noted on a composition's timeline; `image` is a freehand
-   * mark the user drew on a picture an inline artifact published, which is a
-   * still image or one frame of a video; `svg` is an element the user picked
-   * inside an inline SVG artifact, and `html` is an element the user picked
-   * inside an inline HTML artifact. Main validates only `id`, `label`, `text`
-   * and `comment`, so this drives presentation rather than the send: every kind
-   * reaches the model the same way a selection does.
+   * in-app browser, and `page` is an element the user picked on any other page
+   * that browser was showing; `file` is a passage the user annotated in a
+   * project document's preview, whose `label` names that document's path;
+   * `video` is a moment the user noted on a composition's timeline; `image` is a
+   * freehand mark the user drew on a picture an inline artifact published, which
+   * is a still image or one frame of a video; `svg` is an element the user
+   * picked inside an inline SVG artifact, and `html` is an element the user
+   * picked inside an inline HTML artifact. Main validates only `id`, `label`,
+   * `text` and `comment`, so this drives presentation rather than the send:
+   * every kind reaches the model the same way a selection does.
    */
-  kind?: 'selection' | 'design' | 'file' | 'video' | 'image' | 'svg' | 'html'
+  kind?: 'selection' | 'design' | 'page' | 'file' | 'video' | 'image' | 'svg' | 'html'
+}
+
+/**
+ * One conversation a user answers directly from the conversation that collected it.
+ *
+ * A group chat shows the replies several threads produced, so a bubble is a door
+ * back into the thread that spoke it: attaching it to the composer addresses the
+ * user's next words to that thread, and the quote in their message keeps the
+ * reply they answered.
+ */
+export interface DirectReplyTarget {
+  /** The conversation the words are delivered to. */
+  projectId: string
+  threadId: string
+  /** That conversation's title, snapshotted for the quote. */
+  title: string
+  /** Who spoke the answered reply. */
+  speakerName: string
+  /** The message in the open conversation that was answered, for the jump back. */
+  messageId: string
+  /** A short excerpt of what was answered. */
+  excerpt: string
 }
 
 /** A project-relative file or directory visibly attached to an outgoing prompt. */

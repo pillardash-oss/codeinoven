@@ -17,6 +17,9 @@ const { handlers, listeners, showOpenDialog, showSaveDialog, safeStorage } = vi.
   showSaveDialog: vi.fn(),
   safeStorage: {
     isAsyncEncryptionAvailable: vi.fn(async () => true),
+    // The vault reports itself unavailable on Linux when Chromium fell back to
+    // the plaintext `basic_text` backend, so every mock has to answer this too.
+    getSelectedStorageBackend: vi.fn(() => 'gnome_libsecret'),
     encryptStringAsync: vi.fn(async (value: string) => Buffer.from(`enc:${value}`, 'utf-8')),
     decryptStringAsync: vi.fn(async (buffer: Buffer) => ({
       result: buffer.toString('utf-8').replace(/^enc:/u, ''),
@@ -115,7 +118,6 @@ const defaultConfig: AppConfig = {
   questionTimeoutMs: 300_000,
   agentQuestionCap: 3,
   keybindings: {},
-  slashCommandMode: 'app',
   preferredEditor: 'system',
   openLocalhostInCioBrowser: true,
   openAllLinksInCioBrowser: false,
@@ -191,7 +193,6 @@ describe('validateAppConfigPatch', () => {
       validateAppConfigPatch({
         theme: 'dark',
         threadLimit: 120,
-        slashCommandMode: 'passthrough',
         preferredEditor: 'ghostty',
         agentDefaults: {
           syncFromThreadChanges: true,
@@ -236,7 +237,6 @@ describe('validateAppConfigPatch', () => {
     ).toMatchObject({
       theme: 'dark',
       threadLimit: 120,
-      slashCommandMode: 'passthrough',
       preferredEditor: 'ghostty',
       agentDefaults: {
         syncFromThreadChanges: true,
@@ -306,7 +306,6 @@ describe('validateAppConfigPatch', () => {
     { maxDiffLines: 1.5 },
     { maxDiffLines: 5001 },
     { maxDiffLines: '100' },
-    { slashCommandMode: 'both' },
     { preferredEditor: 'unknown-editor' },
     { agentDefaults: { syncFromThreadChanges: 'yes' } },
     { agentDefaults: { syncFromThreadChanges: true, imageDescriptor: { harnessId: 'opencode' } } },
@@ -456,12 +455,9 @@ describe('config IPC', () => {
       ...defaultConfig,
       lastFolderDialogPath: '/projects'
     })
-    await expect(
-      updateHandler?.(trustedEvent(), { theme: 'dark', slashCommandMode: 'passthrough' })
-    ).resolves.toEqual({
+    await expect(updateHandler?.(trustedEvent(), { theme: 'dark' })).resolves.toEqual({
       ...defaultConfig,
       theme: 'dark',
-      slashCommandMode: 'passthrough',
       lastFolderDialogPath: '/projects'
     })
 
@@ -469,7 +465,6 @@ describe('config IPC', () => {
     expect(saveConfig).toHaveBeenCalledWith({
       ...defaultConfig,
       theme: 'dark',
-      slashCommandMode: 'passthrough',
       lastFolderDialogPath: '/projects'
     })
 

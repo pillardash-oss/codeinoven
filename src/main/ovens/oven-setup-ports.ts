@@ -6,13 +6,13 @@ import { syncOvenAccount } from './oven-accounts'
 import type { OvenSetupPorts } from './oven-setup-service'
 import type { OvenService } from './oven-service'
 import type { HarnessAccountRegistry } from '../providers/harness-account-registry'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import { Logger } from '../system/logger'
 
 export interface OvenSetupPortDependencies {
   service: OvenService
   accounts: HarnessAccountRegistry
-  vault: SecretVault
+  vault: SecretsService
   /**
    * The most recent completed check for one Oven, when it is young enough to
    * authorize a setup. Setup reuses it instead of opening its own read, so a

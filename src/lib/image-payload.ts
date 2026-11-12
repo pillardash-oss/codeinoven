@@ -97,6 +97,23 @@ const MAX_IMAGES_PER_RESULT = 8
 const IMAGE_DATA_URL = /^data:(image\/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+)$/iu
 
 /**
+ * The media types an image-reading provider is guaranteed to decode.
+ *
+ * A gateway result carries whatever data URL a tool produced, and plenty of
+ * tools produce formats the providers refuse: a tab list ships favicons as
+ * `image/x-icon` and `image/svg+xml`, and DeepSeek answers the whole turn with
+ * `invalid_request_error: You have uploaded an unsupported image` for anything
+ * outside this set. A payload is therefore only turned into an image PART when
+ * its media type is on this list; everything else stays readable text, so a
+ * decorative icon can never fail a turn on a stricter provider.
+ */
+const PROVIDER_IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
+
+/** The most SVG markup inlined as text in place of an image part. An icon is
+ *  well under this; a document-sized drawing keeps its marker instead. */
+const MAX_INLINE_SVG_CHARACTERS = 48_000
+
+/**
  * Fit a box inside a square budget, preserving its aspect ratio and never
  * upscaling it. Returns whole pixels, because a fractional capture size is
  * rounded by the encoder anyway and the resize call expects integers.
@@ -143,11 +160,50 @@ function imageMarker(mimeType: string, base64Length: number): string {
   return `[image delivered as an image content part, not inline base64: ${mimeType}, ${base64Kilobytes(base64Length)} KB]`
 }
 
+/** The text left where an image of a media type no provider is assumed to
+ *  decode was dropped: the reader still learns what was there. */
+function unsupportedImageMarker(mimeType: string, base64Length: number): string {
+  return `[image not attached, ${mimeType} is not a format the model reads: ${base64Kilobytes(base64Length)} KB]`
+}
+
+/** Decode base64 to text, or null when the runtime cannot or the text is too
+ *  large to be worth inlining. `atob` exists in both Node and the renderer, so
+ *  this module stays free of `node:*`. */
+function decodeBase64Text(data: string, maxCharacters: number): string | null {
+  if ((data.length * 3) / 4 > maxCharacters) return null
+  try {
+    return new TextDecoder().decode(
+      Uint8Array.from(atob(data), (character) => character.charCodeAt(0))
+    )
+  } catch {
+    return null
+  }
+}
+
+/**
+ * What a non-provider image data URL becomes once it is lifted out of a payload.
+ *
+ * SVG is markup, so its decoded source is inlined and the model reads the
+ * drawing as text instead of losing it. Every other format (an icon, a BMP, a
+ * TIFF) is bytes no provider decodes and no model reads, so only its marker is
+ * kept.
+ */
+function unsupportedImageText(mimeType: string, data: string): string {
+  if (mimeType === 'image/svg+xml') {
+    const svg = decodeBase64Text(data, MAX_INLINE_SVG_CHARACTERS)
+    if (svg) return `[image inlined as markup, ${mimeType}]\n${svg}`
+  }
+  return unsupportedImageMarker(mimeType, data.length)
+}
+
 function collect(value: unknown, images: GatewayImagePart[], depth: number): unknown {
   if (typeof value === 'string') {
-    if (images.length >= MAX_IMAGES_PER_RESULT) return value
     const parsed = parseImageDataUrl(value)
     if (!parsed) return value
+    if (!PROVIDER_IMAGE_MIMES.has(parsed.mimeType)) {
+      return unsupportedImageText(parsed.mimeType, parsed.data)
+    }
+    if (images.length >= MAX_IMAGES_PER_RESULT) return value
     images.push({ type: 'image', data: parsed.data, mimeType: parsed.mimeType })
     return imageMarker(parsed.mimeType, parsed.data.length)
   }
@@ -198,6 +254,9 @@ function hoistImageParts(value: unknown, images: GatewayImagePart[], depth = 0):
   ) {
     const mimeType = record['mimeType']
     const data = record['data']
+    if (!PROVIDER_IMAGE_MIMES.has(mimeType)) {
+      return { type: 'text', text: unsupportedImageText(mimeType, data) }
+    }
     if (images.length < MAX_IMAGES_PER_RESULT && !images.some((image) => image.data === data)) {
       images.push({ type: 'image', data, mimeType })
     }
@@ -252,6 +311,16 @@ function existingContentParts(
       typeof entry['data'] === 'string' &&
       typeof entry['mimeType'] === 'string'
     ) {
+      // A server's picture travels as a picture only when the model can decode
+      // it; anything else is demoted to text here, where it would otherwise be
+      // forwarded verbatim to a stricter provider.
+      if (!PROVIDER_IMAGE_MIMES.has(entry['mimeType'])) {
+        parts.push({
+          type: 'text',
+          text: unsupportedImageText(entry['mimeType'], entry['data'])
+        })
+        continue
+      }
       if (!images.some((existing) => existing.data === entry['data'])) {
         images.push({ type: 'image', data: entry['data'], mimeType: entry['mimeType'] })
       }

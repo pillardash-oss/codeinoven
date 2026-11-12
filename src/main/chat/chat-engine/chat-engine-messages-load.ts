@@ -393,6 +393,9 @@ export class ChatEngineMessagesLoad {
         return {
           kind: 'window',
           parts: [],
+          subagentParts: [],
+          turnCompacted: false,
+          turnSpan: null,
           total: 0,
           totalSteps: 0,
           start: 0,
@@ -407,6 +410,9 @@ export class ChatEngineMessagesLoad {
       return {
         kind: 'window',
         parts: window.parts,
+        subagentParts: window.subagentParts,
+        turnCompacted: window.turnCompacted,
+        turnSpan: window.turnSpan,
         total: window.total,
         totalSteps: window.totalSteps,
         start: window.start,

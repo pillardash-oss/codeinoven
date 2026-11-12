@@ -1,20 +1,12 @@
 import type { TypesafeKeySource } from '../../lib/types'
 import type { AgentSecretService } from '../utilities/agent-secret-service'
 import type { UtilityRegistryService } from '../utilities/utility-registry-service'
-import type { SecretVault } from '../storage/secret-vault'
+import { TYPESAFE_KEY_REF } from '../secrets/secret-refs'
+import type { SecretsService } from '../secrets/secrets-service'
 import { Logger } from '../system/logger'
 
 /** The variable name every TypeSafe consumer in the ecosystem uses. */
 export const TYPESAFE_ENVIRONMENT_VARIABLE = 'TYPESAFE_API_KEY'
-
-/**
- * Deterministic vault ref for the key this device stores.
- *
- * One ref, one writer, one reader, the same shape as `providerTokenRef`: the
- * ref is a constant, so rotating the key is a save over the same ref and no
- * consumer ever holds or passes a reference around.
- */
-export const TYPESAFE_KEY_REF = 'cio_typesafe_api_key'
 
 /** Longest key accepted, generous enough for a future format change. */
 const KEY_MAXIMUM_LENGTH = 4_096
@@ -61,7 +53,7 @@ export class TypesafeKeyResolver {
   private static readonly CACHE_TTL_MS = 15_000
 
   constructor(
-    private readonly vault: SecretVault,
+    private readonly vault: SecretsService,
     private readonly registry: UtilityRegistryService,
     private readonly agentSecrets: AgentSecretService
   ) {}
@@ -100,7 +92,10 @@ export class TypesafeKeyResolver {
   async store(value: string): Promise<void> {
     const key = usableKey(value)
     if (!key) throw new TypeError('TypeSafe API key must be a non-empty string')
-    await this.vault.save(key, TYPESAFE_KEY_REF)
+    await this.vault.save(key, TYPESAFE_KEY_REF, {
+      scope: 'typesafe',
+      label: 'TypeSafe API key'
+    })
     this.invalidate()
   }
 

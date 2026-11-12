@@ -192,6 +192,13 @@ export class SpeechService {
   private dictationTranscriptions = 0
   private readonly eviction: SpeechRuntimeEviction
   private readonly playground = new SpeechPlaygroundStore()
+  /**
+   * Queue job ids of the transcription each attempt is waiting on, so a
+   * dictation the user cancels can stop the model work it started instead of
+   * letting it finish words nobody asked for. Entries are removed when the job
+   * settles.
+   */
+  private readonly attemptJobs = new Map<string, string>()
 
   constructor(
     private readonly paths: SpeechServicePaths,
@@ -254,16 +261,25 @@ export class SpeechService {
     void this.nativeCapture.ping().catch((error) => {
       Logger.dev('Native speech capture could not be started ahead of time:', error)
     })
-    // Wait for the boot to settle before opening the microphone once. Priming
-    // builds the engine, installs the tap and resolves the device at launch, so
-    // the first press of the session costs tens of milliseconds like every other
-    // one; it is a one-off warmup and must not compete with the boot itself.
-    if (microphoneAccessGranted() && !(await this.storage.anotherInstanceIsRecording())) {
-      this.scheduleCaptureWarmup()
-    }
+    // The microphone is not opened here. Opening CoreAudio's input device is
+    // what lights the system microphone indicator, so at launch the app would
+    // look like it was recording while the user was only looking at their
+    // desktop. The device is opened at the first of two moments instead: the
+    // user's first real gesture (a pointer over a mic, or the first tap of the
+    // dictation shortcut) or, if none has come, once the workspace has settled
+    // and the user could actually record (see `warmCaptureAfterSettle`).
   }
 
   private captureWarmupTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * Whether the microphone has been opened once this session, by a warmup or by
+   * a press.
+   *
+   * Priming builds the engine and leaves the device released, so the second
+   * caller has nothing to gain and a second device open only re-lights the
+   * microphone indicator for no reason.
+   */
+  private capturePrimed = false
   /**
    * Reads the `voiceRecordingEnabled` setting, the second way a user can have a
    * mic on screen (the first is an installed ASR model). Wired by the boot
@@ -278,39 +294,74 @@ export class SpeechService {
   }
 
   /**
-   * Prime the native microphone once the application has rendered and booted.
+   * Open the microphone once the workspace has settled.
    *
-   * The microphone stays released until the user actually records (the engine is
-   * started once and stopped again, with the device object retained), so this is
-   * invisible apart from a brief device open. Warming here rather than on the
-   * first press is what makes a shortcut recording start on the press: a
-   * shortcut never hovers a mic, so a gesture-driven warmup cannot help it.
+   * Boot is over by then: the splash is gone, the renderer has hydrated and the
+   * feature graph is up, so a device open no longer competes with startup. This
+   * is the second of the two moments the microphone may open; a press that
+   * arrives first wins, and `capturePrimed` is what makes the late arm a no-op
+   * then instead of re-opening the device behind a live take.
+   *
+   * The microphone is released again by the warmup itself (the engine is built
+   * and then stopped), so what this buys is a press that starts the take instead
+   * of paying CoreAudio's 150-800 ms device open and losing the first words.
    */
-  private scheduleCaptureWarmup(delayMs = 1_500): void {
+  warmCaptureAfterSettle(delayMs = 750): void {
+    if (this.capturePrimed) return
+    this.scheduleCaptureWarmup(delayMs)
+  }
+
+  /**
+   * Prime the native microphone ahead of a press.
+   *
+   * Warming rather than waiting for the press is what makes a shortcut recording
+   * start on the press: a shortcut never hovers a mic, so a gesture-driven
+   * warmup cannot help it. Every caller runs after the app is usable and is
+   * skipped once the microphone has been primed already.
+   */
+  private scheduleCaptureWarmup(delayMs: number): void {
     if (this.captureWarmupTimer) clearTimeout(this.captureWarmupTimer)
+    if (this.capturePrimed) return
+    if (!microphoneAccessGranted()) return
     this.captureWarmupTimer = setTimeout(() => {
       this.captureWarmupTimer = null
-      if (this.openCaptures.size > 0) return
-      if (!microphoneAccessGranted()) return
-      void (async () => {
-        // Gate the warmup exactly like the mic control it exists for: a user
-        // with no usable model and the audio-to-LLM setting off has no mic on
-        // screen, and the microphone must not open for them.
-        if (!(await this.dictationAvailable())) return
-        await this.nativeCapture.warm().catch((error) => {
-          Logger.dev('Native speech capture warmup failed (non-fatal):', error)
-        })
-      })()
+      void this.warmCaptureIfIdle()
     }, delayMs)
+  }
+
+  private async warmCaptureIfIdle(): Promise<void> {
+    // A take that started first (or a microphone the user is already holding
+    // open by hovering a mic) owns the device, and priming underneath it would
+    // shut the engine it depends on.
+    if (this.capturePrimed || this.openCaptures.size > 0) return
+    if (!microphoneAccessGranted()) return
+    // Gate the warmup exactly like the mic control it exists for: a user with no
+    // usable model and the audio-to-LLM setting off has no mic on screen, and
+    // the microphone must not open for them.
+    if (!(await this.dictationAvailable())) return
+    // A sibling instance that is recording negotiated the device already, and a
+    // second process opening it can make that device renegotiate mid-take.
+    if (await this.storage.anotherInstanceIsRecording()) return
+    if (this.capturePrimed || this.openCaptures.size > 0) return
+    this.capturePrimed = true
+    await this.nativeCapture.warm().catch((error) => {
+      Logger.dev('Native speech capture warmup failed (non-fatal):', error)
+    })
+  }
+
+  /** A press supersedes any warmup still waiting on its timer. */
+  private claimCapturePrimed(): void {
+    this.capturePrimed = true
+    if (!this.captureWarmupTimer) return
+    clearTimeout(this.captureWarmupTimer)
+    this.captureWarmupTimer = null
   }
 
   /**
    * Resolve microphone access for a recording the user just asked for.
    *
    * The only place the permission is ever requested: a fresh install is asked
-   * when the user presses the mic, never while the application boots. Warming
-   * the capture worker is separate and only runs once this answer already
-   * exists (see `initialize`).
+   * when the user presses the mic, never while the application boots.
    */
   ensureMicrophoneAccess(): Promise<SpeechMicrophoneAccess> {
     return requestMicrophoneAccess()
@@ -450,6 +501,9 @@ export class SpeechService {
     // never opens the microphone.
     if (!(await this.dictationAvailable())) return
     if (await this.storage.anotherInstanceIsRecording()) return
+    // The user's intent is here first, so a warmup still waiting on its timer
+    // must not open the device a second time underneath this arm.
+    this.claimCapturePrimed()
     await this.nativeCapture.arm()
   }
 
@@ -496,6 +550,9 @@ export class SpeechService {
     // opens CoreAudio while the answer is still pending.
     const access = await requestMicrophoneAccess()
     if (!access.granted) throw new Error(access.message ?? 'Microphone access is unavailable.')
+    // The press is the warmup's equal: whichever came first opens the device, and
+    // the other one stands down instead of re-opening it mid-take.
+    this.claimCapturePrimed()
     const started = await this.storage.beginNativeCapture(scope)
     try {
       // `pressedAt` is the instant of the gesture, not of this line: the take
@@ -586,8 +643,11 @@ export class SpeechService {
   async failNativeCapture(sessionId: string, message: string): Promise<SpeechRecordingAttempt> {
     await this.nativeCapture.stop(sessionId).catch(() => undefined)
     const attempt = await this.failCapture(sessionId, message)
-    // A failed take can leave the recorder dead or cold. Prime it again so the
-    // retry starts on a microphone that is already open.
+    // A failed take can leave the recorder dead or cold, and that is the one
+    // case a primed microphone no longer means anything: the next press is a
+    // retry the user has already asked for, so the device is opened again for it
+    // rather than the retry paying the open and losing its first words.
+    this.capturePrimed = false
     if (microphoneAccessGranted()) this.scheduleCaptureWarmup(500)
     return attempt
   }
@@ -647,6 +707,7 @@ export class SpeechService {
           signal
         )
     })
+    this.attemptJobs.set(attemptId, queued.id)
     await this.storage.updateAttempt(attemptId, (attempt) => {
       attempt.stage = 'transcribing'
       attempt.runtime = runtime
@@ -711,20 +772,27 @@ export class SpeechService {
       return { attemptId, jobId: queued.id, rawTranscript, finalTranscript }
     } catch (cause) {
       const error = this.asError(cause, 'transcription-failed')
-      Logger.error('Speech transcription failed', {
-        attemptId,
-        runtime,
-        artifactId,
-        jobId: queued.id,
-        error: error.message
-      })
-      await this.storage.updateAttempt(attemptId, (attempt) => {
-        attempt.stage = error.code === 'cancelled' ? 'cancelled' : 'failed'
-        attempt.errors.push({ stage: 'transcribing', error, occurredAt: Date.now() })
-      })
+      // A cancelled dictation is deleted while this job is still running, so
+      // its attempt may already be gone: settling a recording that no longer
+      // exists must not raise over the cancellation that removed it.
+      const known = this.storage.getAttempt(attemptId)
+      if (known) {
+        Logger.error('Speech transcription failed', {
+          attemptId,
+          runtime,
+          artifactId,
+          jobId: queued.id,
+          error: error.message
+        })
+        await this.storage.updateAttempt(attemptId, (attempt) => {
+          attempt.stage = error.code === 'cancelled' ? 'cancelled' : 'failed'
+          attempt.errors.push({ stage: 'transcribing', error, occurredAt: Date.now() })
+        })
+      }
       throw cause
     } finally {
       this.dictationTranscriptions -= 1
+      if (this.attemptJobs.get(attemptId) === queued.id) this.attemptJobs.delete(attemptId)
     }
   }
 
@@ -1018,6 +1086,28 @@ export class SpeechService {
   async deleteHistory(attemptId: string, token: string): Promise<void> {
     this.consumeConfirmation(token, 'history-item', attemptId)
     await this.storage.deleteAttempt(attemptId, true)
+  }
+
+  /**
+   * Throw away a dictation the user cancelled outright.
+   *
+   * Cancelling is not deleting a kept recording, so it needs no confirmation:
+   * the user pressed the gesture that abandons the take while it was still
+   * being made. Any transcription already queued or running for it is cancelled
+   * first, so the model stops on words nobody will read, then the attempt and
+   * its audio are deleted, which is what keeps it out of the history entirely.
+   * Returns quietly when the attempt is already gone, so the renderer's cancel
+   * path and a retried cancel cannot fight over it.
+   */
+  async discardAttempt(attemptId: string): Promise<void> {
+    const jobId = this.attemptJobs.get(attemptId)
+    if (jobId) {
+      this.queue.cancel(jobId)
+      this.attemptJobs.delete(attemptId)
+    }
+    if (!this.storage.getAttempt(attemptId)) return
+    await this.storage.deleteAttempt(attemptId, true)
+    this.emit({ kind: 'history', attemptId, stage: 'cancelled' })
   }
 
   async deleteAllHistory(token: string): Promise<void> {

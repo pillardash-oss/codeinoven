@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioActivity from '@pdslng/cio-icon/CioActivity.svelte'
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import CioCable from '@pdslng/cio-icon/CioCable.svelte'
@@ -1319,7 +1320,7 @@
   >
     {#if modalError}<p class="text-sm text-danger" role="alert">{modalError}</p>{/if}
     {#if editorOpen}
-      {#await import('../shared/AppearancePicker.svelte') then { default: AppearancePicker }}
+      {#await loadCachedPanelModule('module:lib/components/shared/AppearancePicker.svelte', () => import('../shared/AppearancePicker.svelte')) then { default: AppearancePicker }}
         <AppearancePicker
           {name}
           {color}
@@ -1602,7 +1603,7 @@
 </ConfirmDialog>
 
 {#if agentOpen}
-  {#await import('./OvenAgentModal.svelte') then { default: OvenAgentModal }}
+  {#await loadCachedPanelModule('module:lib/components/settings/OvenAgentModal.svelte', () => import('./OvenAgentModal.svelte')) then { default: OvenAgentModal }}
     <OvenAgentModal
       open={agentOpen}
       onClose={() => (agentOpen = false)}
@@ -1612,7 +1613,7 @@
 {/if}
 
 {#if shellOven}
-  {#await import('./OvenShellModal.svelte') then { default: OvenShellModal }}
+  {#await loadCachedPanelModule('module:lib/components/settings/OvenShellModal.svelte', () => import('./OvenShellModal.svelte')) then { default: OvenShellModal }}
     <OvenShellModal oven={shellOven} onClose={() => (shellOven = null)} />
   {/await}
 {/if}

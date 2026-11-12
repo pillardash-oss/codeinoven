@@ -16,14 +16,19 @@
   import LocalAiBrewPanel from './LocalAiBrewPanel.svelte'
   import type { BrewJob } from './local-ai-controller.svelte'
   import {
-    LLAMA_CPP_BREW_ENVIRONMENT,
-    llamaCppBrewArgs,
+    LOCAL_AI_BREW_ENVIRONMENT,
+    localAiBrewArgs,
+    localAiBrewFormula,
+    localAiServerCommandName,
     type LlamaCppBrewJobKind,
-    type LlamaCppRuntimeStatus
+    type LocalAiRuntimeId,
+    type LocalAiRuntimeStatus
   } from '$shared/llama-cpp'
 
   interface Props {
-    runtime: LlamaCppRuntimeStatus | null
+    runtime: LocalAiRuntimeId
+    /** What detection found for this engine, or null while it has not answered. */
+    status: LocalAiRuntimeStatus | null
     detecting: boolean
     detectError: string
     onRefresh: () => void
@@ -31,7 +36,7 @@
     onChanged: () => void
   }
 
-  let { runtime, detecting, detectError, onRefresh, onChanged }: Props = $props()
+  let { runtime, status, detecting, detectError, onRefresh, onChanged }: Props = $props()
 
   let job = $state<BrewJob | null>(null)
   let panelMinimized = $state(false)
@@ -41,12 +46,19 @@
   let copied = $state(false)
   let pendingUninstall = $state(false)
 
-  const installed = $derived(runtime?.installed ?? false)
-  const canManage = $derived(Boolean(runtime?.installerPath))
-  const updateAvailable = $derived(Boolean(runtime?.updateAvailable))
+  const installed = $derived(status?.installed ?? false)
+  const canManage = $derived(Boolean(status?.installerPath))
+  const updateAvailable = $derived(Boolean(status?.updateAvailable))
+  /** The engine's name, its command, and the mark that stands for it. */
+  const label = $derived(runtime === 'mlx' ? 'MLX' : 'llama.cpp')
+  const commandName = $derived(localAiServerCommandName(runtime))
+  const formula = $derived(localAiBrewFormula(runtime))
+  const icon = $derived(
+    runtime === 'mlx' ? { name: 'Apple', id: 'apple' } : { name: 'llama.cpp', id: 'llamacpp' }
+  )
 
   const badge = $derived.by(() => {
-    if (detecting && !runtime) {
+    if (detecting && !status) {
       return {
         Icon: CioSpinner,
         label: 'Checking…',
@@ -71,17 +83,17 @@
   })
 
   function runJob(kind: LlamaCppBrewJobKind): void {
-    if (!runtime?.installerPath) return
+    if (!status?.installerPath) return
     jobExitCode = null
     jobCancelled = false
     jobStopping = false
     panelMinimized = false
     job = {
       kind,
-      terminalId: `local-ai-brew-${kind}-${Date.now()}`,
-      command: runtime.installerPath,
-      args: llamaCppBrewArgs(kind),
-      environment: { ...LLAMA_CPP_BREW_ENVIRONMENT }
+      terminalId: `local-ai-brew-${runtime}-${kind}-${Date.now()}`,
+      command: status.installerPath,
+      args: localAiBrewArgs(runtime, kind),
+      environment: { ...LOCAL_AI_BREW_ENVIRONMENT }
     }
   }
 
@@ -106,8 +118,8 @@
   }
 
   async function copyPath(): Promise<void> {
-    if (!runtime?.path) return
-    await invoke('clipboard:writeText', runtime.path)
+    if (!status?.path) return
+    await invoke('clipboard:writeText', status.path)
     copied = true
     setTimeout(() => (copied = false), 1_500)
   }
@@ -145,12 +157,12 @@
       <div
         class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
       >
-        <VendorIcon name="llama.cpp" id="llamacpp" size={20} />
+        <VendorIcon name={icon.name} id={icon.id} size={20} />
       </div>
       <div class="min-w-0">
-        <p class="truncate text-sm font-medium">llama.cpp</p>
+        <p class="truncate text-sm font-medium">{label}</p>
         <p class="truncate font-mono text-[0.625rem] text-dimmed">
-          {runtime?.version || (installed ? 'Version unknown' : 'llama-server')}
+          {status?.version || (installed ? 'Version unknown' : commandName)}
         </p>
       </div>
     </div>
@@ -169,7 +181,7 @@
       {#if updateAvailable && canManage}
         <button
           class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs font-medium text-warning transition-colors hover:bg-warning/15 disabled:opacity-50"
-          title="Update llama.cpp to {runtime?.latestVersion || 'the latest build'}"
+          title="Update {label} to {status?.latestVersion || 'the latest build'}"
           disabled={detecting}
           onclick={() => runJob('update')}
         >
@@ -178,12 +190,12 @@
           {:else}
             <CioDownload size={13} />
           {/if}
-          {runtime?.latestVersion ? `Update to ${runtime.latestVersion}` : 'Update'}
+          {status?.latestVersion ? `Update to ${status.latestVersion}` : 'Update'}
         </button>
       {:else if !installed && canManage}
         <button
           class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-primary/30 bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
-          title="Install llama.cpp with Homebrew in an embedded terminal"
+          title="Install {label} with Homebrew in an embedded terminal"
           disabled={detecting}
           onclick={() => runJob('install')}
         >
@@ -196,7 +208,7 @@
         </button>
       {/if}
 
-      <ThreadDropdown items={menuItems} title="llama.cpp actions" ariaLabel="llama.cpp actions" />
+      <ThreadDropdown items={menuItems} title="{label} actions" ariaLabel="{label} actions" />
     </div>
   </div>
 
@@ -204,16 +216,16 @@
     <div class="min-w-0">
       <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">Path</p>
       <div class="mt-0.5 flex items-center gap-1.5">
-        <span class="min-w-0 truncate font-mono text-xs text-muted" title={runtime?.path}>
-          {runtime?.path ||
+        <span class="min-w-0 truncate font-mono text-xs text-muted" title={status?.path}>
+          {status?.path ||
             (detectError ? detectError : installed ? 'Not available' : 'Not found on PATH')}
         </span>
-        {#if runtime?.path}
+        {#if status?.path}
           <button
             type="button"
             class="flex h-5 w-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
             title="Copy path"
-            aria-label="Copy llama-server path"
+            aria-label="Copy {label} server path"
             onclick={() => void copyPath()}
           >
             {#if copied}
@@ -231,7 +243,7 @@
         Installer
       </p>
       <p class="mt-0.5 truncate text-xs text-muted">
-        {runtime?.installer === 'homebrew'
+        {status?.installer === 'homebrew'
           ? 'Homebrew'
           : installed
             ? 'Managed outside the app'
@@ -240,11 +252,17 @@
     </div>
   </div>
 
-  {#if runtime && !installed && !canManage}
+  {#if status && !installed && !canManage}
     <p class="mt-3 border-t border-border pt-3 text-xs leading-relaxed text-dimmed">
-      Automatic install runs through Homebrew on macOS only. Install llama.cpp from
-      <span class="font-mono">ggml-org/llama.cpp</span> releases, make
-      <span class="font-mono">llama-server</span> available on PATH, then check again.
+      Automatic install runs through Homebrew on macOS only.
+      {#if runtime === 'mlx'}
+        Install the MLX server with <span class="font-mono">brew install mlx-lm</span>, then check
+        again.
+      {:else}
+        Install llama.cpp from
+        <span class="font-mono">ggml-org/llama.cpp</span> releases, make
+        <span class="font-mono">llama-server</span> available on PATH, then check again.
+      {/if}
     </p>
   {/if}
 </SettingsEntry>
@@ -266,10 +284,10 @@
 
 <ConfirmDialog
   open={pendingUninstall}
-  title="Uninstall llama.cpp"
+  title="Uninstall {label}"
   confirmLabel="Uninstall"
   variant="danger"
-  note="Homebrew removes the binary from this machine. Server entries stay saved."
+  note="Homebrew removes the package from this machine. Server entries stay saved."
   onCancel={() => (pendingUninstall = false)}
   onConfirm={() => {
     pendingUninstall = false
@@ -277,7 +295,7 @@
   }}
 >
   <p class="text-sm leading-relaxed text-muted">
-    This runs <span class="font-mono">brew uninstall llama.cpp</span> in the docked terminal. Until it
-    is installed again, no local server can start.
+    This runs <span class="font-mono">brew uninstall {formula}</span> in the docked terminal. Until
+    it is installed again, no {label} server can start.
   </p>
 </ConfirmDialog>

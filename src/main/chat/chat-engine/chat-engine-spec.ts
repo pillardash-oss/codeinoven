@@ -328,10 +328,19 @@ export class ChatEngineSpec {
     if (!pending.sessionId) return null
     let format: SpecGenerationFormatMode = 'json'
     try {
+      // Read the submitted run through the account that produced it, so a
+      // thread on a non-default account never reads another account's session.
+      const pendingDriverId = pending.settings.harnessId || DEFAULT_HARNESS
+      const pendingAccount = await this.host.state.accountRegistry.resolveForProvider(
+        pendingDriverId,
+        pending.settings.providerId,
+        pending.settings.accountId
+      )
       const { driver, projectPath } = await this.host.resolve(
         pending.projectId,
-        pending.settings.harnessId || DEFAULT_HARNESS,
-        pending.threadId
+        pendingDriverId,
+        pending.threadId,
+        pendingAccount.id
       )
       const messages = await driver.loadMessages(projectPath, pending.sessionId)
       const response = [...messages].reverse().find((message) => message.role === 'assistant')

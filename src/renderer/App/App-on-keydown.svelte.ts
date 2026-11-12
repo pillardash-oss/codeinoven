@@ -18,12 +18,15 @@ import {
   viewShowsThread
 } from '$lib/content-view-threads'
 import { viewShowsScopedSidebar } from '$lib/content-view-projects'
+import { boardProjectId } from '$lib/threads/thread-scope'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
+import { openThreadBrowserFor } from '$lib/stores/thread-browser-open'
 import { settingsRouteState } from '$lib/stores/settings-route.svelte'
 import { loadBrowser, withBrowser } from '$lib/stores/browser-access.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { findNavState } from '$lib/stores/find-nav.svelte'
+import { panelSearchRequest } from '$lib/stores/panel-search-request.svelte'
 import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
 import { browserFindState } from '$lib/stores/browser-find.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
@@ -33,7 +36,6 @@ import { scopeState } from '$lib/stores/scope.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { preloadScopeChunk, preloadSettingsChunk } from '$lib/page-preload'
 import type { ActionSelection } from '$lib/actions'
-import { actionContext } from '$lib/stores/action-context.svelte'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
   INBOX_PROJECT_ID,
@@ -42,7 +44,6 @@ import {
   type Thread
 } from '$shared/types'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
-import { actionId, settingsTabs } from '../app-palette-actions'
 import { FileSearchPaletteController } from '../app-file-search.svelte'
 import { ThreadSearchPaletteController } from '../app-thread-search.svelte'
 import { workspaceTourViewFor } from '$lib/guide/guide-stops'
@@ -86,7 +87,13 @@ export class AppOnKeydown extends BoardUnit<App> {
       preloadSettingsChunk()
     }
     if (view === 'scope') {
-      const projectId = workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
+      // The board is a project surface: the open thread's project is used when it
+      // is a real project, so pressing Board from an assistant task or a chat
+      // never scopes a board to that hidden conversation container.
+      const projectId = boardProjectId(
+        workspaceState.selectedThread?.projectId,
+        workspaceState.activeProject?.id
+      )
       if (projectId) void scopeState.activateProject(projectId)
       scopeState.clearSidebarContext()
     } else if (view === 'chats') {
@@ -200,14 +207,6 @@ export class AppOnKeydown extends BoardUnit<App> {
   }
 
   async handlePaletteSelection(selection: ActionSelection): Promise<void> {
-    const settingsTab = settingsTabs.find(
-      (tab) => actionId(`settings:${tab.id}`) === selection.action.id
-    )
-    if (settingsTab) {
-      this.navigate(settingsViewForSection(settingsTab.id))
-      return
-    }
-
     switch (selection.action.id) {
       case 'app:new-project':
         this.root.spotlightPalette.openNewProjectSpotlight()
@@ -240,6 +239,15 @@ export class AppOnKeydown extends BoardUnit<App> {
       case 'app:browser-tab-search':
         this.root.spotlightPalette.browserTabSearch.openPalette()
         return
+      case 'app:browser':
+        this.navigate('browser')
+        return
+      case 'app:thread-browser': {
+        const thread = workspaceState.selectedThread
+        if (!thread) return
+        openThreadBrowserFor(thread.projectId, thread.id)
+        return
+      }
       case 'app:notifications':
         contextSidebarState.toggleNotifications()
         return
@@ -314,16 +322,13 @@ export class AppOnKeydown extends BoardUnit<App> {
         this.navigate('settings')
         return
       default:
-        await actionContext.current?.onSelect(selection)
+        return
     }
   }
 
   /** Close the whole spotlight, whichever screen is on top. */
   closeSpotlight(): void {
     this.root.spotlightPalette.commandPaletteOpen = false
-    // The home input ranks threads inline; closing the surface stands that down
-    // so a later open never paints rows from the query it was closed on.
-    this.root.spotlightPalette.resetHomeSearch()
     if (this.fileSearch.paletteOpen) this.fileSearch.close()
     if (this.threadSearch.paletteOpen) this.threadSearch.close()
     if (this.root.spotlightPalette.allThreadSearch.paletteOpen)
@@ -381,8 +386,11 @@ export class AppOnKeydown extends BoardUnit<App> {
       // An assistant task is only ever shown by the assistant view.
       this.navigate('assistant')
     } else if (inScopeState) {
-      // Stay in the scope state: reveal the thread in the scope sidebar.
-      if (this.activeView !== 'projects') this.navigate('projects')
+      // Stay in the scope state: reveal the thread in the scope sidebar. The
+      // scoped view is its own view, so it is re-entered as itself instead of
+      // as the projects page carrying a docked sidebar, which is what made a
+      // notification drop the scoped state back to a plain project view.
+      if (this.activeView !== 'projects-scope') this.navigate('projects-scope')
       scopeState.showSidebarForThread(thread)
       void scopeState.ensureBoardLoaded(thread.projectId)
     } else if (this.activeView === 'threads') {
@@ -633,6 +641,16 @@ export class AppOnKeydown extends BoardUnit<App> {
       e.preventDefault()
       if (e.repeat) return
       this.handleFind()
+      return
+    }
+    if (keymapState.matches('panel-search', e)) {
+      // The active view's own panel search. Cmd/Ctrl+F stays the conversation's
+      // find, so this chord belongs to the list the view draws on the left.
+      const panelViews = ['projects', 'projects-scope', 'chats', 'threads', 'assistant']
+      if (!panelViews.includes(this.activeView)) return
+      e.preventDefault()
+      if (e.repeat) return
+      panelSearchRequest.requestOpen()
       return
     }
     if (keymapState.matches('nav-toggle-right-sidebar', e)) {

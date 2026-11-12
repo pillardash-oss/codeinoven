@@ -8,7 +8,13 @@
     tone?: ThreadStatusTone
     kind?: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
     color?: string
-    variant?: 'dot' | 'spinner' | 'icon'
+    variant?: 'dot' | 'square' | 'spinner' | 'icon'
+    /**
+     * A square drawn as a thin outline only, with its fill left transparent. A
+     * tab uses it for a state that is finished: the shape still marks the slot
+     * and the colour still names the state, without claiming attention.
+     */
+    hollow?: boolean
     /** Icon (Lucide component) rendered when `variant` is 'icon'. */
     icon?: Component | null
     size?: 'sm' | 'md' | 'lg'
@@ -28,6 +34,7 @@
     kind,
     color,
     variant = 'dot',
+    hollow = false,
     icon = null,
     size = 'sm',
     title,
@@ -81,6 +88,22 @@
   <span
     class="{sizeClass} shrink-0 animate-spin rounded-full border-2 border-transparent bg-transparent {className}"
     style="border-top-color: {resolvedColor}; border-right-color: {resolvedColor};"
+    {role}
+    aria-label={ariaLabel}
+    aria-hidden={ariaHidden}
+    title={titleAttr}
+  ></span>
+{:else if variant === 'square'}
+  <!-- The square form of a thread mark, matching the ring a completed thread row
+       wears: a filled square in the state's own colour, or the same square held at
+       the border colour and left empty once the thread is done. -->
+  <span
+    class={[
+      'size-2 shrink-0 border',
+      hollow ? 'border-border-strong bg-transparent' : 'bg-current',
+      className
+    ]}
+    style={hollow ? undefined : `color: ${resolvedColor}; border-color: ${resolvedColor};`}
     {role}
     aria-label={ariaLabel}
     aria-hidden={ariaHidden}

@@ -15,9 +15,9 @@ A plain chat message sent while the lifecycle is parked is answered normally in 
 
 ## Stage behavior
 
-Dependencies cascade when a stage is enabled: **Achievement implies Spec**, so enabling it leaves Spec enabled. **Assignment stands alone** and never turns Spec on see _Assignment sources_ below. Achievement is a loop mode and never enables Assignment. Enabling PRD or Spec never enables Brainstorm instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when a stage is turned on. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
+Dependencies cascade when a stage is enabled: **no stage requires another**. **Assignment stands alone** and never turns Spec on, and neither does Achievement see _Assignment sources_ below. Achievement is a loop mode and never enables Assignment. Enabling PRD or Spec never enables Brainstorm instead, PRD and Spec require context, so the **engineer entry card** ("Brainstorm first | Jump directly into PRD/Spec") is shown at the point of sending a message, never when a stage is turned on. Jumping in still lets the Sr. Engineer ask alignment questions; it simply skips the Brainstorm document and generates the PRD or Spec from the message instead.
 
-Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Achievement requires an approved Spec; Assignment does not.
+Single-stage runs stop after their selected stage. PRD finalization does not select Spec. Spec approval does not start implementation on its own. Neither Achievement nor Assignment requires an approved Spec: an approved Spec wins as the contract when one exists, and otherwise the work is judged against the goal captured from the request or the thread conversation.
 
 ### Assignment sources
 
@@ -27,6 +27,8 @@ An Assignment always has exactly one authoritative source, resolved when generat
 - **Conversation-backed** no Spec exists, so the user's message and the thread conversation are the scope. Every distinct work item the message names becomes its own task, the Sr. Engineer inspects the project read-only to resolve concrete `expectedFiles`, and the Assignment is persisted with no Spec identifier.
 
 Both sources produce the same reviewable draft, the same human Assignment-approval gate, and the same durable worker threads. A conversation-backed Assignment completes into an audit run against its own task prompts and conversation, because there is no specification to audit against.
+
+Achievement resolves its contract the same way: the approved Spec when the thread has one, and otherwise the goal captured when Achievement was enabled (the tool call's instructions, or the thread's title and latest request), verified by the auditor against the whole coordinator transcript.
 
 The user's message that triggers generation is passed to the Sr. Engineer as that Assignment's request, so a send in the Assignment stage is never silently discarded.
 
@@ -51,7 +53,7 @@ The agent reaches every stage through a real callable tool instead of the app wa
 - `cio_create_prd` turns PRD on and creates the product requirements document.
 - `cio_create_spec` turns Spec on and generates the specification draft, only on an explicit request for a spec.
 - `cio_create_assignment` turns Assignment on and creates the task graph for the user to sign off.
-- `cio_create_achievement` turns Achievement on so the thread implements, audits and reworks until the approved specification is verified. It requires an approved specification, because the independent audit judges the result against that contract.
+- `cio_create_achievement` turns Achievement on so the thread implements, audits and reworks until the goal is verified. Its contract is the thread's approved specification when one exists, and otherwise the goal taken from the tool's instructions or from the thread's own title and latest request, which the auditor verifies against the whole coordinator transcript. It never blocks on a missing specification.
 
 Each stage tool is invoked only when the user explicitly asks for that artifact by name. A plan is not a spec: a request for a plan, a checklist, an approach or the steps is answered with the agent's own plan in prose or a markdown file, followed by the work, and never converted into a stage. The behavior prompt and the gateway instructions carry the same rule, so the agent does not infer a stage from the size or risk of the work: brainstorming or exploring a direction calls `cio_create_brainstorm`, product requirements or a PRD calls `cio_create_prd`, a spec or a specification calls `cio_create_spec`, splitting the work into tasks or across agents calls `cio_create_assignment`, and "keep going until this works" or "until the goal is reached" calls `cio_create_achievement`.
 

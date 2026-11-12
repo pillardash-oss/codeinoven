@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { Logger } from '../../system/logger'
+import { stopProcessGroup } from '../../system/process-group-stop'
 import {
   ACP_METHOD_NOT_FOUND,
   acpRecord,
@@ -42,6 +43,8 @@ export interface AcpClientOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15 * 60 * 1000
+/** Time the agent group gets to exit on its own before the helpers are killed. */
+const GROUP_EXIT_GRACE_MS = 1_500
 const STDERR_TAIL_LIMIT = 8_000
 
 interface PendingRequest {
@@ -75,7 +78,11 @@ export class AcpClient {
     const child = spawn(this.options.command, [...this.options.args], {
       cwd: this.options.cwd,
       env: this.options.env,
-      stdio: ['pipe', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // The agent forks helpers of its own (cursor-agent starts a
+      // `worker-server`), so it leads its own process group and a stop reaches
+      // all of them instead of leaking the helpers to launchd.
+      detached: process.platform !== 'win32'
     })
     this.child = child
     child.stdout.setEncoding('utf8')
@@ -160,8 +167,14 @@ export class AcpClient {
     if (!child) return
     this.closed = true
     this.failAll(new Error('The ACP agent process was stopped'))
-    child.kill(signal)
     this.child = null
+    const pid = child.pid
+    child.kill(signal)
+    if (!pid) return
+    // Signal the group as well: the leader exiting on its own leaves the helpers
+    // it forked running, and one daemon per agent restart is how orphans pile up.
+    stopProcessGroup(pid, signal)
+    setTimeout(() => stopProcessGroup(pid, 'SIGKILL'), GROUP_EXIT_GRACE_MS).unref?.()
   }
 
   private readStdout(chunk: string): void {

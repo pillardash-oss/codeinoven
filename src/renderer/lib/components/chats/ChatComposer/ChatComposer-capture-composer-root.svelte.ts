@@ -287,7 +287,10 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
 
   /** Whether there is anything to send: text, an attachment, or a payload reference. */
   hasSendableContent = $derived(
-    this.hasText || this.root.submit.attachments.length > 0 || this.hasCommentReference
+    this.hasText ||
+      this.root.submit.attachments.length > 0 ||
+      this.root.submit.pendingAttachments.length > 0 ||
+      this.hasCommentReference
   )
 
   /** Whether the button should show the stop icon (agent working, nothing to send). */

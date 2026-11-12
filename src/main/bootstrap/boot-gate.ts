@@ -95,6 +95,21 @@ export function closeAppfileGates(reason: string): void {
 }
 
 /**
+ * The gate the renderer's hydration reads and the post-paint boot wait on.
+ *
+ * The window is created before storage and SQLite are open, so the renderer's
+ * own boot overlaps that work instead of queueing behind it. That reorder is
+ * only safe because of this gate: a hydration invoke can arrive while the data
+ * stores are still opening, and the post-paint service graph cannot be built
+ * before them either. Both read the gate and are released the moment the boot
+ * publishes it.
+ *
+ * A boot that fails closes the gate, so a read rejects with the reason instead
+ * of leaving the renderer waiting on a splash that will never come down.
+ */
+export const bootDataGate = new BootGate<true>('boot data')
+
+/**
  * Settle the appfile gates once the boot has finished, so a preview can never
  * wait on a publish that the boot did not make. A gate that was published is
  * untouched; an unpublished one rejects its waiters with the reason.

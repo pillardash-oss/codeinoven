@@ -395,14 +395,8 @@
       Assigned models
     </h3>
     <p class="mt-2 text-xs leading-relaxed text-dimmed">
-      Name the work, say which craft it belongs to, and pick the model that does it: the copy, an
-      SEO pass, the images a page needs, the clip that opens it, the voice-over. A design session
-      hands that work to the model you pick here and never picks one itself. Copywriting names a
-      harness model and comes back as text. An image, a clip or a track names a generation model
-      instead, and the app produces it with the backend configured above, then saves the result into
-      the design as a file. Give one craft several models and they cover each other, in the order
-      they are listed. With nothing assigned, the agent says which work needs a model instead of
-      improvising one.
+      Choose which model handles each kind of work, such as copy, images, clips or voice-over. Add
+      more than one model to a kind of work and they are tried in order.
     </p>
   </div>
 

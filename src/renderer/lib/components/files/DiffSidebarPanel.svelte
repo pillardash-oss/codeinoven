@@ -651,12 +651,13 @@
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import ErrorStrip from '../ui/ErrorStrip.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { onMount } from 'svelte'
   import FileTypeIcon from './FileTypeIcon.svelte'
-  import FileDiffView from './FileDiffView.svelte'
+  import FileDiffView from './DeferredFileDiffView.svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import Switch from '../ui/Switch.svelte'
   import DiffLayoutToggle from '../ui/DiffLayoutToggle.svelte'
@@ -945,9 +946,11 @@
     {#if controller.loading && controller.turns.length === 0}
       <div class="min-h-12"></div>
     {:else if controller.error}
-      <div class="border border-danger/20 bg-danger/10 px-3 py-2">
-        <p class="text-[0.6875rem] leading-relaxed text-danger">{controller.error}</p>
-      </div>
+      <ErrorStrip
+        title="The changes could not be loaded"
+        message={controller.error}
+        folded={false}
+      />
     {:else if controller.turns.length === 0}
       <div class="flex h-full items-center justify-center px-6 text-center">
         <div>
@@ -1000,8 +1003,15 @@
                       onclick={() => controller.toggleDiff(fileDiff.path)}
                     >
                       <FileTypeIcon path={fileDiff.path} size={13} />
-                      <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">
-                        {fileDiff.path}
+                      <span class="flex min-w-0 flex-1 items-baseline font-mono text-[0.625rem]">
+                        {#if fileDiff.path.includes('/')}
+                          <span class="min-w-0 truncate text-muted"
+                            >{fileDiff.path.slice(0, fileDiff.path.lastIndexOf('/') + 1)}</span
+                          >
+                        {/if}
+                        <span class="shrink-0 text-foreground"
+                          >{fileDiff.path.slice(fileDiff.path.lastIndexOf('/') + 1)}</span
+                        >
                       </span>
                       {#if fileDiff.binary}
                         <span class="shrink-0 text-[0.5625rem] text-dimmed">binary</span>

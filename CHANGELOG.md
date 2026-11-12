@@ -22,7 +22,47 @@ All notable changes to CodeInOven are documented here. This project follows
   and tailwindcss-language-server report nothing numeric while they load and only
   servers that do (TypeScript, Pyright and friends) fill the bar.
 
+### Changed
+
+- **The runtime moved to Electron 45.3.1 (Chromium 156), and the embedded
+  browser's extension surface was re-measured rather than assumed.** The
+  permission list that is stripped from an installed manifest was recorded on
+  Chromium 152, so it was re-taken against the shipped runtime: all 103 names
+  are still unknown to the loader, and no name warned on the new runtime that
+  did not already warn on Electron 44, so no extension gains a warning and none
+  loses a permission it had. The other v45 changes were checked against the code
+  they would touch: sandboxed preloads keep no removed `events`/`timers`/`url`
+  shims, no `Buffer` or `setImmediate`, and `out/preload/index.cjs` requires
+  only `electron`; every browser view, popup, side panel and extension page is
+  already `sandbox: true`, so the new `window.open` child sandbox rule changes
+  nothing; screen capture already answers the new `display-capture` permission
+  (`src/lib/browser/site-permissions.ts`), and no code reads an ASAR file
+  descriptor across a process boundary. The 45.3.1 patch keeps the same
+  Chromium and Node builds, so none of that had to be taken again; its two
+  fixes both land on code this app runs, a macOS notification observer leak
+  when a notification is unsubscribed before it is closed (the detach-then-close
+  path in `src/main/notifications/notification-service.ts`) and the rejection of
+  certificates issued by eMudhra's revoked RSA intermediates, which the embedded
+  browser inherits from Chromium's root store without a code change.
+
 ### Fixed
+
+- **A page can no longer drag the app window, which is what made an Azure
+  sign-in impossible to click.** Opening Microsoft's "You don't have access to
+  this" page and pressing anywhere on it moved the whole window with the
+  pointer, and every control on the page was dead. Electron applies
+  `-webkit-app-region: drag` from any web contents in the window to the window
+  itself, and Microsoft's sign-in pages declare one (they are written to run
+  inside desktop shells of their own), so the window server claimed its
+  rectangle before the page was asked. A page has no such power over a real
+  browser, so the app's styles for a page now include a `no-drag` subtraction
+  covering the document, which is the one shape that survives wherever a page
+  declares its region: drag rectangles are computed from layout, and a
+  subtraction is the only thing that removes them. It is installed on every
+  `dom-ready` for a tab and for a popup, and the scrollbar theme that is tracked
+  per tab is left alone for a popup's document
+  (`main/browser/browser-service/browser-service-configuration.ts`,
+  `browser-service-tabs.ts`, `browser-service-popups.ts`).
 
 - **A docked agent handoff whose prompt is never sent now says it was cancelled
   and can be closed.** Starting an action with an agent in review mode docks a

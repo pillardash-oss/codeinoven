@@ -7,6 +7,7 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import { navigationHistoryState } from '$lib/stores/navigation-history.svelte'
 import { settingsRouteState } from '$lib/stores/settings-route.svelte'
+import { scopeState } from '$lib/stores/scope.svelte'
 import { loadBrowser } from '$lib/stores/browser-access.svelte'
 import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
@@ -123,7 +124,20 @@ export class AppEffects extends BoardUnit<App> {
       view: rendererRecovery.activeView,
       thread: rendererRecovery.selectedThread,
       utilities:
-        rendererRecovery.activeView === 'settings-utilities' ? settingsRouteState.utilities : null
+        rendererRecovery.activeView === 'settings-utilities' ? settingsRouteState.utilities : null,
+      scope: scopeState.sidebarContext ? { ...scopeState.sidebarContext } : null
+    })
+
+    /**
+     * The scope docked on the sidebar is part of the place the user is in, and
+     * it moves without a navigation (another bucket, another slice, another
+     * thread revealed in it). The history observer is told about it here so the
+     * location it sits on always holds the scope on screen, which is what the
+     * next Back restores.
+     */
+    $effect(() => {
+      void scopeState.sidebarContext
+      this.root.openAssistantFromSearch.observeNavigationLocation()
     })
 
     onMount(() => {

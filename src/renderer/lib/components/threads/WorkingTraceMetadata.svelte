@@ -23,6 +23,10 @@
     thinkingLevel: ThinkingLevel | null
     providerName?: string | null
     providerId?: string | null
+    /** Draw the provider with its own logo before the model, for a header that
+     *  has room to name how the run was paid for and served. The model then
+     *  drops its vendor mark, because the one mark already answers it. */
+    showProviderName?: boolean
     harnessId?: string | null
     harnessName?: string | null
     accountLabel?: string | null
@@ -37,6 +41,7 @@
     thinkingLevel,
     providerName,
     providerId,
+    showProviderName = false,
     harnessId,
     harnessName,
     accountLabel,
@@ -53,6 +58,8 @@
     if (!id) return false
     return [providerName, providerId].some((name) => vendorMatches(id, name ?? ''))
   })
+
+  const showProviderMark = $derived(showProviderName && (providerName ?? '').trim() !== '')
 
   // An account badge explains which of several credentials paid for the run. An
   // ACP agent has no accounts at all (it signs in through its own CLI), and a
@@ -79,8 +86,15 @@
     </span>
     <span class="shrink-0">·</span>
   {/if}
+  {#if showProviderMark}
+    <span class="flex shrink-0 items-center gap-1" title={`Provider: ${providerName ?? ''}`}>
+      <VendorIcon name={providerName ?? ''} id={providerId ?? undefined} size={11} />
+      <span class="truncate">{providerName}</span>
+    </span>
+    <span class="shrink-0">·</span>
+  {/if}
   <span class="flex min-w-0 items-center gap-1">
-    {#if !harnessOwnsBrand}
+    {#if !showProviderMark && !harnessOwnsBrand}
       <VendorIcon name={providerName ?? modelLabel ?? ''} id={providerId ?? undefined} size={11} />
     {/if}
     <span class="truncate">{modelLabel}</span>

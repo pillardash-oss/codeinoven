@@ -431,15 +431,11 @@
     {:else}
       <div class="flex min-h-0 min-w-0 flex-1 items-center justify-center bg-app">
         <div class="flex h-full flex-col items-center justify-center px-6">
-          <img src={logoUrl} alt="CodeInOven" class="mb-8 h-20 w-20" draggable="false" />
-          <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">
-            CIO Global Browser
-          </h1>
-          <p class="max-w-md mt-1 text-center text-[0.8125rem] text-muted">
-            This is not by no means a complete browser, but it is good enough to browse the web
-            while you work. It is an attempt to reduce cognitive overload from context switching.
-            Try it out gradually and see if it can replace your dev browser. This is chromium after
-            all.
+          <img src={logoUrl} alt="" class="mb-6 h-12 w-12 opacity-60" draggable="false" />
+          <h1 class="text-[1.0625rem] font-semibold tracking-tight text-foreground">Browser</h1>
+          <p class="mt-1 max-w-md text-center text-[0.8125rem] text-muted">
+            Chromium inside your workspace. Browse while you work, and let agents read and drive the
+            tabs you open here.
           </p>
 
           <div class="mt-4 flex w-full max-w-sm flex-col gap-1"></div>

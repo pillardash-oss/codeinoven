@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { onMount, tick } from 'svelte'
   import { on } from 'svelte/events'
   import { SvelteMap } from 'svelte/reactivity'
@@ -495,7 +496,7 @@
                before any browser is, and this is the only place it knows about
                one, so importing the row statically would carry the browser's
                model into the first-paint chunk for a row that cannot appear. -->
-          {#await import('./SwitcherBrowserRow.svelte') then { default: SwitcherBrowserRow }}
+          {#await loadCachedPanelModule('module:lib/components/threads/SwitcherBrowserRow.svelte', () => import('./SwitcherBrowserRow.svelte')) then { default: SwitcherBrowserRow }}
             <SwitcherBrowserRow
               tab={entry.tab}
               selected={entryKey === highlightedKey}
@@ -506,7 +507,7 @@
           <!-- A panel row is a dynamic import for the same reason the browser row
                is: the switcher mounts before any panel tab can, and the row only
                ever appears in a list that already holds one. -->
-          {#await import('./SwitcherPanelRow.svelte') then { default: SwitcherPanelRow }}
+          {#await loadCachedPanelModule('module:lib/components/threads/SwitcherPanelRow.svelte', () => import('./SwitcherPanelRow.svelte')) then { default: SwitcherPanelRow }}
             <SwitcherPanelRow
               tab={entry.tab}
               selected={entryKey === highlightedKey}

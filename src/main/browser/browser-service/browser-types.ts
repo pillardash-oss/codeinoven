@@ -110,7 +110,8 @@ export interface BrowserTab {
    */
   displayedViewport: BrowserViewportApplication | null
   /** The design folder this tab is rendering, when the design capability opened
-   *  it. Non-null is what makes the tab eligible for the element inspector. */
+   *  it. Non-null is what gives the tab its screen history controls and what makes
+   *  a pick report the folder it came from; every tab is inspectable either way. */
   design: BrowserDesignTab | null
   /** The video composition this tab is showing, read from the served folder's
    *  manifest. Non-null is what arms the transport and what the panel draws the

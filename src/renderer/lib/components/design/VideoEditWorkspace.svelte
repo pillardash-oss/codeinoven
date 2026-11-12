@@ -1,4 +1,5 @@
 <script lang="ts">
+  import SeekBar from '../ui/SeekBar.svelte'
   import { onMount, type Component, type Snippet } from 'svelte'
   import { on } from 'svelte/events'
   import { ContextMenu } from 'bits-ui'
@@ -23,6 +24,7 @@
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import { appConfirm } from '$lib/stores/app-confirm.svelte'
+  import { ARROW_FRAME_STEP } from '$shared/video/frame-grid'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { videoEditorController } from '$lib/stores/video-editor.svelte'
@@ -464,8 +466,10 @@
           void editor.importFiles()
         }
       ],
-      ['video-edit-frame-back', () => editor.seek(editor.time - 1 / editor.fps)],
-      ['video-edit-frame-forward', () => editor.seek(editor.time + 1 / editor.fps)]
+      ['video-edit-frame-back', () => editor.seek(editor.time - ARROW_FRAME_STEP / editor.fps)],
+      ['video-edit-frame-forward', () => editor.seek(editor.time + ARROW_FRAME_STEP / editor.fps)],
+      ['video-edit-frame-back-one', () => editor.seek(editor.time - 1 / editor.fps)],
+      ['video-edit-frame-forward-one', () => editor.seek(editor.time + 1 / editor.fps)]
     ]
     for (const [id, run] of actions)
       if (keymapState.matches(id, event)) {
@@ -546,17 +550,14 @@
     editor.selection?.kind === 'brush'
   )}
   {#if editor.selection?.kind === 'brush'}<label class="flex items-center gap-1 text-xs text-muted"
-      >Brush<input
-        type="range"
-        min="0.01"
-        max="0.2"
-        step="0.005"
+      >Brush<SeekBar
         class="w-24"
+        min={0.01}
+        max={0.2}
+        step={0.005}
         value={editor.selection.size}
-        aria-label="Blur brush size"
-        title="Blur brush size"
-        oninput={(event) =>
-          editor.select({ kind: 'brush', size: Number(event.currentTarget.value) })}
+        label="Blur brush size"
+        onInput={(size) => editor.select({ kind: 'brush', size })}
       /></label
     >{/if}
   {@render editActions()}

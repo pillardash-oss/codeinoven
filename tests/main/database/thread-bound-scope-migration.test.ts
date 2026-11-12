@@ -40,7 +40,7 @@ describe('version 6 schema upgrade', () => {
     const result = applyDatabaseSchema(db)
 
     expect(result.appliedVersions).toContain(6)
-    expect(DATABASE_SCHEMA_VERSION).toBe(8)
+    expect(DATABASE_SCHEMA_VERSION).toBe(11)
     const row = db
       .prepare(
         `SELECT bound_scope_project_id, bound_scope_scope_id, bound_scope_home_project_id,
@@ -76,7 +76,7 @@ describe('version 6 schema upgrade', () => {
     const second = applyDatabaseSchema(db)
     // The chain runs every file above the stored version, so a version-5 file
     // also passes through the later data backfills that shipped after it.
-    expect(first.appliedVersions).toEqual([6, 7, 8])
+    expect(first.appliedVersions).toEqual([6, 7, 8, 9, 10, 11])
     expect(second.appliedVersions).toEqual([])
     db.close()
   })

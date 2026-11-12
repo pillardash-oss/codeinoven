@@ -57,6 +57,7 @@ export function claudeSubagentPart(
       agent: string(input['subagent_type']) ?? string(input['agent']) ?? name,
       description,
       prompt: string(input['prompt']),
+      harnessId: 'claude-code',
       providerTaskId: callId,
       modelId: string(input['model']),
       background: input['run_in_background'] === true || input['background'] === true,
@@ -66,6 +67,14 @@ export function claudeSubagentPart(
   }
 }
 
+/**
+ * The forwarded text of a sub-agent's newest message.
+ *
+ * `--forward-subagent-text` delivers every sub-agent assistant message on the
+ * parent stream, but the part keeps only the message it just reported: the
+ * transcript is accumulated by the panel while it is open, because a run nobody
+ * is watching must cost one bounded record, never a growing one.
+ */
 export function partFromBlock(
   messageId: string,
   block: Record<string, unknown>,
@@ -154,9 +163,21 @@ export function messageFromAssistant(message: Record<string, unknown>): AgentMes
   const content = Array.isArray(message['content']) ? message['content'] : []
   const parts: AgentPart[] = []
   const now = Date.now()
-  for (const [index, blockValue] of content.entries()) {
+  // Block indexes are counted per type, never by position in the content array.
+  // Claude Code re-emits the same assistant message with a *different* block
+  // layout: a record that arrives while a thinking block is still streaming
+  // holds only `[text]`, and the settled record holds `[thinking, text, ...]`.
+  // A positional index put the same text at 0 in the first record and at 1 in
+  // the second, so merging the two records by id kept both and the trace drew
+  // the identical paragraph twice. Counting per type anchors the id to the
+  // block's own content, so the later record overwrites the earlier one.
+  const blockCounts = new Map<string, number>()
+  for (const blockValue of content) {
     const block = record(blockValue)
     if (!block) continue
+    const type = string(block['type']) ?? ''
+    const index = blockCounts.get(type) ?? 0
+    blockCounts.set(type, index + 1)
     const part = partFromBlock(messageId, block, index)
     if (part) parts.push(part)
   }

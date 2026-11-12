@@ -17,15 +17,15 @@ export interface IdeMenuAction {
   label: string
   run: () => void
 }
-const providers = new WeakMap<HTMLElement, (event: MouseEvent) => IdeMenuAction[]>()
-export function registerIdeContext(
-  host: HTMLElement,
-  provider: (event: MouseEvent) => IdeMenuAction[]
-): () => void {
+/** A context menu may resolve its IDE items after it is already on screen, so
+ *  the language server never delays Go to Definition or a copy item. */
+export type IdeMenuProvider = (event: MouseEvent) => IdeMenuAction[] | Promise<IdeMenuAction[]>
+const providers = new WeakMap<HTMLElement, IdeMenuProvider>()
+export function registerIdeContext(host: HTMLElement, provider: IdeMenuProvider): () => void {
   providers.set(host, provider)
   return () => providers.delete(host)
 }
-export function ideContextActions(event: MouseEvent): IdeMenuAction[] {
+export function ideContextActions(event: MouseEvent): IdeMenuAction[] | Promise<IdeMenuAction[]> {
   const host =
     event.target instanceof Element
       ? event.target.closest<HTMLElement>('[data-editor-codemirror]')

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import CioChat from '@pdslng/cio-icon/CioChat.svelte'
@@ -95,6 +96,25 @@
   })
 
   /**
+   * The scope the sidebar is showing, which leads the destination list.
+   *
+   * A picker is one flat list and the sidebar draws one scope at a time, so the
+   * scope the user can see has to be named explicitly: without it the rows a
+   * project keeps in its first scope   last week's work   filled the top of the
+   * picker however recent the threads in the scope on screen were. When no
+   * sidebar context belongs to this project, the source chat's own scope is the
+   * closest stand-in, because that is the work being carried away from.
+   */
+  const currentBucketId = $derived.by((): string | null => {
+    const context = scopeState.sidebarContext
+    if (context?.projectId === projectId) return context.bucketId
+    const source = scopeState.allScopeThreads.find(
+      (thread) => thread.id === sourceThreadId && thread.projectId === projectId
+    )
+    return source ? scopeState.bucketForThread(source) : null
+  })
+
+  /**
    * The project's chats, in the order the project view shows them.
    *
    * Nothing narrows them beyond the exclusions above, and every other chat of the
@@ -116,6 +136,7 @@
     const rows = [...live, ...listedThreads.filter((thread) => !liveIds.has(thread.id))]
     return orderRelocationDestinations(rows.filter(isDestination), {
       buckets: projectBuckets,
+      currentBucketId,
       sliceFor: (thread) => ({
         bucketId: scopeState.bucketForThread(thread),
         stage: scopeState.stageForThread(thread)
@@ -197,7 +218,7 @@
      typing, because the palette's default bound draws sixty rows and a project's
      older chats   the one holding an unsent draft among them   are exactly what
      fell past it. -->
-{#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
+{#await loadCachedPanelModule('module:lib/components/actions/CommandPalette.svelte', () => import('../actions/CommandPalette.svelte')) then { default: CommandPalette }}
   <CommandPalette
     open
     {title}

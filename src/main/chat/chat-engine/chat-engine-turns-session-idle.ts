@@ -1,4 +1,6 @@
 import { stripAbortedRunErrors } from '../stopped-run-errors'
+import { delegationFromThread } from '../chat-engine-don'
+import { DON_THREAD_ID } from '../../don/don-bootstrap'
 import { Logger } from '../../system/logger'
 import { latestAgentTodo } from '../../../lib/agent-todos'
 import type {
@@ -1167,6 +1169,23 @@ export class ChatEngineTurnsSessionIdle {
           settledDispatch,
           finalStatus
         )
+      }
+      // A settled run the orchestrator handed to an assistant is written back into
+      // Don's thread under that assistant's own name, which is what makes Don's
+      // conversation read as a group chat instead of a list of statuses.
+      const settledDelegation = finishedThread
+        ? (this.host.don?.delegations.settle(finishedThread.id) ??
+          (finishedThread.projectId === ASSISTANT_SPACE_ID
+            ? (delegationFromThread(finishedThread, DON_THREAD_ID) ?? undefined)
+            : undefined))
+        : undefined
+      // A turn the user started by answering that thread directly is read where
+      // they answered it, so it is not reported into the group a second time.
+      const directlyAnswered = finishedThread
+        ? (this.host.don?.delegations.takeDirectReply(finishedThread.id) ?? false)
+        : false
+      if (settledDelegation && !directlyAnswered) {
+        void this.host.units['turns-dispatch'].reportDonDelegation(settledDelegation, finalStatus)
       }
       // A settled turn on an assistant task is reported to the assistant scheduler,
       // which knows whether it dispatched a run on that task and stamps its last

@@ -182,8 +182,7 @@
         bind:value={description}></textarea>
       <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
         What it is for, in your own words. It is your note about the assistant, shown when you hover
-        its row. How it behaves lives in the Personality section of its behavior, and its schedule
-        sits beside it there.
+        its row. How it behaves is edited in its knowledge, beside its schedule.
       </p>
     </div>
 

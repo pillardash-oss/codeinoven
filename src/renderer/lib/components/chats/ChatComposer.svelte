@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { isMacPlatform } from '$lib/shortcut-display'
   import CioArrowUp from '@pdslng/cio-icon/CioArrowUp.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
@@ -11,7 +12,6 @@
   import { scale } from 'svelte/transition'
   import { motionDuration } from '$lib/motion'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
-  import AttachmentPreview from './AttachmentPreview.svelte'
   import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
   import ChatComposerAttachmentStrip from './ChatComposerAttachmentStrip.svelte'
@@ -35,6 +35,11 @@
   let {
     onSend,
     disabled = false,
+    directReply = null,
+    directReplyBusy = false,
+    directReplyError = '',
+    onClearDirectReply,
+    onOpenDirectReply,
     working = false,
     stackedAbove = false,
     onStop,
@@ -114,6 +119,11 @@
   const board = createChatComposer(() => ({
     onSend,
     disabled,
+    directReply,
+    directReplyBusy,
+    directReplyError,
+    onClearDirectReply,
+    onOpenDirectReply,
     working,
     stackedAbove,
     onStop,
@@ -223,21 +233,23 @@
 
 {#if board.handleDropData.preview.file}
   {@const previewAttachment = board.handleDropData.preview.file}
-  <AttachmentPreview
-    attachment={previewAttachment}
-    src={board.handleDropData.preview.urls[previewAttachment.url]}
-    text={board.handleDropData.preview.texts[previewAttachment.url]}
-    documentHtml={board.handleDropData.preview.documents[previewAttachment.url]}
-    documentLoading={board.handleDropData.preview.documentLoading[previewAttachment.url] ?? false}
-    onSaveText={isEditablePastedTextAttachment(previewAttachment)
-      ? board.handleDropData.savePreviewText
-      : undefined}
-    pager={board.handleDropData.previewPager}
-    onClose={() => {
-      board.handleDropData.preview.close()
-      board.submit.focusComposerAtSavedCaret()
-    }}
-  />
+  {#await loadCachedPanelModule('module:lib/components/chats/AttachmentPreview.svelte', () => import('./AttachmentPreview.svelte')) then { default: AttachmentPreview }}
+    <AttachmentPreview
+      attachment={previewAttachment}
+      src={board.handleDropData.preview.urls[previewAttachment.url]}
+      text={board.handleDropData.preview.texts[previewAttachment.url]}
+      documentHtml={board.handleDropData.preview.documents[previewAttachment.url]}
+      documentLoading={board.handleDropData.preview.documentLoading[previewAttachment.url] ?? false}
+      onSaveText={isEditablePastedTextAttachment(previewAttachment)
+        ? board.handleDropData.savePreviewText
+        : undefined}
+      pager={board.handleDropData.previewPager}
+      onClose={() => {
+        board.handleDropData.preview.close()
+        board.submit.focusComposerAtSavedCaret()
+      }}
+    />
+  {/await}
 {/if}
 
 <ChatComposerDropZone
@@ -306,8 +318,7 @@
 
   {#if board.handleDropData.selectedHarnessLacksAttachments && (board.handleDropData.attachmentBlockedNotice || board.submit.attachments.length > 0)}
     <CardNotice placement="composer" tone="danger">
-      This model cannot accept file board.submit.attachments. Choose another model before sending
-      this file.
+      This model cannot accept file attachments. Choose another model before sending this file.
     </CardNotice>
   {/if}
 
@@ -319,7 +330,13 @@
 
   <ChatComposerAttachmentStrip
     attachments={board.submit.attachments}
+    pendingAttachments={board.submit.pendingAttachments}
     references={board.props.references}
+    directReply={board.props.directReply ?? null}
+    directReplyBusy={board.props.directReplyBusy ?? false}
+    directReplyError={board.props.directReplyError ?? ''}
+    onClearDirectReply={board.props.onClearDirectReply}
+    onOpenDirectReply={board.props.onOpenDirectReply}
     startAfterThreads={board.handleDropData.startAfterThreads}
     threadReferences={board.handleDropData.threadReferences}
     forkParentReference={board.props.forkParentReference ?? null}
@@ -328,6 +345,7 @@
     previewUrls={board.handleDropData.preview.urls}
     onPreviewAttachment={board.handleDropData.preview.open}
     onRemoveAttachment={board.submit.removeAttachment}
+    onRemovePendingAttachment={board.submit.cancelPendingAttachment}
     onToggleFileSystemMode={board.handleDropData.toggleFileSystemMode}
     startAfterPopoverOpen={board.captureComposerRoot.startAfterPopoverOpen}
     onOpenStartAfterPopover={board.captureComposerRoot.openStartAfterPopover}

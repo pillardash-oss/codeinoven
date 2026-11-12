@@ -528,6 +528,10 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.errorMessage = `No knowledge draft found in this thread yet. Ask the agent to present the final knowledge in a fenced knowledge block, then try again.`
       return false
     }
+    // The commit names the conversation it came from, not just the assistant the
+    // view happens to have selected, so the app can refuse a save that would write
+    // this conversation's instructions onto a different assistant.
+    const authoringThreadId = this.root.handleAgentEvent.thread.id
     // A revision is compared with what is saved, because the draft carries the
     // whole document and nothing else checks that it still contains one.
     const replacing =
@@ -565,7 +569,10 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
       const plan = draft.plan
       const assistant = replacing
       const wasScheduled = assistant ? assistantIsScheduled(assistant) : true
-      const patch: Parameters<typeof assistants.updateAssistant>[1] = { knowledge: draft.knowledge }
+      const patch: Parameters<typeof assistants.updateAssistant>[1] = {
+        knowledge: draft.knowledge,
+        authoringThreadId
+      }
       // A conversation settles who the assistant is as well as what it does, so a
       // plan that carries the name the user gave it, or a clock they did or did not
       // want, is applied on the same save. How it behaves is not here: it is the

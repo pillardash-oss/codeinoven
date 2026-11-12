@@ -363,9 +363,10 @@ export class GitStatusPanelHandlePrListAction extends BoardUnit<GitStatusPanel> 
   /**
    * Resolve a PR's online conflicts with the agent's help: check out the PR head
    * and merge the base in (so conflicts land in the tree), then hand the agent a
-   * thread to resolve the conflict markers. The agent never pushes   the user
-   * finishes with Complete merge, which pushes the resolution to the PR, merges
-   * that PR, and deletes the temporary branch.
+   * thread to resolve them. The agent carries the flow to the end itself: it
+   * writes the resolution commit, publishes it on its own branch, and opens the
+   * pull request into the conflicted head branch, so the user is left with a link
+   * to merge instead of a half-finished checkout.
    */
   async startConflictResolution(pr: PullRequestSummary): Promise<void> {
     await resolvePrConflictsWithAgent(

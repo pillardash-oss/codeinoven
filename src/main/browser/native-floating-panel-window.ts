@@ -5,7 +5,10 @@ import type {
   WebContents,
   WindowOpenHandlerResponse
 } from 'electron'
-import type { NativeFloatingPanelBounds } from '../../lib/native-floating-panel'
+import type {
+  NativeFloatingPanelBounds,
+  NativeFloatingPanelOptions
+} from '../../lib/native-floating-panel'
 import { resolveBlankPreload } from './child-window-support'
 import { trustedIpcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -19,6 +22,10 @@ let handlersRegistered = false
 interface Panel {
   token: string
   bounds: NativeFloatingPanelBounds
+  /** Whether expanding this panel may activate its window (see
+   *  `NativeFloatingPanelOptions`). A passive panel carries a dropdown anchored
+   *  to a field in the app window and must never take the caret from it. */
+  takesFocus: boolean
   visible: boolean
   consumed: boolean
   expiresAt: number
@@ -53,6 +60,15 @@ function validateBounds(value: unknown): NativeFloatingPanelBounds {
   return { x, y, width, height }
 }
 
+function validateOptions(value: unknown): NativeFloatingPanelOptions {
+  if (value === undefined) return {}
+  if (typeof value !== 'object' || value === null) throw new Error('Invalid panel options')
+  const takesFocus = (value as Record<string, unknown>).takesFocus
+  if (takesFocus !== undefined && typeof takesFocus !== 'boolean')
+    throw new Error('Invalid panel focus option')
+  return takesFocus === undefined ? {} : { takesFocus }
+}
+
 function managerFor(event: IpcMainInvokeEvent): NativeFloatingPanelWindow {
   const manager = managers.get(event.sender)
   if (!manager || event.senderFrame !== event.sender.mainFrame) {
@@ -64,8 +80,10 @@ function managerFor(event: IpcMainInvokeEvent): NativeFloatingPanelWindow {
 function registerHandlers(): void {
   if (handlersRegistered) return
   handlersRegistered = true
-  trustedIpcMain.handle('app:prepareFloatingPanel', (event, id: unknown, bounds: unknown) =>
-    managerFor(event).prepare(validateId(id), validateBounds(bounds))
+  trustedIpcMain.handle(
+    'app:prepareFloatingPanel',
+    (event, id: unknown, bounds: unknown, options: unknown) =>
+      managerFor(event).prepare(validateId(id), validateBounds(bounds), validateOptions(options))
   )
   trustedIpcMain.handle(
     'app:updateFloatingPanel',
@@ -142,10 +160,15 @@ export class NativeFloatingPanelWindow {
     })
   }
 
-  prepare(id: string, bounds: NativeFloatingPanelBounds): string {
+  prepare(
+    id: string,
+    bounds: NativeFloatingPanelBounds,
+    options: NativeFloatingPanelOptions = {}
+  ): string {
     const existing = this.panels.get(id)
     if (existing && (existing.window || existing.expiresAt > Date.now())) {
       existing.bounds = bounds
+      existing.takesFocus = options.takesFocus ?? true
       return existing.token
     }
     if (existing) this.release(id)
@@ -153,6 +176,7 @@ export class NativeFloatingPanelWindow {
     const panel: Panel = {
       token: `cio-floating-${randomUUID()}`,
       bounds,
+      takesFocus: options.takesFocus ?? true,
       visible: false,
       consumed: false,
       expiresAt: Date.now() + PREPARATION_TTL_MS
@@ -192,6 +216,11 @@ export class NativeFloatingPanelWindow {
         hasShadow: false,
         skipTaskbar: true,
         roundedCorners: false,
+        // A passive host is a dropdown over a field the user is typing in: it may
+        // not become the key window, and its first click has to land without one
+        // (the row it presses is the pick).
+        focusable: panel.takesFocus,
+        acceptFirstMouse: true,
         ...this.screenBounds(panel.bounds),
         webPreferences: {
           // A blank preload explicitly replaces the parent's privileged one. An
@@ -203,7 +232,13 @@ export class NativeFloatingPanelWindow {
           nodeIntegration: false,
           nodeIntegrationInSubFrames: false,
           nodeIntegrationInWorker: false,
-          webSecurity: true
+          webSecurity: true,
+          // A passive panel is not the key window, which is exactly the state
+          // Chromium throttles: its frames and timers would slow down under the
+          // page it floats over, and a dropdown drawn there has to answer a hover
+          // and a press immediately. The window only exists while a panel is open,
+          // so the cost is bounded by its lifecycle.
+          backgroundThrottling: panel.takesFocus
         }
       }
     }
@@ -216,8 +251,10 @@ export class NativeFloatingPanelWindow {
     panel.bounds = bounds
     panel.visible = visible
     this.synchronize(panel)
-    // Activation belongs to expansion, not repeated bounds updates or parent events.
-    if (expanding && panel.window.isVisible()) {
+    // Activation belongs to expansion, not repeated bounds updates or parent
+    // events, and only a panel that owns the keyboard may take it: a passive
+    // dropdown would hand the caret away from the field it hangs under.
+    if (expanding && panel.takesFocus && panel.window.isVisible()) {
       panel.window.focus()
       panel.window.webContents.focus()
     }

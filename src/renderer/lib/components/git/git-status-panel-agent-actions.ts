@@ -18,7 +18,7 @@ import {
   type ThreadSettings
 } from '$shared/types'
 import { agentAssist, type AgentAssistPrepared } from '../assist/agent-assist-store.svelte'
-import type { PrCommentChatSubject } from './git-status-panel-prompts'
+import type { ConflictResolutionTarget, PrCommentChatSubject } from './git-status-panel-prompts'
 import { jobForCheck } from './pr-check-job'
 import {
   prCommentAssignmentPrompt,
@@ -345,11 +345,14 @@ export async function assignAgentToIssue(
  * working tree.
  *
  * The brief opens as a draft or is sent immediately, decided by the shared
- * runner; the panel's own conflict controls stay the place the merge is
- * completed from. The thread carries the scope the panel is attached to, so
- * conflicts that live in a managed worktree are resolved in that worktree. Main
- * derives the working root from the scope id and fails closed on an unhealthy
- * checkout, which is why the renderer never supplies a worktree path here.
+ * runner; the thread carries the scope the panel is attached to, so conflicts
+ * that live in a managed worktree are resolved in that worktree. Main derives
+ * the working root from the scope id and fails closed on an unhealthy checkout,
+ * which is why the renderer never supplies a worktree path here.
+ *
+ * `target` is what a pull request resolution is published to. It is null for a
+ * plain local merge or rebase, where nothing is published at all: that resolution
+ * ends committed and clean, and the push stays the user's own step.
  */
 async function prepareConflictHandoff(input: {
   projectId: string
@@ -359,6 +362,7 @@ async function prepareConflictHandoff(input: {
   title: string
   conflictedPaths: string[]
   pullRequest: PullRequestSummary | null
+  target: ConflictResolutionTarget | null
 }): Promise<AgentAssistPrepared> {
   const thread = await createHandoffThread({
     projectId: input.projectId,
@@ -372,7 +376,8 @@ async function prepareConflictHandoff(input: {
     text: conflictResolutionPrompt(
       input.conflictedPaths,
       input.pullRequest,
-      gitState.conflictState === 'rebase' ? 'rebase' : 'merge'
+      gitState.conflictState === 'rebase' ? 'rebase' : 'merge',
+      input.target
     )
   }
 }
@@ -403,10 +408,12 @@ export async function preparePrConflictSession(
  *
  * The confirmed handoff first prepares the working tree and then builds the
  * thread on exactly that checkout, so the agent can never resolve markers in a
- * different directory from the one the panel prepared. The agent never pushes;
- * the user finishes with Complete merge, which publishes and merges the pull
- * request. `onThread` receives the thread as soon
- * as it exists, so the panel that started this can reopen it while the agent
+ * different directory from the one the panel prepared. The agent then owns the
+ * whole rest of the flow: it writes the resolution commit, publishes it on its
+ * own branch through the app's Git channels, and opens the pull request that
+ * merges that branch into the conflicted branch, so the user is handed a link to
+ * merge rather than a half-finished checkout. `onThread` receives the thread as
+ * soon as it exists, so the panel that started this can reopen it while the agent
  * works and after it stops.
  */
 export async function resolvePrConflictsWithAgent(
@@ -421,8 +428,7 @@ export async function resolvePrConflictsWithAgent(
   agentAssist.open({
     projectId,
     title: `Resolve conflicts in PR #${pr.number} with agent`,
-    summary:
-      'The agent resolves the conflict markers in the prepared checkout, then stops for your review.',
+    summary: `The agent resolves the conflicts, pushes the resolution and opens a pull request into ${pr.headRef}.`,
     scopeBucketId,
     scopeLocked: true,
     onThread,
@@ -438,7 +444,8 @@ export async function resolvePrConflictsWithAgent(
         scopeBucketId,
         title: `Resolve conflicts in PR #${pr.number}`,
         conflictedPaths: [...gitState.conflicted],
-        pullRequest: pr
+        pullRequest: pr,
+        target: { scopeBucketId, remote, returnBranch }
       })
     }
   })
@@ -450,6 +457,9 @@ export async function resolvePrConflictsWithAgent(
  * this only has to hand the agent the brief. The thread opens in
  * `scopeBucketId`, which is the checkout the conflicted working tree belongs to,
  * and `onThread` reports it back so the panel can reopen it later.
+ *
+ * Nothing is published from here: the agent finishes the merge or rebase and
+ * commits it, and the push stays the user's own step on a branch they own.
  */
 export async function resolveCurrentConflictsWithAgent(
   projectId: string,
@@ -460,8 +470,7 @@ export async function resolveCurrentConflictsWithAgent(
   agentAssist.open({
     projectId,
     title: `Resolve conflicts in ${branchLabel} with agent`,
-    summary:
-      'The agent resolves the conflict markers in this checkout, then stops for your review.',
+    summary: 'The agent resolves the conflicts and commits the merge, then leaves the push to you.',
     scopeBucketId,
     scopeLocked: true,
     onThread,
@@ -473,7 +482,8 @@ export async function resolveCurrentConflictsWithAgent(
         scopeBucketId,
         title: `Resolve conflicts in ${branchLabel}`,
         conflictedPaths: [...gitState.conflicted],
-        pullRequest: null
+        pullRequest: null,
+        target: null
       })
   })
 }

@@ -13,6 +13,8 @@ import {
 } from '../../ipc/ipc-validation'
 import type { SendPromptOptions } from '../../drivers/driver.interface'
 import { isAssistantNextStepsPrompt } from '../../../lib/assistant-next-steps'
+import { DON_ASSISTANT_ID } from '../../../lib/types/assistant'
+import { DON_THREAD_ID } from '../../don/don-bootstrap'
 import { isContinuationRelayPrompt } from '../../../lib/pending-request'
 import { composeAssistantInstruction } from '../../../lib/assistant-run'
 import { isCioUtilityRequest } from '../../utilities/cio-utility-prompt'
@@ -799,7 +801,16 @@ export class ChatEngineTurnsSendPrompt {
     // Track the latest user expression for the memory proposal at turn end.
     // Recorded before the active-turn branch below so a message that steers a
     // running turn still carries its text and referenced selections.
-    if (origin === 'user' && !(targetThread && isAssistantSetupThread(targetThread))) {
+    //
+    // An app-owned turn is never mined: `presentation` means the visible message
+    // is the app's own status line and `text` is an instruction the app wrote,
+    // such as Don's opening interview. Reading that as the user's words is how a
+    // prompt line became a pending "standing preference" in their memory.
+    if (
+      origin === 'user' &&
+      presentation === undefined &&
+      !(targetThread && isAssistantSetupThread(targetThread))
+    ) {
       this.host.state.pendingMemoryDecisions.set(sessionId, {
         userMessage: text,
         settings,
@@ -1062,6 +1073,14 @@ export class ChatEngineTurnsSendPrompt {
       // thread, so the workstation tools are opened for it here rather than by
       // a tag, and the dispatched thread carries the project's own gate.
       assistantTaskTurn,
+      // Don is the only assistant that can see and hand work to the others, so the
+      // roster and delegation tools are opened on its own thread and nowhere else.
+      targetThread?.assistantId === DON_ASSISTANT_ID,
+      // The conversation a group chat started can speak back into it while it
+      // works, so a delegated run offers the group reply tool. The group's own
+      // thread does not: it is the host, and a message there mid-turn is exactly
+      // the insertion that confused its closing answer.
+      Boolean(targetThread?.dispatchOrigin?.initiatorThreadId === DON_THREAD_ID),
       // A real project thread may create its engineering artifacts through the
       // artifact tools. A chat, an assistant task, the inbox and an Assignment
       // worker are offered none of those routes.

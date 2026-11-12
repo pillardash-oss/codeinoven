@@ -1,4 +1,5 @@
 import { wireChatEngine } from './chat-engine/chat-engine-wiring'
+import type { DonRuntime } from './chat-engine-don'
 import { ChatEngineState } from './chat-engine/chat-engine-state'
 import type { ThreadTransferRelease } from './thread-transfer-service/thread-transfer-workers'
 import type { HandoffReleaseDetails } from '../system/instance-handoff-bus'
@@ -114,6 +115,7 @@ import type {
   BrainstormPrototypeFidelity,
   LocalRankingGradeProgress,
   LocalRankingGradeScope,
+  Assistant,
   AssistantAgents
 } from '../../lib/types'
 import { ModelPricingService } from '../providers/model-pricing-service'
@@ -125,6 +127,7 @@ import type {
   VirtualTaskOptions
 } from './chat-engine/chat-engine-types'
 import { buildChatEngineUnits } from './chat-engine/chat-engine-units'
+import type { DirectReplyInput } from './chat-engine/chat-engine-direct-reply'
 
 export {
   CITATION_SYSTEM_INSTRUCTION,
@@ -384,6 +387,8 @@ export class ChatEngine {
   public sessionRegistry = new Map<string, SessionInfo>()
 
   public pendingQuestions = new Map<string, PendingQuestionInfo>()
+  /** Settles a delegated teammate's question in the conversation that began the work. */
+  private delegatedQuestionHandler: ((pending: PendingQuestionInfo) => void) | null = null
 
   /** Max consecutive forced continuations before an Assignment stall surfaces. */
   static readonly MAX_ASSIGNMENT_CONTINUATION_STALLS = 2
@@ -409,6 +414,16 @@ export class ChatEngine {
   static readonly SILENT_WORK_GRACE_MS = 30 * 60 * 1000
 
   // 30 minutes
+
+  /** Total harness silence after which "it is still working" stops being a
+   *  reason to wait. A driver that reports itself busy keeps the turn alive for
+   *  as long as it keeps reporting *something*, but a half-open provider stream
+   *  leaves it busy with no output at all, and without this ceiling the watchdog
+   *  re-arms its grace window forever and parks the thread invisibly for hours.
+   *  Past the ceiling the silence is surfaced as a retryable failure instead. */
+  static readonly SILENT_STALL_CEILING_MS = 60 * 60 * 1000
+
+  // 60 minutes
 
   /**
    * How long the answer path waits for a session to finish its idle
@@ -474,6 +489,15 @@ export class ChatEngine {
 
   /** The workstation tools' implementation and the dispatches awaiting a report. */
   public orchestration: OrchestrationRuntime | null = null
+
+  /**
+   * Don's capability implementation and the handoffs awaiting an answer.
+   *
+   * Attached by the bootstrap, because it owns both the assistant directory and the
+   * config the user's name lives in, while the chat engine owns thread creation,
+   * prompt sending and the turn that settles a delegated run.
+   */
+  public don: DonRuntime | null = null
 
   /**
    * Read the HEAD commit of one checkout, for a run's starting point.
@@ -956,6 +980,15 @@ export class ChatEngine {
   }
   async restoreCoordinatorHandoffQueues(): Promise<void> {
     return this.units['assignment'].restoreCoordinatorHandoffQueues()
+  }
+  /**
+   * Answer one conversation from inside the conversation that collected it.
+   *
+   * The words are delivered to the thread that spoke them and recorded in the
+   * conversation the user typed them in, so a group chat reads as one inbox.
+   */
+  async sendDirectReply(input: DirectReplyInput): Promise<AgentMessage> {
+    return this.units['direct-reply'].send(input)
   }
   async sendPrompt(
     projectId: string,
@@ -1552,8 +1585,52 @@ export class ChatEngine {
   }): Promise<Thread> {
     return this.units['assistant-authoring'].createAssistantRunThread(input)
   }
+  /**
+   * Open the Getting started conversation of a teammate the orchestrator hired,
+   * with the request that caused the hire already in it.
+   */
+  async openRecruitedAssistantConversation(input: {
+    assistant: Assistant
+    purpose: string
+    request?: string
+    settings: ThreadSettings
+    /** The conversation that asked for the hire, when an assistant did. */
+    initiator?: { projectId: string; threadId: string }
+  }): Promise<Thread> {
+    return this.units['assistant-authoring'].openRecruitedAssistantConversation(input)
+  }
+  /**
+   * Install Don's runtime and hand its executor to the utility gateway, so a turn on
+   * Don's thread can read the assistant roster and delegate work.
+   */
+  attachDonRuntime(runtime: DonRuntime): void {
+    this.don = runtime
+    this.state.utilityOrchestration.setDonExecutor(runtime.executor)
+  }
+  /**
+   * Install the handler that settles a delegated teammate's question inside the
+   * conversation that started its work.
+   *
+   * Registered by the bootstrap, which owns the orchestrator's runtime: the engine
+   * only knows that a question it registered may belong to work an assistant
+   * dispatched, and hands it over rather than deciding what to do about it.
+   */
+  attachDelegatedQuestionHandler(handler: ((pending: PendingQuestionInfo) => void) | null): void {
+    this.delegatedQuestionHandler = handler
+  }
+
+  /** Offer a freshly registered question to that handler. Never throws. */
+  notifyDelegatedQuestion(pending: PendingQuestionInfo): void {
+    this.delegatedQuestionHandler?.(pending)
+  }
+
   attachOrchestrationRuntime(): void {
     return this.units['runtime-workflows'].attachOrchestrationRuntime()
+  }
+  attachOrchestrationAssistantDirectory(
+    directory: import('./chat-engine-orchestration').OrchestrationAssistantDirectory | null
+  ): void {
+    return this.units['runtime-workflows'].attachOrchestrationAssistantDirectory(directory)
   }
   attachHeartbeatScheduler(scheduler: HeartbeatSchedulerService): void {
     return this.units['runtime-connectivity'].attachHeartbeatScheduler(scheduler)

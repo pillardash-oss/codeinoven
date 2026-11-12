@@ -68,9 +68,28 @@ function formatAttributes(attributes: Record<string, string>): string {
  * descriptor is clipped to a fixed length: when it has to cut something, it is
  * the clipped opening markup that goes, never the URL, the scroll offset or the
  * viewport that make the comment about one exact render.
+ *
+ * The first line names what the reader was looking at, because a pick no longer
+ * comes from a design folder alone: the same authoring surface and inference
+ * apply to a page a thread opened from the project tree, a dev server or any
+ * site, and a descriptor that called every one of them a design would send the
+ * agent looking for a folder that does not exist.
  */
 export function designElementDescriptor(
   target: BrowserInspectorTarget,
+  design: BrowserDesignTab | null
+): string {
+  return elementDescriptor(target, design === null ? 'Page element' : 'Design element', design)
+}
+
+/** The descriptor for an element picked on a page that is not a design folder. */
+export function pageElementDescriptor(target: BrowserInspectorTarget): string {
+  return elementDescriptor(target, 'Page element', null)
+}
+
+function elementDescriptor(
+  target: BrowserInspectorTarget,
+  headline: string,
   design: BrowserDesignTab | null
 ): string {
   const short = describeInspectorTarget(target)
@@ -86,7 +105,7 @@ export function designElementDescriptor(
   const surface = target.surface
   const surfaceState = surface ? formatAttributes(surface.state) : ''
   const lines = [
-    `Design element: ${short}`,
+    `${headline}: ${short}`,
     // The screen an element lives on, because a canvas frames several of them
     // and a selector alone does not say which file to open to find it.
     target.frame ? `screen: ${target.frame}` : null,
@@ -193,5 +212,33 @@ export function designElementReference(
     ...(design ? { directory: design.directory } : {}),
     ...(entry ? { designEntry: entry } : {}),
     ...(design ? { designId: designPageIdentity(design.directory, entry) } : {})
+  }
+}
+
+/**
+ * Build the composer reference for one element picked on an ordinary page.
+ *
+ * Identical to a design pick except for what it names: there is no design folder
+ * to carry, so the reference keeps the page's own URL instead, which is what
+ * lets a comment reopen its page in the thread browser after the tab is gone.
+ * The reference id is the page marker's id, so the panel, the pin and the
+ * composer chip all name one element.
+ */
+export function pageElementReference(
+  id: string,
+  target: BrowserInspectorTarget,
+  tab: { id: string; url: string }
+): ResponseReferenceAnchor {
+  const url = target.page.url || tab.url
+  return {
+    id,
+    kind: 'page',
+    // Renumbered to `Page element N` with its position when it is stored.
+    label: 'Page element',
+    text: pageElementDescriptor(target),
+    selector: target.selector,
+    tabId: tab.id,
+    ...(target.frame ? { frame: target.frame } : {}),
+    ...(url ? { pageUrl: url } : {})
   }
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import type { AppPanelPortal } from '$lib/app-panel-portal'
-  import IdeEditorTools from './IdeEditorTools.svelte'
+  import type IdeEditorTools from './IdeEditorTools.svelte'
   import { onMount } from 'svelte'
 
   import {
@@ -44,6 +45,8 @@
     /** Mirror of the editor's undo/redo depth, so a toolbar can disable the
      *  actions that would do nothing. */
     onHistoryChange?: (state: FileEditorHistoryState) => void
+    /** A managed `cio://` reference in the buffer was opened with the modifier held. */
+    onSecretReference?: (name: string, secretRef: string) => void
   }
 
   let {
@@ -71,7 +74,8 @@
     onInput,
     onFindMatches = undefined,
     onReplaceDone = undefined,
-    onHistoryChange = undefined
+    onHistoryChange,
+    onSecretReference = undefined
   }: Props = $props()
 
   let ideTools = $state<IdeEditorTools>()
@@ -116,9 +120,15 @@
       isIdeEnabled: () => ideEnabled && Boolean(projectId),
       onIdeAction: (action, token) => ideTools?.handle(action, token) ?? false,
       getIdeActions: (token) => ideTools?.actions(token) ?? [],
+      getIdeCompletions: (query) => ideTools?.completions(query) ?? Promise.resolve([]),
+      resolveIdeCompletion: (item) =>
+        ideTools ? ideTools.resolveCompletion(item) : Promise.resolve(null),
       onDocChange: (text) => onInput({ currentTarget: { value: text } }),
       onFindMatches,
-      onHistoryChange: (history) => onHistoryChange?.(history)
+      onHistoryChange,
+      // A prop is read when the gesture happens, so the owner can re-target the
+      // panel without rebuilding the editor.
+      onSecretReference: (name, secretRef) => onSecretReference?.(name, secretRef)
     }).then((instance) => {
       if (cancelled) {
         instance.destroy()
@@ -205,15 +215,22 @@
 ></div>
 
 {#if projectId && ideEnabled}
-  <IdeEditorTools
-    bind:this={ideTools}
-    {projectId}
-    {scopeBucketId}
-    {threadId}
-    {path}
-    {value}
-    enabled={ideEnabled}
-    {projectName}
-    statusPortal={ideStatusPortal}
-  />
+  {#await loadCachedPanelModule('module:lib/components/files/IdeEditorTools.svelte', () => import('./IdeEditorTools.svelte')) then { default: IdeEditorTools }}
+    <IdeEditorTools
+      bind:this={ideTools}
+      {projectId}
+      {scopeBucketId}
+      {threadId}
+      {path}
+      {value}
+      enabled={ideEnabled}
+      {projectName}
+      statusPortal={ideStatusPortal}
+      onReplaceDocument={(text) => {
+        const current = controller
+        if (!current) return
+        current.replaceRange(0, current.getValue().length, text, 'ide.codeAction')
+      }}
+    />
+  {/await}
 {/if}

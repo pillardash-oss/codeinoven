@@ -14,10 +14,7 @@ import type {
   EngineeringToolContext,
   ScopeToolExecutor
 } from '../../utilities/utility-orchestration-service'
-import {
-  CREATE_SPEC_TOOL_NAME,
-  type EngineeringToolOperation
-} from '../../../lib/engineering-tools'
+import type { EngineeringToolOperation } from '../../../lib/engineering-tools'
 import type {
   AgentMessage,
   AgentPart,
@@ -403,18 +400,41 @@ export class ChatEngineUtilitiesTools {
 
     switch (operation) {
       case 'brainstorm': {
+        const hadWorkflow =
+          this.host.state.brainstormEngine.getWorkflowState(projectId, threadId) !== null
         this.host.state.brainstormEngine.ensureWorkflow(projectId, threadId)
-        this.enableEngineeringStage(projectId, threadId, 'brainstorm')
-        const document = await this.host.units['brainstorm'].createBrainstormSessionReport(
-          projectId,
-          threadId,
-          instructions
-        )
-        return {
-          artifact: 'brainstorm',
-          id: document.id,
-          version: document.version,
-          message: `The Brainstorm draft v${document.version} is ready for review.`
+        try {
+          // A draft is only creatable from the brainstorm entry choice. The UI
+          // sets it before it generates; a tool call had no such step, so every
+          // agent-created Brainstorm failed in `createDraft` with "A brainstorm
+          // draft requires the brainstorm entry choice" after the generation had
+          // already run.
+          this.host.state.brainstormEngine.chooseEntry(projectId, threadId, 'brainstorm')
+          // The stage starts only once a draft exists. Starting it before the
+          // generation is what left a thread stuck on a Brainstorm entry gate
+          // whenever the generator failed: the lifecycle stayed active, the
+          // workflow kept no entry choice, and every later message was swallowed
+          // as an answer to a card that was never produced.
+          const document = await this.host.units['brainstorm'].createBrainstormSessionReport(
+            projectId,
+            threadId,
+            instructions
+          )
+          this.enableEngineeringStage(projectId, threadId, 'brainstorm')
+          return {
+            artifact: 'brainstorm',
+            id: document.id,
+            version: document.version,
+            message: `The Brainstorm draft v${document.version} is ready for review.`
+          }
+        } catch (error) {
+          // A generation that never produced a draft must not leave the entry
+          // card behind. The workflow is the card: a `choice_pending` row with no
+          // entry choice renders an entry card that waits on the user while the
+          // thread row settles `completed`, so the notification reports "done"
+          // for a conversation that is visibly asking for a choice.
+          if (!hadWorkflow) this.host.state.brainstormEngine.resetWorkflow(projectId, threadId)
+          throw error
         }
       }
       case 'prd': {
@@ -439,7 +459,8 @@ export class ChatEngineUtilitiesTools {
         if (workflow.stage !== 'drafting') {
           throw new Error('The PRD workflow is not ready for a new draft.')
         }
-        this.enableEngineeringStage(projectId, threadId, 'prd')
+        // Only a produced draft may park the thread on the PRD stage; a failed
+        // generation must leave the lifecycle where it found it.
         const document = await this.host.generatePrd(
           projectId,
           threadId,
@@ -449,6 +470,7 @@ export class ChatEngineUtilitiesTools {
           [],
           createMessageId()
         )
+        this.enableEngineeringStage(projectId, threadId, 'prd')
         this.host.broadcast({
           type: 'prd.ready',
           sessionId: context.sessionId,
@@ -520,13 +542,6 @@ export class ChatEngineUtilitiesTools {
         }
       }
       case 'achievement': {
-        const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, threadId)
-        if (!activeSpec || activeSpec.status !== 'approved') {
-          throw new Error(
-            'Achievement audits against an approved specification. Create the specification with ' +
-              `${CREATE_SPEC_TOOL_NAME}, get it approved, then call this tool again.`
-          )
-        }
         if (
           this.host.state.engineeringLifecycleEngine.get(projectId, threadId)?.activeStage ===
           'achievement'
@@ -536,6 +551,18 @@ export class ChatEngineUtilitiesTools {
             message: 'Achievement is already running for this thread.'
           }
         }
+        // An approved specification is the strongest contract an audit can judge,
+        // so it wins whenever the thread has one. Without it Achievement still
+        // runs: the goal is captured from the tool call or the conversation and
+        // the audit judges the work against that, exactly as an Assignment
+        // decomposes the conversation when no specification exists. Refusing
+        // here is what stopped an agent that was told to keep going until the
+        // goal was reached.
+        const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, threadId)
+        const approvedSpec = activeSpec?.status === 'approved' ? activeSpec : null
+        const goal = approvedSpec
+          ? undefined
+          : await this.resolveAchievementGoal(projectId, threadId, thread.title, instructions)
         this.enableEngineeringStage(projectId, threadId, 'achievement')
         // Achievement owns the audit/rework loop, so the thread keeps running in
         // loop mode until the goal is verified.
@@ -544,15 +571,74 @@ export class ChatEngineUtilitiesTools {
           assignmentMode: true,
           loopMode: true
         })
+        if (goal) {
+          await this.host.threadManager.updateThread(projectId, threadId, {
+            achievementGoal: goal
+          })
+        }
         return {
           artifact: 'achievement',
-          specId: activeSpec.id,
-          specVersion: activeSpec.version,
-          message:
-            'Achievement is enabled. The thread implements, audits and reworks until the approved specification is verified.'
+          ...(approvedSpec
+            ? { specId: approvedSpec.id, specVersion: approvedSpec.version }
+            : goal
+              ? { goal }
+              : {}),
+          message: approvedSpec
+            ? 'Achievement is enabled. The thread implements, audits and reworks until the approved specification is verified.'
+            : goal
+              ? `Achievement is enabled against this goal, taken from the request and this conversation:\n\n${goal}\n\nThe thread implements, audits and reworks until that goal is verified.`
+              : 'Achievement is enabled against the goal this conversation states. The thread implements, audits and reworks until the independent audit verifies it.'
         }
       }
     }
+  }
+
+  /**
+   * The goal an Achievement run without an approved specification works toward.
+   *
+   * The user's own words are the goal, so nothing is invented: the explicit
+   * request made through the achievement tool wins, and otherwise the goal comes
+   * from what this thread already says, its title and the latest request in it.
+   * The audit also reads the whole transcript, so this is the goal statement the
+   * interface can show, not the only thing the auditor sees.
+   */
+  private async resolveAchievementGoal(
+    projectId: string,
+    threadId: string,
+    title: string,
+    instructions: string
+  ): Promise<string> {
+    if (instructions) return instructions
+    const parts: string[] = []
+    const trimmedTitle = title.trim()
+    if (trimmedTitle) parts.push(`Thread: ${trimmedTitle}`)
+    const messages = await this.host.loadMessages(projectId, threadId)
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message?.role !== 'user') continue
+      const text = this.requestText(message).trim()
+      if (!text) continue
+      parts.push(`Latest request from the user:\n${text}`)
+      break
+    }
+    return parts.join('\n\n')
+  }
+
+  /** Plain text of a user message, presentation first and durable parts after. */
+  private requestText(message: AgentMessage): string {
+    const presentation = message.parts.find(
+      (part): part is Extract<AgentPart, { type: 'user-presentation' }> =>
+        part.type === 'user-presentation'
+    )
+    if (presentation) {
+      return [presentation.presentation.action, presentation.presentation.body]
+        .filter((value): value is string => Boolean(value))
+        .join('\n\n')
+    }
+    return message.parts
+      .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
   }
 
   /**
@@ -792,18 +878,20 @@ export class ChatEngineUtilitiesTools {
           // Tool provenance enriches the card when available. A measured file
           // change survives even when the tool's write syntax is opaque.
           const sources = session.changeSources?.get(path) ?? []
-          session.changeSources?.set(
-            path,
-            sources.map((source) =>
-              toolIds.has(source.toolPartId)
-                ? {
-                    ...source,
-                    verification: 'shell-window-and-content',
-                    window: { startedAt: before.capturedAt, endedAt: after.capturedAt }
-                  }
-                : source
-            )
+          const enriched = sources.map((source) =>
+            toolIds.has(source.toolPartId)
+              ? {
+                  ...source,
+                  verification: 'shell-window-and-content' as const,
+                  window: { startedAt: before.capturedAt, endedAt: after.capturedAt }
+                }
+              : source
           )
+          // A path with no source at all is a bare window observation: the file
+          // moved while the command ran, but nothing proves this turn wrote it.
+          // It still belongs in `changedPaths`; storing an empty source list
+          // instead made the checkpoint read the key as write evidence.
+          if (enriched.length > 0) session.changeSources?.set(path, enriched)
           session.changedPaths.add(path)
         }
       } catch (error) {

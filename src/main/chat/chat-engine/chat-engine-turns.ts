@@ -43,6 +43,7 @@ import {
 } from './chat-engine-changes'
 import { turnStreamPath } from './chat-engine-pure'
 import { toolActionLabelForPart } from '../../../lib/tool-action-label'
+import { displayDeviceAttention } from '../../display/display-device-attention'
 import { ChatEngine, isTurnBoundaryPrompt } from '../chat-engine'
 
 /** ChatEngine turns: one concern, moved verbatim from the composition root. */
@@ -540,6 +541,10 @@ export class ChatEngineTurns {
         event.part,
         eventOwner.projectPath
       )
+      // An agent that goes straight to a device with adb or simctl never calls
+      // the mirroring tool, so the panel follows the device command it did run
+      // instead of waiting for an announcement that will not come.
+      displayDeviceAttention.noteToolCall(eventOwner.threadId, event.part.state.input)
     }
     if (eventOwner) {
       this.host.state.projectIdleSince.delete(eventOwner.projectId)
@@ -555,6 +560,11 @@ export class ChatEngineTurns {
         event.type !== 'session.idle' &&
         event.type !== 'session.error'
       ) {
+        // Recorded before the timer reset so the watchdog can tell a session
+        // that is genuinely streaming from one that only still *claims* to be
+        // busy: a stream that stops mid-tool leaves the tool open forever, and
+        // open work with nothing behind it must not buy unlimited silence.
+        eventOwner.lastWorkEventAt = Date.now()
         this.host.units['turns-sessions'].resetSessionWatchdog(event.sessionId)
       }
       this.host.units['brainstorm'].forwardBrainstormTrace(eventOwner, event)

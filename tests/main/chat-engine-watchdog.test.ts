@@ -136,3 +136,63 @@ describe('ChatEngine watchdog   silent-session liveness probe', () => {
     expect(issue?.message).toBe('rate limit exceeded')
   })
 })
+
+describe('ChatEngine watchdog   silent stall ceiling', () => {
+  // A half-open provider stream leaves the harness busy with nothing behind it:
+  // the in-flight tool it was running never reports completion, so the
+  // in-flight exemption re-arms itself forever. These lock in the ceiling that
+  // turns that silence into a visible, retryable failure.
+
+  function turnsSessionsOf(engine: ChatEngine): Record<string, unknown> {
+    const units = (engine as unknown as Record<string, unknown>)['units'] as Record<
+      string,
+      Record<string, unknown>
+    >
+    return units['turns-sessions']
+  }
+
+  type StalledInfo = { driverId: string; projectId: string; threadId: string; projectPath: string }
+
+  it('anchors the silence clock on first use and measures from the last harness event', async () => {
+    const engine = await makeEngine()
+    const unit = turnsSessionsOf(engine)
+    const silentElapsedMs = unit['silentStallElapsedMs'] as (info: StalledInfo) => number
+    const info: StalledInfo & { lastWorkEventAt?: number } = { ...baseInfo }
+
+    // No event has ever been seen: the clock starts here, never at process boot.
+    expect(silentElapsedMs.call(unit, info)).toBe(0)
+    expect(info.lastWorkEventAt).toBeGreaterThan(0)
+
+    info.lastWorkEventAt = Date.now() - 90 * 60 * 1000
+    expect(silentElapsedMs.call(unit, info)).toBeGreaterThanOrEqual(90 * 60 * 1000)
+  })
+
+  it('surfaces a stalled turn as a retryable failure instead of preserving it', async () => {
+    const engine = await makeEngine()
+    const unit = turnsSessionsOf(engine)
+    const seen: Array<{ sessionId: string; issue: Record<string, unknown> }> = []
+    unit['failWatchedSession'] = async (
+      _info: StalledInfo,
+      sessionId: string,
+      issue: Record<string, unknown>
+    ): Promise<void> => {
+      seen.push({ sessionId, issue })
+    }
+
+    const failStalledSession = unit['failStalledSession'] as (
+      info: StalledInfo,
+      sessionId: string,
+      silentMs: number
+    ) => Promise<void>
+    await failStalledSession.call(unit, baseInfo, 'sess-1', 137 * 60 * 1000)
+
+    expect(seen).toHaveLength(1)
+    expect(seen[0]?.sessionId).toBe('sess-1')
+    expect(seen[0]?.issue).toMatchObject({ kind: 'network', retryable: true, harnessId: 'pi' })
+    expect(String(seen[0]?.issue.message)).toContain('137 minutes')
+  })
+
+  it('keeps the ceiling at least one full grace window', () => {
+    expect(ChatEngine.SILENT_STALL_CEILING_MS).toBeGreaterThan(ChatEngine.SILENT_WORK_GRACE_MS)
+  })
+})

@@ -261,6 +261,11 @@ async function buildStagePlan(options: StageOptions, target: SmokeTarget): Promi
   // vitest with the exact CI environment keeps the local mirror faithful, so a
   // green local test stage means the CI suite job's tests see the same behavior.
   stages.push(
+    // The 2000-line source ceiling runs first: it costs ~0.1s and a file over the
+    // ceiling fails the release gate, so there is no reason to spend a type
+    // check on it first. Mirrors the `suite` job's "Source file size ceiling"
+    // step and the same check inside `verify:release`.
+    await stage('file-size', 'Source file size ceiling', ['bun', 'run', 'check:file-size']),
     await stage('check', 'Type check', ['bun', 'run', 'check']),
     await stage('lint', 'Lint', ['bun', 'run', 'lint', '.']),
     await stage('test', 'Tests', ['bun', 'run', 'test'], undefined, { CI: 'true' }),

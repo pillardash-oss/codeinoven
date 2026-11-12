@@ -69,7 +69,16 @@ interface PtySession {
 /** How often the watchdog sweeps for idle sessions. */
 const IDLE_WATCHDOG_INTERVAL_MS = 5_000
 
-const ALLOWED_COMMANDS = new Set([
+/**
+ * The commands a renderer may run in their own PTY, before the ACP agents the user
+ * configured are considered.
+ *
+ * The Local AI page launches the server of each engine it manages (`llama-server`
+ * for GGUF and `mlx_lm.server` for MLX) through the same PTY, and runs Homebrew for
+ * their install and update steps, which is why those three are here. Nothing else
+ * joins this set, so a renderer still cannot ask for an arbitrary process.
+ */
+export const ALLOWED_PTY_COMMANDS: ReadonlySet<string> = new Set([
   'opencode',
   'claude',
   'codex',
@@ -82,9 +91,10 @@ const ALLOWED_COMMANDS = new Set([
   'brew',
   'winget',
   'rm',
-  // Llama.cpp: the server binary itself, launched from the Llama.cpp settings
-  // page. Homebrew is already allowed above for the install and update steps.
+  // The Local AI page's own servers. Homebrew is already allowed above for the
+  // install and update steps.
   'llama-server',
+  'mlx_lm.server',
   'git',
   'wsl',
   'sh',
@@ -93,7 +103,7 @@ const ALLOWED_COMMANDS = new Set([
 ])
 
 /** Environment a renderer may hand a command, never arbitrary values: account
- *  directories follow the account a session runs as, and the Llama.cpp page
+ *  directories follow the account a session runs as, and the Local AI page
  *  needs Homebrew to run a job without waiting for a keypress (`HOMEBREW_NO_ASK`). */
 const COMMAND_ENVIRONMENT_KEYS = new Set([
   'PI_CODING_AGENT_DIR',
@@ -113,6 +123,15 @@ function normalizedCommandName(command: string): string {
     .toLowerCase()
 }
 
+/**
+ * Whether a command may run in its own PTY without consulting the user's ACP
+ * agents. Exported so the Local AI engines' names can be checked in one place,
+ * which is what a missing entry here looks like from the outside.
+ */
+export function isAllowedPtyCommand(command: string): boolean {
+  return ALLOWED_PTY_COMMANDS.has(normalizedCommandName(command))
+}
+
 function safeCommandEnvironment(environment?: Record<string, string>): Record<string, string> {
   if (!environment) return {}
   return Object.fromEntries(
@@ -125,6 +144,31 @@ function safeCommandEnvironment(environment?: Record<string, string>): Record<st
         !value.includes('\0')
     )
   )
+}
+
+/**
+ * Resolve the project's own ENV secrets for one process the app is about to start.
+ *
+ * The values belong to that child and nothing else: they are merged into its
+ * environment after the shell environment, so a project may override what the
+ * user's shell had, and they never reach the app, the agent harness, or an agent's
+ * tool calls.
+ */
+export interface PtyProjectEnvironmentHook {
+  (context: {
+    projectId: string
+    threadId: string
+    cwd: string
+    /** Project-relative directory the session starts in, '' for the project root. */
+    directory: string
+    /**
+     * The action script about to run, when this is an action.
+     *
+     * An action starts at the project root but usually moves into a package, so the
+     * resolver reads the script to know which directory groups apply.
+     */
+    script?: string
+  }): Promise<Record<string, string>>
 }
 
 /** Called when the user types into a project terminal, so concurrent agent
@@ -264,7 +308,8 @@ export class PtyService {
     private readonly trackProcess?: (process: PtyTrackedProcess) => void,
     private readonly onUserInput?: PtyUserInputHook,
     private readonly remoteLaunch?: PtyRemoteLaunchHook,
-    private readonly ovenShellLaunch?: PtyOvenShellLaunchHook
+    private readonly ovenShellLaunch?: PtyOvenShellLaunchHook,
+    private readonly projectEnvironment?: PtyProjectEnvironmentHook
   ) {
     this.projectManager = new ProjectManager(_database)
     this.scopeRoots = scopeResolver ? scopeRootProvider(scopeResolver) : undefined
@@ -496,6 +541,28 @@ export class PtyService {
     return this.reuseLiveSession(id)
   }
 
+  /**
+   * Project ENV values for one process, or none.
+   *
+   * A terminal must open even when the env store is unreadable, so a failure here
+   * is reported and the session starts with the plain shell environment instead.
+   */
+  private async resolveProjectEnvironment(
+    projectId: string,
+    threadId: string,
+    cwd: string,
+    directory: string,
+    script?: string
+  ): Promise<Record<string, string>> {
+    if (!this.projectEnvironment) return {}
+    try {
+      return await this.projectEnvironment({ projectId, threadId, cwd, directory, script })
+    } catch (error: unknown) {
+      Logger.error('Project env could not be applied to this process:', error)
+      return {}
+    }
+  }
+
   private async createSession(
     id: string,
     projectId: string,
@@ -544,8 +611,14 @@ export class PtyService {
     const shell = await resolveShell()
     const createdAt = Date.now()
 
-    const env = await buildShellEnv()
+    const projectEnv = await this.resolveProjectEnvironment(
+      projectId,
+      threadId,
+      cwd,
+      directory ?? ''
+    )
     ensureActive()
+    const env = { ...(await buildShellEnv()), ...projectEnv }
     const proc = pty.spawn(shell, resolveShellArgs(shell), {
       name: 'xterm-256color',
       cols,
@@ -749,7 +822,7 @@ export class PtyService {
    * joins this set, so a renderer still cannot ask for an arbitrary process.
    */
   private async isAllowedHarnessCommand(name: string): Promise<boolean> {
-    if (ALLOWED_COMMANDS.has(name)) return true
+    if (ALLOWED_PTY_COMMANDS.has(name)) return true
     await ensureAcpAgentsLoaded().catch(() => undefined)
     return currentAcpAgents().some((agent) => {
       if (acpCommandName(agent.command) === name) return true
@@ -996,7 +1069,8 @@ export class PtyService {
     await this.prepareWindowsShell()
     const shell = await resolveShell()
     const createdAt = Date.now()
-    const env = { ...(await buildShellEnv()), ...safeVariables }
+    const projectEnv = await this.resolveProjectEnvironment(projectId, threadId, cwd, '', script)
+    const env = { ...(await buildShellEnv()), ...safeVariables, ...projectEnv }
     ensureActive()
     // An action runs its lines in sequence with no user watching keystrokes, so
     // a failing step must end the run instead of letting the next line execute

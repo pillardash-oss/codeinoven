@@ -16,7 +16,10 @@ import {
   mapCodexRateLimits,
   mapCodexUsage
 } from '../../../src/main/drivers/codex-driver'
-import { CODEX_QUESTION_INSTRUCTION } from '../../../src/main/drivers/codex/codex-tools'
+import {
+  CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION,
+  CODEX_QUESTION_INSTRUCTION
+} from '../../../src/main/drivers/codex/codex-tools'
 import { InactiveQuestionTurnError } from '../../../src/main/drivers/driver.interface'
 
 const spawnMock = vi.hoisted(() => vi.fn())
@@ -282,7 +285,7 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
       expect.objectContaining({
         method: 'thread/start',
         params: expect.objectContaining({
-          developerInstructions: `Internal memory contract\n\n${CODEX_QUESTION_INSTRUCTION}`,
+          developerInstructions: `Internal memory contract\n\n${CODEX_QUESTION_INSTRUCTION}\n\n${CODEX_AUTO_REVIEW_APPROVAL_INSTRUCTION}`,
           dynamicTools: expect.arrayContaining([
             expect.objectContaining({ name: 'cio_ask_user' }),
             ...dynamicTools
@@ -1177,6 +1180,55 @@ describe.skipIf(process.platform === 'win32')('CodexDriver', () => {
         { step: 'Inspect the driver', status: 'completed' },
         { step: 'Apply the fix', status: 'inProgress' }
       ]
+    ])
+  })
+
+  it('publishes the failure text of a failed Codex tool call', async () => {
+    const driver = new CodexDriver(await storage())
+    const child = new FakeChild()
+    spawnMock.mockReturnValue(child as unknown as ChildProcess)
+    const sessionId = await driver.createSession('/project', 'Codex')
+    await driver.sendPrompt('/project', { sessionId, settings, text: 'go', attachments: [] })
+    // A dynamic tool call (the app's own tools) reports a boolean verdict and
+    // carries its text in `contentItems`.
+    child.emitPayload({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'tool-1',
+          type: 'dynamicToolCall',
+          tool: 'cio_util_find',
+          success: false,
+          contentItems: [{ type: 'inputText', text: 'No search index is available' }]
+        }
+      }
+    })
+    // An MCP call reports `failed` plus an `error` object instead.
+    child.emitPayload({
+      method: 'item/completed',
+      params: {
+        item: {
+          id: 'tool-2',
+          type: 'mcpToolCall',
+          server: 'gateway',
+          tool: 'cio_util_find',
+          status: 'failed',
+          error: { message: 'gateway rejected the query' }
+        }
+      }
+    })
+    child.emitPayload({
+      method: 'turn/completed',
+      params: { turn: { id: 'turn-1', status: 'completed' } }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    const messages = await driver.loadMessages('/project', sessionId)
+    const toolStates = messages.flatMap((message) =>
+      message.parts.flatMap((part) => (part.type === 'tool' ? [part.state] : []))
+    )
+    expect(toolStates).toEqual([
+      expect.objectContaining({ status: 'error', error: 'No search index is available' }),
+      expect.objectContaining({ status: 'error', error: 'gateway rejected the query' })
     ])
   })
 

@@ -2,8 +2,12 @@ import { userSuppliedPaths } from '../user-supplied-paths'
 import { Logger } from '../../system/logger'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import { instanceRegistry } from '../../system/instance-registry'
-import { createOrchestrationRuntime } from '../chat-engine-orchestration'
+import {
+  createOrchestrationRuntime,
+  type OrchestrationAssistantDirectory
+} from '../chat-engine-orchestration'
 import { LOCAL_OVEN_ID } from '../../../lib/ovens'
+import { mapInBatches } from '../../../lib/bounded-work'
 import { OvenRegistry } from '../../ovens/oven-registry'
 import { OvenService } from '../../ovens/oven-service'
 import { OvenHarnessService } from '../../ovens/oven-harness-service'
@@ -209,7 +213,45 @@ export class ChatEngineRuntimeWorkflows {
         }
       },
       listModelProfiles: async () => (await this.host.storage.getConfig()).modelProfiles ?? [],
+      getConfig: () => this.host.storage.getConfig(),
+      // Subscription capacity is provider-level account state, so it is probed
+      // only for the accounts the target list is about to show, three at a
+      // time. A probe that fails drops out: missing capacity is never an error.
+      accountUsage: async (targets) => {
+        if (targets.length === 0) return []
+        const providersCatalog = this.host.units['providers-catalog']
+        const probed = await mapInBatches(targets, 3, async (target) => {
+          try {
+            return await providersCatalog.refreshAccountUsage({
+              harnessId: target.harnessId,
+              providerId: target.providerId,
+              accountId: target.accountId
+            })
+          } catch (error) {
+            Logger.dev('Account usage probe failed for a dispatch target:', error)
+            return []
+          }
+        })
+        return probed.flat()
+      },
       getThread: (projectId, threadId) => this.host.threadManager.getThread(projectId, threadId),
+      getThreadById: (threadId) => this.host.threadManager.getThreadById(threadId),
+      listDispatchedThreads: (initiatorProjectId, initiatorThreadId) =>
+        dispatchRepo.listByInitiator(initiatorProjectId, initiatorThreadId),
+      updateThreadSettings: (projectId, threadId, settings) =>
+        this.host.threadManager.updateSettings(projectId, threadId, settings),
+      clearStoppedByUser: (projectId, threadId) =>
+        this.host.threadManager.clearStoppedByUser(projectId, threadId),
+      pendingRequestKind: (threadId) => {
+        for (const pending of this.host.pendingQuestions.values()) {
+          if (pending.request.threadId !== threadId) continue
+          return pending.settleSecret ? 'secret' : 'question'
+        }
+        for (const pending of this.host.state.pendingPermissions.values()) {
+          if (pending.session.threadId === threadId) return 'permission'
+        }
+        return null
+      },
       latestAssistantText: async (projectId, threadId) => {
         const messages = await this.host.threadManager.loadMessages(projectId, threadId)
         for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -221,6 +263,23 @@ export class ChatEngineRuntimeWorkflows {
         return null
       },
       createThread: (input) => this.host.units['threads-create'].createOrchestrationThread(input),
+      // The decision a blocked thread is waiting for settles through the same
+      // APIs its own card uses, so the dispatcher never gets a second, weaker way
+      // to answer work it did not run.
+      answerQuestion: (input) =>
+        this.host.answerQuestion(input.projectId, input.threadId, input.requestId, input.answers),
+      answerSecret: (input) =>
+        this.host.answerSecret(input.projectId, input.threadId, input.requestId, input.secrets),
+      replyPermission: (input) =>
+        this.host.replyPermission(input.projectId, input.requestId, input.reply),
+      // A secret the dispatcher collected is read from the vault by the name it
+      // was stored under, so the value never enters a conversation to reach the
+      // thread that asked for it.
+      resolveThreadSecret: async (threadId, environmentVariable) => {
+        const service = this.host.state.agentSecrets
+        if (!service) return null
+        return service.resolveThreadSecret(threadId, environmentVariable)
+      },
       recordDispatch: async (input) => {
         await dispatchRepo.record(input)
         // The initiator's row wears the orchestrator mark, so the count it reads
@@ -252,6 +311,17 @@ export class ChatEngineRuntimeWorkflows {
       }
     })
     this.host.state.utilityOrchestration.setOrchestrationExecutor(this.host.orchestration.executor)
+  }
+
+  /**
+   * Give the orchestration tools the assistant directory they dispatch to.
+   *
+   * The orchestration runtime is created before the assistant manager is
+   * attached on the same boot, so the directory arrives here rather than as a
+   * constructor argument. A dispatch with no assistantId never reads it.
+   */
+  attachOrchestrationAssistantDirectory(directory: OrchestrationAssistantDirectory | null): void {
+    this.host.orchestration?.setAssistantDirectory(directory)
   }
 
   /**

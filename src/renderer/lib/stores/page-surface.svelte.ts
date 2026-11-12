@@ -19,7 +19,7 @@
  */
 
 import { SvelteSet } from 'svelte/reactivity'
-import { isOverlayOpen } from '../overlay-close.svelte'
+import { isOverlayOpen, topOverlayRecordingTargets } from '../overlay-close.svelte'
 import { isSettingsView, rendererRecovery } from './renderer-recovery.svelte'
 
 const workspaceCovered = $derived(
@@ -48,6 +48,18 @@ export function isWorkspaceCovered(): boolean {
 export function isEscapeClaimed(event?: KeyboardEvent): boolean {
   if (event?.defaultPrevented) return true
   return workspaceCovered || isOverlayOpen()
+}
+
+/**
+ * Whether the surface that owns Escape right now is the one a recording lives in.
+ *
+ * A recorder is stopped by Escape even though an overlay claims the key, when
+ * that overlay is the panel holding the recording: the key meant "stop the
+ * microphone", not "close this panel". A panel opened above it names no
+ * recording, so the claim stays its own.
+ */
+export function ownsEscapeForRecording(targetId: string): boolean {
+  return topOverlayRecordingTargets().includes(targetId)
 }
 
 /**

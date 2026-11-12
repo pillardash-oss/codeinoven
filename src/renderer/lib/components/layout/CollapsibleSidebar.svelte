@@ -267,7 +267,7 @@
     </div>
 
     {#if footer}
-      <div class="shrink-0 border-t">
+      <div class="shrink-0">
         {@render footer()}
       </div>
     {/if}
@@ -351,7 +351,7 @@
       </div>
 
       {#if footer}
-        <div class="shrink-0 border-t">
+        <div class="shrink-0">
           {@render footer()}
         </div>
       {/if}

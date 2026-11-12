@@ -22,6 +22,8 @@
   import PermissionRequestCard from '../PermissionRequestCard.svelte'
   import ImageDescriptorErrorCard from '../ImageDescriptorErrorCard.svelte'
   import AgentProviderStatusCard from '../AgentProviderStatusCard.svelte'
+  import ScopeHealthNotice from '../../scope/ScopeHealthNotice.svelte'
+  import { isScopeRootFailure } from '$shared/provider-issue'
   import AiAccountSetupCard from '../AiAccountSetupCard.svelte'
   import SpecReadyCard from '../SpecReadyCard.svelte'
   import BrainstormEntryChoiceCard from '../BrainstormEntryChoiceCard.svelte'
@@ -158,62 +160,77 @@
     <!-- Provider status   between messages and composer, always visible. A
          matching bubbled worker error is replaced by the attributed card above. -->
     {#if board.submitBrainstormDecision.visibleProviderStatus && !board.submitBrainstormDecision.coordinatorErrorMatchesAssignmentWorker && !board.currentWorkingTraceAttribution.independentAuditorChild}
+      {@const brokenScopeId = isScopeRootFailure(
+        board.submitBrainstormDecision.visibleProviderStatus.issue.message
+      )
+        ? board.handleAgentEvent.thread.scopeBucketId
+        : undefined}
       <div class="conversation-gutter shrink-0 px-6">
         <div class="mx-auto max-w-3xl">
-          <AgentProviderStatusCard
-            status={board.submitBrainstormDecision.visibleProviderStatus}
-            stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('provider')}
-            joinsBelow
-            threadId={board.handleAgentEvent.thread.id}
-            providerName={board.submitBrainstormDecision.statusCardProviderName}
-            settings={board.composerScope.statusCardSettings ??
-              (board.props.chatMode
-                ? {
-                    ...board.loadOlderMessages.settings,
-                    assignmentMode: false,
-                    loopMode: false
-                  }
-                : board.loadOlderMessages.settings)}
-            providers={board.currentWorkingTraceAttribution.providers}
-            projectId={board.handleAgentEvent.thread.projectId}
-            favoriteModels={rendererRecovery.modelFavoritesFor(board.sources.modelScope())}
-            recentModels={rendererRecovery.modelRecentsFor(board.sources.modelScope())}
-            onRemoveRecent={(key) =>
-              rendererRecovery.removeModelRecentFor(board.sources.modelScope(), key)}
-            onModelChange={board.currentWorkingTraceAttribution.changeThreadModel}
-            onToggleFavorite={(providerId, modelId, harnessId) =>
-              rendererRecovery.toggleModelFavoriteFor(
-                board.sources.modelScope(),
-                modelKey(harnessId, providerId, modelId)
-              )}
-            onReorderFavorite={(draggedKey, targetKey, position) =>
-              rendererRecovery.reorderModelFavoriteFor(
-                board.sources.modelScope(),
-                draggedKey,
-                targetKey,
-                position
-              )}
-            onStop={board.abortRun.abortRun}
-            onRetry={board.abortRun.retryConnection}
-            retrying={board.abortRun.providerRetrying}
-            onSignedIn={board.submitBrainstormDecision.proactiveAuthVisible
-              ? () => void board.studioTemporaryChatContext.refreshAfterProactiveSignIn()
-              : undefined}
-            autoRetryEnabled={board.unmirroredTraceStartTime.autoRetryAfterReset}
-            onDismiss={() => {
-              board.handleAgentEvent.errorMessage = ''
-              board.handleAgentEvent.providerStatus = null
-              board.submitBrainstormDecision.proactiveAuthIssue = null
-              if (board.props.controller) {
-                // Controller conversations own their error state in the
-                // controller's store key   clearing the thread-scoped
-                // backend error would leave the card stuck on screen.
-                board.props.controller.clearStatus()
-              } else {
-                void board.composerScope.dismissSessionError()
-              }
-            }}
-          />
+          {#if brokenScopeId}
+            <!-- A missing checkout is not a provider failure, so it gets the
+                 worktree's own strip with the repair as its action. -->
+            <ScopeHealthNotice
+              projectId={board.handleAgentEvent.thread.projectId}
+              scopeBucketId={brokenScopeId}
+              variant="inline"
+            />
+          {:else}
+            <AgentProviderStatusCard
+              status={board.submitBrainstormDecision.visibleProviderStatus}
+              stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('provider')}
+              joinsBelow
+              threadId={board.handleAgentEvent.thread.id}
+              providerName={board.submitBrainstormDecision.statusCardProviderName}
+              settings={board.composerScope.statusCardSettings ??
+                (board.props.chatMode
+                  ? {
+                      ...board.loadOlderMessages.settings,
+                      assignmentMode: false,
+                      loopMode: false
+                    }
+                  : board.loadOlderMessages.settings)}
+              providers={board.currentWorkingTraceAttribution.providers}
+              projectId={board.handleAgentEvent.thread.projectId}
+              favoriteModels={rendererRecovery.modelFavoritesFor(board.sources.modelScope())}
+              recentModels={rendererRecovery.modelRecentsFor(board.sources.modelScope())}
+              onRemoveRecent={(key) =>
+                rendererRecovery.removeModelRecentFor(board.sources.modelScope(), key)}
+              onModelChange={board.currentWorkingTraceAttribution.changeThreadModel}
+              onToggleFavorite={(providerId, modelId, harnessId) =>
+                rendererRecovery.toggleModelFavoriteFor(
+                  board.sources.modelScope(),
+                  modelKey(harnessId, providerId, modelId)
+                )}
+              onReorderFavorite={(draggedKey, targetKey, position) =>
+                rendererRecovery.reorderModelFavoriteFor(
+                  board.sources.modelScope(),
+                  draggedKey,
+                  targetKey,
+                  position
+                )}
+              onStop={board.abortRun.abortRun}
+              onRetry={board.abortRun.retryConnection}
+              retrying={board.abortRun.providerRetrying}
+              onSignedIn={board.submitBrainstormDecision.proactiveAuthVisible
+                ? () => void board.studioTemporaryChatContext.refreshAfterProactiveSignIn()
+                : undefined}
+              autoRetryEnabled={board.unmirroredTraceStartTime.autoRetryAfterReset}
+              onDismiss={() => {
+                board.handleAgentEvent.errorMessage = ''
+                board.handleAgentEvent.providerStatus = null
+                board.submitBrainstormDecision.proactiveAuthIssue = null
+                if (board.props.controller) {
+                  // Controller conversations own their error state in the
+                  // controller's store key   clearing the thread-scoped
+                  // backend error would leave the card stuck on screen.
+                  board.props.controller.clearStatus()
+                } else {
+                  void board.composerScope.dismissSessionError()
+                }
+              }}
+            />
+          {/if}
         </div>
       </div>
     {/if}
@@ -992,6 +1009,14 @@
                                   ? `${APP_NAME} is working · type to queue a message`
                                   : (board.props.composerPlaceholder ?? 'Send a message...')}
                   disabled={board.harnessUsage.specFormulating}
+                  directReply={board.directReply.target}
+                  directReplyBusy={board.directReply.sending}
+                  directReplyError={board.directReply.error}
+                  onClearDirectReply={() => board.directReply.clear()}
+                  onOpenDirectReply={() => {
+                    const target = board.directReply.target
+                    if (target) void board.directReply.reveal(target.messageId)
+                  }}
                   working={board.switchProject.busy}
                   onStop={board.abortRun.abortRun}
                   autofocus

@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, WEBSITE_URL, brandUserAgent } from '../lib/brand'
-import { isWindowsStorePackage } from '../lib/utils'
+import { isWindowsStorePackage, skipsOsKeyring } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
@@ -73,7 +73,7 @@ import {
   installAppFilePreviewProtocol,
   installRendererSessionGuards
 } from './bootstrap/session-guards'
-import { closeAppfileGates } from './bootstrap/boot-gate'
+import { bootDataGate, closeAppfileGates } from './bootstrap/boot-gate'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 declare const __CODEINOVEN_APP_VERSION__: string
@@ -114,6 +114,19 @@ if (process.platform === 'win32') {
 }
 
 configureElectronDataRoot()
+// A launch the build started by itself (the packaged-startup smoke) is unattended,
+// so it must never wait on the macOS login keychain. Chromium keeps its own key in
+// the login keychain for cookie and password encryption (OSCrypt), separate from
+// Electron's `safeStorage`, and reading it from a bundle whose ad-hoc signature is
+// not the one that stored the item raises a SecurityAgent password prompt. That
+// prompt blocks the main thread, so no JavaScript deadline can escape it and a
+// nightly gate would hang until a human typed the password. The mock keychain
+// switch replaces the keychain with an in-process one, which is exactly the
+// non-interactive behaviour an unshipped verification launch needs; the switch is
+// appended only for those launches so a shipped app keeps the real keychain.
+if (process.platform === 'darwin' && skipsOsKeyring()) {
+  app.commandLine.appendSwitch('use-mock-keychain')
+}
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
 // per-window preferences below remain explicit so future windows inherit the
 // secure expectation even when reviewed in isolation.
@@ -324,6 +337,12 @@ function markWorkspaceReadyIfInteractive(): void {
   // workspace so the first Cmd+K thread search ranks semantically instead of
   // paying the model load inside its answer. No-op unless intent search is on.
   state.searchService?.warm()
+  // The workspace is settled and interactive, which is the second moment the
+  // microphone is allowed to open ahead of a press: a user who reaches for the
+  // dictation shortcut without ever hovering a mic must not lose their first
+  // words to CoreAudio's device open. A press that already came first wins, and
+  // the late arm stands down instead of re-opening the device.
+  state.speechService?.warmCaptureAfterSettle()
   void completeStartupIfReady()
 }
 
@@ -1127,6 +1146,7 @@ void app
     void startStartupUpdater(state, storage).catch(() => {})
     // A hung asynchronous initializer must leave a usable update surface too.
     startupRecoveryTimer = setTimeout(() => {
+      bootDataGate.close('Workspace initialization did not finish')
       void handleFatalStartup(new Error('Workspace initialization did not finish.'), {
         state,
         database,
@@ -1225,37 +1245,66 @@ void app
       newInstance: openNewInstance
     })
 
-    // Storage and database warm-up are independent   run them concurrently.
-    await Promise.all([
-      storage.initialize(),
-      trackStartupStep('database:init', () => database.init()),
-      // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
-      // here guarantees the flag is ready before `createWindow()` runs without
-      // serializing behind the heavier startup work.
-      trackStartupStep('trafficLight:warm', () => warmTrafficLightDetection())
-    ])
-    if (state.startupRecovery) return
-    // Analytics never delays window creation and never runs in a probe.
-    usageAnalytics.start(storage, __CODEINOVEN_APP_VERSION__)
-    startupTelemetry.mark('storage:ready')
-    startupTelemetry.mark('database:ready')
-    await windowStateService.load()
-    // Load the background preferences, apply the login item, and publish the
-    // instance role before any window exists.
-    await backgroundLifecycle.start()
-    if (state.startupRecovery) return
-    Logger.info(`${APP_NAME} main process initialized`)
-    await startStartupUpdater(state, storage)
-    if (state.startupRecovery) return
+    // The window's persisted geometry is a plain file read that needs the config
+    // root and nothing else, which makes it the one pre-window step that still
+    // has to finish before the window exists. Everything heavier now opens
+    // behind it: `createWindow()` runs before storage and SQLite, so the
+    // renderer's own multi-second boot overlaps them instead of queueing behind
+    // them.
+    await trackStartupStep('windowState:load', () => windowStateService.load())
 
-    // The renderer invokes its first config/project/scope/thread reads while
-    // its document evaluates. Register that bounded surface before navigation;
-    // the feature graph remains dynamically imported after first paint.
-    registerHydrationIpcHandlers(storage, database)
+    // The renderer invokes its first config/project/scope/thread reads while its
+    // document evaluates, and the window now exists before the data stores are
+    // open, so this surface is registered before navigation and every handler
+    // waits on the boot-data gate instead of reading a database that is not
+    // there yet.
+    registerHydrationIpcHandlers(storage, database, bootDataGate.read())
     // The global browser's tab list is durable app state, not browser runtime:
     // the renderer hydrates it while its document evaluates, so it is registered
     // here with the other pre-navigation handlers.
     registerGlobalBrowserIpcHandlers()
+
+    // Storage and database warm-up are independent   run them concurrently.
+    //
+    // Each branch records its own phase the moment its own work lands, which is
+    // the only way the report can attribute the gap: marking both after the
+    // pool made `database:ready` a 0 ms delta that folded the whole SQLite open
+    // into `storage:ready`. The two launch shapes below share this one step, so
+    // a headless launch opens the stores the same way a visible one does.
+    const openDataStores = async (): Promise<boolean> => {
+      const storageReady = storage.initialize().then(() => startupTelemetry.mark('storage:ready'))
+      const databaseReady = trackStartupStep('database:init', () => database.init()).then(() =>
+        startupTelemetry.mark('database:ready')
+      )
+      // Windows/macOS resolve instantly; Linux reads GTK settings. Starting it
+      // here guarantees the flag is ready before the renderer asks for it
+      // without serializing behind the heavier startup work.
+      const trafficLightReady = trackStartupStep('trafficLight:warm', () =>
+        warmTrafficLightDetection()
+      )
+      await Promise.all([storageReady, databaseReady, trafficLightReady])
+      // Released for every waiter at once: the hydration reads a renderer issued
+      // during its own boot, and the post-paint feature graph, both proceed here.
+      bootDataGate.publish(true)
+      if (state.startupRecovery) return false
+      // Analytics never delays window creation and never runs in a probe.
+      usageAnalytics.start(storage, __CODEINOVEN_APP_VERSION__)
+      // Load the background preferences, apply the login item, and publish the
+      // instance role. This one waits for the database rather than running
+      // beside it: its attention pass reads thread state, so arriving before
+      // SQLite is open would compute the icon from a database that is not there
+      // yet.
+      await trackStartupStep('backgroundLifecycle:start', () => backgroundLifecycle.start())
+      if (state.startupRecovery) return false
+      Logger.info(`${APP_NAME} main process initialized`)
+      // The updater is deliberately not awaited here. It was already started
+      // unawaited right after `whenReady`, and awaiting it put its cache sweep (a
+      // recursive delete of the updater cache and any abandoned install staging)
+      // in front of the window creation. The feature boot awaits it before
+      // `features:ready`, so no channel is registered late; it simply stops
+      // competing with the first paint.
+      return true
+    }
 
     // The trusted top-level renderer may capture microphone audio for local
     // dictation. Camera, subframes, foreign documents, and every unrelated
@@ -1295,6 +1344,7 @@ void app
       // graph boots directly so the scheduler, chat engine, and notifications
       // are live. Window-bound services (browser, PTY) attach the first time a
       // window is opened, from the menu bar or a notification click.
+      if (!(await openDataStores())) return
       void import('./bootstrap/post-paint-services')
         .then(({ bootPostPaintServices }) => bootPostPaintServices(bootContext))
         .catch((error: unknown) => {
@@ -1334,7 +1384,14 @@ void app
       // already-registered services stay alive, and the failure is fully
       // logged for diagnosis. A background feature failing must never exit
       // the whole app on the user's behalf.
-      void import('./bootstrap/post-paint-services')
+      //
+      // The gate is what makes the earlier window safe: the renderer can now
+      // paint and announce itself while storage and SQLite are still opening,
+      // so the graph waits for the same gate hydration reads wait on instead of
+      // constructing every repo against an unopened database.
+      void bootDataGate
+        .read()
+        .then(() => import('./bootstrap/post-paint-services'))
         .then(({ bootPostPaintServices }) => bootPostPaintServices(bootContext))
         .catch((error: unknown) => {
           state.startupServicesFailed = true
@@ -1434,10 +1491,20 @@ void app
         openMainWindow()
       }
     })
+
+    // The window and every listener above exist now, so the data stores open
+    // behind a renderer that is already booting. This is the one await the
+    // earlier window buys time for: hydration reads and the post-paint graph
+    // are parked on the gate until it returns.
+    if (!(await openDataStores())) return
   })
   .catch(async (error: unknown) => {
     if (startupRecoveryTimer) clearTimeout(startupRecoveryTimer)
     startupRecoveryTimer = null
+    // Nothing will publish the gate after a failed boot, so every hydration
+    // read and the parked feature graph are released with the reason instead of
+    // waiting for a publish that cannot happen.
+    bootDataGate.close('The boot failed before the data stores opened')
     // Keep the updater and a renderer-independent recovery surface alive.
     await handleFatalStartup(error, { state, database, storage })
   })

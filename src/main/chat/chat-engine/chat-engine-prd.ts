@@ -121,7 +121,21 @@ export class ChatEnginePrd {
     if (active) return active
 
     const driverId = settings.harnessId || DEFAULT_HARNESS
-    const { driver, projectPath } = await this.host.resolve(projectId, driverId, threadId)
+    // Generate inside the thread's own account, the way its turns run. The
+    // harness default can be a different account whose container does not know
+    // the thread's provider, which failed generation with `Model not found`.
+    const account = await this.host.state.accountRegistry.resolveForProvider(
+      driverId,
+      settings.providerId,
+      settings.accountId
+    )
+    settings = { ...settings, accountId: account.id }
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      threadId,
+      account.id
+    )
     assertHarnessRequestCapabilities(driver, attachments, settings.permissionLevel)
     const userMessage = await this.host.units['messages-write'].persistOutboundMessage(
       projectId,

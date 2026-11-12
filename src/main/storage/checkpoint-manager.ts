@@ -17,6 +17,7 @@ import { Logger } from '../system/logger'
 import {
   ChangeTrackingService,
   isBinary,
+  isExcludedRelativePath,
   type CheckpointChange,
   type CheckpointFile,
   type ProjectCheckpoint,
@@ -37,7 +38,10 @@ import {
   MAX_CHECKPOINT_FAILURE_LENGTH
 } from './checkpoint/checkpoint-errors'
 import {
+  dropExcludedPathChanges,
+  dropUnprovenOverlappingChanges,
   pruneUnusedBlobs,
+  repairEvidenceDroppedCheckpoints,
   repairMisattributedInternalCheckpoints,
   repairTruncatedLineStats,
   type CheckpointMaintenanceHost
@@ -172,6 +176,13 @@ export interface ForeignPaths {
  *  moment after the checkpoint row, so a young row is never declared ownerless. */
 const ABANDONED_CHECKPOINT_MIN_AGE_MS = 10 * 60_000
 const ABANDONED_CHECKPOINT_SCAN_LIMIT = 200
+
+/**
+ * How long a turn that never completed is still treated as having been in
+ * flight. A row left behind by a dead process has no end time, so without a
+ * bound it would make every later turn in the project look contested forever.
+ */
+const ORPHANED_TURN_GRACE_MS = 10 * 60 * 1000
 const ABANDONED_CHECKPOINT_SETTLE_LIMIT = 50
 const ABANDONED_CHECKPOINT_MESSAGE =
   'No process was left to finish this turn, so its checkpoint was closed without a file diff.'
@@ -328,7 +339,10 @@ export class CheckpointManager {
     const after = await tracker.snapshot(projectPath, {
       includeGitMetadata: before.git !== undefined
     })
-    return tracker.calculateChanges(before, after).map((change) => change.path)
+    return tracker
+      .calculateChanges(before, after)
+      .map((change) => change.path)
+      .filter((path) => !isExcludedRelativePath(path))
   }
 
   /**
@@ -397,6 +411,23 @@ export class CheckpointManager {
       const allChanges = tracker.calculateChanges(checkpoint.before, after)
       const foreign =
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
+      // A turn another thread had in flight during this window makes the diff
+      // ambiguous whether or not its process is still alive. The live
+      // `active_turns` row is removed when a session dies without finishing,
+      // and the files it wrote stay in the working tree: a read-only turn then
+      // reported them as its own. The stored checkpoints keep the window, so
+      // they are the durable record of who else was working here.
+      const overlapping =
+        options.contestedDiff || allChanges.length === 0
+          ? undefined
+          : await this.overlappingForeignThreadIds(
+              projectId,
+              threadId,
+              checkpoint.before.createdAt,
+              after.createdAt,
+              options.ownThreadIds
+            )
+      const contestedDiff = options.contestedDiff === true || (overlapping?.length ?? 0) > 0
       const precisePaths = options.precisePaths ?? new Set<string>()
       const excludedPaths = options.excludedPaths
       // A path this turn recorded write evidence for. Window evidence counts: a
@@ -414,7 +445,7 @@ export class CheckpointManager {
         // A concurrent turn elsewhere in this project poisons the project-wide
         // diff: a path it wrote looks exactly like a path this turn wrote. Only
         // this turn's own evidence may claim a path in that state.
-        if (options.contestedDiff && !claimedByThisTurn(path)) return false
+        if (contestedDiff && !claimedByThisTurn(path)) return false
         if (foreign === undefined) return true
         const precise = precisePaths.has(path)
         if (foreign.claimed.has(path) && !precise) return false
@@ -447,10 +478,16 @@ export class CheckpointManager {
       // path and keep the change only when its content really differs from the
       // turn's own baseline, so a no-op write is never invented as a change.
       const rescued = new Set(changes.map((change) => change.path))
-      const evidencedPaths = new Set<string>([
-        ...(options.changeSources?.keys() ?? []),
-        ...(options.evidencedPaths ?? [])
-      ])
+      // Only a recorded source is this turn's evidence. A path that sits in the
+      // source map with no source at all is a bare shell window: the file moved
+      // while the command ran, which is exactly what another turn writing here
+      // looks like. Counting the bare key as proof let a contested diff rescue a
+      // room full of another thread's files back onto a read-only turn's card.
+      const evidencedPaths = new Set<string>(options.evidencedPaths ?? [])
+      for (const [path, sources] of options.changeSources ??
+        new Map<string, FileChangeSource[]>()) {
+        if (sources.length > 0) evidencedPaths.add(path)
+      }
       if (Object.keys(checkpoint.before.files).length > 0) {
         let rescueCount = 0
         for (const path of evidencedPaths) {
@@ -470,6 +507,13 @@ export class CheckpointManager {
           rescued.add(path)
           rescueCount += 1
         }
+      }
+      // Scratch and build output are never the turn's work, however they reached
+      // the diff: a file-change card that offers `.cio/tmp/report.txt` as a
+      // change is noise the user has to clear by hand.
+      for (let index = changes.length - 1; index >= 0; index -= 1) {
+        const change = changes[index]
+        if (change && isExcludedRelativePath(change.path)) changes.splice(index, 1)
       }
       // A turn whose real diff was entirely filtered away is the one case where
       // the file-changes card silently shows nothing. Record why, bounded, so a
@@ -500,7 +544,8 @@ export class CheckpointManager {
           windowed: windowedElsewhere,
           borrowed: borrowedElsewhere,
           userOwned,
-          contested: options.contestedDiff === true,
+          contested: contestedDiff,
+          overlapping: overlapping?.slice(0, 3),
           claimFiltered: changedPaths !== undefined,
           // A contested diff is claimable only through this turn's own write
           // evidence, so this count is the first thing to read when a real
@@ -732,6 +777,51 @@ export class CheckpointManager {
     return new Set(
       rows.map((row) => row['thread_id']).filter((id): id is string => typeof id === 'string')
     )
+  }
+
+  /**
+   * Other threads whose turn window overlapped this one, from the durable
+   * checkpoints rather than the live table.
+   *
+   * `active_turns` only knows about processes that are still alive: a session
+   * that died mid-turn leaves its files in the working tree and no live row,
+   * so the next turn in the project swept them up as its own work. Only the
+   * turns that never completed count here, and only while they are recent: a
+   * turn that finished inside the window already claims its paths through the
+   * foreign-checkpoint scan, and an abandoned row older than the window has
+   * left its work in this turn's baseline rather than its diff.
+   */
+  private async overlappingForeignThreadIds(
+    projectId: string,
+    threadId: string,
+    turnStart: number,
+    turnEnd: number,
+    ownThreadIds?: ReadonlySet<string>
+  ): Promise<string[]> {
+    const rows = await this.queryRows(
+      `SELECT json_extract(data, '$.threadId') AS thread_id
+         FROM turn_checkpoints
+        WHERE project_id = ? AND thread_id != ?
+          AND json_extract(data, '$.createdAt') <= ?
+          AND json_extract(data, '$.completedAt') IS NULL
+          AND json_extract(data, '$.createdAt') >= ?
+        LIMIT ?`,
+      [
+        projectId,
+        threadId,
+        turnEnd,
+        turnStart - ORPHANED_TURN_GRACE_MS,
+        ABANDONED_CHECKPOINT_SCAN_LIMIT
+      ],
+      ABANDONED_CHECKPOINT_SCAN_LIMIT
+    )
+    const ids = new Set<string>()
+    for (const row of rows) {
+      const id = row['thread_id']
+      if (typeof id !== 'string' || ownThreadIds?.has(id)) continue
+      ids.add(id)
+    }
+    return [...ids]
   }
 
   /**
@@ -1086,6 +1176,13 @@ export class CheckpointManager {
       save: (checkpoint) => this.save(checkpoint),
       tracker: (projectId) => this.tracker(projectId),
       queryRows: (sql, params, maxRows) => this.queryRows(sql, params, maxRows),
+      queryRowsStrict: async (sql, params, maxRows) => {
+        const result = await this.db.queryViaWorker(sql, params, maxRows, {
+          allowPrimaryFallback: false
+        })
+        if (!result.ok) throw new Error(result.error ?? 'checkpoint read failed')
+        return (result.rows ?? []) as Record<string, unknown>[]
+      },
       withBlobLock: (projectId, operation) => this.withBlobLock(projectId, operation)
     }
   }
@@ -1096,6 +1193,22 @@ export class CheckpointManager {
 
   async repairMisattributedInternalCheckpoints(): Promise<number> {
     return repairMisattributedInternalCheckpoints(this.maintenanceHost())
+  }
+
+  /** Clear cards that only hold another turn's abandoned work. */
+  async dropUnprovenOverlappingChanges(): Promise<number> {
+    return dropUnprovenOverlappingChanges(this.maintenanceHost())
+  }
+
+  /** Drop scratch and build-output paths a card should never have listed. */
+  async dropExcludedPathChanges(): Promise<number> {
+    return dropExcludedPathChanges(this.maintenanceHost())
+  }
+
+  /** Restore the real files of turns whose contested diff was filtered away
+   *  while their write evidence was mis-parsed, so an empty card becomes true. */
+  async repairEvidenceDroppedCheckpoints(): Promise<number> {
+    return repairEvidenceDroppedCheckpoints(this.maintenanceHost())
   }
 
   /** Re-open a recently completed checkpoint so late tool claims   edits that
@@ -1317,8 +1430,12 @@ export class CheckpointManager {
     const tracker = this.tracker(projectId)
     const before = change.before ? await tracker.readBlob(change.before.hash) : null
     const after = change.after ? await tracker.readBlob(change.after.hash) : null
-    if (change.before && !before) throw new Error(`Checkpoint blob is unavailable for ${path}`)
-    if (change.after && !after) throw new Error(`Checkpoint blob is unavailable for ${path}`)
+    // A recorded change whose content blob is gone can never be shown as a diff.
+    // Reporting the path and kind without fabricating the missing side keeps the
+    // reader honest and the hover popover working instead of failing the read.
+    if ((change.before && !before) || (change.after && !after)) {
+      return { path, kind: change.kind, binary: false, truncated: false, contentUnavailable: true }
+    }
     const window = decodeDiffWindow(before, after, MAX_DIFF_WINDOW_BYTES, DIFF_WINDOW_CONTEXT_BYTES)
     return {
       path,
@@ -1402,12 +1519,22 @@ export class CheckpointManager {
     const beforeFile = checkpoint.before.files[path]
     const tracker = this.tracker(projectId)
     const before = beforeFile ? await tracker.readBlob(beforeFile.hash) : null
-    if (beforeFile && !before) throw new Error(`Checkpoint blob is unavailable for ${path}`)
     let after: Uint8Array | null = null
     try {
       after = await readFile(absolutePath)
     } catch (error) {
       if (!isMissing(error)) throw error
+    }
+    // Same honest degradation as the persisted diff: report the path and kind
+    // when the baseline content is gone instead of failing the whole read.
+    if (beforeFile && !before) {
+      return {
+        path,
+        kind: after ? 'modified' : 'deleted',
+        binary: false,
+        truncated: false,
+        contentUnavailable: true
+      }
     }
     if (after !== null && isBinary(after)) {
       return { path, kind: beforeFile ? 'modified' : 'created', binary: true, truncated: false }
@@ -1557,10 +1684,30 @@ export class CheckpointManager {
       }
       return { ...snapshot, files }
     }
+    // A change rescued from this turn's own write evidence (a path the
+    // project-wide snapshot never listed, such as a file inside an excluded
+    // directory) carries a file entry the snapshot maps do not. Blob pruning
+    // and rollback both read the maps, so every change-referenced entry has to
+    // be written back into them or the content is collected while the change
+    // still claims it.
+    const withChangeFiles = (
+      snapshot: ProjectCheckpoint,
+      side: 'before' | 'after'
+    ): ProjectCheckpoint => {
+      const files = { ...snapshot.files }
+      let added = false
+      for (const change of checkpoint.changes) {
+        const file = change[side]
+        if (!file || files[change.path]) continue
+        files[change.path] = file
+        added = true
+      }
+      return added ? { ...snapshot, files } : snapshot
+    }
     return {
       ...checkpoint,
-      before: trimFiles(checkpoint.before),
-      ...(checkpoint.after ? { after: trimFiles(checkpoint.after) } : {})
+      before: withChangeFiles(trimFiles(checkpoint.before), 'before'),
+      ...(checkpoint.after ? { after: withChangeFiles(trimFiles(checkpoint.after), 'after') } : {})
     }
   }
 
@@ -1577,7 +1724,12 @@ export class CheckpointManager {
     params: unknown[],
     maxRows: number
   ): Promise<Row[]> {
-    const result = await this.db.queryViaWorker(sql, params, maxRows)
+    // `allowPrimaryFallback: false` because `queryViaWorker` otherwise answers a
+    // failed worker read from the primary connection itself, and the retry below
+    // would then run the identical statement on the main thread a second time.
+    const result = await this.db.queryViaWorker(sql, params, maxRows, {
+      allowPrimaryFallback: false
+    })
     if (!result.ok) {
       return this.db.all<Row>(sql, ...params)
     }

@@ -1,4 +1,4 @@
-import type { Assistant } from './types'
+import { assistantIsBuiltin, type Assistant } from './types'
 
 /**
  * Assistant sidebar order.
@@ -20,8 +20,13 @@ export function assistantOrderKey(assistant: Assistant): number {
   return assistant.sortOrder ?? assistant.createdAt
 }
 
-/** Sidebar order for two assistants: pins, then manual position, then creation. */
+/** Sidebar order for two assistants: built-ins, pins, then manual position, then creation. */
 export function compareAssistants(a: Assistant, b: Assistant): number {
+  // A built-in assistant is the app's own front door, so it keeps the first slot
+  // whatever the user pins or drags.
+  const aBuiltin = assistantIsBuiltin(a) ? 1 : 0
+  const bBuiltin = assistantIsBuiltin(b) ? 1 : 0
+  if (aBuiltin !== bBuiltin) return bBuiltin - aBuiltin
   const aPinned = a.pinned ? 1 : 0
   const bPinned = b.pinned ? 1 : 0
   if (aPinned !== bPinned) return bPinned - aPinned

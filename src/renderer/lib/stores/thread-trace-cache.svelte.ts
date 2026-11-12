@@ -1,5 +1,11 @@
-import type { AgentPart, TurnStreamPartsPage } from '$shared/types'
-import { mergeWorkingParts } from '$lib/working-trace-parts'
+import type { AgentPart, TurnStreamPartsChange, TurnStreamPartsPage } from '$shared/types'
+import type { TraceSpan } from '$shared/working-trace-span'
+import {
+  isSubagentPart,
+  mergeTurnSubagents,
+  mergeWorkingParts,
+  type SubagentPart
+} from '$lib/working-trace-parts'
 
 /**
  * Navigation-safe cache for a thread's live working trace.
@@ -39,6 +45,22 @@ export class ThreadTraceState {
   totalSteps = $state(0)
   /** Newest durable task-list parts for the turn (they never render inline). */
   todoParts = $state<AgentPart[]>([])
+  /**
+   * Every sub-agent step the whole turn delegated to, in fold order, whether or
+   * not it is inside `parts`.
+   *
+   * The trace header and its dropdown read this instead of the mounted rows: a
+   * turn spawns its workers near the start and the mounted window opens on its
+   * newest entries, so the step that delegated the work is usually on a page
+   * nobody has scrolled to yet.
+   */
+  subagentParts = $state<SubagentPart[]>([])
+  /** True when the whole turn compacted its context, whether or not the
+   *  compaction step is on a mounted page. */
+  turnCompacted = $state(false)
+  /** Earliest start to latest end across the whole turn's steps, so the header
+   *  states the turn's real duration while only a page of it is mounted. */
+  turnSpan = $state<TraceSpan | null>(null)
   /** Start time of the turn `todoParts` was folded for. */
   todoTurnStart = $state<number | null>(null)
   /** Stream events the durable log has consumed: the live poll's cursor. */
@@ -69,6 +91,8 @@ export class ThreadTraceState {
     this.hasOlder = page.hasOlder
     this.totalSteps = page.totalSteps
     this.todoParts = page.todoParts
+    this.adoptSubagents(page.subagentParts)
+    this.adoptTraceMarkers(page)
     this.todoTurnStart = boundary
     this.cursor = page.cursor
     this.windowReadAt = Date.now()
@@ -86,11 +110,51 @@ export class ThreadTraceState {
     this.parts = next
   }
 
+  /**
+   * Adopt what the durable fold says about the whole turn: whether it compacted
+   * its context, and the span it occupied.
+   *
+   * Both travel on every read, window or change, because they are facts about
+   * the turn rather than about the slice a reader happens to hold.
+   */
+  adoptTraceMarkers(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
+    this.turnCompacted = page.turnCompacted
+    this.turnSpan = page.turnSpan
+  }
+
+  /**
+   * Adopt the turn's delegation from a durable window read.
+   *
+   * Every window read of one turn carries the whole turn's sub-agent steps, so
+   * this is a replacement rather than a merge: paging an older page in changes
+   * nothing about who the turn delegated to.
+   */
+  adoptSubagents(parts: readonly AgentPart[]): void {
+    this.subagentParts = parts.filter(isSubagentPart)
+  }
+
+  /**
+   * Fold the sub-agent snapshots a change read delivered into the turn list.
+   *
+   * A window read ships the whole turn's delegation, but the live poll only
+   * ships what the log touched, so a worker that starts or finishes between two
+   * windows arrives here and must reach the header without waiting for the next
+   * page.
+   */
+  mergeTouchedSubagents(parts: readonly AgentPart[]): void {
+    const touched = parts.filter(isSubagentPart)
+    if (touched.length === 0) return
+    this.subagentParts = mergeTurnSubagents(this.subagentParts, touched)
+  }
+
   reset(): void {
     this.parts = []
     this.hasOlder = false
     this.totalSteps = 0
     this.todoParts = []
+    this.subagentParts = []
+    this.turnCompacted = false
+    this.turnSpan = null
     this.todoTurnStart = null
     this.cursor = null
     this.turnStartTs = null

@@ -12,7 +12,8 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
   designElementReference,
   designEntryFromUrl,
-  designPageIdentity
+  designPageIdentity,
+  pageElementReference
 } from '$lib/design-element-reference'
 import { contextSidebarState } from './context-sidebar.svelte'
 import {
@@ -138,7 +139,7 @@ class DesignMirror {
  * list.
  */
 function markerNumber(reference: ResponseReferenceAnchor, fallback: number): number {
-  const match = /^Design element (\d+)$/u.exec(reference.label)
+  const match = /^(?:Design|Page) element (\d+)$/u.exec(reference.label)
   const parsed = match === null ? Number.NaN : Number(match[1])
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback
 }
@@ -263,9 +264,9 @@ already have come and gone, which is why the list is watched rather than read
     })
   }
 
-  /** Whether this tab is serving a design, which is what inspection needs. */
+  /** Whether this tab can be inspected, which every open thread-browser tab can. */
   canInspect(tabId: string): boolean {
-    return this.designs.has(tabId)
+    return this.isOpenBrowserTab(tabId)
   }
 
   isArmed(tabId: string): boolean {
@@ -341,6 +342,10 @@ already have come and gone, which is why the list is watched rather than read
     reference: ResponseReferenceAnchor,
     tabId: string
   ): boolean {
+    // An element picked on a page that is not a design folder is pinned to the tab
+    // it was picked in, and to nothing else: the same site shown in another tab is
+    // another document, so there is no folder to match it by.
+    if (reference.kind === 'page') return reference.tabId === tabId
     if (reference.kind !== 'design') return false
     if (reference.tabId === tabId) return true
     const tab = this.tabOf(tabId)
@@ -578,6 +583,12 @@ already have come and gone, which is why the list is watched rather than read
     threadId: string,
     reference: ResponseReferenceAnchor
   ): Promise<void> {
+    // An element picked on an ordinary page is named by its URL rather than by a
+    // design folder, so the page is reopened as a page.
+    if (reference.kind === 'page') {
+      await this.revealPage(projectId, threadId, reference)
+      return
+    }
     const tabId = reference.tabId
     let failed: string | undefined
     // The tab the comment was written in is the most direct answer while it is
@@ -636,6 +647,45 @@ already have come and gone, which is why the list is watched rather than read
     } catch (failure: unknown) {
       logRendererError('A design annotation tab could not be focused; reopening its page.', failure)
       return false
+    }
+  }
+
+  /** The part of {@link reveal} that reopens a page an element was picked on. */
+  private async revealPage(
+    projectId: string,
+    threadId: string,
+    reference: ResponseReferenceAnchor
+  ): Promise<void> {
+    const tabId = reference.tabId
+    // The tab that holds the page is the exact answer while it is still open.
+    if (tabId && this.isOpenBrowserTab(tabId)) {
+      if (await this.tryFocus(tabId, projectId, threadId, reference)) return
+    }
+    const url = reference.pageUrl
+    if (!url) {
+      // A reference written before a page pick carried its URL cannot be reopened,
+      // and its tab is gone, so the report is the only honest answer.
+      toast.error('The page this comment was made on is no longer open.', {
+        description: reference.label
+      })
+      return
+    }
+    const opened = contextSidebarState.openBrowserForContext(url, projectId, threadId)
+    contextSidebarState.focus(opened)
+    try {
+      // Main creates a tab when it is shown, and an open tab whose page has not
+      // been shown yet is unknown there, so the page is loaded here first: that is
+      // what makes the tab exist before its pin is asked for.
+      const boxId =
+        contextSidebarState.browserTabs.find((candidate) => candidate.id === opened)?.boxId ?? null
+      await invoke('browser:navigate', opened, projectId, threadId, url, boxId)
+      if (tabId && tabId !== opened) this.rebindReferences(projectId, threadId, tabId, opened)
+      await this.restoreAndFocus(opened, reference.id, { projectId, threadId })
+    } catch (failure: unknown) {
+      logRendererError('The page a comment was made on could not be reopened.', failure)
+      toast.error('The page this comment was made on could not be opened again.', {
+        description: url
+      })
     }
   }
 
@@ -816,22 +866,25 @@ already have come and gone, which is why the list is watched rather than read
     await invoke('browser:inspectFocus', tabId, referenceId, true)
   }
 
-  /** Mirror the design a tab is serving, and end the session when it stops. */
+  /** The address the tab list holds for a tab, when the session has no page report. */
+  private tabUrl(tabId: string): string {
+    return contextSidebarState.browserTabs.find((tab) => tab.id === tabId)?.url ?? ''
+  }
+
+  /** Mirror the design a tab is serving, and republish its pins when it changes. */
   private notePageState(tabId: string, design: BrowserDesignTab | null, url: string): void {
     if (design) {
       this.designs.set(tabId, design, url)
       this.publishMarkers(tabId)
       return
     }
+    // The tab left its design folder. The pins it drew for that design go with the
+    // document, and the open comment closes because the element it was pinned to
+    // went with it, but the tab itself stays inspectable: every page is, so the
+    // mode is not ended here.
     if (!this.designs.delete(tabId)) return
-    this.publishedMarkers.delete(tabId)
-    // The tab left its design folder, so the element a comment was pinned to is
-    // gone with the document that held it: the border has nothing left to outline
-    // and the bubble has nothing left to sit beside.
     this.editing.delete(tabId)
-    // A tab that navigated away from its design folder is no longer inspectable,
-    // so the session cannot stay armed for a page that no longer offers it.
-    if (this.armed.has(tabId)) this.setArmed(tabId, false)
+    this.publishMarkers(tabId)
   }
 
   /**
@@ -878,10 +931,14 @@ already have come and gone, which is why the list is watched rather than read
     if (!owner) return
     const { projectId, threadId } = owner
     const page = this.designs.get(tabId)
-    const reference = designElementReference(event.id, event.target, page?.design ?? null, {
-      id: tabId,
-      url: page?.url ?? contextSidebarState.browserTabs.find((tab) => tab.id === tabId)?.url ?? ''
-    })
+    const tab = { id: tabId, url: page?.url ?? this.tabUrl(tabId) }
+    // A pick from a served design folder and a pick from an ordinary page are the
+    // same observation written against different surfaces: the design one names
+    // the folder so the page can be served again, and the page one names the URL
+    // so a comment can reopen the very page it was made on.
+    const reference = page
+      ? designElementReference(event.id, event.target, page.design, tab)
+      : pageElementReference(event.id, event.target, tab)
     // A pick's id is the id of the page marker it created, so the same pick can
     // only ever name one reference. Folding it in by id keeps a repeated report
     // of one pick from adding a second entry with the same key.

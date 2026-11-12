@@ -13,9 +13,12 @@
   import {
     DEFAULT_THREAD_TITLE,
     activeThreadRowId,
+    isRealProjectId,
     threadTracksReadStatus,
     type Thread
   } from '$shared/types'
+  import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
+  import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ScopeBucketView from './ScopeBucket.svelte'
   import ScopeActionsModals from './ScopeActionsModals.svelte'
   import { ScopeActionsController } from './ScopeActionsController.svelte'
@@ -133,7 +136,12 @@
 
   async function togglePin(thread: Thread): Promise<void> {
     try {
-      const updated = await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
+      // A bookmarked thread carries the bookmark in the mark slot, so the one
+      // control removes the bookmark first: the same rule the workspace row
+      // applies, so the mark means the same thing in every list.
+      const updated = thread.bookmarked
+        ? await invoke('thread:setBookmarked', thread.projectId, thread.id, false)
+        : await invoke('thread:setPinned', thread.projectId, thread.id, !thread.pinned)
       scopeState.updateThread(updated)
       workspaceState.updateThread(updated)
     } catch (error) {
@@ -278,10 +286,12 @@
       actionError = errorMessage(error, 'The slice could not be folded.')
     })
   }
+  const bucketCount = $derived(scopeState.buckets.length)
+  const bucketRows = $derived(bucketCount <= 1 ? 1 : Math.ceil(bucketCount / 2))
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-app">
-  {#if !scopeState.activeProjectId}
+  {#if !isRealProjectId(scopeState.activeProjectId)}
     <div class="flex h-full items-center justify-center">
       <p class="text-sm text-dimmed">Select a project to organize its threads by scope.</p>
     </div>
@@ -311,32 +321,51 @@
       </div>
     {:else}
       <div class="min-h-0 flex-1 overflow-auto p-3">
-        <div
-          class={scopeState.buckets.length === 1
-            ? 'h-full w-full'
-            : 'grid w-full grid-cols-2 items-start gap-3'}
-        >
-          {#each scopeState.buckets as bucket (bucket.id)}
-            <ScopeBucketView
-              {bucket}
-              actions={scopeActions}
-              fill={scopeState.buckets.length === 1}
-              activeThreadId={activeThreadRowId(workspaceState.selectedThread)}
-              onToggle={() => toggleBucket(bucket.id)}
-              onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
-              onMoveBucket={moveBucket}
-              onCreateThread={() => void createThread(bucket.id)}
-              onOpen={(thread) => void openThread(thread)}
-              onRename={handleRename}
-              onTogglePin={(thread) => void togglePin(thread)}
-              onDelete={handleDelete}
-              onFork={(thread) => void forkThread(thread)}
-              onMoveThread={(threadId, bucketId) => void moveThread(threadId, bucketId)}
-              onReorderThread={(stage, draggedId, targetId, position) =>
-                void reorderThread(bucket.id, stage, draggedId, targetId, position)}
-            />
-          {/each}
-        </div>
+        {#if scopeState.buckets.length === 0}
+          <EmptyState
+            icon={CioFolderGit}
+            title="No scopes yet"
+            description="A scope groups the threads that work on the same checkout. Create one to start organizing this project."
+          />
+        {:else}
+          <!--
+            One scope fills the screen. Two or more sit two to a row, and an odd
+            last scope takes the full row. Past one row each row is half the
+            height, so four scopes always fit one screen and more scroll.
+          -->
+          <div
+            class="grid h-full w-full gap-3 {bucketCount === 1 ? 'grid-cols-1' : 'grid-cols-2'}"
+            style:grid-auto-rows={bucketRows > 1 ? 'calc((100% - 0.75rem) / 2)' : '100%'}
+          >
+            {#each scopeState.buckets as bucket, index (bucket.id)}
+              <div
+                class="min-h-0 min-w-0 {bucket.collapsed ? 'self-start' : ''} {bucketCount > 2 &&
+                bucketCount % 2 === 1 &&
+                index === bucketCount - 1
+                  ? 'col-span-2'
+                  : ''}"
+              >
+                <ScopeBucketView
+                  {bucket}
+                  actions={scopeActions}
+                  activeThreadId={activeThreadRowId(workspaceState.selectedThread)}
+                  onToggle={() => toggleBucket(bucket.id)}
+                  onToggleSlice={(stage) => toggleSlice(bucket.id, stage)}
+                  onMoveBucket={moveBucket}
+                  onCreateThread={() => void createThread(bucket.id)}
+                  onOpen={(thread) => void openThread(thread)}
+                  onRename={handleRename}
+                  onTogglePin={(thread) => void togglePin(thread)}
+                  onDelete={handleDelete}
+                  onFork={(thread) => void forkThread(thread)}
+                  onMoveThread={(threadId, bucketId) => void moveThread(threadId, bucketId)}
+                  onReorderThread={(stage, draggedId, targetId, position) =>
+                    void reorderThread(bucket.id, stage, draggedId, targetId, position)}
+                />
+              </div>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/if}
   {/if}

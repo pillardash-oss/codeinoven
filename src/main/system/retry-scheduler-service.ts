@@ -197,6 +197,17 @@ export class RetrySchedulerService {
     this.changeListener = callback
   }
 
+  /**
+   * The waits this instance is currently holding, one per session.
+   *
+   * Read by the attention mirror, which reports a parked dispatched thread into
+   * the conversation that started it: an unattended rate-limit wait is otherwise
+   * indistinguishable from work that is still running.
+   */
+  listPending(): PendingRetryRecord[] {
+    return [...this.pending.values()]
+  }
+
   /** True when any pending retry resets at or before `deadlineMs`. */
   hasPendingRetryBefore(deadlineMs: number): boolean {
     for (const record of this.pending.values()) {

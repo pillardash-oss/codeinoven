@@ -26,14 +26,18 @@ import type {
   UsageEventDetails,
   UsageEventFeature,
   UsagePricingProvenance,
+  Assistant,
   AssistantAgents
 } from '../../../lib/types'
 import {
+  ASSISTANT_SETUP_TITLE,
   ASSISTANT_SPACE_ID,
   isAssistantSetupThread,
   assistantKnowledgeComplete
 } from '../../../lib/types'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
+import { delegationAuthor } from '../chat-engine-don'
+import { teammateAuthor, writeTeammateLine } from '../delegation-lines'
 import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
 import { assistantReportIsTerminal, isAssistantReportThread } from '../../../lib/assistant-reports'
 import type { SessionInfo } from './chat-engine-types'
@@ -188,6 +192,140 @@ export class ChatEngineAssistantAuthoring {
     const updated = this.host.state.assistantRepo.updateIdentity(assistantId, identity, Date.now())
     if (!updated) return
     broadcastAssistantsChanged(this.host.state.assistantRepo.list())
+  }
+
+  /**
+   * Open the Getting started conversation of a recruited teammate.
+   *
+   * This is the orchestrator building its own team. The assistant row is created by
+   * the caller, which owns the directory, and carries the instruction set Don wrote
+   * for it, so nothing is left to interview: the teammate is complete the moment it
+   * exists and the work Don dispatches to it is a real run.
+   *
+   * This opens the other half: the pinned Getting started thread that hosts the
+   * teammate's knowledge for later revisions. Nothing is written into it and no
+   * model turn is spent on it, because a hire happens on a thread the user never
+   * opened: its announcement belongs in Don's conversation, and an authoring
+   * interview there would ask a card nobody answers and leave a teammate that can
+   * never run.
+   */
+  async openRecruitedAssistantConversation(input: {
+    assistant: Assistant
+    /** What the teammate is for, in the words of whoever hired it. */
+    purpose: string
+    /** The work waiting for it, in the user's own words. */
+    request?: string
+    /** The settings of the conversation the hire came from, inherited by the new
+     *  thread. */
+    settings: ThreadSettings
+    /**
+     * The conversation that asked for the hire, when an assistant did instead of
+     * the user.
+     *
+     * A hiring is work Don started on the user's behalf, so the new thread is a
+     * dispatched child of Don's conversation: its notifications are suppressed, its
+     * wait for an answer is drawn in Don's thread under the new teammate's name,
+     * and its settle is reported there rather than left on a row the user never
+     * opened. Without the origin the Getting started interview would sit in the
+     * teammate's own thread and ask the user everything Don was meant to settle.
+     */
+    initiator?: { projectId: string; threadId: string }
+  }): Promise<Thread> {
+    const settings = input.settings
+    const { thread, finalize } = this.host.threadManager.prepareCreateThread(
+      {
+        projectId: ASSISTANT_SPACE_ID,
+        providerId: settings.providerId,
+        title: ASSISTANT_SETUP_TITLE,
+        titleSource: 'manual',
+        settings,
+        assistantId: input.assistant.id,
+        // The flag is what pins the row, makes it the assistant's knowledge
+        // thread, and keeps it out of eviction for the assistant's whole life.
+        assistantGettingStarted: true,
+        workingDirectory: '',
+        ...(input.initiator
+          ? {
+              dispatchOrigin: {
+                assistantId: input.assistant.id,
+                assistantName: input.assistant.name,
+                author: delegationAuthor(input.assistant),
+                initiatorProjectId: input.initiator.projectId,
+                initiatorThreadId: input.initiator.threadId,
+                at: Date.now()
+              }
+            }
+          : {})
+      },
+      {
+        onEviction: (outcome) => {
+          if (outcome.failedIds.length === 0) return
+          Logger.error('Recruited assistant thread eviction failed', {
+            assistantId: input.assistant.id,
+            evictedId: outcome.evictedId,
+            failedIds: outcome.failedIds.join(','),
+            error: String(outcome.error)
+          })
+        }
+      }
+    )
+    await finalize()
+    broadcastThreadUpdate(thread)
+    // The team grows where the request was made. The hiring is Don's own work, so
+    // the new teammate says in Don's conversation that it exists, what it was
+    // built for and that it is ready for the request. It never claims the work is
+    // already with it: dispatch is Don's next call, after this creation returns,
+    // so the handoff is announced by Don and only once it is accepted. Nothing
+    // about the hire is ever left on this thread for the user to answer.
+    await this.announceRecruitedTeammate(thread, input.assistant.name, input.purpose)
+    return thread
+  }
+
+  /**
+   * The line a freshly hired teammate speaks in the conversation that asked for it.
+   *
+   * Nobody interviews the user for a hire and nothing about it lives only on the
+   * teammate's own row: the introduction lands under the teammate's own name in
+   * Don's thread, which is where the user asked for the work, so a new teammate is
+   * visible the moment it exists instead of after they go looking for it.
+   *
+   * This runs while the teammate is created, before the create result reaches Don
+   * and before Don calls `cio_orchestrate_dispatch`, so the line may announce that
+   * the teammate is built and ready, never that the work is already with it: that
+   * handoff is Don's own line, sent once the dispatch is accepted.
+   *
+   * Best effort: the hire itself has already happened, so a line the app cannot
+   * write must never fail the creation.
+   */
+  private async announceRecruitedTeammate(
+    thread: Thread,
+    name: string,
+    purpose: string
+  ): Promise<void> {
+    const origin = thread.dispatchOrigin
+    if (!origin) return
+    const author = teammateAuthor(thread)
+    if (!author) return
+    const forWhat = purpose.trim()
+    try {
+      await writeTeammateLine(this.host, {
+        author,
+        thread,
+        id: `don-hire-${thread.id}`,
+        projectId: origin.initiatorProjectId,
+        threadId: origin.initiatorThreadId,
+        text: [
+          `I'm ${name.trim() || author.name}. I was built for this: ${forWhat || 'the work you brought'}.`,
+          'My instructions are written and I am ready to take the request.',
+          `\n\n@thread:${thread.id}`
+        ].join(' ')
+      })
+    } catch (error) {
+      Logger.dev('Hire announcement skipped', {
+        threadId: thread.id,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   /**

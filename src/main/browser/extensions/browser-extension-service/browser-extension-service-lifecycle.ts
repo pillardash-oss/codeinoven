@@ -302,7 +302,12 @@ export class BrowserExtensionServiceLifecycle {
       deliver: (delivery) => {
         const current = state.bridges.get(record.id)
         if (current) void current.push(nativeMessagingCommand(delivery))
-      }
+      },
+      // A host that stops answering leaves its extension waiting on a promise it
+      // may not have given a timeout, which is a spinner the user can do nothing
+      // about. Naming the program is the one thing that resolves it.
+      reportSilentHost: (application) =>
+        this.host.host.reportCompanionSilent(record.id, record.name, application)
     })
     const bridge = new BrowserExtensionBridge({
       session: state.session,

@@ -272,7 +272,10 @@ export function mergeCloudDeploymentContainers(
           ? {}
           : { updatedAt: mapping.updatedAt }
         : { updatedAt: live.updatedAt }),
-      ...(live.log === undefined ? {} : { log: live.log })
+      ...(live.log === undefined ? {} : { log: live.log }),
+      // A compose resource's per-container log streams only exist while the
+      // provider reports them, so they come from the live read alone.
+      ...(live.logSources === undefined ? {} : { logSources: live.logSources })
     })
   }
   return merged

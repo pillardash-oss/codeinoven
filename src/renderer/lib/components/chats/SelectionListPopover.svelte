@@ -53,16 +53,17 @@
   /**
    * What the edit action promises, which depends on where the reference lives.
    *
-   * A selection is edited in place, a document annotation in the file panel, a
-   * design element in the browser, an inline artifact element in its artifact
-   * card and a mark on the picture it was drawn on, so the label has to name the
-   * surface the click actually brings up.
+   * A selection is edited in place, a document annotation in the file panel, an
+   * element picked in the browser in the page it came from, an inline artifact
+   * element in its artifact card and a mark on the picture it was drawn on, so the
+   * label has to name the surface the click actually brings up.
    */
   function editTitle(reference: PromptReference): string {
     switch (reference.kind) {
       case 'file':
         return `Open ${reference.label} and edit its comment`
       case 'design':
+      case 'page':
         return `Show ${reference.label} in the browser and edit its comment`
       case 'video':
         return `Show ${reference.label} on the timeline and edit its comment`
@@ -101,7 +102,7 @@
   <div class="max-h-64 overflow-y-auto">
     {#each references as reference, referenceIndex (reference.id)}
       {@const number = referenceIndex + 1}
-      {@const isElement = reference.kind === 'design'}
+      {@const isElement = reference.kind === 'design' || reference.kind === 'page'}
       {@const isArtifactElement = reference.kind === 'svg' || reference.kind === 'html'}
       {@const isAnnotation = reference.kind === 'file'}
       {@const isNote = reference.kind === 'video'}

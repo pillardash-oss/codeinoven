@@ -80,7 +80,11 @@ const MAX_TURN_ALIGNMENT_PAGES = 4
 class ThreadMessagesStore {
   #loadPromises = new Map<string, Promise<void>>()
   private cache = new ThreadMessagesCache()
-  private events = new ThreadMessagesEvents(this.cache)
+  private events = new ThreadMessagesEvents(this.cache, (projectId, threadId) => {
+    void this.mergeTurnAlignedTail(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW).catch(
+      () => {}
+    )
+  })
 
   /** Reactive cache keyed by `projectId:threadId`. */
   get threads() {
@@ -753,6 +757,7 @@ class ThreadMessagesStore {
       references
     )
     agentRuns.setBusy(projectId, conversationId, true, messageId)
+    agentRuns.beginDispatch(projectId, conversationId)
     try {
       const response = await invoke(
         'agent:sendTemporaryPrompt',
@@ -804,6 +809,7 @@ class ThreadMessagesStore {
       references
     )
     agentRuns.setBusy(projectId, conversationId, true, messageId)
+    agentRuns.beginDispatch(projectId, conversationId)
     try {
       await invoke(
         'agent:steerTemporaryPrompt',

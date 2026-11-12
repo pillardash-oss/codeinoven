@@ -84,7 +84,19 @@ const DESTRUCTIVE_KEYWORDS = [
   'abort'
 ] as const
 
-const CHANNEL_NAMES: readonly string[] = Object.keys(IPC_INVOKE_CONTRACT)
+/**
+ * Channels an agent may never drive, even though the renderer may.
+ *
+ * The env value read exists so the app's own editor can show a stored value back to
+ * the person who stored it. Handing it to an agent would put every project secret
+ * into an agent's context, which is the one thing this feature is built to prevent,
+ * so it is removed from the catalog and refused by name below.
+ */
+const AGENT_FORBIDDEN_CHANNELS: ReadonlySet<string> = new Set(['secrets:envValues'])
+
+const CHANNEL_NAMES: readonly string[] = Object.keys(IPC_INVOKE_CONTRACT).filter(
+  (channel) => !AGENT_FORBIDDEN_CHANNELS.has(channel)
+)
 
 /**
  * The declared argument order of the channels an agent is most likely to drive.
@@ -125,7 +137,8 @@ const CHANNEL_ARG_HINTS: Readonly<Record<string, string>> = {
   'cloudDeploy:availableContainers': 'projectId, providerKind, accountId?',
   'cloudDeploy:containerStatus': 'projectId, providerKind, containerId, accountId?',
   'cloudDeploy:deployments': 'projectId, providerKind, containerId, accountId?',
-  'cloudDeploy:containerLog': 'projectId, providerKind, containerId, deploymentId?, accountId?',
+  'cloudDeploy:containerLog':
+    'projectId, providerKind, containerId, deploymentId?, accountId?, serviceName? (a logSources id, for one compose container)',
   'browser:loadTabs': 'no arguments',
   'providers:getStatus': 'no arguments',
   'project:list': 'no arguments',
@@ -260,6 +273,9 @@ export function createAppControlExecutor(
 
     let target: AppControlTarget
     if (channel !== null) {
+      if (AGENT_FORBIDDEN_CHANNELS.has(channel)) {
+        throw new Error(`App channel "${channel}" is not available to an agent by design.`)
+      }
       if (!CHANNEL_NAMES.includes(channel)) {
         throw new Error(
           `Unknown app channel "${channel}". Read cio_app_catalog for the exact names.`

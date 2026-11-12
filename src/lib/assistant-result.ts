@@ -95,3 +95,19 @@ export function assistantResultText(raw: string, streaming = false): string {
     return ASSISTANT_INVALID_RESULT
   return stripUrgencyTag(raw.trim())
 }
+
+/**
+ * The result boundary itself, removed from any text before it is drawn.
+ *
+ * Every surface reads the answer out of the boundary, but a transcript can also
+ * draw a run's newest words before its answer lands, and a message can reach the
+ * screen through a path that does not yet know it belongs to a conversation that
+ * carries the boundary at all. This is the last rule applied to every such text:
+ * whatever route it took, the app's own transport markers are never shown as
+ * words.
+ */
+const ENVELOPE_TAGS = /<\/?assistant_(?:result|detail)>/giu
+
+export function stripAssistantEnvelope(text: string): string {
+  return text.replace(ENVELOPE_TAGS, '').trim()
+}

@@ -26,6 +26,13 @@ import { Logger } from '../system/logger'
  * back to a stale inventory. See `bundlePiAiRegistry` in
  * `scripts/pi-harness-bundle.ts`.
  *
+ * That copy also registers pi-ai's OAuth sign-in flows. pi-ai reaches them
+ * through a run-time specifier (`import(new URL("./anthropic.ts", import.meta.url))`)
+ * so a bundle cannot follow them, and the packaged app used to fail every browser
+ * and device sign-in with `Cannot find module .../vendor/anthropic.js`. The bundle
+ * registers the same flows through literal imports, and the build refuses to ship
+ * a registry whose flows cannot load.
+ *
  * Note: `require.resolve('@earendil-works/pi-ai/dist/providers/all.js')` can
  * NOT be used   the exports map only exposes `./providers/*`, so deep `dist/`
  * specifiers always throw ERR_PACKAGE_PATH_NOT_EXPORTED.

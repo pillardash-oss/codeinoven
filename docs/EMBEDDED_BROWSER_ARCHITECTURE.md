@@ -210,7 +210,7 @@ material way, and the difference is deliberate.
 - **A launch from an extension's own page opens a tab.** Electron answers no
   `chrome.tabs.create` in a way that reaches a tab strip, so a password manager's
   "launch" row, which is exactly that call for the address the entry holds, opened
-  nothing at all. The app owns the tabs, so `compat/cio-page-tabs.js` replaces
+  nothing at all. The app owns the tabs, so `compat/cio-page-tabs.ts` replaces
   `tabs.create` on both roots in the page's own world, the ask travels the channel
   `chrome.runtime.openOptionsPage` already uses (`browser-extension-page-tabs.ts`),
   and `BrowserServiceExtensionPages.openTabFromExtensionPage` validates the address
@@ -226,13 +226,29 @@ material way, and the difference is deliberate.
   own document which a password manager reads as the website the user is on, and
   reports as "Site doesn't match" naming the extension's id. The tab facts a tab's
   pages receive are therefore pushed into the extension's own documents as well as
-  into its worker: `compat/cio-page-tabs.js` wraps `tabs.query` on both roots in the
+  into its worker: `compat/cio-page-tabs.ts` wraps `tabs.query` on both roots in the
   page's world (never listing an extension surface as a tab, and reporting the page
   behind the popup as the active one, with the `WebContents` id a message must use),
   answers `tabs.getCurrent` with `undefined` as Chromium does in a popup, and leaves
   `url`/`title` out when the extension may not read them. The snapshot comes from
   `browser-extension-page-tabs.ts`, pushed on every `onUpdated`/`onActivated` fact and
   on each document the popup arrives with.
+- **The compatibility preamble is a typed module tree, not one injected file.** It
+  is 3,600 lines of measured workarounds, so it is authored as one module per concern
+  under `src/main/browser/extensions/compat/preamble/`, with `index.ts` as the
+  composition root running them in the order the single closure used to. The app
+  imports that entry through `?compat-bundle`
+  (`scripts/lib/vite-compat-source-plugin.ts`), and
+  `scripts/lib/compat-source-compiler.ts` bundles every module into one IIFE that is
+  written into the extension under the name `cio-compat-preamble.js`. Three rules live
+  in that compiler: the bundle is not minified or tree-shaken, the entry's closing end
+  marker is preserved because a stale copy is rewritten by splitting the file there,
+  and the strict-mode directive a bundled module would otherwise carry is dropped,
+  because the copy it replaced ran as a classic script where a failed assignment is a
+  no-op rather than a throw. The injected text is unchanged in surface:
+  `tests/main/browser/compat-preamble.test.ts` runs the real bundle against a mock
+  runtime and pins the 254 installed members, the created namespaces and the answers
+  of the namespaces an extension actually calls.
 - **A link in the browser view belongs to that browser.** The link context menu offers
   the default browser, a new tab of the app-wide browser and the tab already on screen
   there, and the thread browser's item (which targets a project thread's tab) is not

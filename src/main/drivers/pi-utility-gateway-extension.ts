@@ -52,6 +52,8 @@ import {
   ACTION_SUMMARY_SCHEMA_DESCRIPTION
 } from '../../lib/tool-action-label'
 import {
+  ORCHESTRATION_ANSWER_TOOL_NAME,
+  ORCHESTRATION_CONTINUE_TOOL_NAME,
   ORCHESTRATION_DISPATCH_TOOL_NAME,
   ORCHESTRATION_STATUS_TOOL_NAME,
   ORCHESTRATION_TARGETS_TOOL_NAME
@@ -87,6 +89,8 @@ const suggestTool = gatewayTool(UTILITY_SUGGEST_TOOL_NAME)
 const orchestrationTargetsTool = gatewayTool(ORCHESTRATION_TARGETS_TOOL_NAME)
 const orchestrationDispatchTool = gatewayTool(ORCHESTRATION_DISPATCH_TOOL_NAME)
 const orchestrationStatusTool = gatewayTool(ORCHESTRATION_STATUS_TOOL_NAME)
+const orchestrationContinueTool = gatewayTool(ORCHESTRATION_CONTINUE_TOOL_NAME)
+const orchestrationAnswerTool = gatewayTool(ORCHESTRATION_ANSWER_TOOL_NAME)
 const appCatalogTool = gatewayTool(APP_CONTROL_CATALOG_TOOL_NAME)
 const appCallTool = gatewayTool(APP_CONTROL_CALL_TOOL_NAME)
 const createBrainstormTool = gatewayTool(CREATE_BRAINSTORM_TOOL_NAME)
@@ -377,10 +381,23 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     description: ${JSON.stringify(activateTool.description)},
     promptSnippet: 'Activate an installed app utility for the current turn',
     parameters: Type.Object({
-      utility_id: Type.String({ description: 'Installed utility identifier.' })
+      utility_id: Type.Optional(Type.String({ description: 'Installed utility identifier.' })),
+      force: Type.Optional(
+        Type.Boolean({ description: 'Re-activate an already active utility and re-list it.' })
+      ),
+      inputs: Type.Optional(
+        Type.Array(
+          Type.Object({
+            utility_id: Type.String(),
+            force: Type.Optional(Type.Boolean())
+          }),
+          { description: 'One entry per utility to activate in this one call.' }
+        )
+      )
     }),
     async execute(_toolCallId, params) {
-      const result = await callGateway(${JSON.stringify(activateTool.route)}, { utility_id: params.utility_id })
+      const body = { utility_id: params.utility_id, force: params.force, inputs: params.inputs }
+      const result = await callGateway(${JSON.stringify(activateTool.route)}, body)
       return textResult(result)
     }
   })
@@ -393,13 +410,19 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     parameters: Type.Object({
       utility_id: Type.String({ description: 'Utility activated earlier this turn.' }),
       operation: Type.String({ description: 'Operation or tool name to invoke.' }),
-      input: Type.Optional(Type.Record(Type.String(), Type.Unknown()))
+      input: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      inputs: Type.Optional(
+        Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+          description: 'One input per item, for the same operation over many items.'
+        })
+      )
     }),
     async execute(_toolCallId, params) {
       const result = await callGateway(${JSON.stringify(invokeTool.route)}, {
         utility_id: params.utility_id,
         operation: params.operation,
-        input: params.input ?? {}
+        input: params.input ?? {},
+        inputs: params.inputs
       })
       return textResult(result)
     }
@@ -695,13 +718,78 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     label: 'Read a dispatched thread status',
     description: ${JSON.stringify(orchestrationStatusTool.description)},
     parameters: Type.Object({
-      threadId: Type.String({ description: 'Thread id returned by cio_orchestrate_dispatch.' }),
+      threadId: Type.Optional(Type.String({ description: 'Thread id to read. Omit to list every thread this conversation dispatched, with their ids and current settings.' })),
       projectId: Type.Optional(Type.String())
     }),
     async execute(_toolCallId, params) {
       const result = await callGateway(${JSON.stringify(orchestrationStatusTool.route)}, {
-        threadId: params.threadId,
+        ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
         ...(params.projectId !== undefined ? { projectId: params.projectId } : {})
+      })
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(orchestrationContinueTool.name)},
+    label: 'Continue a dispatched thread',
+    description: ${JSON.stringify(orchestrationContinueTool.description)},
+    parameters: Type.Object({
+      threadId: Type.String({ description: 'The existing thread to continue.' }),
+      prompt: Type.Optional(Type.String({ description: 'Follow-up instruction for that thread. Omit to only change how it runs.' })),
+      harnessId: Type.Optional(Type.String({ description: 'Exact harness id. Requires providerId and modelId.' })),
+      providerId: Type.Optional(Type.String({ description: 'Exact provider id. Requires harnessId and modelId.' })),
+      modelId: Type.Optional(Type.String({ description: 'Exact model id. Requires harnessId and providerId.' })),
+      accountId: Type.Optional(Type.String({ description: 'Exact account id for the harness.' })),
+      thinkingLevel: Type.Optional(Type.String()),
+      inferenceMode: Type.Optional(Type.String()),
+      permissionLevel: Type.Optional(Type.String()),
+      ovenId: Type.Optional(Type.String({ description: 'Exact Oven id, or local for this computer.' })),
+      ovenPath: Type.Optional(Type.String())
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(${JSON.stringify(orchestrationContinueTool.route)}, {
+        threadId: params.threadId,
+        ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+        ...(params.harnessId !== undefined ? { harnessId: params.harnessId } : {}),
+        ...(params.providerId !== undefined ? { providerId: params.providerId } : {}),
+        ...(params.modelId !== undefined ? { modelId: params.modelId } : {}),
+        ...(params.accountId !== undefined ? { accountId: params.accountId } : {}),
+        ...(params.thinkingLevel !== undefined ? { thinkingLevel: params.thinkingLevel } : {}),
+        ...(params.inferenceMode !== undefined ? { inferenceMode: params.inferenceMode } : {}),
+        ...(params.permissionLevel !== undefined ? { permissionLevel: params.permissionLevel } : {}),
+        ...(params.ovenId !== undefined ? { ovenId: params.ovenId } : {}),
+        ...(params.ovenPath !== undefined ? { ovenPath: params.ovenPath } : {})
+      })
+      return textResult(result)
+    }
+  })
+
+  registerCioGatewayTool(pi, {
+    name: ${JSON.stringify(orchestrationAnswerTool.name)},
+    label: 'Answer a dispatched thread that is waiting',
+    description: ${JSON.stringify(orchestrationAnswerTool.description)},
+    parameters: Type.Object({
+      kind: Type.String({ description: 'question, secret or permission.' }),
+      requestId: Type.String({ description: 'Request id from the message that said the thread stopped.' }),
+      threadId: Type.String({ description: 'The blocked thread id, from the same message.' }),
+      projectId: Type.String({ description: 'The project the blocked thread lives in.' }),
+      answers: Type.Optional(Type.Array(Type.Array(Type.String()), { description: 'kind question: one entry per question, each holding the answer the user gave.' })),
+      secrets: Type.Optional(Type.Array(Type.Object({
+        secretId: Type.String({ description: 'The secret id the blocked thread asked for.' }),
+        environmentVariable: Type.String({ description: 'The variable this conversation collected the value under.' })
+      }), { description: 'kind secret: the values stay in the vault and are read by the app.' })),
+      permission: Type.Optional(Type.String({ description: 'kind permission: once, always or reject.' }))
+    }),
+    async execute(_toolCallId, params) {
+      const result = await callGateway(${JSON.stringify(orchestrationAnswerTool.route)}, {
+        kind: params.kind,
+        requestId: params.requestId,
+        threadId: params.threadId,
+        projectId: params.projectId,
+        ...(params.answers !== undefined ? { answers: params.answers } : {}),
+        ...(params.secrets !== undefined ? { secrets: params.secrets } : {}),
+        ...(params.permission !== undefined ? { permission: params.permission } : {})
       })
       return textResult(result)
     }

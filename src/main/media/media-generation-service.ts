@@ -9,7 +9,8 @@ import {
 } from '../../lib/media-generation'
 import type { AppConfig } from '../../lib/types'
 import type { DesignMediaKind } from '../../lib/design-media'
-import type { SecretVault } from '../storage/secret-vault'
+import { mediaProviderTokenRef } from '../secrets/secret-refs'
+import type { SecretsService } from '../secrets/secrets-service'
 import { createReplicateProvider } from './replicate-provider'
 import type { MediaProvider } from './media-provider'
 
@@ -25,11 +26,6 @@ import type { MediaProvider } from './media-provider'
  * The service returns a URL and stops there. Writing the bytes is the existing
  * media saver's job, so there is exactly one writer of media on disk.
  */
-
-/** Deterministic vault ref for one provider's token, so it survives a restart. */
-export function mediaProviderTokenRef(providerId: MediaProviderId): string {
-  return `media_provider_token_${providerId}`
-}
 
 /** What settings needs to know about the configured backend. */
 export interface MediaGenerationStatus {
@@ -54,7 +50,7 @@ export interface MediaGenerationResult {
 export interface MediaGenerationServiceOptions {
   /** The live config, read per call so a settings change applies at once. */
   config: () => Promise<AppConfig>
-  vault: SecretVault
+  vault: SecretsService
   /**
    * Builds the backend for one token. Injected by a probe, which points the same
    * client at a local server instead of the real endpoint.
@@ -98,7 +94,11 @@ export class MediaGenerationService {
   async setToken(providerId: MediaProviderId, token: string): Promise<void> {
     const trimmed = token.trim()
     if (trimmed.length === 0) throw new TypeError('The generation token must not be empty')
-    await this.options.vault.save(trimmed, mediaProviderTokenRef(providerId))
+    await this.options.vault.save(trimmed, mediaProviderTokenRef(providerId), {
+      scope: 'media',
+      ownerId: providerId,
+      label: `${mediaProviderLabel(providerId)} API token`
+    })
   }
 
   /** Forget one provider's token. The provider choice itself is left alone. */

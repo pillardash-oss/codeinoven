@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
@@ -33,6 +35,7 @@
 
   import AppHeaderCenter from './AppHeaderCenter.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
+  import AppHeaderLayoutToggle from './AppHeaderLayoutToggle.svelte'
   import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
   import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
@@ -68,51 +71,115 @@
   })
 
   /**
-   * Which form the app's name takes in this bar. Only the name ever gives way:
-   * the mark, the navigation pair and every view action keep their places at
-   * every panel width, so the column follows the panel only until it is as narrow
-   * as the chrome itself.
+   * The panel column the bar is drawing right now.
    *
-   * `none` is the view without a sidebar (nothing to align to) and the column
-   * past the width the chrome needs: the mark alone. `long` needs the room the
-   * name itself takes beside three actions; below that the bar falls back to the
-   * short name rather than to an ellipsis.
+   * The assistant view's name sits on the panel's right edge, so closing the
+   * panel has to carry that name across to the chrome. The sidebar unmounts in
+   * its own animated pass, and its registration only drops once that pass ends,
+   * which would leave the name standing until the panel was already gone. This
+   * column follows the target itself, so the name slides from where the panel was
+   * to where the chrome ends at the moment the target changes.
+   */
+  // Intentional initial-value capture: the slide starts from wherever the column
+  // is at mount, then the effect below owns it.
+  // svelte-ignore state_referenced_locally
+  let renderedColumn = $state(panelColumnWidth)
+  /** The value the animation has reached, kept out of state to avoid a cycle. */
+  // svelte-ignore state_referenced_locally
+  let columnNow = panelColumnWidth
+  let columnFrame: number | null = null
+
+  $effect(() => {
+    const target = panelColumnWidth
+    if (target === columnNow) return
+    slideColumnTo(target)
+  })
+
+  function slideColumnTo(target: number): void {
+    if (columnFrame !== null) cancelAnimationFrame(columnFrame)
+    const from = columnNow
+    const startedAt = performance.now()
+    const duration = 220
+    const step = (now: number): void => {
+      const progress = Math.min(1, (now - startedAt) / duration)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      columnNow = from + (target - from) * eased
+      renderedColumn = columnNow
+      if (progress < 1) {
+        columnFrame = requestAnimationFrame(step)
+        return
+      }
+      columnNow = target
+      renderedColumn = target
+      columnFrame = null
+    }
+    columnFrame = requestAnimationFrame(step)
+  }
+
+  onDestroy(() => {
+    if (columnFrame !== null) cancelAnimationFrame(columnFrame)
+  })
+
+  /**
+   * Whether the app's full name is drawn beside its mark.
+   *
+   * The wordmark is `CodeInOven` on every platform, so the only choice left is
+   * whether the column is wide enough for it; below that the mark stands alone
+   * and the name returns as soon as the panel is dragged wide enough.
    */
   /** The bar's controls at their narrowest: the mark, the navigation pair and
    *  three view actions. Nothing in the chrome shrinks, so this is what the
    *  panel has to be able to hold. */
   const CHROME_WIDTH = 182
-  /** The same column with the short name beside the mark. */
-  const CHROME_WIDTH_WITH_SHORT_NAME = 203
-  /** And with the whole wordmark. */
-  const CHROME_WIDTH_WITH_LONG_NAME = 252
+  /** The column that fits the whole wordmark beside the mark. */
+  const CHROME_WIDTH_WITH_WORDMARK = 252
 
-  let brandForm = $derived.by((): 'long' | 'short' | 'none' => {
-    const column = panelColumnWidth
-    if (column <= 0 || column < CHROME_WIDTH_WITH_SHORT_NAME) return 'none'
-    if (controlsOnLeft) return 'short'
-    return column >= CHROME_WIDTH_WITH_LONG_NAME ? 'long' : 'short'
+  let showBrandName = $derived(
+    panelColumnWidth > 0 && panelColumnWidth >= CHROME_WIDTH_WITH_WORDMARK
+  )
+
+  /** The chrome's measured width. The column it owns is a target, not a fact: with
+   *  no panel docked the cluster is content-sized, and using the worst-case width
+   *  there pushed the title a few pixels right of the line it was aligning to.
+   *
+   *  This is the cluster as drawn, so it equals the panel's column whenever the
+   *  chrome fits inside it. It is therefore the wordmark's alignment reference,
+   *  never a floor: see `chromeFloorWidth` for that. */
+  let clusterWidth = $state(0)
+
+  /** The chrome's content width with no attention paid to the column: the box the
+   *  bar's mark, navigation and actions take on their own. */
+  let chromeWidth = $state(0)
+
+  /** The brand name's own width, which is the part of the chrome that gives way. */
+  let brandNameWidth = $state(0)
+
+  /** The narrowest the chrome ever gets, because the name is the one part of it
+   *  the bar drops as the column narrows.
+   *
+   *  The floor has to be the chrome's own content width and never the drawn
+   *  cluster width: the cluster is exactly as wide as the panel's column, so a
+   *  floor read from it equals the panel's current width, and the drag could only
+   *  ever widen the panel (which is what it did: every move was clamped back to
+   *  where it started, while a move outward grew the floor with it). Measured
+   *  rather than estimated, because a dev build carries a build pill the
+   *  production bar does not. */
+  let chromeFloorWidth = $derived.by(() => {
+    if (chromeWidth <= 0) return CHROME_WIDTH
+    return Math.max(0, chromeWidth - (showBrandName ? brandNameWidth : 0))
   })
 
   /** The narrowest panel that still contains the header's chrome, so a drag can
    *  never pull the action buttons out of the panel's column and into the
-   *  thread's. Measured, not estimated: a dev build carries a build pill the
-   *  production bar does not, and an estimate that ignores it lets the chrome
-   *  overflow the column by exactly that pill's width. */
+   *  thread's. */
   let minimumPanelWidth = $derived.by(() => {
-    const chrome = clusterWidth > 0 ? clusterWidth : CHROME_WIDTH
-    const floor = chrome + leftInset - layoutPanelState.railWidth
+    const floor = chromeFloorWidth + leftInset - layoutPanelState.railWidth
     return Math.max(0, Math.min(420, floor))
   })
 
   $effect(() => {
     layoutPanelState.minimumWidth = minimumPanelWidth
   })
-
-  /** The chrome's measured width. The column it owns is a target, not a fact: with
-   *  no panel docked the cluster is content-sized, and using the worst-case width
-   *  there pushed the title a few pixels right of the line it was aligning to. */
-  let clusterWidth = $state(0)
 
   /** How far the thread's block sits from the end of the chrome so that its left
    *  edge lands on the reading column's own left edge. The page being read is the
@@ -146,6 +213,9 @@
   let onSettings = $derived(isSettingsView(activeView))
 
   let onScope = $derived(activeView === 'scope')
+  /** The Projects and Threads pair is switched from the panel's own tab row, so
+   *  the app header draws no second switch for it. */
+  let onPanelTabs = $derived(activeView === 'projects' || activeView === 'threads')
 
   /**
    * The global browser is its own workspace: its centre shows the page, its
@@ -156,6 +226,14 @@
    * thread, and a browser tab is not a thread.
    */
   let onBrowser = $derived(activeView === 'browser')
+
+  /**
+   * The assistant view owns its centre: the open assistant's name, then its latest
+   * threads as tabs, instead of a single thread title. It is fetched on first
+   * entry, like the browser's centre, so the strip's own model never sits in the
+   * launch chunk.
+   */
+  let onAssistant = $derived(activeView === 'assistant')
 
   /** Chats and Assistant must feel like chat   no editor, spec, or terminal controls. */
   let chatMode = $derived(activeView === 'chats' || activeView === 'assistant')
@@ -324,77 +402,100 @@
   <nav
     class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1"
     aria-label="Primary navigation"
-    style:width={panelColumnWidth > 0 ? `${panelColumnWidth}px` : undefined}
+    style:width={onAssistant
+      ? `${renderedColumn}px`
+      : panelColumnWidth > 0
+        ? `${panelColumnWidth}px`
+        : undefined}
     bind:clientWidth={clusterWidth}
   >
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-      aria-label="Open thread switcher"
-      title="Open thread switcher"
-      onclick={() => threadSwitcherRequest.requestOpen()}
-    >
-      <VendorIcon name="CodeInOven" size={20} />
-      {#if brandForm !== 'none'}
-        <span class="header-brand-name">{brandForm === 'long' ? 'CodeInOven' : 'cio'}</span>
+    <!-- The chrome measures itself inside its own content box. The cluster above
+         is forced to the panel's column, so its width says where the column is,
+         never how wide the chrome needs to be. -->
+    <div class="flex w-max shrink-0 items-center gap-1" bind:clientWidth={chromeWidth}>
+      <button
+        type="button"
+        class="flex shrink-0 items-center px-1.5 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+        aria-label="Open thread switcher"
+        title="Open thread switcher"
+        onclick={() => threadSwitcherRequest.requestOpen()}
+      >
+        <VendorIcon name="CodeInOven" size={20} />
+        {#if showBrandName}
+          <!-- The gap to the mark is the name's own padding, so its measured
+               width is the whole space the name takes. -->
+          <span class="header-brand-name pl-1.5" bind:clientWidth={brandNameWidth}>CodeInOven</span>
+        {/if}
+      </button>
+
+      {#if buildLabel}
+        <StatusPill
+          tone={buildTone}
+          dot
+          truncate
+          title="CodeInOven {buildLabel} build"
+          aria-label="CodeInOven build: {buildLabel}"
+          class="min-w-0 px-1 py-0">{buildLabel}</StatusPill
+        >
       {/if}
-    </button>
 
-    {#if buildLabel}
-      <StatusPill
-        tone={buildTone}
-        dot
-        truncate
-        title="CodeInOven {buildLabel} build"
-        aria-label="CodeInOven build: {buildLabel}"
-        class="min-w-0 px-1 py-0">{buildLabel}</StatusPill
-      >
-    {/if}
+      <!-- Global navigation: back / forward -->
+      <div class="header-cluster-nav flex items-center gap-0.5">
+        <button
+          class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
+          aria-label="Go back"
+          title="Go back"
+          disabled={!navigationHistoryState.canGoBack}
+          onclick={goBack}
+        >
+          <CioBack size={ICON_SIZE.control} />
+        </button>
+        <button
+          class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
+          aria-label="Go forward"
+          title="Go forward"
+          disabled={!navigationHistoryState.canGoForward}
+          onclick={goForward}
+        >
+          <CioForward size={ICON_SIZE.control} />
+        </button>
+      </div>
 
-    <!-- Global navigation: back / forward -->
-    <div class="header-cluster-nav flex items-center gap-0.5">
-      <button
-        class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
-        aria-label="Go back"
-        title="Go back"
-        disabled={!navigationHistoryState.canGoBack}
-        onclick={goBack}
-      >
-        <CioBack size={ICON_SIZE.control} />
-      </button>
-      <button
-        class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
-        aria-label="Go forward"
-        title="Go forward"
-        disabled={!navigationHistoryState.canGoForward}
-        onclick={goForward}
-      >
-        <CioForward size={ICON_SIZE.control} />
-      </button>
-    </div>
-
-    {#if onSettings}
-      <!-- Settings owns this slot while it is on screen: the per-view actions
+      {#if onSettings}
+        <!-- Settings owns this slot while it is on screen: the per-view actions
            belong to the view that was here before. -->
-      <button
-        class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {settingsUiState.searchOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-dimmed hover:bg-elevated hover:text-muted'}"
-        aria-label="Search settings"
-        title="Search settings"
-        onclick={() => (settingsUiState.searchOpen = true)}
-      >
-        <CioSearch size={ICON_SIZE.control} />
-      </button>
-    {:else}
-      <div class="header-cluster-actions">
-        <!-- Folded only when the bar genuinely has no room for them: no panel
+        <button
+          class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {settingsUiState.searchOpen
+            ? 'bg-elevated text-foreground'
+            : 'text-dimmed hover:bg-elevated hover:text-muted'}"
+          aria-label="Search settings"
+          title="Search settings"
+          onclick={() => (settingsUiState.searchOpen = true)}
+        >
+          <CioSearch size={ICON_SIZE.control} />
+        </button>
+      {:else}
+        {#if navigation.layoutToggle && !onScope && !onPanelTabs}
+          <!-- The second layout of the rail item on screen: Scoped beside the
+             board. The Projects/Threads pair is switched from the panel's own tab
+             row now, so the bar spends no control on it. -->
+          <AppHeaderLayoutToggle toggle={navigation.layoutToggle} />
+        {/if}
+        <div class="header-cluster-actions">
+          <!-- Folded only when the bar genuinely has no room for them: no panel
              column to spend, and the context panel open, which is what narrows the
              conversation and the title with it. Both panels closed, or a panel
              docked on the left, and the actions stay in the bar. -->
-        <AppHeaderViewActions compact={panelColumnWidth === 0 && contextSidebarState.visible} />
-      </div>
-    {/if}
+          <AppHeaderViewActions compact={panelColumnWidth === 0 && contextSidebarState.visible} />
+          {#if navigation.layoutToggle && onScope}
+            <!-- Beside the board, Scoped follows the search it narrows: the
+               toggle belongs to the search, not to the view's own creation
+               controls. -->
+            <AppHeaderLayoutToggle toggle={navigation.layoutToggle} />
+          {/if}
+        </div>
+      {/if}
+    </div>
   </nav>
 
   {#if onScope}
@@ -404,8 +505,13 @@
          every view, so importing this statically would put the browser's model in
          the first-paint chunk. It is fetched the moment the browser view is the
          one on screen, which is also when its runtime is wired. -->
-    {#await import('./AppHeaderBrowserCenter.svelte') then { default: AppHeaderBrowserCenter }}
+    {#await loadCachedPanelModule('module:lib/components/layout/AppHeaderBrowserCenter.svelte', () => import('./AppHeaderBrowserCenter.svelte')) then { default: AppHeaderBrowserCenter }}
       <AppHeaderBrowserCenter />
+    {/await}
+  {:else if onAssistant}
+    <!-- The assistant's thread tabs, in their own chunk for the same reason. -->
+    {#await loadCachedPanelModule('module:lib/components/layout/AppHeaderAssistantTabs.svelte', () => import('./AppHeaderAssistantTabs.svelte')) then { default: AppHeaderAssistantTabs }}
+      <AppHeaderAssistantTabs />
     {/await}
   {:else}
     <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} />
@@ -470,7 +576,7 @@
          and it draws nothing while no browser tab is running the extension's
          box. -->
     {#if onBrowser && browserStore()}
-      {#await import('./AppHeaderPinnedExtensions.svelte') then { default: AppHeaderPinnedExtensions }}
+      {#await loadCachedPanelModule('module:lib/components/layout/AppHeaderPinnedExtensions.svelte', () => import('./AppHeaderPinnedExtensions.svelte')) then { default: AppHeaderPinnedExtensions }}
         <AppHeaderPinnedExtensions />
       {/await}
     {/if}

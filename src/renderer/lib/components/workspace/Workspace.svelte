@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import AssistantKnowledgeIcon from '$lib/components/icons/cio/AssistantKnowledgeIcon.svelte'
   import CioActions from '@pdslng/cio-icon/CioActions.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
@@ -8,6 +9,8 @@
   import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   import CioHistory from '@pdslng/cio-icon/CioHistory.svelte'
   import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
@@ -15,7 +18,8 @@
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { feature } from '$lib/feature-registry'
   import { motionDuration } from '$lib/motion'
-  import { assistants } from '$lib/stores/assistants.svelte'
+  import { assistantHeaderTabs } from '$lib/stores/assistant-header-tabs.svelte'
+  import { rememberAssistantThread } from '$lib/stores/assistant-last-viewed.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -35,7 +39,7 @@
   import { threadChangesState } from '$lib/stores/thread-changes.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import type { AutoAnswerThreadScope, Project } from '$shared/types'
+  import type { Assistant, AutoAnswerThreadScope, Project } from '$shared/types'
   import { activeThreadRowId, ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
   import { cubicOut } from 'svelte/easing'
   import { SvelteSet } from 'svelte/reactivity'
@@ -53,6 +57,10 @@
   import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
   import WorkspaceSidebar from './WorkspaceSidebar.svelte'
+  import type { SidebarPanelAction } from '$lib/components/layout/SidebarActionStack.svelte'
+  import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { canHostProjectThread } from './Workspace/Workspace-new-thread-project-picker.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
   import { createWorkspace } from './Workspace/Workspace-board.svelte'
@@ -76,6 +84,31 @@
     config,
     updateConfig
   }))
+  /**
+   * The assistant view's thread tabs live in the app header, which this component
+   * does not paint. The board publishes what the strip draws (its assistant-space
+   * threads) and what it can do (open, delete, remove), so the header never owns a
+   * second thread list or a second delete path.
+   */
+  assistantHeaderTabs.publishActions({
+    openThread: board.markThreadReadAndApply.openAssistantTask,
+    deleteThread: board.switcherPanelTabs.handleDelete,
+    renameThread: board.switcherPanelTabs.handleRename,
+    togglePinThread: (thread) => void board.openThreadFromSwitcher.togglePin(thread),
+    forkThread: (thread) => void board.switcherPanelTabs.forkThread(thread),
+    openThreadNotes: board.switcherPanelTabs.openAssistantTaskNotes,
+    hideKnowledgeThread: (thread) => void board.switcherPanelTabs.hideAssistantKnowledge(thread),
+    openAssistantBehaviour: (assistant: Assistant) => {
+      void board.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)
+    },
+    createTask: (assistant: Assistant) => {
+      void board.mergeThreadsInList.createTaskInAssistant(assistant)
+    },
+    deleteAssistant: board.mergeThreadsInList.deleteAssistant
+  })
+  $effect(() => {
+    assistantHeaderTabs.publishThreads(board.mergeThreadsInList.assistantThreads)
+  })
   /**
    * Dock contents, grouped: history (which also carries the thread note and, on
    * an assistant task, the assistant's behavior), then workspace tools, then
@@ -101,21 +134,28 @@
     // no count worth showing yet, and "0" reads as a stuck/broken badge.
     const hasMessages = workspaceState.messageCount > 0
 
-    // The thread note rides in history's own group, right after it: the two are
+    // The thread note rides in history's own group, right after it (and after
+    // an assistant task's behavior, which sits closest to history): the two are
     // always reached together, so they read as one pair instead of the note
     // sitting far down the rail behind its own hairline. It is always present
     //   not just once a note exists   so it also doubles as the "add a note"
     // entry point; the amber tone only kicks in once there is something written
     // to draw attention to.
     const hasThreadNote = threadNotesState.has(selectedThread.id)
+    const threadNoteOpen = board.switcherPanelTabs.dockKindActive('thread-note')
     const threadNoteEntry: ContextDockItem = {
       id: 'note',
       label: hasThreadNote
         ? `${feature('thread-note').name} available`
         : `Add a ${feature('thread-note').name.toLowerCase()}`,
       icon: feature('thread-note').icon,
-      active: board.switcherPanelTabs.dockKindActive('thread-note'),
+      active: threadNoteOpen,
       tone: hasThreadNote ? 'warning' : undefined,
+      // Waits in More until there is a note to come back to, or until the note
+      // is open right now: an open panel always has its own icon on the rail,
+      // where it can be seen and closed again.
+      overflow: !hasThreadNote && !threadNoteOpen,
+      emerges: true,
       onSelect: () =>
         board.switcherPanelTabs.toggleDockPanel('thread-note', () =>
           contextSidebarState.openThreadNote(
@@ -126,9 +166,11 @@
         )
     }
 
-    // An assistant task's own authoring surface rides the same group, right
-    // after the note: history, the note and the assistant's behavior are the
-    // three panels of one thread's identity.
+    // An assistant task's own authoring surface rides the same group, directly
+    // after history: the assistant's behavior is how this task is steered, so
+    // it belongs on the rail rather than folded behind More. It sits beside the
+    // note because history, the behavior and the note are the three panels of
+    // one thread's identity.
     const assistantBehaviorEntry: ContextDockItem | null = isAssistantThread
       ? {
           id: 'assistant-knowledge',
@@ -155,8 +197,8 @@
         onSelect: () =>
           (board.jumpToHistoryMessage.showHistoryMenu = !board.jumpToHistoryMessage.showHistoryMenu)
       },
-      threadNoteEntry,
-      ...(assistantBehaviorEntry ? [assistantBehaviorEntry] : [])
+      ...(assistantBehaviorEntry ? [assistantBehaviorEntry] : []),
+      threadNoteEntry
     ]
 
     const workspaceTools: ContextDockItem[] = []
@@ -278,6 +320,7 @@
             : 'Sources',
         icon: CioTabInfo,
         active: board.switcherPanelTabs.dockKindActive('sources'),
+        overflow: workspaceState.sourceProcessCount === 0,
         countBadge:
           workspaceState.sourceProcessCount > 0
             ? String(workspaceState.sourceProcessCount)
@@ -294,6 +337,8 @@
         icon: CioMemory,
         active: board.switcherPanelTabs.dockKindActive('memory'),
         badge: memoryProposalState.hasPending ? 'attention' : undefined,
+        // On the rail only while a suggestion waits for review.
+        overflow: !memoryProposalState.hasPending,
         badgeTitle: `${memoryProposalState.pendingCount} memory proposals need attention`,
         onSelect: () =>
           board.switcherPanelTabs.toggleDockPanel(
@@ -308,6 +353,7 @@
         label: 'Cloud deployments',
         icon: CioCloud,
         active: board.switcherPanelTabs.dockKindActive('cloud-deployment'),
+        overflow: true,
         onSelect: () =>
           board.switcherPanelTabs.toggleDockPanel(
             'cloud-deployment',
@@ -321,6 +367,7 @@
         label: 'Debugger',
         icon: CioDebugger,
         active: board.switcherPanelTabs.dockKindActive('debugger'),
+        overflow: true,
         onSelect: () =>
           board.switcherPanelTabs.toggleDockPanel(
             'debugger',
@@ -380,12 +427,19 @@
         const session = designCoordinatorState.stateFor(selectedThread.projectId, selectedThread.id)
         const sessionKind = session?.active ? session.kind : undefined
         if ((work?.[kind].length ?? 0) === 0 && sessionKind !== kind) continue
+        // The project's work waits in More; work this thread made (or a session it
+        // has open) slides out onto the rail so the thread shows it holds some.
+        const threadOwns =
+          sessionKind === kind ||
+          (work?.[kind].some((entry) => entry.creatorThreadId === selectedThread.id) ?? false)
         authoredWork.push({
           id: `authored-work-${kind}`,
           label: `${AUTHORED_WORK_NAME_BY_KIND[kind]}s in ${authoredWorkOwnerLabel(selectedThread.projectId)}`,
           icon: AUTHORED_WORK_ICON_BY_KIND[kind],
           active: board.openThreadFromSwitcher.authoredWorkActive(kind),
           media: browserAudio.boardActivities(selectedThread.id, kind),
+          overflow: !threadOwns,
+          emerges: true,
           onSelect: () => board.openThreadFromSwitcher.openAuthoredWork(kind)
         })
       }
@@ -581,6 +635,54 @@
    */
   const selectedThread = $derived(board.openThreadFromSwitcher.selectedThread)
   const activeProject = $derived(board.openThreadFromSwitcher.activeProject)
+
+  // Opening an assistant later returns to the conversation the user was last in,
+  // so the assistant view's own navigation is remembered as it happens, whoever
+  // opened the thread (a tab, the sidebar, a notification, or a shortcut).
+  $effect(() => rememberAssistantThread(selectedThread))
+
+  /** The list's own actions, drawn at the foot of its panel. */
+  function sidebarPanelActions(pane: 'folders' | 'threads' | 'chats'): SidebarPanelAction[] {
+    if (pane === 'chats') {
+      return [
+        {
+          id: 'new-chat',
+          label: 'New chat',
+          icon: CioPencil,
+          shortcut: keymapState.keysFor('nav-new-thread'),
+          run: () => board.markThreadReadAndApply.startNewChat()
+        }
+      ]
+    }
+    return [
+      {
+        id: 'new-project',
+        label: 'New project',
+        component: ProjectCreateControl as unknown as SidebarPanelAction['component'],
+        props: {
+          title: 'New project',
+          label: 'New project',
+          onProjectCreated: board.switcherPanelTabs.handleProjectCreated,
+          onExisting: board.switcherPanelTabs.handleExistingProject,
+          triggerAddProject: board.state.projectCreateTrigger,
+          triggerKind: board.state.projectCreateTriggerKind
+        }
+      },
+      {
+        id: 'new-thread',
+        label: 'New thread',
+        icon: CioPlus,
+        shortcut: keymapState.keysFor('nav-new-thread'),
+        run: () => {
+          const project = canHostProjectThread(board.openThreadFromSwitcher.activeProject)
+            ? board.openThreadFromSwitcher.activeProject
+            : null
+          if (project) void board.createThreadInProject.createThreadInProject(project)
+          else board.newThreadPicker.request()
+        }
+      }
+    ]
+  }
 </script>
 
 <svelte:document onpointerdowncapture={board.switcherPanelTabs.handleComposerPointerDown} />
@@ -590,36 +692,24 @@
        A view with nothing in its board.switcherPanelTabs.sidebar paints no board.switcherPanelTabs.sidebar at all, so an empty
        panel is never put in front of the user. -->
   {#if board.markThreadReadAndApply.workspaceSidebarVisible && board.props.mode === 'assistant'}
-    {#await import('../assistant/AssistantSidebar.svelte') then { default: AssistantSidebar }}
+    {#await loadCachedPanelModule('module:lib/components/assistant/AssistantSidebar.svelte', () => import('../assistant/AssistantSidebar.svelte')) then { default: AssistantSidebar }}
       <AssistantSidebar
         bind:scroller={board.switcherPanelTabs.sidebarScroller}
         assistants={board.mergeThreadsInList.assistantList}
         tasks={board.markThreadReadAndApply.assistantTasks}
-        runsByTask={board.mergeThreadsInList.assistantRunsByTask}
+        runs={board.mergeThreadsInList.assistantRuns}
         runsByAssistant={board.mergeThreadsInList.runsByAssistant}
         selectedThreadId={activeThreadRowId(selectedThread)}
         onOpenTask={board.markThreadReadAndApply.openAssistantTask}
-        onOpenTaskKnowledge={board.mergeThreadsInList.openAssistantKnowledgeForTask}
         onOpenAssistantKnowledge={(assistant) =>
           void board.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)}
-        onCreateTaskInAssistant={(assistant) =>
-          void board.mergeThreadsInList.createTaskInAssistant(assistant)}
-        onRenameTask={board.switcherPanelTabs.handleRename}
-        onTogglePinTask={(task) => void board.openThreadFromSwitcher.togglePin(task)}
-        onDeleteTask={board.switcherPanelTabs.handleDelete}
-        onForkTask={(task) => void board.switcherPanelTabs.forkThread(task)}
-        onOpenTaskNotes={board.switcherPanelTabs.openAssistantTaskNotes}
-        onHandedOffTask={board.switcherPanelTabs.handleAssistantHandoff}
-        onHideKnowledge={(task) => void board.switcherPanelTabs.hideAssistantKnowledge(task)}
-        onDeleteAssistant={board.mergeThreadsInList.deleteAssistant}
-        onHasAssistantRunsToday={(assistant) => assistants.hasRunsToday(assistant.id)}
-        onSkipNextAssistantRun={board.state.skipNextRun}
-        onSkipAssistantRunsToday={board.state.skipRunsToday}
-        onTogglePinAssistant={(assistant) => void board.state.toggleAssistantPin(assistant)}
         onMoveAssistant={(draggedId, targetId, position) =>
           void board.state.moveAssistant(draggedId, targetId, position)}
         onAssignTask={(taskId, assistantId) =>
           void board.mergeThreadsInList.assignAssistantTask(taskId, assistantId)}
+        onCreateAssistant={board.markThreadReadAndApply.createAssistant}
+        onCreateAssistantViaChat={board.markThreadReadAndApply.createAssistantViaChat}
+        assistantCreateTrigger={board.mergeThreadsInList.assistantCreateTrigger}
       />
     {/await}
   {:else if board.markThreadReadAndApply.workspaceSidebarVisible}
@@ -627,6 +717,8 @@
       bind:scroller={board.switcherPanelTabs.sidebarScroller}
       mode={board.props.mode}
       active={board.props.active}
+      onSelectMode={(next) => navigate(next)}
+      panelActions={sidebarPanelActions}
       projects={board.createThreadInProject.projects}
       visibleProjects={board.mergeThreadsInList.visibleProjects}
       projectIcons={board.createThreadInProject.projectIcons}
@@ -736,6 +828,7 @@
             onAdoptAssistantTask={board.mergeThreadsInList.requestTaskOwnerForTask}
           />
         {/snippet}
+
         <div
           class="min-h-0 min-w-0 {board.appBackgroundPanelKinds.rightSidebarFlushes
             ? 'border-l border-border'
@@ -845,7 +938,7 @@
 {/snippet}
 
 {#snippet browserMenu()}
-  {#await import('./WorkspaceBrowserMenu.svelte') then { default: WorkspaceBrowserMenu }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceBrowserMenu.svelte', () => import('./WorkspaceBrowserMenu.svelte')) then { default: WorkspaceBrowserMenu }}
     <WorkspaceBrowserMenu browser={board.switcherPanelTabs.browser} />
   {/await}
 {/snippet}
@@ -860,14 +953,14 @@
      fetched on a launch that never reaches the board.switcherPanelTabs.browser. Thread-board.switcherPanelTabs.browser
      fullscreen is loaded separately below when a thread tab asks for it. -->
 {#if browserStore()}
-  {#await import('./WorkspaceBrowserDataModal.svelte') then { default: WorkspaceBrowserDataModal }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceBrowserDataModal.svelte', () => import('./WorkspaceBrowserDataModal.svelte')) then { default: WorkspaceBrowserDataModal }}
     <WorkspaceBrowserDataModal
       browser={board.switcherPanelTabs.browser}
       projects={board.createThreadInProject.projects}
     />
   {/await}
 
-  {#await import('./WorkspaceBrowserDownloadsModal.svelte') then { default: WorkspaceBrowserDownloadsModal }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceBrowserDownloadsModal.svelte', () => import('./WorkspaceBrowserDownloadsModal.svelte')) then { default: WorkspaceBrowserDownloadsModal }}
     <WorkspaceBrowserDownloadsModal browser={board.switcherPanelTabs.browser} />
   {/await}
 {/if}
@@ -904,7 +997,7 @@
 />
 
 {#if board.switcherPanelTabs.terminalFullscreenTab}
-  {#await import('./WorkspaceFullscreenTerminal.svelte') then { default: WorkspaceFullscreenTerminal }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceFullscreenTerminal.svelte', () => import('./WorkspaceFullscreenTerminal.svelte')) then { default: WorkspaceFullscreenTerminal }}
     <WorkspaceFullscreenTerminal
       tabId={board.openThreadFromSwitcher.terminalFullscreenTabId}
       onTabIdChange={(id) => (board.openThreadFromSwitcher.terminalFullscreenTabId = id)}
@@ -914,7 +1007,7 @@
   {/await}
 {/if}
 {#if board.openThreadFromSwitcher.displayFullscreenTabId}
-  {#await import('./WorkspaceFullscreenDisplay.svelte') then { default: WorkspaceFullscreenDisplay }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceFullscreenDisplay.svelte', () => import('./WorkspaceFullscreenDisplay.svelte')) then { default: WorkspaceFullscreenDisplay }}
     <WorkspaceFullscreenDisplay
       tabId={board.openThreadFromSwitcher.displayFullscreenTabId}
       onTabIdChange={(id) => (board.openThreadFromSwitcher.displayFullscreenTabId = id)}
@@ -924,7 +1017,7 @@
   {/await}
 {/if}
 {#if board.openThreadFromSwitcher.browserFullscreenTabId}
-  {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceFullscreenBrowser.svelte', () => import('./WorkspaceFullscreenBrowser.svelte')) then { default: WorkspaceFullscreenBrowser }}
     <WorkspaceFullscreenBrowser
       tabId={board.openThreadFromSwitcher.browserFullscreenTabId}
       onTabIdChange={(id) => (board.openThreadFromSwitcher.browserFullscreenTabId = id)}

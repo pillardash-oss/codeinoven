@@ -8,6 +8,7 @@ import { browserAssistant, type BrowserAssistantChat } from '../browser-assistan
 import { contextSidebarState } from '../context-sidebar.svelte'
 import { browserAudio } from '../browser-audio.svelte'
 import { sidebarState } from '../sidebar.svelte'
+import { selectedSearchText } from '../../selection-text'
 import { threadNotesState } from '../thread-notes.svelte'
 import { recentVisits } from '../recent-visits.svelte'
 import {
@@ -547,7 +548,9 @@ export class GlobalBrowserStateRuntime {
   /** Open the shared search panel and reveal the sidebar containing its results. */
   openTabSearch(groupId: string | null = null): void {
     this.host.tabSearchGroupId = groupId
-    this.host.tabSearchQuery = ''
+    // A search opened while the reader has text highlighted starts from that
+    // passage: a copied address or a tab title is often what they selected.
+    this.host.tabSearchQuery = selectedSearchText()
     this.host.tabSearchOpen = true
     this.host.tabSearchFocusRequest += 1
     // Keep the filtered tab results visible while searching.
@@ -606,12 +609,19 @@ export class GlobalBrowserStateRuntime {
     groupId: string | null = null,
     boxId: string | null | undefined = undefined
   ): string {
-    const existing = this.host.findTabByUrl(url, boxId ?? undefined)
+    // A box named by the default box's own id is the profile's own jar, so the
+    // match and the new tab both go through the same conversion a stored tab does.
+    const targetBox = boxId === undefined ? undefined : (this.storedTabBoxId(boxId) ?? undefined)
+    const existing = this.host.findTabByUrl(url, targetBox)
     if (existing) {
       this.host.activate(existing.id)
       return existing.id
     }
-    return this.host.createTab(url, groupId, boxId === undefined ? this.newTabBoxId() : boxId)
+    return this.host.createTab(
+      url,
+      groupId,
+      targetBox === undefined ? this.newTabBoxId() : targetBox
+    )
   }
 
   /**
@@ -652,6 +662,23 @@ export class GlobalBrowserStateRuntime {
   }
 
   /**
+   * The box id a tab actually stores for a requested box.
+   *
+   * A tab has no box id when it lives in the profile's own jar, and the default box
+   * *is* that jar: every caller converts a box to a jar through `jarIdForBox`, and an
+   * id that names no offered box is dropped rather than kept, so a tab can never be
+   * left pointing at a jar nothing owns. A surface that hands this tab creator the
+   * default box by name (the box menu lists it under the title it renamed itself to)
+   * therefore still produces an unboxed tab, which is the one shape every reader of
+   * `tab.boxId` already understands.
+   */
+  private storedTabBoxId(boxId: string | null | undefined): string | null {
+    if (boxId === null || boxId === undefined) return null
+    const jarId = jarIdForBox(boxId)
+    return jarId !== null && this.host.boxes.some((box) => box.id === jarId) ? jarId : null
+  }
+
+  /**
    * Create a tab for an address (blank allowed) and make it active.
    *
    * `boxId` names the jar the tab runs in, or null for the profile's own. `anchor`
@@ -673,8 +700,9 @@ export class GlobalBrowserStateRuntime {
     this.enforceTabCap()
     const anchorTab = anchor ? this.host.tabById(anchor.tabId) : this.host.activeTab
     const targetGroupId = groupId === undefined ? (anchorTab?.groupId ?? null) : groupId
-    const targetBoxId =
+    const targetBoxId = this.storedTabBoxId(
       boxId !== undefined ? boxId : anchorTab ? anchorTab.boxId : this.newTabBoxId()
+    )
     const now = Date.now()
     const tab: GlobalBrowserTab = {
       id: `browser:${crypto.randomUUID()}`,
@@ -683,7 +711,7 @@ export class GlobalBrowserStateRuntime {
       url,
       favicon: null,
       groupId: this.host.groups.some((group) => group.id === targetGroupId) ? targetGroupId : null,
-      boxId: this.host.boxes.some((box) => box.id === targetBoxId) ? targetBoxId : null,
+      boxId: this.storedTabBoxId(targetBoxId),
       createdAt: now,
       lastUsedAt: now,
       hibernated: false,
@@ -741,7 +769,8 @@ export class GlobalBrowserStateRuntime {
     const index = this.host.tabs.findIndex((candidate) => candidate.id === tabId)
     if (index < 0) return null
     const tab = this.host.tabs[index]
-    if (tab.boxId === boxId) return null
+    const box = this.storedTabBoxId(boxId)
+    if (tab.boxId === box) return null
     const url = tab.url
     const groupId = tab.groupId
     const appearance = {
@@ -757,7 +786,7 @@ export class GlobalBrowserStateRuntime {
     // box, so recording it would offer the user a tab that never left.
     // No focus handover for the tab in between: the new tab takes it below.
     this.host.close(tabId, { recordForReopen: false, focusNeighbour: false })
-    const nextId = this.host.createTab(url, groupId, boxId)
+    const nextId = this.host.createTab(url, groupId, box)
     this.host.updateTab(nextId, appearance)
     if (pinned) this.host.updateTab(nextId, { pinned, pinnedAt })
     // A reopen is a replacement, not a new row: the tab keeps the position of
@@ -892,10 +921,7 @@ export class GlobalBrowserStateRuntime {
         this.host.groups.some((group) => group.id === entry.tab.groupId)
           ? entry.tab.groupId
           : null,
-      boxId:
-        entry.tab.boxId !== null && this.host.boxes.some((box) => box.id === entry.tab.boxId)
-          ? entry.tab.boxId
-          : null,
+      boxId: this.storedTabBoxId(entry.tab.boxId),
       // The tab's conversation was deleted with it, so a reopened tab starts
       // with none and asks the agent again if it wants one.
       assistantThreadId: null,

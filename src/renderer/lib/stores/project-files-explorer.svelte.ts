@@ -725,6 +725,13 @@ export class ProjectFilesExplorer {
     if (persist) this.persistExplorer(projectId)
   }
 
+  /**
+   * Point the tree at one folder and open it.
+   *
+   * Unlike a file, a folder has no other surface that can show it, so a folder
+   * reveal is the one reveal that still opens the tree. Folding it again is the
+   * reader's next click, not a state this action silently overrides.
+   */
   async revealDirectory(projectId: string, directory: string): Promise<void> {
     const state = this.host.stateFor(projectId)
     const generation = this.beginFocus(projectId)
@@ -792,11 +799,19 @@ export class ProjectFilesExplorer {
     }
   }
 
+  /**
+   * Point the tree at one file without changing whether it is on screen.
+   *
+   * Folding the tree is the reader's own choice, persisted per project, and a
+   * reveal must not overrule it. A file click already brings its viewer on
+   * screen, so the reveal records where the entry sits and the tree lands there
+   * the next time it is opened instead of reopening itself on every citation,
+   * attachment or transcript link.
+   */
   async revealFile(projectId: string, path: string): Promise<void> {
     const state = this.host.stateFor(projectId)
     const generation = this.beginFocus(projectId)
     this.markPendingReveal(state, path)
-    state.explorerVisible = true
     await this.loadDirectory(projectId, '')
     await this.expandDirectoryPath(projectId, state, parentDirectory(path))
     if (!this.isCurrentFocus(projectId, generation)) return

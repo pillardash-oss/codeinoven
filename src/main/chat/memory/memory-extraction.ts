@@ -1,6 +1,7 @@
 import type { MemoryCategory, MemoryEntry, MemoryPriority, MemoryScope } from '../../../lib/types'
 import { memoryAudienceForContainer } from '../../../lib/memory/memory-scopes'
-import { MEMORY_LIMITS, MEMORY_EXTRACTION_LIMITS } from './memory-constants'
+import { MEMORY_EXTRACTION_LIMITS } from './memory-constants'
+import { memoryTitleFrom } from './memory-title'
 
 /**
  * Explicit request to keep something, which a work-directive turn can never
@@ -252,7 +253,9 @@ export function detectMemoryCandidates(input: {
   const audience = memoryAudienceForContainer(input.projectId)
   const scopes: MemoryScope[] = audience === 'chat' ? ['thread'] : [audience]
   const candidate: MemoryCandidate = {
-    label: capText(cappedContent, MEMORY_LIMITS.maxLabelCharacters),
+    // The title is a whole sentence or clause run of the candidate, never the
+    // candidate sliced at a character count.
+    label: memoryTitleFrom(cappedContent),
     content: cappedContent,
     category: categoryForCandidate(cappedContent, matched),
     priority: priorityForCandidate(cappedContent),

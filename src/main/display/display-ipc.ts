@@ -26,9 +26,10 @@ import { bindDisplayWindow, displayService } from './display-runtime'
  * adapters) only on first use. Nothing in this file imports one of those, so the
  * cost of having the panel at all is a handful of handler rows.
  *
- * Presence is the other half, and it is agent-initiated rather than detected: the
- * `ext_simulation` tool tells this boundary which device to mirror, and the app
- * never scans for a device on its own.
+ * Presence is the other half: the `ext_simulation` tool tells this boundary which
+ * device to mirror, and a device command the agent already ran is the second
+ * signal, so a thread testing an emulator over adb puts it on screen without the
+ * agent announcing it. Neither one scans for a device on its own.
  */
 export interface DisplayIpcDeps {
   window: () => BrowserWindow | null

@@ -1,5 +1,3 @@
-import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
-import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { viewShowsWorkspaceShell } from '$lib/content-view-projects'
@@ -28,7 +26,7 @@ import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
 import { threadStatusSortKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { GLOBAL_BROWSER_PROJECT_ID, type AuthoredWorkKind } from '$shared/ipc-contract'
-import type { Project, Assistant, Thread } from '$shared/types'
+import type { Project, Thread } from '$shared/types'
 import {
   activeThreadRowId,
   ASSISTANT_SPACE_ID,
@@ -41,16 +39,12 @@ import {
   threadTracksReadStatus
 } from '$shared/types'
 import { onMount } from 'svelte'
-import AssistantSearchControl from '../../assistant/AssistantSearchControl.svelte'
-import AssistantCreateControl from '../../assistant/AssistantCreateControl.svelte'
 import ProjectCreateControl from '../../shared/ProjectCreateControl.svelte'
 import ScopeCreateControl from '../../shared/ScopeCreateControl.svelte'
-import ThreadProjectFilterMenu from '../../shared/ThreadProjectFilterMenu.svelte'
 import ThreadSearchControl from '../../shared/ThreadSearchControl.svelte'
-import SidebarSearchControl from '../SidebarSearchControl.svelte'
+import ThreadProjectFilterMenu from '../../shared/ThreadProjectFilterMenu.svelte'
 import { threadHasVisibleWork } from '../workspace-thread-helpers'
 import type { Workspace } from './Workspace-board.svelte'
-import { canHostProjectThread } from './Workspace-new-thread-project-picker.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the Workspace board. */
@@ -562,6 +556,10 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
     // read signal for the open thread; marking read is idempotent.
     $effect(() => {
       const onWindowFocus = (): void => {
+        // A side chat on screen is read by the same act: coming back to the
+        // window with that panel already open is not a click on the rail icon,
+        // so the mark it left behind has to be dropped here.
+        contextSidebarState.clearOnScreenTemporaryChatUnread()
         const selected = workspaceState.selectedThread
         if (!selected || selected.read || !threadTracksReadStatus(selected)) return
         this.root.markThreadReadAndApply.requestThreadRead(selected.projectId, selected.id)
@@ -908,18 +906,12 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
       // the workspace comes back, which is what restores a view's actions after a
       // trip to the browser; without it the slot stayed empty on return.
       if (!this.root.props.active && !this.root.props.scopeViewActive) return
-      // Held in a local so the callbacks below keep the narrowing this check gives.
-      const activeProject = this.root.openThreadFromSwitcher.activeProject
-      // A hidden conversation container (the inbox a chat left selected) is not a
-      // project a thread view can mint into: the new-thread action treats it as
-      // no project at all and asks which one instead.
-      const project = canHostProjectThread(activeProject) ? activeProject : null
       if (workspaceState.specStudioOpen) {
         viewActions.set('none', [])
         return
       }
-      // Scope Board page: new scope, cross-scope search, new project   replacing
-      // the old far-right toolbar of the scope view header.
+      // Scope Board page: new scope and cross-scope search in the bar, and the
+      // new-project control in the project tabs row, after the overflow count   // replacing the old far-right toolbar of the scope view header.
       if (this.root.props.scopeViewActive) {
         const scopeBoardActions: ViewActionItem[] = [
           {
@@ -943,85 +935,38 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
           },
           {
             id: 'new-project',
+            // The board's project control adds a tab, so it sits with the tabs
+            // instead of in the bar: it is drawn in the tabs row, after the
+            // overflow count.
+            region: 'scope-tabs',
             component: ProjectCreateControl as unknown as ViewActionItem['component'],
             props: {
               onProjectCreated: this.root.switcherPanelTabs.handleProjectCreated,
               onExisting: (project: Project) => void scopeState.activateProject(project.id),
               triggerAddProject: this.root.state.projectCreateTrigger,
-              triggerKind: this.root.state.projectCreateTriggerKind
+              triggerKind: this.root.state.projectCreateTriggerKind,
+              // The tabs row carries the header's full-size controls, so this one
+              // matches the bell and the sticky notes beside it.
+              size: 'control'
             }
           }
         ]
         viewActions.set('scope', scopeBoardActions)
         return
       }
+      // Projects and Chats keep no actions in the bar: their tab row, search and
+      // create buttons live in their own panel, above the list they act on.
+      // The timeline keeps its two filters here: they narrow every project at
+      // once, which is the bar's scope rather than the panel's.
       if (this.root.props.mode === 'threads') {
-        const actions: ViewActionItem[] = [
-          {
-            id: 'search',
-            component: SidebarSearchControl as unknown as ViewActionItem['component'],
-            props: {
-              open: this.root.switcherPanelTabs.sidebar.threadsSearchOpen,
-              query: this.root.switcherPanelTabs.sidebar.threadsSearchQuery,
-              loading: this.root.switcherPanelTabs.sidebar.threadsSearching,
-              onOpenChange: (open: boolean) => {
-                if (open) this.root.switcherPanelTabs.sidebar.openThreadsSearch()
-                else this.root.switcherPanelTabs.sidebar.closeThreadsSearch()
-              },
-              onQueryChange: (value: string) =>
-                this.root.switcherPanelTabs.sidebar.runThreadsSearch(value),
-              ariaLabel: 'Search threads',
-              title: 'Search threads',
-              placeholder: 'Search threads…',
-              size: 'md'
-            }
-          },
-          {
-            id: 'new-thread',
-            icon: CioPlus,
-            ariaLabel: project ? `New thread in ${project.name}` : 'New thread',
-            // The action never hides: with no project open it asks which project
-            // the thread belongs to, using the same picker the chat hand-off
-            // uses, and the chosen project mints the empty thread.
-            title: project ? `New thread in ${project.name}` : 'New thread in a project',
-            shortcut: keymapState.keysFor('nav-new-thread'),
-            run: () =>
-              project
-                ? void this.root.createThreadInProject.createThreadInProject(project)
-                : this.root.newThreadPicker.request()
-          },
+        viewActions.set('threads', [
           {
             id: 'filter',
             component: ThreadProjectFilterMenu as unknown as ViewActionItem['component']
           }
-        ]
-        viewActions.set('threads', actions)
+        ])
       } else if (this.root.props.mode === 'chats') {
-        const chatsActions: ViewActionItem[] = [
-          {
-            id: 'search',
-            component: ThreadSearchControl as unknown as ViewActionItem['component'],
-            props: {
-              threads: scopeState.allScopeThreads.filter(
-                (thread) => thread.projectId === INBOX_PROJECT_ID
-              ),
-              contextLabel: 'chats',
-              title: 'Search chats',
-              onOpen: this.root.openThreadFromSwitcher.openThread,
-              // The Chats view is the inbox family and nothing else.
-              fts: { family: 'chats' }
-            }
-          },
-          {
-            id: 'new-chat',
-            icon: CioPencil,
-            ariaLabel: 'New chat',
-            title: 'New chat',
-            shortcut: keymapState.keysFor('nav-new-thread'),
-            run: this.root.markThreadReadAndApply.startNewChat
-          }
-        ]
-        viewActions.set('chats', chatsActions)
+        viewActions.set('chats', [])
       } else if (this.root.props.mode === 'projects' && scopeState.sidebarContext) {
         // Same paradigm as every other view: search first, then new thread.
         const scopeContextProjectId = scopeState.sidebarContext.projectId
@@ -1063,65 +1008,13 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
         ]
         viewActions.set('scoped-threads', scopedActions)
       } else if (this.root.props.mode === 'assistant') {
-        const assistantActions: ViewActionItem[] = [
-          {
-            id: 'search',
-            component: AssistantSearchControl as unknown as ViewActionItem['component'],
-            props: {
-              assistants: this.root.mergeThreadsInList.assistantList,
-              tasks: this.root.markThreadReadAndApply.assistantTasks,
-              runs: this.root.mergeThreadsInList.assistantRuns,
-              onOpenTask: this.root.markThreadReadAndApply.openAssistantTask,
-              onOpenAssistant: (assistant: Assistant) =>
-                void this.root.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)
-            }
-          },
-          {
-            id: 'new-assistant',
-            component: AssistantCreateControl as unknown as ViewActionItem['component'],
-            props: {
-              onCreate: this.root.markThreadReadAndApply.createAssistant,
-              onCreateViaChat: this.root.markThreadReadAndApply.createAssistantViaChat,
-              trigger: this.root.mergeThreadsInList.assistantCreateTrigger
-            }
-          },
-          {
-            id: 'new-task',
-            icon: AssistantTaskIcon,
-            ariaLabel: 'New task',
-            title: 'New task',
-            shortcut: keymapState.keysFor('assistant-new-task'),
-            run: () => void this.root.mergeThreadsInList.createAssistantTaskFromShortcut()
-          }
-        ]
-        viewActions.set('assistant', assistantActions)
+        // The assistant view keeps no actions in the bar: its search, its new
+        // assistant control and its new task all live in the view's own surfaces
+        // (the sidebar's top row and the strip beside the assistant's name), so
+        // the bar is left to the assistant and its threads.
+        viewActions.set('assistant', [])
       } else {
-        const projectActions: ViewActionItem[] = [
-          {
-            id: 'search',
-            component: ThreadSearchControl as unknown as ViewActionItem['component'],
-            props: {
-              threads: this.root.createThreadInProject.allThreads,
-              contextLabel: 'threads',
-              title: 'Search threads',
-              onOpen: this.root.openThreadFromSwitcher.openThread,
-              // The Projects view lists projects and their threads; a chat or an
-              // assistant task belongs to its own view and its own search.
-              fts: { family: 'projects' }
-            }
-          },
-          {
-            id: 'new-project',
-            component: ProjectCreateControl as unknown as ViewActionItem['component'],
-            props: {
-              onProjectCreated: this.root.switcherPanelTabs.handleProjectCreated,
-              onExisting: this.root.switcherPanelTabs.handleExistingProject,
-              triggerAddProject: this.root.state.projectCreateTrigger,
-              triggerKind: this.root.state.projectCreateTriggerKind
-            }
-          }
-        ]
-        viewActions.set('projects', projectActions)
+        viewActions.set('projects', [])
       }
     })
 

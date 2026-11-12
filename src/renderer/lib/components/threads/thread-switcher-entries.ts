@@ -11,6 +11,12 @@
  * surface the order does not name, with one deliberate exception: the browser tab
  * on screen leads the list (see `currentBrowserTabId`). A browser tab the user
  * never opened therefore cannot appear.
+ *
+ * The browser is one surface, not one surface per tab. A run of consecutive
+ * browser-tab visits is a single browsing session and claims a single row:
+ * stepping through tabs inside the global browser used to give every tab its own
+ * slot above the thread the user came from, so one Control+Tab out of the browser
+ * landed on a sibling browser tab instead of that thread.
  */
 
 import type { Thread } from '$shared/types'
@@ -115,6 +121,12 @@ export function buildThreadSwitcherEntries(
   const usedThreads = new Set<string>()
   const usedTabs = new Set<string>()
   const usedPanelTabs = new Set<string>()
+  // A run of consecutive browser-tab visits is one browsing session, and one
+  // session claims one slot: the newest tab it names. Switching tabs inside the
+  // browser is how the browser is used, not a jump between surfaces, so it must
+  // not push the thread the user came from down the list and turn the next
+  // Control+Tab into a hop to a neighbouring browser tab.
+  let browserSessionClaimed = false
   const currentTabId = source.currentBrowserTabId ?? null
   const currentTab = currentTabId ? (tabsById.get(currentTabId) ?? null) : null
   const currentKey = currentTab ? browserTabVisitKey(currentTab.id) : null
@@ -127,12 +139,21 @@ export function buildThreadSwitcherEntries(
   for (const visit of visits) {
     if (entries.length >= limit) break
     if (isBrowserTabVisitKey(visit)) {
+      // The rest of a session stays out of the list: its newest live tab is the
+      // row the whole session is reached through.
+      if (browserSessionClaimed) continue
       const tab = tabsById.get(browserTabIdFromVisitKey(visit))
+      // A tab that has gone leaves the session open, so the next tab of the run
+      // can represent it instead of the session losing its row entirely.
       if (!tab || usedTabs.has(tab.id)) continue
       entries.push({ kind: 'browser', tab })
       usedTabs.add(tab.id)
+      browserSessionClaimed = true
       continue
     }
+    // Any other surface ends the session, so the browser used again after it is
+    // its own row again.
+    browserSessionClaimed = false
     if (isPanelTabVisitKey(visit)) {
       const tab = panelTabsById.get(panelTabIdFromVisitKey(visit))
       if (!tab || usedPanelTabs.has(tab.id)) continue

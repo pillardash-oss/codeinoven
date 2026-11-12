@@ -48,7 +48,7 @@ interface NormalizedBaseUrlProvider {
  * Persists custom base-URL provider definitions beneath CodeInOven's config root.
  *
  * API keys are never stored as plaintext. Callers hand a plaintext key to the
- * IPC layer, which vaults it via {@link SecretVault} and passes only the opaque
+ * IPC layer, which vaults it via {@link SecretsService} and passes only the opaque
  * `apiKeyRef` here. The matching `apiKeyEnvVar` is the deterministic name the
  * OpenCode driver sets on the spawned server's environment so OpenCode's
  * `{env:VAR}` config syntax can reference the resolved key.

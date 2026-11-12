@@ -1,10 +1,13 @@
 <script lang="ts">
   import { invoke } from '$lib/ipc.svelte'
-  import type { LlamaCppRuntimeStatus, LocalAiRuntimeSummary } from '$shared/llama-cpp'
+  import {
+    LOCAL_AI_RUNTIME_TABS,
+    type LocalAiRuntimeId,
+    type LocalAiRuntimeStatus
+  } from '$shared/llama-cpp'
   import { onMount } from 'svelte'
-  import LocalAiLlamaTab from './local-ai/LocalAiLlamaTab.svelte'
+  import LocalAiEngineTab from './local-ai/LocalAiEngineTab.svelte'
   import LocalAiSettingsTab from './local-ai/LocalAiSettingsTab.svelte'
-  import LocalAiWorkerTab from './local-ai/LocalAiWorkerTab.svelte'
   import type { AppConfig, AppConfigPatch } from '$shared/types'
 
   interface Props {
@@ -15,70 +18,52 @@
 
   let { config, settingsReady, updateConfig }: Props = $props()
 
-  let runtime = $state<LlamaCppRuntimeStatus | null>(null)
-  /** MLX and Core ML: the bundled workers, which the llama.cpp card does not cover. */
-  let workerRuntimes = $state<LocalAiRuntimeSummary[]>([])
-  let detecting = $state(false)
-  let detectError = $state('')
+  /** What detection found for each engine, keyed by engine. */
+  let statuses = $state<Partial<Record<LocalAiRuntimeId, LocalAiRuntimeStatus>>>({})
+  let detecting = $state<Partial<Record<LocalAiRuntimeId, boolean>>>({})
+  let detectErrors = $state<Partial<Record<LocalAiRuntimeId, string>>>({})
 
-  type LocalAiTab = 'llama' | 'mlx' | 'coreml' | 'settings'
-  let tab = $state<LocalAiTab>('llama')
+  type LocalAiTab = LocalAiRuntimeId | 'settings'
+  let tab = $state<LocalAiTab>('llama.cpp')
 
   const TABS: { id: LocalAiTab; label: string; title: string }[] = [
-    { id: 'llama', label: 'llama.cpp', title: 'The llama.cpp engine and its servers' },
-    { id: 'mlx', label: 'MLX', title: 'The MLX engine and the models it serves' },
-    { id: 'coreml', label: 'Core ML', title: 'The Core ML engine and the models it serves' },
+    ...LOCAL_AI_RUNTIME_TABS,
     { id: 'settings', label: 'Settings', title: 'Model memory and unload behaviour' }
   ]
 
-  /**
-   * MLX and Core ML are Apple Silicon engines that ship as bundled workers, so a
-   * machine that cannot run them does not get a tab for them at all. Until the
-   * detection answers, only the always-present tabs are listed, so no tab
-   * appears and then disappears.
-   */
-  const visibleTabs = $derived(
-    TABS.filter(
-      (entry) =>
-        entry.id === 'llama' ||
-        entry.id === 'settings' ||
-        workerRuntimes.some((worker) => worker.id === entry.id && worker.available)
-    )
-  )
+  const activeTab = $derived(TABS.some((entry) => entry.id === tab) ? tab : 'llama.cpp')
 
-  /** The selected tab, or the first one that still exists after a detection. */
-  const activeTab = $derived(
-    visibleTabs.some((entry) => entry.id === tab) ? tab : ('llama' as LocalAiTab)
-  )
-
-  const worker = $derived(workerRuntimes.find((entry) => entry.id === activeTab) ?? null)
-
-  async function detect(): Promise<void> {
-    detecting = true
-    detectError = ''
+  async function detect(runtime: LocalAiRuntimeId): Promise<void> {
+    detecting = { ...detecting, [runtime]: true }
+    detectErrors = { ...detectErrors, [runtime]: '' }
     try {
-      const [llama, runtimes] = await Promise.all([
-        invoke('llamaCpp:detect'),
-        invoke('localAi:runtimes')
-      ])
-      runtime = llama
-      workerRuntimes = runtimes.filter((entry) => entry.id !== 'llama.cpp')
+      const status = await invoke('localAi:detect', runtime)
+      statuses = { ...statuses, [runtime]: status }
     } catch (error) {
-      detectError = error instanceof Error ? error.message : 'Detection failed'
+      detectErrors = {
+        ...detectErrors,
+        [runtime]: error instanceof Error ? error.message : 'Detection failed'
+      }
     } finally {
-      detecting = false
+      detecting = { ...detecting, [runtime]: false }
     }
   }
 
+  function statusOf(runtime: LocalAiRuntimeId): LocalAiRuntimeStatus | null {
+    return statuses[runtime] ?? null
+  }
+
   onMount(() => {
-    void detect()
+    // Both engines are detected once, so each tab states what this machine has
+    // before the user switches to it.
+    for (const entry of LOCAL_AI_RUNTIME_TABS) void detect(entry.id)
   })
 </script>
 
 <div class="p-6 pb-24">
   <div class="mb-4">
     <h1 class="text-xl font-bold tracking-tight">Local AI</h1>
-    <p class="mt-0.5 text-sm text-muted">One engine per tab, each with the models it serves.</p>
+    <p class="mt-0.5 text-sm text-muted">Models that run on this computer, grouped by engine.</p>
   </div>
 
   <div
@@ -86,7 +71,7 @@
     role="tablist"
     aria-label="Local AI tabs"
   >
-    {#each visibleTabs as entry (entry.id)}
+    {#each TABS as entry (entry.id)}
       <button
         type="button"
         class="px-3 py-1.5 text-xs font-medium transition-colors {activeTab === entry.id
@@ -102,24 +87,19 @@
     {/each}
   </div>
 
-  {#if activeTab === 'llama'}
-    <LocalAiLlamaTab
-      {runtime}
-      {detecting}
-      {detectError}
-      onRefresh={() => void detect()}
-      onChanged={() => void detect()}
+  {#if activeTab === 'settings'}
+    <LocalAiSettingsTab {config} {settingsReady} {updateConfig} />
+  {:else}
+    <LocalAiEngineTab
+      runtime={activeTab}
+      status={statusOf(activeTab)}
+      detecting={detecting[activeTab] ?? false}
+      detectError={detectErrors[activeTab] ?? ''}
+      onRefresh={() => void detect(activeTab)}
+      onChanged={() => void detect(activeTab)}
       {config}
       {settingsReady}
       {updateConfig}
     />
-  {:else if activeTab === 'settings'}
-    <LocalAiSettingsTab {config} {settingsReady} {updateConfig} />
-  {:else if worker}
-    <LocalAiWorkerTab runtime={worker} {config} {settingsReady} {updateConfig} />
-  {:else}
-    <p class="text-sm text-muted">
-      {detecting ? 'Detecting runtimes…' : 'This runtime is not available.'}
-    </p>
   {/if}
 </div>

@@ -23,6 +23,7 @@ import type {
   BrowserDownload,
   BrowserExtension,
   BrowserExtensionActivityUpdate,
+  BrowserExtensionCompanionSilent,
   BrowserExtensionProgress,
   BrowserExtensionSidePanel,
   BrowserFindResult,
@@ -528,6 +529,13 @@ export const IPC_EVENT_CONTRACT = {
    * worker restarted and holds none of what it recorded before.
    */
   'browser:extensionActivity': [] as unknown as [update: BrowserExtensionActivityUpdate],
+  /**
+   * One extension wrote to its companion's native messaging host and the host
+   * never wrote back, which is what a frozen desktop helper looks like from the
+   * extension's side. The renderer tells the user to restart that program, since
+   * the app cannot answer on its behalf and the extension waits forever.
+   */
+  'browser:extensionCompanionSilent': [] as unknown as [report: BrowserExtensionCompanionSilent],
   'browser:download': [] as unknown as [download: BrowserDownload],
   /**
    * A download the browser dropped from its own list (removed by the user, or

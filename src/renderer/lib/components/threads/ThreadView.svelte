@@ -10,9 +10,11 @@
   import StartAfterThreadPicker from '../chats/StartAfterThreadPicker.svelte'
   import SelectionActionMenu from '../shared/SelectionActionMenu.svelte'
   import AnnotationIndicator from '../shared/AnnotationIndicator.svelte'
-  import ResponseAnnotationComment from '../chats/ResponseAnnotationComment.svelte'
-  import MediaPreview from '../chats/MediaPreview.svelte'
-  import AttachmentPreview from '../chats/AttachmentPreview.svelte'
+  // The comment editor and the media lightbox are opened by a gesture, so they
+  // are imported where they render instead of riding the first screen. Each is
+  // the head of a chain of its own (the comment bubble pulls the rich editor and
+  // the lightbox pulls the document preview), and none of it paints until the
+  // user asks for that one overlay.
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import ContinueInProjectModal from './ContinueInProjectModal.svelte'
   import TranscriptExportModal from './TranscriptExportModal.svelte'
@@ -93,7 +95,6 @@
     active,
     ownsReadingColumn
   }))
-  board.effects.setActiveActions(() => activeActions)
   board.submitBrainstormDecision.setReconcileReadySpec(() => reconcileReadySpecNow())
   let composerShoe = $derived.by((): ComposerShoeData => {
     const isNewThread = board.loadOlderMessages.messages.length === 0 && !board.switchProject.busy
@@ -657,7 +658,7 @@
 {/snippet}
 
 {#snippet ovenPicker()}
-  {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
+  {#await loadCachedPanelModule('module:lib/components/threads/OvenControls.svelte', () => import('./OvenControls.svelte')) then { default: OvenControlsComponent }}
     <OvenControlsComponent
       bind:this={board.openOvenPicker.ovenControl}
       thread={board.handleAgentEvent.thread}
@@ -667,9 +668,7 @@
       onSettingsChange={board.contextUsage.updateSettings}
     />
   {:catch}
-    <span class="text-xs text-danger" role="alert"
-      >Oven controls could not be board.sources.loaded.</span
-    >
+    <span class="text-xs text-danger" role="alert">Oven controls could not be loaded.</span>
   {/await}
 {/snippet}
 
@@ -682,7 +681,7 @@
   {@const item = board.studioTemporaryChatContext.viewerAnnotatableItem}
   {#if item}
     {#if isVideoMime(item.mime)}
-      {#await import('./ArtifactVideoAnnotator.svelte') then { default: ArtifactVideoAnnotator }}
+      {#await loadCachedPanelModule('module:lib/components/threads/ArtifactVideoAnnotator.svelte', () => import('./ArtifactVideoAnnotator.svelte')) then { default: ArtifactVideoAnnotator }}
         <ArtifactVideoAnnotator
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
@@ -700,7 +699,7 @@
         />
       {/await}
     {:else}
-      {#await import('./ArtifactImageAnnotator.svelte') then { default: ArtifactImageAnnotator }}
+      {#await loadCachedPanelModule('module:lib/components/threads/ArtifactImageAnnotator.svelte', () => import('./ArtifactImageAnnotator.svelte')) then { default: ArtifactImageAnnotator }}
         <ArtifactImageAnnotator
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
@@ -726,42 +725,46 @@
     ? board.unmirroredTraceStartTime.viewerArtifactPath(viewerItem.url)
     : null}
   {#if viewerItem.media}
-    <MediaPreview
-      src={board.state.imageUrls.getUrl(viewerItem.url)}
-      revealUrl={viewerItem.url}
-      startAt={board.studioTemporaryChatContext.messageViewer.startAt}
-      autoPlay={board.studioTemporaryChatContext.messageViewer.playing ?? false}
-      filename={viewerItem.filename}
-      mime={viewerItem.mime}
-      pager={board.studioTemporaryChatContext.messageViewerPager}
-      annotate={board.studioTemporaryChatContext.viewerAnnotatableItem
-        ? viewerAnnotationSurface
-        : undefined}
-      onClose={board.studioTemporaryChatContext.closeMessageViewer}
-      onReveal={viewerArtifact
-        ? () => board.unmirroredTraceStartTime.revealViewerArtifact(viewerArtifact)
-        : undefined}
-      onLoadError={(el) => {
-        const viewer = board.studioTemporaryChatContext.messageViewer
-        const target = viewer?.items[viewer.index]
-        if (target) void board.state.imageUrls.bindMedia(target.url, target.mime, el)
-      }}
-    />
+    {#await loadCachedPanelModule('module:lib/components/chats/MediaPreview.svelte', () => import('../chats/MediaPreview.svelte')) then { default: MediaPreview }}
+      <MediaPreview
+        src={board.state.imageUrls.getUrl(viewerItem.url)}
+        revealUrl={viewerItem.url}
+        startAt={board.studioTemporaryChatContext.messageViewer.startAt}
+        autoPlay={board.studioTemporaryChatContext.messageViewer.playing ?? false}
+        filename={viewerItem.filename}
+        mime={viewerItem.mime}
+        pager={board.studioTemporaryChatContext.messageViewerPager}
+        annotate={board.studioTemporaryChatContext.viewerAnnotatableItem
+          ? viewerAnnotationSurface
+          : undefined}
+        onClose={board.studioTemporaryChatContext.closeMessageViewer}
+        onReveal={viewerArtifact
+          ? () => board.unmirroredTraceStartTime.revealViewerArtifact(viewerArtifact)
+          : undefined}
+        onLoadError={(el) => {
+          const viewer = board.studioTemporaryChatContext.messageViewer
+          const target = viewer?.items[viewer.index]
+          if (target) void board.state.imageUrls.bindMedia(target.url, target.mime, el)
+        }}
+      />
+    {/await}
   {:else}
-    <AttachmentPreview
-      attachment={viewerItem}
-      src={board.studioTemporaryChatContext.attachmentPreview.urls[viewerItem.url]}
-      text={board.studioTemporaryChatContext.attachmentPreview.texts[viewerItem.url]}
-      documentHtml={board.studioTemporaryChatContext.attachmentPreview.documents[viewerItem.url]}
-      documentLoading={board.studioTemporaryChatContext.attachmentPreview.documentLoading[
-        viewerItem.url
-      ] ?? false}
-      pager={board.studioTemporaryChatContext.messageViewerPager}
-      onClose={board.studioTemporaryChatContext.closeMessageViewer}
-      onReveal={viewerArtifact
-        ? () => board.unmirroredTraceStartTime.revealViewerArtifact(viewerArtifact)
-        : undefined}
-    />
+    {#await loadCachedPanelModule('module:lib/components/chats/AttachmentPreview.svelte', () => import('../chats/AttachmentPreview.svelte')) then { default: AttachmentPreview }}
+      <AttachmentPreview
+        attachment={viewerItem}
+        src={board.studioTemporaryChatContext.attachmentPreview.urls[viewerItem.url]}
+        text={board.studioTemporaryChatContext.attachmentPreview.texts[viewerItem.url]}
+        documentHtml={board.studioTemporaryChatContext.attachmentPreview.documents[viewerItem.url]}
+        documentLoading={board.studioTemporaryChatContext.attachmentPreview.documentLoading[
+          viewerItem.url
+        ] ?? false}
+        pager={board.studioTemporaryChatContext.messageViewerPager}
+        onClose={board.studioTemporaryChatContext.closeMessageViewer}
+        onReveal={viewerArtifact
+          ? () => board.unmirroredTraceStartTime.revealViewerArtifact(viewerArtifact)
+          : undefined}
+      />
+    {/await}
   {/if}
 {/if}
 
@@ -771,19 +774,21 @@
       board.studioTemporaryChatContext.queuedAttachmentViewer.index
     ]}
   {#if queuedViewerItem}
-    <AttachmentPreview
-      attachment={queuedViewerItem}
-      src={board.studioTemporaryChatContext.attachmentPreview.urls[queuedViewerItem.url]}
-      text={board.studioTemporaryChatContext.attachmentPreview.texts[queuedViewerItem.url]}
-      documentHtml={board.studioTemporaryChatContext.attachmentPreview.documents[
-        queuedViewerItem.url
-      ]}
-      documentLoading={board.studioTemporaryChatContext.attachmentPreview.documentLoading[
-        queuedViewerItem.url
-      ] ?? false}
-      pager={board.studioTemporaryChatContext.queuedAttachmentPager}
-      onClose={board.studioTemporaryChatContext.closeQueuedAttachmentViewer}
-    />
+    {#await loadCachedPanelModule('module:lib/components/chats/AttachmentPreview.svelte', () => import('../chats/AttachmentPreview.svelte')) then { default: AttachmentPreview }}
+      <AttachmentPreview
+        attachment={queuedViewerItem}
+        src={board.studioTemporaryChatContext.attachmentPreview.urls[queuedViewerItem.url]}
+        text={board.studioTemporaryChatContext.attachmentPreview.texts[queuedViewerItem.url]}
+        documentHtml={board.studioTemporaryChatContext.attachmentPreview.documents[
+          queuedViewerItem.url
+        ]}
+        documentLoading={board.studioTemporaryChatContext.attachmentPreview.documentLoading[
+          queuedViewerItem.url
+        ] ?? false}
+        pager={board.studioTemporaryChatContext.queuedAttachmentPager}
+        onClose={board.studioTemporaryChatContext.closeQueuedAttachmentViewer}
+      />
+    {/await}
   {/if}
 {/if}
 
@@ -830,22 +835,24 @@
   {@const editorReference = board.steerQueuedMessage.commentEditorReference()}
   {@const editorPosition = board.studioTemporaryChatContext.commentEditorAnchor}
   {#if editorReference && editorPosition}
-    <ResponseAnnotationComment
-      x={editorPosition.x + ANNOTATION_BUBBLE_SIZE / 2}
-      y={editorPosition.y}
-      initialComment={editorReference.comment ?? ''}
-      targetId={`response-comment-${board.handleAgentEvent.thread.id}-${editorReference.id}`}
-      scope={{ kind: 'project', projectId: board.handleAgentEvent.thread.projectId }}
-      onDraftChange={(comment) =>
-        board.unmirroredTraceStartTime.persistResponseReferenceCommentDraft(
-          editorReference.id,
-          comment
-        )}
-      onDone={(comment) =>
-        board.composerScope.saveResponseReferenceComment(editorReference.id, comment)}
-      onRemove={() => board.steerQueuedMessage.removeResponseReference(editorReference.id)}
-      onClose={() => (board.steerQueuedMessage.commentEditorReferenceId = null)}
-    />
+    {#await loadCachedPanelModule('module:lib/components/chats/ResponseAnnotationComment.svelte', () => import('../chats/ResponseAnnotationComment.svelte')) then { default: ResponseAnnotationComment }}
+      <ResponseAnnotationComment
+        x={editorPosition.x + ANNOTATION_BUBBLE_SIZE / 2}
+        y={editorPosition.y}
+        initialComment={editorReference.comment ?? ''}
+        targetId={`response-comment-${board.handleAgentEvent.thread.id}-${editorReference.id}`}
+        scope={{ kind: 'project', projectId: board.handleAgentEvent.thread.projectId }}
+        onDraftChange={(comment) =>
+          board.unmirroredTraceStartTime.persistResponseReferenceCommentDraft(
+            editorReference.id,
+            comment
+          )}
+        onDone={(comment) =>
+          board.composerScope.saveResponseReferenceComment(editorReference.id, comment)}
+        onRemove={() => board.steerQueuedMessage.removeResponseReference(editorReference.id)}
+        onClose={() => (board.steerQueuedMessage.commentEditorReferenceId = null)}
+      />
+    {/await}
   {/if}
 {/if}
 
@@ -861,7 +868,7 @@
 
   {#if board.submitSpecDecision.showSpecStudio}
     {#if findNavState.studioFindOpen}
-      {#await import('./FindInSurface.svelte') then { default: FindInSurface }}
+      {#await loadCachedPanelModule('module:lib/components/threads/FindInSurface.svelte', () => import('./FindInSurface.svelte')) then { default: FindInSurface }}
         <FindInSurface
           container={board.state.threadViewElement}
           focusTrigger={findNavState.studioFindFocusTrigger}
@@ -1217,7 +1224,7 @@
     data-conversation-pane
   >
     {#if board.unmirroredTraceStartTime.showFind}
-      {#await import('./FindInSurface.svelte') then { default: FindInSurface }}
+      {#await loadCachedPanelModule('module:lib/components/threads/FindInSurface.svelte', () => import('./FindInSurface.svelte')) then { default: FindInSurface }}
         <FindInSurface
           container={board.state.threadViewElement}
           focusTrigger={findNavState.conversationFindFocusTrigger}
@@ -1274,7 +1281,7 @@
   <!-- The request travels into the picker's own callback: the palette closes the
        picker before it reports the pick, and that close clears this state. -->
   {@const request = board.currentWorkingTraceAttribution.relocationRequest}
-  {#await import('../chats/RelocateThreadPicker.svelte') then { default: RelocateThreadPicker }}
+  {#await loadCachedPanelModule('module:lib/components/chats/RelocateThreadPicker.svelte', () => import('../chats/RelocateThreadPicker.svelte')) then { default: RelocateThreadPicker }}
     <RelocateThreadPicker
       projectId={board.handleAgentEvent.thread.projectId}
       projectName={board.composerScope.relocationAssistantId

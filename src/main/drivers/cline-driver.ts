@@ -25,7 +25,7 @@ import { buildProcessEnvironmentAsync } from './cli-environment'
 import { attachmentReferences, attachmentTarget } from './attachment-reference'
 import { runHarnessCommand } from './harness-runtime'
 import type { BaseUrlProviderService } from '../providers/base-url-provider-service'
-import type { SecretVault } from '../storage/secret-vault'
+import type { SecretsService } from '../secrets/secrets-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import {
   clineApprovalRequest,
@@ -52,6 +52,15 @@ import { clineModelContextWindow } from './cline/cline-usage'
 import { mapClineRecord, mapCurrentClineRecord } from './cline/cline-stream-fold'
 import type { ClineTurnState } from './cline/cline-stream-fold'
 import { record, stringValue, utilityKey } from './cline/cline-values'
+
+/**
+ * How long one successful `cline --version` probe answers for.
+ *
+ * The probe exists to catch a missing or broken install before a turn, and a
+ * Cline install cannot change inside this window, so ten minutes keeps a broken
+ * install surfacing quickly while removing a whole node boot from every turn.
+ */
+const CLINE_READY_TTL_MS = 10 * 60 * 1000
 
 export class ClineDriver extends PersistentCliDriver {
   readonly id = 'cline'
@@ -83,6 +92,10 @@ export class ClineDriver extends PersistentCliDriver {
 
   private turnStates = new Map<string, ClineTurnState>()
   private turnCounts = new Map<string, number>()
+  /** When the `cline --version` readiness probe last passed; see `ensureCliReady`. */
+  private cliReadyAt = 0
+  /** The readiness probe in flight, shared by turns that start together. */
+  private cliReadyCheck: Promise<void> | null = null
   /** Approval bridges keyed by CodeInOven session id; cleaned up on turn end. */
   private approvalBridges = new Map<string, ClineApprovalBridge>()
   /** Web-only hook directories keyed by CodeInOven session id. */
@@ -98,7 +111,7 @@ export class ClineDriver extends PersistentCliDriver {
   constructor(
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
-    private readonly secretVault?: SecretVault
+    private readonly secretVault?: SecretsService
   ) {
     super(storage)
   }
@@ -114,11 +127,25 @@ export class ClineDriver extends PersistentCliDriver {
   }
 
   protected async ensureCliReady(projectPath: string): Promise<void> {
+    // `cline` is a node launcher, so one `--version` probe boots a whole node
+    // process (measured at ~186 MB and several seconds) for a single line.
+    // Cline's install cannot change mid-turn, so one successful answer is reused
+    // instead of paid on every turn of every Cline thread.
+    if (Date.now() - this.cliReadyAt < CLINE_READY_TTL_MS) return
+    this.cliReadyCheck ??= this.probeCli(projectPath).finally(() => {
+      this.cliReadyCheck = null
+    })
+    await this.cliReadyCheck
+  }
+
+  private async probeCli(projectPath: string): Promise<void> {
     await runHarnessCommand('cline', ['--version'], {
       cwd: projectPath,
       env: await buildProcessEnvironmentAsync(),
       timeoutMs: 10_000
     })
+    // Only a success is cached: a missing install must surface on every turn.
+    this.cliReadyAt = Date.now()
   }
 
   async listProviders(): Promise<ProviderCatalog[]> {

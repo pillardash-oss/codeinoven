@@ -22,6 +22,8 @@ const MAX_TITLE_LENGTH = 120
 const MAX_NAME_LENGTH = 80
 const MAX_PATH_LENGTH = 4096
 const MAX_REFERENCE_LENGTH = 200
+/** A pull request description is user-facing prose, so it gets its own room. */
+const MAX_BODY_LENGTH = 20_000
 
 export const STRATEGIES: readonly GitPullStrategy[] = ['merge', 'rebase', 'ff-only']
 export const MERGE_MODES: readonly ScopeMergeMode[] = [
@@ -49,7 +51,13 @@ const SCOPE_TOOL_INPUT_KEYS: ReadonlySet<string> = new Set([
   'target',
   'deleteBranch',
   'threads',
-  'confirm'
+  'confirm',
+  'branch',
+  'remote',
+  'head',
+  'base',
+  'body',
+  'draft'
 ])
 
 /**
@@ -84,6 +92,18 @@ export function parseScopeToolInput(input: Record<string, unknown>): ScopeToolCa
   if (baseBranch !== undefined) call.baseBranch = baseBranch
   const sourcePath = optionalString(input, 'sourcePath', MAX_PATH_LENGTH)
   if (sourcePath !== undefined) call.sourcePath = sourcePath
+  const branch = optionalString(input, 'branch', MAX_REFERENCE_LENGTH)
+  if (branch !== undefined) call.branch = branch
+  const remote = optionalString(input, 'remote', MAX_REFERENCE_LENGTH)
+  if (remote !== undefined) call.remote = remote
+  const head = optionalString(input, 'head', MAX_REFERENCE_LENGTH)
+  if (head !== undefined) call.head = head
+  const base = optionalString(input, 'base', MAX_REFERENCE_LENGTH)
+  if (base !== undefined) call.base = base
+  const body = optionalString(input, 'body', MAX_BODY_LENGTH)
+  if (body !== undefined) call.body = body
+  const draft = optionalBoolean(input, 'draft')
+  if (draft !== undefined) call.draft = draft
   const target = optionalString(input, 'target', MAX_REFERENCE_LENGTH)
   if (target !== undefined) call.target = target
   const runSetup = optionalBoolean(input, 'runSetup')

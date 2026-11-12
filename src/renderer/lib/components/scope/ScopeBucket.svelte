@@ -4,8 +4,10 @@
   import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
+  import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioPin from '@pdslng/cio-icon/CioPin.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
+  import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import StageContainer from './StageContainer.svelte'
   import ScopeHealthNotice from './ScopeHealthNotice.svelte'
   import ScopeActionsMenu from '../shared/ScopeActionsMenu.svelte'
@@ -20,7 +22,6 @@
     bucket: ScopeBucket
     /** Scope-level actions (edit, pin, archive, worktree lifecycle, merge, delete). */
     actions: ScopeActionsController
-    fill?: boolean
     activeThreadId: string | null
     onToggle: () => void
     onToggleSlice: (stage: ThreadStage) => void
@@ -43,7 +44,6 @@
   let {
     bucket,
     actions,
-    fill = false,
     activeThreadId,
     onToggle,
     onToggleSlice,
@@ -59,11 +59,10 @@
   }: Props = $props()
 
   let scopeDropPosition = $state<'before' | 'after' | null>(null)
-  let threadCount = $derived(
-    scopeState.currentProjectThreads.filter(
-      (thread) => scopeState.bucketForThread(thread) === bucket.id
-    ).length
-  )
+  let threadCount = $derived(scopeState.threadCountFor(bucket.id))
+  /** With no thread anywhere in the project there is nothing to drag between
+   *  scopes, so the columns give way to a prompt to start the first one. */
+  let projectEmpty = $derived(scopeState.allScopeThreads.length === 0)
 
   /** Archived scopes are visually washed out (still interactive, still on the board). */
   let isArchived = $derived(bucket.archivedAt !== undefined)
@@ -118,7 +117,7 @@
 <section
   class="relative flex w-full min-w-0 flex-col border {isArchived
     ? 'border-border bg-elevated/40'
-    : 'bg-surface'} {bucket.collapsed ? 'h-10' : fill ? 'h-full' : 'h-120'} {scopeDropPosition
+    : 'bg-surface'} {bucket.collapsed ? 'h-10' : 'h-full'} {scopeDropPosition
     ? 'ring-2 ring-primary/30'
     : ''}"
   style:border-color={isArchived ? undefined : bucket.color}
@@ -236,26 +235,44 @@
           />
         </div>
       {/if}
-      <div class="flex min-h-0 min-w-0 flex-1 gap-2">
-        {#each visibleStages as stage (stage)}
-          <StageContainer
-            bucketId={bucket.id}
-            {stage}
-            threads={scopeState.threadsFor(bucket.id, stage)}
-            collapsed={bucket.collapsedSlices.includes(stage)}
-            {activeThreadId}
-            onToggle={() => onToggleSlice(stage)}
-            {onOpen}
-            {onRename}
-            {onTogglePin}
-            {onDelete}
-            {onFork}
-            {onMoveThread}
-            onReorderThread={(draggedId, targetId, position) =>
-              onReorderThread(stage, draggedId, targetId, position)}
-          />
-        {/each}
-      </div>
+      {#if projectEmpty}
+        <EmptyState
+          icon={CioMessage}
+          title="No threads yet"
+          description="Start a thread in {bucket.name}. Threads move between scopes by dragging once there are some."
+        >
+          {#snippet action()}
+            <button
+              class="inline-flex h-7 items-center gap-1.5 bg-primary px-3 text-[0.6875rem] font-medium text-on-primary transition-opacity hover:opacity-90"
+              onclick={onCreateThread}
+            >
+              <CioPlus size={12} />
+              New thread
+            </button>
+          {/snippet}
+        </EmptyState>
+      {:else}
+        <div class="flex min-h-0 min-w-0 flex-1 gap-2">
+          {#each visibleStages as stage (stage)}
+            <StageContainer
+              bucketId={bucket.id}
+              {stage}
+              threads={scopeState.threadsFor(bucket.id, stage)}
+              collapsed={bucket.collapsedSlices.includes(stage)}
+              {activeThreadId}
+              onToggle={() => onToggleSlice(stage)}
+              {onOpen}
+              {onRename}
+              {onTogglePin}
+              {onDelete}
+              {onFork}
+              {onMoveThread}
+              onReorderThread={(draggedId, targetId, position) =>
+                onReorderThread(stage, draggedId, targetId, position)}
+            />
+          {/each}
+        </div>
+      {/if}
     </div>
   {/if}
 </section>

@@ -26,7 +26,7 @@ export const SCOPE_CAPABILITY_SEARCH_QUERY = 'worktree'
  * activated anything.
  */
 export const SCOPE_CAPABILITY_SUMMARY =
-  'Create and manage app-owned Git worktree scopes for the active project: fork an isolated checkout for a feature or give an existing scope its own checkout, list and inspect scopes, sync a worktree with the project main branch in either direction, read and finish conflicts, repair, adopt, archive, rename, and (with confirmation) detach or delete. Every checkout it creates appears on the scope board with its branch, health and threads, and the calling thread can move into it. Use it only when the user explicitly asks to work in a separate worktree, never on your own initiative. Never run raw `git worktree add`: a raw worktree stays invisible to the app.'
+  'Create and manage app-owned Git worktree scopes for the active project: fork an isolated checkout for a feature or give an existing scope its own checkout, list and inspect scopes, sync a worktree with the project main branch in either direction, read and finish conflicts, publish a branch to its remote and open the pull request that carries it, repair, adopt, archive, rename, and (with confirmation) detach or delete. Every checkout it creates appears on the scope board with its branch, health and threads, and the calling thread can move into it. Use the worktree actions only when the user explicitly asks to work in a separate worktree, never on your own initiative. Never run raw `git worktree add`: a raw worktree stays invisible to the app.'
 
 /**
  * The capability contract, returned by activation and by the post-compaction
@@ -53,6 +53,11 @@ Write actions:
 - adopt (sourcePath, runSetup?): adopt an existing Git worktree checkout as a managed scope.
 - repair, retry_setup: fix an unhealthy checkout, or re-run its setup commands.
 - sync_from_main, sync_to_main (strategy: merge|rebase|ff-only).
+
+Publishing actions, which are the app's own push and pull request, so they work with the project credential the app already holds:
+- publish_branch (branch, remote?): push that local branch to its remote (default origin). It never force-pushes and never rewrites history.
+- open_pull_request (title, head, base, body?, draft?, scope?): open the pull request from head into base and answer with its number and URL. It never merges, closes, or comments on anything.
+Use these for the flow the app handed you, and give the user the pull request link they belong to. Never run \`git push\` yourself to reach a shared branch when the app can publish it, and never ask the user for a GitHub token: the app resolves the credential.
 
 Destructive actions, which challenge before they act:
 - detach_worktree: unregister the checkout and keep the scope.

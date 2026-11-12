@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioArrowUpDown from '@pdslng/cio-icon/CioArrowUpDown.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
@@ -1497,7 +1498,7 @@
     onSelect={() => {}}
     onMinimize={board.studio.minimizeCompositionEditor}
   >
-    {#await import('$lib/components/browser/BrowserPanel.svelte') then { default: BrowserPanel }}
+    {#await loadCachedPanelModule('module:lib/components/browser/BrowserPanel.svelte', () => import('$lib/components/browser/BrowserPanel.svelte')) then { default: BrowserPanel }}
       {#key shownFullscreenTab.id}
         <!--
           Watching the composition full screen is the same editor with the work put

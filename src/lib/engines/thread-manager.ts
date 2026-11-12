@@ -1,7 +1,4 @@
 import { isThreadBusyStatus } from '../thread-status-policy'
-import { rm } from 'fs/promises'
-import { generateId } from '../utils'
-import { threadOwnedDirectories } from '../thread-storage-paths'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import { GLOBAL_BROWSER_PROJECT_ID, GLOBAL_BROWSER_THREAD_ID } from '../ipc/browser'
 import { broadcastThreadDraftUpdated } from '../../main/chat/thread-events'
@@ -25,48 +22,55 @@ import { ScopeManager } from './scope-manager'
 import type { Database } from '../../main/database/database'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
-  scopeSliceForStatus,
   type ScopeSlice,
-  type BoundScopeRebind,
   type Thread,
-  type Project,
   type CreateThreadInput,
   type ThreadStatus,
   type ThreadSettings,
   type ThreadContextUsage,
   type AgentMessage,
+  type AssistantPreview,
   type ThreadMessageCursor,
   type ThreadMessagePage,
   type UsageBearingMessage,
   type UserMessageSummary,
   isOrchestrationChildThread,
   isAssistantSetupThread,
-  usesThreadWorkspaceMount,
   ASSISTANT_SPACE_ID
 } from '../types'
 import {
-  REGULAR_BUCKET,
-  bucketForThread,
   buildThreadCapacity,
-  countThreadsInBucket,
-  evictableInBucket,
-  isProtectedFromAutomaticCleanup,
   scopedBucketIdsFromBoard,
   type ThreadCapacity,
   type ThreadListOptions
 } from './thread-manager-capacity'
-import { buildThreadDeletionStatements, placeholdersFor } from './thread-manager-deletion'
 import { assertScopeSwapAllowed } from './thread-manager-scope-swap'
-import { assistantRunDescendants, orchestrationDescendants } from './thread-manager-lineage'
+import { orchestrationDescendants } from './thread-manager-lineage'
 import { ThreadForkService } from './thread-manager-fork'
 import { ThreadSearchService, type IntentSearchProvider } from './thread-manager-search'
+import { ThreadOrderingService } from './thread-manager-ordering'
+import { ThreadStatusService } from './thread-manager-status'
+import { ThreadCreationService, type ThreadEvictionOutcome } from './thread-manager-creation'
+import {
+  ThreadScopeBindingService,
+  type ThreadScopeRootProvider
+} from './thread-manager-scope-binding'
 import { ThreadTranscriptStore } from './thread-manager-transcripts'
+import { ThreadSweepService, type ThreadSweepSummary } from './thread-manager-sweep'
+import { ThreadScopeThreadsService } from './thread-manager-scope-threads'
 import { recoverBrowserTranscript } from '../../main/chat/browser-transcript-recovery'
 import { StorageEngine } from '../../main/storage/storage-engine'
 import { turnStreamPath } from '../../main/chat/turn-stream'
 
 export { remapCopiedMessages } from './thread-manager-fork'
 export type { ThreadCapacity, ThreadListOptions } from './thread-manager-capacity'
+export {
+  AllThreadsPinnedError,
+  AllThreadsProtectedError,
+  type ThreadEvictionOutcome
+} from './thread-manager-creation'
+export type { ThreadScopeRootProvider } from './thread-manager-scope-binding'
+export type { ThreadDeletionProject, ThreadSweepSummary } from './thread-manager-sweep'
 
 /** Sidebar quota for the inbox (Chats) project: show all of its recent threads. */
 const INBOX_PROJECT_ID = 'inbox'
@@ -84,81 +88,6 @@ const INBOX_PROJECT_ID = 'inbox'
  */
 const ASSISTANT_SPACE_RECENT_THREADS = 120
 
-/**
- * How many eviction candidates one create may try before it gives up for that
- * create. Eviction walks the bucket oldest-first and already tolerates a thread
- * it cannot delete, so this bound only keeps a systemic failure (a database that
- * is refusing writes, a driver that is gone) from turning thread creation into a
- * long loop over every thread the bucket holds.
- */
-const EVICTION_CANDIDATES_PER_CREATE = 5
-
-/**
- * What a create's background capacity eviction did.
- *
- * Deletion is best-effort by design: the new thread is already persisted when
- * this runs, and a failure is reported, never thrown. `failedIds` names every
- * candidate whose deletion failed, so an undeletable thread stays visible even
- * when a later candidate made room.
- */
-export interface ThreadEvictionOutcome {
-  /** Candidate ids whose deletion failed, oldest first. */
-  failedIds: string[]
-  /** Id of the thread that was deleted, when one was. */
-  evictedId?: string
-  /** The most recent deletion failure, for the audit log. */
-  error?: unknown
-}
-
-/**
- * Raised when `createThread` is asked to exceed a project's thread limit while
- * every active thread is protected from automatic cleanup. Deliberately
- * explicit: no thread is silently deleted and no thread is silently created
- * past the bound.
- */
-export class AllThreadsProtectedError extends Error {
-  constructor(
-    readonly projectId: string,
-    readonly limit: number,
-    readonly activeCount: number
-  ) {
-    super(
-      `Cannot create a thread: every active thread is pinned or in spec status (${activeCount}/${limit}). ` +
-        'Move a thread out of spec, unpin it, or delete an existing thread first.'
-    )
-    this.name = 'AllThreadsProtectedError'
-  }
-}
-
-/** @deprecated Use `AllThreadsProtectedError`. */
-export const AllThreadsPinnedError = AllThreadsProtectedError
-
-/**
- * Main-process injection point that resolves a scope target into its
- * authoritative filesystem root. The persisted `Thread.workingDirectory` is
- * compatibility data; this provider is the authority at creation time.
- */
-export interface ThreadScopeRootProvider {
-  /**
-   * Resolve the compatibility working directory for a thread in the given
-   * scope. Returns null when the scope is unknown/project-rooted without a
-   * local project. Throws when a managed scope root is unhealthy.
-   */
-  resolveCompatibilityRoot(projectId: string, scopeBucketId?: string): Promise<string | null>
-}
-
-/**
- * The project row a thread sweep resolves its scratch directories against.
- * Narrow on purpose: only the source and path decide where a thread's files live.
- */
-export type ThreadDeletionProject = Pick<Project, 'source' | 'path'> | null
-
-/** What a project-wide thread sweep removed, and what it could not. */
-export interface ThreadSweepSummary {
-  swept: number
-  unresolved: number
-}
-
 export class ThreadManager {
   private threadRepo: ThreadRepo
   private projectRepo: ProjectRepo
@@ -173,6 +102,12 @@ export class ThreadManager {
   >()
   private readonly forks: ThreadForkService
   private readonly searchService: ThreadSearchService
+  private readonly ordering: ThreadOrderingService
+  private readonly status: ThreadStatusService
+  private readonly scopeBinding: ThreadScopeBindingService
+  private readonly creation: ThreadCreationService
+  private readonly sweep: ThreadSweepService
+  private readonly scopeThreads: ThreadScopeThreadsService
 
   /**
    * @param onChange Invoked after a thread's status/read state is persisted so
@@ -185,7 +120,7 @@ export class ThreadManager {
     private onChange?: (thread: Thread) => void,
     private onDelete?: (thread: Thread) => void | Promise<void>,
     private onDeleted?: (threads: Pick<Thread, 'projectId' | 'id'>[]) => void | Promise<void>,
-    private scopeRoots?: ThreadScopeRootProvider
+    scopeRoots?: ThreadScopeRootProvider
   ) {
     this.threadRepo = new ThreadRepo(db)
     this.projectRepo = new ProjectRepo(db)
@@ -196,6 +131,46 @@ export class ThreadManager {
     this.transcripts = new ThreadTranscriptStore(db, this.agentMessageRepo)
     this.forks = new ThreadForkService(db, this.projectRepo, this.engineeringLifecycleEngine, this)
     this.searchService = new ThreadSearchService(db, this.threadRepo)
+    this.ordering = new ThreadOrderingService(
+      this.threadRepo,
+      (projectId, threadId) => this.requireOwnedThread(projectId, threadId),
+      (thread) => this.onChange?.(thread)
+    )
+    this.status = new ThreadStatusService(
+      this.threadRepo,
+      (projectId, threadId) => this.requireOwnedThread(projectId, threadId),
+      (thread) => this.announce(thread),
+      (projectId, threadId) => this.getThread(projectId, threadId),
+      (thread) => this.onChange?.(thread)
+    )
+    this.scopeBinding = new ThreadScopeBindingService(
+      this.projectRepo,
+      this.scopeManager,
+      scopeRoots
+    )
+    this.creation = new ThreadCreationService(
+      this.threadRepo,
+      this.projectRepo,
+      this.scopeManager,
+      this.scopeBinding,
+      (projectId, threadId) => this.deleteThread(projectId, threadId)
+    )
+    this.sweep = new ThreadSweepService(
+      db,
+      this.threadRepo,
+      this.projectRepo,
+      this.transcripts,
+      (thread) => this.onDelete?.(thread),
+      (threads) => this.onDeleted?.(threads),
+      (projectId, threadIds) => this.onThreadsDeletedForRanking?.(projectId, threadIds)
+    )
+    this.scopeThreads = new ThreadScopeThreadsService(
+      this.threadRepo,
+      this.projectRepo,
+      this.scopeManager,
+      (projectId, threadId) => this.deleteThread(projectId, threadId),
+      (projectId, threadId, input) => this.updateThread(projectId, threadId, input)
+    )
   }
 
   /**
@@ -302,10 +277,21 @@ export class ThreadManager {
   }
 
   /** The full synchronous `createThread`, used by internal orchestrators. */
+  /** The full synchronous `createThread`, used by internal orchestrators. */
   async createThread(input: CreateThreadInput): Promise<Thread> {
-    const { thread, finalize } = this.prepareCreateThread(input)
-    await finalize()
-    return thread
+    return this.creation.create(input)
+  }
+
+  /**
+   * Split the create so the renderer-facing path can return the thread
+   * immediately and finalize persistence in the background. The two halves are
+   * owned by {@link ThreadCreationService}; this stays the manager's door to it.
+   */
+  prepareCreateThread(
+    input: CreateThreadInput,
+    options: { onEviction?: (outcome: ThreadEvictionOutcome) => void } = {}
+  ): { thread: Thread; finalize: () => Promise<void> } {
+    return this.creation.prepare(input, options)
   }
 
   /**
@@ -328,223 +314,6 @@ export class ThreadManager {
       title: 'Browser',
       workingDirectory: ''
     })
-  }
-
-  /**
-   * Split the create so the renderer-facing path can return the thread
-   * immediately and finalize persistence in the background:
-   *
-   * - The synchronous half only builds the thread object and stable id.
-   * - The `finalize` half validates the project, enforces capacity, performs
-   *   the lazy eviction, and persists the row through the database worker.
-   *   Eviction failure never breaks the new thread; it is surfaced through
-   *   `onEviction` so the caller can audit it while the create proceeds.
-   */
-  prepareCreateThread(
-    input: CreateThreadInput,
-    options: { onEviction?: (outcome: ThreadEvictionOutcome) => void } = {}
-  ): { thread: Thread; finalize: () => Promise<void> } {
-    const creatingOrchestrationChild =
-      input.assignmentRole === 'worker' ||
-      input.achievementRole === 'auditor' ||
-      input.coordinatorThreadId !== undefined
-    const id = input.id ?? generateId()
-    const now = Date.now()
-
-    const thread: Thread = {
-      id,
-      projectId: input.projectId,
-      providerId: input.providerId,
-      title: input.title,
-      titleSource: input.titleSource ?? 'default',
-      status: 'created',
-      // An assistant's knowledge ("Getting started") thread is always pinned: pinning is
-      // what keeps it out of automatic eviction, and the invariant lives here so
-      // no caller can create it unpinned.
-      pinned: input.assistantGettingStarted === true,
-      archived: false,
-      read: true,
-      settings: input.settings,
-      featureSlug: input.featureSlug,
-      scopeBucketId: input.scopeBucketId,
-      // A bound scope is part of the created row itself for the same reason the
-      // assistant fields are: the creation broadcast carries this object, and a
-      // binding written afterwards would be wiped by that payload.
-      boundScope: input.boundScope,
-      runBase: input.runBase,
-      dispatchOrigin: input.dispatchOrigin,
-      assignmentId: input.assignmentId,
-      assignmentRole: input.assignmentRole,
-      assignmentTaskId: input.assignmentTaskId,
-      coordinatorThreadId: input.coordinatorThreadId,
-      achievementRole: input.achievementRole,
-      auditorThreadId: input.auditorThreadId,
-      userInputLocked: input.userInputLocked,
-      // Always a boolean, matching what a read returns for the column.
-      engineering: input.engineering === true,
-      // Assistant-space fields must be part of the created row itself: the
-      // creation broadcast carries this object, so grouping a task after the
-      // fact would be wiped by the very next thread:updated payload.
-      assistantId: input.assistantId,
-      assistantIconType: input.assistantIconType,
-      assistantIcon: input.assistantIcon,
-      // Kept out of the row when absent: the repository stores only the true
-      // case, so the in-memory shape must match what a read returns.
-      ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
-      // A run thread carries the task it runs from creation: the creation
-      // broadcast is what the sidebar nests rows from.
-      ...(input.assistantTaskId ? { assistantTaskId: input.assistantTaskId } : {}),
-      // The repository stores an absent override as NULL and reads it back as
-      // `undefined`, so the in-memory row must use the same shape.
-      scheduleOverride: input.scheduleOverride ?? undefined,
-      scheduled: input.scheduled,
-      createdAt: now,
-      updatedAt: now,
-      lastActivity: now,
-      workingDirectory: input.workingDirectory ?? ''
-    }
-
-    const finalize = async (): Promise<void> => {
-      // Project validation and capacity reads are deliberately inside the
-      // async half. Renderer-facing creates can return the stable thread id
-      // before either SQLite query begins, while internal callers still await
-      // this function and receive the same deterministic errors.
-      const project = await this.projectRepo.getViaWorker(input.projectId)
-      if (!project) {
-        throw new Error(`Project not found: ${input.projectId}`)
-      }
-      // A binding names a checkout, so both halves must still exist: an unknown
-      // project or a bucket that has left the board would resolve to nothing and
-      // silently point every evidence surface at no repository at all.
-      if (input.boundScope) await this.assertBoundScopeTarget(input.boundScope)
-      const scopedBuckets = scopedBucketIdsFromBoard(
-        await this.scopeManager.getBoardSnapshot(input.projectId)
-      )
-      // The new thread lands in its own bucket: either its pinned-like scope's
-      // bucket or the shared regular bucket. Capacity is enforced per bucket,
-      // so eviction only ever displaces threads from the same bucket.
-      const newThreadBucket = bucketForThread({ scopeBucketId: input.scopeBucketId }, scopedBuckets)
-      const active = await this.threadRepo.listCapacityCandidatesViaWorker(input.projectId)
-      const bucketCount = countThreadsInBucket(active, scopedBuckets, newThreadBucket)
-      let evictionCandidateIds: string[] = []
-      if (!creatingOrchestrationChild && bucketCount >= project.threadLimit) {
-        evictionCandidateIds = evictableInBucket(active, scopedBuckets, newThreadBucket)
-          .slice(0, EVICTION_CANDIDATES_PER_CREATE)
-          .map((candidate) => candidate.id)
-        if (evictionCandidateIds.length === 0) {
-          throw new AllThreadsProtectedError(input.projectId, project.threadLimit, bucketCount)
-        }
-      }
-
-      // The new thread lands first so the optimistic create always yields a
-      // persisted row; the bounded bucket delete is best-effort cleanup that
-      // must never roll back the creation it is making room for.
-      // A bound task's directory is its bound scope's, resolved by the same
-      // authority every project thread uses. The home container never wins:
-      // falling back to assistant storage is exactly the behaviour the park
-      // gate exists to prevent.
-      if (input.boundScope) {
-        await this.resolveBoundCompatibilityRoot(input.boundScope, thread)
-      }
-      await this.resolveCompatibilityRoot(input.projectId, input.scopeBucketId, thread)
-      await this.threadRepo.upsertViaWorker(thread)
-      if (evictionCandidateIds.length > 0) {
-        // The outcome is evaluated before the optional call. An absent callback
-        // skips only the report, never the eviction itself.
-        const outcome = await this.evictOldestDeletable(input.projectId, evictionCandidateIds)
-        options.onEviction?.(outcome)
-      }
-    }
-
-    return { thread, finalize }
-  }
-
-  /**
-   * Delete the oldest candidate that can actually be deleted.
-   *
-   * Capacity is an invariant of the app (docs/APP-BIBLE.md, "Bounded resources"),
-   * so a thread whose deletion fails must not be able to hold the project above
-   * its bound forever: eviction keeps the bucket's order and moves on to the
-   * next candidate, while every failure is returned to the caller so the
-   * undeletable thread is auditable instead of silent. The caller bounds the
-   * list, so one sweep is always short and thread creation never waits on it.
-   */
-  private async evictOldestDeletable(
-    projectId: string,
-    candidateIds: readonly string[]
-  ): Promise<ThreadEvictionOutcome> {
-    const failedIds: string[] = []
-    let error: unknown
-    for (const candidateId of candidateIds) {
-      try {
-        await this.deleteThread(projectId, candidateId)
-        return { failedIds, evictedId: candidateId, ...(error === undefined ? {} : { error }) }
-      } catch (failure) {
-        failedIds.push(candidateId)
-        error = failure
-      }
-    }
-    return { failedIds, ...(error === undefined ? {} : { error }) }
-  }
-
-  /**
-   * Synchronize a thread's compatibility working directory with its scope's
-   * authoritative root. Renderer-supplied directories never win when the
-   * scope resolves; unhealthy managed scopes fail closed.
-   */
-  /**
-   * Assert that a bound scope names a project that exists and a bucket that is
-   * still on that project's board.
-   *
-   * Shape validation happens at the IPC boundary; existence is a database
-   * question and belongs where both repos are already in hand. A removed scope
-   * is rejected rather than accepted and followed to the Default scope, because
-   * a binding is a user's explicit choice of checkout.
-   */
-  private async assertBoundScopeTarget(boundScope: BoundScopeRebind): Promise<void> {
-    const project = await this.projectRepo.getViaWorker(boundScope.projectId)
-    if (!project) {
-      throw new Error(`Project not found: ${boundScope.projectId}`)
-    }
-    const board = await this.scopeManager.getBoardSnapshot(boundScope.projectId)
-    if (!board.buckets.some((bucket) => bucket.id === boundScope.scopeBucketId)) {
-      throw new Error(`Scope ${boundScope.scopeBucketId} is not on project ${boundScope.projectId}`)
-    }
-  }
-
-  private async resolveCompatibilityRoot(
-    projectId: string,
-    scopeBucketId: string | undefined,
-    thread: Thread
-  ): Promise<void> {
-    if (!this.scopeRoots || !scopeBucketId) return
-    // A conversation container mounts its own app-storage workspace
-    // (`chats-cwd/`, `assistant-cwd/`, `browser-cwd/`) and owns no repository
-    // scope, so no bucket on it can ever name a checkout. Resolving one made a
-    // create in the assistant space fail closed after the row was already
-    // announced, and the thread was deleted seconds after it appeared.
-    if (usesThreadWorkspaceMount(projectId)) return
-    const resolved = await this.scopeRoots.resolveCompatibilityRoot(projectId, scopeBucketId)
-    if (resolved) thread.workingDirectory = resolved
-  }
-
-  /**
-   * A bound task's compatibility directory comes from its bound scope.
-   *
-   * Fail-closed on purpose: an unhealthy managed scope throws out of the
-   * provider, and the caller parks the run with that reason instead of letting
-   * the thread keep whatever directory it had.
-   */
-  private async resolveBoundCompatibilityRoot(
-    boundScope: BoundScopeRebind,
-    thread: Thread
-  ): Promise<void> {
-    if (!this.scopeRoots) return
-    const resolved = await this.scopeRoots.resolveCompatibilityRoot(
-      boundScope.projectId,
-      boundScope.scopeBucketId
-    )
-    if (resolved) thread.workingDirectory = resolved
   }
 
   /**
@@ -592,109 +361,19 @@ export class ThreadManager {
   }
 
   async reorderThreads(projectId: string, orderedIds: string[]): Promise<Thread[]> {
-    this.threadRepo.batchUpdateSortOrder(orderedIds)
-    const ordered = orderedIds.map((threadId) => this.requireOwnedThread(projectId, threadId))
-
-    // Pinned threads keep a single pin-time order across every surface: rewrite
-    // pinned_at so the first pinned thread in the new list is most-recent.
-    const pinned = ordered.filter((thread) => thread.pinned)
-    if (pinned.length > 0) {
-      const base = Date.now()
-      this.threadRepo.batchUpdatePinnedAt(
-        pinned.map((thread) => thread.id),
-        base
-      )
-      pinned.forEach((thread, index) => {
-        thread.pinnedAt = base - index
-      })
-    }
-
-    for (const thread of ordered) {
-      this.onChange?.(thread)
-    }
-    return ordered
+    return this.ordering.reorderThreads(projectId, orderedIds)
   }
 
-  /**
-   * Persist a single thread's manual drag-reorder anchor.
-   *
-   * `sortOrder` acts as a "frozen recency" anchor: it stores a timestamp placed
-   * between the dragged thread's new neighbors. The renderer orders threads by
-   * `sortOrder ?? lastActivity` descending, so a dragged thread holds its
-   * position, while any thread that receives genuinely newer activity (a
-   * larger `lastActivity`, since epoch time only grows) naturally sorts above
-   * it   and can be dragged back above again. Unlike the batch reorder, this
-   * touches only the dragged thread and never wipes other threads' anchors.
-   */
   async setSortOrder(projectId: string, threadId: string, sortOrder: number): Promise<Thread> {
-    const existing = this.requireOwnedThread(projectId, threadId)
-    const now = Date.now()
-    this.threadRepo.setSortOrder(threadId, sortOrder, now)
-    const updated: Thread = { ...existing, sortOrder, lastActivity: now, updatedAt: now }
-    this.onChange?.(updated)
-    return updated
+    return this.ordering.setSortOrder(projectId, threadId, sortOrder)
   }
 
-  /**
-   * Manual reorder of the pinned threads for a project. This is the single way
-   * pin order changes: the first id becomes most-recently pinned (top). Only
-   * pinned_at is rewritten   nothing else, so it stays consistent across every
-   * surface and a newly pinned thread always lands on top.
-   */
   async reorderPinnedThreads(projectId: string, orderedPinnedIds: string[]): Promise<Thread[]> {
-    if (new Set(orderedPinnedIds).size !== orderedPinnedIds.length) {
-      throw new Error('Pinned order must contain unique IDs')
-    }
-    const owned = orderedPinnedIds.map((threadId) => this.requireOwnedThread(projectId, threadId))
-    if (owned.some((thread) => !thread.pinned)) {
-      throw new Error('Pinned reorder list must contain only pinned threads')
-    }
-    const base = Date.now()
-    this.threadRepo.batchUpdatePinnedAt(
-      owned.map((thread) => thread.id),
-      base
-    )
-    const updated: Thread[] = []
-    owned.forEach((thread, index) => {
-      const next = { ...thread, pinnedAt: base - index }
-      this.onChange?.(next)
-      updated.push(next)
-    })
-    return updated
+    return this.ordering.reorderPinnedThreads(projectId, orderedPinnedIds)
   }
 
-  /**
-   * Manual reorder of pinned threads across every project (Threads view). The
-   * first id becomes most-recently pinned (top). Only pinned_at is rewritten  
-   * nothing else   so pin order stays consistent across every surface and a
-   * newly pinned thread always lands on top.
-   */
   async reorderPinnedThreadsGlobal(orderedPinnedIds: string[]): Promise<Thread[]> {
-    if (new Set(orderedPinnedIds).size !== orderedPinnedIds.length) {
-      throw new Error('Pinned order must contain unique IDs')
-    }
-    const owned = orderedPinnedIds.map((threadId) => {
-      const thread = this.threadRepo.get(threadId)
-      if (!thread) {
-        throw new Error(`Thread not found: ${threadId}`)
-      }
-      return thread
-    })
-    if (owned.some((thread) => !thread.pinned)) {
-      throw new Error('Pinned reorder list must contain only pinned threads')
-    }
-    const base = Date.now()
-    this.threadRepo.batchUpdatePinnedAt(
-      owned.map((thread) => thread.id),
-      base
-    )
-    const updated: Thread[] = []
-    owned.forEach((thread, index) => {
-      const next = { ...thread, pinnedAt: base - index }
-      this.onChange?.(next)
-      updated.push(next)
-    })
-    return updated
+    return this.ordering.reorderPinnedThreadsGlobal(orderedPinnedIds)
   }
 
   async reorderScopeThreads(
@@ -703,77 +382,7 @@ export class ThreadManager {
     slice: ScopeSlice,
     orderedIds: string[]
   ): Promise<Thread[]> {
-    if (new Set(orderedIds).size !== orderedIds.length) {
-      throw new Error('Scope thread order must contain unique IDs')
-    }
-
-    const partition = (await this.threadRepo.listByProjectViaWorker(projectId))
-      .filter((thread) => {
-        if (thread.archived) return false
-        if ((thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID) !== bucketId) return false
-        if (slice === 'unread') {
-          return thread.status === 'completed' && !thread.read
-        }
-        if (slice === 'pinned') {
-          return thread.pinned
-        }
-        return scopeSliceForStatus(thread.status) === slice
-      })
-      .sort((a, b) => {
-        if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity
-        return a.id.localeCompare(b.id)
-      })
-    const partitionById = new Map(partition.map((thread) => [thread.id, thread]))
-    const requested = orderedIds.map((threadId) => {
-      const thread = partitionById.get(threadId)
-      if (!thread) {
-        throw new Error(`Thread ${threadId} does not belong to the requested scope slice`)
-      }
-      return thread
-    })
-    const requestedIds = new Set(orderedIds)
-    const canonicalOrder = [
-      ...requested,
-      ...partition.filter((thread) => !requestedIds.has(thread.id))
-    ]
-
-    this.threadRepo.batchUpdateScopeSortOrder(
-      bucketId,
-      slice,
-      canonicalOrder.map((t) => t.id)
-    )
-
-    // Reordering the pinned slice is a manual pin reorder: rewrite pinned_at so
-    // the first pinned thread is most-recent, keeping pin order consistent with
-    // every other surface.
-    let pinnedBase = 0
-    if (slice === 'pinned' && canonicalOrder.length > 0) {
-      pinnedBase = Date.now()
-      this.threadRepo.batchUpdatePinnedAt(
-        canonicalOrder.map((t) => t.id),
-        pinnedBase
-      )
-    }
-
-    const updatedThreads: Thread[] = []
-    for (let index = 0; index < canonicalOrder.length; index++) {
-      const existing = canonicalOrder[index]
-      if (
-        existing.scopeSortOrder !== index ||
-        (slice === 'pinned' && existing.pinnedAt !== pinnedBase - index)
-      ) {
-        const updated: Thread = {
-          ...existing,
-          scopeSortOrder: index,
-          ...(slice === 'pinned' ? { pinnedAt: pinnedBase - index } : {})
-        }
-        this.onChange?.(updated)
-        updatedThreads.push(updated)
-      } else {
-        updatedThreads.push(existing)
-      }
-    }
-    return updatedThreads
+    return this.ordering.reorderScopeThreads(projectId, bucketId, slice, orderedIds)
   }
 
   async updateThread(
@@ -799,6 +408,7 @@ export class ThreadManager {
         | 'coordinatorThreadId'
         | 'achievementRole'
         | 'auditorThreadId'
+        | 'achievementGoal'
         | 'userInputLocked'
         | 'engineering'
         | 'independentAudit'
@@ -809,6 +419,8 @@ export class ThreadManager {
         | 'assistantIconType'
         | 'assistantIcon'
         | 'assistantGettingStarted'
+        | 'groupParticipants'
+        | 'groupTitle'
         | 'lastRunAt'
         | 'scheduleOverride'
         | 'scheduled'
@@ -817,6 +429,30 @@ export class ThreadManager {
   ): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
 
+    // An assistant's Getting started thread is its behavior record: the
+    // conversation that wrote the instructions the assistant follows on every run.
+    // It belongs to that assistant, and to that place, for life. Nothing renames it,
+    // moves it, or hands it to another assistant, because a behavior thread that
+    // changes owner is how one assistant's instructions, name and schedule once
+    // landed on a different assistant entirely.
+    if (isAssistantSetupThread(existing)) {
+      if (
+        (input.title !== undefined && input.title !== existing.title) ||
+        (input.titleSource !== undefined && input.titleSource !== existing.titleSource)
+      ) {
+        throw new Error('The Getting started thread cannot be renamed')
+      }
+      if (input.assistantId !== undefined && input.assistantId !== existing.assistantId) {
+        throw new Error('The Getting started thread cannot be moved to another assistant')
+      }
+      if (
+        input.scopeBucketId !== undefined &&
+        input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
+      ) {
+        throw new Error('The Getting started thread cannot be moved out of its scope')
+      }
+    }
+
     // Only an assistant task has a home and a workspace that can differ. A
     // project thread already names its own scope, so accepting a binding for
     // one would create a second, contradictory answer to the same question.
@@ -824,7 +460,7 @@ export class ThreadManager {
       if (existing.projectId !== ASSISTANT_SPACE_ID) {
         throw new Error('Only an assistant task can be bound to a project scope')
       }
-      if (input.boundScope) await this.assertBoundScopeTarget(input.boundScope)
+      if (input.boundScope) await this.scopeBinding.assertBoundScopeTarget(input.boundScope)
     }
 
     // Moving a thread to a different scope counts as activity on it: the
@@ -869,6 +505,9 @@ export class ThreadManager {
       assignmentTaskId: input.assignmentTaskId ?? existing.assignmentTaskId,
       coordinatorThreadId: input.coordinatorThreadId ?? existing.coordinatorThreadId,
       achievementRole: input.achievementRole ?? existing.achievementRole,
+      // An explicit goal replaces the previous one (a new Achievement run can
+      // restate the goal); omitting it keeps what the thread already recorded.
+      achievementGoal: input.achievementGoal ?? existing.achievementGoal,
       auditorThreadId: input.auditorThreadId ?? existing.auditorThreadId,
       userInputLocked: input.userInputLocked ?? existing.userInputLocked,
       // The Engineering marker is durable: once set it stays set, so a later
@@ -882,6 +521,8 @@ export class ThreadManager {
       assistantId: input.assistantId ?? existing.assistantId,
       assistantIconType: input.assistantIconType ?? existing.assistantIconType,
       assistantIcon: input.assistantIcon ?? existing.assistantIcon,
+      groupParticipants: input.groupParticipants ?? existing.groupParticipants,
+      groupTitle: input.groupTitle ?? existing.groupTitle,
       ...(input.assistantGettingStarted ? { assistantGettingStarted: true } : {}),
       lastRunAt: input.lastRunAt ?? existing.lastRunAt,
       scheduleOverride:
@@ -898,12 +539,12 @@ export class ThreadManager {
     // Rebinding a task re-derives its directory from the destination scope, on
     // the same rule a scope move follows, before anything can act on it.
     if (
-      this.scopeRoots &&
+      this.scopeBinding.hasScopeRoots &&
       input.boundScope !== undefined &&
       input.workingDirectory === undefined &&
       (input.boundScope?.projectId ?? null) !== (existing.boundScope?.projectId ?? null)
     ) {
-      const resolved = await this.scopeRoots.resolveCompatibilityRoot(
+      const resolved = await this.scopeBinding.resolveRoot(
         input.boundScope.projectId,
         input.boundScope.scopeBucketId
       )
@@ -913,15 +554,12 @@ export class ThreadManager {
     // Moving a thread between scopes re-derives its compatibility working
     // directory from the destination scope before anything can act on it.
     if (
-      this.scopeRoots &&
+      this.scopeBinding.hasScopeRoots &&
       input.scopeBucketId !== undefined &&
       input.workingDirectory === undefined &&
       input.scopeBucketId !== (existing.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID)
     ) {
-      const resolved = await this.scopeRoots.resolveCompatibilityRoot(
-        projectId,
-        updated.scopeBucketId
-      )
+      const resolved = await this.scopeBinding.resolveRoot(projectId, updated.scopeBucketId)
       if (resolved) {
         // The recorded branch names the checkout the thread used to run in, and
         // a move between scopes can swap that checkout (a managed scope has its
@@ -1017,149 +655,33 @@ export class ThreadManager {
     this.onChange?.(updated)
     return updated
   }
-  async deleteThread(projectId: string, threadId: string): Promise<void> {
-    const projectThreads = await this.threadRepo.listForDeletionViaWorker(projectId)
-    const thread = projectThreads.find((candidate) => candidate.id === threadId)
-    if (!thread) {
-      // Deleting a thread that is already gone is a finished deletion, not a
-      // failure: the row and everything the cascade takes with it are exactly
-      // what the caller asked to remove, and reporting "not found" would show a
-      // cleanup warning for a delete that already succeeded. The broadcast still
-      // runs so every window drops a row it may have kept from a missed event;
-      // a thread owned by another project is still a caller bug and keeps
-      // failing with the ownership error above.
-      if (await this.threadRepo.getViaWorker(threadId)) {
-        throw new Error(`Thread not found in project ${projectId}: ${threadId}`)
-      }
-      await this.onDeleted?.([{ projectId, id: threadId }])
-      return
-    }
-    // A task owns the runs it produced, exactly as a coordinator owns its
-    // workers: both are swept with the thread so no orphan row survives.
-    const deletionOrder = [
-      ...assistantRunDescendants(projectThreads, threadId),
-      ...orchestrationDescendants(projectThreads, threadId),
-      thread
-    ]
-    await this.deleteThreadOrder(projectId, deletionOrder)
-  }
-
-  /**
-   * The body of a thread deletion, given the exact rows it sweeps.
-   *
-   * Split out so a project-wide sweep can reuse one project thread snapshot for
-   * every thread it removes. The alternative   reading the whole project's
-   * threads again per thread   is quadratic in a project with hundreds of
-   * threads, and that is exactly the deletion that used to freeze the app.
-   */
-  private async deleteThreadOrder(
+  async deleteThread(
     projectId: string,
-    deletionOrder: Thread[],
-    project?: ThreadDeletionProject | null
+    threadId: string,
+    options: { allowAssistantSetupThread?: boolean } = {}
   ): Promise<void> {
-    if (deletionOrder.length === 0) return
-    const assignmentIds = await this.assignmentIdsFor(deletionOrder)
-    for (const candidate of deletionOrder) {
-      await this.onDelete?.(candidate)
-    }
-    this.onThreadsDeletedForRanking?.(
-      projectId,
-      deletionOrder.map((candidate) => candidate.id)
-    )
-    const outcome = await this.db.transactionViaWorker(
-      buildThreadDeletionStatements(deletionOrder, assignmentIds)
-    )
-    if (!outcome.ok) {
-      throw new Error(outcome.error ?? 'thread deletion failed')
-    }
-    for (const candidate of deletionOrder) {
-      this.transcripts.forgetUserMessages(projectId, candidate.id)
-    }
-    await this.removeThreadDiskArtifacts(deletionOrder, project)
-    await this.onDeleted?.(deletionOrder)
+    return this.sweep.deleteThread(projectId, threadId, options)
   }
 
   /**
    * Delete every thread in a project through the same path as `deleteThread`
    * (session teardown, DB row cleanup, disk artifacts), so project deletion
-   * never has to duplicate or fall behind that logic.
-   *
-   * Only walks coordinator/standalone threads   orchestration children are
-   * swept as part of their coordinator's deletion. One snapshot serves the
-   * whole sweep, each thread is removed as its own small step, and the loop
-   * yields to the event loop between threads so a large project cannot starve
-   * painting, IPC, or an agent stream while it drains. A thread whose teardown
-   * throws is logged and skipped instead of aborting the rest of the project,
-   * and a second pass picks up any row the first pass could not remove.
+   * never has to duplicate or fall behind that logic. Owned by
+   * {@link ThreadSweepService}.
    */
   async deleteAllThreadsInProject(
     projectId: string,
     onProgress?: (done: number, total: number) => void
   ): Promise<ThreadSweepSummary> {
-    const projectThreads = await this.threadRepo.listForDeletionViaWorker(projectId)
-    const project = await this.projectRepo.getViaWorker(projectId)
-    const roots = projectThreads.filter((thread) => !isOrchestrationChildThread(thread))
-    const sweptIds = new Set<string>()
-    let swept = 0
-    let done = 0
-    for (const root of roots) {
-      if (sweptIds.has(root.id)) continue
-      const order = [
-        ...assistantRunDescendants(projectThreads, root.id),
-        ...orchestrationDescendants(projectThreads, root.id),
-        root
-      ].filter((candidate) => !sweptIds.has(candidate.id))
-      for (const candidate of order) sweptIds.add(candidate.id)
-      try {
-        await this.deleteThreadOrder(projectId, order, project)
-        swept += order.length
-      } catch (error) {
-        Logger.dev('A thread survived a project deletion sweep', {
-          projectId,
-          threadId: root.id,
-          error: error instanceof Error ? error.message : String(error)
-        })
-      }
-      done += 1
-      onProgress?.(done, roots.length)
-      await new Promise<void>((resolve) => setImmediate(resolve))
-    }
-    // A retry pass removes whatever the first pass left behind: a row whose
-    // teardown threw, or a descendant that arrived while the sweep ran.
-    const leftovers = await this.threadRepo.listForDeletionViaWorker(projectId)
-    for (const thread of leftovers) {
-      try {
-        await this.deleteThreadOrder(projectId, [thread], project)
-        swept += 1
-      } catch (error) {
-        Logger.dev('A leftover thread survived a project deletion sweep', {
-          projectId,
-          threadId: thread.id,
-          error: error instanceof Error ? error.message : String(error)
-        })
-      }
-    }
-    const unresolved = (await this.threadRepo.listForDeletionViaWorker(projectId)).length
-    return { swept, unresolved }
+    return this.sweep.deleteAllThreadsInProject(projectId, onProgress)
   }
 
   /** All non-archived threads whose scope bucket equals `bucketId`, read on the
    *  database worker: scope tools and worktree preflights ask for this while
    *  the user is typing, so it must not touch SQLite on the main thread. */
-  private async scopeOwnedThreads(projectId: string, bucketId: string): Promise<Thread[]> {
-    const threads = await this.threadRepo.listByProjectViaWorker(projectId, {
-      includeArchived: false
-    })
-    return threads.filter(
-      (thread) => (thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID) === bucketId
-    )
-  }
-
   /** Number of user-visible (non-orchestration-child) threads owned by a scope. */
   async countThreadsInScope(projectId: string, bucketId: string): Promise<number> {
-    return (await this.scopeOwnedThreads(projectId, bucketId)).filter(
-      (thread) => !isOrchestrationChildThread(thread)
-    ).length
+    return this.scopeThreads.countThreadsInScope(projectId, bucketId)
   }
 
   /**
@@ -1169,22 +691,7 @@ export class ThreadManager {
    * scope) are removed individually.
    */
   async deleteThreadsInScope(projectId: string, bucketId: string): Promise<number> {
-    const owned = await this.scopeOwnedThreads(projectId, bucketId)
-    const roots = owned.filter((thread) => !isOrchestrationChildThread(thread))
-    let deleted = roots.length
-    for (const root of roots) {
-      await this.deleteThread(projectId, root.id)
-    }
-    const remaining = await this.scopeOwnedThreads(projectId, bucketId)
-    for (const thread of remaining) {
-      try {
-        await this.deleteThread(projectId, thread.id)
-        deleted += 1
-      } catch {
-        // Already swept by a parent deletion; treat as removed.
-      }
-    }
-    return deleted
+    return this.scopeThreads.deleteThreadsInScope(projectId, bucketId)
   }
 
   /**
@@ -1197,79 +704,12 @@ export class ThreadManager {
     projectId: string,
     fromBucketId: string
   ): Promise<{ moved: number; evicted: number }> {
-    const protectedIds = new Set<string>()
-    let moved = 0
-    const owned = await this.scopeOwnedThreads(projectId, fromBucketId)
-    for (const root of owned.filter((thread) => !isOrchestrationChildThread(thread))) {
-      await this.updateThread(projectId, root.id, { scopeBucketId: DEFAULT_SCOPE_BUCKET_ID })
-      protectedIds.add(root.id)
-      moved += 1
-    }
-    // Sweep orphans the parent move did not cover (children whose coordinator
-    // lived outside the scope).
-    const leftovers = await this.scopeOwnedThreads(projectId, fromBucketId)
-    for (const thread of leftovers) {
-      await this.updateThread(projectId, thread.id, { scopeBucketId: DEFAULT_SCOPE_BUCKET_ID })
-      protectedIds.add(thread.id)
-      moved += 1
-    }
-    const evicted = await this.enforceRegularBucketCapacity(projectId, protectedIds)
-    return { moved, evicted }
+    return this.scopeThreads.moveThreadsOutOfScope(projectId, fromBucketId)
   }
 
-  /**
-   * Evict the oldest unprotected threads in the shared regular bucket until the
-   * project thread limit is respected. `protectedIds` are never evicted.
-   * Returns how many threads were removed.
-   */
-  private async enforceRegularBucketCapacity(
-    projectId: string,
-    protectedIds: ReadonlySet<string> = new Set()
-  ): Promise<number> {
-    const project = await this.projectRepo.getViaWorker(projectId)
-    if (!project) throw new Error(`Project not found: ${projectId}`)
-    const scopedBuckets = scopedBucketIdsFromBoard(this.scopeManager.getBoard(projectId))
-    const candidates = await this.threadRepo.listCapacityCandidatesViaWorker(projectId)
-    const regular = candidates.filter(
-      (candidate) =>
-        bucketForThread(candidate, scopedBuckets) === REGULAR_BUCKET &&
-        !protectedIds.has(candidate.id)
-    )
-    let overage =
-      candidates.filter((candidate) => bucketForThread(candidate, scopedBuckets) === REGULAR_BUCKET)
-        .length - project.threadLimit
-    const evictionCandidates = regular.sort(
-      (left, right) => left.lastActivity - right.lastActivity || left.id.localeCompare(right.id)
-    )
-    let evicted = 0
-    for (const candidate of evictionCandidates) {
-      if (overage <= 0) break
-      if (isProtectedFromAutomaticCleanup(candidate)) continue
-      try {
-        await this.deleteThread(projectId, candidate.id)
-        evicted += 1
-      } catch {
-        // Race with another sweep; the limit is best-effort here.
-      }
-      overage -= 1
-    }
-    return evicted
-  }
+  /** Number of user-visible (non-orchestration-child) threads owned by a scope. */
 
   /** Remove app-owned scratch directories a deleted thread wrote to. Best-effort. */
-  private async removeThreadDiskArtifacts(
-    threads: Thread[],
-    project?: ThreadDeletionProject | null
-  ): Promise<void> {
-    for (const thread of threads) {
-      const owner =
-        project === undefined ? await this.projectRepo.getViaWorker(thread.projectId) : project
-      const dirs = threadOwnedDirectories(owner, thread.projectId, thread.id, thread.assistantId)
-      for (const dir of dirs) {
-        await rm(dir, { recursive: true, force: true }).catch(() => {})
-      }
-    }
-  }
 
   /**
    * Ids of every orchestration descendant of `threadId`   worker sub-agent
@@ -1282,61 +722,12 @@ export class ThreadManager {
     return orchestrationDescendants(threads, threadId).map((thread) => thread.id)
   }
 
-  private async assignmentIdsFor(threads: Thread[]): Promise<Set<string>> {
-    const assignmentIds = new Set(
-      threads.flatMap((thread) => (thread.assignmentId ? [thread.assignmentId] : []))
-    )
-    if (threads.length === 0) return assignmentIds
-    const threadIds = threads.map((thread) => thread.id)
-    const placeholders = placeholdersFor(threadIds.length)
-    const projectId = threads[0].projectId
-    const result = await this.db.queryViaWorker(
-      `SELECT assignment_id FROM assignment_workflow
-       WHERE project_id = ? AND coordinator_thread_id IN (${placeholders})
-       UNION
-       SELECT assignment_id FROM assignment_versions
-       WHERE project_id = ? AND coordinator_thread_id IN (${placeholders})`,
-      [projectId, ...threadIds, projectId, ...threadIds],
-      1_000
-    )
-    for (const row of result.rows) {
-      const assignmentId = row['assignment_id']
-      if (typeof assignmentId === 'string') assignmentIds.add(assignmentId)
-    }
-    return assignmentIds
-  }
-
-  /**
-   * Park a run on a typed reason until the user repairs its scope.
-   *
-   * The status is `working-paused` rather than `failed`, because nothing went
-   * wrong with the work: the checkout it needs is not usable yet, and the
-   * repair action is the user's next step. The reason is stored whole so the
-   * row and the receipt can name the category and repeat the app's own guidance
-   * after a restart.
-   */
   async parkThread(
     projectId: string,
     threadId: string,
     reason: NonNullable<Thread['parkReason']>
   ): Promise<Thread> {
-    const existing = this.requireOwnedThread(projectId, threadId)
-    const now = Date.now()
-    const updated: Thread = {
-      ...existing,
-      status: 'working-paused',
-      lastOutcome: 'parked',
-      parkReason: reason,
-      lastError: reason.message,
-      lastErrorAt: now,
-      updatedAt: now,
-      lastActivity: now,
-      sortOrder: undefined,
-      scopeSortOrder: undefined
-    }
-    await this.threadRepo.upsertViaWorker(updated)
-    await this.announce(updated)
-    return updated
+    return this.status.parkThread(projectId, threadId, reason)
   }
 
   async setStatus(
@@ -1345,66 +736,7 @@ export class ThreadManager {
     status: ThreadStatus,
     opts?: { read?: boolean; error?: string; errorDetail?: string }
   ): Promise<Thread> {
-    const existing = this.requireOwnedThread(projectId, threadId)
-
-    const now = Date.now()
-
-    // Carry the failure's diagnostic text on the thread row so downstream
-    // consumers (error notifications, the notification panel, and the next
-    // launch after an unattended run) can show what actually went wrong. It is
-    // persisted through `threadUpsertParams` and cleared the moment the thread
-    // leaves `failed`.
-    const lastError =
-      status === 'failed'
-        ? (() => {
-            const detail = opts?.errorDetail?.trim()
-            const message =
-              opts?.error?.trim() ||
-              existing.lastError ||
-              (detail ? detail.split('\n', 1)[0]?.trim() || undefined : undefined)
-            if (!message) return undefined
-            return detail && detail !== message ? `${message}\n\n${detail}` : message
-          })()
-        : undefined
-
-    // The outcome of the most recent settled run. A status that is not itself a
-    // settle point (planning/executing/interrupted) leaves the previous outcome
-    // in place, so resuming a failed run does not erase the fact that it failed.
-    const lastOutcome: Thread['lastOutcome'] =
-      status === 'failed'
-        ? 'failed'
-        : status === 'completed'
-          ? 'completed'
-          : status === 'awaiting_approval'
-            ? 'parked'
-            : existing.lastOutcome
-
-    // A resumed run is no longer parked: the reason belongs to the attempt that
-    // refused to start, so a turn that does start clears it.
-    const clearedPark =
-      existing.parkReason !== undefined &&
-      (status === 'executing' || status === 'completed' || status === 'failed')
-
-    const updated: Thread = {
-      ...existing,
-      status,
-      ...(clearedPark ? { parkReason: undefined } : {}),
-      scopeSortOrder:
-        scopeSliceForStatus(existing.status) === scopeSliceForStatus(status)
-          ? existing.scopeSortOrder
-          : undefined,
-      read: opts?.read ?? existing.read,
-      lastError,
-      lastErrorAt: status === 'failed' ? now : undefined,
-      lastOutcome,
-      updatedAt: now,
-      lastActivity: now,
-      sortOrder: undefined
-    }
-
-    await this.threadRepo.upsertViaWorker(updated)
-    await this.announce(updated)
-    return updated
+    return this.status.setStatus(projectId, threadId, status, opts)
   }
 
   async dismissSpecReview(
@@ -1413,25 +745,28 @@ export class ThreadManager {
     specId: string,
     specVersion: number
   ): Promise<Thread> {
-    const existing = this.requireOwnedThread(projectId, threadId)
+    return this.status.dismissSpecReview(projectId, threadId, specId, specVersion)
+  }
 
-    const now = Date.now()
-    const updated: Thread = {
-      ...existing,
-      status: 'completed',
-      scopeSortOrder:
-        scopeSliceForStatus(existing.status) === 'done' ? existing.scopeSortOrder : undefined,
-      read: true,
-      dismissedSpecId: specId,
-      dismissedSpecVersion: specVersion,
-      updatedAt: now,
-      lastActivity: now,
-      sortOrder: undefined
-    }
+  async setAuditState(
+    projectId: string,
+    threadId: string,
+    auditState: Thread['auditState'],
+    report?: { id: string; version: number }
+  ): Promise<Thread> {
+    return this.status.setAuditState(projectId, threadId, auditState, report)
+  }
 
-    await this.threadRepo.upsertViaWorker(updated)
-    await this.announce(updated)
-    return updated
+  async markStoppedByUser(projectId: string, threadId: string): Promise<void> {
+    return this.status.markStoppedByUser(projectId, threadId)
+  }
+
+  async wasStoppedByUser(projectId: string, threadId: string): Promise<boolean> {
+    return this.status.wasStoppedByUser(projectId, threadId)
+  }
+
+  async clearStoppedByUser(projectId: string, threadId: string): Promise<void> {
+    return this.status.clearStoppedByUser(projectId, threadId)
   }
 
   /**
@@ -1450,78 +785,9 @@ export class ThreadManager {
     if (updated) this.onChange?.(updated)
   }
 
-  async setAuditState(
-    projectId: string,
-    threadId: string,
-    auditState: Thread['auditState'],
-    report?: { id: string; version: number }
-  ): Promise<Thread> {
-    const existing = this.requireOwnedThread(projectId, threadId)
-    const now = Date.now()
-    const updated: Thread = {
-      ...existing,
-      auditState,
-      ...(report
-        ? { activeAuditId: report.id, activeAuditVersion: report.version }
-        : auditState === undefined
-          ? { activeAuditId: undefined, activeAuditVersion: undefined }
-          : {}),
-      updatedAt: now,
-      lastActivity: now,
-      sortOrder: undefined
-    }
-    await this.threadRepo.upsertViaWorker(updated)
-    await this.announce(updated)
-    return updated
-  }
-
-  /**
-   * Latch a deliberate user stop so no automatic resume may revive this
-   * thread. The flag lives inside the persisted settings, so it survives app
-   * restarts, forks, and the settings round-trips of `updateThread`.
-   */
-  async markStoppedByUser(projectId: string, threadId: string): Promise<void> {
-    try {
-      const existing = await this.getThread(projectId, threadId)
-      if (!existing?.settings) return
-      const settings: ThreadSettings = {
-        ...existing.settings,
-        stoppedByUserAt: Date.now()
-      }
-      await this.threadRepo.upsertViaWorker({ ...existing, settings })
-      this.onChange?.({ ...existing, settings })
-    } catch (error) {
-      Logger.error('Stop latch could not be persisted', {
-        projectId,
-        threadId,
-        error: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
   /** A deliberate user stop the thread has not outlived with a new prompt yet. */
-  async wasStoppedByUser(projectId: string, threadId: string): Promise<boolean> {
-    const thread = await this.getThread(projectId, threadId)
-    return thread?.settings?.stoppedByUserAt !== undefined
-  }
 
   /** A real user prompt re-arms automatic resumes on the thread. */
-  async clearStoppedByUser(projectId: string, threadId: string): Promise<void> {
-    try {
-      const existing = await this.getThread(projectId, threadId)
-      if (!existing || existing.settings?.stoppedByUserAt === undefined) return
-      const { stoppedByUserAt: _cleared, ...settings } = existing.settings
-      const updated: Thread = { ...existing, settings, updatedAt: Date.now() }
-      await this.threadRepo.upsertViaWorker(updated)
-      this.onChange?.(updated)
-    } catch (error) {
-      Logger.error('Stop latch could not be cleared', {
-        projectId,
-        threadId,
-        error: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
 
   async setPinned(projectId: string, threadId: string, pinned: boolean): Promise<Thread> {
     const existing = this.requireOwnedThread(projectId, threadId)
@@ -1924,6 +1190,31 @@ export class ThreadManager {
   async loadUserMessages(projectId: string, threadId: string): Promise<UserMessageSummary[]> {
     if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return []
     return this.transcripts.loadUserMessages(projectId, threadId)
+  }
+
+  /**
+   * The newest conversation message per assistant, for the assistant list rows.
+   *
+   * Read straight from the message repo rather than through a transcript load:
+   * the sidebar needs one bounded line per row, not a conversation.
+   */
+  async listAssistantPreviews(projectId: string): Promise<AssistantPreview[]> {
+    return this.agentMessageRepo.latestAssistantPreviewsViaWorker(projectId)
+  }
+
+  /**
+   * Retire app-owned seed messages. The orchestrator bootstrap uses this when the
+   * app changes what it seeds, so an install that saw the earlier version does
+   * not keep a line the app no longer writes.
+   */
+  async deleteAppMessages(
+    projectId: string,
+    threadId: string,
+    ids: readonly string[]
+  ): Promise<void> {
+    if (ids.length === 0) return
+    if (!(await this.getOwnedThreadViaWorker(projectId, threadId))) return
+    this.agentMessageRepo.deleteByIds(threadId, ids)
   }
 
   /** Load every parent-session record, including hidden transport-only prompts. */

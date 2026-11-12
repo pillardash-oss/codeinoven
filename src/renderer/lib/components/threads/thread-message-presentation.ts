@@ -8,6 +8,7 @@ import {
 } from '../chats/composer-mentions'
 import { assistantTagIconHtml } from '$lib/components/assistant/assistant-tag-badge'
 import { threadComposerTag } from '$lib/components/chats/composer-tag'
+import { inlineTagChipHtml } from '$lib/components/shared/inline-tag-chip'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { taggedThreads } from '$lib/stores/tagged-threads.svelte'
 import { assistantAccentColor } from '$lib/assistant-icons'
@@ -140,34 +141,26 @@ export function tracePreviewByUserMessage(entries: AgentMessage[]): SvelteMap<st
   return previews
 }
 
-function escapeHtmlForChip(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-}
-
 function inlineChipHtml(reference: PromptProjectReference): string {
-  const safeName = escapeHtmlForChip(reference.name)
-  const safePath = escapeHtmlForChip(reference.path)
-  const safeTitle = escapeHtmlForChip(
-    `Tagged ${reference.kind}: ${reference.name}, ${reference.path}`
-  )
   const icon =
     reference.kind === 'directory'
       ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4z"/></svg>'
       : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>'
   const kind = reference.kind === 'directory' ? 'folder' : 'file'
-  const safeLabel = escapeHtmlForChip(`Reveal this ${kind} in the file tree: ${reference.path}`)
   // A real control, not decoration: the chip names a file the reader can jump
   // to. It carries the same `data-file-chip` path across the message render,
   // and MarkdownView + the citation context menu pick it up by delegation.
-  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeLabel}" data-file-chip="${safePath}">${icon}<span class="max-w-48 truncate font-medium">${safeName}</span></span>`
+  return inlineTagChipHtml({
+    label: reference.name,
+    title: `Tagged ${reference.kind}: ${reference.name}, ${reference.path}`,
+    markHtml: icon,
+    actionLabel: `Reveal this ${kind} in the file tree: ${reference.path}`,
+    attributes: { 'data-file-chip': reference.path },
+    className: 'text-[0.75rem]'
+  })
 }
 
-function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
+function builtInTagChipHtml(tag: ComposerBuiltInTag): string {
   // Inline SVG (not an `<img>` data URI) so the icon's embedded `.dark`
   // selector can see the theme class on `<html>`: the mark's ink follows the
   // active theme (black on light, white on dark). The chip's
@@ -175,22 +168,53 @@ function inlineTagChipHtml(tag: ComposerBuiltInTag): string {
   const icon = getVendorIconSvg(APP_NAME)
   // The complete tag, not just its short label, so a hover proves which tag a
   // send actually carried.
-  const safeTitle = escapeHtmlForChip(`${tag.token} · ${tag.description}`)
-  const iconHtml = icon
-    ? `<span class="inline-flex shrink-0 text-[0.75rem] leading-none" aria-hidden="true">${icon}</span>`
-    : ''
-  return `<span class="inline-flex max-w-full items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" title="${safeTitle}" data-cio-tag="${tag.id}">${iconHtml}<span class="max-w-48 truncate font-medium">${tag.chipLabel}</span></span>`
+  return inlineTagChipHtml({
+    label: tag.chipLabel,
+    title: `${tag.token} · ${tag.description}`,
+    markHtml: icon ?? undefined,
+    markClassName: 'text-[0.75rem] leading-none',
+    attributes: { 'data-cio-tag': tag.id },
+    className: 'text-[0.75rem]'
+  })
 }
 
 function inlineAssistantTagChipHtml(tag: ComposerAssistantTag, title: string): string {
-  const safeTitle = escapeHtmlForChip(`Open ${tag.detail}: ${title}`)
   // The same assistant icon the composer badge wears, so a tagged thread reads
   // the same before the send and after it. The chip is a control: it carries the
   // tag it names, and the conversation opens that thread from it.
   // The assistant's accent edges the chip, exactly like the badge in the
   // composer and the assistant's own rows, so the same tag reads the same
   // before and after the send.
-  return `<span class="inline-flex max-w-full cursor-pointer items-center gap-1 border border-border bg-elevated px-1.5 py-0.5 text-[0.75rem] leading-none align-baseline" style="border-left:2px solid ${escapeHtmlForChip(tag.color)}" title="${safeTitle}" role="button" tabindex="0" aria-label="${safeTitle}" data-assistant-tag="${escapeHtmlForChip(`${tag.kind}:${tag.id}`)}">${tag.iconHtml}<span class="max-w-48 truncate font-medium">${escapeHtmlForChip(title)}</span></span>`
+  return inlineTagChipHtml({
+    label: title,
+    title: `Open ${tag.detail}: ${title}`,
+    markHtml: tag.iconHtml,
+    accentColor: tag.color,
+    actionLabel: `Open ${tag.detail}: ${title}`,
+    attributes: { 'data-assistant-tag': `${tag.kind}:${tag.id}` },
+    className: 'text-[0.75rem]'
+  })
+}
+
+/**
+ * The link a reply carries to the thread the work behind it ran on.
+ *
+ * A delegated run reports into the conversation that asked, and its own row is
+ * not where the reader meets the answer, so this chip is the one place that opens
+ * the work. It says what it does rather than showing a bare title, and the title
+ * truncates inside the chip like any other long name.
+ */
+function inlineThreadReferenceChipHtml(tag: ComposerAssistantTag, title: string): string {
+  const label = `Click to view thread: ${title}`
+  return inlineTagChipHtml({
+    label,
+    title: label,
+    markHtml: tag.iconHtml,
+    accentColor: tag.color,
+    actionLabel: label,
+    attributes: { 'data-assistant-tag': `${tag.kind}:${tag.id}` },
+    className: 'text-[0.75rem]'
+  })
 }
 
 /** The assistant-space names a sent tag can render with. */
@@ -237,7 +261,7 @@ function assistantTagChips(
       ),
       keywords: []
     }
-    chips.push({ token, html: inlineAssistantTagChipHtml(tag, title) })
+    chips.push({ token, html: inlineThreadReferenceChipHtml(tag, title) })
   }
   for (const assistant of lookup.assistants) {
     const token = composerAssistantTagToken({ kind: 'assistant', id: assistant.id })
@@ -295,7 +319,7 @@ export function inlineFileTagsForMessage(
   // A built-in tag renders as a badge on the conversation screen too, mirroring
   // the composer badge for the same token.
   for (const tag of COMPOSER_BUILT_IN_TAGS) {
-    if (text.includes(tag.token)) tags.push({ token: tag.token, html: inlineTagChipHtml(tag) })
+    if (text.includes(tag.token)) tags.push({ token: tag.token, html: builtInTagChipHtml(tag) })
   }
   if (assistantTags) tags.push(...assistantTagChips(text, assistantTags))
   // A thread tagged from another project: the assistant list cannot name it,

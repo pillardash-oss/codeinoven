@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { OvenGitIdentityService } from '../../../src/main/ovens/oven-git-identity'
 import type { OvenPreflightReport } from '../../../src/lib/ovens'
 import type { OvenSsh } from '../../../src/main/ovens/oven-ssh'
-import type { SecretVault } from '../../../src/main/storage/secret-vault'
+import type { SecretsService } from '../../../src/main/secrets/secrets-service'
 
 const report: OvenPreflightReport = {
   ovenId: 'oven-test',
@@ -30,7 +30,7 @@ describe('oven Git identity', () => {
       command.startsWith('test -f') ? 'present' : 'Host key verification failed'
     )
     const ssh = { execute } as unknown as OvenSsh
-    const service = new OvenGitIdentityService({ ssh, vault: {} as SecretVault })
+    const service = new OvenGitIdentityService({ ssh, vault: {} as SecretsService })
     const result = await service.verify('oven-test', report)
     expect(result.status).toBe('host-key-untrusted')
     expect(result.expectedHostKeyFingerprints.length).toBeGreaterThan(0)
@@ -42,7 +42,7 @@ describe('oven Git identity', () => {
     const execute = vi.fn(async () => '')
     const service = new OvenGitIdentityService({
       ssh: { execute } as unknown as OvenSsh,
-      vault: {} as SecretVault
+      vault: {} as SecretsService
     })
     const result = await service.verify('oven-test', {
       ...report,

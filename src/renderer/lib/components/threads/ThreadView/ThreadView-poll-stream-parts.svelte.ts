@@ -24,7 +24,6 @@ import {
   isActivityOnlyUserMessage,
   isTurnCompleted,
   isTurnTransparentUserMessage,
-  lastTurnStartIndex,
   pendingTurnAnchorIndex,
   splitTurnTraceParts,
   streamWorkingPartsForTurn,
@@ -160,11 +159,15 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     if (this.conversationBusy || this.root.unmirroredTraceStartTime.brainstormReportRefreshing)
       return []
     if (pendingTurnAnchorIndex(this.root.buildSpecActionPrompt.structureMessages) === -1) return []
-    // Only when no assistant row exists at all. An earlier assistant turn is
-    // itself a mount point for this fold (`streamWorkingPartsForTurn` keeps
-    // every part the mirror does not already carry before that turn), so
-    // mounting a second card here would render the same work twice.
-    if (lastTurnStartIndex(this.root.buildSpecActionPrompt.structureMessages) !== -1) return []
+    // Only when no assistant turn is going to mount this fold itself. An
+    // assistant turn keeps the fold's parts (`streamWorkingPartsForTurn`) while
+    // it is the transcript's active turn, and mounting a second card here would
+    // render the same work twice. Once a newer prompt has opened a turn of its
+    // own, that older turn is settled and merges nothing, so the fold belongs
+    // here   which is the window a thread paused on a question sits in: the run
+    // is not busy, no assistant row is mirrored yet, and the work that led to
+    // the question is only in the log.
+    if (this.root.buildSpecActionPrompt.latestTurnInfo.active) return []
     const parts = this.streamWorkingPartsForPendingTurn()
     return latestWorkingTraceParts(parts).length > 0 ? parts : []
   })
@@ -410,6 +413,21 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     return views
   })
 
+  /**
+   * Adopt everything a durable read states about the whole turn: the task list
+   * it was folded for, whether the turn compacted its context, the span its
+   * steps occupied, and (on a window) every sub-agent it delegated to.
+   *
+   * Each of these is a fact about the turn, not about the slice that crossed
+   * IPC, so they all travel with any read and the trace header stays correct
+   * whatever page happens to be mounted.
+   */
+  applyTurnSnapshot(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
+    this.applyTodoSnapshot(page)
+    this.streamTrace.adoptTraceMarkers(page)
+    if (page.kind === 'window') this.streamTrace.adoptSubagents(page.subagentParts)
+  }
+
   /** Adopt a durable read's task-list snapshot together with the turn it was
    *  folded for, so the card can reject it once the transcript moves on. */
   applyTodoSnapshot(page: TurnStreamPartsPage | TurnStreamPartsChange): void {
@@ -578,11 +596,17 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
    *  a resumed Pi process may restart its local message counter, so an old and
    *  current part can temporarily carry the same provider-generated ID. */
   streamWorkingPartsForPendingTurn(): AgentPart[] {
-    const prompt = this.root.buildSpecActionPrompt.pendingLiveTurn
-      ? this.root.buildSpecActionPrompt.structureMessages[
-          this.root.buildSpecActionPrompt.pendingLiveTurn.userMessageIndex
-        ]
-      : undefined
+    // The prompt that opened the pending turn. A live turn names its own index;
+    // a turn that is not busy (paused on a question, stopped, errored) still has
+    // one, and it is needed here, because it is what keeps an older turn's fold
+    // from rendering under the new prompt.
+    const pendingIndex = this.root.buildSpecActionPrompt.pendingLiveTurn
+      ? this.root.buildSpecActionPrompt.pendingLiveTurn.userMessageIndex
+      : pendingTurnAnchorIndex(this.root.buildSpecActionPrompt.structureMessages)
+    const prompt =
+      pendingIndex === -1
+        ? undefined
+        : this.root.buildSpecActionPrompt.structureMessages[pendingIndex]
     // Delivery and the durable poll arrive separately. Until the fold catches
     // up, its parts still belong above the new prompt, never below it.
     if (
@@ -756,7 +780,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
         this.streamTrace.setParts(mergeWorkingParts(this.streamTrace.parts, page.parts))
         this.streamTrace.hasOlder = page.hasOlder
         this.streamTrace.totalSteps = page.totalSteps
-        this.applyTodoSnapshot(page)
+        this.applyTurnSnapshot(page)
         this.streamTrace.cursor = page.cursor
         return
       }
@@ -770,7 +794,8 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
       this.streamTrace.turnStartTs = page.turnStartTs ?? this.streamTrace.turnStartTs
       this.streamTrace.cursor = page.cursor
       this.streamTrace.totalSteps = page.totalSteps
-      this.applyTodoSnapshot(page)
+      this.applyTurnSnapshot(page)
+      this.streamTrace.mergeTouchedSubagents(page.parts)
       // A fold that shrank under us with the same boundary belongs to a log
       // rewritten after the fact: remount the newest page instead of keeping
       // entries that no longer belong here.
@@ -821,7 +846,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
       this.streamTrace.setParts(mergeWorkingParts(this.streamTrace.parts, page.parts))
       this.streamTrace.hasOlder = page.hasOlder
       this.streamTrace.totalSteps = page.totalSteps
-      this.applyTodoSnapshot(page)
+      this.applyTurnSnapshot(page)
       this.streamTrace.cursor = page.cursor
     } catch {
       // Best-effort: the message cache still carries the checkoffs, and the
@@ -849,7 +874,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     this.streamTrace.setParts(page.parts)
     this.streamTrace.hasOlder = page.hasOlder
     this.streamTrace.totalSteps = page.totalSteps
-    this.applyTodoSnapshot(page)
+    this.applyTurnSnapshot(page)
     this.streamTrace.cursor = page.cursor
   }
 
@@ -892,6 +917,7 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     ])
     this.streamTrace.hasOlder = page.hasOlder
     this.streamTrace.totalSteps = page.totalSteps
+    this.applyTurnSnapshot(page)
     if (this.streamTrace.parts.length === mountedBefore) this.streamTrace.hasOlder = false
   }
 }

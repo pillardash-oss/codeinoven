@@ -9,20 +9,24 @@
  */
 
 import type { AgentQuestion } from './types'
+import {
+  SECRET_ENVIRONMENT_VARIABLE_PATTERN,
+  SECRET_ENVIRONMENT_VARIABLE_LIMIT,
+  deriveAppEnvironmentVariable,
+  validateTargetEnvironmentVariable
+} from './secret-names'
 
 /** App-owned directory for secret-tool registries and temporary plaintext files. */
 export const AGENT_SECRET_ROOT = 'agent-secrets'
 
 /** Valid OS environment variable name a collected secret can be exposed under. */
-export const SECRET_ENVIRONMENT_VARIABLE_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u
+export { SECRET_ENVIRONMENT_VARIABLE_PATTERN } from './secret-names'
 
 /** Most secrets one call may ask for; a card is human-paced, so keep it short. */
 export const SECRET_REQUEST_LIMIT = 5
 
 const SECRET_TITLE_LIMIT = 120
 const SECRET_DESCRIPTION_LIMIT = 400
-const ENVIRONMENT_VARIABLE_LIMIT = 64
-const SECRET_TITLE_SLUG_LIMIT = 24
 /** Most names one alternative instruction may point the app at, bounding lookups. */
 export const SECRET_ALTERNATIVE_NAME_LIMIT = 5
 
@@ -85,15 +89,21 @@ export function normalizeAgentSecretRequests(input: unknown): AgentSecretRequest
     const environmentVariable = optionalText(
       entry['environment_variable'],
       `Secret ${index + 1} environment variable`,
-      ENVIRONMENT_VARIABLE_LIMIT
+      SECRET_ENVIRONMENT_VARIABLE_LIMIT
     )
-    if (
-      environmentVariable !== undefined &&
-      !SECRET_ENVIRONMENT_VARIABLE_PATTERN.test(environmentVariable)
-    ) {
-      throw new TypeError(
-        `Secret ${index + 1} environment variable must be a valid OS variable name`
-      )
+    if (environmentVariable !== undefined) {
+      // Rejected here, before a card is ever drawn, so an agent cannot ask the
+      // user to type a value into a name the app or the OS already owns.
+      try {
+        validateTargetEnvironmentVariable(environmentVariable)
+      } catch (error) {
+        throw new TypeError(
+          `Secret ${index + 1} environment variable is not allowed: ${
+            error instanceof Error ? error.message : environmentVariable
+          }`,
+          { cause: error }
+        )
+      }
     }
     const utilityId = optionalText(entry['utility_id'], `Secret ${index + 1} utility id`, 128)
     return {
@@ -117,15 +127,12 @@ export function normalizeAgentSecretRequests(input: unknown): AgentSecretRequest
  * always wins, because the target (an MCP server variable, a CLI flag) needs
  * that exact spelling; otherwise the app derives `CIO_<ID>_<TITLE_SLUG>`, where
  * the per-secret id keeps two secrets with the same title distinct.
+ *
+ * The derivation itself lives in `secret-names`, which is the single place the
+ * app decides what a name it owns looks like.
  */
 export function deriveSecretEnvironmentVariable(id: string, title: string): string {
-  const slug = title
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/gu, '_')
-    .replace(/^_+|_+$/gu, '')
-    .slice(0, SECRET_TITLE_SLUG_LIMIT)
-    .replace(/_+$/gu, '')
-  return `CIO_${id}_${slug || 'SECRET'}`
+  return deriveAppEnvironmentVariable(id, title)
 }
 
 /**

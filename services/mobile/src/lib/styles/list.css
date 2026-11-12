@@ -302,6 +302,16 @@
   color: var(--color-muted);
 }
 
+/* ---- Starting work ----
+   The one control that begins something new from this panel. It sits under the
+   list rather than beside the title, so the title row stays the single place the
+   reading is switched. */
+.list-foot {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.75rem var(--gutter) 0;
+}
+
 /* ---- Assistants ----
    A scheduled assistant folds open to what it does; a manual one has no schedule
    to explain, so it stays a row. */

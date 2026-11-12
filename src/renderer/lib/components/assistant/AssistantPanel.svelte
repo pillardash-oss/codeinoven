@@ -6,6 +6,7 @@
   import { toast } from 'svelte-sonner'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
+  import StatusPill from '$lib/components/ui/StatusPill.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { getAssistantIcon } from '$lib/assistant-icons'
   import { appConfigState } from '$lib/stores/app-config.svelte'
@@ -13,6 +14,7 @@
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
   import { assistants } from '$lib/stores/assistants.svelte'
   import type { AssistantPanelTab } from '$lib/stores/context-sidebar-types'
+  import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { rendererRecovery, type MainView } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
@@ -44,10 +46,12 @@
     assistantKnowledgeSections,
     parseKnowledgeSections,
     resolveConnections,
+    runIssueNoticeId,
     serializeKnowledgeSections,
     withKnowledgePersonality,
     type ConnectionSetupRequest,
-    type ConnectionView
+    type ConnectionView,
+    type RunIssue
   } from './assistant-view'
   import {
     buildConnectionLibrary,
@@ -186,11 +190,6 @@
    */
   const activeTab = $derived(
     TABS.some((entry) => entry.id === panelTab) ? panelTab : ('all' as AssistantPanelTab)
-  )
-
-  /** The status pill's ink: a paused assistant is a warning, a running one is a success. */
-  const statusToneColor = $derived(
-    assistant?.paused ? 'var(--color-warning)' : 'var(--color-success)'
   )
 
   /**
@@ -495,25 +494,33 @@
    *  runs. Tasks and their run threads are both checked, since execution status
    *  lives on the run thread. */
   const runIssues = $derived.by(() => {
-    const issues: Array<{ id: string; task: Thread; kind: string; detail: string }> = []
+    const issues: RunIssue[] = []
     const seen = new SvelteSet<string>()
-    const pushIssue = (thread: Thread, kind: string, detail: string): void => {
+    const pushIssue = (thread: Thread, kind: string, detail: string, condition: string): void => {
       const id = `${thread.id}:${kind}`
       if (seen.has(id)) return
       seen.add(id)
-      issues.push({ id, task: thread, kind, detail })
+      issues.push({ id, task: thread, kind, detail, condition })
     }
     const collectFrom = (thread: Thread): void => {
       const retryAt = agentRuns.retryAt(thread.projectId, thread.id)
       if (retryAt !== null) {
-        pushIssue(thread, 'Rate limited', `Retrying ${describeRelativeTime(retryAt, Date.now())}`)
+        pushIssue(
+          thread,
+          'Rate limited',
+          `Retrying ${describeRelativeTime(retryAt, Date.now())}`,
+          `rate-limited:${retryAt}`
+        )
       }
+      // A status problem belongs to the dispatch that produced it, so the next run
+      // that fails, waits or is interrupted is a different occurrence and shows.
+      const occurrence = `${thread.status}:${thread.lastDispatchedAt ?? 0}`
       if (thread.status === 'awaiting_approval') {
-        pushIssue(thread, 'Needs attention', 'Waiting on you')
+        pushIssue(thread, 'Needs attention', 'Waiting on you', occurrence)
       } else if (thread.status === 'failed') {
-        pushIssue(thread, 'Failed', 'The last run failed')
+        pushIssue(thread, 'Failed', 'The last run failed', occurrence)
       } else if (thread.status === 'interrupted') {
-        pushIssue(thread, 'Interrupted', 'The last run was interrupted')
+        pushIssue(thread, 'Interrupted', 'The last run was interrupted', occurrence)
       }
     }
     for (const entry of assistantTasks) collectFrom(entry)
@@ -524,7 +531,14 @@
     return issues
   })
 
-  const issueCount = $derived(missedRuns.length + runIssues.length)
+  /** The live problems: the rows the user has not dismissed for this occurrence. */
+  const visibleRunIssues = $derived(
+    runIssues.filter(
+      (issue) => !noticeDismissals.isDismissed(runIssueNoticeId(issue.id), issue.condition)
+    )
+  )
+
+  const issueCount = $derived(missedRuns.length + visibleRunIssues.length)
 
   /**
    * The panel's tabs as the full screen strip's tabs. The strip carries no badge
@@ -731,7 +745,9 @@
     -->
     <header class="flex shrink-0 flex-col gap-2 border-b border-border px-3 py-2.5">
       <div class="flex items-center gap-2.5">
-        <span class="flex h-8 w-8 shrink-0 items-center justify-center bg-elevated">
+        <span
+          class="flex h-9 w-9 shrink-0 items-center justify-center border border-border bg-elevated"
+        >
           {#if assistantIcon}
             <img src={assistantIcon} alt="" class="h-5 w-5 object-contain" draggable="false" />
           {:else}
@@ -739,26 +755,51 @@
           {/if}
         </span>
         <div class="min-w-0 flex-1">
-          <h1 class="truncate text-[0.875rem] font-semibold tracking-tight text-foreground">
+          <h1 class="truncate text-sm font-semibold tracking-tight text-foreground">
             {assistant.name}
           </h1>
-          <p class="mt-0.5 truncate text-[0.6875rem] text-muted">
-            {scheduleLabel} · last run {lastRunLabel}
+          <!--
+            One fact per line. The clock is the assistant's identity here (how it
+            runs), so the head states it alone and the All tab owns the run
+            history: the old line glued both together and truncated the very
+            time it was there to state.
+          -->
+          <p class="mt-0.5 truncate text-[0.6875rem] text-muted" title={scheduleLabel}>
+            {scheduleLabel}
           </p>
         </div>
-        <button
-          type="button"
-          class="shrink-0 border border-border px-1.5 py-0.5 text-[0.5625rem] tracking-wide uppercase transition-colors hover:bg-elevated"
-          style="color: {statusToneColor}"
-          title={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
-          aria-label={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
-          onclick={() => void togglePaused()}
-        >
-          {assistant.paused ? 'Paused' : 'Running'}
-        </button>
+        <div class="flex shrink-0 items-center gap-1">
+          <!--
+            The state is the pause control, and it wears the app's canonical
+            status pill rather than a hand-coloured tag: a paused assistant is a
+            warning, a running one a success, and the dot says which at a glance.
+          -->
+          <button
+            type="button"
+            class="flex shrink-0 items-center bg-transparent p-0 transition-opacity hover:opacity-80"
+            title={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
+            aria-label={assistant.paused ? 'Resume this assistant' : 'Pause this assistant'}
+            onclick={() => void togglePaused()}
+          >
+            <StatusPill tone={assistant.paused ? 'warning' : 'success'} dot>
+              {assistant.paused ? 'Paused' : 'Running'}
+            </StatusPill>
+          </button>
+          {#if !fullscreen}
+            <button
+              type="button"
+              class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+              title="Open in full screen"
+              aria-label="Open in full screen"
+              onclick={() => (fullscreen = true)}
+            >
+              <CioMaximize size={13} strokeWidth={1.8} />
+            </button>
+          {/if}
+        </div>
       </div>
       {#if assistant.description?.trim()}
-        <p class="border-l-2 border-border pl-2.5 text-[0.75rem] leading-relaxed text-muted">
+        <p class="border-l border-border pl-2.5 text-[0.75rem] leading-relaxed text-muted">
           {assistant.description}
         </p>
       {/if}
@@ -767,48 +808,40 @@
 {/snippet}
 
 {#snippet panelHeader()}
-  <div class="flex h-9 shrink-0 items-stretch border-b border-border pr-1">
-    <div
-      class="flex min-w-0 flex-1 items-stretch overflow-x-auto"
-      role="tablist"
-      aria-label="Assistant sections"
-    >
-      {#each visibleTabs as entry (entry.id)}
-        <button
-          type="button"
-          role="tab"
-          aria-selected={activeTab === entry.id}
-          class="relative flex shrink-0 items-center gap-1.5 px-2.5 text-[0.6875rem] whitespace-nowrap transition-colors {activeTab ===
-          entry.id
-            ? 'text-foreground'
-            : 'text-muted hover:text-foreground'}"
-          title={entry.label}
-          onclick={() => (panelTab = entry.id)}
-        >
-          {entry.label}
-          {#if tabCount(entry.id) !== null}
-            <span
-              class="border border-border bg-elevated px-1 text-[0.5625rem] tabular-nums"
-              style={entry.id === 'issues' ? 'color: var(--color-missed)' : ''}
-            >
-              {tabCount(entry.id)}
-            </span>
-          {/if}
-          {#if activeTab === entry.id}
-            <span class="absolute inset-x-1.5 bottom-0 h-[2px] bg-primary"></span>
-          {/if}
-        </button>
-      {/each}
-    </div>
-    <button
-      type="button"
-      class="my-1 flex w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Open in full screen"
-      aria-label="Open in full screen"
-      onclick={() => (fullscreen = true)}
-    >
-      <CioMaximize size={13} strokeWidth={1.8} />
-    </button>
+  <!--
+    The app's own section strip (notification and memory panels draw the same
+    one): text-xs, a 2px rule under the active label, and a count as plain
+    tabular numerals rather than a second bordered box inside every tab. It
+    wraps instead of scrolling sideways, so a panel narrower than its eight
+    sections still shows Schedule, Wakes and Reporting rather than hiding the
+    last three behind an invisible horizontal scroll.
+  -->
+  <div
+    class="flex shrink-0 flex-wrap items-center gap-x-1 border-b border-border px-2"
+    role="tablist"
+    aria-label="Assistant sections"
+  >
+    {#each visibleTabs as entry (entry.id)}
+      {@const count = tabCount(entry.id)}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeTab === entry.id}
+        class="-mb-px flex items-center gap-1.5 border-b-2 px-2 py-1.5 text-xs font-medium whitespace-nowrap transition-colors {activeTab ===
+        entry.id
+          ? 'border-foreground text-foreground'
+          : 'border-transparent text-muted hover:text-foreground'}"
+        title={entry.label}
+        onclick={() => (panelTab = entry.id)}
+      >
+        {entry.label}
+        {#if count !== null}
+          <span class="tabular-nums {entry.id === 'issues' ? 'text-missed' : 'text-dimmed'}">
+            {count}
+          </span>
+        {/if}
+      </button>
+    {/each}
   </div>
 {/snippet}
 
@@ -855,7 +888,7 @@
           {reportingBrief}
           {deliveryReady}
           missedCount={missedRuns.length}
-          runIssueCount={runIssues.length}
+          runIssueCount={visibleRunIssues.length}
           onRunNow={() => void runNow()}
           onSelect={(tab) => (panelTab = tab)}
         />
@@ -976,7 +1009,7 @@
       <AssistantIssuesTab
         {scheduled}
         {missedRuns}
-        {runIssues}
+        runIssues={visibleRunIssues}
         {backgroundRuns}
         {onOpenTask}
         onDismissMissed={(id) => void dismissRun(id)}

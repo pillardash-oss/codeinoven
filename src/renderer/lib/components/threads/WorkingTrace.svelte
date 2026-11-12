@@ -6,13 +6,16 @@
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import type { AgentPart, ThinkingLevel } from '$shared/types'
+  import type { TraceSpan } from '$shared/working-trace-span'
   import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
   import type { SubagentPart } from '$lib/working-trace-parts'
   import {
     groupTraceIntoChains,
+    isSubagentPart,
     latestWorkingTraceParts,
+    mergeTurnSubagents,
     tracePartsSpan
   } from '$lib/working-trace-parts'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
@@ -62,6 +65,27 @@
     endTime?: number
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
+    /**
+     * True inside a group conversation. The trace belongs to the speaker named
+     * above its bubble, so its header drops the model, harness and account chips
+     * and keeps only the work and the fold control.
+     */
+    compact?: boolean
+    /**
+     * True inside a group reply, where the trace is a section of the bubble rather
+     * than a band of its own. Its rows then take the bubble's own surface instead
+     * of painting the darker app fill behind them.
+     */
+    flat?: boolean
+    /**
+     * A maximum height for the open body, in rem.
+     *
+     * A group bubble is a reply, not a page: an expanding trace would drag the
+     * bubble with it and push the rest of the conversation away. The body scrolls
+     * inside that ceiling instead, so the bubble keeps one height while the work
+     * keeps arriving.
+     */
+    bodyMaxHeightRem?: number
     /** True while this trace is on screen. A hidden trace   the workspace keeps
      *  a thread mounted behind Settings/Scope and other views   does not pull
      *  its older durable pages, so coming back mounts what the reader is
@@ -75,6 +99,24 @@
     /** True when the durable stream holds entries older than the oldest this
      *  trace holds, so the top of the trace can pull another page. */
     olderPartsAvailable?: boolean
+    /**
+     * Every sub-agent step the whole turn delegated to, from the durable fold,
+     * whether or not it is inside `parts`.
+     *
+     * A trace mounts one bounded page at a time and a turn spawns its workers
+     * near the start, so the page on screen often holds none of them. The header
+     * badge reports the turn from this list, and it must say so even while the
+     * step that delegated the work sits on a page nobody has scrolled to.
+     */
+    turnSubagentParts?: AgentPart[]
+    /** True when any step of this whole turn compacted its context, from the
+     *  durable fold, so the header marks it even while the compaction step sits
+     *  on a page nobody has scrolled to. */
+    turnCompacted?: boolean
+    /** Earliest start to latest end across this whole turn's steps, from the
+     *  durable fold. The header duration reads this instead of the mounted
+     *  entries, which cover only the pages loaded so far. */
+    turnSpan?: TraceSpan | null
     /** Pull the next older durable page into this trace's parts. Called once per
      *  gesture at the trace's top, and to fill a trace whose content fits. */
     onLoadOlderParts?: () => void | Promise<void>
@@ -119,8 +161,14 @@
     active = true,
     totalSteps = 0,
     olderPartsAvailable = false,
+    turnSubagentParts = [],
+    turnCompacted = false,
+    turnSpan = null,
     onLoadOlderParts,
     modelLabel = null,
+    compact = false,
+    flat = false,
+    bodyMaxHeightRem,
     thinkingLevel = null,
     providerName,
     providerId,
@@ -195,8 +243,10 @@
    *  it, so a trace showing only its newest window still states the real size
    *  and the figure never climbs as older pages load. */
   const stepCount = $derived(Math.max(mountedStepCount, totalSteps))
-  /** The trace's whole wall-clock span, from its earliest entry to its latest. */
-  const traceSpan = $derived(tracePartsSpan(visibleParts))
+  /** The trace's whole wall-clock span, from its earliest entry to its latest.
+   *  The turn's own span wins when the durable fold reported one: the mounted
+   *  entries are only the pages loaded so far. */
+  const traceSpan = $derived(turnSpan ?? tracePartsSpan(visibleParts))
   /** True while an older page is in flight, so one arrival loads exactly one
    *  page. Plain, not reactive: only the scroll handler reads it and nothing
    *  renders from it. */
@@ -317,9 +367,12 @@
     void pullOlderPage()
   })
 
-  // When no explicit start is available, fall back to the earliest working
-  // part timestamp so the timer keeps counting even at message boundaries.
-  const effectiveStartTime = $derived(workingTraceStartTime(visibleParts, startTime))
+  // When no explicit start is available, fall back to the earliest timestamp the
+  // whole turn reported, then to the mounted entries, so the timer keeps counting
+  // even at message boundaries and never restarts from a page of the turn.
+  const effectiveStartTime = $derived(
+    workingTraceStartTime(visibleParts, startTime ?? traceSpan?.start)
+  )
 
   /** True only while a live session is streaming this trace. A restored trace
    *  (busy with the saved-activity note) is historical: its durations are
@@ -417,8 +470,13 @@
     }
     return null
   })
-  const subagentParts = $derived(
+  const mountedSubagentParts = $derived(
     visibleParts.filter((part): part is SubagentPart => part.type === 'subagent')
+  )
+  /** The turn's delegation: the fold's own list, advanced by whatever the live
+   *  stream has already shown in the mounted rows. */
+  const subagentParts = $derived(
+    mergeTurnSubagents(turnSubagentParts.filter(isSubagentPart), mountedSubagentParts)
   )
   const subagentCount = $derived(subagentParts.length)
   const runningSubagents = $derived(
@@ -437,7 +495,8 @@
     subagentBadgeLabel(soleActiveTask, activeSubagentCount, subagentCount)
   )
   const hasCompaction = $derived(
-    visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
+    turnCompacted ||
+      visibleParts.some((part) => part.type === 'compaction' || part.type === 'compaction-summary')
   )
 
   // One clock for the whole dropdown list: it ticks only while a worker is
@@ -476,7 +535,10 @@
   <!-- The header pins to the transcript's top while the reader scrolls through
        this trace's work, so folding it is always one click away without a
        scroll back. The body is the transcript's now: one scroller, not two. -->
-  <div class="sticky top-0 z-20 bg-app" bind:clientHeight={traceHeaderHeight}>
+  <div
+    class="sticky top-0 z-20 {flat ? 'bg-transparent' : 'bg-app'}"
+    bind:clientHeight={traceHeaderHeight}
+  >
     <WorkingTraceSummary
       open={isOpen}
       live={liveActivity}
@@ -491,6 +553,7 @@
       label={subagentBadgeLabelText}
       elapsedFor={subagentElapsed}
       {modelLabel}
+      {compact}
       {isFast}
       {thinkingLevel}
       {providerName}
@@ -511,10 +574,14 @@
       bind:this={traceBodyEl}
       transition:slide={foldSlide()}
       class="flex min-w-0 flex-col gap-2 pb-2"
+      class:overflow-y-auto={bodyMaxHeightRem !== undefined}
+      style:max-height={bodyMaxHeightRem === undefined ? undefined : `${bodyMaxHeightRem}rem`}
     >
       {#each chains as chain, index (chain.id)}
         <WorkingTraceChain
           {chain}
+          {flat}
+          ownScroll={bodyMaxHeightRem !== undefined}
           {formatOutput}
           active={liveActivity && index === chains.length - 1}
           showHeader={chains.length > 1 || chain.output !== null}

@@ -62,12 +62,15 @@
   <span
     class="relative inline-flex h-4 w-7 shrink-0 items-center transition-colors {checked
       ? activeClass
-      : 'bg-overlay'}"
+      : 'bg-app shadow-[inset_0_0_0_1px_var(--color-border-strong)]'}"
   >
+    <!-- Off reads as a hollow track with a muted knob on the left, on as a filled
+         track with the knob on the right, so the state never rests on position
+         alone. -->
     <span
-      class="inline-block h-3 w-3 bg-surface transition-transform {checked
-        ? 'translate-x-3.5'
-        : 'translate-x-0.5'}"
+      class="inline-block h-3 w-3 transition-transform {checked
+        ? 'translate-x-3.5 bg-surface'
+        : 'translate-x-0.5 bg-muted'}"
     ></span>
   </span>
   {#if children}

@@ -226,8 +226,8 @@
     <div>
       <h1 class="text-xl font-bold tracking-tight">Heartbeat</h1>
       <p class="mt-0.5 text-sm text-muted">
-        Send a lightweight "ping" to a model at set times to start its usage window early so the
-        next 5-hour reset lands before you need it.
+        Ping a model at set times so its 5-hour usage window starts early and resets before you need
+        it.
       </p>
     </div>
     <button
@@ -303,15 +303,15 @@
               )}
               {#if config.thinkingLevel}· {config.thinkingLevel}{/if}
             </p>
-            {#if account}
-              <span
-                class="mt-1 inline-flex max-w-full truncate border bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
-                title="Account: {account.label}"
-              >
-                <CioPerson size={10} class="mr-1 shrink-0" />{account.label}
-              </span>
-            {/if}
-            <div class="mt-1.5 flex flex-wrap gap-1">
+            <div class="mt-1 flex flex-wrap items-center gap-1">
+              {#if account}
+                <span
+                  class="inline-flex max-w-full truncate border bg-elevated px-1.5 py-0.5 text-[0.625rem] text-muted"
+                  title="Account: {account.label}"
+                >
+                  <CioPerson size={10} class="mr-1 shrink-0" />{account.label}
+                </span>
+              {/if}
               {#each config.times as time (time)}
                 <span
                   class="border border-border bg-raised px-1.5 py-0.5 text-[0.625rem] tabular-nums text-muted"

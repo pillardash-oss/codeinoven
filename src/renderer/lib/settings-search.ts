@@ -6,6 +6,7 @@ import CioCode from '@pdslng/cio-icon/CioCode.svelte'
 import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
 import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
 import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
+import CioKey from '@pdslng/cio-icon/CioKey.svelte'
 import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
 import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
 import CioPalette from '@pdslng/cio-icon/CioPalette.svelte'
@@ -336,6 +337,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: CioHeartPulse
   },
   {
+    id: 'secrets',
+    section: 'secrets',
+    group: 'data',
+    title: 'Secrets',
+    description: 'Every stored credential, with replace and revoke.',
+    keywords: ['secrets', 'vault', 'credentials', 'api key', 'tokens', 'keyring', 'encrypted'],
+    icon: CioKey
+  },
+  {
     id: 'profile',
     section: 'profile',
     group: 'data',
@@ -424,11 +434,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'general',
     blockId: 'general-threads',
     title: 'Threads',
-    description:
-      'Thread limits, slash command behavior, question timeout, and which panel tabs the switcher lists.',
+    description: 'Thread limits, question timeout, and which panel tabs the switcher lists.',
     keywords: [
       'limit',
-      'slash commands',
       'timeout',
       'switcher',
       'ctrl+tab',

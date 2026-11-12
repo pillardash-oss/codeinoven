@@ -1,4 +1,6 @@
 <script lang="ts">
+  import SeekBar from '../ui/SeekBar.svelte'
+  import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import type { SpeechSettings } from '../../../../lib/speech/types'
   import Switch from '../ui/Switch.svelte'
   import VoiceShortcutInput from './VoiceShortcutInput.svelte'
@@ -92,19 +94,19 @@
         aria-label="Toggle remote transcript cleanup"
       />
     </div>
-    <select
-      class="w-full border bg-elevated px-2.5 py-2 text-xs outline-none focus:border-primary disabled:opacity-50"
-      aria-label="Remote cleanup model source"
-      disabled={!settings.remoteCleanupEnabled}
+    <EnumSelect
+      options={[
+        { id: 'conversation', label: 'Current conversation model' },
+        { id: 'fixed', label: 'Selected fixed model' }
+      ]}
       value={settings.remoteCleanupSelection}
-      onchange={(event) =>
-        patch({
-          remoteCleanupSelection: event.currentTarget.value as 'fixed' | 'conversation'
-        })}
-    >
-      <option value="conversation">Current conversation model</option>
-      <option value="fixed">Selected fixed model</option>
-    </select>
+      disabled={!settings.remoteCleanupEnabled}
+      ariaLabel="Remote cleanup model source"
+      title="Remote cleanup model source"
+      placeholder="Choose a source"
+      class="w-full"
+      onChange={(id) => patch({ remoteCleanupSelection: id })}
+    />
     {#if settings.remoteCleanupSelection === 'fixed'}
       <label class="block text-xs text-muted">
         Fixed model ID
@@ -169,19 +171,16 @@
     {#each unloadItems as item (item.key)}
       <label class="flex items-center justify-between gap-3 text-xs text-muted">
         {item.label}
-        <select
-          class="border bg-elevated px-2.5 py-1.5 text-xs outline-none focus:border-primary"
-          aria-label={`${item.label} unload delay`}
-          value={settings[item.key]}
-          onchange={(event) =>
-            patch({
-              [item.key]: event.currentTarget.value as '5m' | '10m' | '20m' | '30m' | 'keep'
-            })}
-        >
-          {#each unloadOptions as option (option.value)}
-            <option value={option.value}>{option.label}</option>
-          {/each}
-        </select>
+        <div class="w-36 shrink-0">
+          <EnumSelect
+            options={unloadOptions.map((option) => ({ id: option.value, label: option.label }))}
+            value={settings[item.key]}
+            ariaLabel={`${item.label} unload delay`}
+            title={`${item.label} unload delay`}
+            placeholder="Choose a delay"
+            onChange={(id) => patch({ [item.key]: id })}
+          />
+        </div>
       </label>
     {/each}
   </div>
@@ -221,14 +220,14 @@
   </div>
   <label class="mt-4 flex items-center gap-3 text-xs text-muted">
     Cue volume
-    <input
-      type="range"
-      min="0"
-      max="1"
-      step="0.05"
+    <SeekBar
+      class="w-32"
+      min={0}
+      max={1}
+      step={0.05}
       value={settings.cues.volume}
-      aria-label="Speech cue volume"
-      oninput={(event) => patchCues({ volume: event.currentTarget.valueAsNumber })}
+      label="Speech cue volume"
+      onInput={(volume) => patchCues({ volume })}
     />
   </label>
 </section>

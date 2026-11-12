@@ -423,11 +423,25 @@ export class ChatEngineQuestionsAsk {
           }
         }
       }
+      // A recovered question is offered to the orchestrator exactly like a live
+      // one: a run that was already blocked when the thread was opened is still
+      // work the parent can settle.
+      this.host.notifyDelegatedQuestion(pending)
     }
-    return [...this.host.pendingQuestions.values()]
-      .map((pending) => pending.request)
-      .filter((request) => request.projectId === projectId && request.threadId === threadId)
-      .sort((left, right) => left.createdAt - right.createdAt)
+    return (
+      [...this.host.pendingQuestions.values()]
+        .map((pending) => pending.request)
+        .filter((request) => request.projectId === projectId && request.threadId === threadId)
+        .sort((left, right) => left.createdAt - right.createdAt)
+        // A thread the app dispatched on someone's behalf never raises its own
+        // card: the request belongs to the conversation that asked for the work,
+        // which draws the same card there under the thread's own badge. Showing it
+        // here as well would put one decision in front of the user twice, on a row
+        // they never started by hand. The request stays registered either way, so
+        // the parent's card and any programmatic answer still settle the one
+        // request the driver is blocked on.
+        .filter(() => !thread.dispatchOrigin?.initiatorThreadId)
+    )
   }
 
   /**
@@ -664,8 +678,13 @@ export class ChatEngineQuestionsAsk {
     this.host.units['questions'].schedulePendingQuestion(pending)
     // A temporary side chat (including a global browser's agent sidebar) owns no
     // status of its own: its parent thread must not be marked as awaiting input
-    // for a question the side chat asked.
-    if (!session.ephemeral) {
+    // for a question the side chat asked. An artifact-generation session
+    // (Brainstorm, PRD, Spec) is ephemeral for its own lifecycle but its question
+    // belongs to the thread it is drafting for, so it must park the thread: the
+    // interview card was invisible to the row and its notification read
+    // `completed` while the card waited on the user.
+    const sideChat = this.host.units['temporary-chats'].temporaryChatForSession(session.sessionId)
+    if (!sideChat) {
       await this.host.threadManager.setStatus(
         session.projectId,
         session.threadId,
@@ -676,6 +695,10 @@ export class ChatEngineQuestionsAsk {
       )
     }
     this.host.broadcast(event)
+    // Last, once the app's own card exists: a question raised by work an assistant
+    // dispatched is settled in the conversation that started it, and this is the
+    // one moment the engine knows the request is waiting.
+    this.host.notifyDelegatedQuestion(pending)
   }
 
   /**

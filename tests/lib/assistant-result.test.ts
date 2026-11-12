@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { assistantResultText, ASSISTANT_INVALID_RESULT } from '$shared/assistant-result'
+import {
+  assistantResultText,
+  stripAssistantEnvelope,
+  ASSISTANT_INVALID_RESULT
+} from '$shared/assistant-result'
 import { buildAssistantReportDocument } from '$shared/assistant-reports'
 
 const result =
@@ -79,5 +83,18 @@ describe('assistant result delivery', () => {
     expect(document).not.toContain('Let me draft')
     expect(document).not.toContain('translated report')
     expect(document).not.toContain('assistant_result')
+  })
+
+  it('never shows the transport boundary, whichever surface draws the text', () => {
+    // The live activity line and a transcript that has not yet resolved its
+    // conversation both draw text the answer path never touched.
+    expect(stripAssistantEnvelope('<assistant_result>Sent it to Ola.</assistant_result>')).toBe(
+      'Sent it to Ola.'
+    )
+    expect(stripAssistantEnvelope('<assistant_result>Sent it to Ola.')).toBe('Sent it to Ola.')
+    expect(stripAssistantEnvelope('<assistant_detail>Long answer</assistant_detail>')).toBe(
+      'Long answer'
+    )
+    expect(stripAssistantEnvelope('Plain words.')).toBe('Plain words.')
   })
 })

@@ -821,6 +821,11 @@ class ContextSidebarState {
     return this.browser.runtimeFor(tabId)
   }
 
+  /** Whether main last reported this browser tab's page as still loading. */
+  browserTabLoading(tabId: string): boolean {
+    return this.browser.loadingFor(tabId)
+  }
+
   /** Mute or unmute one browser tab's audio output. */
   toggleBrowserTabMute(tabId: string): void {
     this.browser.toggleMute(tabId)
@@ -958,14 +963,14 @@ class ContextSidebarState {
   toggleNotifications(): void {
     this.notificationsVisible = !this.notificationsVisible
     if (this.notificationsVisible) {
-      // A panel the user closed a moment ago reopens on the same tab, so
-      // switching to Projects and coming straight back stays on Projects.
-      // Only a panel left closed for longer than the grace window, or one this
-      // session never closed at all, opens on Attention: it is the one list
-      // that says what is waiting on the user right now.
+      // A panel the user closed a moment ago reopens on the same filter, so
+      // switching to Done and coming straight back stays on Done. Only a panel
+      // left closed for longer than the grace window, or one this session never
+      // closed at all, opens on Attention: it is the one list that says what is
+      // waiting on the user right now.
       const hiddenFor = Date.now() - this.notificationsHiddenAt
       if (this.notificationsHiddenAt === 0 || hiddenFor > NOTIFICATION_PANEL_TAB_GRACE_MS) {
-        notificationPanelState.setTab('attention')
+        notificationPanelState.setSubFilter('attention')
       }
       this.stickyNotesVisible = false
       if (this.browser.visible) this.browser.detachView()
@@ -1064,6 +1069,12 @@ class ContextSidebarState {
     expiresAt = Date.now() + TEMPORARY_CHAT_INACTIVITY_MS
   ): void {
     this.tabContexts.touchTemporaryChat(tab, expiresAt)
+  }
+
+  /** Drop the unread mark of the side chat on screen, used when the window
+   *  regains focus with that chat already open. */
+  clearOnScreenTemporaryChatUnread(): void {
+    this.tabContexts.clearOnScreenTemporaryChatUnread()
   }
 
   expireTemporaryChat(tab: TemporaryChatContextTab, closeRemote = true): void {

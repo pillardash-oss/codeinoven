@@ -215,6 +215,42 @@ export function armPreferredVoiceHost(): void {
   else speechController.armCapture()
 }
 
+/**
+ * Start the take on one named input, if that input exists.
+ *
+ * A surface that raised its own microphone (the Don Listening panel, opened by
+ * the triple press) must not hand the take to whatever happens to be behind it,
+ * and it mounts after the gesture that opened it. It therefore asks for its own
+ * target id once its mic is registered, and keeps asking for a frame or two
+ * while the panel finishes mounting. Returns false while that input is not
+ * registered yet.
+ */
+export function triggerVoiceHost(targetId: string): boolean {
+  const state = speechController.state.state
+  // A take already running is not restarted: the request is satisfied, and the
+  // caller's retry loop stops.
+  if (state !== 'idle' && state !== 'failed') return true
+  for (const host of hosts) {
+    if (host.targetId !== targetId) continue
+    if (!host.eligible()) return false
+    host.activate()
+    return true
+  }
+  return false
+}
+
+/**
+ * Whether a take is already underway: starting, recording, or stopping.
+ *
+ * A press can never start a second take while one is running, so the shortcut
+ * reads this to mean the gesture can only be "stop", and to skip the wait that
+ * exists purely to tell a new take apart from the longer Don gesture.
+ */
+export function isVoiceTakeActive(): boolean {
+  const state = speechController.state.state
+  return state !== 'idle' && state !== 'failed'
+}
+
 /** Runs the mic action of whichever input is on view; toggles off the current
  *  recording when one is already running. */
 export function triggerPreferredVoiceHost(): void {
