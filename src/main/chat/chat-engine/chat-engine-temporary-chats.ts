@@ -19,7 +19,6 @@ import {
 } from '../../ipc/ipc-validation'
 import type { SendPromptOptions, SteerPromptOptions } from '../../drivers/driver.interface'
 import { isContinuationRelayPrompt } from '../../../lib/pending-request'
-import { legacyHarnessAccountId } from '../../providers/harness-account-registry'
 import type {
   AgentMessage,
   AgentPart,
@@ -118,6 +117,41 @@ export class ChatEngineTemporaryChats {
     return presentableMessages(kept)
   }
 
+  /**
+   * The harness and account a temporary chat binds for these settings.
+   *
+   * Creation and every later turn must answer this the same way, because a
+   * session cannot change harness or account once it has spoken: a fallback
+   * harness (`''` means the app default) and an account the registry resolves
+   * on our behalf are exactly what creation stored, so a guard that re-derived
+   * them from the raw settings rejected its own binding and no message could
+   * ever be sent.
+   */
+  private async boundIdentity(
+    settings: ThreadSettings
+  ): Promise<{ driverId: string; accountId: string }> {
+    const driverId = settings.harnessId || DEFAULT_HARNESS
+    const accountId = (
+      await this.host.state.accountRegistry.resolveForProvider(
+        driverId,
+        settings.providerId,
+        settings.accountId
+      )
+    ).id
+    return { driverId, accountId }
+  }
+
+  /** Refuse a mid-conversation harness or account switch, on the same terms. */
+  private async assertBoundIdentity(
+    temporary: TemporaryChatSession,
+    settings: ThreadSettings
+  ): Promise<void> {
+    const bound = await this.boundIdentity(settings)
+    if (temporary.driverId !== bound.driverId || temporary.accountId !== bound.accountId) {
+      throw new Error('The temporary chat harness or account cannot change after its first message')
+    }
+  }
+
   async sendTemporaryPrompt(
     projectId: string,
     threadId: string,
@@ -205,14 +239,7 @@ export class ChatEngineTemporaryChats {
           context = formatHistoryRecap(await this.host.loadMessages(projectId, threadId))
         }
       }
-      const driverId = settings.harnessId || DEFAULT_HARNESS
-      const accountId = (
-        await this.host.state.accountRegistry.resolveForProvider(
-          driverId,
-          settings.providerId,
-          settings.accountId
-        )
-      ).id
+      const { driverId, accountId } = await this.boundIdentity(settings)
       const { driver, projectPath } = await this.host.resolve(
         projectId,
         driverId,
@@ -261,13 +288,7 @@ export class ChatEngineTemporaryChats {
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('Temporary chat does not belong to this thread')
     }
-    if (
-      temporary.driverId !== settings.harnessId ||
-      temporary.accountId !==
-        (settings.accountId ?? legacyHarnessAccountId(settings.harnessId || DEFAULT_HARNESS))
-    ) {
-      throw new Error('The temporary chat harness or account cannot change after its first message')
-    }
+    await this.assertBoundIdentity(temporary, settings)
     this.refreshTemporaryChatExpiry(temporary)
     this.host.broadcast({
       type: 'temporary-chat.started',
@@ -479,13 +500,7 @@ export class ChatEngineTemporaryChats {
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('Temporary chat does not belong to this thread')
     }
-    if (
-      temporary.driverId !== settings.harnessId ||
-      temporary.accountId !==
-        (settings.accountId ?? legacyHarnessAccountId(settings.harnessId || DEFAULT_HARNESS))
-    ) {
-      throw new Error('The temporary chat harness or account cannot change after its first message')
-    }
+    await this.assertBoundIdentity(temporary, settings)
     if (this.host.sessionStatuses.get(temporary.sessionId)?.state !== 'working') {
       throw new Error('The quick chat turn finished before the steer message could be delivered')
     }
