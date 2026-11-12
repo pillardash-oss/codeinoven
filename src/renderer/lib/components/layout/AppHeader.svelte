@@ -5,7 +5,6 @@
   import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
   import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
-  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTools from '@pdslng/cio-icon/CioTools.svelte'
   import { ICON_SIZE } from '$lib/components/icons/cio/scale'
@@ -35,6 +34,7 @@
 
   import AppHeaderCenter from './AppHeaderCenter.svelte'
   import AppHeaderGitChip from './AppHeaderGitChip.svelte'
+  import AppHeaderLayoutToggle from './AppHeaderLayoutToggle.svelte'
   import type { AppHeaderNavigationController } from './AppHeaderNavigationController.svelte'
   import AppHeaderScopeTabs from './AppHeaderScopeTabs.svelte'
   import AppHeaderThreadModals from './AppHeaderThreadModals.svelte'
@@ -428,23 +428,11 @@
           <CioSearch size={ICON_SIZE.control} />
         </button>
       {:else}
-        {#if navigation.layoutToggle}
-          {@const toggle = navigation.layoutToggle}
-          {@const ToggleIcon = toggle.icon}
+        {#if navigation.layoutToggle && !onScope}
           <!-- The second layout of the rail item on screen: Thread beside the
-             project view, Scoped beside the board. -->
-          <button
-            class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {toggle.pressed
-              ? 'bg-elevated text-foreground'
-              : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            aria-label={toggle.label}
-            aria-pressed={toggle.pressed}
-            title={toggle.label}
-            data-shortcut={encodeShortcutTokens(toggle.keys)}
-            onclick={toggle.select}
-          >
-            <ToggleIcon size={ICON_SIZE.control} />
-          </button>
+             project view. The board's own toggle (Scoped) sits with the board's
+             actions instead, right after its search. -->
+          <AppHeaderLayoutToggle toggle={navigation.layoutToggle} />
         {/if}
         <div class="header-cluster-actions">
           <!-- Folded only when the bar genuinely has no room for them: no panel
@@ -452,6 +440,12 @@
              conversation and the title with it. Both panels closed, or a panel
              docked on the left, and the actions stay in the bar. -->
           <AppHeaderViewActions compact={panelColumnWidth === 0 && contextSidebarState.visible} />
+          {#if navigation.layoutToggle && onScope}
+            <!-- Beside the board, Scoped follows the search it narrows: the
+               toggle belongs to the search, not to the view's own creation
+               controls. -->
+            <AppHeaderLayoutToggle toggle={navigation.layoutToggle} />
+          {/if}
         </div>
       {/if}
     </div>

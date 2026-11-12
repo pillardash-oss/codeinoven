@@ -919,8 +919,8 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
         viewActions.set('none', [])
         return
       }
-      // Scope Board page: new scope, cross-scope search, new project   replacing
-      // the old far-right toolbar of the scope view header.
+      // Scope Board page: new scope and cross-scope search in the bar, and the
+      // new-project control in the project tabs row, after the overflow count   // replacing the old far-right toolbar of the scope view header.
       if (this.root.props.scopeViewActive) {
         const scopeBoardActions: ViewActionItem[] = [
           {
@@ -944,6 +944,10 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
           },
           {
             id: 'new-project',
+            // The board's project control adds a tab, so it sits with the tabs
+            // instead of in the bar: it is drawn in the tabs row, after the
+            // overflow count.
+            region: 'scope-tabs',
             component: ProjectCreateControl as unknown as ViewActionItem['component'],
             props: {
               onProjectCreated: this.root.switcherPanelTabs.handleProjectCreated,

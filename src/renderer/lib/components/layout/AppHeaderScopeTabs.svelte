@@ -5,6 +5,7 @@
   import { hasProjectNameCollision, projectIdentityTitle } from '$lib/project-location'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
+  import { viewActions } from '$lib/stores/view-actions.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
   import PickerMenuShell from '$lib/components/shared/PickerMenuShell.svelte'
@@ -269,4 +270,16 @@
       {/if}
     </div>
   {/if}
+  <!-- The actions the board registers for this row. Its project control lives
+       here because it adds a tab: it follows the overflow count, at the end of
+       the tabs it belongs to, instead of standing in the app bar beside the
+       search. -->
+  {#each viewActions.scopeTabItems as item (item.id)}
+    {#if item.component}
+      {@const ScopeTabAction = item.component}
+      <span class="ml-0.5 flex shrink-0 items-center">
+        <ScopeTabAction {...item.props ?? {}} />
+      </span>
+    {/if}
+  {/each}
 </div>

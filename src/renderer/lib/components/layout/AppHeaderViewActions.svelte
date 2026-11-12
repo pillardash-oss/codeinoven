@@ -1,7 +1,7 @@
 <script lang="ts">
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import { fade } from 'svelte/transition'
-  import { viewActions } from '$lib/stores/view-actions.svelte'
+  import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
   import { motionDuration } from '$lib/motion'
   import { encodeShortcutTokens } from '$lib/keymap/keymap'
 
@@ -34,7 +34,7 @@
   app header now that the view switcher itself lives on the left rail, so the
   active view's own controls stay next to the project/thread title.
 -->
-{#if viewActions.items.length > 0}
+{#if viewActions.headerItems.length > 0}
   <div class="actions-stack min-w-7" data-onboarding="view-actions" data-guide="view-actions">
     {#key viewActions.view}
       {#if compact}
@@ -66,7 +66,7 @@
               role="menu"
               aria-label="View actions"
             >
-              {#each viewActions.items as item (item.id)}
+              {#each viewActions.headerItems as item (item.id)}
                 {@render actionControl(item)}
               {/each}
             </div>
@@ -77,7 +77,7 @@
           class="action-layer flex items-center gap-0.5"
           transition:fade={{ duration: motionDuration(180) }}
         >
-          {#each viewActions.items as item (item.id)}
+          {#each viewActions.headerItems as item (item.id)}
             {@render actionControl(item)}
           {/each}
         </div>
@@ -86,7 +86,7 @@
   </div>
 {/if}
 
-{#snippet actionControl(item: (typeof viewActions.items)[number])}
+{#snippet actionControl(item: ViewActionItem)}
   {#if item.component}
     {@const ActionControl = item.component}
     <span class="actions-arriving inline-flex">
