@@ -1151,8 +1151,12 @@ Nothing about the hire is written or broadcast anywhere but Don's own conversati
 The teammate introduces itself there under its own name the moment its thread exists
 (`announceRecruitedTeammate`, in Don's thread), and nothing is written into the
 teammate's Getting started thread at all: it is created as the host its knowledge is
-revised from later, and stays empty until the user opens it. Any question its run
-stops on is routed into Don's thread for Don to settle (`don-question-router.ts`).
+revised from later, and stays empty until the user opens it. That introduction says
+the teammate is built and ready for the request, never that the work is already with
+it: it is written while the teammate is created, before the create result reaches Don,
+and the handoff is Don's own line after `cio_orchestrate_dispatch` is accepted. Any
+question its run stops on is routed into Don's thread for Don to settle
+(`don-question-router.ts`).
 Only a credential, an OAuth or MCP sign-in, or a connected account is left on a card
 for the user. A hired teammate has no authoring card to answer, because it was never
 asked anything.

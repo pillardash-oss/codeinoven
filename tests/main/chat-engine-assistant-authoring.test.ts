@@ -290,6 +290,14 @@ describe('hiring a teammate from a conversation', () => {
     // The knowledge was written before the thread existed, so the announcement
     // never says the instructions are still being drafted.
     expect(messageText(announced)).toContain('My instructions are written')
+    // The announcement is written while the teammate is created, before the create
+    // result reaches Don and before Don dispatches the waiting request, so it may
+    // only say the teammate is ready. Claiming the work already left for it would
+    // announce a handoff that has not happened yet.
+    expect(messageText(announced)).toContain('ready to take the request')
+    expect(messageText(announced)).not.toMatch(
+      /on its way|already with me|has been dispatched|is running/i
+    )
 
     // Nothing is written into the teammate's own thread: everything the user is
     // meant to see about a hire lives in the conversation that asked for it.

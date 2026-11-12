@@ -273,8 +273,10 @@ export class ChatEngineAssistantAuthoring {
     broadcastThreadUpdate(thread)
     // The team grows where the request was made. The hiring is Don's own work, so
     // the new teammate says in Don's conversation that it exists, what it was
-    // built for and that the waiting request is already with it. Nothing about the
-    // hire is ever left on this thread for the user to answer.
+    // built for and that it is ready for the request. It never claims the work is
+    // already with it: dispatch is Don's next call, after this creation returns,
+    // so the handoff is announced by Don and only once it is accepted. Nothing
+    // about the hire is ever left on this thread for the user to answer.
     await this.announceRecruitedTeammate(thread, input.assistant.name, input.purpose)
     return thread
   }
@@ -286,6 +288,11 @@ export class ChatEngineAssistantAuthoring {
    * teammate's own row: the introduction lands under the teammate's own name in
    * Don's thread, which is where the user asked for the work, so a new teammate is
    * visible the moment it exists instead of after they go looking for it.
+   *
+   * This runs while the teammate is created, before the create result reaches Don
+   * and before Don calls `cio_orchestrate_dispatch`, so the line may announce that
+   * the teammate is built and ready, never that the work is already with it: that
+   * handoff is Don's own line, sent once the dispatch is accepted.
    *
    * Best effort: the hire itself has already happened, so a line the app cannot
    * write must never fail the creation.
@@ -309,7 +316,7 @@ export class ChatEngineAssistantAuthoring {
         threadId: origin.initiatorThreadId,
         text: [
           `I'm ${name.trim() || author.name}. I was built for this: ${forWhat || 'the work you brought'}.`,
-          'My instructions are written and the request is on its way to me.',
+          'My instructions are written and I am ready to take the request.',
           `\n\n@thread:${thread.id}`
         ].join(' ')
       })
