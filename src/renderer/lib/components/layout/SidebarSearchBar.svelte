@@ -88,9 +88,9 @@
       title="Hide search"
       onclick={collapse}
     >
-      <!-- The registry has no right chevron: the down mark turned on its side is
-           the same glyph the app already uses for "go to the side". -->
-      <CioChevronDown size={ICON_SIZE.inline} class="-rotate-90" />
+      <!-- The registry has no left chevron: the down mark turned on its side is
+           the same glyph, aimed back at the button the field came from. -->
+      <CioChevronDown size={ICON_SIZE.inline} class="rotate-90" />
     </button>
   </div>
 {:else}
