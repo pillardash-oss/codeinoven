@@ -67,6 +67,24 @@ export function claudeSubagentPart(
   }
 }
 
+/**
+ * The forwarded text of a sub-agent's live messages, accumulated.
+ *
+ * `--forward-subagent-text` delivers every sub-agent assistant message as its
+ * own record, one after another, so the part's output is a growing transcript.
+ * Replacing it would keep only the newest message, which is what left the
+ * sub-agent panel holding one paragraph of a long run.
+ */
+export function appendSubagentOutput(previous: string | undefined, chunk: string): string {
+  const text = chunk.trim()
+  const before = previous?.trimEnd() ?? ''
+  if (!text) return before
+  if (!before) return text
+  // A record replayed by a reconnect must not double the paragraph it repeats.
+  if (before.endsWith(text)) return before
+  return `${before}\n\n${text}`
+}
+
 export function partFromBlock(
   messageId: string,
   block: Record<string, unknown>,

@@ -85,6 +85,12 @@
   }
 
   const sessionId = $derived(tab.activity.childSessionId)
+  /** A harness that names no child session (Claude Code forwards a sub-agent's
+   *  messages into the parent stream instead) has no transcript to load: the
+   *  text on the part is the only record of the run, and it grows as the
+   *  worker speaks. The panel therefore renders it live rather than waiting for
+   *  the run to settle. */
+  const parentForwarded = $derived(!sessionId)
   const fallbackIssue = $derived(subagentFallbackIssue(tab.activity))
   const visibleProviderStatus = $derived(subagentProviderStatus(liveStatus, fallbackIssue))
   const effectiveStatus = $derived(
@@ -133,8 +139,17 @@
   const showWorkingTrace = $derived(shouldMountWorkingTrace(runParts.length, busy))
   const finalOutput = $derived(tab.activity.output?.trim() ?? '')
   const showCapturedOutput = $derived(
-    shouldShowCapturedOutput(finalOutput, busy, loading, loadError, messages)
+    shouldShowCapturedOutput(
+      finalOutput,
+      parentForwarded ? false : busy,
+      loading,
+      loadError,
+      messages
+    )
   )
+  // Until the worker's first forwarded message lands there is nothing to show,
+  // so the loader stands in for the wait it would otherwise never end.
+  const showChildLoader = $derived(!parentForwarded || finalOutput.length === 0)
 
   onMount(() => {
     void initializeSession()
@@ -393,7 +408,7 @@
 
       <SubagentSessionViewLoadState
         {loading}
-        {busy}
+        busy={busy && showChildLoader}
         {liveStreamed}
         {loadError}
         messageCount={messages.length}
@@ -437,12 +452,12 @@
         <div class="text-xs text-foreground">
           <DeferredMarkdownView text={finalOutput} />
         </div>
-      {:else if !sessionId && !loading && !loadError && !busy}
+      {:else if !sessionId && !loading && !loadError}
         {#if effectiveStatus === 'completed' || effectiveStatus === 'error'}
           <p class="text-[0.625rem] text-dimmed">
             No further output was recorded for this sub-agent.
           </p>
-        {:else}
+        {:else if !busy}
           <p class="text-[0.625rem] text-dimmed">
             Sub-agent output will appear here as it is produced.
           </p>

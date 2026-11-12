@@ -5,6 +5,7 @@ import { claudeApiRetryKind, claudeResultIssue, claudeSessionLimitIssue } from '
 import {
   CLAUDE_ASYNC_AGENT_LAUNCH_MARKER,
   activeClaudeSubagentParts,
+  appendSubagentOutput,
   findSubagentPart,
   findToolPart,
   latestAssistant,
@@ -166,13 +167,19 @@ export function mapClaudeCodeRecord(
             .filter((text): text is string => Boolean(text))
             .join('\n')
         : undefined
+      // Each forwarded record is one finished message of the sub-agent's own
+      // transcript, so they accumulate: the panel shows the run as it grows
+      // instead of only the newest message.
+      const forwarded = output
+        ? appendSubagentOutput(existing.activity.output, output)
+        : existing.activity.output
       const part: Extract<AgentPart, { type: 'subagent' }> = {
         ...existing,
         activity: {
           ...existing.activity,
           status: 'running',
           modelId: resolvedModelId ?? existing.activity.modelId,
-          ...(output ? { output } : {})
+          ...(forwarded ? { output: forwarded } : {})
         }
       }
       return {
