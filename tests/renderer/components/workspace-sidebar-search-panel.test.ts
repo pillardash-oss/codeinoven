@@ -215,7 +215,8 @@ function sidebarProps(sidebar: WorkspaceSidebarController): SidebarProps {
     onLoadHistoryPage: vi.fn(async () => {}),
     projectHasMoreInDb: () => false,
     onSelectMode: () => {},
-    panelActions: emptyPanelActions
+    panelActions: emptyPanelActions,
+    panelTools: emptyPanelActions
   }
 }
 

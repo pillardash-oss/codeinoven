@@ -653,18 +653,19 @@
   {#if pane === 'chats'}
     <button
       type="button"
-      class="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="New chat"
       title="New chat"
       data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
       onclick={board.markThreadReadAndApply.startNewChat}
     >
       <CioPencil size={13} class="shrink-0" />
-      <span class="hidden truncate @min-[15rem]:inline">New chat</span>
+      <span class="truncate">New chat</span>
     </button>
-  {:else if pane === 'folders'}
+  {:else}
     <ProjectCreateControl
       title="New project"
+      label="New project"
       onProjectCreated={board.switcherPanelTabs.handleProjectCreated}
       onExisting={board.switcherPanelTabs.handleExistingProject}
       triggerAddProject={board.state.projectCreateTrigger}
@@ -672,7 +673,7 @@
     />
     <button
       type="button"
-      class="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="New thread"
       title="New thread"
       data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
@@ -685,11 +686,15 @@
       }}
     >
       <CioPlus size={13} class="shrink-0" />
-      <span class="hidden truncate @min-[15rem]:inline">New thread</span>
+      <span class="truncate">New thread</span>
     </button>
-  {:else}
-    <!-- The timeline's own filters: which projects it spans, and which inboxes
-         it groups by. Same menu the header used to carry. -->
+  {/if}
+{/snippet}
+
+<!-- Tools that belong beside the panel's search button: the timeline's own
+     filters, which narrow the very list that search runs over. -->
+{#snippet sidebarPanelTools(pane: 'folders' | 'threads' | 'chats')}
+  {#if pane === 'threads'}
     <ThreadProjectFilterMenu />
   {/if}
 {/snippet}
@@ -728,6 +733,7 @@
       active={board.props.active}
       onSelectMode={(next) => navigate(next)}
       panelActions={sidebarPanelActions}
+      panelTools={sidebarPanelTools}
       projects={board.createThreadInProject.projects}
       visibleProjects={board.mergeThreadsInList.visibleProjects}
       projectIcons={board.createThreadInProject.projectIcons}

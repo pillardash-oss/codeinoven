@@ -39,6 +39,12 @@
      * neighbours.
      */
     size?: 'compact' | 'control'
+    /**
+     * Text beside the mark on the trigger. A labelled trigger grows with its
+     * label (which truncates) instead of keeping the square mark-only box, so
+     * the control can sit in a panel's action row as a named button.
+     */
+    label?: string
   }
 
   let {
@@ -50,7 +56,8 @@
     mode = 'dropdown',
     open = false,
     onClose = () => {},
-    size = 'compact'
+    size = 'compact',
+    label = undefined
   }: Props = $props()
 
   /** The trigger's box and the mark inside it, one step apart by request. */
@@ -182,12 +189,17 @@
 {#if mode === 'dropdown'}
   <DropdownMenu.Root>
     <DropdownMenu.Trigger
-      class="flex {triggerBox} items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex {label
+        ? 'h-7 min-w-0 gap-1.5 px-2'
+        : `${triggerBox} justify-center`} items-center text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label={title}
       {title}
       data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-project'))}
     >
-      <CioProjects size={triggerIconSize} strokeWidth={1.8} />
+      <CioProjects size={triggerIconSize} strokeWidth={1.8} class="shrink-0" />
+      {#if label}
+        <span class="truncate text-[0.6875rem] font-medium">{label}</span>
+      {/if}
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
       <DropdownMenu.Content

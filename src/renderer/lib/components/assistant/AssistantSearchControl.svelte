@@ -1,13 +1,11 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import SidebarSearchBar from '$lib/components/layout/SidebarSearchBar.svelte'
   import { Popover } from 'bits-ui'
-  import { cubicOut } from 'svelte/easing'
-  import { slideWidth } from '$lib/motion'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -388,32 +386,34 @@
 {/snippet}
 
 {#if inline}
-  {#if expanded}
-    <!-- The field widens out of the button's own place, from nothing to the row
-         it now owns, so opening the search reads as one control changing shape. -->
-    <div class="relative min-w-0 flex-1" in:slideWidth={{ duration: 180, easing: cubicOut }}>
-      <div class="flex items-center gap-1">
-        <!-- The chevron gives the row back to the buttons it replaced. -->
-        <button
-          type="button"
-          class="flex size-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Close search"
-          title="Close search"
-          onclick={closeSearch}
-        >
-          <CioBack size={13} />
-        </button>
-        {@render searchField()}
+  <div class="relative min-w-0 {expanded ? 'flex-1' : ''}">
+    <!-- The very control the project panel's search wears: the button becomes the
+         field, and the chevron gives it back. Its label truncates to the mark as
+         the panel narrows. -->
+    <SidebarSearchBar
+      open={expanded}
+      {query}
+      placeholder="Search assistants, tasks and runs…"
+      ariaLabel="Search assistants, tasks and runs"
+      loading={searching}
+      onOpenChange={(next) => {
+        if (next) expanded = true
+        else closeSearch()
+      }}
+      onQueryChange={(value) => {
+        query = value
+        runThreadSearch(value)
+      }}
+      label="Search"
+    />
+    {#if expanded && trimmed.length > 0}
+      <div
+        class="absolute inset-x-0 top-full z-30 mt-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
+      >
+        {@render resultsPanel()}
       </div>
-      {#if trimmed.length > 0}
-        <div
-          class="absolute inset-x-0 top-full z-30 mt-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
-        >
-          {@render resultsPanel()}
-        </div>
-      {/if}
-    </div>
-  {/if}
+    {/if}
+  </div>
 {:else}
   <Popover.Root
     bind:open

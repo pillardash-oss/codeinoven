@@ -169,7 +169,8 @@ function props(mode: 'projects' | 'chats' | 'threads') {
     onLoadHistoryPage: vi.fn(async () => {}),
     projectHasMoreInDb: () => false,
     onSelectMode: () => {},
-    panelActions: emptyPanelActions
+    panelActions: emptyPanelActions,
+    panelTools: emptyPanelActions
   }
 }
 

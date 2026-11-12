@@ -1,8 +1,5 @@
 <script lang="ts">
-  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
-  import { fade } from 'svelte/transition'
-  import { motionDuration } from '$lib/motion'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import DonTile from './DonTile.svelte'
   import AssistantRow from './AssistantRow.svelte'
@@ -11,6 +8,7 @@
   import type { NewAssistantDraft } from './assistant-create'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
+  import { panelSearchRequest } from '$lib/stores/panel-search-request.svelte'
   import { lastViewedAssistantThreadId } from '$lib/stores/assistant-last-viewed.svelte'
   import { sortAssistants } from '$shared/assistant-order'
   import { DON_ASSISTANT_ID, assistantIsBuiltin, assistantReady } from '$shared/types'
@@ -187,6 +185,17 @@
     if (target) onOpenTask(target)
     else onOpenAssistantKnowledge(assistant)
   }
+  /**
+   * The shell owns the chord and publishes one request per press; this panel is
+   * the one that knows what its own search is, so it answers the request.
+   */
+  let handledPanelSearch = 0
+  $effect(() => {
+    const request = panelSearchRequest.requestId
+    if (request === handledPanelSearch) return
+    handledPanelSearch = request
+    searchExpanded = true
+  })
 </script>
 
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
@@ -198,30 +207,6 @@
            live here. -->
       <div class="sticky top-0 z-20 -mx-1.5 mb-1 bg-surface px-1.5 pt-0.5 pb-1.5">
         <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
-          {#if !searchExpanded}
-            <div
-              class="flex min-w-0 items-center gap-1"
-              transition:fade={{ duration: motionDuration(120) }}
-            >
-              <button
-                type="button"
-                class="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium whitespace-nowrap text-muted transition-colors hover:bg-elevated hover:text-foreground"
-                aria-label="Search assistants, tasks and runs"
-                title="Search assistants, tasks and runs"
-                onclick={() => (searchExpanded = true)}
-              >
-                <CioSearch size={13} class="shrink-0" />
-                <span class="assistant-panel-label truncate" data-panel-label>Search</span>
-              </button>
-              <AssistantCreateControl
-                label="New assistant"
-                labelClass="assistant-panel-label truncate"
-                onCreate={onCreateAssistant}
-                onCreateViaChat={onCreateAssistantViaChat}
-                trigger={assistantCreateTrigger}
-              />
-            </div>
-          {/if}
           <AssistantSearchControl
             inline
             bind:expanded={searchExpanded}
@@ -231,6 +216,15 @@
             {onOpenTask}
             onOpenAssistant={onOpenAssistantKnowledge}
           />
+          {#if !searchExpanded}
+            <AssistantCreateControl
+              label="New assistant"
+              labelClass="assistant-panel-label truncate"
+              onCreate={onCreateAssistant}
+              onCreateViaChat={onCreateAssistantViaChat}
+              trigger={assistantCreateTrigger}
+            />
+          {/if}
         </div>
       </div>
 

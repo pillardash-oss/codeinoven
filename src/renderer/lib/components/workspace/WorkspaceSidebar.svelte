@@ -157,6 +157,8 @@
      * where the list's controls belong instead of in the app header.
      */
     panelActions: Snippet<[panelPane: 'folders' | 'threads' | 'chats']>
+    /** Tools that sit beside the panel's search button, e.g. the thread filters. */
+    panelTools: Snippet<[panelPane: 'folders' | 'threads' | 'chats']>
   }
 
   let {
@@ -201,7 +203,8 @@
     onLoadHistoryPage,
     projectHasMoreInDb,
     onSelectMode,
-    panelActions
+    panelActions,
+    panelTools
   }: Props = $props()
 
   /**
@@ -258,8 +261,8 @@
   const panelTabs = $derived<SidebarPanelTab[]>([
     {
       id: 'folders',
-      label: 'Folders',
-      icon: CioFolder,
+      label: 'Projects',
+      icon: CioProjects,
       shortcut: keymapState.keysFor('nav-projects'),
       active: mode === 'projects',
       select: () => onSelectMode('projects')
@@ -730,12 +733,16 @@
   }}
 />
 
-{#snippet chatsControls()}
-  {@render panelActions('chats')}
+{#snippet listActions()}
+  {@render panelActions(mode === 'threads' ? 'threads' : mode === 'chats' ? 'chats' : 'folders')}
 {/snippet}
 
-{#snippet listActions()}
-  {@render panelActions(mode === 'threads' ? 'threads' : 'folders')}
+{#snippet listTools()}
+  {@render panelTools(mode === 'threads' ? 'threads' : 'folders')}
+{/snippet}
+
+{#snippet chatTools()}
+  {@render panelTools('chats')}
 {/snippet}
 
 <!-- Shared sidebar   shows Projects or Chats depending on the shell mode.
@@ -771,8 +778,9 @@
         tabs={mode === 'chats' ? [] : panelTabs}
         search={panelSearch}
         searchShortcut={keymapState.keysFor('panel-search')}
-        trailing={mode === 'chats' ? chatsControls : undefined}
-        row={mode === 'chats' ? undefined : listActions}
+        searchLabel={mode === 'chats' ? 'Search' : undefined}
+        trailing={mode === 'chats' ? chatTools : listTools}
+        row={listActions}
       />
     {/if}
   {/snippet}
