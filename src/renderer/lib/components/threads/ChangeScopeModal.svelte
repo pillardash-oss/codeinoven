@@ -8,7 +8,7 @@
   import { getIconSvgDataUrl, generateInitialsIconSvg } from '$lib/project-svg-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { scopeState } from '$lib/stores/scope.svelte'
-  import { moveThreadToScope } from '$lib/stores/thread-scope-move'
+  import { moveThreadToScope, scopeMoveRefusal } from '$lib/stores/thread-scope-move'
   import type { ScopeBucket } from '$shared/types'
 
   interface Props {
@@ -33,6 +33,12 @@
    */
   let creationTarget: { projectId: string; threadId: string } | null = $state(null)
 
+  /**
+   * The board's scopes in display order, each carrying the refusal this window
+   * would answer for it right now. A working thread whose run owns a project root
+   * cannot be handed a different one, so those targets are greyed out here
+   * instead of accepting the click and coming straight back as a toast.
+   */
   let buckets = $derived(
     (scopeState.boards.get(projectId)?.buckets ?? [])
       .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -41,6 +47,11 @@
         if (!q) return true
         return bucket.name.toLowerCase().includes(q)
       })
+      .map((bucket) => ({
+        ...bucket,
+        refusal:
+          bucket.id === currentBucketId ? null : scopeMoveRefusal(projectId, threadId, bucket.id)
+      }))
   )
 
   /** The typed query matches no existing scope, so a "+" appears to create it. */
@@ -150,9 +161,9 @@
           class="flex w-full items-center gap-2 px-2.5 py-2 text-left text-sm transition-colors {bucket.id ===
           currentBucketId
             ? 'bg-elevated text-foreground'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
-          title={bucket.name}
-          disabled={bucket.id === currentBucketId}
+            : 'text-muted hover:bg-elevated hover:text-foreground'} disabled:hover:bg-transparent"
+          title={bucket.refusal ?? bucket.name}
+          disabled={bucket.id === currentBucketId || bucket.refusal !== null}
           onclick={() => void selectBucket(bucket)}
         >
           {#if bucket.iconType}

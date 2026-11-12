@@ -27,23 +27,37 @@ export interface ScopeSwapRuleInput {
 }
 
 /**
+ * The filesystem root a scope resolves to, as an identity the rule can compare.
+ *
+ * Every project-rooted scope resolves to the same registered project directory,
+ * so they share one key and a move between them changes no path. A managed
+ * worktree is a checkout of its own with a directory of its own, so its directory
+ * name is its identity.
+ */
+function scopeRootKey(bucket: ScopeBucket): string {
+  return isManagedScopeRoot(bucket.root) ? `worktree:${bucket.root.directoryName}` : 'project'
+}
+
+/**
  * Why a thread may not change scope right now, or `null` when the move is fine.
  *
- * A worktree scope is a checkout of its own: the running turn has that directory
- * open, and a move re-derives the thread's working directory out from under it.
- * The result is a turn that keeps writing into a checkout the thread no longer
- * belongs to, plus a worktree the lifecycle may then consider free while a run
- * still lives in it. So the swap waits for the turn: a working thread inside a
- * worktree scope may not be reassigned at all.
+ * A scope carries the thread's project root. While the thread works, that root is
+ * the directory its run has open: a move that hands it a different checkout
+ * re-derives its working directory out from under the turn. The result is a turn
+ * that keeps writing into a checkout the thread no longer belongs to, plus a
+ * worktree the lifecycle may then consider free while a run still lives in it.
  *
- * Every other case is unchanged. A thread whose scope is the project root moves
- * freely while it works, and a worktree thread moves freely once it settles,
+ * So the rule is about the root, not about which side of the move is a worktree:
+ * a working thread may not move onto a scope that resolves anywhere else, into a
+ * worktree or out of one. A move between scopes that share the project directory
+ * changes no root and stays free, and every move is free once the thread settles,
  * whether it is done, interrupted, or parked on the user.
  *
- * One rule, two callers: the main-process guard that enforces it, and the
- * renderer that answers a refused drag with a toast instead of a round trip. The
- * renderer runs it first so the user hears about the refusal immediately, and
- * the guard runs it again because no surface may bypass it.
+ * One rule, three callers: the main-process guard that enforces it, the renderer
+ * that answers a refused drag with a toast instead of a round trip, and the
+ * Change Scope dialog that greys out the targets this rule refuses. The renderer
+ * runs it first so the user hears about the refusal immediately, and the guard
+ * runs it again because no surface may bypass it.
  */
 export function scopeSwapRefusal(input: ScopeSwapRuleInput): string | null {
   const currentBucketId = input.thread.scopeBucketId ?? DEFAULT_SCOPE_BUCKET_ID
@@ -51,7 +65,13 @@ export function scopeSwapRefusal(input: ScopeSwapRuleInput): string | null {
   if (!isThreadBusyStatus(input.thread.status)) return null
 
   const current = input.buckets.find((bucket) => bucket.id === currentBucketId)
-  if (!current || !isManagedScopeRoot(current.root)) return null
+  const target = input.buckets.find((bucket) => bucket.id === input.targetBucketId)
+  if (!current || !target) return null
+  if (scopeRootKey(current) === scopeRootKey(target)) return null
 
-  return `Stop this thread before moving it to another scope: "${current.name}" is an isolated worktree.`
+  if (isManagedScopeRoot(current.root)) {
+    return `Stop this thread before moving it out of "${current.name}": that scope's worktree is the project root this run is using.`
+  }
+
+  return `Stop this thread before moving it into "${target.name}": that scope's worktree would replace the project root this run is using.`
 }
