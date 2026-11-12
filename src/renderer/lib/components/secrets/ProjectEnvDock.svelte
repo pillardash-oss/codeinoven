@@ -758,7 +758,8 @@
   <p>
     <span class="font-mono text-foreground">{groupLabel}{fileName}</span>
     is rewritten to hold one <span class="font-mono">NAME=cio://&lt;ref&gt;</span> line per key. Any
-    content already there is kept beside it as
-    <span class="font-mono">{fileName}.cio-backup</span>.
+    content already there is kept at
+    <span class="font-mono">.cio/secrets/{groupLabel}{fileName}</span>, inside the ignored
+    <span class="font-mono">.cio</span> folder.
   </p>
 </ConfirmDialog>
