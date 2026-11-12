@@ -157,8 +157,6 @@
      * where the list's controls belong instead of in the app header.
      */
     panelActions: Snippet<[panelPane: 'folders' | 'threads' | 'chats']>
-    /** Tools that sit beside the panel's search button, e.g. the thread filters. */
-    panelTools: Snippet<[panelPane: 'folders' | 'threads' | 'chats']>
   }
 
   let {
@@ -203,8 +201,7 @@
     onLoadHistoryPage,
     projectHasMoreInDb,
     onSelectMode,
-    panelActions,
-    panelTools
+    panelActions
   }: Props = $props()
 
   /**
@@ -737,14 +734,6 @@
   {@render panelActions(mode === 'threads' ? 'threads' : mode === 'chats' ? 'chats' : 'folders')}
 {/snippet}
 
-{#snippet listTools()}
-  {@render panelTools(mode === 'threads' ? 'threads' : 'folders')}
-{/snippet}
-
-{#snippet chatTools()}
-  {@render panelTools('chats')}
-{/snippet}
-
 <!-- Shared sidebar   shows Projects or Chats depending on the shell mode.
      A studio that owns the pane hides this panel instead of unmounting it: its
      lists are every project, thread and chat row the shell holds, and rebuilding
@@ -779,7 +768,6 @@
         search={panelSearch}
         searchShortcut={keymapState.keysFor('panel-search')}
         searchLabel={mode === 'chats' ? 'Search' : undefined}
-        trailing={mode === 'chats' ? chatTools : listTools}
         row={listActions}
       />
     {/if}

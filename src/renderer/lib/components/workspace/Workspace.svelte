@@ -58,7 +58,6 @@
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
   import WorkspaceSidebar from './WorkspaceSidebar.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
-  import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import { canHostProjectThread } from './Workspace/Workspace-new-thread-project-picker.svelte'
@@ -653,7 +652,7 @@
   {#if pane === 'chats'}
     <button
       type="button"
-      class="flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 min-w-0 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="New chat"
       title="New chat"
       data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
@@ -673,7 +672,7 @@
     />
     <button
       type="button"
-      class="flex h-7 min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      class="flex h-7 min-w-0 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
       aria-label="New thread"
       title="New thread"
       data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
@@ -688,14 +687,6 @@
       <CioPlus size={13} class="shrink-0" />
       <span class="truncate">New thread</span>
     </button>
-  {/if}
-{/snippet}
-
-<!-- Tools that belong beside the panel's search button: the timeline's own
-     filters, which narrow the very list that search runs over. -->
-{#snippet sidebarPanelTools(pane: 'folders' | 'threads' | 'chats')}
-  {#if pane === 'threads'}
-    <ThreadProjectFilterMenu />
   {/if}
 {/snippet}
 
@@ -733,7 +724,6 @@
       active={board.props.active}
       onSelectMode={(next) => navigate(next)}
       panelActions={sidebarPanelActions}
-      panelTools={sidebarPanelTools}
       projects={board.createThreadInProject.projects}
       visibleProjects={board.mergeThreadsInList.visibleProjects}
       projectIcons={board.createThreadInProject.projectIcons}

@@ -42,6 +42,7 @@ import { onMount } from 'svelte'
 import ProjectCreateControl from '../../shared/ProjectCreateControl.svelte'
 import ScopeCreateControl from '../../shared/ScopeCreateControl.svelte'
 import ThreadSearchControl from '../../shared/ThreadSearchControl.svelte'
+import ThreadProjectFilterMenu from '../../shared/ThreadProjectFilterMenu.svelte'
 import { threadHasVisibleWork } from '../workspace-thread-helpers'
 import type { Workspace } from './Workspace-board.svelte'
 import { SvelteSet } from 'svelte/reactivity'
@@ -953,11 +954,17 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
         viewActions.set('scope', scopeBoardActions)
         return
       }
-      // Projects, Threads and Chats keep no actions in the bar: their tab row,
-      // search, create buttons and filters live in their own panel, above the
-      // list they act on, so nothing of theirs is left in the header.
+      // Projects and Chats keep no actions in the bar: their tab row, search and
+      // create buttons live in their own panel, above the list they act on.
+      // The timeline keeps its two filters here: they narrow every project at
+      // once, which is the bar's scope rather than the panel's.
       if (this.root.props.mode === 'threads') {
-        viewActions.set('threads', [])
+        viewActions.set('threads', [
+          {
+            id: 'filter',
+            component: ThreadProjectFilterMenu as unknown as ViewActionItem['component']
+          }
+        ])
       } else if (this.root.props.mode === 'chats') {
         viewActions.set('chats', [])
       } else if (this.root.props.mode === 'projects' && scopeState.sidebarContext) {

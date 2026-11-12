@@ -23,10 +23,6 @@ const emptyPanelActions = createRawSnippet<['folders' | 'threads' | 'chats']>(()
   render: () => '<span></span>'
 }))
 
-const emptyPanelTools = createRawSnippet<['folders' | 'threads' | 'chats']>(() => ({
-  render: () => '<span></span>'
-}))
-
 const invokeMock = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock('$lib/ipc.svelte', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/ipc.svelte')>()
@@ -219,8 +215,7 @@ describe('chats list parity', () => {
           onLoadHistoryPage: vi.fn(async () => {}),
           projectHasMoreInDb: () => false,
           onSelectMode: () => {},
-          panelActions: emptyPanelActions,
-          panelTools: emptyPanelTools
+          panelActions: emptyPanelActions
         }
       }
     })

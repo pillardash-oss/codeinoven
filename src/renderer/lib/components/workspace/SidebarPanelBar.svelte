@@ -36,8 +36,6 @@
     label: string
     tabs?: SidebarPanelTab[]
     search: SidebarPanelSearch
-    /** Tools that belong beside the search button, e.g. the thread filters. */
-    trailing?: Snippet
     /** The action row under the tabs, owned by the panel that draws the list. */
     row?: Snippet
     /** Keymap key tokens that open the search, so its button wears its chord. */
@@ -50,7 +48,6 @@
     label,
     tabs = [],
     search,
-    trailing,
     row,
     searchShortcut = [],
     searchLabel = undefined
@@ -67,8 +64,8 @@
   inside it, so they stay put while the rows move. Labels give way before the
   marks do, and a narrow panel keeps the tab marks' text truncated.
 -->
-<div class="@container shrink-0 border-b border-border bg-surface" data-region="sidebar-panel-bar">
-  <div class="flex h-10 min-w-0 items-center gap-1 p-1">
+<div class="@container shrink-0 bg-surface" data-region="sidebar-panel-bar">
+  <div class="flex min-w-0 items-center gap-1 px-2 py-1.5">
     {#if search.open}
       <SidebarSearchBar
         open
@@ -82,7 +79,11 @@
       />
     {:else}
       {#if tabs.length > 0}
-        <div class="flex min-w-0 flex-1 items-center gap-1" role="tablist" aria-label={label}>
+        <div
+          class="flex min-w-0 flex-1 items-center gap-1 border bg-surface p-1"
+          role="tablist"
+          aria-label={label}
+        >
           {#each tabs as tab (tab.id)}
             {@const TabIcon = tab.icon}
             <button
@@ -127,7 +128,6 @@
           shortcut={searchShortcut}
           label={searchLabel}
         />
-        {@render trailing?.()}
       </div>
     {/if}
   </div>
@@ -135,7 +135,7 @@
   {#if row}
     <!-- The list's own controls, centred under the tabs: their text is the
          control, so a row of them reads as one set rather than a toolbar. -->
-    <div class="flex items-center justify-center gap-1 px-1.5 pb-1.5">
+    <div class="flex items-center justify-center gap-1 px-2 pb-1.5">
       {@render row()}
     </div>
   {/if}
