@@ -31,6 +31,8 @@ import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_CAPABILITY_ID,
   GATEWAY_DISCOVERY_INSTRUCTION,
+  UTILITY_ACTIVATE_BATCH_CONCURRENCY,
+  UTILITY_ACTIVATE_BATCH_LIMIT,
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_INVOKE_BATCH_CONCURRENCY,
   UTILITY_INVOKE_BATCH_LIMIT
@@ -415,6 +417,8 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
   }
 
   async activate(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const batch = input['inputs']
+    if (batch !== undefined) return this.activateBatch(state, input, batch)
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
     if (utilityId === GATEWAY_CAPABILITY_ID)
       return {
@@ -485,6 +489,48 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
       },
       capability
     }
+  }
+
+  /**
+   * Activate several capabilities in one model call. Harnesses without a script
+   * runner would otherwise open a fresh round trip per utility just to learn
+   * what each one accepts, and the batch is what lets one call hand back the
+   * catalogs of everything the task needs. Each entry settles on its own, in
+   * the caller's order, so one unavailable utility never hides the rest.
+   */
+  private async activateBatch(
+    state: TurnState,
+    input: Record<string, unknown>,
+    batch: unknown
+  ): Promise<unknown> {
+    if (!Array.isArray(batch) || batch.length === 0)
+      throw new Error('inputs must be a non-empty array of {utility_id} entries')
+    if (batch.length > UTILITY_ACTIVATE_BATCH_LIMIT)
+      throw new Error(`inputs carries at most ${UTILITY_ACTIVATE_BATCH_LIMIT} entries per call`)
+    if (input['utility_id'] !== undefined)
+      throw new Error('Pass either utility_id or inputs, not both')
+    const results: Array<{ ok: true; result: unknown } | { ok: false; error: string }> = []
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < batch.length) {
+        const index = next++
+        try {
+          results[index] = {
+            ok: true,
+            result: await this.activate(state, recordValue(batch[index]))
+          }
+        } catch (error) {
+          results[index] = {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error)
+          }
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(UTILITY_ACTIVATE_BATCH_CONCURRENCY, batch.length) }, worker)
+    )
+    return { results }
   }
 
   async capabilityFor(
@@ -709,7 +755,17 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
           const handler = this.host.bridgeHandlers.get(tool.route)
           if (!handler) throw new Error('Gateway handler is unavailable')
           return handler(state, args)
-        }
+        },
+        // A batch entry may target an activated utility's own operation. It
+        // runs through the single-invocation path, so the eligibility gate,
+        // the thread bank and every permission card behave exactly as they do
+        // for a direct call.
+        async (utilityId, targetOperation, targetInput) =>
+          this.invoke(state, {
+            utility_id: utilityId,
+            operation: targetOperation,
+            input: targetInput
+          })
       )
     }
     let resolved = state.activated.get(utilityId)

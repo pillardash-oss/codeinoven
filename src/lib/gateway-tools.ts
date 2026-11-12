@@ -14,6 +14,10 @@ export const UTILITY_INVOKE_TOOL_NAME = 'cio_util_use'
 export const UTILITY_INVOKE_BATCH_LIMIT = 32
 /** Items of one `inputs` batch in flight at once. */
 export const UTILITY_INVOKE_BATCH_CONCURRENCY = 4
+/** Most utilities one `cio_util_init` call may activate in `inputs`. */
+export const UTILITY_ACTIVATE_BATCH_LIMIT = 8
+/** Activations of one `inputs` batch in flight at once. */
+export const UTILITY_ACTIVATE_BATCH_CONCURRENCY = 2
 /** Explicit-setup-only operation for installing validated utility definitions. */
 export const UTILITY_MANAGE_TOOL_NAME = 'cio_util_manage'
 /**
@@ -50,7 +54,7 @@ export const CORE_GATEWAY_TOOL_NAMES: ReadonlySet<string> = new Set([
   UTILITY_DIAGNOSTICS_TOOL_NAME
 ])
 export const GATEWAY_DISCOVERY_INSTRUCTION =
-  'Optional app, workstation, engineering and utility-setup tools are available through the built-in cio:gateway capability, already active. Use cio_util_use with utility_id "cio:gateway", operation "catalog", and input {names:["tool_name"]} to load only the needed schemas, or input {} for a compact index. Then operation "call" with input {tool:"tool_name",arguments:{...}} executes it with the original permissions. Operation "batch" accepts input {calls:[{tool,arguments}]} for up to eight independent read-only calls. Inspect every result; dependent calls, mutations and approvals remain sequential. Do not call optional tool names directly or use shell gateway requests.'
+  'Optional app, workstation, engineering and utility-setup tools are available through the built-in cio:gateway capability, already active. Use cio_util_use with utility_id "cio:gateway", operation "catalog", and input {names:["tool_name"]} to load only the needed schemas, or input {} for a compact index. Then operation "call" with input {tool:"tool_name",arguments:{...}} executes it with the original permissions. Operation "batch" takes input {calls:[...]} with up to eight entries in one round trip: {tool,arguments} for any gateway tool, or {utility_id,operation,input} for an activated or banked utility. Entries settle in your order, so an activation can precede the call that needs it, and a permission-gated call still raises its own card. Do not call optional tool names directly or use shell gateway requests.'
 
 /**
  * The round-trip contract for one harness's tool surface.
@@ -66,8 +70,8 @@ export function gatewayBatchingInstruction(codeMode: boolean): string {
     'Round-trip contract: batch, always. Every model call re-reads the whole conversation, so a burst of one call per item is a failure of this contract, not a slower path.',
     codeMode
       ? 'Use code mode extensively: cover a list in ONE code-mode script that loops over the inputs with bounded concurrency and returns only the findings, and never issue a separate call for each item when one script could carry them.'
-      : `This harness gives you no code mode tool, so batch in the tools it does have: cover a list in ONE shell command (a for loop, xargs, or one search command that matches several patterns at once), issue independent reads, searches and utility calls together in a single assistant message, run one utility operation over many items with a single ${UTILITY_INVOKE_TOOL_NAME} call carrying \`inputs\`, and use the gateway batch operation for up to eight independent read-only app calls. Never issue a separate call for each item.`,
-    'Keep dependent operations, mutations, approvals and retries sequential, inspect every result, and filter large results before returning them to the model.'
+      : `This harness gives you no code mode tool, so batch in the tools it does have: cover a list in ONE shell command (a for loop, xargs, or one search command that matches several patterns at once), issue independent reads, searches and utility calls together in a single assistant message, run one utility operation over many items with a single ${UTILITY_INVOKE_TOOL_NAME} call carrying \`inputs\`, activate several capabilities at once with ONE ${UTILITY_ACTIVATE_TOOL_NAME} call carrying \`inputs\`, and use the gateway batch operation for up to eight gateway tool calls or activated-utility operations. Never issue a separate call for each item.`,
+    'A batch is one round trip, not a race: the gateway settles a batch entry in the order you listed them, so an activation can precede the call that needs it, and a permission-gated call still raises its own card. Inspect every result, and filter large results before returning them to the model.'
   ]
   return contract.join(' ')
 }
@@ -75,8 +79,8 @@ export function gatewayBatchingInstruction(codeMode: boolean): string {
 /** One utility invocation per item is the most expensive shape a turn can take. */
 export function gatewayPerItemInstruction(codeMode: boolean): string {
   return codeMode
-    ? "One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched."
-    : `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics), make ONE ${UTILITY_INVOKE_TOOL_NAME} call with \`inputs\` set to the list (up to ${UTILITY_INVOKE_BATCH_LIMIT} per call), use one gateway \`batch\` when the calls are independent app tools, or drive local work from ONE shell command. Never invoke a utility once per item, and never call the gateway through the shell.`
+    ? "One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch carries app tools and the operations of activated utilities in the same way, so reach for one script or one batch instead of a call per item."
+    : `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics), make ONE ${UTILITY_INVOKE_TOOL_NAME} call with \`inputs\` set to the list (up to ${UTILITY_INVOKE_BATCH_LIMIT} per call), use one gateway \`batch\` for the app tools and activated-utility operations you need, or drive local work from ONE shell command. Never invoke a utility once per item, and never call the gateway through the shell.`
 }
 
 export function initialGatewayTools(
@@ -260,13 +264,32 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_ACTIVATE_TOOL_NAME,
     description:
-      "Activate one installed utility for the current turn and inspect the operations it exposes. The first activation registers the utility in this thread's utilities bank; later turns can invoke it directly by id without re-activating.",
+      "Activate an installed utility for the current turn and inspect the operations it exposes. The first activation registers the utility in this thread's utilities bank; later turns can invoke it directly by id without re-activating. Pass `inputs` to activate several capabilities in one round trip: each entry is {utility_id} (optionally with force), and the call returns one {ok, result | error} entry per utility, in order.",
     inputSchema: {
       type: 'object',
       properties: {
-        utility_id: { type: 'string', description: 'Installed utility identifier.' }
+        utility_id: { type: 'string', description: 'Installed utility identifier.' },
+        force: {
+          type: 'boolean',
+          description:
+            'Re-activate an already active utility and return its authorization payload again. Use it only when the earlier one is gone from context.'
+        },
+        inputs: {
+          type: 'array',
+          description:
+            'One entry per utility to activate in this call, each {"utility_id":"..."} with optional force.',
+          items: {
+            type: 'object',
+            properties: {
+              utility_id: { type: 'string' },
+              force: { type: 'boolean' }
+            },
+            required: ['utility_id'],
+            additionalProperties: false
+          },
+          maxItems: UTILITY_ACTIVATE_BATCH_LIMIT
+        }
       },
-      required: ['utility_id'],
       additionalProperties: false
     },
     outputSchema: GATEWAY_OPERATION_RESULT_SCHEMA,
