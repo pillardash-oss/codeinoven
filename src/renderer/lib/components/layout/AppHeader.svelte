@@ -120,23 +120,13 @@
     if (columnFrame !== null) cancelAnimationFrame(columnFrame)
   })
 
-  /**
-   * Whether the app's full name is drawn beside its mark.
-   *
-   * The wordmark is `CodeInOven` on every platform, so the only choice left is
-   * whether the column is wide enough for it; below that the mark stands alone
-   * and the name returns as soon as the panel is dragged wide enough.
-   */
   /** The bar's controls at their narrowest: the mark, the navigation pair and
    *  three view actions. Nothing in the chrome shrinks, so this is what the
    *  panel has to be able to hold. */
   const CHROME_WIDTH = 182
-  /** The column that fits the whole wordmark beside the mark. */
+  /** The same chrome with the wordmark beside its mark, used until the bar has
+   *  measured itself. */
   const CHROME_WIDTH_WITH_WORDMARK = 252
-
-  let showBrandName = $derived(
-    panelColumnWidth > 0 && panelColumnWidth >= CHROME_WIDTH_WITH_WORDMARK
-  )
 
   /** The chrome's measured width. The column it owns is a target, not a fact: with
    *  no panel docked the cluster is content-sized, and using the worst-case width
@@ -151,11 +141,11 @@
    *  bar's mark, navigation and actions take on their own. */
   let chromeWidth = $state(0)
 
-  /** The brand name's own width, which is the part of the chrome that gives way. */
-  let brandNameWidth = $state(0)
-
-  /** The narrowest the chrome ever gets, because the name is the one part of it
-   *  the bar drops as the column narrows.
+  /** The narrowest the chrome ever gets: its own content width, wordmark included.
+   *
+   *  The wordmark stands beside the mark in every layout on every platform, so the
+   *  bar makes room for it instead of dropping it: this floor keeps the panel wide
+   *  enough for the whole chrome, name and all.
    *
    *  The floor has to be the chrome's own content width and never the drawn
    *  cluster width: the cluster is exactly as wide as the panel's column, so a
@@ -165,8 +155,8 @@
    *  rather than estimated, because a dev build carries a build pill the
    *  production bar does not. */
   let chromeFloorWidth = $derived.by(() => {
-    if (chromeWidth <= 0) return CHROME_WIDTH
-    return Math.max(0, chromeWidth - (showBrandName ? brandNameWidth : 0))
+    if (chromeWidth <= 0) return CHROME_WIDTH_WITH_WORDMARK
+    return Math.max(CHROME_WIDTH, chromeWidth)
   })
 
   /** The narrowest panel that still contains the header's chrome, so a drag can
@@ -421,11 +411,7 @@
         onclick={() => threadSwitcherRequest.requestOpen()}
       >
         <VendorIcon name="CodeInOven" size={20} />
-        {#if showBrandName}
-          <!-- The gap to the mark is the name's own padding, so its measured
-               width is the whole space the name takes. -->
-          <span class="header-brand-name pl-1.5" bind:clientWidth={brandNameWidth}>CodeInOven</span>
-        {/if}
+        <span class="header-brand-name pl-1.5">CodeInOven</span>
       </button>
 
       {#if buildLabel}
