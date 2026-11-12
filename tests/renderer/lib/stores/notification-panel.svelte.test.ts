@@ -139,8 +139,46 @@ describe('bulk dismissal', () => {
 })
 
 describe('the filters', () => {
-  it('open on Attention, which is what waits on the user', () => {
-    expect(panel.subFilter).toBe('attention')
+  it('open on All, because one list holds every kind and family now', () => {
+    expect(panel.subFilter).toBe('all')
+    expect(panel.sourceFilter).toBe('all')
+  })
+
+  it('narrow the list to one family without losing its kind filter', () => {
+    panel.add(payload('project', { kind: 'completed' }))
+    panel.add(payload('chat', { projectId: INBOX_PROJECT_ID, source: 'chat' }))
+    panel.add(payload('assistant', { projectId: ASSISTANT_SPACE_ID, source: 'assistant' }))
+
+    panel.setSourceFilter('projects')
+    expect(panel.visible.map((n) => n.id)).toEqual(['project'])
+    expect(panel.count('done')).toBe(1)
+
+    panel.setSourceFilter('assistants')
+    expect(panel.visible.map((n) => n.id)).toEqual(['assistant'])
+
+    // Every family answers to All again, and resetting returns both narrowings.
+    panel.setSubFilter('attention')
+    panel.resetFilters()
+    expect(panel.visible).toHaveLength(3)
+    expect(panel.subFilter).toBe('all')
+    expect(panel.sourceFilter).toBe('all')
+  })
+
+  it('leave the assistant ledger rows out of the project and chat families', async () => {
+    const { assistants } = await import('$lib/stores/assistants.svelte')
+    const mocked = assistants as unknown as {
+      missedRuns: Array<{ id: string; dueAt: number }>
+    }
+    mocked.missedRuns = [{ id: 'missed-1', dueAt: 50 }]
+
+    expect(panel.count('attention')).toBe(1)
+
+    panel.setSourceFilter('projects')
+    expect(panel.visibleMissedRuns).toEqual([])
+    expect(panel.count('attention')).toBe(0)
+
+    panel.setSourceFilter('assistants')
+    expect(panel.visibleMissedRuns).toHaveLength(1)
   })
 
   it('count a failure under Attention, so there is no separate Issues filter', () => {
