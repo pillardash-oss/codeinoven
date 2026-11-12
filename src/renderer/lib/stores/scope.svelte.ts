@@ -435,6 +435,10 @@ class ScopeState {
     return this.threads.threadsFor(bucketId, slice)
   }
 
+  threadCountFor(bucketId: string): number {
+    return this.threads.threadCountFor(bucketId)
+  }
+
   async reorderThreads(
     bucketId: string,
     slice: ThreadStage,

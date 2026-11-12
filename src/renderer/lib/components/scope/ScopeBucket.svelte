@@ -59,11 +59,7 @@
   }: Props = $props()
 
   let scopeDropPosition = $state<'before' | 'after' | null>(null)
-  let threadCount = $derived(
-    scopeState.currentProjectThreads.filter(
-      (thread) => scopeState.bucketForThread(thread) === bucket.id
-    ).length
-  )
+  let threadCount = $derived(scopeState.threadCountFor(bucket.id))
 
   /** Archived scopes are visually washed out (still interactive, still on the board). */
   let isArchived = $derived(bucket.archivedAt !== undefined)

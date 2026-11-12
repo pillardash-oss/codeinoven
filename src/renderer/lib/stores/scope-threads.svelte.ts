@@ -81,6 +81,25 @@ function threadSnapshotEqual(a: Thread, b: Thread): boolean {
  * thread set, and the selected draft thread id. Board reads go through the
  * host so the store stays the single owner of the board cache.
  */
+/**
+ * Display order inside one slice. Pinned threads share one pin-time order across
+ * every surface; manual reorder (pinned_at) is the only override. Other slices
+ * use scope order.
+ */
+function compareInSlice(slice: ThreadStage, a: Thread, b: Thread): number {
+  if (slice === 'pinned') {
+    const aAt = a.pinnedAt ?? -1
+    const bAt = b.pinnedAt ?? -1
+    if (aAt !== bAt) return bAt - aAt
+  } else {
+    const aPosition = a.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
+    const bPosition = b.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
+    if (aPosition !== bPosition) return aPosition - bPosition
+  }
+  if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity
+  return a.id.localeCompare(b.id)
+}
+
 export class ScopeThreads {
   allScopeThreads: Thread[] = $state([])
   /** Threads holding unsent composer content. Draft state lives in renderer
@@ -159,21 +178,60 @@ export class ScopeThreads {
   }
 
   get currentProjectThreads(): Thread[] {
+    return this.projectThreads
+  }
+
+  /**
+   * The active project's listable threads.
+   *
+   * Orchestration children (Assignment workers and auditors) stay in
+   * `allScopeThreads` so the Sr. Engineer row can aggregate their unread and
+   * active-delegate state, but they are never listed as their own row on the
+   * scoped sidebar or board. A `thread:updated` broadcast can introduce a
+   * child that the bounded hydration slice excluded, so the predicate has to
+   * sit on this read and not only on the ingestion paths.
+   *
+   * Derived once and shared: the sidebar and the board read it from dozens of
+   * places per render, and memory holds every thread loaded so far.
+   */
+  private readonly projectThreads: Thread[] = $derived.by(() => {
     const activeProjectId = this.host.activeProjectId()
     if (!activeProjectId) return []
-    // Orchestration children (Assignment workers and auditors) stay in
-    // `allScopeThreads` so the Sr. Engineer row can aggregate their unread and
-    // active-delegate state, but they are never listed as their own row on the
-    // scoped sidebar or board. A `thread:updated` broadcast can introduce a
-    // child that the bounded hydration slice excluded, so the predicate has to
-    // sit on this read and not only on the ingestion paths.
     return this.allScopeThreads.filter(
       (thread) =>
         thread.projectId === activeProjectId &&
         !thread.archived &&
         !isOrchestrationChildThread(thread)
     )
-  }
+  })
+
+  /**
+   * The active project's threads grouped by scope and slice, each list already
+   * in display order. One walk of the list answers every `threadsFor` read, where
+   * each read used to filter, classify and sort the whole list on its own.
+   */
+  private readonly bucketIndex: ReadonlyMap<string, ReadonlyMap<ThreadStage, Thread[]>> =
+    $derived.by(() => {
+      // eslint-disable-next-line svelte/prefer-svelte-reactivity
+      const index = new Map<string, Map<ThreadStage, Thread[]>>()
+      for (const thread of this.projectThreads) {
+        const bucketId = this.bucketForThread(thread)
+        const stage = this.stageForThread(thread)
+        let stages = index.get(bucketId)
+        if (!stages) {
+          // eslint-disable-next-line svelte/prefer-svelte-reactivity
+          stages = new Map()
+          index.set(bucketId, stages)
+        }
+        const list = stages.get(stage)
+        if (list) list.push(thread)
+        else stages.set(stage, [thread])
+      }
+      for (const stages of index.values()) {
+        for (const [stage, list] of stages) list.sort((a, b) => compareInSlice(stage, a, b))
+      }
+      return index
+    })
 
   /**
    * Seed or refresh thread memory from a page of rows.
@@ -228,24 +286,14 @@ export class ScopeThreads {
   }
 
   threadsFor(bucketId: string, slice: ThreadStage): Thread[] {
-    const threads = this.currentProjectThreads.filter(
-      (thread) => this.bucketForThread(thread) === bucketId && this.stageForThread(thread) === slice
-    )
-    return threads.sort((a, b) => {
-      // Pinned threads share one pin-time order across every surface; manual
-      // reorder (pinned_at) is the only override. Other slices use scope order.
-      if (slice === 'pinned') {
-        const aAt = a.pinnedAt ?? -1
-        const bAt = b.pinnedAt ?? -1
-        if (aAt !== bAt) return bAt - aAt
-      } else {
-        const aPosition = a.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
-        const bPosition = b.scopeSortOrder ?? Number.MAX_SAFE_INTEGER
-        if (aPosition !== bPosition) return aPosition - bPosition
-      }
-      if (a.lastActivity !== b.lastActivity) return b.lastActivity - a.lastActivity
-      return a.id.localeCompare(b.id)
-    })
+    return this.bucketIndex.get(bucketId)?.get(slice) ?? []
+  }
+
+  /** How many listable threads a scope holds across every slice. */
+  threadCountFor(bucketId: string): number {
+    let count = 0
+    for (const list of this.bucketIndex.get(bucketId)?.values() ?? []) count += list.length
+    return count
   }
 
   /**
