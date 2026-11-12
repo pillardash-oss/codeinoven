@@ -1,5 +1,5 @@
 <script lang="ts">
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import DonTile from './DonTile.svelte'
@@ -279,74 +279,78 @@
           onOpenAssistant={onOpenAssistantKnowledge}
         />
       {:else}
-        <!-- Empty, the column is a flex pair: Don holds the top and the invitation
-             takes what is left, so it sits centred between his tile and the foot
-             of the panel instead of hanging directly under him. -->
-        <div class={panelEmpty ? 'flex h-full flex-col' : ''}>
-          <div role="list" aria-label="Assistants">
-            {#if donAssistant}
-              <DonTile
-                assistant={donAssistant}
-                threadId={donThread?.id ?? null}
-                selected={donThread !== null && selectedThreadId === donThread.id}
-                iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
-                ready={assistantReady(donAssistant)}
-                lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
-                stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
-                onOpen={() => {
-                  if (!donThread) return
-                  // The first open is the one moment Don introduces itself. A failure
-                  // here is not fatal: the thread is open and the user can write the
-                  // first line themselves.
-                  void assistantStore.startDonSetup().catch(() => undefined)
-                  onOpenTask(donThread)
-                }}
-              />
-            {/if}
-
-            {#each listedAssistants as assistant (assistant.id)}
-              {@const counts = assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
-              {@const preview = assistantStore.previews.get(assistant.id) ?? null}
-              <AssistantRow
-                {assistant}
-                stateCounts={counts}
-                attention={counts.attention > 0}
-                missed={assistantMissed(assistant.id)}
-                threadCount={threadsOfAssistant(assistant.id)}
-                iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
-                nextRunAt={assistantNextRun(assistant.id)}
-                preview={preview?.text ?? null}
-                lastWorkedAt={preview?.at ?? null}
-                selected={selectedAssistantId === assistant.id}
-                onOpen={openAssistant}
-                {onMoveAssistant}
-                onDropTask={onAssignTask}
-              />
-            {/each}
-          </div>
-
-          <!-- Don keeps his place at the top. With no teammate under him the panel
-             is not empty, it is missing them, so the invitation carries its own
-             create door and the toolbar that would duplicate it stays hidden. -->
-          {#if panelEmpty}
-            <EmptyState
-              class="flex-1 px-2"
-              icon={AssistantIcon}
-              title="Add a teammate"
-              description="You can continue using just Don, or create a special teammate for a special task, like handling your social media."
-            >
-              {#snippet action()}
-                <AssistantCreateControl
-                  variant="primary"
-                  label="New assistant"
-                  onCreate={onCreateAssistant}
-                  onCreateViaChat={onCreateAssistantViaChat}
-                  trigger={assistantCreateTrigger}
-                />
-              {/snippet}
-            </EmptyState>
+        <div role="list" aria-label="Assistants">
+          {#if donAssistant}
+            <DonTile
+              assistant={donAssistant}
+              threadId={donThread?.id ?? null}
+              selected={donThread !== null && selectedThreadId === donThread.id}
+              iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
+              ready={assistantReady(donAssistant)}
+              lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
+              stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
+              onOpen={() => {
+                if (!donThread) return
+                // The first open is the one moment Don introduces itself. A failure
+                // here is not fatal: the thread is open and the user can write the
+                // first line themselves.
+                void assistantStore.startDonSetup().catch(() => undefined)
+                onOpenTask(donThread)
+              }}
+            />
           {/if}
+
+          {#each listedAssistants as assistant (assistant.id)}
+            {@const counts = assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
+            {@const preview = assistantStore.previews.get(assistant.id) ?? null}
+            <AssistantRow
+              {assistant}
+              stateCounts={counts}
+              attention={counts.attention > 0}
+              missed={assistantMissed(assistant.id)}
+              threadCount={threadsOfAssistant(assistant.id)}
+              iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
+              nextRunAt={assistantNextRun(assistant.id)}
+              preview={preview?.text ?? null}
+              lastWorkedAt={preview?.at ?? null}
+              selected={selectedAssistantId === assistant.id}
+              onOpen={openAssistant}
+              {onMoveAssistant}
+              onDropTask={onAssignTask}
+            />
+          {/each}
         </div>
+
+        <!-- Don keeps his place at the top. With no teammate under him the panel
+             is not empty, it is missing them: the dashed plate is the seat the
+             next one would take, so the column reads as a list with room in it
+             and the invitation below is what fills the seat. The toolbar that
+             would duplicate that door stays hidden. -->
+        {#if panelEmpty}
+          <EmptyState
+            class="px-2"
+            title="Add a teammate"
+            description="You can continue using just Don, or create a special teammate for a special task, like handling your social media."
+          >
+            {#snippet visual()}
+              <div
+                class="flex h-20 w-20 items-center justify-center border border-dashed border-border-strong text-dimmed"
+                aria-hidden="true"
+              >
+                <CioPlus size={22} />
+              </div>
+            {/snippet}
+            {#snippet action()}
+              <AssistantCreateControl
+                variant="primary"
+                label="New assistant"
+                onCreate={onCreateAssistant}
+                onCreateViaChat={onCreateAssistantViaChat}
+                trigger={assistantCreateTrigger}
+              />
+            {/snippet}
+          </EmptyState>
+        {/if}
       {/if}
     </div>
   </div>
