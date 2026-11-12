@@ -268,6 +268,14 @@ class ScopeState {
     }
 
     const sequence = ++this.loadSequence
+    // Effects call this (ScopeView reloads on every project change). Reading the
+    // cache synchronously made it a dependency of the calling effect, so the
+    // refresh's own `boards.set` re-ran that effect: a fetch-and-rebuild loop for
+    // as long as the board stayed open. One microtask keeps every read below out
+    // of the caller's tracking, and the cached board still paints before the
+    // next frame.
+    await Promise.resolve()
+    if (sequence !== this.loadSequence) return
     // A board seen before paints at once and refreshes in place. Only a project
     // with nothing cached shows the loading state, so returning to the board
     // never waits on the database worker's queue.
