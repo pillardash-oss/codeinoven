@@ -1,6 +1,7 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
@@ -29,14 +30,24 @@
     /** Open an assistant result (its knowledge panel / first task). */
     onOpenAssistant: (assistant: Assistant) => void
     /**
-     * Draw the field in place instead of in a popover. The assistant panel's top
-     * row uses this: the field is always there, and its placeholder is what says
-     * what it searches, so no button and no collapse are needed.
+     * Draw the field in place instead of in a popover, growing out of the panel's
+     * own Search button. While it is open it owns the row: the chevron gives it
+     * back to the button.
      */
     inline?: boolean
+    /** Whether the inline field is open. */
+    expanded?: boolean
   }
 
-  let { assistants, tasks, runs, onOpenTask, onOpenAssistant, inline = false }: Props = $props()
+  let {
+    assistants,
+    tasks,
+    runs,
+    onOpenTask,
+    onOpenAssistant,
+    inline = false,
+    expanded = $bindable(false)
+  }: Props = $props()
 
   let open = $state(false)
   let query = $state('')
@@ -151,7 +162,8 @@
   )
 
   function closeSearch(): void {
-    if (!inline) open = false
+    if (inline) expanded = false
+    else open = false
     query = ''
     remoteResults = []
     searching = false
@@ -190,7 +202,6 @@
 
 {#snippet searchField()}
   <div class="flex min-w-0 flex-1 items-center gap-1.5">
-    <CioSearch size={14} class="shrink-0 text-dimmed" />
     <input
       {@attach focusInput}
       type="text"
@@ -375,16 +386,30 @@
 {/snippet}
 
 {#if inline}
-  <div class="relative min-w-0 flex-1">
-    {@render searchField()}
-    {#if trimmed.length > 0}
-      <div
-        class="absolute inset-x-0 top-full z-30 mt-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
-      >
-        {@render resultsPanel()}
+  {#if expanded}
+    <div class="relative min-w-0 flex-1">
+      <div class="flex items-center gap-1">
+        <!-- The chevron gives the row back to the buttons it replaced. -->
+        <button
+          type="button"
+          class="flex size-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Close search"
+          title="Close search"
+          onclick={closeSearch}
+        >
+          <CioBack size={13} />
+        </button>
+        {@render searchField()}
       </div>
-    {/if}
-  </div>
+      {#if trimmed.length > 0}
+        <div
+          class="absolute inset-x-0 top-full z-30 mt-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
+        >
+          {@render resultsPanel()}
+        </div>
+      {/if}
+    </div>
+  {/if}
 {:else}
   <Popover.Root
     bind:open

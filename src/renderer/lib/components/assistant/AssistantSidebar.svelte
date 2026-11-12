@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import DonTile from './DonTile.svelte'
   import AssistantRow from './AssistantRow.svelte'
@@ -69,6 +70,9 @@
     onCreateAssistantViaChat,
     assistantCreateTrigger = 0
   }: Props = $props()
+
+  /** Whether the search owns the panel's top row instead of its button. */
+  let searchExpanded = $state(false)
 
   const EMPTY_TASKS: readonly Thread[] = []
   const EMPTY_RUNS: readonly Thread[] = []
@@ -190,21 +194,36 @@
            door sits beside it. The app header leaves this view alone, so they
            live here. -->
       <div class="sticky top-0 z-20 -mx-1.5 mb-1 bg-surface px-1.5 pt-0.5 pb-1.5">
-        <div class="flex min-h-7 items-center gap-1 overflow-hidden">
+        <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
+          {#if !searchExpanded}
+            <div class="flex min-w-0 items-center gap-1">
+              <button
+                type="button"
+                class="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium whitespace-nowrap text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                aria-label="Search assistants, tasks and runs"
+                title="Search assistants, tasks and runs"
+                onclick={() => (searchExpanded = true)}
+              >
+                <CioSearch size={13} class="shrink-0" />
+                <span class="assistant-panel-label truncate" data-panel-label>Search</span>
+              </button>
+              <AssistantCreateControl
+                label="New assistant"
+                labelClass="assistant-panel-label truncate"
+                onCreate={onCreateAssistant}
+                onCreateViaChat={onCreateAssistantViaChat}
+                trigger={assistantCreateTrigger}
+              />
+            </div>
+          {/if}
           <AssistantSearchControl
             inline
+            bind:expanded={searchExpanded}
             {assistants}
             {tasks}
             {runs}
             {onOpenTask}
             onOpenAssistant={onOpenAssistantKnowledge}
-          />
-          <AssistantCreateControl
-            label="New assistant"
-            labelClass="assistant-panel-label truncate"
-            onCreate={onCreateAssistant}
-            onCreateViaChat={onCreateAssistantViaChat}
-            trigger={assistantCreateTrigger}
           />
         </div>
       </div>

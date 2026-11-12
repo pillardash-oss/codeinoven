@@ -70,31 +70,22 @@
   })
 
   /**
-   * Which form the app's name takes in this bar. Only the name ever gives way:
-   * the mark, the navigation pair and every view action keep their places at
-   * every panel width, so the column follows the panel only until it is as narrow
-   * as the chrome itself.
+   * Whether the app's full name is drawn beside its mark.
    *
-   * `none` is the view without a sidebar (nothing to align to) and the column
-   * past the width the chrome needs: the mark alone. `long` needs the room the
-   * name itself takes beside three actions; below that the bar falls back to the
-   * short name rather than to an ellipsis.
+   * The wordmark is `CodeInOven` on every platform, so the only choice left is
+   * whether the column is wide enough for it; below that the mark stands alone
+   * and the name returns as soon as the panel is dragged wide enough.
    */
   /** The bar's controls at their narrowest: the mark, the navigation pair and
    *  three view actions. Nothing in the chrome shrinks, so this is what the
    *  panel has to be able to hold. */
   const CHROME_WIDTH = 182
-  /** The same column with the short name beside the mark. */
-  const CHROME_WIDTH_WITH_SHORT_NAME = 203
-  /** And with the whole wordmark. */
-  const CHROME_WIDTH_WITH_LONG_NAME = 252
+  /** The column that fits the whole wordmark beside the mark. */
+  const CHROME_WIDTH_WITH_WORDMARK = 252
 
-  let brandForm = $derived.by((): 'long' | 'short' | 'none' => {
-    const column = panelColumnWidth
-    if (column <= 0 || column < CHROME_WIDTH_WITH_SHORT_NAME) return 'none'
-    if (controlsOnLeft) return 'short'
-    return column >= CHROME_WIDTH_WITH_LONG_NAME ? 'long' : 'short'
-  })
+  let showBrandName = $derived(
+    panelColumnWidth > 0 && panelColumnWidth >= CHROME_WIDTH_WITH_WORDMARK
+  )
 
   /** The chrome's measured width. The column it owns is a target, not a fact: with
    *  no panel docked the cluster is content-sized, and using the worst-case width
@@ -124,7 +115,7 @@
    *  production bar does not. */
   let chromeFloorWidth = $derived.by(() => {
     if (chromeWidth <= 0) return CHROME_WIDTH
-    return Math.max(0, chromeWidth - (brandForm === 'none' ? 0 : brandNameWidth))
+    return Math.max(0, chromeWidth - (showBrandName ? brandNameWidth : 0))
   })
 
   /** The narrowest panel that still contains the header's chrome, so a drag can
@@ -171,6 +162,9 @@
   let onSettings = $derived(isSettingsView(activeView))
 
   let onScope = $derived(activeView === 'scope')
+  /** The Projects and Threads pair is switched from the panel's own tab row, so
+   *  the app header draws no second switch for it. */
+  let onPanelTabs = $derived(activeView === 'projects' || activeView === 'threads')
 
   /**
    * The global browser is its own workspace: its centre shows the page, its
@@ -355,9 +349,11 @@
   style={trafficLightInsetStyle({ mirrorRightInset: false, rightPadding: '0.25rem' })}
 >
   <nav
-    class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1"
+    class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1 {onAssistant
+      ? 'transition-[width] duration-200 ease-out'
+      : ''}"
     aria-label="Primary navigation"
-    style:width={panelColumnWidth > 0 ? `${panelColumnWidth}px` : undefined}
+    style:width={panelColumnWidth > 0 || onAssistant ? `${panelColumnWidth}px` : undefined}
     bind:clientWidth={clusterWidth}
   >
     <!-- The chrome measures itself inside its own content box. The cluster above
@@ -372,12 +368,10 @@
         onclick={() => threadSwitcherRequest.requestOpen()}
       >
         <VendorIcon name="CodeInOven" size={20} />
-        {#if brandForm !== 'none'}
+        {#if showBrandName}
           <!-- The gap to the mark is the name's own padding, so its measured
                width is the whole space the name takes. -->
-          <span class="header-brand-name pl-1.5" bind:clientWidth={brandNameWidth}
-            >{brandForm === 'long' ? 'CodeInOven' : 'cio'}</span
-          >
+          <span class="header-brand-name pl-1.5" bind:clientWidth={brandNameWidth}>CodeInOven</span>
         {/if}
       </button>
 
@@ -428,10 +422,10 @@
           <CioSearch size={ICON_SIZE.control} />
         </button>
       {:else}
-        {#if navigation.layoutToggle && !onScope}
-          <!-- The second layout of the rail item on screen: Thread beside the
-             project view. The board's own toggle (Scoped) sits with the board's
-             actions instead, right after its search. -->
+        {#if navigation.layoutToggle && !onScope && !onPanelTabs}
+          <!-- The second layout of the rail item on screen: Scoped beside the
+             board. The Projects/Threads pair is switched from the panel's own tab
+             row now, so the bar spends no control on it. -->
           <AppHeaderLayoutToggle toggle={navigation.layoutToggle} />
         {/if}
         <div class="header-cluster-actions">
