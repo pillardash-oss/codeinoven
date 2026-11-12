@@ -387,6 +387,8 @@ export class ChatEngine {
   public sessionRegistry = new Map<string, SessionInfo>()
 
   public pendingQuestions = new Map<string, PendingQuestionInfo>()
+  /** Settles a delegated teammate's question in the conversation that began the work. */
+  private delegatedQuestionHandler: ((pending: PendingQuestionInfo) => void) | null = null
 
   /** Max consecutive forced continuations before an Assignment stall surfaces. */
   static readonly MAX_ASSIGNMENT_CONTINUATION_STALLS = 2
@@ -1592,6 +1594,8 @@ export class ChatEngine {
     purpose: string
     request?: string
     settings: ThreadSettings
+    /** The conversation that asked for the hire, when an assistant did. */
+    initiator?: { projectId: string; threadId: string }
   }): Promise<Thread> {
     return this.units['assistant-authoring'].openRecruitedAssistantConversation(input)
   }
@@ -1602,6 +1606,22 @@ export class ChatEngine {
   attachDonRuntime(runtime: DonRuntime): void {
     this.don = runtime
     this.state.utilityOrchestration.setDonExecutor(runtime.executor)
+  }
+  /**
+   * Install the handler that settles a delegated teammate's question inside the
+   * conversation that started its work.
+   *
+   * Registered by the bootstrap, which owns the orchestrator's runtime: the engine
+   * only knows that a question it registered may belong to work an assistant
+   * dispatched, and hands it over rather than deciding what to do about it.
+   */
+  attachDelegatedQuestionHandler(handler: ((pending: PendingQuestionInfo) => void) | null): void {
+    this.delegatedQuestionHandler = handler
+  }
+
+  /** Offer a freshly registered question to that handler. Never throws. */
+  notifyDelegatedQuestion(pending: PendingQuestionInfo): void {
+    this.delegatedQuestionHandler?.(pending)
   }
 
   attachOrchestrationRuntime(): void {

@@ -133,6 +133,18 @@ export interface DonDeps {
     input: { name: string; purpose: string; request?: string },
     context: { projectId: string; threadId: string }
   ) => Promise<DonRecruitedAssistant>
+  /**
+   * Settle a teammate's blocked question from Don's own turn.
+   *
+   * The question and its ids come from the app, and the app is what validates the
+   * answer against the request it belongs to. The executor only forwards it with
+   * the turn that made the decision, so a turn cannot answer outside the work it
+   * started.
+   */
+  answerTeammateQuestion: (
+    input: { threadId: string; requestId: string; answers: string[][]; note?: string },
+    context: { projectId: string; threadId: string }
+  ) => Promise<{ answered: boolean; threadId?: string; error?: string }>
 }
 
 /** The speaker snapshot a delegated assistant's reply carries. */
@@ -221,8 +233,29 @@ export function createDonExecutor(deps: DonDeps): DonExecutor {
         assistant: { id: created.assistantId, name: created.name },
         threadId: created.threadId,
         projectId: ASSISTANT_SPACE_ID,
-        note: `The new assistant is being interviewed in its own Getting started conversation, and the request is already with it. Say one short line naming who was created and that the work is with them. Do not do the work yourself, and do not wait for it.`
+        note: `The new assistant is being set up by the app in its own Getting started conversation, with the request already with it. Say one short line naming who was created and that the work is with them. Do not do the work yourself, and do not wait for it.`
       }
+    }
+    if (operation === 'answer-teammate') {
+      const threadId = typeof input['threadId'] === 'string' ? input['threadId'].trim() : ''
+      const requestId = typeof input['requestId'] === 'string' ? input['requestId'].trim() : ''
+      if (threadId.length === 0 || requestId.length === 0) {
+        throw new Error('Answering a teammate needs the thread and the question it is waiting on')
+      }
+      const rawAnswers = Array.isArray(input['answers']) ? input['answers'] : []
+      const answers = rawAnswers.map((entry) =>
+        Array.isArray(entry)
+          ? entry.filter((value): value is string => typeof value === 'string')
+          : []
+      )
+      if (answers.length === 0 || answers.some((entry) => entry.length === 0)) {
+        throw new Error('Every question in the request needs an answer')
+      }
+      const note = typeof input['note'] === 'string' ? input['note'].trim() : ''
+      return deps.answerTeammateQuestion(
+        { threadId, requestId, answers, ...(note.length > 0 ? { note } : {}) },
+        { projectId: context.projectId, threadId: context.threadId }
+      )
     }
   }
 }

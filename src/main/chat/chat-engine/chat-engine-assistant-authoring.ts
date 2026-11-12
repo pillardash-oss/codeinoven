@@ -40,6 +40,7 @@ import {
   assistantRecruitSetupPrompt
 } from '../../../lib/assistant-chat-setup'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
+import { delegationAuthor } from '../chat-engine-don'
 import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
 import { assistantReportIsTerminal, isAssistantReportThread } from '../../../lib/assistant-reports'
 import type { SessionInfo } from './chat-engine-types'
@@ -218,6 +219,18 @@ export class ChatEngineAssistantAuthoring {
     /** The settings of the conversation the hire came from, inherited by the new
      *  thread. */
     settings: ThreadSettings
+    /**
+     * The conversation that asked for the hire, when an assistant did instead of
+     * the user.
+     *
+     * A hiring is work Don started on the user's behalf, so the new thread is a
+     * dispatched child of Don's conversation: its notifications are suppressed, its
+     * wait for an answer is drawn in Don's thread under the new teammate's name,
+     * and its settle is reported there rather than left on a row the user never
+     * opened. Without the origin the Getting started interview would sit in the
+     * teammate's own thread and ask the user everything Don was meant to settle.
+     */
+    initiator?: { projectId: string; threadId: string }
   }): Promise<Thread> {
     const settings = input.settings
     const { thread, finalize } = this.host.threadManager.prepareCreateThread(
@@ -231,7 +244,19 @@ export class ChatEngineAssistantAuthoring {
         // The flag is what pins the row, makes it the assistant's knowledge
         // thread, and keeps it out of eviction for the assistant's whole life.
         assistantGettingStarted: true,
-        workingDirectory: ''
+        workingDirectory: '',
+        ...(input.initiator
+          ? {
+              dispatchOrigin: {
+                assistantId: input.assistant.id,
+                assistantName: input.assistant.name,
+                author: delegationAuthor(input.assistant),
+                initiatorProjectId: input.initiator.projectId,
+                initiatorThreadId: input.initiator.threadId,
+                at: Date.now()
+              }
+            }
+          : {})
       },
       {
         onEviction: (outcome) => {
