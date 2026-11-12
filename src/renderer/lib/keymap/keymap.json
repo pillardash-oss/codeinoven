@@ -127,6 +127,13 @@
           "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view."
         },
         {
+          "id": "panel-search",
+          "keys": ["mod", "shift", "f"],
+          "label": "Search this panel",
+          "description": "Opens the search of the active view's own panel: the project or thread list on the left, or the assistant panel. The conversation keeps its own find on Cmd/Ctrl+F.",
+          "scenario": "Projects, Threads, Chats or Assistant view."
+        },
+        {
           "id": "threads-toggle-grouping",
           "keys": [],
           "label": "Group threads by status",

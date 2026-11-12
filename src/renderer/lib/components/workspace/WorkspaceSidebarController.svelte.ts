@@ -69,6 +69,18 @@ export class WorkspaceSidebarController {
    *  change re-runs that search instead of leaving stale results on screen. */
   private threadsSearchFilterKey = threadProjectFilterState.selectedIds.join(',')
 
+  /**
+   * The panel searches of the Chats and Projects panels.
+   *
+   * Both filter rows the sidebar already holds, so they answer on the keystroke
+   * and never edit the lists they read. The Threads panel keeps the full-text
+   * search above, because its list spans the whole history.
+   */
+  chatsSearchOpen = $state(false)
+  chatsSearchQuery = $state('')
+  projectsSearchOpen = $state(false)
+  projectsSearchQuery = $state('')
+
   /** Initialise expandedFolders: start with all projects expanded, then fold
    *  any the user has previously collapsed. */
   initExpandedFolders(visible: Project[]): void {
@@ -164,7 +176,27 @@ export class WorkspaceSidebarController {
   /** Dismiss every open sidebar search   the composer took the user's focus. */
   closeAllSearches(): void {
     if (this.threadsSearchOpen) this.closeThreadsSearch()
+    if (this.chatsSearchOpen) this.closeChatsSearch()
+    if (this.projectsSearchOpen) this.closeProjectsSearch()
     for (const projectId of [...this.projectSearchOpen]) this.closeProjectSearch(projectId)
+  }
+
+  openChatsSearch(): void {
+    this.chatsSearchOpen = true
+  }
+
+  closeChatsSearch(): void {
+    this.chatsSearchOpen = false
+    this.chatsSearchQuery = ''
+  }
+
+  openProjectsSearch(): void {
+    this.projectsSearchOpen = true
+  }
+
+  closeProjectsSearch(): void {
+    this.projectsSearchOpen = false
+    this.projectsSearchQuery = ''
   }
 
   runProjectSearch(projectId: string, raw: string): void {

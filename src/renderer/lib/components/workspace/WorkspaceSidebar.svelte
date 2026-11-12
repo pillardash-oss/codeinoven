@@ -18,8 +18,10 @@
   import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
+  import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { onDestroy } from 'svelte'
+  import type { Snippet } from 'svelte'
   import { prefersReducedMotion } from 'svelte/motion'
   import { fade, slide } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
@@ -54,6 +56,7 @@
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
+  import { panelSearchRequest } from '$lib/stores/panel-search-request.svelte'
   import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
   import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -64,6 +67,10 @@
   import { type Project, type Thread } from '$shared/types'
   import FolderRow from './FolderRow.svelte'
   import SidebarListPane from './SidebarListPane.svelte'
+  import SidebarPanelBar, {
+    type SidebarPanelSearch,
+    type SidebarPanelTab
+  } from './SidebarPanelBar.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import SidebarProjectSearchField from './SidebarProjectSearchField.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
@@ -141,6 +148,15 @@
     onLoadProjectThreadsPage: (projectId: string) => Promise<void>
     onLoadHistoryPage: () => Promise<void>
     projectHasMoreInDb: (projectId: string) => boolean
+    /** Switch the panel between its own lists: the projects tree and the
+     *  timeline. The Projects/Threads tabs call it. */
+    onSelectMode: (mode: 'projects' | 'threads') => void
+    /**
+     * The action row under the panel's tabs, owned by the workspace: the create
+     * door of the list on screen, or the thread list's own filters. It is drawn
+     * where the list's controls belong instead of in the app header.
+     */
+    panelActions: Snippet<[panelPane: 'folders' | 'threads' | 'chats']>
   }
 
   let {
@@ -183,7 +199,9 @@
     onSwitchScopedProject,
     onLoadProjectThreadsPage,
     onLoadHistoryPage,
-    projectHasMoreInDb
+    projectHasMoreInDb,
+    onSelectMode,
+    panelActions
   }: Props = $props()
 
   /**
@@ -232,6 +250,89 @@
   })
 
   /**
+   * The panel's own tabs, and its own search, as the bar above the list draws
+   * them. The Projects and Threads lists are one panel with two tabs (the same
+   * pair the view rail folds into its project item), and Chats is a panel with
+   * no tabs at all: only its search and its new-chat door sit above the list.
+   */
+  const panelTabs = $derived<SidebarPanelTab[]>([
+    {
+      id: 'folders',
+      label: 'Folders',
+      icon: CioFolder,
+      shortcut: keymapState.keysFor('nav-projects'),
+      active: mode === 'projects',
+      select: () => onSelectMode('projects')
+    },
+    {
+      id: 'threads',
+      label: 'Threads',
+      icon: CioThreads,
+      shortcut: keymapState.keysFor('nav-threads'),
+      active: mode === 'threads',
+      select: () => onSelectMode('threads')
+    }
+  ])
+
+  const panelSearch = $derived.by((): SidebarPanelSearch => {
+    if (mode === 'chats') {
+      return {
+        open: sidebar.chatsSearchOpen,
+        query: sidebar.chatsSearchQuery,
+        placeholder: 'Search chats…',
+        ariaLabel: 'Search chats',
+        onOpenChange: (open) => (open ? sidebar.openChatsSearch() : sidebar.closeChatsSearch()),
+        onQueryChange: (value) => (sidebar.chatsSearchQuery = value)
+      }
+    }
+    if (mode === 'threads') {
+      return {
+        open: sidebar.threadsSearchOpen,
+        query: sidebar.threadsSearchQuery,
+        placeholder: 'Search threads…',
+        ariaLabel: 'Search threads',
+        loading: sidebar.threadsSearching,
+        onOpenChange: (open) => (open ? sidebar.openThreadsSearch() : sidebar.closeThreadsSearch()),
+        onQueryChange: (value) => sidebar.runThreadsSearch(value)
+      }
+    }
+    return {
+      open: sidebar.projectsSearchOpen,
+      query: sidebar.projectsSearchQuery,
+      placeholder: 'Search projects…',
+      ariaLabel: 'Search projects',
+      onOpenChange: (open) => (open ? sidebar.openProjectsSearch() : sidebar.closeProjectsSearch()),
+      onQueryChange: (value) => (sidebar.projectsSearchQuery = value)
+    }
+  })
+
+  /**
+   * Open the search of whichever list this panel is showing.
+   *
+   * The chord is read by the shell, which cannot know which panel is on screen,
+   * so it publishes a request and the panel that owns the list answers it. The
+   * request is only marked handled while this panel is the on-screen view, so a
+   * chord pressed elsewhere is never swallowed here.
+   */
+  let handledPanelSearch = 0
+  $effect(() => {
+    const request = panelSearchRequest.requestId
+    if (request === handledPanelSearch || !active) return
+    handledPanelSearch = request
+    if (mode === 'chats') sidebar.openChatsSearch()
+    else if (mode === 'threads') sidebar.openThreadsSearch()
+    else if (!scopedSidebarVisible) sidebar.openProjectsSearch()
+  })
+
+  /**
+   * The Chats and Projects panel searches filter the rows already on screen.
+   * They answer on the keystroke, so the list is narrowed as the user types and
+   * never replaced by a result set of its own.
+   */
+  const chatsQuery = $derived(sidebar.chatsSearchQuery.trim().toLowerCase())
+  const projectsQuery = $derived(sidebar.projectsSearchQuery.trim().toLowerCase())
+
+  /**
    * Holds activity-driven reordering back so a burst of ticks becomes one move
    * instead of rows fighting over a slot; see {@link ThreadOrderSettle}.
    */
@@ -278,6 +379,31 @@
   )
   /** The Chats list as the settle last committed it. */
   const settledStandaloneThreads = $derived(threadOrderSettle.view('chats', standaloneThreads))
+
+  const pinnedChatsShown = $derived(
+    chatsQuery
+      ? pinnedInboxThreads.filter((thread) => thread.title.toLowerCase().includes(chatsQuery))
+      : pinnedInboxThreads
+  )
+  const chatsShown = $derived(
+    chatsQuery
+      ? settledStandaloneThreads.filter((thread) => thread.title.toLowerCase().includes(chatsQuery))
+      : settledStandaloneThreads
+  )
+  const pinnedProjectsShown = $derived(
+    projectsQuery
+      ? pinnedProjects.filter((project) => project.name.toLowerCase().includes(projectsQuery))
+      : pinnedProjects
+  )
+  const regularProjectsShown = $derived(
+    projectsQuery
+      ? regularProjects.filter((project) => project.name.toLowerCase().includes(projectsQuery))
+      : regularProjects
+  )
+  // A project search narrows the folders, not the threads inside them: the
+  // pinned thread list belongs to the timeline tab, so it steps aside while the
+  // user is looking for a folder.
+  const pinnedThreadsShown = $derived(projectsQuery ? [] : pinnedThreads)
 
   /**
    * The list a drop in the Threads view resolves against: the rows the pane is
@@ -604,6 +730,14 @@
   }}
 />
 
+{#snippet chatsControls()}
+  {@render panelActions('chats')}
+{/snippet}
+
+{#snippet listActions()}
+  {@render panelActions(mode === 'threads' ? 'threads' : 'folders')}
+{/snippet}
+
 <!-- Shared sidebar   shows Projects or Chats depending on the shell mode.
      A studio that owns the pane hides this panel instead of unmounting it: its
      lists are every project, thread and chat row the shell holds, and rebuilding
@@ -626,6 +760,23 @@
     onDrop: (event: DragEvent) => void handleSidebarDrop(event)
   }}
 >
+  <!-- The panel's own controls, above its list: the tabs that switch which
+       list it shows, the search that morphs over them, and the action row for the
+       list on screen. They are chrome rather than part of the scroller, so the
+       tabs and the actions stay where they are while rows move underneath. -->
+  {#snippet chrome()}
+    {#if !workspaceState.specStudioOpen && !scopedSidebarVisible && mode !== 'assistant'}
+      <SidebarPanelBar
+        label="Projects and threads"
+        tabs={mode === 'chats' ? [] : panelTabs}
+        search={panelSearch}
+        searchShortcut={keymapState.keysFor('panel-search')}
+        trailing={mode === 'chats' ? chatsControls : undefined}
+        row={mode === 'chats' ? undefined : listActions}
+      />
+    {/if}
+  {/snippet}
+
   {#snippet header()}
     {#if workspaceState.specStudioOpen}
       <span class="text-[0.625rem] tabular-nums text-dimmed">
@@ -930,11 +1081,11 @@
       {/if}
     </SidebarListPane>
     <SidebarListPane name="chats" visible={!loading && mode === 'chats'}>
-      {#if pinnedInboxThreads.length > 0}
+      {#if pinnedChatsShown.length > 0}
         <PinnedSection
           sectionKey="chats"
           label="Pinned Chats"
-          threads={pinnedInboxThreads}
+          threads={pinnedChatsShown}
           activeThreadId={activeThreadId ?? null}
           getRowIcon={() => null}
           onOpen={onOpenThread}
@@ -949,16 +1100,16 @@
         />
       {/if}
 
-      {#if settledStandaloneThreads.length > 0}
+      {#if chatsShown.length > 0}
         {@const chatsVisible = sidebar.visibleThreads(
           'chats',
-          settledStandaloneThreads,
+          chatsShown,
           activeThreadId,
           THREAD_LIST_PAGE_SIZE
         )}
         {@const chatsHidden = sidebar.hiddenThreadCount(
           'chats',
-          settledStandaloneThreads,
+          chatsShown,
           chatsVisible,
           THREAD_LIST_PAGE_SIZE
         )}
@@ -998,11 +1149,7 @@
           <button
             class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
             onclick={() =>
-              sidebar.showMoreThreads(
-                'chats',
-                settledStandaloneThreads.length,
-                THREAD_LIST_PAGE_SIZE
-              )}
+              sidebar.showMoreThreads('chats', chatsShown.length, THREAD_LIST_PAGE_SIZE)}
           >
             Show {chatsHidden} more
           </button>
@@ -1014,11 +1161,16 @@
             Show less
           </button>
         {/if}
-      {:else if pinnedInboxThreads.length === 0}
+      {:else if pinnedChatsShown.length === 0}
         <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
           <CioMessage size={20} class="text-dimmed" />
-          <p class="text-xs text-muted">No chats yet</p>
-          <p class="text-xs text-dimmed">Start a new chat to get going</p>
+          {#if chatsQuery}
+            <p class="text-xs text-muted">No matching chats</p>
+            <p class="text-xs text-dimmed">Try another name</p>
+          {:else}
+            <p class="text-xs text-muted">No chats yet</p>
+            <p class="text-xs text-dimmed">Start a new chat to get going</p>
+          {/if}
         </div>
       {/if}
     </SidebarListPane>
@@ -1252,7 +1404,7 @@
       <PinnedSection
         sectionKey="projects-threads"
         label="Pinned Threads"
-        threads={pinnedThreads.filter((thread) => !thread.bookmarked)}
+        threads={pinnedThreadsShown.filter((thread) => !thread.bookmarked)}
         detailed
         sticky
         activeThreadId={activeThreadId ?? null}
@@ -1269,7 +1421,7 @@
       />
 
       <!-- Pinned projects -->
-      {#if pinnedProjects.length > 0}
+      {#if pinnedProjectsShown.length > 0}
         <div class="mb-1 pb-2">
           <button
             type="button"
@@ -1292,11 +1444,11 @@
             <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
               >Pinned Projects</span
             >
-            <span class="text-[0.625rem] text-dimmed/70">{pinnedProjects.length}</span>
+            <span class="text-[0.625rem] text-dimmed/70">{pinnedProjectsShown.length}</span>
           </button>
           {#if !pinnedFold.isFolded('projects-projects')}
             <div transition:slide={foldSlide()} class="space-y-px" role="list">
-              {#each pinnedProjects as project (project.id)}
+              {#each pinnedProjectsShown as project (project.id)}
                 {@const folderThreads = threadOrderSettle.view(
                   projectOrderKey(project.id),
                   threadsByProject.get(project.id) ?? []
@@ -1576,15 +1728,20 @@
       {/if}
 
       <!-- Folder tree -->
-      {#if regularProjects.length === 0 && pinnedProjects.length === 0}
+      {#if regularProjectsShown.length === 0 && pinnedProjectsShown.length === 0}
         <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
           <CioFolderOpen size={20} class="text-dimmed" />
-          <p class="text-xs text-muted">No projects yet</p>
-          <p class="text-xs text-dimmed">Add a folder to get started</p>
+          {#if projectsQuery}
+            <p class="text-xs text-muted">No matching projects</p>
+            <p class="text-xs text-dimmed">Try another name</p>
+          {:else}
+            <p class="text-xs text-muted">No projects yet</p>
+            <p class="text-xs text-dimmed">Add a folder to get started</p>
+          {/if}
         </div>
-      {:else if regularProjects.length > 0}
+      {:else if regularProjectsShown.length > 0}
         <div class="space-y-0.5" role="list">
-          {#each regularProjects as project (project.id)}
+          {#each regularProjectsShown as project (project.id)}
             {@const folderThreads = threadOrderSettle.view(
               projectOrderKey(project.id),
               threadsByProject.get(project.id) ?? []

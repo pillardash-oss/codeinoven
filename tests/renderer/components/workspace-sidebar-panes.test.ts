@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushSync, mount, tick, unmount } from 'svelte'
+import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte'
 
 /**
  * The sidebar keeps one list per view mounted, so switching views is a
@@ -13,6 +13,12 @@ import { flushSync, mount, tick, unmount } from 'svelte'
  * tearing down and rebuilding a few hundred rows per switch is what made
  * Projects > Threads take around a second with a few hundred threads.
  */
+
+/** The panel action row the sidebar draws under its tabs; the tests only
+ *  exercise the lists, so it renders nothing. */
+const emptyPanelActions = createRawSnippet<['folders' | 'threads' | 'chats']>(() => ({
+  render: () => '<span></span>'
+}))
 
 const invokeMock = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock('$lib/ipc.svelte', async (importOriginal) => {
@@ -161,7 +167,9 @@ function props(mode: 'projects' | 'chats' | 'threads') {
     onSwitchScopedProject: vi.fn(async () => {}),
     onLoadProjectThreadsPage: vi.fn(async () => {}),
     onLoadHistoryPage: vi.fn(async () => {}),
-    projectHasMoreInDb: () => false
+    projectHasMoreInDb: () => false,
+    onSelectMode: () => {},
+    panelActions: emptyPanelActions
   }
 }
 

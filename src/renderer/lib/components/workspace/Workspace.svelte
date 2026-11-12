@@ -9,6 +9,8 @@
   import CioFiles from '@pdslng/cio-icon/CioFiles.svelte'
   import CioHistory from '@pdslng/cio-icon/CioHistory.svelte'
   import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
+  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
+  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
   import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
@@ -55,6 +57,11 @@
   import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
   import WorkspaceSidebar from './WorkspaceSidebar.svelte'
+  import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
+  import ThreadProjectFilterMenu from '../shared/ThreadProjectFilterMenu.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { encodeShortcutTokens } from '$lib/keymap/keymap'
+  import { canHostProjectThread } from './Workspace/Workspace-new-thread-project-picker.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
   import { createWorkspace } from './Workspace/Workspace-board.svelte'
@@ -636,6 +643,57 @@
   $effect(() => rememberAssistantThread(selectedThread))
 </script>
 
+<!--
+  The action row under the left panel's tabs, owned here because the workspace
+  owns what each list can do: the create door of the list on screen, or the
+  timeline's own thread filters. The app header keeps none of these for the
+  Projects, Threads and Chats views, so they live with the list they act on.
+-->
+{#snippet sidebarPanelActions(pane: 'folders' | 'threads' | 'chats')}
+  {#if pane === 'chats'}
+    <button
+      type="button"
+      class="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label="New chat"
+      title="New chat"
+      data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
+      onclick={board.markThreadReadAndApply.startNewChat}
+    >
+      <CioPencil size={13} class="shrink-0" />
+      <span class="hidden truncate @min-[15rem]:inline">New chat</span>
+    </button>
+  {:else if pane === 'folders'}
+    <ProjectCreateControl
+      title="New project"
+      onProjectCreated={board.switcherPanelTabs.handleProjectCreated}
+      onExisting={board.switcherPanelTabs.handleExistingProject}
+      triggerAddProject={board.state.projectCreateTrigger}
+      triggerKind={board.state.projectCreateTriggerKind}
+    />
+    <button
+      type="button"
+      class="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+      aria-label="New thread"
+      title="New thread"
+      data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
+      onclick={() => {
+        const project = canHostProjectThread(board.openThreadFromSwitcher.activeProject)
+          ? board.openThreadFromSwitcher.activeProject
+          : null
+        if (project) void board.createThreadInProject.createThreadInProject(project)
+        else board.newThreadPicker.request()
+      }}
+    >
+      <CioPlus size={13} class="shrink-0" />
+      <span class="hidden truncate @min-[15rem]:inline">New thread</span>
+    </button>
+  {:else}
+    <!-- The timeline's own filters: which projects it spans, and which inboxes
+         it groups by. Same menu the header used to carry. -->
+    <ThreadProjectFilterMenu />
+  {/if}
+{/snippet}
+
 <svelte:document onpointerdowncapture={board.switcherPanelTabs.handleComposerPointerDown} />
 
 <div class="flex h-full">
@@ -668,6 +726,8 @@
       bind:scroller={board.switcherPanelTabs.sidebarScroller}
       mode={board.props.mode}
       active={board.props.active}
+      onSelectMode={(next) => navigate(next)}
+      panelActions={sidebarPanelActions}
       projects={board.createThreadInProject.projects}
       visibleProjects={board.mergeThreadsInList.visibleProjects}
       projectIcons={board.createThreadInProject.projectIcons}

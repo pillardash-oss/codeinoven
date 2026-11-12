@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushSync, mount, tick, unmount } from 'svelte'
+import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte'
 
 /**
  * The Threads-view search panel must not empty the sidebar on the keystroke.
@@ -144,6 +144,12 @@ function installInvokeMock(): void {
   })
 }
 
+/** The panel action row the sidebar draws under its tabs; the tests only
+ *  exercise the lists, so it renders nothing. */
+const emptyPanelActions = createRawSnippet<['folders' | 'threads' | 'chats']>(() => ({
+  render: () => '<span></span>'
+}))
+
 /** Past the controller's 120 ms debounce, so the search has been dispatched. */
 const afterDebounce = (): Promise<void> =>
   new Promise((resolve) => {
@@ -207,7 +213,9 @@ function sidebarProps(sidebar: WorkspaceSidebarController): SidebarProps {
     onSwitchScopedProject: vi.fn(async () => {}),
     onLoadProjectThreadsPage: vi.fn(async () => {}),
     onLoadHistoryPage: vi.fn(async () => {}),
-    projectHasMoreInDb: () => false
+    projectHasMoreInDb: () => false,
+    onSelectMode: () => {},
+    panelActions: emptyPanelActions
   }
 }
 

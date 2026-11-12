@@ -224,11 +224,14 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
   })
 
   /**
-   * Whether the left sidebar is painted at all. A sidebar with nothing in it is
-   * not rendered, so no dock and no edge-hover overlay offer a panel with no
-   * content.
+   * Whether the left sidebar is painted at all.
+   *
+   * It always is. The panel carries its own controls (its tabs, its search, the
+   * create door of the list on screen), so an empty list is a state drawn inside
+   * the panel rather than a reason to take the panel, and its controls, away.
+   * Only the user removes it: by folding the sidebar or by hiding it.
    */
-  workspaceSidebarVisible = $derived(this.workspaceSidebarHasContent)
+  workspaceSidebarVisible = $derived(true)
 
   /**
    * Manual reorder of the sidebar pinned section. Pin order is one shared
