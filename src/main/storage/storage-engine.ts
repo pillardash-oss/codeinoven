@@ -146,6 +146,7 @@ const DEFAULT_CONFIG: AppConfig = {
   inAppNotificationSound: { ...DEFAULT_IN_APP_NOTIFICATION_SOUND },
   cioCleanupRetentionDays: DEFAULT_CIO_CLEANUP_RETENTION_DAYS,
   cioCleanupExcludedCategories: [...DEFAULT_CIO_CLEANUP_EXCLUDED_CATEGORIES],
+  agentAccountVisibility: true,
   sound: DEFAULT_SPEECH_SETTINGS,
   llamaCppServers: [],
   llamaCppUnload: DEFAULT_LOCAL_AI_UNLOAD_OPTION

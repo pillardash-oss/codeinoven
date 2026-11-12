@@ -23,6 +23,7 @@
     ProviderConnectionInfo
   } from '$shared/types'
   import Modal from '../ui/Modal.svelte'
+  import Switch from '../ui/Switch.svelte'
   import ProviderSignInPanel from './ProviderSignInPanel.svelte'
   import HarnessAccountList from './accounts/HarnessAccountList.svelte'
   import HarnessAccountDetail from './accounts/HarnessAccountDetail.svelte'
@@ -56,6 +57,15 @@
   let saving = $state(false)
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
+  /**
+   * Whether agents may see which account still has subscription capacity.
+   *
+   * The switch decides whether `cio_orchestrate_targets` reports capacity at
+   * all, so an agent that sees none falls back to the thread's own account and
+   * model. An absent stored field reads as on.
+   */
+  let agentAccountVisibility = $state(true)
+  let savingAccountVisibility = $state(false)
 
   /**
    * Credential state of the account the edit modal is showing.
@@ -267,6 +277,38 @@
     }
   }
 
+  /** Read the one config field this panel edits; an absent field means on. */
+  async function loadAgentAccountVisibility(): Promise<void> {
+    try {
+      agentAccountVisibility = (await invoke('config:get')).agentAccountVisibility !== false
+    } catch (configError) {
+      error =
+        configError instanceof Error
+          ? configError.message
+          : 'Account capacity visibility could not be read.'
+    }
+  }
+
+  /** Persist the switch, guarding against a second write while one is running. */
+  async function setAgentAccountVisibility(next: boolean): Promise<void> {
+    if (savingAccountVisibility) return
+    const previous = agentAccountVisibility
+    savingAccountVisibility = true
+    agentAccountVisibility = next
+    error = ''
+    try {
+      await invoke('config:update', { agentAccountVisibility: next })
+    } catch (saveError) {
+      agentAccountVisibility = previous
+      error =
+        saveError instanceof Error
+          ? saveError.message
+          : 'Account capacity visibility could not be saved.'
+    } finally {
+      savingAccountVisibility = false
+    }
+  }
+
   async function refreshAccounts(): Promise<void> {
     if (refreshing) return
     refreshing = true
@@ -334,6 +376,7 @@
   }
 
   async function initializeAccounts(): Promise<void> {
+    await loadAgentAccountVisibility()
     await loadStoredAccounts()
     harnessAccountUsageCache.schedule(rows)
     await refreshAccounts()
@@ -621,6 +664,24 @@
         <CioRefresh size={12} class={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
         Refresh
       </button>
+    </div>
+
+    <div class="flex items-center justify-between gap-3">
+      <div class="min-w-0">
+        <p class="text-xs font-medium text-foreground">Agents can check account capacity</p>
+        <p class="mt-0.5 truncate text-[0.625rem] text-dimmed">
+          {agentAccountVisibility
+            ? 'Shows which connected account still has subscription capacity'
+            : "Agents run on this thread's own account and model"}
+        </p>
+      </div>
+      <Switch
+        checked={agentAccountVisibility}
+        disabled={savingAccountVisibility}
+        onchange={(value) => void setAgentAccountVisibility(value)}
+        aria-label="Let agents see which connected account has subscription capacity left"
+        title="Set whether agents can see which account still has subscription capacity"
+      />
     </div>
 
     <div class="sticky top-0 z-20 flex flex-wrap items-center gap-2 bg-app py-1.5">

@@ -1,5 +1,7 @@
 import type {
+  AgentAccountUsage,
   AgentSecretSubmission,
+  AppConfig,
   HarnessAccount,
   ModelProfile,
   PermissionLevel,
@@ -125,6 +127,20 @@ export interface OrchestrationDeps {
   harnessInventory: (ovenId: string) => Promise<OvenHarnessInventoryItem[]>
   /** The saved model profiles the user named, in their own order. */
   listModelProfiles: () => Promise<ModelProfile[]>
+  /**
+   * The app config, read for the one question a target list has to answer
+   * before it probes anything: whether the user lets agents see account
+   * capacity (`agentAccountVisibility`, on unless it is false).
+   */
+  getConfig: () => Promise<Pick<AppConfig, 'agentAccountVisibility'>>
+  /**
+   * Live subscription capacity for the named accounts, one entry per account
+   * that answered. A probe that fails simply drops its entry, because missing
+   * capacity must never become a tool error.
+   */
+  accountUsage: (
+    targets: readonly { harnessId: string; providerId: string; accountId: string }[]
+  ) => Promise<AgentAccountUsage[]>
   getThread: (projectId: string, threadId: string) => Promise<Thread | null>
   /** A thread by id, whatever project it lives in, for continuing existing work. */
   getThreadById: (threadId: string) => Promise<Thread | null>
@@ -305,12 +321,13 @@ async function readTargets(
   const ovenFilter = optionalString(input, 'ovenId')
   const includeModels = input['includeModels'] !== false
 
-  const [state, catalogs, accounts, profiles, projects] = await Promise.all([
+  const [state, catalogs, accounts, profiles, projects, config] = await Promise.all([
     deps.listOvens(),
     includeModels ? deps.listProviderCatalogs(context.projectId) : Promise.resolve([]),
     deps.listAccounts(),
     deps.listModelProfiles(),
-    deps.listProjects()
+    deps.listProjects(),
+    deps.getConfig()
   ])
 
   const ovens = state.ovens
@@ -341,6 +358,19 @@ async function readTargets(
   const catalogsForHarness = harnessFilter
     ? catalogs.filter((catalog) => catalog.harnessId === harnessFilter)
     : catalogs
+
+  /**
+   * Whether account capacity may be reported at all.
+   *
+   * The user's `agentAccountVisibility` switch decides this. Off means the list
+   * carries no capacity and no usage probe is made, so an agent cannot learn
+   * which account still has quota and has to run on this thread's own account
+   * and model instead of shopping around.
+   */
+  const accountsQueryable = config.agentAccountVisibility !== false
+  const accountCapacity = accountsQueryable
+    ? await readAccountCapacity(deps, accountsForHarness)
+    : new Map<string, AccountCapacity>()
 
   return {
     project: { id: context.projectId, path: context.projectPath },
@@ -401,13 +431,20 @@ async function readTargets(
       id: preset.id,
       label: preset.label
     })),
-    accounts: accountsForHarness.map((account) => ({
-      id: account.id,
-      harnessId: account.harnessId,
-      providerId: account.providerId,
-      label: account.label,
-      isDefault: account.isDefault === true
-    })),
+    accountsQueryable,
+    accounts: accountsForHarness.map((account) => {
+      // Capacity is present only when the user allows it and the account
+      // answered, so an agent reads absence as "run on this thread's own model".
+      const capacity = accountCapacity.get(account.id)
+      return {
+        id: account.id,
+        harnessId: account.harnessId,
+        providerId: account.providerId,
+        label: account.label,
+        isDefault: account.isDefault === true,
+        ...(capacity ? { capacity } : {})
+      }
+    }),
     profiles: profiles.map((profile) => ({
       id: profile.id,
       name: profile.name,
@@ -431,6 +468,90 @@ async function readTargets(
         'cio_orchestrate_continue sends a follow-up to a thread this conversation already dispatched and changes how it runs in place. cio_orchestrate_status with no threadId lists those threads with their ids. Never dispatch a new thread to add to existing work.'
     }
   }
+}
+
+/** One subscription window's headroom, as an agent reads it. */
+interface AccountCapacityWindow {
+  label: string
+  /** Share of the window already consumed, 0-100, when the provider reports it. */
+  usedPercent?: number
+  /** Unix milliseconds the window resets at, when the provider reports it. */
+  resetsAt?: number
+}
+
+/** What one connected account still has left, when the user allows it to be seen. */
+interface AccountCapacity {
+  windows: AccountCapacityWindow[]
+  /** Human-readable prepaid balance, when the account is credit metered. */
+  creditsRemaining?: string
+  /** True when the account's credential expired, so its quota cannot be read. */
+  needsSignIn?: boolean
+}
+
+/**
+ * Capacity for every account in the list, keyed by account id.
+ *
+ * Only ever called when the user's visibility switch is on: a probe is a real
+ * provider round trip per account, so an off switch makes none. An account that
+ * did not answer has no entry, which is how the list says "nothing known"
+ * instead of "nothing left".
+ */
+async function readAccountCapacity(
+  deps: OrchestrationDeps,
+  accounts: readonly HarnessAccount[]
+): Promise<Map<string, AccountCapacity>> {
+  const capacity = new Map<string, AccountCapacity>()
+  if (accounts.length === 0) return capacity
+  const usage = await deps.accountUsage(
+    accounts.map((account) => ({
+      harnessId: account.harnessId,
+      providerId: account.providerId,
+      accountId: account.id
+    }))
+  )
+  for (const account of accounts) {
+    const entry =
+      usage.find((candidate) => candidate.accountId === account.id) ??
+      // A harness that answers for its provider rather than for a single
+      // account container reports no accountId, so the provider pair identifies it.
+      usage.find(
+        (candidate) =>
+          candidate.accountId === undefined &&
+          candidate.harnessId === account.harnessId &&
+          candidate.providerId === account.providerId
+      )
+    const described = entry ? describeAccountCapacity(entry) : null
+    if (described) capacity.set(account.id, described)
+  }
+  return capacity
+}
+
+/** One account's capacity, or null when the probe carried nothing an agent could use. */
+function describeAccountCapacity(usage: AgentAccountUsage): AccountCapacity | null {
+  const windows: AccountCapacityWindow[] = usage.rateLimits
+    .filter((window) => window.usedPercent !== undefined || window.resetsAt !== undefined)
+    .map((window) => ({
+      label: window.label || window.id,
+      ...(window.usedPercent !== undefined ? { usedPercent: window.usedPercent } : {}),
+      ...(window.resetsAt !== undefined ? { resetsAt: window.resetsAt } : {})
+    }))
+  const creditsRemaining = describeCreditsRemaining(usage.credits)
+  const needsSignIn = usage.reauthenticationRequired === true
+  if (windows.length === 0 && !creditsRemaining && !needsSignIn) return null
+  return {
+    windows,
+    ...(creditsRemaining ? { creditsRemaining } : {}),
+    ...(needsSignIn ? { needsSignIn } : {})
+  }
+}
+
+/** A short prepaid-credit line, or undefined when the account reports no balance. */
+function describeCreditsRemaining(credits: AgentAccountUsage['credits']): string | undefined {
+  if (!credits) return undefined
+  if (credits.unlimited === true) return 'unlimited'
+  if (typeof credits.balance === 'number') return `${credits.balance} credits left`
+  if (credits.hasCredits === true) return 'credit metered'
+  return undefined
 }
 
 /**
