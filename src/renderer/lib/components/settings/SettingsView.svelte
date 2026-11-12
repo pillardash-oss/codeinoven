@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
@@ -1443,7 +1444,7 @@
         settings page needs; importing it here statically made every page in
         Settings pay for Harnesses before it could paint.
       -->
-      {#await import('../providers/ProvidersView.svelte') then { default: ProvidersView }}
+      {#await loadCachedPanelModule('module:lib/components/providers/ProvidersView.svelte', () => import('../providers/ProvidersView.svelte')) then { default: ProvidersView }}
         <ProvidersView />
       {/await}
     {:else if section === 'utilities'}

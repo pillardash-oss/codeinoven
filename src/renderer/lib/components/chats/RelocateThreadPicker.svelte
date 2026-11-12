@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { onMount } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import CioChat from '@pdslng/cio-icon/CioChat.svelte'
@@ -217,7 +218,7 @@
      typing, because the palette's default bound draws sixty rows and a project's
      older chats   the one holding an unsent draft among them   are exactly what
      fell past it. -->
-{#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
+{#await loadCachedPanelModule('module:lib/components/actions/CommandPalette.svelte', () => import('../actions/CommandPalette.svelte')) then { default: CommandPalette }}
   <CommandPalette
     open
     {title}

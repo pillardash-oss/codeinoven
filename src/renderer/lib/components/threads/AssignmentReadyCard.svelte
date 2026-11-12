@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
   import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
@@ -117,7 +118,7 @@
           id={`assignment-review-${assignment.id}`}
           class="max-h-[32rem] overflow-y-auto px-3 py-2.5"
         >
-          {#await import('../specs/AssignmentReviewContent.svelte') then { default: AssignmentReviewContent }}
+          {#await loadCachedPanelModule('module:lib/components/specs/AssignmentReviewContent.svelte', () => import('../specs/AssignmentReviewContent.svelte')) then { default: AssignmentReviewContent }}
             <AssignmentReviewContent
               content={draft}
               {providers}

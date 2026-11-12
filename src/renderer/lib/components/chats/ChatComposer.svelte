@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { isMacPlatform } from '$lib/shortcut-display'
   import CioArrowUp from '@pdslng/cio-icon/CioArrowUp.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
@@ -232,7 +233,7 @@
 
 {#if board.handleDropData.preview.file}
   {@const previewAttachment = board.handleDropData.preview.file}
-  {#await import('./AttachmentPreview.svelte') then { default: AttachmentPreview }}
+  {#await loadCachedPanelModule('module:lib/components/chats/AttachmentPreview.svelte', () => import('./AttachmentPreview.svelte')) then { default: AttachmentPreview }}
     <AttachmentPreview
       attachment={previewAttachment}
       src={board.handleDropData.preview.urls[previewAttachment.url]}

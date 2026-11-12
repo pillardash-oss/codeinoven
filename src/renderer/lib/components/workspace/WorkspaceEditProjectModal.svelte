@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import type { SvelteMap } from 'svelte/reactivity'
   import Modal from '$lib/components/ui/Modal.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -61,7 +62,7 @@
              heavy for the first paint, and it only ever renders while this modal
              is open. Fetching it here is what keeps the parser out of the entry
              chunk; this modal is the only eager reader of the picker. -->
-        {#await import('$lib/components/shared/AppearancePicker.svelte') then { default: AppearancePicker }}
+        {#await loadCachedPanelModule('module:lib/components/shared/AppearancePicker.svelte', () => import('$lib/components/shared/AppearancePicker.svelte')) then { default: AppearancePicker }}
           <AppearancePicker
             name={dialogs.editProjectName}
             color={dialogs.editProjectColor}

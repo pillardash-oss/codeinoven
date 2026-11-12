@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioFind from '@pdslng/cio-icon/CioFind.svelte'
@@ -447,7 +448,7 @@
 {/if}
 
 {#if editDraft && editingNoteId}
-  {#await import('./StickyNoteEditModal.svelte') then { default: StickyNoteEditModal }}
+  {#await loadCachedPanelModule('module:lib/components/notes/StickyNoteEditModal.svelte', () => import('./StickyNoteEditModal.svelte')) then { default: StickyNoteEditModal }}
     <StickyNoteEditModal
       open
       noteId={editingNoteId}

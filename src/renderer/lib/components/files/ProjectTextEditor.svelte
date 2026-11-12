@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import type { AppPanelPortal } from '$lib/app-panel-portal'
   import type IdeEditorTools from './IdeEditorTools.svelte'
   import { onMount } from 'svelte'
@@ -214,7 +215,7 @@
 ></div>
 
 {#if projectId && ideEnabled}
-  {#await import('./IdeEditorTools.svelte') then { default: IdeEditorTools }}
+  {#await loadCachedPanelModule('module:lib/components/files/IdeEditorTools.svelte', () => import('./IdeEditorTools.svelte')) then { default: IdeEditorTools }}
     <IdeEditorTools
       bind:this={ideTools}
       {projectId}

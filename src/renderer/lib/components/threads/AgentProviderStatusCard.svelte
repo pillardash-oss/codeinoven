@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
@@ -500,7 +501,7 @@ card, the way it did before the head moved onto the shared primitives. -->
        status line, and the panel behind it is the sign-in flow with every
        provider form. Importing it here keeps that flow in its own chunk instead
        of charging the launch for a dialog most sessions never open. -->
-  {#await import('../providers/ProviderSignInPanel.svelte') then { default: ProviderSignInPanel }}
+  {#await loadCachedPanelModule('module:lib/components/providers/ProviderSignInPanel.svelte', () => import('../providers/ProviderSignInPanel.svelte')) then { default: ProviderSignInPanel }}
     <ProviderSignInPanel
       harnessId={issue.harnessId}
       harnessName={providerName}

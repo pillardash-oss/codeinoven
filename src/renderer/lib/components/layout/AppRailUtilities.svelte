@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioAlertCircle from '@pdslng/cio-icon/CioAlertCircle.svelte'
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
@@ -245,7 +246,7 @@
      actually open. The modal renders nothing while closed, so gating on the
      open flag mounts the same surface, just later. -->
 {#if taskManagerOpen}
-  {#await import('$lib/components/workspace/TaskManagerModal.svelte') then { default: TaskManagerModal }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/TaskManagerModal.svelte', () => import('$lib/components/workspace/TaskManagerModal.svelte')) then { default: TaskManagerModal }}
     <TaskManagerModal open={taskManagerOpen} onClose={() => (taskManagerOpen = false)} />
   {/await}
 {/if}
@@ -254,7 +255,7 @@
      from one rail button, so it stays out of the first-paint chunk and mounts
      only once the click has also loaded the list it renders. -->
 {#if blockersModalOpen}
-  {#await import('$lib/components/layout/UpdateBlockersModal.svelte') then { default: UpdateBlockersModal }}
+  {#await loadCachedPanelModule('module:lib/components/layout/UpdateBlockersModal.svelte', () => import('$lib/components/layout/UpdateBlockersModal.svelte')) then { default: UpdateBlockersModal }}
     <UpdateBlockersModal
       payload={updateBlockers.payload}
       onDismiss={() => {

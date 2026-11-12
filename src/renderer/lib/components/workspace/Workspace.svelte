@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import AssistantKnowledgeIcon from '$lib/components/icons/cio/AssistantKnowledgeIcon.svelte'
   import CioActions from '@pdslng/cio-icon/CioActions.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
@@ -605,7 +606,7 @@
        A view with nothing in its board.switcherPanelTabs.sidebar paints no board.switcherPanelTabs.sidebar at all, so an empty
        panel is never put in front of the user. -->
   {#if board.markThreadReadAndApply.workspaceSidebarVisible && board.props.mode === 'assistant'}
-    {#await import('../assistant/AssistantSidebar.svelte') then { default: AssistantSidebar }}
+    {#await loadCachedPanelModule('module:lib/components/assistant/AssistantSidebar.svelte', () => import('../assistant/AssistantSidebar.svelte')) then { default: AssistantSidebar }}
       <AssistantSidebar
         bind:scroller={board.switcherPanelTabs.sidebarScroller}
         assistants={board.mergeThreadsInList.assistantList}
@@ -860,7 +861,7 @@
 {/snippet}
 
 {#snippet browserMenu()}
-  {#await import('./WorkspaceBrowserMenu.svelte') then { default: WorkspaceBrowserMenu }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceBrowserMenu.svelte', () => import('./WorkspaceBrowserMenu.svelte')) then { default: WorkspaceBrowserMenu }}
     <WorkspaceBrowserMenu browser={board.switcherPanelTabs.browser} />
   {/await}
 {/snippet}
@@ -875,14 +876,14 @@
      fetched on a launch that never reaches the board.switcherPanelTabs.browser. Thread-board.switcherPanelTabs.browser
      fullscreen is loaded separately below when a thread tab asks for it. -->
 {#if browserStore()}
-  {#await import('./WorkspaceBrowserDataModal.svelte') then { default: WorkspaceBrowserDataModal }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceBrowserDataModal.svelte', () => import('./WorkspaceBrowserDataModal.svelte')) then { default: WorkspaceBrowserDataModal }}
     <WorkspaceBrowserDataModal
       browser={board.switcherPanelTabs.browser}
       projects={board.createThreadInProject.projects}
     />
   {/await}
 
-  {#await import('./WorkspaceBrowserDownloadsModal.svelte') then { default: WorkspaceBrowserDownloadsModal }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceBrowserDownloadsModal.svelte', () => import('./WorkspaceBrowserDownloadsModal.svelte')) then { default: WorkspaceBrowserDownloadsModal }}
     <WorkspaceBrowserDownloadsModal browser={board.switcherPanelTabs.browser} />
   {/await}
 {/if}
@@ -919,7 +920,7 @@
 />
 
 {#if board.switcherPanelTabs.terminalFullscreenTab}
-  {#await import('./WorkspaceFullscreenTerminal.svelte') then { default: WorkspaceFullscreenTerminal }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceFullscreenTerminal.svelte', () => import('./WorkspaceFullscreenTerminal.svelte')) then { default: WorkspaceFullscreenTerminal }}
     <WorkspaceFullscreenTerminal
       tabId={board.openThreadFromSwitcher.terminalFullscreenTabId}
       onTabIdChange={(id) => (board.openThreadFromSwitcher.terminalFullscreenTabId = id)}
@@ -929,7 +930,7 @@
   {/await}
 {/if}
 {#if board.openThreadFromSwitcher.displayFullscreenTabId}
-  {#await import('./WorkspaceFullscreenDisplay.svelte') then { default: WorkspaceFullscreenDisplay }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceFullscreenDisplay.svelte', () => import('./WorkspaceFullscreenDisplay.svelte')) then { default: WorkspaceFullscreenDisplay }}
     <WorkspaceFullscreenDisplay
       tabId={board.openThreadFromSwitcher.displayFullscreenTabId}
       onTabIdChange={(id) => (board.openThreadFromSwitcher.displayFullscreenTabId = id)}
@@ -939,7 +940,7 @@
   {/await}
 {/if}
 {#if board.openThreadFromSwitcher.browserFullscreenTabId}
-  {#await import('./WorkspaceFullscreenBrowser.svelte') then { default: WorkspaceFullscreenBrowser }}
+  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceFullscreenBrowser.svelte', () => import('./WorkspaceFullscreenBrowser.svelte')) then { default: WorkspaceFullscreenBrowser }}
     <WorkspaceFullscreenBrowser
       tabId={board.openThreadFromSwitcher.browserFullscreenTabId}
       onTabIdChange={(id) => (board.openThreadFromSwitcher.browserFullscreenTabId = id)}

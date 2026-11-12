@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { SvelteSet } from 'svelte/reactivity'
   import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
@@ -922,7 +923,7 @@
           <!-- Scope action dialogs (edit, delete, worktree lifecycle, merge).
                Loaded on demand so their heavy worktree forms stay out of the
                main shell chunk. -->
-          {#await import('../scope/ScopeActionsModals.svelte') then { default: ScopeActionsModals }}
+          {#await loadCachedPanelModule('module:lib/components/scope/ScopeActionsModals.svelte', () => import('../scope/ScopeActionsModals.svelte')) then { default: ScopeActionsModals }}
             <ScopeActionsModals actions={scopeActions} />
           {/await}
         </div>

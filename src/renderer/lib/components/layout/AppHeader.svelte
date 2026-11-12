@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioNotes from '@pdslng/cio-icon/CioNotes.svelte'
@@ -423,7 +424,7 @@
          every view, so importing this statically would put the browser's model in
          the first-paint chunk. It is fetched the moment the browser view is the
          one on screen, which is also when its runtime is wired. -->
-    {#await import('./AppHeaderBrowserCenter.svelte') then { default: AppHeaderBrowserCenter }}
+    {#await loadCachedPanelModule('module:lib/components/layout/AppHeaderBrowserCenter.svelte', () => import('./AppHeaderBrowserCenter.svelte')) then { default: AppHeaderBrowserCenter }}
       <AppHeaderBrowserCenter />
     {/await}
   {:else}
@@ -489,7 +490,7 @@
          and it draws nothing while no browser tab is running the extension's
          box. -->
     {#if onBrowser && browserStore()}
-      {#await import('./AppHeaderPinnedExtensions.svelte') then { default: AppHeaderPinnedExtensions }}
+      {#await loadCachedPanelModule('module:lib/components/layout/AppHeaderPinnedExtensions.svelte', () => import('./AppHeaderPinnedExtensions.svelte')) then { default: AppHeaderPinnedExtensions }}
         <AppHeaderPinnedExtensions />
       {/await}
     {/if}

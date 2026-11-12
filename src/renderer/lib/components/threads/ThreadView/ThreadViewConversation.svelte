@@ -1411,7 +1411,7 @@
                         <!-- The read-along only exists while a turn is being
                                  spoken, so its chunk waits for playback instead
                                  of riding along with the first screen. -->
-                        {#await import('../../speech/ReadAlongOverlay.svelte') then { default: ReadAlongOverlay }}
+                        {#await loadCachedPanelModule('module:lib/components/speech/ReadAlongOverlay.svelte', () => import('../../speech/ReadAlongOverlay.svelte')) then { default: ReadAlongOverlay }}
                           <ReadAlongOverlay
                             segments={speechController.activeSegments!}
                             activeIndex={speechController.visibleSegmentIndex}

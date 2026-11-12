@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioChat from '@pdslng/cio-icon/CioChat.svelte'
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
   import type { Thread } from '$shared/types'
@@ -109,7 +110,7 @@
      first-paint chunk: this component is reachable from the composer and the
      thread view, both of which render on the first screen. -->
 {#if open}
-  {#await import('../actions/CommandPalette.svelte') then { default: CommandPalette }}
+  {#await loadCachedPanelModule('module:lib/components/actions/CommandPalette.svelte', () => import('../actions/CommandPalette.svelte')) then { default: CommandPalette }}
     <CommandPalette
       {open}
       {actions}

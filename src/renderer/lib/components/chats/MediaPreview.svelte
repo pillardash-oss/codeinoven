@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
@@ -214,7 +215,7 @@
              action here: this surface already is the fullscreen view. It loads
              with the media instead of with the app, so a picture-only preview
              never pays for the transport controls. -->
-        {#await import('../ui/VideoPlayer.svelte') then { default: VideoPlayer }}
+        {#await loadCachedPanelModule('module:lib/components/ui/VideoPlayer.svelte', () => import('../ui/VideoPlayer.svelte')) then { default: VideoPlayer }}
           <VideoPlayer
             {src}
             sourceKey={revealUrl ?? src}
@@ -226,7 +227,7 @@
           />
         {/await}
       {:else if kind === 'audio'}
-        {#await import('../ui/AudioPlayer.svelte') then { default: AudioPlayer }}
+        {#await loadCachedPanelModule('module:lib/components/ui/AudioPlayer.svelte', () => import('../ui/AudioPlayer.svelte')) then { default: AudioPlayer }}
           <AudioPlayer
             {src}
             label={filename}

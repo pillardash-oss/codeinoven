@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import AnnotationMarkLayer from './AnnotationMarkLayer.svelte'
   import { markContentBox, markDescriptor, type MarkCapture } from '$lib/annotation-marks'
   import {
@@ -250,7 +251,7 @@
        picture: a surface that answers a video cannot also turn every press into
        play, so the player leaves the pointer to the pen here. It is fetched with
        the artifact being marked, not with the app. -->
-  {#await import('../ui/VideoPlayer.svelte') then { default: VideoPlayer }}
+  {#await loadCachedPanelModule('module:lib/components/ui/VideoPlayer.svelte', () => import('../ui/VideoPlayer.svelte')) then { default: VideoPlayer }}
     <VideoPlayer
       {src}
       sourceKey={url}
