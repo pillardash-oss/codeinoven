@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte'
+import { flushSync, mount, tick, unmount } from 'svelte'
 import type { Assistant, Project, Thread } from '$shared/types'
 
 /**
@@ -16,12 +16,6 @@ import type { Assistant, Project, Thread } from '$shared/types'
  * the memory and the motion are supposed to be a property of "a sidebar list",
  * not something each list author remembers.
  */
-
-/** The panel action row the sidebar draws under its tabs; the tests only
- *  exercise the lists, so it renders nothing. */
-const emptyPanelActions = createRawSnippet<['folders' | 'threads' | 'chats', boolean]>(() => ({
-  render: () => '<span></span>'
-}))
 
 const invokeMock = vi.hoisted(() => vi.fn(async () => undefined))
 vi.mock('$lib/ipc.svelte', async (importOriginal) => {
@@ -215,7 +209,7 @@ describe('chats list parity', () => {
           onLoadHistoryPage: vi.fn(async () => {}),
           projectHasMoreInDb: () => false,
           onSelectMode: () => {},
-          panelActions: emptyPanelActions
+          panelActions: () => []
         }
       }
     })

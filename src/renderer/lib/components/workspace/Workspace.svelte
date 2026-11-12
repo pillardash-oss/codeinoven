@@ -57,9 +57,9 @@
   import WorkspaceHistoryMenu from './WorkspaceHistoryMenu.svelte'
   import WorkspaceRemoveProjectModals from './WorkspaceRemoveProjectModals.svelte'
   import WorkspaceSidebar from './WorkspaceSidebar.svelte'
+  import type { SidebarPanelAction } from '$lib/components/layout/SidebarActionStack.svelte'
   import ProjectCreateControl from '../shared/ProjectCreateControl.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { encodeShortcutTokens } from '$lib/keymap/keymap'
   import { canHostProjectThread } from './Workspace/Workspace-new-thread-project-picker.svelte'
   import WorkspaceTerminalDockContent from './WorkspaceTerminalDockContent.svelte'
   import WorkspaceUnsavedChangesDialog from './WorkspaceUnsavedChangesDialog.svelte'
@@ -640,63 +640,50 @@
   // so the assistant view's own navigation is remembered as it happens, whoever
   // opened the thread (a tab, the sidebar, a notification, or a shortcut).
   $effect(() => rememberAssistantThread(selectedThread))
-</script>
 
-<!--
-  The action row under the left panel's tabs, owned here because the workspace
-  owns what each list can do: the create door of the list on screen, or the
-  timeline's own thread filters. The app header keeps none of these for the
-  Projects, Threads and Chats views, so they live with the list they act on.
--->
-{#snippet sidebarPanelActions(pane: 'folders' | 'threads' | 'chats', compact: boolean)}
-  {#if pane === 'chats'}
-    <button
-      type="button"
-      class="flex h-7 items-center gap-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground {compact
-        ? 'w-7 justify-center'
-        : 'w-full justify-start px-2 text-[0.6875rem] font-medium'}"
-      aria-label="New chat"
-      title="New chat"
-      data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
-      onclick={board.markThreadReadAndApply.startNewChat}
-    >
-      <CioPencil size={compact ? 15 : 13} class="shrink-0" />
-      {#if !compact}
-        <span class="truncate">New chat</span>
-      {/if}
-    </button>
-  {:else}
-    <ProjectCreateControl
-      title="New project"
-      label={compact ? undefined : 'New project'}
-      onProjectCreated={board.switcherPanelTabs.handleProjectCreated}
-      onExisting={board.switcherPanelTabs.handleExistingProject}
-      triggerAddProject={board.state.projectCreateTrigger}
-      triggerKind={board.state.projectCreateTriggerKind}
-    />
-    <button
-      type="button"
-      class="flex h-7 items-center gap-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground {compact
-        ? 'w-7 justify-center'
-        : 'w-full justify-start px-2 text-[0.6875rem] font-medium'}"
-      aria-label="New thread"
-      title="New thread"
-      data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
-      onclick={() => {
-        const project = canHostProjectThread(board.openThreadFromSwitcher.activeProject)
-          ? board.openThreadFromSwitcher.activeProject
-          : null
-        if (project) void board.createThreadInProject.createThreadInProject(project)
-        else board.newThreadPicker.request()
-      }}
-    >
-      <CioPlus size={compact ? 15 : 13} class="shrink-0" />
-      {#if !compact}
-        <span class="truncate">New thread</span>
-      {/if}
-    </button>
-  {/if}
-{/snippet}
+  /** The list's own actions, drawn at the foot of its panel. */
+  function sidebarPanelActions(pane: 'folders' | 'threads' | 'chats'): SidebarPanelAction[] {
+    if (pane === 'chats') {
+      return [
+        {
+          id: 'new-chat',
+          label: 'New chat',
+          icon: CioPencil,
+          shortcut: keymapState.keysFor('nav-new-thread'),
+          run: () => board.markThreadReadAndApply.startNewChat()
+        }
+      ]
+    }
+    return [
+      {
+        id: 'new-project',
+        label: 'New project',
+        component: ProjectCreateControl as unknown as SidebarPanelAction['component'],
+        props: {
+          title: 'New project',
+          label: 'New project',
+          onProjectCreated: board.switcherPanelTabs.handleProjectCreated,
+          onExisting: board.switcherPanelTabs.handleExistingProject,
+          triggerAddProject: board.state.projectCreateTrigger,
+          triggerKind: board.state.projectCreateTriggerKind
+        }
+      },
+      {
+        id: 'new-thread',
+        label: 'New thread',
+        icon: CioPlus,
+        shortcut: keymapState.keysFor('nav-new-thread'),
+        run: () => {
+          const project = canHostProjectThread(board.openThreadFromSwitcher.activeProject)
+            ? board.openThreadFromSwitcher.activeProject
+            : null
+          if (project) void board.createThreadInProject.createThreadInProject(project)
+          else board.newThreadPicker.request()
+        }
+      }
+    ]
+  }
+</script>
 
 <svelte:document onpointerdowncapture={board.switcherPanelTabs.handleComposerPointerDown} />
 
@@ -841,6 +828,7 @@
             onAdoptAssistantTask={board.mergeThreadsInList.requestTaskOwnerForTask}
           />
         {/snippet}
+
         <div
           class="min-h-0 min-w-0 {board.appBackgroundPanelKinds.rightSidebarFlushes
             ? 'border-l border-border'

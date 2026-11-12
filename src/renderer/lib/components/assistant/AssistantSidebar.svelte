@@ -199,35 +199,35 @@
 </script>
 
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
+  <!-- The panel's controls live at its foot, on the same line as the rail's own
+       utility icons, so the list keeps the whole column above them. -->
+  {#snippet footer()}
+    <div class="bg-surface px-2 pt-1.5 pb-2">
+      <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
+        <AssistantSearchControl
+          inline
+          bind:expanded={searchExpanded}
+          {assistants}
+          {tasks}
+          {runs}
+          {onOpenTask}
+          onOpenAssistant={onOpenAssistantKnowledge}
+        />
+        {#if !searchExpanded}
+          <AssistantCreateControl
+            label="New assistant"
+            labelClass="assistant-panel-label truncate"
+            onCreate={onCreateAssistant}
+            onCreateViaChat={onCreateAssistantViaChat}
+            trigger={assistantCreateTrigger}
+          />
+        {/if}
+      </div>
+    </div>
+  {/snippet}
+
   <div class="flex h-full min-h-0 flex-col [container-type:inline-size]">
     <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
-      <!-- The panel's own controls stay pinned above the list as it scrolls: the
-           search morphs out of its button into a field, and the new-assistant
-           door sits beside it. The app header leaves this view alone, so they
-           live here. -->
-      <div class="sticky top-0 z-20 -mx-1.5 mb-1 bg-surface px-1.5 pt-0.5 pb-1.5">
-        <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
-          <AssistantSearchControl
-            inline
-            bind:expanded={searchExpanded}
-            {assistants}
-            {tasks}
-            {runs}
-            {onOpenTask}
-            onOpenAssistant={onOpenAssistantKnowledge}
-          />
-          {#if !searchExpanded}
-            <AssistantCreateControl
-              label="New assistant"
-              labelClass="assistant-panel-label truncate"
-              onCreate={onCreateAssistant}
-              onCreateViaChat={onCreateAssistantViaChat}
-              trigger={assistantCreateTrigger}
-            />
-          {/if}
-        </div>
-      </div>
-
       <div role="list" aria-label="Assistants">
         <!-- The panel is always here now, controls included, so an install with
              no assistant draws its own empty state instead of a bare list. -->

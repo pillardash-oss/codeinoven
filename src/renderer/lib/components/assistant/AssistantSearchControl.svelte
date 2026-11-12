@@ -408,7 +408,7 @@
     />
     {#if expanded && trimmed.length > 0}
       <div
-        class="absolute inset-x-0 top-full z-30 mt-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
+        class="absolute inset-x-0 bottom-full z-30 mb-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
       >
         {@render resultsPanel()}
       </div>

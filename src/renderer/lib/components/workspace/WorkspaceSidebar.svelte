@@ -21,7 +21,6 @@
   import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { onDestroy } from 'svelte'
-  import type { Snippet } from 'svelte'
   import { prefersReducedMotion } from 'svelte/motion'
   import { fade, slide } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
@@ -71,6 +70,7 @@
     type SidebarPanelSearch,
     type SidebarPanelTab
   } from './SidebarPanelBar.svelte'
+  import type { SidebarPanelAction } from '$lib/components/layout/SidebarActionStack.svelte'
   import SidebarSearchControl from './SidebarSearchControl.svelte'
   import SidebarProjectSearchField from './SidebarProjectSearchField.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
@@ -156,7 +156,7 @@
      * door of the list on screen, or the thread list's own filters. It is drawn
      * where the list's controls belong instead of in the app header.
      */
-    panelActions: Snippet<[panelPane: 'folders' | 'threads' | 'chats', compact: boolean]>
+    panelActions: (panelPane: 'folders' | 'threads' | 'chats') => SidebarPanelAction[]
   }
 
   let {
@@ -214,19 +214,18 @@
   let projectsTreeVisible = $derived(mode === 'projects' && scopeState.sidebarContext === null)
 
   /**
-   * Whether the panel's list has been scrolled away from its top.
+   * How far the panel's list has scrolled, 0 to 1 across the first stretch of it.
    *
-   * The actions under the tabs name themselves while the list is at the top and
-   * fold into one line of marks once it is not, so the rows get the height back.
-   * The scroller belongs to the shell (it is bound in), so this watches the
-   * element it hands over and nothing else.
+   * The foot of the panel folds its actions from named buttons to marks over
+   * that range, one action at a time. The scroller belongs to the shell (it is
+   * bound in), so this watches the element it hands over and nothing else.
    */
-  let panelCompact = $state(false)
+  let panelProgress = $state(0)
   $effect(() => {
     const element = scroller
     if (!element) return
     const onScroll = (): void => {
-      panelCompact = element.scrollTop > 8
+      panelProgress = Math.min(1, Math.max(0, element.scrollTop / 96))
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
@@ -750,13 +749,6 @@
   }}
 />
 
-{#snippet listActions(compact: boolean)}
-  {@render panelActions(
-    mode === 'threads' ? 'threads' : mode === 'chats' ? 'chats' : 'folders',
-    compact
-  )}
-{/snippet}
-
 <!-- Shared sidebar   shows Projects or Chats depending on the shell mode.
      A studio that owns the pane hides this panel instead of unmounting it: its
      lists are every project, thread and chat row the shell holds, and rebuilding
@@ -779,24 +771,22 @@
     onDrop: (event: DragEvent) => void handleSidebarDrop(event)
   }}
 >
-  <!-- The panel's own controls, above its list: the tabs that switch which
-       list it shows, the search that morphs over them, and the action row for the
-       list on screen. They are chrome rather than part of the scroller, so the
-       tabs and the actions stay where they are while rows move underneath. -->
-  {#snippet chrome()}
+  {#snippet footer()}
     {#if !workspaceState.specStudioOpen && !scopedSidebarVisible && mode !== 'assistant'}
       <SidebarPanelBar
         label="Projects and threads"
         tabs={mode === 'chats' ? [] : panelTabs}
         search={panelSearch}
+        actions={panelActions(
+          mode === 'threads' ? 'threads' : mode === 'chats' ? 'chats' : 'folders'
+        )}
+        progress={panelProgress}
         searchShortcut={keymapState.keysFor('panel-search')}
         searchLabel={mode === 'chats'
           ? 'Search chats'
           : mode === 'threads'
             ? 'Search threads'
             : 'Search projects'}
-        compact={panelCompact}
-        row={listActions}
       />
     {/if}
   {/snippet}
