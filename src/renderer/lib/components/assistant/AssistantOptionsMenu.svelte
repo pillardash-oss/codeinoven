@@ -1,5 +1,6 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import type { Snippet } from 'svelte'
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
   import CioCalendar from '@pdslng/cio-icon/CioCalendar.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
@@ -13,30 +14,26 @@
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { assistantHeaderTabs } from '$lib/stores/assistant-header-tabs.svelte'
-  import {
-    AssistantDefaultIcon,
-    assistantAccentColor,
-    getAssistantIcon
-  } from '$lib/assistant-icons'
   import { assistantIsScheduled, type Assistant } from '$shared/types'
   import AssistantEditModal from './AssistantEditModal.svelte'
 
   /**
-   * The assistant's own menu, worn by the icon on its header tab.
+   * The assistant's own menu, opened from its mark in the assistant view's header.
    *
    * It is the only place the assistant's settings live now: the sidebar row is a
-   * plain row, so the tab's icon is the door to behaviour, appearance, schedule,
-   * pinning and removal. The icon is the trigger, exactly as a browser tab's icon
-   * opens the page's own menu.
+   * plain row, so the mark beside the name is the door to behaviour, appearance,
+   * schedule, pinning and removal. The caller supplies the trigger itself, so the
+   * mark can become a chevron under the pointer and either mouse button can open
+   * the same menu.
    */
   interface Props {
     assistant: Assistant
-    iconUrl?: string | null
+    open?: boolean
+    children: Snippet
   }
 
-  let { assistant, iconUrl = null }: Props = $props()
+  let { assistant, open = $bindable(false), children }: Props = $props()
 
-  let menuOpen = $state(false)
   let hasRunsToday = $state(false)
   let editOpen = $state(false)
   let deleteOpen = $state(false)
@@ -46,15 +43,13 @@
   let todayRunsCheck = 0
 
   const scheduled = $derived(assistantIsScheduled(assistant))
-  const icon = $derived(getAssistantIcon(assistant, iconUrl))
   const skipDialogTitle = $derived(
     skipConfirm === 'today' ? "Skip today's runs?" : 'Skip next run?'
   )
   const skipConfirmLabel = $derived(skipConfirm === 'today' ? 'Skip for today' : 'Skip next run')
 
-  function onMenuOpenChange(open: boolean): void {
-    menuOpen = open
-    if (!open) {
+  function onMenuOpenChange(next: boolean): void {
+    if (!next) {
       todayRunsCheck += 1
       hasRunsToday = false
       return
@@ -64,7 +59,7 @@
     void assistantStore
       .hasRunsToday(assistant.id)
       .then((hasRuns) => {
-        if (menuOpen && check === todayRunsCheck) hasRunsToday = hasRuns
+        if (open && check === todayRunsCheck) hasRunsToday = hasRuns
       })
       .catch(() => {
         if (check === todayRunsCheck) hasRunsToday = false
@@ -108,18 +103,17 @@
   }
 </script>
 
-<DropdownMenu.Root bind:open={menuOpen} onOpenChange={onMenuOpenChange}>
+<DropdownMenu.Root bind:open onOpenChange={onMenuOpenChange}>
   <DropdownMenu.Trigger
-    class="flex size-4 shrink-0 items-center justify-center outline-none transition-opacity duration-150 hover:opacity-100 data-[state=open]:opacity-100"
+    class="flex shrink-0 items-center justify-center outline-none"
     aria-label="Options for {assistant.name}"
     title="Assistant options"
-    oncontextmenu={(event: MouseEvent) => event.preventDefault()}
+    oncontextmenu={(event: MouseEvent) => {
+      event.preventDefault()
+      open = true
+    }}
   >
-    {#if icon}
-      <img src={icon} alt="" class="size-4 object-contain" draggable="false" />
-    {:else}
-      <AssistantDefaultIcon size={14} style="color: {assistantAccentColor(assistant)}" />
-    {/if}
+    {@render children()}
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content

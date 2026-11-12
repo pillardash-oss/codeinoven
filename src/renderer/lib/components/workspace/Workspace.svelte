@@ -86,8 +86,16 @@
   assistantHeaderTabs.publishActions({
     openThread: board.markThreadReadAndApply.openAssistantTask,
     deleteThread: board.switcherPanelTabs.handleDelete,
+    renameThread: board.switcherPanelTabs.handleRename,
+    togglePinThread: (thread) => void board.openThreadFromSwitcher.togglePin(thread),
+    forkThread: (thread) => void board.switcherPanelTabs.forkThread(thread),
+    openThreadNotes: board.switcherPanelTabs.openAssistantTaskNotes,
+    hideKnowledgeThread: (thread) => void board.switcherPanelTabs.hideAssistantKnowledge(thread),
     openAssistantBehaviour: (assistant: Assistant) => {
       void board.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)
+    },
+    createTask: (assistant: Assistant) => {
+      void board.mergeThreadsInList.createTaskInAssistant(assistant)
     },
     deleteAssistant: board.mergeThreadsInList.deleteAssistant
   })

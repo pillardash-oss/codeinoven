@@ -1,4 +1,3 @@
-import AssistantTaskIcon from '$lib/components/icons/cio/AssistantTaskIcon.svelte'
 import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
@@ -1088,16 +1087,10 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
               onCreateViaChat: this.root.markThreadReadAndApply.createAssistantViaChat,
               trigger: this.root.mergeThreadsInList.assistantCreateTrigger
             }
-          },
-          {
-            id: 'new-task',
-            icon: AssistantTaskIcon,
-            ariaLabel: 'New task',
-            title: 'New task',
-            shortcut: keymapState.keysFor('assistant-new-task'),
-            run: () => void this.root.mergeThreadsInList.createAssistantTaskFromShortcut()
           }
         ]
+        // New task moved beside the assistant's name in the header strip, where
+        // the assistant it lands in is the one named right next to it.
         viewActions.set('assistant', assistantActions)
       } else {
         const projectActions: ViewActionItem[] = [
