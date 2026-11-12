@@ -6,6 +6,8 @@
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import { Popover } from 'bits-ui'
+  import { cubicOut } from 'svelte/easing'
+  import { slideWidth } from '$lib/motion'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -387,7 +389,9 @@
 
 {#if inline}
   {#if expanded}
-    <div class="relative min-w-0 flex-1">
+    <!-- The field widens out of the button's own place, from nothing to the row
+         it now owns, so opening the search reads as one control changing shape. -->
+    <div class="relative min-w-0 flex-1" in:slideWidth={{ duration: 180, easing: cubicOut }}>
       <div class="flex items-center gap-1">
         <!-- The chevron gives the row back to the buttons it replaced. -->
         <button

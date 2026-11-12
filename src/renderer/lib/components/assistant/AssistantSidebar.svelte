@@ -1,5 +1,8 @@
 <script lang="ts">
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
+  import { fade } from 'svelte/transition'
+  import { motionDuration } from '$lib/motion'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import DonTile from './DonTile.svelte'
   import AssistantRow from './AssistantRow.svelte'
@@ -196,7 +199,10 @@
       <div class="sticky top-0 z-20 -mx-1.5 mb-1 bg-surface px-1.5 pt-0.5 pb-1.5">
         <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
           {#if !searchExpanded}
-            <div class="flex min-w-0 items-center gap-1">
+            <div
+              class="flex min-w-0 items-center gap-1"
+              transition:fade={{ duration: motionDuration(120) }}
+            >
               <button
                 type="button"
                 class="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium whitespace-nowrap text-muted transition-colors hover:bg-elevated hover:text-foreground"
@@ -229,8 +235,15 @@
       </div>
 
       <div role="list" aria-label="Assistants">
-        <!-- No empty note here: the shell paints this sidebar only while it holds
-           an assistant, and the view's own empty state invites the first one. -->
+        <!-- The panel is always here now, controls included, so an install with
+             no assistant draws its own empty state instead of a bare list. -->
+        {#if listedAssistants.length === 0 && !donAssistant && tasks.length === 0}
+          <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
+            <AssistantIcon mark="agent" size={20} class="text-dimmed" />
+            <p class="text-xs text-muted">No assistants yet</p>
+            <p class="text-xs text-dimmed">Create one to get going</p>
+          </div>
+        {/if}
         {#if donAssistant}
           <DonTile
             assistant={donAssistant}
