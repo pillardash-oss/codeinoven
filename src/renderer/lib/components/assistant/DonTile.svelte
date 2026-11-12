@@ -84,8 +84,8 @@
     </span>
     <!-- One line under the plate: who it is, when it last worked, and what its
          threads are doing. -->
-    <span class="flex items-center gap-1.5 text-sm font-medium text-foreground">
-      {name}
+    <span class="flex max-w-full items-center gap-1.5 text-sm font-medium whitespace-nowrap">
+      <span class="min-w-0 truncate text-foreground">{name}</span>
       {#if !ready}
         <CioAttention
           size={12}

@@ -20,6 +20,8 @@
     title?: string
     /** Draw the trigger as an icon with its name beside it, for a panel toolbar. */
     label?: string
+    /** Classes for that label, so a host can decide when it stops showing. */
+    labelClass?: string
     /** External open signal (keyboard shortcut); the control opens its dialog
      *  whenever the value grows past the one it already handled. */
     trigger?: number
@@ -30,6 +32,7 @@
     onCreateViaChat,
     title = 'New assistant',
     label = '',
+    labelClass = '',
     trigger = 0
   }: Props = $props()
 
@@ -98,15 +101,15 @@
 <button
   type="button"
   class={label
-    ? 'flex h-7 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'
+    ? 'flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium whitespace-nowrap text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'
     : 'flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'}
   aria-label="New assistant"
   title="New assistant"
   onclick={() => (open = true)}
 >
-  <AssistantIcon size={14} />
+  <AssistantIcon size={14} class="shrink-0" />
   {#if label}
-    <span>{label}</span>
+    <span class={labelClass} data-panel-label>{label}</span>
   {/if}
 </button>
 

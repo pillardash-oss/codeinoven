@@ -189,31 +189,32 @@
 </script>
 
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
-  <div class="flex h-full min-h-0 flex-col">
+  <div class="flex h-full min-h-0 flex-col [container-type:inline-size]">
     <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
       <!-- The panel's own controls stay pinned above the list as it scrolls: the
            search morphs out of its button into a field, and the new-assistant
            door sits beside it. The app header leaves this view alone, so they
            live here. -->
       <div class="sticky top-0 z-20 -mx-1.5 mb-1 bg-surface px-1.5 pt-0.5 pb-1.5">
-        <div class="flex min-h-7 items-center justify-center gap-1">
+        <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
           {#if !searchExpanded}
             <div
-              class="flex items-center gap-1"
+              class="flex min-w-0 items-center gap-1"
               transition:fade={{ duration: motionDuration(140) }}
             >
               <button
                 type="button"
-                class="flex h-7 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                class="flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium whitespace-nowrap text-muted transition-colors hover:bg-elevated hover:text-foreground"
                 aria-label="Search assistants, tasks and runs"
                 title="Search assistants, tasks and runs"
                 onclick={() => (searchExpanded = true)}
               >
-                <CioSearch size={13} />
-                <span>Search</span>
+                <CioSearch size={13} class="shrink-0" />
+                <span class="assistant-panel-label truncate" data-panel-label>Search</span>
               </button>
               <AssistantCreateControl
                 label="New assistant"
+                labelClass="assistant-panel-label truncate"
                 onCreate={onCreateAssistant}
                 onCreateViaChat={onCreateAssistantViaChat}
                 trigger={assistantCreateTrigger}
@@ -278,3 +279,13 @@
     </div>
   </div>
 </CollapsibleSidebar>
+
+<style>
+  /* A narrow panel keeps the two controls as icons: the glyphs identify them, and
+     a squeezed label is harder to read than none. Labels truncate before this. */
+  @container (max-width: 13rem) {
+    :global([data-panel-label]) {
+      display: none;
+    }
+  }
+</style>
