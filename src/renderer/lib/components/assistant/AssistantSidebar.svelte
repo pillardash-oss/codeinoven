@@ -202,7 +202,7 @@
   <!-- The panel's controls live at its foot, on the same line as the rail's own
        utility icons, so the list keeps the whole column above them. -->
   {#snippet footer()}
-    <div class="bg-surface px-2 pt-1.5 pb-2">
+    <div class="@container bg-surface px-2 pt-1.5 pb-2">
       <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
         <AssistantSearchControl
           inline

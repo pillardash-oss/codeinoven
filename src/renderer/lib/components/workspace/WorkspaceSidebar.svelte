@@ -225,12 +225,18 @@
   $effect(() => {
     const element = scroller
     if (!element) return
-    // The foot keeps its height, so the list's overflow and its scroll position
-    // are stable while it folds: the range can be measured on any event without
-    // the fold feeding back into its own trigger.
+    // The fold is read from the scroll position alone, never from the current
+    // overflow: the foot gives height back as it folds, so a range that moved
+    // with the overflow would keep moving the goalposts under its own motion.
+    // The two ends are absolute: at the top the stack is whole, and at the last
+    // pixel of travel the row is settled, so a short list can never be stranded
+    // between the two shapes.
     const onScroll = (): void => {
-      const overflow = Math.max(1, element.scrollHeight - element.clientHeight)
-      panelProgress = Math.min(1, Math.max(0, element.scrollTop / Math.min(160, overflow)))
+      const atTop = element.scrollTop <= 0
+      const atEnd = element.scrollTop + element.clientHeight >= element.scrollHeight - 1
+      if (atTop) panelProgress = 0
+      else if (atEnd) panelProgress = 1
+      else panelProgress = Math.min(1, element.scrollTop / 160)
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     onScroll()

@@ -56,11 +56,22 @@
   )
 
   /**
-   * The stack's own width, so the folded row can ask whether the names fit.
+   * The room the actions take in the panel.
    *
-   * The room never shrinks with the fold: taking height back mid-scroll changes
-   * the list's viewport, which can remove the very overflow that caused the fold
-   * and set the two fighting, which is the vibration this replaced.
+   * It folds with the last action, so the foot never keeps a stack's worth of
+   * empty space under a row of marks, and it never gives a row back before the
+   * action that left it has arrived. The fold's progress comes from the scroll
+   * position alone, never from the current overflow, so the height change cannot
+   * feed back into its own trigger.
+   */
+  const blockHeight = $derived(
+    ACTION_ROW +
+      (stackHeight - ACTION_ROW) *
+        (1 - (actions.length > 0 ? actionProgress(actions.length - 1, actions.length) : progress))
+  )
+
+  /**
+   * The stack's own width, so the folded row can ask whether the names fit.
    */
   let containerWidth = $state(0)
 
@@ -161,7 +172,12 @@
   utility icons. While the list is at its top every action names itself; as the
   list scrolls, each one gives its name up in turn and keeps only its mark.
 -->
-<div class="relative w-full" style="height: {stackHeight}px" {@attach measureWidth}>
+<div
+  class="relative w-full"
+  data-panel-actions
+  style="height: {blockHeight}px"
+  {@attach measureWidth}
+>
   {#each actions as action, index (action.id)}
     {@const ActionIcon = action.icon}
     <div
@@ -201,6 +217,12 @@
       top 90ms linear,
       left 90ms linear,
       width 90ms linear;
+  }
+
+  /* The block gives height back at the pace the marks move, so the list grows
+     into the space smoothly instead of jumping when the fold ends. */
+  [data-panel-actions] {
+    transition: height 90ms linear;
   }
 
   @media (prefers-reduced-motion: reduce) {
