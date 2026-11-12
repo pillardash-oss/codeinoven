@@ -70,6 +70,7 @@
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import DisplaySourceIcon from '../display/DisplaySourceIcon.svelte'
+  import SubagentModelMark from '../threads/SubagentModelMark.svelte'
 
   const failedPopupIcons = new SvelteSet<string>()
 
@@ -508,15 +509,9 @@
     {:else if tab.kind === 'sources'}
       <CioTabInfo size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'subagent'}
-      <!-- The sub-agent mark is the one a sub-agent wears on every surface; a
-           hue would make it a second class of tab rather than one more tab. A
-           pawn agent wears the assistant mark instead, so the rail tells the two
-           apart at a glance while the tab body stays the same. -->
-      {#if tab.activity.pawn}
-        <AssistantIcon mark="agent" size={ICON_SIZE.row} class="shrink-0" />
-      {:else}
-        <CioSubagent size={ICON_SIZE.row} class="shrink-0" />
-      {/if}
+      <!-- A worker wears the mark of the model running it, so the strip says
+           whose tokens are being spent before the tab is opened. -->
+      <SubagentModelMark activity={tab.activity} size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'temporary-chat'}
       <!-- The dashed bubble is the tool's mark: a side chat wears the same
            neutral glyph as every other tab. Its unread state is a status, so it

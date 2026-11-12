@@ -135,10 +135,11 @@
     const tab = activeContextTab
     const settings = selectedThread?.settings
     if (tab?.kind !== 'subagent' || selectedThread?.id !== tab.threadId) {
-      return { harnessId: null, thinkingLevel: null }
+      return { harnessId: null, providerId: null, thinkingLevel: null }
     }
     return {
       harnessId: settings?.harnessId ?? null,
+      providerId: settings?.providerId ?? null,
       thinkingLevel: settings?.thinkingLevel ?? null
     }
   })

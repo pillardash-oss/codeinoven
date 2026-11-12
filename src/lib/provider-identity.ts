@@ -75,6 +75,21 @@ export function resolveModelProvider(
   return owners.length === 1 ? owners[0] : undefined
 }
 
+/**
+ * The provider name a surface prints.
+ *
+ * A harness may qualify a provider with the account that serves it: the OpenCode
+ * catalog reports its own provider as `"codeinoven-2 / OpenCode"`, naming the Zen
+ * workspace before the provider. An account is a credential detail rather than
+ * part of the provider's identity, so the qualifier is dropped wherever the
+ * provider is named. A name without one is returned exactly as the harness
+ * reported it.
+ */
+export function providerDisplayName(name: string): string {
+  const qualified = /^(?<account>[^/]+?)\s+\/\s+(?<provider>.+)$/u.exec(name.trim())
+  return qualified?.groups?.['provider']?.trim() || name
+}
+
 /** The catalog entry for a model of a resolved provider, when it still lists it. */
 export function providerModel(
   provider: ProviderCatalog | undefined,
