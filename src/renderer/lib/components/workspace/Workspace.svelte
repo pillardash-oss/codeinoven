@@ -136,16 +136,20 @@
     // entry point; the amber tone only kicks in once there is something written
     // to draw attention to.
     const hasThreadNote = threadNotesState.has(selectedThread.id)
+    const threadNoteOpen = board.switcherPanelTabs.dockKindActive('thread-note')
     const threadNoteEntry: ContextDockItem = {
       id: 'note',
       label: hasThreadNote
         ? `${feature('thread-note').name} available`
         : `Add a ${feature('thread-note').name.toLowerCase()}`,
       icon: feature('thread-note').icon,
-      active: board.switcherPanelTabs.dockKindActive('thread-note'),
+      active: threadNoteOpen,
       tone: hasThreadNote ? 'warning' : undefined,
-      // Waits in More until there is a note to come back to.
-      overflow: !hasThreadNote,
+      // Waits in More until there is a note to come back to, or until the note
+      // is open right now: an open panel always has its own icon on the rail,
+      // where it can be seen and closed again.
+      overflow: !hasThreadNote && !threadNoteOpen,
+      emerges: true,
       onSelect: () =>
         board.switcherPanelTabs.toggleDockPanel('thread-note', () =>
           contextSidebarState.openThreadNote(
