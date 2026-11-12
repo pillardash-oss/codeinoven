@@ -1,12 +1,15 @@
 <script lang="ts">
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioStop from '@pdslng/cio-icon/CioStop.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { formatBytes } from '$lib/format/bytes'
+  import { osFileManagerLabel } from '$lib/os-file-manager'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import SettingsDisclosure from '../../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../../shared/SettingsEntry.svelte'
@@ -27,6 +30,8 @@
     status: LlamaCppServerStatus
     logLines: string[]
     loadedModel: string
+    /** Bytes the model occupies on disk, undefined until it has been measured. */
+    modelSize?: number | undefined
     notice: string
     expanded: boolean
     onToggle: () => void
@@ -34,6 +39,8 @@
     onStop: () => void
     onEdit: () => void
     onDelete: () => void
+    /** Show the model's file or folder in the OS file manager. */
+    onReveal: () => void
     /** False for a row the app only registers, never launches. */
     managed?: boolean
   }
@@ -44,6 +51,7 @@
     status,
     logLines,
     loadedModel,
+    modelSize,
     notice,
     expanded,
     onToggle,
@@ -51,6 +59,7 @@
     onStop,
     onEdit,
     onDelete,
+    onReveal,
     managed = true
   }: Props = $props()
 
@@ -63,6 +72,18 @@
       : 'No output yet. Start the server to see its log here.'
   )
   const busy = $derived(status === 'starting' || status === 'running')
+  /** A row saved from a Hugging Face tag names nothing on disk yet, so there is
+   *  no file to reveal and no size to measure until its download lands. */
+  const localPath = $derived(entry.modelPath.trim())
+  const sizeLabel = $derived(
+    localPath.length === 0
+      ? 'Not downloaded'
+      : modelSize === undefined
+        ? 'Measuring…'
+        : modelSize > 0
+          ? formatBytes(modelSize)
+          : 'Unavailable'
+  )
 
   const badge = $derived.by(() => {
     if (status === 'running') {
@@ -98,6 +119,12 @@
   })
 
   const menuItems = $derived.by<MenuItem[]>(() => [
+    {
+      label: osFileManagerLabel(),
+      icon: CioFolderOpen,
+      disabled: localPath.length === 0,
+      onClick: onReveal
+    },
     { label: 'Edit server', icon: CioPencil, disabled: busy, onClick: onEdit },
     { label: 'remove-divider', divider: true },
     { label: 'Remove server', icon: CioTrash, danger: true, onClick: onDelete }
@@ -196,7 +223,7 @@
     </div>
   </div>
 
-  <div class="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 @2xl:grid-cols-2">
+  <div class="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 @2xl:grid-cols-3">
     <div class="min-w-0">
       <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
         Address
@@ -230,6 +257,20 @@
         title={loadedModel}
       >
         {loadedModel || (status === 'running' ? 'No model reported' : 'Not loaded')}
+      </p>
+    </div>
+
+    <div class="min-w-0">
+      <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+        Model size
+      </p>
+      <p
+        class="mt-0.5 truncate text-xs {modelSize ? 'text-muted' : 'text-dimmed'}"
+        title={localPath.length > 0
+          ? localPath
+          : 'Measured once a Hugging Face model is downloaded'}
+      >
+        {sizeLabel}
       </p>
     </div>
   </div>

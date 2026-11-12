@@ -10,7 +10,9 @@
  * Only llama.cpp writes a log file of its own, so the log channels are the one part
  * that stays llama.cpp-only.
  */
-import { BrowserWindow } from 'electron'
+import { BrowserWindow, shell } from 'electron'
+import { isAbsolute } from 'node:path'
+import { stat } from 'node:fs/promises'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 // The app's own picker wrapper: it reopens where the human last picked, which
@@ -30,7 +32,7 @@ import { detectLlamaCppRuntime } from './llama-cpp-runtime'
 import { detectMlxRuntime } from './mlx-runtime'
 import { probeLocalAiServer, stopLocalAiServer } from './local-ai-process'
 import { followLocalAiLog, localAiLogPath, tailLocalAiLog } from './local-ai-log'
-import { resolveModelLocation } from './local-ai-model-location'
+import { measureModelPath, resolveModelLocation } from './local-ai-model-location'
 import { sharedLocalAiRuntimeRegistry } from './local-ai-runtime-registry'
 
 /** The engines the page can launch, and the order a bad value falls back through. */
@@ -162,9 +164,54 @@ export function registerLocalAiIpc(
     return result.filePaths[0] ?? null
   })
 
+  /**
+   * Bytes the row's model occupies on disk, for the card's size column.
+   *
+   * A model the user keeps anywhere on the machine is the app's to measure, not
+   * the renderer's: the walk over an MLX snapshot runs here, off the UI thread.
+   */
+  ipcMain.handle('localAi:modelSize', async (_, rawPath: unknown) => {
+    const path = readModelPath(rawPath)
+    return path ? await measureModelPath(path) : null
+  })
+
+  /**
+   * Show the row's model in the OS file manager.
+   *
+   * A GGUF model is a file, so it is highlighted in its folder; an MLX model is
+   * a folder of weights, so the folder itself opens. The path is only stat-ed,
+   * never read, which is what lets a model outside the app's own roots open
+   * without a scope grant.
+   */
+  ipcMain.handle('localAi:revealModel', async (_, rawPath: unknown): Promise<boolean> => {
+    const path = readModelPath(rawPath)
+    if (!path) return false
+    try {
+      const metadata = await stat(path)
+      if (metadata.isDirectory()) return (await shell.openPath(path)) === ''
+      if (!metadata.isFile()) return false
+      shell.showItemInFolder(path)
+      return true
+    } catch {
+      return false
+    }
+  })
+
   // The page's "Unload now": the user overriding the idle window, which the
   // confirmation card warns about before it reaches here.
   ipcMain.handle('localAi:unloadNow', () => sharedLocalAiRuntimeRegistry().unloadNow())
+}
+
+/**
+ * A model path the page asks about: absolute, bounded, and never a link to
+ * somewhere else. Anything the caller could not have meant is null.
+ */
+function readModelPath(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const path = value.trim()
+  if (path.length === 0 || path.length > 4_096) return null
+  if (path.includes('\0') || !isAbsolute(path)) return null
+  return path
 }
 
 /** The row id names a log file, so it is validated here, not at the log path. */

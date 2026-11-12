@@ -80,6 +80,10 @@ export class LocalAiController {
   logs = $state<Record<string, string[]>>({})
   loadedModel = $state<Record<string, string>>({})
   notice = $state<Record<string, string>>({})
+  /** Bytes each saved model path occupies, keyed by path, filled on demand. */
+  modelSizes = $state<Record<string, number>>({})
+  /** Paths already asked about, so a card re-render never walks a model twice. */
+  private measured = new SvelteSet<string>()
   private handles = new SvelteMap<string, RunningHandle>()
 
   statusOf(entryId: string): LlamaCppServerStatus {
@@ -93,6 +97,41 @@ export class LocalAiController {
   isBusy(entryId: string): boolean {
     const status = this.statusOf(entryId)
     return status === 'starting' || status === 'running'
+  }
+
+  /**
+   * Bytes the model at this path occupies on disk, or undefined until the main
+   * process has answered. 0 stands for a path it could not measure, so a card
+   * can tell "still reading" from "unavailable".
+   */
+  sizeOf(path: string): number | undefined {
+    return this.modelSizes[path]
+  }
+
+  /**
+   * Ask the main process how large a saved model is.
+   *
+   * A multi-gigabyte snapshot is walked there, never here, and each path is asked
+   * once per session: a card that re-renders or a tab that is reopened reuses the
+   * answer instead of re-reading the disk.
+   */
+  async loadModelSize(path: string): Promise<void> {
+    if (path.length === 0 || this.measured.has(path)) return
+    this.measured.add(path)
+    let bytes: number
+    try {
+      bytes = (await invoke('localAi:modelSize', path)) ?? 0
+    } catch {
+      bytes = 0
+    }
+    this.modelSizes = { ...this.modelSizes, [path]: bytes }
+  }
+
+  /** Show a saved model in the OS file manager, reporting a refusal honestly. */
+  async revealModel(entry: LlamaCppServerEntry): Promise<boolean> {
+    const path = entry.modelPath.trim()
+    if (path.length === 0) return false
+    return await invoke('localAi:revealModel', path).catch(() => false)
   }
 
   /** A start waiting for the user to accept that the model already bound to
