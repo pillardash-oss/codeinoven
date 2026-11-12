@@ -127,7 +127,8 @@
     // no count worth showing yet, and "0" reads as a stuck/broken badge.
     const hasMessages = workspaceState.messageCount > 0
 
-    // The thread note rides in history's own group, right after it: the two are
+    // The thread note rides in history's own group, right after it (and after
+    // an assistant task's behavior, which sits closest to history): the two are
     // always reached together, so they read as one pair instead of the note
     // sitting far down the rail behind its own hairline. It is always present
     //   not just once a note exists   so it also doubles as the "add a note"
@@ -154,15 +155,16 @@
         )
     }
 
-    // An assistant task's own authoring surface rides the same group, right
-    // after the note: history, the note and the assistant's behavior are the
-    // three panels of one thread's identity.
+    // An assistant task's own authoring surface rides the same group, directly
+    // after history: the assistant's behavior is how this task is steered, so
+    // it belongs on the rail rather than folded behind More. It sits beside the
+    // note because history, the behavior and the note are the three panels of
+    // one thread's identity.
     const assistantBehaviorEntry: ContextDockItem | null = isAssistantThread
       ? {
           id: 'assistant-knowledge',
           label: 'Assistant behavior',
           icon: AssistantKnowledgeIcon,
-          overflow: true,
           active: board.switcherPanelTabs.dockKindActive('assistant-knowledge'),
           onSelect: () =>
             board.switcherPanelTabs.toggleDockPanel('assistant-knowledge', () =>
@@ -184,8 +186,8 @@
         onSelect: () =>
           (board.jumpToHistoryMessage.showHistoryMenu = !board.jumpToHistoryMessage.showHistoryMenu)
       },
-      threadNoteEntry,
-      ...(assistantBehaviorEntry ? [assistantBehaviorEntry] : [])
+      ...(assistantBehaviorEntry ? [assistantBehaviorEntry] : []),
+      threadNoteEntry
     ]
 
     const workspaceTools: ContextDockItem[] = []
