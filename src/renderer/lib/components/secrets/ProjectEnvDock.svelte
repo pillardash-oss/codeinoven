@@ -8,10 +8,14 @@
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { workspaceState } from '$lib/stores/workspace.svelte'
   import { APP_SLUG } from '$shared/brand'
+  import { isOrchestrationChildThread, type Thread } from '$shared/types'
   import {
     DEFAULT_ENV_FILE_NAME,
     formatEnvValue,
@@ -23,6 +27,7 @@
   import { onMount, tick } from 'svelte'
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
+  import FindInBar from '../files/FindInBar.svelte'
   import DockRow from '../ui/DockRow.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
 
@@ -295,6 +300,11 @@
   async function focusPendingKey(): Promise<void> {
     const name = projectEnvDock.takeFocusName()
     if (!name) return
+    // A minimized dock has no rows in the document, so it has to come back before
+    // there is anything to reveal; and a filtered list may hide the row the link
+    // names, so the bar steps out of the way.
+    if (projectEnvDock.minimized) projectEnvDock.expand()
+    if (findOpen) closeFind()
     if (surface !== 'keys') switchSurface('keys')
     await tick()
     const row = rows.find((candidate) => candidate.name === name)
@@ -302,12 +312,18 @@
     const field = document.getElementById(`env-key-value-${row.id}`)
     if (field instanceof HTMLInputElement) {
       // Focusing first would let the browser pick the scroll offset itself, so the
-      // caret lands in the field and the field is then centred in its scroller.
+      // caret lands in the field and the row is then centred in its scroller.
       field.focus({ preventScroll: true })
       field.select()
     }
-    field?.scrollIntoView({ block: 'center' })
     highlightRowId = row.id
+    // The panel is still laying itself out after the surface and content swap, so
+    // the row is measured on the next frame instead of scrolling to a stale offset.
+    requestAnimationFrame(() => {
+      document
+        .getElementById(`env-key-row-${row.id}`)
+        ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
     window.setTimeout(() => {
       if (highlightRowId === row.id) highlightRowId = null
     }, 2_400)
@@ -490,6 +506,129 @@
     }
     body = serializeRows(rows)
     surface = 'editor'
+  }
+
+  // ─── Find ─────────────────────────────────────────────────────────────────
+
+  let findOpen = $state(false)
+  let findQuery = $state('')
+  let findIndex = $state(0)
+  let findFocusTrigger = $state(0)
+
+  /** Key rows whose name or value holds the query. */
+  const findRows = $derived.by(() => {
+    const query = findQuery.trim().toLowerCase()
+    if (!query) return rows
+    return rows.filter(
+      (row) => row.name.toLowerCase().includes(query) || row.value.toLowerCase().includes(query)
+    )
+  })
+  /** Matches in the plain editor, so the same chord finds text there too. */
+  const findTextRanges = $derived.by(() => {
+    const query = findQuery.trim().toLowerCase()
+    if (surface !== 'editor' || !query) return [] as { start: number; end: number }[]
+    const haystack = body.toLowerCase()
+    const ranges: { start: number; end: number }[] = []
+    let from = 0
+    while (ranges.length < 500) {
+      const at = haystack.indexOf(query, from)
+      if (at < 0) break
+      ranges.push({ start: at, end: at + query.length })
+      from = at + Math.max(query.length, 1)
+    }
+    return ranges
+  })
+  const findMatchCount = $derived(surface === 'keys' ? findRows.length : findTextRanges.length)
+  const findActiveIndex = $derived(
+    findMatchCount === 0 ? 0 : Math.min(findIndex, findMatchCount - 1)
+  )
+  /** While the bar holds a query, the key list shows only what it found. */
+  const findFiltersRows = $derived(findOpen && surface === 'keys' && findQuery.trim().length > 0)
+  const visibleRows = $derived(findFiltersRows ? findRows : rows)
+
+  function openFind(): void {
+    findOpen = true
+    findFocusTrigger += 1
+  }
+
+  function closeFind(): void {
+    findOpen = false
+    findQuery = ''
+    findIndex = 0
+  }
+
+  function updateFind(query: string): void {
+    findQuery = query
+    findIndex = 0
+    void revealFindMatch()
+  }
+
+  /** Move to the next or previous match, wrapping at either end. */
+  function moveFind(step: number): void {
+    if (findMatchCount === 0) return
+    findIndex = (findActiveIndex + step + findMatchCount) % findMatchCount
+    void revealFindMatch()
+  }
+
+  /** Put the active match where the reader can see it, on either surface. */
+  async function revealFindMatch(): Promise<void> {
+    await tick()
+    if (findMatchCount === 0) return
+    if (surface === 'keys') {
+      const row = findRows[findActiveIndex]
+      if (!row) return
+      document.getElementById(`env-key-row-${row.id}`)?.scrollIntoView({ block: 'nearest' })
+      return
+    }
+    const range = findTextRanges[findActiveIndex]
+    const editor = document.getElementById('env-editor')
+    if (!range || !(editor instanceof HTMLTextAreaElement)) return
+    editor.focus({ preventScroll: true })
+    editor.setSelectionRange(range.start, range.end)
+    // A textarea does not scroll itself to a selection the way a document does.
+    const line = editor.value.slice(0, range.start).split('\n').length
+    const inlineHeight = Number.parseFloat(getComputedStyle(editor).lineHeight) || 16
+    editor.scrollTop = Math.max(0, (line - 3) * inlineHeight)
+  }
+
+  /** The dock is the focused surface, so its save and find chords win over the
+   *  file panel it floats above instead of editing whatever sits behind it. */
+  function handleDockKeydown(event: KeyboardEvent): void {
+    if (confirmWrite || confirmDiscard) return
+    if (keymapState.matches('files-save', event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      if (saving || loading || !dirty) return
+      void save()
+      return
+    }
+    if (keymapState.matches('nav-find', event)) {
+      event.preventDefault()
+      event.stopPropagation()
+      openFind()
+    }
+  }
+
+  /** Take the reader to the project's latest thread, picked the way creating a
+   *  pull request picks it: newest activity first, archived rows out. */
+  async function openLatestProjectThread(): Promise<void> {
+    const projectId = projectEnvDock.projectId
+    if (!projectId) return
+    try {
+      const threads: Thread[] = await invoke('thread:listAll')
+      const latest = threads
+        .filter((thread) => thread.projectId === projectId && !thread.archived)
+        .filter((thread) => !isOrchestrationChildThread(thread))
+        .sort((left, right) => right.lastActivity - left.lastActivity)[0]
+      if (!latest) return
+      const project =
+        scopeState.projectRecords.find((candidate) => candidate.id === projectId) ??
+        (await invoke('project:get', projectId))
+      if (!project) return
+      workspaceState.openThreadInOwningView(latest, project)
+    } catch (cause) {
+      error = cause instanceof Error ? cause.message : 'Could not open the latest thread'
+    }
   }
 
   /** Add a blank key, then put the caret in it and bring it on screen. */
@@ -698,6 +837,8 @@
       oninput={(event) => (fileName = event.currentTarget.value)}
       onblur={() => void renameFile(fileName)}
       onkeydown={(event) => {
+        handleDockKeydown(event)
+        if (event.defaultPrevented) return
         if (event.key === 'Enter') {
           event.preventDefault()
           void renameFile(fileName)
@@ -708,17 +849,20 @@
 
   {#snippet headerPrefix()}
     <span class="flex min-w-0 items-center gap-2">
-      <span
-        class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden border bg-raised text-dimmed"
+      <button
+        type="button"
+        class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden border bg-raised text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
         style:border-color={projectEnvDock.color ?? undefined}
-        aria-hidden="true"
+        title="Open {projectEnvDock.projectName}'s latest thread"
+        aria-label="Open {projectEnvDock.projectName}'s latest thread"
+        onclick={() => void openLatestProjectThread()}
       >
         {#if projectEnvDock.iconUrl}
           <img src={projectEnvDock.iconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
         {:else}
           <CioKey size={12} />
         {/if}
-      </span>
+      </button>
       <span
         class="min-w-0 truncate text-xs font-medium text-muted"
         title={projectEnvDock.projectName}
@@ -747,7 +891,16 @@
     </DockRow>
   {/snippet}
 
-  <div class="flex h-full min-h-0 flex-col">
+  <!-- The panel is a group around its own focused controls, and the handler is
+       only here to keep the app-level save chord from editing the surface behind
+       the dock. It has no interaction of its own to describe. -->
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="flex h-full min-h-0 flex-col"
+    role="group"
+    aria-label="Env file editor"
+    onkeydown={handleDockKeydown}
+  >
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
       <label class="flex min-w-0 items-center gap-2" for="env-file-picker">
         <span class="text-[0.6875rem] font-medium text-muted">Stored</span>
@@ -862,6 +1015,23 @@
       </div>
     {/if}
 
+    {#if findOpen}
+      <div class="shrink-0 border-b p-1.5">
+        <FindInBar
+          query={findQuery}
+          matches={findMatchCount}
+          activeIndex={findActiveIndex}
+          placeholder={surface === 'keys' ? 'Find a key or value' : 'Find in this file'}
+          label="Find in this env file"
+          focusTrigger={findFocusTrigger}
+          onQueryChange={updateFind}
+          onNext={() => moveFind(1)}
+          onPrev={() => moveFind(-1)}
+          onClose={closeFind}
+        />
+      </div>
+    {/if}
+
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if loading}
         <div class="flex items-center gap-2 px-3 py-3 text-xs text-muted">
@@ -869,6 +1039,7 @@
         </div>
       {:else if surface === 'editor'}
         <textarea
+          id="env-editor"
           class="h-full min-h-64 w-full resize-none bg-app p-3 font-mono text-xs leading-relaxed text-foreground outline-none placeholder:text-dimmed"
           spellcheck="false"
           autocomplete="off"
@@ -879,12 +1050,13 @@
           onkeydown={handleEditKeydown}></textarea>
       {:else}
         <div class="divide-y">
-          {#each rows as row (row.id)}
+          {#each visibleRows as row (row.id)}
             {@const stored =
               currentFile?.entries.some((entry) => entry.name === row.name.trim()) ?? false}
             <div
               id="env-key-row-{row.id}"
-              class="flex items-center gap-2 px-3 py-1.5 {highlightRowId === row.id
+              class="flex items-center gap-2 px-3 py-1.5 {highlightRowId === row.id ||
+              (findFiltersRows && findRows[findActiveIndex]?.id === row.id)
                 ? 'bg-primary/10'
                 : ''}"
             >
@@ -939,6 +1111,8 @@
           {/each}
           {#if rows.length === 0}
             <p class="px-3 py-3 text-xs text-muted">No keys yet. Use the plus button to add one.</p>
+          {:else if findFiltersRows && findRows.length === 0}
+            <p class="px-3 py-3 text-xs text-muted">No keys match this search.</p>
           {/if}
         </div>
       {/if}

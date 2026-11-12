@@ -109,7 +109,7 @@
           "id": "nav-find",
           "keys": ["mod", "f"],
           "label": "Find in focused surface",
-          "description": "Opens find in whatever surface is focused: the file tree filter, the file reader (its source editor and the rendered document it is showing), the git panel, the spec studio, deployment logs, sticky notes, thread notes, or the conversation.",
+          "description": "Opens find in whatever surface is focused: the file tree filter, the file reader (its source editor and the rendered document it is showing), the env file panel, the git panel, the spec studio, deployment logs, sticky notes, thread notes, or the conversation.",
           "scenario": "Anywhere in the app."
         },
         {
@@ -702,7 +702,7 @@
           "id": "files-save",
           "keys": ["mod", "s"],
           "label": "Save file",
-          "description": "Saves the active file tab, or an edited file opened from the operating system. In the conflict resolution editor the press first saves the resolved progress as a draft, and only once there is no draft left to write does it replace the original file and mark it resolved.",
+          "description": "Saves the active file tab, an edited file opened from the operating system, or the env file panel when it is the focused surface. In the conflict resolution editor the press first saves the resolved progress as a draft, and only once there is no draft left to write does it replace the original file and mark it resolved.",
           "scenario": "A file tab is open and has unsaved changes, or a conflicted file is open in the conflict resolution editor."
         },
         {
