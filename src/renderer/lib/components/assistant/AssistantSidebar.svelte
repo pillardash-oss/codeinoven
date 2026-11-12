@@ -163,6 +163,7 @@
           iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
           ready={assistantReady(donAssistant)}
           lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
+          stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
           onOpen={() => {
             if (!donThread) return
             // The first open is the one moment Don introduces itself. A failure

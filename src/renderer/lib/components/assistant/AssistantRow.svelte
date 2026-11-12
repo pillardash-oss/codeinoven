@@ -210,6 +210,14 @@
       {:else}
         <AssistantDefaultIcon size={28} style="color: {color}" />
       {/if}
+      <!-- The row's state cluster rides the icon's bottom centre instead of the
+           name line: the name keeps its width, and the indicator reads as part of
+           the assistant it belongs to. -->
+      <span
+        class="pointer-events-none absolute bottom-0 left-1/2 flex -translate-x-1/2 translate-y-1/3 items-center justify-center bg-elevated px-0.5"
+      >
+        <ThreadStateCounts counts={stateCounts} />
+      </span>
     </span>
 
     <span class="min-w-0 flex-1">
@@ -218,7 +226,6 @@
           <CioPin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
         <span class="min-w-0 truncate text-sm font-medium text-foreground">{assistant.name}</span>
-        <ThreadStateCounts counts={stateCounts} class="shrink-0" />
         <MediaActivityTrail activities={media} label={assistant.name} />
         {#if assistant.paused}
           <span

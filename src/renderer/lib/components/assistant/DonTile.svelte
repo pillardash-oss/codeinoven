@@ -1,6 +1,8 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
+  import type { ThreadStateCounts as ThreadStateCountsValue } from '$lib/thread-state-counts'
   import type { Assistant } from '$shared/types'
   import { formatCompactAge } from '$shared/date-time-format'
   import { relativeTimeClock } from '$lib/relative-time.svelte'
@@ -31,6 +33,8 @@
     ready: boolean
     /** When Don's conversation last moved, so the tile says how long it has been. */
     lastWorkedAt?: number | null
+    /** Don's working, attention and error breakdown, as the other rows wear it. */
+    stateCounts: ThreadStateCountsValue
     onOpen: () => void
   }
 
@@ -41,6 +45,7 @@
     iconUrl = null,
     ready,
     lastWorkedAt = null,
+    stateCounts,
     onOpen
   }: Props = $props()
 
@@ -77,7 +82,9 @@
         <AssistantIcon mark="mark" size={56} class="text-brand-ink" />
       {/if}
     </span>
-    <span class="flex items-center gap-1 text-sm font-medium text-foreground">
+    <!-- One line under the plate: who it is, when it last worked, and what its
+         threads are doing. -->
+    <span class="flex items-center gap-1.5 text-sm font-medium text-foreground">
       {name}
       {#if !ready}
         <CioAttention
@@ -87,9 +94,12 @@
           aria-label={`${name} has no model yet`}
         />
       {/if}
+      {#if lastWorkedLabel}
+        <span class="text-dimmed" aria-hidden="true">·</span>
+        <span class="text-xs font-normal text-dimmed group-hover:text-muted">{lastWorkedLabel}</span
+        >
+      {/if}
+      <ThreadStateCounts counts={stateCounts} />
     </span>
-    {#if lastWorkedLabel}
-      <span class="-mt-1.5 text-xs text-dimmed group-hover:text-muted">{lastWorkedLabel}</span>
-    {/if}
   </button>
 </div>
