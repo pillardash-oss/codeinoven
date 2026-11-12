@@ -39,6 +39,16 @@ const LOG_LINE_LIMIT = 400
 const PROBE_INTERVAL_MS = 2_000
 /** A first start downloads its model, so readiness can be many minutes out. */
 const PROBE_LIMIT = 900
+/**
+ * The same budget for a row whose weights are not on disk yet.
+ *
+ * Nothing in the app resumes a fetch that was cut short: the downloader the
+ * engines ship starts every file from zero. So a multi-gigabyte model over a home
+ * connection needs hours, and the 30-minute budget above would abort it just as it
+ * finished, which is exactly what made a start look like it began again every
+ * time. A row that names a local path keeps the short budget.
+ */
+const REFERENCE_PROBE_LIMIT = 7_200
 /** A card keeps the last lines of a failure, never the whole log, in its notice. */
 const FAILURE_TAIL_LINES = 6
 /** An adopted server is watched for as long as it runs, since nothing else tells
@@ -525,13 +535,18 @@ export class LocalAiController {
   private scheduleProbe(entry: LlamaCppServerEntry): void {
     const handle = this.handles.get(entry.id)
     if (!handle) return
-    if (handle.probes >= PROBE_LIMIT) {
+    const limit = this.isReferenceRow(entry) ? REFERENCE_PROBE_LIMIT : PROBE_LIMIT
+    if (handle.probes >= limit) {
       this.stopHandle(entry.id)
       void invoke('pty:destroy', localAiPtyId(entry.id))
       this.setStatus(entry.id, 'failed')
       this.notice = {
         ...this.notice,
-        [entry.id]: this.failureTail(entry.id) || 'The server never answered on its port'
+        [entry.id]:
+          this.failureTail(entry.id) ||
+          (this.isReferenceRow(entry)
+            ? 'The model was still being downloaded when the server was stopped'
+            : 'The server never answered on its port')
       }
       return
     }
