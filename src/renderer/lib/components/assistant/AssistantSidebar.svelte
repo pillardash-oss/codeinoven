@@ -4,6 +4,7 @@
   import DonTile from './DonTile.svelte'
   import AssistantRow from './AssistantRow.svelte'
   import AssistantSearchControl from './AssistantSearchControl.svelte'
+  import SidebarSearchBar from '$lib/components/layout/SidebarSearchBar.svelte'
   import AssistantCreateControl from './AssistantCreateControl.svelte'
   import type { NewAssistantDraft } from './assistant-create'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
@@ -74,6 +75,7 @@
 
   /** Whether the search owns the panel's top row instead of its button. */
   let searchExpanded = $state(false)
+  let searchQuery = $state('')
 
   const EMPTY_TASKS: readonly Thread[] = []
   const EMPTY_RUNS: readonly Thread[] = []
@@ -204,15 +206,20 @@
   {#snippet footer()}
     <div class="@container bg-surface px-2 pt-1.5 pb-2">
       <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
-        <AssistantSearchControl
-          inline
-          bind:expanded={searchExpanded}
-          {assistants}
-          {tasks}
-          {runs}
-          {onOpenTask}
-          onOpenAssistant={onOpenAssistantKnowledge}
-        />
+        <div class="min-w-0 {searchExpanded ? 'flex-1' : ''}">
+          <SidebarSearchBar
+            open={searchExpanded}
+            query={searchQuery}
+            placeholder="Search assistants, tasks and runs…"
+            ariaLabel="Search assistants and threads"
+            onOpenChange={(open) => {
+              searchExpanded = open
+              if (!open) searchQuery = ''
+            }}
+            onQueryChange={(value) => (searchQuery = value)}
+            label="Search assistants and threads"
+          />
+        </div>
         {#if !searchExpanded}
           <AssistantCreateControl
             label="New assistant"
@@ -228,56 +235,67 @@
 
   <div class="flex h-full min-h-0 flex-col [container-type:inline-size]">
     <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
-      <div role="list" aria-label="Assistants">
-        <!-- The panel is always here now, controls included, so an install with
+      {#if searchExpanded && searchQuery.trim().length > 0}
+        <AssistantSearchControl
+          bind:query={searchQuery}
+          {assistants}
+          {tasks}
+          {runs}
+          {onOpenTask}
+          onOpenAssistant={onOpenAssistantKnowledge}
+        />
+      {:else}
+        <div role="list" aria-label="Assistants">
+          <!-- The panel is always here now, controls included, so an install with
              no assistant draws its own empty state instead of a bare list. -->
-        {#if listedAssistants.length === 0 && !donAssistant && tasks.length === 0}
-          <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-            <AssistantIcon mark="agent" size={20} class="text-dimmed" />
-            <p class="text-xs text-muted">No assistants yet</p>
-            <p class="text-xs text-dimmed">Create one to get going</p>
-          </div>
-        {/if}
-        {#if donAssistant}
-          <DonTile
-            assistant={donAssistant}
-            threadId={donThread?.id ?? null}
-            selected={donThread !== null && selectedThreadId === donThread.id}
-            iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
-            ready={assistantReady(donAssistant)}
-            lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
-            stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
-            onOpen={() => {
-              if (!donThread) return
-              // The first open is the one moment Don introduces itself. A failure
-              // here is not fatal: the thread is open and the user can write the
-              // first line themselves.
-              void assistantStore.startDonSetup().catch(() => undefined)
-              onOpenTask(donThread)
-            }}
-          />
-        {/if}
+          {#if listedAssistants.length === 0 && !donAssistant && tasks.length === 0}
+            <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
+              <AssistantIcon mark="agent" size={20} class="text-dimmed" />
+              <p class="text-xs text-muted">No assistants yet</p>
+              <p class="text-xs text-dimmed">Create one to get going</p>
+            </div>
+          {/if}
+          {#if donAssistant}
+            <DonTile
+              assistant={donAssistant}
+              threadId={donThread?.id ?? null}
+              selected={donThread !== null && selectedThreadId === donThread.id}
+              iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
+              ready={assistantReady(donAssistant)}
+              lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
+              stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
+              onOpen={() => {
+                if (!donThread) return
+                // The first open is the one moment Don introduces itself. A failure
+                // here is not fatal: the thread is open and the user can write the
+                // first line themselves.
+                void assistantStore.startDonSetup().catch(() => undefined)
+                onOpenTask(donThread)
+              }}
+            />
+          {/if}
 
-        {#each listedAssistants as assistant (assistant.id)}
-          {@const counts = assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
-          {@const preview = assistantStore.previews.get(assistant.id) ?? null}
-          <AssistantRow
-            {assistant}
-            stateCounts={counts}
-            attention={counts.attention > 0}
-            missed={assistantMissed(assistant.id)}
-            threadCount={threadsOfAssistant(assistant.id)}
-            iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
-            nextRunAt={assistantNextRun(assistant.id)}
-            preview={preview?.text ?? null}
-            lastWorkedAt={preview?.at ?? null}
-            selected={selectedAssistantId === assistant.id}
-            onOpen={openAssistant}
-            {onMoveAssistant}
-            onDropTask={onAssignTask}
-          />
-        {/each}
-      </div>
+          {#each listedAssistants as assistant (assistant.id)}
+            {@const counts = assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
+            {@const preview = assistantStore.previews.get(assistant.id) ?? null}
+            <AssistantRow
+              {assistant}
+              stateCounts={counts}
+              attention={counts.attention > 0}
+              missed={assistantMissed(assistant.id)}
+              threadCount={threadsOfAssistant(assistant.id)}
+              iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
+              nextRunAt={assistantNextRun(assistant.id)}
+              preview={preview?.text ?? null}
+              lastWorkedAt={preview?.at ?? null}
+              selected={selectedAssistantId === assistant.id}
+              onOpen={openAssistant}
+              {onMoveAssistant}
+              onDropTask={onAssignTask}
+            />
+          {/each}
+        </div>
+      {/if}
     </div>
   </div>
 </CollapsibleSidebar>

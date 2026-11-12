@@ -793,11 +793,7 @@
         )}
         progress={panelProgress}
         searchShortcut={keymapState.keysFor('panel-search')}
-        searchLabel={mode === 'chats'
-          ? 'Search chats'
-          : mode === 'threads'
-            ? 'Search threads'
-            : 'Search projects'}
+        searchLabel={mode === 'chats' ? 'Search chats' : 'Search projects and threads'}
       />
     {/if}
   {/snippet}

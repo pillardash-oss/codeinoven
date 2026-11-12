@@ -117,7 +117,7 @@
               type="button"
               role="tab"
               aria-selected={tab.active}
-              class="flex h-6 min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium transition-colors {tab.active
+              class="flex h-5 min-w-0 flex-1 items-center justify-center gap-1.5 px-2 text-[0.6875rem] font-medium transition-colors {tab.active
                 ? 'bg-elevated text-foreground'
                 : 'text-muted hover:text-foreground'}"
               title={tab.shortcut?.length

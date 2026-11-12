@@ -1,11 +1,7 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
-  import SidebarSearchBar from '$lib/components/layout/SidebarSearchBar.svelte'
-  import { Popover } from 'bits-ui'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { invoke } from '$lib/ipc.svelte'
@@ -17,7 +13,6 @@
     type ThreadSearchResult
   } from '$shared/types'
   import { assistantGap } from './assistant-view'
-  import type { Attachment } from 'svelte/attachments'
 
   interface Props {
     assistants: Assistant[]
@@ -29,14 +24,9 @@
     onOpenTask: (task: Thread) => void
     /** Open an assistant result (its knowledge panel / first task). */
     onOpenAssistant: (assistant: Assistant) => void
-    /**
-     * Draw the field in place instead of in a popover, growing out of the panel's
-     * own Search button. While it is open it owns the row: the chevron gives it
-     * back to the button.
-     */
-    inline?: boolean
-    /** Whether the inline field is open. */
-    expanded?: boolean
+    /** The query the panel's search field is holding. The field lives at the
+     *  panel's foot; the results are this component, drawn in the list. */
+    query?: string
   }
 
   let {
@@ -45,18 +35,8 @@
     runs,
     onOpenTask,
     onOpenAssistant,
-    inline = false,
-    expanded = $bindable(false)
+    query = $bindable('')
   }: Props = $props()
-
-  let open = $state(false)
-  let query = $state('')
-  let inputEl: HTMLInputElement | undefined = $state(undefined)
-
-  const focusInput: Attachment<HTMLInputElement> = (element) => {
-    inputEl = element
-    element.focus()
-  }
 
   const trimmed = $derived(query.trim().toLowerCase())
 
@@ -161,9 +141,13 @@
       runResults.length === 0
   )
 
+  // The field is elsewhere, so the query is the trigger: every keystroke it
+  // holds runs the same debounced search the old inline field ran.
+  $effect(() => {
+    runThreadSearch(query)
+  })
+
   function closeSearch(): void {
-    if (inline) expanded = false
-    else open = false
     query = ''
     remoteResults = []
     searching = false
@@ -199,44 +183,6 @@
     return assistantIcon(assistant)
   }
 </script>
-
-{#snippet searchField()}
-  <div class="flex min-w-0 flex-1 items-center gap-1.5">
-    <input
-      {@attach focusInput}
-      type="text"
-      class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
-      placeholder="Search assistants, tasks and runs…"
-      aria-label="Search assistants, tasks and runs"
-      bind:value={query}
-      oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-        runThreadSearch(e.currentTarget.value)}
-      onkeydown={(event: KeyboardEvent) => {
-        if (event.key !== 'Escape') return
-        event.preventDefault()
-        closeSearch()
-      }}
-    />
-    {#if query}
-      <button
-        type="button"
-        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label="Clear search"
-        title="Clear search"
-        onclick={() => {
-          query = ''
-          remoteResults = []
-          searching = false
-          searchRequestId++
-          clearTimeout(searchTimer)
-          inputEl?.focus()
-        }}
-      >
-        <CioClose size={13} />
-      </button>
-    {/if}
-  </div>
-{/snippet}
 
 {#snippet resultsPanel()}
   {#if empty}
@@ -385,63 +331,6 @@
   {/if}
 {/snippet}
 
-{#if inline}
-  <div class="relative min-w-0 {expanded ? 'flex-1' : ''}">
-    <!-- The very control the project panel's search wears: the button becomes the
-         field, and the chevron gives it back. Its label truncates to the mark as
-         the panel narrows. -->
-    <SidebarSearchBar
-      open={expanded}
-      {query}
-      placeholder="Search assistants, tasks and runs…"
-      ariaLabel="Search assistants, tasks and runs"
-      loading={searching}
-      onOpenChange={(next) => {
-        if (next) expanded = true
-        else closeSearch()
-      }}
-      onQueryChange={(value) => {
-        query = value
-        runThreadSearch(value)
-      }}
-      label="Search"
-    />
-    {#if expanded && trimmed.length > 0}
-      <div
-        class="absolute inset-x-0 bottom-full z-30 mb-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
-      >
-        {@render resultsPanel()}
-      </div>
-    {/if}
-  </div>
-{:else}
-  <Popover.Root
-    bind:open
-    onOpenChange={(next) => {
-      if (!next) closeSearch()
-    }}
-  >
-    <Popover.Trigger
-      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-      aria-label="Search assistants, tasks and runs"
-      title="Search assistants, tasks and runs"
-    >
-      <CioSearch size={15} strokeWidth={1.8} />
-    </Popover.Trigger>
-
-    <Popover.Portal>
-      <Popover.Content
-        side="bottom"
-        align="start"
-        sideOffset={6}
-        collisionPadding={8}
-        class="z-50 w-80 overflow-hidden border bg-surface p-1.5 shadow-lg"
-        aria-label="Search assistants, tasks and runs"
-        onCloseAutoFocus={(e) => e.preventDefault()}
-      >
-        {@render searchField()}
-        {@render resultsPanel()}
-      </Popover.Content>
-    </Popover.Portal>
-  </Popover.Root>
-{/if}
+<div class="px-1 pt-1" role="region" aria-label="Search results">
+  {@render resultsPanel()}
+</div>
