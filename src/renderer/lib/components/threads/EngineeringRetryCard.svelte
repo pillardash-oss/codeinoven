@@ -1,15 +1,12 @@
 <script lang="ts">
-  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
-  import CardFoot from '../shared/CardFoot.svelte'
-  import CardFrame from '../shared/CardFrame.svelte'
-  import CardHead from '../shared/CardHead.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
   import { type CardChipData } from '../shared/CardTimer.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import { dismissSlide } from '../shared/card-motion'
+  import ErrorStrip, { type ErrorStripAction } from '../ui/ErrorStrip.svelte'
   import type {
     EngineeringLifecycleStage,
     ProviderCatalog,
@@ -78,6 +75,16 @@
     title: 'The stage stopped with an error'
   }
 
+  /** The one primary action. It sits in the header while the card is folded. */
+  const retryAction = $derived<ErrorStripAction>({
+    label: busy ? 'Retrying…' : 'Retry stage',
+    title: `Retry the failed ${stageLabel} stage with the selected model`,
+    icon: busy ? undefined : CioRefresh,
+    loading: busy,
+    disabled: busy,
+    onclick: () => void onRetry()
+  })
+
   function chooseModel(
     providerId: string,
     modelId: string,
@@ -106,82 +113,64 @@
 </script>
 
 <div out:slide={dismissSlide()}>
-  <CardFrame placement="replace" label="Retry failed Engineering stage">
-    <CardHead
-      icon={CioAttention}
-      title="{stageLabel} failed"
-      {chip}
-      tone="warn"
-      bind:folded
-      foldLabel="failed stage"
-    />
+  <ErrorStrip
+    placement="replace"
+    label="Retry failed Engineering stage"
+    title="{stageLabel} failed"
+    tone="warning"
+    {chip}
+    bind:folded
+    foldLabel="failed stage"
+    primary={retryAction}
+  >
+    <p class="font-semibold text-foreground">The {stageLabel} stage could not complete</p>
+    <p>
+      {failure?.trim() ||
+        'The stage stopped with an error. Retry it from where it stopped. Completed progress and context are preserved.'}
+    </p>
 
-    {#if !folded}
-      <div transition:slide={foldSlide()}>
-        <div class="flex flex-col gap-1.5 px-3 py-2.5">
-          <p class="text-xs font-semibold text-foreground">
-            The {stageLabel} stage could not complete
-          </p>
-          <p class="text-xs leading-relaxed text-muted">
-            {failure?.trim() ||
-              'The stage stopped with an error. Retry it from where it stopped   completed progress and context are preserved.'}
-          </p>
-        </div>
+    {#snippet footerStart()}
+      <CardButton
+        label="Cancel"
+        title="Stop the Engineering lifecycle and return to the stage card"
+        icon={CioClose}
+        variant="ghost-danger"
+        disabled={busy}
+        onclick={() => void onCancel()}
+      />
+    {/snippet}
 
-        <CardFoot yields="right">
-          {#snippet left()}
-            <CardButton
-              label="Cancel"
-              title="Stop the Engineering lifecycle and return to the stage card"
-              icon={CioClose}
-              variant="ghost-danger"
-              disabled={busy}
-              onclick={() => void onCancel()}
-            />
-          {/snippet}
-          {#snippet right()}
-            {#if settings}
-              <ModelPicker
-                {providers}
-                {projectId}
-                harnessId={settings.harnessId}
-                providerId={settings.providerId}
-                modelId={settings.modelId}
-                accountId={settings.accountId}
-                {favoriteModels}
-                {recentModels}
-                {onRemoveRecent}
-                side="top"
-                label="Change model"
-                variant="action"
-                onSelect={chooseModel}
-                thinkingLevel={settings.thinkingLevel}
-                runtimeSettings={settings}
-                onSelectThinking={chooseThinking}
-                onSelectRuntime={chooseRuntime}
-                {onToggleFavorite}
-                {onReorderFavorite}
-              />
-            {:else}
-              <CardButton
-                label="Change model"
-                title="Choose a model before retrying"
-                variant="secondary"
-                disabled
-              />
-            {/if}
-            <CardButton
-              label={busy ? 'Retrying…' : 'Retry stage'}
-              title="Retry the failed {stageLabel} stage with the selected model"
-              icon={busy ? undefined : CioRefresh}
-              variant="primary"
-              disabled={busy}
-              loading={busy}
-              onclick={() => void onRetry()}
-            />
-          {/snippet}
-        </CardFoot>
-      </div>
-    {/if}
-  </CardFrame>
+    {#snippet footerEnd()}
+      {#if settings}
+        <ModelPicker
+          {providers}
+          {projectId}
+          harnessId={settings.harnessId}
+          providerId={settings.providerId}
+          modelId={settings.modelId}
+          accountId={settings.accountId}
+          {favoriteModels}
+          {recentModels}
+          {onRemoveRecent}
+          side="top"
+          label="Change model"
+          variant="action"
+          onSelect={chooseModel}
+          thinkingLevel={settings.thinkingLevel}
+          runtimeSettings={settings}
+          onSelectThinking={chooseThinking}
+          onSelectRuntime={chooseRuntime}
+          {onToggleFavorite}
+          {onReorderFavorite}
+        />
+      {:else}
+        <CardButton
+          label="Change model"
+          title="Choose a model before retrying"
+          variant="secondary"
+          disabled
+        />
+      {/if}
+    {/snippet}
+  </ErrorStrip>
 </div>

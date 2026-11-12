@@ -78,24 +78,28 @@
 </script>
 
 {#if gitState.githubPermission && !noticeDismissals.isDismissed(permissionId, permissionCondition)}
-  <div class="mx-2 mt-2 flex items-center gap-2 border border-warning/20 bg-warning/10 px-3 py-2">
-    <CioUnplug size={13} class="shrink-0 text-warning" />
-    <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-muted">
-      {gitState.githubPermission.message}
-    </p>
-    <button
-      type="button"
-      class="h-7 shrink-0 border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
-      onclick={() => githubSignIn.start()}
-    >
-      Sign in to GitHub
-    </button>
-    <NoticeDismissButton
-      id={permissionId}
-      condition={permissionCondition}
-      title="Dismiss the GitHub access notice"
-      size="sm"
-    />
+  <div class="mx-2 mt-2 border border-warning/20 bg-warning/10 px-3 py-2">
+    <div class="flex items-start gap-2">
+      <CioUnplug size={13} class="mt-0.5 shrink-0 text-warning" />
+      <p class="min-w-0 flex-1 text-[0.625rem] leading-relaxed text-muted">
+        {gitState.githubPermission.message}
+      </p>
+      <NoticeDismissButton
+        id={permissionId}
+        condition={permissionCondition}
+        title="Dismiss the GitHub access notice"
+        size="sm"
+      />
+    </div>
+    <div class="mt-2 flex justify-end">
+      <button
+        type="button"
+        class="h-7 shrink-0 border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground hover:bg-elevated"
+        onclick={() => githubSignIn.start()}
+      >
+        Sign in to GitHub
+      </button>
+    </div>
   </div>
 {:else if scopeUnhealthy}
   <div class="mx-2 mt-2">
@@ -139,6 +143,14 @@
           {remoteIssue.message}
         </p>
       </div>
+      <NoticeDismissButton
+        id={remoteIssueId}
+        condition={remoteIssueCondition}
+        title="Dismiss the remote notice"
+        size="sm"
+      />
+    </div>
+    <div class="mt-2 flex justify-end">
       <button
         type="button"
         class="h-7 shrink-0 border border-border bg-surface px-2.5 text-[0.625rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:cursor-not-allowed disabled:opacity-40"
@@ -147,12 +159,6 @@
       >
         {retrying ? 'Retrying...' : 'Try again'}
       </button>
-      <NoticeDismissButton
-        id={remoteIssueId}
-        condition={remoteIssueCondition}
-        title="Dismiss the remote notice"
-        size="sm"
-      />
     </div>
   </div>
 {/if}

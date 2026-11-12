@@ -18,6 +18,7 @@ import {
   viewShowsThread
 } from '$lib/content-view-threads'
 import { viewShowsScopedSidebar } from '$lib/content-view-projects'
+import { boardProjectId } from '$lib/threads/thread-scope'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { openThreadBrowserFor } from '$lib/stores/thread-browser-open'
 import { settingsRouteState } from '$lib/stores/settings-route.svelte'
@@ -25,6 +26,7 @@ import { loadBrowser, withBrowser } from '$lib/stores/browser-access.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { findNavState } from '$lib/stores/find-nav.svelte'
+import { panelSearchRequest } from '$lib/stores/panel-search-request.svelte'
 import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
 import { browserFindState } from '$lib/stores/browser-find.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
@@ -85,7 +87,13 @@ export class AppOnKeydown extends BoardUnit<App> {
       preloadSettingsChunk()
     }
     if (view === 'scope') {
-      const projectId = workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
+      // The board is a project surface: the open thread's project is used when it
+      // is a real project, so pressing Board from an assistant task or a chat
+      // never scopes a board to that hidden conversation container.
+      const projectId = boardProjectId(
+        workspaceState.selectedThread?.projectId,
+        workspaceState.activeProject?.id
+      )
       if (projectId) void scopeState.activateProject(projectId)
       scopeState.clearSidebarContext()
     } else if (view === 'chats') {
@@ -633,6 +641,16 @@ export class AppOnKeydown extends BoardUnit<App> {
       e.preventDefault()
       if (e.repeat) return
       this.handleFind()
+      return
+    }
+    if (keymapState.matches('panel-search', e)) {
+      // The active view's own panel search. Cmd/Ctrl+F stays the conversation's
+      // find, so this chord belongs to the list the view draws on the left.
+      const panelViews = ['projects', 'projects-scope', 'chats', 'threads', 'assistant']
+      if (!panelViews.includes(this.activeView)) return
+      e.preventDefault()
+      if (e.repeat) return
+      panelSearchRequest.requestOpen()
       return
     }
     if (keymapState.matches('nav-toggle-right-sidebar', e)) {

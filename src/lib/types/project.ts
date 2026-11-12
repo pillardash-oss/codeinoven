@@ -66,6 +66,25 @@ export const ASSISTANT_CWD_DIR = 'assistant-cwd'
 export const BROWSER_CWD_DIR = 'browser-cwd'
 
 /**
+ * Whether a container id is a real user project, the only kind of container a
+ * scope board exists for.
+ *
+ * Chats, assistant tasks and global-browser tabs live in hidden containers that
+ * own conversations and no board, so opening Board while one of their threads is
+ * open must never scope a board to them: the view would draw project lanes over
+ * conversations that have no checkout, and the hydration that goes with those
+ * lanes would pull their rows into the project board's thread list.
+ */
+export function isRealProjectId(projectId: string | null | undefined): boolean {
+  if (!projectId) return false
+  return (
+    projectId !== INBOX_PROJECT_ID &&
+    projectId !== ASSISTANT_SPACE_ID &&
+    projectId !== GLOBAL_BROWSER_PROJECT_ID
+  )
+}
+
+/**
  * Fixed hidden containers that hold many independent conversations under one
  * project id. Every per-conversation surface keys off the open thread's
  * conversation scope inside them: a standalone chat owns its own file mount and

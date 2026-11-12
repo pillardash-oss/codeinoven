@@ -75,6 +75,7 @@ export function mapOpenCodeV2SubagentPart(
       agent: stringValue(input['agent']) ?? stringValue(input['subagent_type']) ?? '',
       description: stringValue(input['description']) ?? state.title ?? 'Delegated task',
       ...(prompt === undefined ? {} : { prompt }),
+      harnessId: 'opencode',
       ...(childSessionId === undefined ? {} : { childSessionId }),
       ...(providerId === undefined ? {} : { providerId }),
       ...(modelId === undefined ? {} : { modelId }),

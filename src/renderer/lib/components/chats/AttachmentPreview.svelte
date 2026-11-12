@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioFileQuestion from '@pdslng/cio-icon/CioFileQuestion.svelte'
@@ -381,11 +382,11 @@
           <!-- The app's own player: this surface is the fullscreen view, so it
                offers no fullscreen action of its own. It is fetched only for a
                video, so the transport controls never ride the eager closure. -->
-          {#await import('../ui/VideoPlayer.svelte') then { default: VideoPlayer }}
+          {#await loadCachedPanelModule('module:lib/components/ui/VideoPlayer.svelte', () => import('../ui/VideoPlayer.svelte')) then { default: VideoPlayer }}
             <VideoPlayer {src} label={filename} fit="fill" />
           {/await}
         {:else if kind === 'audio' && src}
-          {#await import('../ui/AudioPlayer.svelte') then { default: AudioPlayer }}
+          {#await loadCachedPanelModule('module:lib/components/ui/AudioPlayer.svelte', () => import('../ui/AudioPlayer.svelte')) then { default: AudioPlayer }}
             <AudioPlayer {src} label={filename} class="w-full max-w-xl" />
           {/await}
         {:else if kind === 'pdf' && src}

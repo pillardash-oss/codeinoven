@@ -33,6 +33,7 @@ import {
   type VideoClipFrameCell,
   type VideoFrameThumbnail
 } from '$shared/video/frame-grid'
+import { silenceTabForSeek } from '$lib/stores/seek-silence'
 
 // eslint-disable-next-line svelte/prefer-svelte-reactivity -- Ownership registry, not rendered state.
 const controllers = new Map<string, VideoEditorController>()
@@ -578,6 +579,11 @@ export class VideoEditorController {
    */
   seek(seconds: number): void {
     this.time = Math.min(this.duration, snapEditTime(seconds, this.fps))
+    // The picture is a page, and a seek is heard as the frames between where it was
+    // and where it lands. Every path into the playhead, the arrow keys and a drag on
+    // the ruler alike, silences the page for as long as the gesture lasts.
+    const tabId = this.tabId
+    if (tabId) silenceTabForSeek(tabId)
     ;(this.playhead ?? this.tabPlayhead())?.seek(this.time)
   }
 

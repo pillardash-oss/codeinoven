@@ -1,31 +1,16 @@
 <script lang="ts">
-  import { SvelteSet } from 'svelte/reactivity'
-  import { threadMediaActivity } from '$lib/speech/thread-media-activity.svelte'
-  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
-  import { archiveItem } from '$lib/archive-actions'
-  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
-  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
-  import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
   import CioFolderGit from '@pdslng/cio-icon/CioFolderGit.svelte'
-  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
-  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPin from '@pdslng/cio-icon/CioPin.svelte'
-  import CioPinOff from '@pdslng/cio-icon/CioPinOff.svelte'
-  import CioKey from '@pdslng/cio-icon/CioKey.svelte'
-  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
-  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
-  import { onDestroy } from 'svelte'
+  import CioThreads from '@pdslng/cio-icon/CioThreads.svelte'
   import { prefersReducedMotion } from 'svelte/motion'
-  import { fade, slide } from 'svelte/transition'
+  import { fade } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import { ListRowReflow, rowArrangement } from '$lib/motion'
-  import { DropdownMenu } from 'bits-ui'
   import type { SvelteMap } from 'svelte/reactivity'
-  import { foldDuration, foldSlide } from '$lib/components/shared/card-motion'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import type { ScopeActionsController } from '$lib/components/scope/ScopeActionsController.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -35,6 +20,7 @@
   import SidebarListRow from '$lib/components/shared/SidebarListRow.svelte'
   import { THREAD_LIST_PAGE_SIZE } from '$lib/components/shared/RowPageBudget.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import EmptyState from '$lib/components/ui/EmptyState.svelte'
   import ThreadSearchResultRow from '$lib/components/shared/ThreadSearchResultRow.svelte'
   import SpecConversationSidebar from '$lib/components/specs/SpecConversationSidebar.svelte'
   import PinnedSection from '$lib/components/threads/PinnedSection.svelte'
@@ -43,42 +29,38 @@
     THREAD_GROUP_COLORS
   } from '$lib/components/threads/thread-group-presentation'
   import ThreadRow from '$lib/components/threads/ThreadRow.svelte'
-  import { copyText } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
-  import { encodeShortcutTokens } from '$lib/keymap/keymap'
-  import { osFileManagerLabel, revealInOsFileManager } from '$lib/os-file-manager'
   import { getProjectIcon, projectIconOnError } from '$lib/project-icons'
   import { pickColorForSeed } from '$lib/project-colors'
   import { hasProjectNameCollision } from '$lib/project-location'
   import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { reportError } from '$lib/stores/app-errors.svelte'
-  import { pinnedFold } from '$lib/stores/pinned-fold.svelte'
-  import { projectDeletionState } from '$lib/stores/project-deletion.svelte'
-  import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
-  import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+  import { panelSearchRequest } from '$lib/stores/panel-search-request.svelte'
   import { STAGE_COLORS, STAGE_LABELS, STAGE_ORDER, scopeState } from '$lib/stores/scope.svelte'
   import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
   import { threadGroupingState } from '$lib/stores/thread-grouping.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { type Project, type Thread } from '$shared/types'
-  import FolderRow from './FolderRow.svelte'
   import SidebarListPane from './SidebarListPane.svelte'
-  import SidebarSearchControl from './SidebarSearchControl.svelte'
-  import SidebarProjectSearchField from './SidebarProjectSearchField.svelte'
+  import SidebarPanelBar, {
+    type SidebarPanelSearch,
+    type SidebarPanelTab
+  } from './SidebarPanelBar.svelte'
+  import type { SidebarPanelAction } from '$lib/components/layout/SidebarActionStack.svelte'
   import type { WorkspaceProjectDialogs } from './WorkspaceProjectDialogs.svelte'
   import type { WorkspaceSidebarController } from './WorkspaceSidebarController.svelte'
   import {
     filterSearchResultsByProject,
-    filterThreadsByQuery,
     groupThreadsByStatus,
     threadHasVisibleWork
   } from './workspace-thread-helpers'
   import { threadDayLabel } from '$lib/components/threads/thread-day-label'
   import { foldedSectionRows } from '$lib/thread-section-rows'
-  import { countThreadStatesByProject, emptyThreadStateCounts } from '$lib/thread-state-counts'
-  import { toast } from 'svelte-sonner'
+  import { countThreadStatesByProject } from '$lib/thread-state-counts'
   import { moveThreadInList, resolveTimelineDrop } from './sidebar-thread-drop'
   import { ThreadOrderSettle } from './thread-order-settle.svelte'
+  import WorkspaceSidebarProjects from './WorkspaceSidebar/WorkspaceSidebarProjects.svelte'
+  import { projectOrderKey } from './WorkspaceSidebar/workspace-sidebar-keys'
 
   interface Props {
     mode: 'projects' | 'chats' | 'threads' | 'assistant'
@@ -140,6 +122,15 @@
     onLoadProjectThreadsPage: (projectId: string) => Promise<void>
     onLoadHistoryPage: () => Promise<void>
     projectHasMoreInDb: (projectId: string) => boolean
+    /** Switch the panel between its own lists: the projects tree and the
+     *  timeline. The Projects/Threads tabs call it. */
+    onSelectMode: (mode: 'projects' | 'threads') => void
+    /**
+     * The action row under the panel's tabs, owned by the workspace: the create
+     * door of the list on screen, or the thread list's own filters. It is drawn
+     * where the list's controls belong instead of in the app header.
+     */
+    panelActions: (panelPane: 'folders' | 'threads' | 'chats') => SidebarPanelAction[]
   }
 
   let {
@@ -182,7 +173,9 @@
     onSwitchScopedProject,
     onLoadProjectThreadsPage,
     onLoadHistoryPage,
-    projectHasMoreInDb
+    projectHasMoreInDb,
+    onSelectMode,
+    panelActions
   }: Props = $props()
 
   /**
@@ -193,6 +186,36 @@
    */
   let scopedSidebarVisible = $derived(mode === 'projects' && scopeState.sidebarContext !== null)
   let projectsTreeVisible = $derived(mode === 'projects' && scopeState.sidebarContext === null)
+
+  /**
+   * How far the panel's list has scrolled, 0 to 1 across the first stretch of it.
+   *
+   * The foot of the panel folds its actions from named buttons to marks over
+   * that range, one action at a time, and back out of it as the list returns to
+   * the top. The scroller belongs to the shell (it is bound in), so this watches
+   * the element it hands over and nothing else.
+   */
+  let panelProgress = $state(0)
+  $effect(() => {
+    const element = scroller
+    if (!element) return
+    // The fold is read from the scroll position alone, never from the current
+    // overflow: the foot gives height back as it folds, so a range that moved
+    // with the overflow would keep moving the goalposts under its own motion.
+    // The two ends are absolute: at the top the stack is whole, and at the last
+    // pixel of travel the row is settled, so a short list can never be stranded
+    // between the two shapes.
+    const onScroll = (): void => {
+      const atTop = element.scrollTop <= 0
+      const atEnd = element.scrollTop + element.clientHeight >= element.scrollHeight - 1
+      if (atTop) panelProgress = 0
+      else if (atEnd) panelProgress = 1
+      else panelProgress = Math.min(1, element.scrollTop / 160)
+    }
+    element.addEventListener('scroll', onScroll, { passive: true })
+    onScroll()
+    return () => element.removeEventListener('scroll', onScroll)
+  })
 
   /**
    * Whether the list is showing search results instead of the timeline.
@@ -231,6 +254,121 @@
   })
 
   /**
+   * The panel's own tabs, and its own search, as the bar above the list draws
+   * them. The Projects and Threads lists are one panel with two tabs (the same
+   * pair the view rail folds into its project item), and Chats is a panel with
+   * no tabs at all: only its search and its new-chat door sit above the list.
+   */
+  const panelTabs = $derived<SidebarPanelTab[]>([
+    {
+      id: 'folders',
+      label: 'Projects',
+      icon: CioProjects,
+      shortcut: keymapState.keysFor('nav-projects'),
+      active: mode === 'projects',
+      select: () => onSelectMode('projects')
+    },
+    {
+      id: 'threads',
+      label: 'Threads',
+      icon: CioThreads,
+      shortcut: keymapState.keysFor('nav-threads'),
+      active: mode === 'threads',
+      select: () => onSelectMode('threads')
+    }
+  ])
+
+  const panelSearch = $derived.by((): SidebarPanelSearch => {
+    if (mode === 'chats') {
+      return {
+        open: sidebar.chatsSearchOpen,
+        query: sidebar.chatsSearchQuery,
+        placeholder: 'Search chats…',
+        ariaLabel: 'Search chats',
+        onOpenChange: (open) => (open ? sidebar.openChatsSearch() : sidebar.closeChatsSearch()),
+        onQueryChange: (value) => (sidebar.chatsSearchQuery = value)
+      }
+    }
+    if (mode === 'threads') {
+      return {
+        open: sidebar.threadsSearchOpen,
+        query: sidebar.threadsSearchQuery,
+        placeholder: 'Search threads…',
+        ariaLabel: 'Search threads',
+        loading: sidebar.threadsSearching,
+        onOpenChange: (open) => (open ? sidebar.openThreadsSearch() : sidebar.closeThreadsSearch()),
+        onQueryChange: (value) => sidebar.runThreadsSearch(value)
+      }
+    }
+    return {
+      open: sidebar.projectsSearchOpen,
+      query: sidebar.projectsSearchQuery,
+      placeholder: 'Search projects…',
+      ariaLabel: 'Search projects',
+      onOpenChange: (open) => (open ? sidebar.openProjectsSearch() : sidebar.closeProjectsSearch()),
+      onQueryChange: (value) => (sidebar.projectsSearchQuery = value)
+    }
+  })
+
+  /**
+   * Open the search of whichever list this panel is showing.
+   *
+   * The chord is read by the shell, which cannot know which panel is on screen,
+   * so it publishes a request and the panel that owns the list answers it. The
+   * request is only marked handled while this panel is the on-screen view, so a
+   * chord pressed elsewhere is never swallowed here.
+   */
+  let handledPanelSearch = 0
+  $effect(() => {
+    const request = panelSearchRequest.requestId
+    if (request === handledPanelSearch || !active) return
+    handledPanelSearch = request
+    if (mode === 'chats') sidebar.openChatsSearch()
+    else if (mode === 'threads') sidebar.openThreadsSearch()
+    else if (!scopedSidebarVisible) sidebar.openProjectsSearch()
+  })
+
+  /**
+   * The Chats and Projects panel searches filter the rows already on screen.
+   * They answer on the keystroke, so the list is narrowed as the user types and
+   * never replaced by a result set of its own.
+   */
+  const chatsQuery = $derived(sidebar.chatsSearchQuery.trim().toLowerCase())
+  const projectsQuery = $derived(sidebar.projectsSearchQuery.trim().toLowerCase())
+
+  /**
+   * What the Threads timeline says when it has no rows to draw.
+   *
+   * The reason matters more than the shape: a search that is still running, a
+   * search that answered nothing, a status grouping that hides every thread, and
+   * a project filter with nothing selected are four different states, and the
+   * line under the icon names the one on screen instead of a single "No threads".
+   */
+  const threadsEmpty = $derived.by(() => {
+    if (searchPanelActive) {
+      return sidebar.threadsSearching
+        ? { title: 'Searching…', description: 'Looking through every thread you have.' }
+        : { title: 'No matching threads', description: 'Nothing matches that search.' }
+    }
+    if (threadGroupingState.enabled && !threadGroupingState.isAll) {
+      return {
+        title: 'No threads here',
+        description: 'No threads are in the inboxes you selected.'
+      }
+    }
+    if (!threadProjectFilterState.isAll) {
+      return {
+        title: 'No threads here',
+        description: 'No threads in the projects you selected.'
+      }
+    }
+    return {
+      title: 'No threads yet',
+      description: 'Start a thread in a project and it shows up here.'
+    }
+  })
+
+  /**
    * Holds activity-driven reordering back so a burst of ticks becomes one move
    * instead of rows fighting over a slot; see {@link ThreadOrderSettle}.
    */
@@ -248,11 +386,6 @@
    * project's counts, so the rail and the strip can never disagree.
    */
   const projectStateCounts = $derived(countThreadStatesByProject(scopeState.allScopeThreads))
-
-  /** The settle key of one project's folder list. */
-  function projectOrderKey(projectId: string): string {
-    return `project:${projectId}`
-  }
 
   /**
    * Hand every list this sidebar draws to the settle, and let go of a project's
@@ -277,6 +410,31 @@
   )
   /** The Chats list as the settle last committed it. */
   const settledStandaloneThreads = $derived(threadOrderSettle.view('chats', standaloneThreads))
+
+  const pinnedChatsShown = $derived(
+    chatsQuery
+      ? pinnedInboxThreads.filter((thread) => thread.title.toLowerCase().includes(chatsQuery))
+      : pinnedInboxThreads
+  )
+  const chatsShown = $derived(
+    chatsQuery
+      ? settledStandaloneThreads.filter((thread) => thread.title.toLowerCase().includes(chatsQuery))
+      : settledStandaloneThreads
+  )
+  const pinnedProjectsShown = $derived(
+    projectsQuery
+      ? pinnedProjects.filter((project) => project.name.toLowerCase().includes(projectsQuery))
+      : pinnedProjects
+  )
+  const regularProjectsShown = $derived(
+    projectsQuery
+      ? regularProjects.filter((project) => project.name.toLowerCase().includes(projectsQuery))
+      : regularProjects
+  )
+  // A project search narrows the folders, not the threads inside them: the
+  // pinned thread list belongs to the timeline tab, so it steps aside while the
+  // user is looking for a folder.
+  const pinnedThreadsShown = $derived(projectsQuery ? [] : pinnedThreads)
 
   /**
    * The list a drop in the Threads view resolves against: the rows the pane is
@@ -432,78 +590,6 @@
     return getProjectIcon(project, projectIcons.get(project.id))
   }
 
-  function toggleFolder(projectId: string): void {
-    if (sidebar.expandedFolders.has(projectId)) {
-      sidebar.expandedFolders.delete(projectId)
-      // Folding resets the folder's row budget so re-expanding shows the
-      // default page, exactly as if the user had clicked "Show less".
-      sidebar.showLessThreads(projectId)
-      rendererRecovery.toggleCollapsedFolder(projectId)
-      settleFold(projectId)
-    } else {
-      sidebar.expandedFolders.add(projectId)
-      rendererRecovery.toggleCollapsedFolder(projectId)
-      if (foldingProjectId === projectId) foldingProjectId = null
-    }
-  }
-
-  /**
-   * The project whose fold is still playing, so its peek row waits for it.
-   *
-   * A folded folder keeps the one thread the user is working in on screen, but
-   * that row may not mount in the same frame as the fold: an outgoing `slide`
-   * holds the list in flow while its height collapses, so a peek row drawn
-   * beside it would show the active thread twice for the length of the fold.
-   * One folder is folded at a time, so one id is all the state this needs.
-   */
-  let foldingProjectId = $state<string | null>(null)
-  let foldSettleTimer: ReturnType<typeof setTimeout> | undefined
-
-  function settleFold(projectId: string): void {
-    clearTimeout(foldSettleTimer)
-    const settle = foldDuration()
-    if (settle <= 0) {
-      foldingProjectId = null
-      return
-    }
-    foldingProjectId = projectId
-    foldSettleTimer = setTimeout(() => (foldingProjectId = null), settle)
-  }
-
-  onDestroy(() => clearTimeout(foldSettleTimer))
-
-  // ─── Folder ellipsis menu actions ────────────────────────────────────────
-
-  async function copyProjectPath(projectId: string): Promise<void> {
-    const project = projects.find((p) => p.id === projectId)
-    if (!project?.path) return
-    try {
-      await copyText(project.path)
-    } catch {
-      // Clipboard not available
-    }
-  }
-
-  async function openInEditor(projectId: string): Promise<void> {
-    await invoke('project:openInEditor', projectId)
-  }
-
-  async function toggleProjectPin(projectId: string): Promise<void> {
-    const project = projects.find((p) => p.id === projectId)
-    if (!project) return
-    const updated = await invoke('project:setPinned', projectId, !project.pinned)
-    onSetProjects(projects.map((p) => (p.id === updated.id ? updated : p)))
-  }
-
-  async function revealProjectInFileManager(projectId: string): Promise<void> {
-    const project = projects.find((p) => p.id === projectId)
-    if (!project || !project.path) return
-    await revealInOsFileManager(project.path)
-  }
-
-  // Folder ellipsis menu
-  let openProjectMenuId = $state<string | null>(null)
-
   let sidebarDropActive = $state(false)
 
   function carriesDroppedFiles(event: DragEvent): boolean {
@@ -557,38 +643,6 @@
   }
 </script>
 
-<!-- The detailed row both project folder lists draw, and the one row a folded
-     folder keeps on screen for the thread the user is working in. One markup for
-     every place a folder's row is drawn, so a peeked row and a listed row stay
-     the same row, with the same bookmark, drag and menu behavior. -->
-{#snippet folderThreadRow(thread: Thread, projectId: string, siblings: readonly Thread[])}
-  <ThreadRow
-    {thread}
-    detailed
-    hideProjectName
-    selected={activeThreadId === thread.id}
-    onOpen={onOpenThread}
-    {onRename}
-    {onTogglePin}
-    showBookmark
-    onBookmark={async (target) => {
-      try {
-        const updated = await invoke('thread:setBookmarked', target.projectId, target.id, true)
-        workspaceState.updateThread(updated)
-        scopeState.updateThread(updated)
-      } catch (error) {
-        toast.error(error instanceof Error ? error.message : 'Could not bookmark thread.')
-      }
-    }}
-    {onDelete}
-    {onFork}
-    onMoveThread={(draggedId, targetId, position) => {
-      const ordered = moveThreadInList(siblings, draggedId, targetId, position)
-      if (ordered) void onThreadDrop(projectId, ordered, draggedId)
-    }}
-  />
-{/snippet}
-
 <svelte:window
   onkeydown={(event) => {
     if (
@@ -625,6 +679,22 @@
     onDrop: (event: DragEvent) => void handleSidebarDrop(event)
   }}
 >
+  {#snippet footer()}
+    {#if !workspaceState.specStudioOpen && !scopedSidebarVisible && mode !== 'assistant'}
+      <SidebarPanelBar
+        label="Projects and threads"
+        tabs={mode === 'chats' ? [] : panelTabs}
+        search={panelSearch}
+        actions={panelActions(
+          mode === 'threads' ? 'threads' : mode === 'chats' ? 'chats' : 'folders'
+        )}
+        progress={panelProgress}
+        searchShortcut={keymapState.keysFor('panel-search')}
+        searchLabel={mode === 'chats' ? 'Search chats' : 'Search'}
+      />
+    {/if}
+  {/snippet}
+
   {#snippet header()}
     {#if workspaceState.specStudioOpen}
       <span class="text-[0.625rem] tabular-nums text-dimmed">
@@ -922,18 +992,18 @@
           <!-- Scope action dialogs (edit, delete, worktree lifecycle, merge).
                Loaded on demand so their heavy worktree forms stay out of the
                main shell chunk. -->
-          {#await import('../scope/ScopeActionsModals.svelte') then { default: ScopeActionsModals }}
+          {#await loadCachedPanelModule('module:lib/components/scope/ScopeActionsModals.svelte', () => import('../scope/ScopeActionsModals.svelte')) then { default: ScopeActionsModals }}
             <ScopeActionsModals actions={scopeActions} />
           {/await}
         </div>
       {/if}
     </SidebarListPane>
     <SidebarListPane name="chats" visible={!loading && mode === 'chats'}>
-      {#if pinnedInboxThreads.length > 0}
+      {#if pinnedChatsShown.length > 0}
         <PinnedSection
           sectionKey="chats"
           label="Pinned Chats"
-          threads={pinnedInboxThreads}
+          threads={pinnedChatsShown}
           activeThreadId={activeThreadId ?? null}
           getRowIcon={() => null}
           onOpen={onOpenThread}
@@ -948,16 +1018,16 @@
         />
       {/if}
 
-      {#if settledStandaloneThreads.length > 0}
+      {#if chatsShown.length > 0}
         {@const chatsVisible = sidebar.visibleThreads(
           'chats',
-          settledStandaloneThreads,
+          chatsShown,
           activeThreadId,
           THREAD_LIST_PAGE_SIZE
         )}
         {@const chatsHidden = sidebar.hiddenThreadCount(
           'chats',
-          settledStandaloneThreads,
+          chatsShown,
           chatsVisible,
           THREAD_LIST_PAGE_SIZE
         )}
@@ -997,11 +1067,7 @@
           <button
             class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
             onclick={() =>
-              sidebar.showMoreThreads(
-                'chats',
-                settledStandaloneThreads.length,
-                THREAD_LIST_PAGE_SIZE
-              )}
+              sidebar.showMoreThreads('chats', chatsShown.length, THREAD_LIST_PAGE_SIZE)}
           >
             Show {chatsHidden} more
           </button>
@@ -1013,12 +1079,18 @@
             Show less
           </button>
         {/if}
-      {:else if pinnedInboxThreads.length === 0}
-        <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-          <CioMessage size={20} class="text-dimmed" />
-          <p class="text-xs text-muted">No chats yet</p>
-          <p class="text-xs text-dimmed">Start a new chat to get going</p>
-        </div>
+      {:else if pinnedChatsShown.length === 0}
+        <!-- Centered in the column: the panel only stands when there is a chat or
+             a search is narrowing the list, so an empty pane is a filter result
+             and reads better as a state than as a line of grey text. -->
+        <EmptyState
+          class="h-full"
+          icon={CioMessage}
+          title={chatsQuery ? 'No matching chats' : 'No chats yet'}
+          description={chatsQuery
+            ? 'Nothing in your chats matches that search.'
+            : 'Start a new chat to get going.'}
+        />
       {/if}
     </SidebarListPane>
     <SidebarListPane name="threads" visible={!loading && mode === 'threads'}>
@@ -1217,17 +1289,12 @@
           </section>
         {:else}
           {#if searchPanelActive || pinnedTimelineThreads.length === 0}
-            <p class="px-2 py-6 text-center text-xs text-dimmed">
-              {searchPanelActive
-                ? sidebar.threadsSearching
-                  ? 'Searching…'
-                  : 'No matching threads'
-                : threadGroupingState.enabled && !threadGroupingState.isAll
-                  ? 'No threads in the selected inboxes'
-                  : threadProjectFilterState.isAll
-                    ? 'No threads yet'
-                    : 'No threads in the selected projects'}
-            </p>
+            <EmptyState
+              class="h-full"
+              icon={CioThreads}
+              title={threadsEmpty.title}
+              description={threadsEmpty.description}
+            />
           {/if}
           <!-- No section owns the tail here, so the older-history control falls
                back to the pane itself. -->
@@ -1244,602 +1311,34 @@
       </div>
     </SidebarListPane>
     <SidebarListPane name="projects" visible={!loading && projectsTreeVisible}>
-      <!-- Pinned threads above everything. This block owns its rows, so it
-             sticks on its own wrapper: the header stays put while the pinned
-             rows pass under it and the pinned-projects block below pushes it
-             out, exactly as the threads view's own pinned block does. -->
-      <PinnedSection
-        sectionKey="projects-threads"
-        label="Pinned Threads"
-        threads={pinnedThreads.filter((thread) => !thread.bookmarked)}
-        detailed
-        sticky
-        activeThreadId={activeThreadId ?? null}
-        getRowIcon={(t) => {
-          const project = projects.find((p) => p.id === t.projectId)
-          return project ? getProjectIcon(project, projectIcons.get(project.id)) : null
-        }}
-        onOpen={onOpenThread}
+      <WorkspaceSidebarProjects
+        {projects}
+        {visibleProjects}
+        {projectIcons}
+        {threadsByProject}
+        {activeThreadId}
+        {pinnedThreadsShown}
+        {pinnedProjectsShown}
+        {regularProjectsShown}
+        {projectsQuery}
+        {projectStateCounts}
+        {threadOrderSettle}
+        {sidebar}
+        {projectDialogs}
+        {projectPageLoading}
+        {onOpenThread}
         {onRename}
         {onTogglePin}
         {onDelete}
         {onFork}
-        onMovePinnedThread={onPinnedThreadMove}
+        {onThreadDrop}
+        {onPinnedThreadMove}
+        {onProjectMove}
+        {onCreateThread}
+        {onSetProjects}
+        {onLoadProjectThreadsPage}
+        {projectHasMoreInDb}
       />
-
-      <!-- Pinned projects -->
-      {#if pinnedProjects.length > 0}
-        <div class="mb-1 pb-2">
-          <button
-            type="button"
-            class="sticky -top-2 z-10 flex w-full items-center gap-1.5 bg-surface px-2 pt-1 pb-0.5 text-left transition-colors hover:bg-overlay"
-            aria-expanded={!pinnedFold.isFolded('projects-projects')}
-            aria-label="{pinnedFold.isFolded('projects-projects')
-              ? 'Expand'
-              : 'Fold'} Pinned Projects"
-            title="{pinnedFold.isFolded('projects-projects') ? 'Expand' : 'Fold'} Pinned Projects"
-            onclick={() => pinnedFold.toggle('projects-projects')}
-          >
-            <CioChevronDown
-              size={12}
-              class="shrink-0 text-dimmed transition-transform {pinnedFold.isFolded(
-                'projects-projects'
-              )
-                ? '-rotate-90'
-                : ''}"
-            />
-            <span class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed"
-              >Pinned Projects</span
-            >
-            <span class="text-[0.625rem] text-dimmed/70">{pinnedProjects.length}</span>
-          </button>
-          {#if !pinnedFold.isFolded('projects-projects')}
-            <div transition:slide={foldSlide()} class="space-y-px" role="list">
-              {#each pinnedProjects as project (project.id)}
-                {@const folderThreads = threadOrderSettle.view(
-                  projectOrderKey(project.id),
-                  threadsByProject.get(project.id) ?? []
-                )}
-                {@const expanded =
-                  sidebar.expandedFolders.has(project.id) ||
-                  sidebar.projectSearchOpen.has(project.id)}
-                <!-- A folded folder still reveals the one thread the user is on, so
-                     folding a project can never take the active thread off screen.
-                     Unfolding brings the rest of the folder back. -->
-                {@const revealedThreads = expanded
-                  ? []
-                  : foldedSectionRows(folderThreads, activeThreadId)}
-                {@const stateCounts =
-                  projectStateCounts.get(project.id) ?? emptyThreadStateCounts()}
-                <DropdownMenu.Root
-                  open={openProjectMenuId === project.id}
-                  onOpenChange={(o) => {
-                    openProjectMenuId = o ? project.id : null
-                  }}
-                >
-                  <div>
-                    <FolderRow
-                      media={[
-                        ...new SvelteSet(
-                          (threadsByProject.get(project.id) ?? []).flatMap((thread) =>
-                            threadMediaActivity(thread.id)
-                          )
-                        )
-                      ]}
-                      {project}
-                      iconUrl={projectIcons.get(project.id) ?? null}
-                      {expanded}
-                      sticky
-                      {stateCounts}
-                      totalThreads={(threadsByProject.get(project.id) ?? []).length}
-                      showLocation={hasProjectNameCollision(project, visibleProjects)}
-                      deleting={projectDeletionState.isPending(project.id)}
-                      deletingLabel={projectDeletionState.label(project.id) ?? undefined}
-                      actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
-                        openProjectMenuId === project.id}
-                      onToggle={() => toggleFolder(project.id)}
-                      onMoveProject={(draggedId, targetId, pos) =>
-                        onProjectMove(draggedId, targetId, pos)}
-                      onContextMenu={(e) => {
-                        e.preventDefault()
-                        openProjectMenuId = project.id
-                      }}
-                    >
-                      {#snippet actions()}
-                        <span class="flex shrink-0 items-center gap-0.5">
-                          <SidebarSearchControl
-                            open={sidebar.projectSearchOpen.has(project.id)}
-                            query={sidebar.projectSearchQueries.get(project.id) ?? ''}
-                            inlineField
-                            fieldId="project-search-{project.id}"
-                            onOpenChange={(open) => {
-                              if (open) sidebar.openProjectSearch(project.id)
-                              else sidebar.closeProjectSearch(project.id)
-                            }}
-                            onQueryChange={(value) => {
-                              sidebar.projectSearchQueries.set(project.id, value)
-                              sidebar.runProjectSearch(project.id, value)
-                            }}
-                            loading={sidebar.projectSearching.has(project.id)}
-                            ariaLabel="Search threads in {project.name}"
-                            title="Search threads"
-                            placeholder="Search threads in {project.name}…"
-                          />
-                          <button
-                            class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                            aria-label="Env secrets for {project.name}"
-                            title="Env secrets"
-                            onclick={() =>
-                              projectEnvDock.open({
-                                projectId: project.id,
-                                projectName: project.name,
-                                iconUrl: getProjectIcon(project, projectIcons.get(project.id)),
-                                color: project.color
-                              })}
-                          >
-                            <CioKey size={12} />
-                          </button>
-                          <button
-                            class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                            aria-label="New thread in {project.name}"
-                            title="New thread"
-                            data-shortcut={encodeShortcutTokens(
-                              keymapState.keysFor('nav-new-thread')
-                            )}
-                            onclick={() => onCreateThread(project)}
-                          >
-                            <CioPlus size={12} />
-                          </button>
-                          <DropdownMenu.Trigger
-                            class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-                            aria-label="Options for {project.name}"
-                            title="Project options"
-                            oncontextmenu={(e: MouseEvent) => e.preventDefault()}
-                          >
-                            <CioEllipsis size={12} />
-                          </DropdownMenu.Trigger>
-                        </span>
-                      {/snippet}
-                    </FolderRow>
-                    {#if expanded}
-                      {@const searchQ = sidebar.projectSearchQueries.get(project.id) ?? ''}
-                      {@const isSearching = Boolean(searchQ.trim())}
-                      {@const searchResults = sidebar.projectSearchResults.get(project.id) ?? []}
-                      {@const filteredThreads = isSearching
-                        ? []
-                        : filterThreadsByQuery(folderThreads, '')}
-                      {@const visibleFolderThreads = expanded
-                        ? sidebar.visibleThreads(project.id, filteredThreads, activeThreadId)
-                        : revealedThreads}
-                      {@const projectDisplayThreads = [
-                        ...visibleFolderThreads.filter((thread) => thread.bookmarked),
-                        ...visibleFolderThreads.filter((thread) => !thread.bookmarked)
-                      ]}
-                      {@const hiddenFolderCount = sidebar.hiddenThreadCount(
-                        project.id,
-                        filteredThreads,
-                        visibleFolderThreads
-                      )}
-                      <!-- The list the fold owns. It is the only child of this branch,
-                           so its own `slide` is what plays when the folder closes:
-                           folding never drops an ancestor with it. -->
-                      <div transition:slide={foldSlide()} class="ml-2">
-                        {#if sidebar.projectSearchOpen.has(project.id)}
-                          <SidebarProjectSearchField
-                            id="project-search-{project.id}"
-                            query={searchQ}
-                            loading={sidebar.projectSearching.has(project.id)}
-                            placeholder="Search threads in {project.name}…"
-                            ariaLabel="Search threads in {project.name}"
-                            onQueryChange={(value) => {
-                              sidebar.projectSearchQueries.set(project.id, value)
-                              sidebar.runProjectSearch(project.id, value)
-                            }}
-                            onClose={() => sidebar.closeProjectSearch(project.id)}
-                          />
-                        {/if}
-                        {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
-                          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
-                        {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
-                          <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
-                            {searchQ.trim() ? 'No matching threads' : 'No threads yet'}
-                          </p>
-                        {:else if isSearching}
-                          <div
-                            class="max-h-80 space-y-px overflow-y-auto overscroll-contain py-0.5"
-                            role="list"
-                          >
-                            {#each searchResults as result (result.thread.id)}
-                              <ThreadSearchResultRow
-                                {result}
-                                selected={activeThreadId === result.thread.id}
-                                onOpen={onOpenThread}
-                              />
-                            {/each}
-                          </div>
-                        {:else}
-                          <div class="space-y-px py-0.5" role="list">
-                            {#each projectDisplayThreads as thread (thread.id)}
-                              {@render folderThreadRow(thread, project.id, folderThreads)}
-                            {/each}
-                          </div>
-                          {#if expanded && hiddenFolderCount > 0}
-                            <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                              onclick={() =>
-                                sidebar.showMoreThreads(project.id, filteredThreads.length)}
-                            >
-                              Show {hiddenFolderCount} more
-                            </button>
-                          {:else if expanded && sidebar.getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
-                            <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-                              disabled={projectPageLoading === project.id}
-                              onclick={() => void onLoadProjectThreadsPage(project.id)}
-                            >
-                              {projectPageLoading === project.id ? 'Loading…' : 'Show more'}
-                            </button>
-                          {/if}
-                          {#if expanded && sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
-                            <button
-                              class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                              onclick={() => sidebar.showLessThreads(project.id)}
-                            >
-                              Show less
-                            </button>
-                          {/if}
-                        {/if}
-                      </div>
-                    {:else if revealedThreads.length > 0 && foldingProjectId !== project.id}
-                      <!-- Folded, a folder keeps the one thread the user is working in
-                             on screen. That row is its own block, never a reason to hold
-                             the list open: holding it open is what used to swallow the
-                             fold animation for the folder the user was working in. -->
-                      <div class="ml-2 space-y-px py-0.5" role="list">
-                        {#each revealedThreads as thread (thread.id)}
-                          {@render folderThreadRow(thread, project.id, folderThreads)}
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                  <DropdownMenu.Portal>
-                    <DropdownMenu.Content
-                      side="bottom"
-                      align="end"
-                      sideOffset={4}
-                      collisionPadding={8}
-                      class="z-50 w-48 overflow-hidden border bg-surface p-1 shadow-lg"
-                    >
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => projectDialogs.askEditProject(project.id)}
-                      >
-                        <CioPencil size={14} class="text-muted" />
-                        Edit Project
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => openInEditor(project.id)}
-                      >
-                        <CioExternalLink size={14} class="text-muted" />
-                        Open in Editor
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => copyProjectPath(project.id)}
-                      >
-                        <CioCopy size={14} class="text-muted" />
-                        Copy Path
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => revealProjectInFileManager(project.id)}
-                      >
-                        <CioFolderOpen size={14} class="text-muted" />
-                        {osFileManagerLabel()}
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => toggleProjectPin(project.id)}
-                      >
-                        {#if project.pinned}
-                          <CioPinOff size={14} class="text-muted" />
-                          Unpin Project
-                        {:else}
-                          <CioPin size={14} class="text-muted" />
-                          Pin Project
-                        {/if}
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
-                        onSelect={() => void archiveItem('project', project.id, project.name)}
-                      >
-                        <CioArchive size={14} class="text-muted" />
-                        Archive Project
-                      </DropdownMenu.Item>
-                      <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                      <DropdownMenu.Item
-                        class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-                        onSelect={() => projectDialogs.askRemoveProject(project.id)}
-                      >
-                        <CioTrash size={14} />
-                        Remove Project
-                      </DropdownMenu.Item>
-                    </DropdownMenu.Content>
-                  </DropdownMenu.Portal>
-                </DropdownMenu.Root>
-              {/each}
-            </div>
-          {/if}
-        </div>
-      {/if}
-
-      <!-- Folder tree -->
-      {#if regularProjects.length === 0 && pinnedProjects.length === 0}
-        <div class="flex flex-col items-center gap-2 px-2 py-10 text-center">
-          <CioFolderOpen size={20} class="text-dimmed" />
-          <p class="text-xs text-muted">No projects yet</p>
-          <p class="text-xs text-dimmed">Add a folder to get started</p>
-        </div>
-      {:else if regularProjects.length > 0}
-        <div class="space-y-0.5" role="list">
-          {#each regularProjects as project (project.id)}
-            {@const folderThreads = threadOrderSettle.view(
-              projectOrderKey(project.id),
-              threadsByProject.get(project.id) ?? []
-            )}
-            {@const expanded =
-              sidebar.expandedFolders.has(project.id) || sidebar.projectSearchOpen.has(project.id)}
-            <!-- A folded folder still reveals the one thread the user is on, so
-                 folding a project can never take the active thread off screen.
-                 Unfolding brings the rest of the folder back. -->
-            {@const revealedThreads = expanded
-              ? []
-              : foldedSectionRows(folderThreads, activeThreadId)}
-            {@const stateCounts = projectStateCounts.get(project.id) ?? emptyThreadStateCounts()}
-            <DropdownMenu.Root
-              open={openProjectMenuId === project.id}
-              onOpenChange={(o) => {
-                openProjectMenuId = o ? project.id : null
-              }}
-            >
-              <div>
-                <FolderRow
-                  media={[
-                    ...new SvelteSet(
-                      (threadsByProject.get(project.id) ?? []).flatMap((thread) =>
-                        threadMediaActivity(thread.id)
-                      )
-                    )
-                  ]}
-                  {project}
-                  iconUrl={projectIcons.get(project.id) ?? null}
-                  {expanded}
-                  sticky
-                  {stateCounts}
-                  totalThreads={(threadsByProject.get(project.id) ?? []).length}
-                  showLocation={hasProjectNameCollision(project, visibleProjects)}
-                  deleting={projectDeletionState.isPending(project.id)}
-                  deletingLabel={projectDeletionState.label(project.id) ?? undefined}
-                  actionsPinned={sidebar.projectSearchOpen.has(project.id) ||
-                    openProjectMenuId === project.id}
-                  onToggle={() => toggleFolder(project.id)}
-                  onMoveProject={(draggedId, targetId, pos) =>
-                    onProjectMove(draggedId, targetId, pos)}
-                  onContextMenu={(e) => {
-                    e.preventDefault()
-                    openProjectMenuId = project.id
-                  }}
-                >
-                  {#snippet actions()}
-                    <span class="flex shrink-0 items-center gap-0.5">
-                      <SidebarSearchControl
-                        open={sidebar.projectSearchOpen.has(project.id)}
-                        query={sidebar.projectSearchQueries.get(project.id) ?? ''}
-                        inlineField
-                        fieldId="project-search-{project.id}"
-                        onOpenChange={(open) => {
-                          if (open) sidebar.openProjectSearch(project.id)
-                          else sidebar.closeProjectSearch(project.id)
-                        }}
-                        onQueryChange={(value) => {
-                          sidebar.projectSearchQueries.set(project.id, value)
-                          sidebar.runProjectSearch(project.id, value)
-                        }}
-                        loading={sidebar.projectSearching.has(project.id)}
-                        ariaLabel="Search threads in {project.name}"
-                        title="Search threads"
-                        placeholder="Search threads in {project.name}…"
-                      />
-                      <button
-                        class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-                        aria-label="New thread in {project.name}"
-                        title="New thread"
-                        data-shortcut={encodeShortcutTokens(keymapState.keysFor('nav-new-thread'))}
-                        onclick={() => onCreateThread(project)}
-                      >
-                        <CioPlus size={12} />
-                      </button>
-                      <DropdownMenu.Trigger
-                        class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-                        aria-label="Options for {project.name}"
-                        title="Project options"
-                        oncontextmenu={(e: MouseEvent) => e.preventDefault()}
-                      >
-                        <CioEllipsis size={12} />
-                      </DropdownMenu.Trigger>
-                    </span>
-                  {/snippet}
-                </FolderRow>
-
-                <!-- Threads under folder -->
-                {#if expanded}
-                  {@const searchQ = sidebar.projectSearchQueries.get(project.id) ?? ''}
-                  {@const isSearching = Boolean(searchQ.trim())}
-                  {@const searchResults = sidebar.projectSearchResults.get(project.id) ?? []}
-                  {@const filteredThreads = isSearching
-                    ? []
-                    : filterThreadsByQuery(folderThreads, '')}
-                  {@const visibleFolderThreads = expanded
-                    ? sidebar.visibleThreads(project.id, filteredThreads, activeThreadId)
-                    : revealedThreads}
-                  {@const projectDisplayThreads = [
-                    ...visibleFolderThreads.filter((thread) => thread.bookmarked),
-                    ...visibleFolderThreads.filter((thread) => !thread.bookmarked)
-                  ]}
-                  {@const hiddenFolderCount = sidebar.hiddenThreadCount(
-                    project.id,
-                    filteredThreads,
-                    visibleFolderThreads
-                  )}
-                  <!-- The list the fold owns: the only child of this branch, so its
-                       own `slide` plays when the folder closes. See the pinned list. -->
-                  <div transition:slide={foldSlide()} class="ml-2">
-                    {#if sidebar.projectSearchOpen.has(project.id)}
-                      <SidebarProjectSearchField
-                        id="project-search-{project.id}"
-                        query={searchQ}
-                        loading={sidebar.projectSearching.has(project.id)}
-                        placeholder="Search threads in {project.name}…"
-                        ariaLabel="Search threads in {project.name}"
-                        onQueryChange={(value) => {
-                          sidebar.projectSearchQueries.set(project.id, value)
-                          sidebar.runProjectSearch(project.id, value)
-                        }}
-                        onClose={() => sidebar.closeProjectSearch(project.id)}
-                      />
-                    {/if}
-                    {#if isSearching && sidebar.projectSearching.has(project.id) && searchResults.length === 0}
-                      <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">Searching…</p>
-                    {:else if (isSearching ? searchResults.length : filteredThreads.length) === 0}
-                      <p class="px-2 py-1.5 text-[0.6875rem] text-dimmed">
-                        {searchQ.trim() ? 'No matching threads' : 'No threads yet'}
-                      </p>
-                    {:else if isSearching}
-                      <div
-                        class="max-h-80 space-y-px overflow-y-auto overscroll-contain py-0.5"
-                        role="list"
-                      >
-                        {#each searchResults as result (result.thread.id)}
-                          <ThreadSearchResultRow
-                            {result}
-                            selected={activeThreadId === result.thread.id}
-                            onOpen={onOpenThread}
-                          />
-                        {/each}
-                      </div>
-                    {:else}
-                      <div class="space-y-px py-0.5" role="list">
-                        {#each projectDisplayThreads as thread (thread.id)}
-                          {@render folderThreadRow(thread, project.id, folderThreads)}
-                        {/each}
-                      </div>
-                      {#if expanded && hiddenFolderCount > 0}
-                        <button
-                          class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                          onclick={() =>
-                            sidebar.showMoreThreads(project.id, filteredThreads.length)}
-                        >
-                          Show {hiddenFolderCount} more
-                        </button>
-                      {:else if expanded && sidebar.getVisibleCount(project.id) >= filteredThreads.length && filteredThreads.length > 0 && projectHasMoreInDb(project.id)}
-                        <button
-                          class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-                          disabled={projectPageLoading === project.id}
-                          onclick={() => void onLoadProjectThreadsPage(project.id)}
-                        >
-                          {projectPageLoading === project.id ? 'Loading…' : 'Show more'}
-                        </button>
-                      {/if}
-                      {#if expanded && sidebar.getVisibleCount(project.id) > sidebar.threadsPerPage}
-                        <button
-                          class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                          onclick={() => sidebar.showLessThreads(project.id)}
-                        >
-                          Show less
-                        </button>
-                      {/if}
-                    {/if}
-                  </div>
-                {:else if revealedThreads.length > 0 && foldingProjectId !== project.id}
-                  <!-- The one row a folded folder keeps for the thread being worked
-                         in, drawn after the fold so closing the folder still moves. -->
-                  <div class="ml-2 space-y-px py-0.5" role="list">
-                    {#each revealedThreads as thread (thread.id)}
-                      {@render folderThreadRow(thread, project.id, folderThreads)}
-                    {/each}
-                  </div>
-                {/if}
-              </div>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content
-                  side="bottom"
-                  align="end"
-                  sideOffset={4}
-                  collisionPadding={8}
-                  class="z-50 w-48 overflow-hidden border bg-surface p-1 shadow-lg"
-                >
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                    onSelect={() => projectDialogs.askEditProject(project.id)}
-                  >
-                    <CioPencil size={14} class="text-muted" />
-                    Edit Project
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                    onSelect={() => openInEditor(project.id)}
-                  >
-                    <CioExternalLink size={14} class="text-muted" />
-                    Open in Editor
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                    onSelect={() => copyProjectPath(project.id)}
-                  >
-                    <CioCopy size={14} class="text-muted" />
-                    Copy Path
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                    onSelect={() => revealProjectInFileManager(project.id)}
-                  >
-                    <CioFolderOpen size={14} class="text-muted" />
-                    {osFileManagerLabel()}
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                    onSelect={() => toggleProjectPin(project.id)}
-                  >
-                    {#if project.pinned}
-                      <CioPinOff size={14} class="text-muted" />
-                      Unpin Project
-                    {:else}
-                      <CioPin size={14} class="text-muted" />
-                      Pin Project
-                    {/if}
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
-                    onSelect={() => void archiveItem('project', project.id, project.name)}
-                  >
-                    <CioArchive size={14} class="text-muted" />
-                    Archive Project
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-                  <DropdownMenu.Item
-                    class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-                    onSelect={() => projectDialogs.askRemoveProject(project.id)}
-                  >
-                    <CioTrash size={14} />
-                    Remove Project
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-          {/each}
-        </div>
-      {/if}
     </SidebarListPane>
     {#if loading && !scopedSidebarVisible}
       <p class="px-2 py-4 text-sm text-dimmed">Loading...</p>

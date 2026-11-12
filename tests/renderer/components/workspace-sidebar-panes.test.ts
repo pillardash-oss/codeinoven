@@ -161,7 +161,9 @@ function props(mode: 'projects' | 'chats' | 'threads') {
     onSwitchScopedProject: vi.fn(async () => {}),
     onLoadProjectThreadsPage: vi.fn(async () => {}),
     onLoadHistoryPage: vi.fn(async () => {}),
-    projectHasMoreInDb: () => false
+    projectHasMoreInDb: () => false,
+    onSelectMode: () => {},
+    panelActions: () => []
   }
 }
 

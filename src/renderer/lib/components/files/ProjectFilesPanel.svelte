@@ -25,6 +25,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import ErrorStrip from '$lib/components/ui/ErrorStrip.svelte'
   import {
     conflictSaveActionLabels,
     conflictSaveActionTitle,
@@ -1283,11 +1284,7 @@
       {@render staleVersionAlert('top-[4.5rem]')}
 
       {#if activeSession?.error}
-        <div
-          class="shrink-0 border-b border-danger/20 bg-danger/10 px-3 py-2 text-[0.625rem] leading-relaxed text-danger"
-        >
-          {activeSession.error}
-        </div>
+        <ErrorStrip title="This file could not be opened" message={activeSession.error} />
       {/if}
 
       {#if findNavState.fileDocumentFindOpen && documentFindAvailable && !fullscreenOpen}

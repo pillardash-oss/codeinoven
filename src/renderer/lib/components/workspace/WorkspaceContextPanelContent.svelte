@@ -124,6 +124,26 @@
   })
 
   /**
+   * Configuration a delegated worker inherited from the thread that spawned it.
+   *
+   * A nested worker runs inside its parent's session, so it inherits the
+   * harness and the reasoning effort unless the spawn named its own. Only the
+   * parent thread on screen can answer that: the tab carries the parent's ids
+   * but no settings, and the sidebar holds no thread rows.
+   */
+  let subagentInherited = $derived.by(() => {
+    const tab = activeContextTab
+    const settings = selectedThread?.settings
+    if (tab?.kind !== 'subagent' || selectedThread?.id !== tab.threadId) {
+      return { harnessId: null, thinkingLevel: null }
+    }
+    return {
+      harnessId: settings?.harnessId ?? null,
+      thinkingLevel: settings?.thinkingLevel ?? null
+    }
+  })
+
+  /**
    * The coordinator the active tab belongs to.
    *
    * Read from the tab's own row rather than from the on-screen thread's, because
@@ -665,7 +685,11 @@
           {#await loadCachedPanelModule(PANEL_KEYS.subagent, () => import('../threads/SubagentSessionView.svelte'))}
             {@render panelLoading('Sub-agent')}
           {:then { default: SubagentSessionView }}
-            <SubagentSessionView tab={activeContextTab} {onOpenSubagent} />
+            <SubagentSessionView
+              tab={activeContextTab}
+              {onOpenSubagent}
+              inherited={subagentInherited}
+            />
           {:catch error}
             {@render panelLoadFailed(PANEL_KEYS.subagent, 'Sub-agent', error)}
           {/await}

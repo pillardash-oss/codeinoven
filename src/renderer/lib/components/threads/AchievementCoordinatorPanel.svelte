@@ -104,7 +104,7 @@
     if (coordinatorWorking) {
       return {
         label: 'Implementation in progress',
-        description: 'The Sr. Engineer is working toward the approved specification.',
+        description: 'The Sr. Engineer is working toward the Achievement goal.',
         tone: 'text-info'
       }
     }

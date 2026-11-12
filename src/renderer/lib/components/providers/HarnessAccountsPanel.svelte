@@ -2,6 +2,7 @@
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioLogIn from '@pdslng/cio-icon/CioLogIn.svelte'
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
@@ -22,6 +23,7 @@
     ProviderConnectionInfo
   } from '$shared/types'
   import Modal from '../ui/Modal.svelte'
+  import Switch from '../ui/Switch.svelte'
   import ProviderSignInPanel from './ProviderSignInPanel.svelte'
   import HarnessAccountList from './accounts/HarnessAccountList.svelte'
   import HarnessAccountDetail from './accounts/HarnessAccountDetail.svelte'
@@ -55,6 +57,15 @@
   let saving = $state(false)
   let disconnectTarget = $state<HarnessAccount | null>(null)
   let disconnecting = $state(false)
+  /**
+   * Whether agents may see which account still has subscription capacity.
+   *
+   * The switch decides whether `cio_orchestrate_targets` reports capacity at
+   * all, so an agent that sees none falls back to the thread's own account and
+   * model. An absent stored field reads as on.
+   */
+  let agentAccountVisibility = $state(true)
+  let savingAccountVisibility = $state(false)
 
   /**
    * Credential state of the account the edit modal is showing.
@@ -70,6 +81,8 @@
   let editNotice = $state('')
   let newApiKey = $state('')
   let replacingKey = $state(false)
+  /** Account whose stored credential is being cleared before its sign-in re-runs. */
+  let reconnecting = $state(false)
   /** Account whose credential is being re-authenticated through the sign-in panel. */
   let signInTarget = $state<HarnessAccount | null>(null)
 
@@ -264,6 +277,38 @@
     }
   }
 
+  /** Read the one config field this panel edits; an absent field means on. */
+  async function loadAgentAccountVisibility(): Promise<void> {
+    try {
+      agentAccountVisibility = (await invoke('config:get')).agentAccountVisibility !== false
+    } catch (configError) {
+      error =
+        configError instanceof Error
+          ? configError.message
+          : 'Account capacity visibility could not be read.'
+    }
+  }
+
+  /** Persist the switch, guarding against a second write while one is running. */
+  async function setAgentAccountVisibility(next: boolean): Promise<void> {
+    if (savingAccountVisibility) return
+    const previous = agentAccountVisibility
+    savingAccountVisibility = true
+    agentAccountVisibility = next
+    error = ''
+    try {
+      await invoke('config:update', { agentAccountVisibility: next })
+    } catch (saveError) {
+      agentAccountVisibility = previous
+      error =
+        saveError instanceof Error
+          ? saveError.message
+          : 'Account capacity visibility could not be saved.'
+    } finally {
+      savingAccountVisibility = false
+    }
+  }
+
   async function refreshAccounts(): Promise<void> {
     if (refreshing) return
     refreshing = true
@@ -331,6 +376,7 @@
   }
 
   async function initializeAccounts(): Promise<void> {
+    await loadAgentAccountVisibility()
     await loadStoredAccounts()
     harnessAccountUsageCache.schedule(rows)
     await refreshAccounts()
@@ -380,14 +426,13 @@
       (editCapabilities.inAppLogin || editCapabilities.loginHandoff)
   )
 
-  /** Human label for the credential method an account's auth entry reports. */
-  function credentialMethodLabel(method: string | undefined): string {
-    if (!method) return 'stored credentials'
-    const normalized = method.toLowerCase()
-    if (normalized === 'oauth') return 'an OAuth sign-in'
-    if (normalized === 'api-key' || normalized === 'api_key') return 'an API key'
-    return method
-  }
+  /**
+   * Whether the credential can only be changed by disconnecting and connecting
+   * again, which needs a sign-in flow to run afterwards.
+   */
+  const canReconnect = $derived(
+    !canReplaceApiKey && !canSignInAgain && editCapabilities?.loginHandoff === true
+  )
 
   function openEdit(account: HarnessAccount): void {
     editTarget = account
@@ -464,6 +509,37 @@
   function startSignIn(account: HarnessAccount): void {
     closeEdit()
     signInTarget = account
+  }
+
+  /**
+   * Clear the account's stored credential and immediately re-run its provider's
+   * sign-in, which writes the new credential back into the same account. A
+   * harness that cannot replace a credential in place is still connected again
+   * from here instead of making the user disconnect and reconnect by hand.
+   */
+  async function reconnectAccount(): Promise<void> {
+    if (!editTarget || reconnecting) return
+    const account = editTarget
+    reconnecting = true
+    editError = ''
+    editNotice = ''
+    try {
+      await invoke(
+        'providerAccounts:logout',
+        account.harnessId,
+        account.providerId || undefined,
+        account.id
+      )
+      harnessAccountCache.invalidate(account.harnessId)
+      startSignIn(account)
+    } catch (reconnectError) {
+      editError =
+        reconnectError instanceof Error
+          ? reconnectError.message
+          : 'The account was not disconnected.'
+    } finally {
+      reconnecting = false
+    }
   }
 
   async function completeSignIn(account: HarnessAccount): Promise<void> {
@@ -588,6 +664,24 @@
         <CioRefresh size={12} class={refreshing ? 'animate-spin' : ''} aria-hidden="true" />
         Refresh
       </button>
+    </div>
+
+    <div class="flex items-center justify-between gap-3">
+      <div class="min-w-0">
+        <p class="text-xs font-medium text-foreground">Agents can check account capacity</p>
+        <p class="mt-0.5 truncate text-[0.625rem] text-dimmed">
+          {agentAccountVisibility
+            ? 'Shows which connected account still has subscription capacity'
+            : "Agents run on this thread's own account and model"}
+        </p>
+      </div>
+      <Switch
+        checked={agentAccountVisibility}
+        disabled={savingAccountVisibility}
+        onchange={(value) => void setAgentAccountVisibility(value)}
+        aria-label="Let agents see which connected account has subscription capacity left"
+        title="Set whether agents can see which account still has subscription capacity"
+      />
     </div>
 
     <div class="sticky top-0 z-20 flex flex-wrap items-center gap-2 bg-app py-1.5">
@@ -790,12 +884,6 @@
           {/if}
         </div>
 
-        <p class="text-[0.6875rem] text-muted">
-          {account.label} is connected to {providerLabel(account)} with {credentialMethodLabel(
-            editAuthEntry?.method
-          )}. Replacing it keeps this account and its label.
-        </p>
-
         {#if editError}
           <p
             class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
@@ -869,10 +957,31 @@
         {/if}
 
         {#if !editStatusLoading && !canReplaceApiKey && !canSignInAgain}
-          <p class="text-[0.6875rem] text-dimmed">
-            {providerLabel(account)} does not let CodeInOven replace this account's credentials from here.
-            Disconnect and connect again to change them.
-          </p>
+          <div class="space-y-3">
+            <p class="text-[0.6875rem] text-dimmed">
+              {providerLabel(account)} does not let CodeInOven replace this account's credentials from
+              here.
+            </p>
+            {#if canReconnect}
+              <div class="flex justify-end">
+                <button
+                  type="button"
+                  class="flex h-9 items-center gap-1.5 border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+                  disabled={reconnecting}
+                  title={`Disconnect and connect ${account.label} again to ${providerLabel(account)}`}
+                  onclick={() => void reconnectAccount()}
+                >
+                  {#if reconnecting}
+                    <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
+                    Disconnecting…
+                  {:else}
+                    <CioPlug size={13} aria-hidden="true" />
+                    Disconnect and connect
+                  {/if}
+                </button>
+              </div>
+            {/if}
+          </div>
         {/if}
       </div>
     </div>

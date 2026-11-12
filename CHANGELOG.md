@@ -24,7 +24,7 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
-- **The runtime moved to Electron 45.3.0 (Chromium 156), and the embedded
+- **The runtime moved to Electron 45.3.1 (Chromium 156), and the embedded
   browser's extension surface was re-measured rather than assumed.** The
   permission list that is stripped from an installed manifest was recorded on
   Chromium 152, so it was re-taken against the shipped runtime: all 103 names
@@ -37,7 +37,13 @@ All notable changes to CodeInOven are documented here. This project follows
   already `sandbox: true`, so the new `window.open` child sandbox rule changes
   nothing; screen capture already answers the new `display-capture` permission
   (`src/lib/browser/site-permissions.ts`), and no code reads an ASAR file
-  descriptor across a process boundary.
+  descriptor across a process boundary. The 45.3.1 patch keeps the same
+  Chromium and Node builds, so none of that had to be taken again; its two
+  fixes both land on code this app runs, a macOS notification observer leak
+  when a notification is unsubscribed before it is closed (the detach-then-close
+  path in `src/main/notifications/notification-service.ts`) and the rejection of
+  certificates issued by eMudhra's revoked RSA intermediates, which the embedded
+  browser inherits from Chromium's root store without a code change.
 
 ### Fixed
 

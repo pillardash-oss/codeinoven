@@ -34,14 +34,14 @@ const NEXT_STAGE_AFTER_GATE: Partial<Record<EngineeringLifecycleGate, Engineerin
     assignment_approval: 'assignment'
   }
 
-/** A stage that must be enabled for the given dependent stage to run. Assignment
- *  stands alone: it decomposes the approved Spec when one exists and the thread
- *  conversation otherwise. Achievement still needs an approved Spec because its
- *  audit loop judges the goal against that contract. */
+/** A stage that must be enabled for the given dependent stage to run. No stage
+ *  requires another today: Assignment decomposes the approved Spec when one exists
+ *  and the thread conversation otherwise, and Achievement judges the work against
+ *  an approved Spec when one exists and the goal captured from the request or the
+ *  conversation otherwise. Neither forces a Spec the user never approved. A stage
+ *  that genuinely needs a predecessor belongs here so its switch brings it too. */
 const STAGE_DEPENDENCIES: Partial<Record<EngineeringLifecycleStage, EngineeringLifecycleStage[]>> =
-  {
-    achievement: ['spec']
-  }
+  {}
 
 /** True when the lifecycle runs the given stage. */
 export function hasSelectedStage(
@@ -53,7 +53,7 @@ export function hasSelectedStage(
 }
 
 /** Build the canonical, de-duplicated stage set for a client request, applying
- *  cascade dependencies so Assignment/Achievement always bring Spec along. */
+ *  cascade dependencies so a stage that needs another always brings it along. */
 export function normalizeLifecycleStages(
   input: EngineeringLifecycleStage[]
 ): EngineeringLifecycleStage[] {

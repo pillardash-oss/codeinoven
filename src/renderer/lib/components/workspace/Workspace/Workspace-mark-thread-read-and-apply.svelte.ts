@@ -224,9 +224,17 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
   })
 
   /**
-   * Whether the left sidebar is painted at all. A sidebar with nothing in it is
-   * not rendered, so no dock and no edge-hover overlay offer a panel with no
-   * content.
+   * Whether the left sidebar is painted at all.
+   *
+   * A view with nothing in its list paints no panel: an empty Projects, Threads
+   * or Chats column is a bare frame with its tabs, search and create row under
+   * it, which reads as a broken panel rather than an invitation. The view's own
+   * empty state takes the pane in that case, and it already carries the one
+   * action that fills the list (Add project, New chat).
+   *
+   * The Assistant view is the exception the content test already answers: Don is
+   * a fixed slot, so the panel holds content from the first launch and draws the
+   * invitation to add teammates under his tile.
    */
   workspaceSidebarVisible = $derived(this.workspaceSidebarHasContent)
 

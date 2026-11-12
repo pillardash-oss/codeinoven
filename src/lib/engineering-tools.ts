@@ -127,7 +127,7 @@ export const ENGINEERING_TOOLS: GatewayToolDefinition[] = [
   },
   {
     name: CREATE_ACHIEVEMENT_TOOL_NAME,
-    description: `Turn on Achievement for ${APP_NAME}: the thread implements, audits and reworks autonomously until the approved goal is verified, without asking the user to approve steps. Call it only when the user explicitly asks to keep going until a goal is reached ("do this until it works", "take it all the way", "keep going until complete"). Do not call it for a single artifact, for a plan, or because the work looks long. It requires an approved specification, because the independent audit judges the result against that contract; when no approved specification exists the tool says so and the specification tool runs first. Nothing is signed off on the user's behalf.`,
+    description: `Turn on Achievement for ${APP_NAME}: the thread implements, audits and reworks autonomously until the approved goal is verified, without asking the user to approve steps. Call it only when the user explicitly asks to keep going until a goal is reached ("do this until it works", "take it all the way", "keep going until complete"). Do not call it for a single artifact, for a plan, or because the work looks long. The independent audit judges the result against the thread's approved specification when one exists, and otherwise against the goal: the instructions you pass here, or, when you pass none, what the thread already says (its title and the latest request in it). Pass the goal whenever the user stated one, so the audit contract is their own words rather than a summary. Nothing is signed off on the user's behalf.`,
     inputSchema: INSTRUCTIONS_INPUT_SCHEMA,
     outputSchema: ENGINEERING_RESULT_SCHEMA,
     route: '/engineering/achievement',

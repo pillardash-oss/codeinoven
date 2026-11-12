@@ -6,8 +6,9 @@
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioReplace from '@pdslng/cio-icon/CioReplace.svelte'
   import CioReplaceAll from '@pdslng/cio-icon/CioReplaceAll.svelte'
-  import { onDestroy, tick } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { selectedSearchText } from '$lib/selection-text'
 
   interface Props {
     query: string
@@ -74,6 +75,18 @@
   // svelte-ignore state_referenced_locally
   let replaceOpen = $state(enableReplace && initialReplaceOpen)
   let replaceInputEl = $state<HTMLInputElement | null>(null)
+
+  // A find that opens empty starts from the passage the reader already
+  // highlighted: the selection is what they came to look for, whether they
+  // asked for the search with a chord or with a toolbar button. A bar that
+  // reopens with a query it remembers keeps that query instead.
+  onMount(() => {
+    if (query.trim()) return
+    const selected = selectedSearchText()
+    if (!selected) return
+    draft = selected
+    void onQueryChange(selected)
+  })
 
   function clearDebounce(): void {
     if (debounceTimer === null) return

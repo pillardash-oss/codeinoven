@@ -906,6 +906,44 @@ export function inspectorInstallScript(key: string): string {
     }
 
     /**
+     * Where the pick is claimed from: the window, not the document.
+     *
+     * Capture listeners on the same node run in the order they were registered,
+     * and a page registers its own long before inspect mode is armed. Menus built
+     * on Radix or Floating UI dismiss themselves from a capture-phase
+     * pointerdown on the document, so a document-level claim lost the race: the
+     * menu closed, and an item ran its action, before the inspector saw the
+     * event. The window precedes the document in the propagation path, so
+     * claiming there puts the inspector ahead of every listener a page can put
+     * on its own document, which is the whole of the stealth promise.
+     */
+    function pressTarget(doc) {
+      return viewOf(doc);
+    }
+
+    function addPressListeners(doc) {
+      const target = pressTarget(doc);
+      target.addEventListener('click', onClick, true);
+      target.addEventListener('pointerdown', onPress, true);
+      target.addEventListener('mousedown', onPress, true);
+      target.addEventListener('pointerup', onPress, true);
+      target.addEventListener('mouseup', onPress, true);
+      target.addEventListener('dblclick', onPress, true);
+      target.addEventListener('auxclick', onPress, true);
+    }
+
+    function removePressListeners(doc) {
+      const target = pressTarget(doc);
+      target.removeEventListener('click', onClick, true);
+      target.removeEventListener('pointerdown', onPress, true);
+      target.removeEventListener('mousedown', onPress, true);
+      target.removeEventListener('pointerup', onPress, true);
+      target.removeEventListener('mouseup', onPress, true);
+      target.removeEventListener('dblclick', onPress, true);
+      target.removeEventListener('auxclick', onPress, true);
+    }
+
+    /**
      * Wire one document so its elements answer the pointer like this page's do.
      *
      * A canvas frame is a document of its own, so the listeners that make an
@@ -920,13 +958,7 @@ export function inspectorInstallScript(key: string): string {
       doc.documentElement[flag] = true;
       ensureCursorStyle(doc);
       doc.addEventListener('pointermove', onPointerMove, true);
-      doc.addEventListener('click', onClick, true);
-      doc.addEventListener('pointerdown', onPress, true);
-      doc.addEventListener('mousedown', onPress, true);
-      doc.addEventListener('pointerup', onPress, true);
-      doc.addEventListener('mouseup', onPress, true);
-      doc.addEventListener('dblclick', onPress, true);
-      doc.addEventListener('auxclick', onPress, true);
+      addPressListeners(doc);
       doc.addEventListener('keydown', onKeyDown, true);
       doc.addEventListener('load', onFrameLoad, true);
       const view = viewOf(doc);
@@ -961,13 +993,7 @@ export function inspectorInstallScript(key: string): string {
     function addListener() {
       if (state.listeners) return;
       document.addEventListener('pointermove', onPointerMove, true);
-      document.addEventListener('click', onClick, true);
-      document.addEventListener('pointerdown', onPress, true);
-      document.addEventListener('mousedown', onPress, true);
-      document.addEventListener('pointerup', onPress, true);
-      document.addEventListener('mouseup', onPress, true);
-      document.addEventListener('dblclick', onPress, true);
-      document.addEventListener('auxclick', onPress, true);
+      addPressListeners(document);
       document.addEventListener('keydown', onKeyDown, true);
       document.addEventListener('load', onFrameLoad, true);
       // The canvas reports that it panned, zoomed or refitted, which changes
@@ -983,13 +1009,7 @@ export function inspectorInstallScript(key: string): string {
     function removeListener() {
       if (!state.listeners) return;
       document.removeEventListener('pointermove', onPointerMove, true);
-      document.removeEventListener('click', onClick, true);
-      document.removeEventListener('pointerdown', onPress, true);
-      document.removeEventListener('mousedown', onPress, true);
-      document.removeEventListener('pointerup', onPress, true);
-      document.removeEventListener('mouseup', onPress, true);
-      document.removeEventListener('dblclick', onPress, true);
-      document.removeEventListener('auxclick', onPress, true);
+      removePressListeners(document);
       document.removeEventListener('keydown', onKeyDown, true);
       document.removeEventListener('load', onFrameLoad, true);
       document.removeEventListener('cio:canvas-view', scheduleHoverFrame);

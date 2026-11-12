@@ -32,12 +32,21 @@ export const GROUP_CHAT_REPLY_TOOL_NAME = 'cio_reply_in_chat'
  * needs instead of reporting that the team is missing.
  */
 export const DON_CREATE_ASSISTANT_TOOL_NAME = 'cio_create_assistant'
+/**
+ * Answer a question a teammate's run is blocked on, in that teammate's own thread.
+ *
+ * The question belongs to the work, not to the person: Don settles what it can so
+ * the team keeps moving. A credential is the one exception, because only the user
+ * can supply it.
+ */
+export const DON_ANSWER_TEAMMATE_TOOL_NAME = 'cio_answer_teammate'
 
 /** Every Don tool name, for the gateway gate and the extension. */
 export const DON_TOOL_NAMES: readonly string[] = [
   DON_USER_NAME_TOOL_NAME,
   GROUP_CHAT_REPLY_TOOL_NAME,
-  DON_CREATE_ASSISTANT_TOOL_NAME
+  DON_CREATE_ASSISTANT_TOOL_NAME,
+  DON_ANSWER_TEAMMATE_TOOL_NAME
 ]
 
 /** Whether a gateway tool name belongs to Don's own tools. */
@@ -46,13 +55,15 @@ export function isDonTool(name: string): boolean {
 }
 
 /** The single operation a Don tool call names. */
-export type DonToolOperation = 'user-name' | 'reply-in-chat' | 'create-assistant'
+export type DonToolOperation =
+  'user-name' | 'reply-in-chat' | 'create-assistant' | 'answer-teammate'
 
 /** Read the operation a tool name stands for. */
 export function donToolOperation(name: string): DonToolOperation | null {
   if (name === DON_USER_NAME_TOOL_NAME) return 'user-name'
   if (name === GROUP_CHAT_REPLY_TOOL_NAME) return 'reply-in-chat'
   if (name === DON_CREATE_ASSISTANT_TOOL_NAME) return 'create-assistant'
+  if (name === DON_ANSWER_TEAMMATE_TOOL_NAME) return 'answer-teammate'
   return null
 }
 
@@ -96,7 +107,12 @@ const CREATE_ASSISTANT_INPUT_SCHEMA: Record<string, unknown> = {
     request: {
       type: 'string',
       description:
-        "The work that is waiting for it, in the user's own words and with the detail they gave. It is carried into the new assistant's first conversation, so nothing has to be explained twice."
+        "The work that is waiting for it, in the user's own words and with the detail they gave. It is carried into the new assistant's instructions and its first task, so nothing has to be explained twice."
+    },
+    instructions: {
+      type: 'string',
+      description:
+        'The instruction set you write for the teammate, in Markdown: what it is for, what it should take on, how it should answer, and anything specific about this work. Nobody interviews the user for a hire, so this is where the teammate\u2019s behavior comes from. Open it with a "Personality" section holding how it should behave; leaving it out gives the teammate a plain baseline you can revise later.'
     }
   },
   required: ['name', 'purpose'],
@@ -115,6 +131,37 @@ const USER_NAME_INPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false
 }
 
+const ANSWER_TEAMMATE_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    threadId: {
+      type: 'string',
+      description:
+        'The thread of the teammate whose run is waiting, exactly as the question names it.'
+    },
+    requestId: {
+      type: 'string',
+      description: 'The question request id, exactly as the question names it.'
+    },
+    answers: {
+      type: 'array',
+      description:
+        'One entry per question, in the order the question asks them. Each entry is the answer you chose, as a single-item array holding exactly one answer text from the options offered, or your own wording when the question allows a custom answer.',
+      items: {
+        type: 'array',
+        items: { type: 'string' }
+      }
+    },
+    note: {
+      type: 'string',
+      description:
+        "One short line for the user, in your own words, saying what you decided and why. It is written into this conversation under the teammate's name."
+    }
+  },
+  required: ['threadId', 'requestId', 'answers'],
+  additionalProperties: false
+}
+
 export const DON_TOOLS: GatewayToolDefinition[] = [
   {
     name: GROUP_CHAT_REPLY_TOOL_NAME,
@@ -129,11 +176,20 @@ export const DON_TOOLS: GatewayToolDefinition[] = [
   {
     name: DON_CREATE_ASSISTANT_TOOL_NAME,
     description:
-      'Create the teammate this request needs, and only after the roster has answered. Read cio_orchestrate_targets on this turn and check every assistant first: hire only when the request is assistant-category work and not one assistant fits it, never when one plausibly fits, never for codebase work that belongs to a project, and never when the user has asked you not to create assistants. It gives the assistant the name and purpose you chose and opens its Getting started conversation with the waiting request already in it, so the person only answers its first questions. Say one line afterwards naming who was created and that the work is already with them.',
+      'Create the teammate this request needs, and only after the roster has answered. Read cio_orchestrate_targets on this turn and check every assistant first: hire only when the request is assistant-category work and not one assistant fits it, never when one plausibly fits, never for codebase work that belongs to a project, and never when the user has asked you not to create assistants. You give it the name, the purpose and its instruction set, and the request it was hired for, so it arrives ready and never interviews the person. Nothing about the hire ever interrupts them: it introduces itself in this conversation under its own name, and anything it needs to ask reaches this conversation for you to settle. After it is created, dispatch the waiting request to it in this same turn with cio_orchestrate_dispatch, then say one line naming who was created and that the work is with them.',
     inputSchema: CREATE_ASSISTANT_INPUT_SCHEMA,
     outputSchema: DON_RESULT_SCHEMA,
     route: '/don-create-assistant',
     sentWhen: "Don's thread, when the request needs work no existing assistant was built for"
+  },
+  {
+    name: DON_ANSWER_TEAMMATE_TOOL_NAME,
+    description:
+      "Answer the question a teammate's run is waiting on, so the work continues without the user. Use it whenever a teammate stops on a question about how the work should be done, what to prefer, which option to pick or what something means: those are yours to decide. Fill the answers in the order the question asks them, using one of the offered options word for word. A capability the app offered to install is settled the same way, and never by accepting the install: decline it when the work does not need it, or answer in your own words telling the teammate how to finish with what the app already has. Never use it for a credential, a login, an OAuth or MCP sign-in, or a connected account: only the user can supply those, so say one line about what you need with cio_reply_in_chat and leave the card for them.",
+    inputSchema: ANSWER_TEAMMATE_INPUT_SCHEMA,
+    outputSchema: DON_RESULT_SCHEMA,
+    route: '/don-answer-teammate',
+    sentWhen: "Don's thread, when a teammate's run stops on a question Don can settle"
   },
   {
     name: DON_USER_NAME_TOOL_NAME,

@@ -1,17 +1,14 @@
 <script lang="ts">
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioImage from '@pdslng/cio-icon/CioImage.svelte'
   import CioImagePlus from '@pdslng/cio-icon/CioImagePlus.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
-  import CardFoot from '../shared/CardFoot.svelte'
-  import CardFrame from '../shared/CardFrame.svelte'
-  import CardHead from '../shared/CardHead.svelte'
-  import { dismissSlide, foldSlide } from '../shared/card-motion'
+  import { dismissSlide } from '../shared/card-motion'
   import ModelPicker from '../shared/ModelPicker.svelte'
+  import ErrorStrip, { type ErrorStripAction } from '../ui/ErrorStrip.svelte'
   import Switch from '../ui/Switch.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import type {
@@ -133,6 +130,22 @@
           : 'Retry describing the image'
   )
 
+  /** The one primary action. It sits in the header while the card is folded. */
+  const retryAction = $derived<ErrorStripAction>({
+    label: needsSelection
+      ? 'Continue worker'
+      : changed
+        ? 'Retry with this model'
+        : networkRelated
+          ? 'Retry with more time'
+          : 'Retry',
+    title: retryTitle,
+    icon: working || !visionSelection ? undefined : CioRefresh,
+    loading: working,
+    disabled: working || !visionSelection,
+    onclick: () => void retry()
+  })
+
   function chooseThinking(level: ThinkingLevel): void {
     const base = override ?? request.selection
     if (!base) return
@@ -200,134 +213,101 @@
 </script>
 
 <div out:slide={dismissSlide()}>
-  <CardFrame placement="replace" label="Image descriptor error" {stackedAbove} {joinsBelow}>
-    <CardHead
-      icon={request.imageId ? CioImage : CioAttention}
-      title={cardTitle}
-      chip={{ text: 'Stopped', tone: 'urgent' }}
-      bind:folded={foldState.folded}
-      foldLabel="vision model error"
-    />
+  <ErrorStrip
+    placement="replace"
+    label="Image descriptor error"
+    icon={request.imageId ? CioImage : CioAttention}
+    title={cardTitle}
+    tone="warning"
+    chip={{ text: 'Stopped', tone: 'urgent' }}
+    bind:folded={foldState.folded}
+    foldLabel="vision model error"
+    rawError={request.error}
+    primary={retryAction}
+    onDismiss={() => void ignore()}
+    dismissTitle="Dismiss and continue without the description"
+    dismissDisabled={working}
+    {stackedAbove}
+    {joinsBelow}
+  >
+    <p class="text-sm font-semibold text-foreground">
+      {needsSelection
+        ? `${request.workerTitle ?? 'The agent'} needs vision assistance`
+        : networkRelated
+          ? 'The image upload or vision response was interrupted'
+          : 'The vision model could not describe this image'}
+    </p>
+    <p>
+      {needsSelection
+        ? 'Choose a vision-capable model to describe the image. The blocked worker resumes after you continue.'
+        : networkRelated
+          ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model, pick a different image, or continue without the description.'
+          : changed
+            ? 'Retry with the selected vision model, pick a different image, dismiss, or type a new message below to steer the agent another way.'
+            : 'Pick a different vision model and retry, pick a different image, dismiss, or type a new message below to steer the agent another way.'}
+    </p>
 
-    {#if !foldState.folded}
-      <div transition:slide={foldSlide()}>
-        <div class="space-y-4 p-4">
-          <div>
-            <p class="text-sm font-semibold text-foreground">
-              {needsSelection
-                ? `${request.workerTitle ?? 'The agent'} needs vision assistance`
-                : networkRelated
-                  ? 'The image upload or vision response was interrupted'
-                  : 'The vision model could not describe this image'}
-            </p>
-            <p
-              class="mt-1.5 max-h-40 overflow-y-auto break-words whitespace-pre-wrap border border-danger/30 bg-danger/5 px-3 py-2 font-mono text-[0.6875rem] leading-relaxed text-danger"
-            >
-              {request.error}
-            </p>
-            <p class="mt-2 text-xs leading-relaxed text-muted">
-              {needsSelection
-                ? 'Choose a vision-capable model to describe the image. The blocked worker resumes after you continue.'
-                : networkRelated
-                  ? 'This is usually caused by a slow or unstable connection. Retry allows more upload time; you can also choose another vision model, pick a different image, or continue without the description.'
-                  : changed
-                    ? 'Retry with the selected vision model, pick a different image, ignore, or type a new message below to steer the agent another way.'
-                    : 'Pick a different vision model and retry, pick a different image, ignore, or type a new message below to steer the agent another way.'}
-            </p>
-          </div>
-
-          <div>
-            <p class="mb-1.5 text-[0.6875rem] font-semibold text-dimmed">Change vision model</p>
-            <ModelPicker
-              {providers}
-              {projectId}
-              harnessId={visionSelection?.harnessId ?? providers[0]?.harnessId ?? ''}
-              providerId={visionSelection?.providerId ?? ''}
-              modelId={visionSelection?.modelId ?? ''}
-              accountId={visionSelection?.accountId}
-              {favoriteModels}
-              {recentModels}
-              {onRemoveRecent}
-              visionOnly
-              side="top"
-              variant="field"
-              disabled={working}
-              onSelect={(providerId, modelId, harnessId, accountId) => {
-                override = { harnessId, providerId, modelId, accountId }
-              }}
-              thinkingLevel={visionSelection?.thinkingLevel}
-              runtimeSettings={visionSelection ?? undefined}
-              onSelectThinking={chooseThinking}
-              onSelectRuntime={chooseRuntime}
-              {onToggleFavorite}
-              {onReorderFavorite}
-            />
-            <div class="mt-3">
-              <Switch
-                bind:checked={remember}
-                label="Don't ask again"
-                aria-label="Don't ask again for worker image model selection"
-              />
-            </div>
-          </div>
-
-          {#if actionError}
-            <p class="text-xs text-danger" role="alert">{actionError}</p>
-          {/if}
-        </div>
-      </div>
-    {/if}
-
-    {#if !foldState.folded}
-      <CardFoot>
-        {#snippet left()}
+    <div>
+      <p class="mb-1.5 text-[0.6875rem] font-semibold text-dimmed">Change vision model</p>
+      <ModelPicker
+        {providers}
+        {projectId}
+        harnessId={visionSelection?.harnessId ?? providers[0]?.harnessId ?? ''}
+        providerId={visionSelection?.providerId ?? ''}
+        modelId={visionSelection?.modelId ?? ''}
+        accountId={visionSelection?.accountId}
+        {favoriteModels}
+        {recentModels}
+        {onRemoveRecent}
+        visionOnly
+        side="top"
+        variant="field"
+        disabled={working}
+        onSelect={(providerId, modelId, harnessId, accountId) => {
+          override = { harnessId, providerId, modelId, accountId }
+        }}
+        thinkingLevel={visionSelection?.thinkingLevel}
+        runtimeSettings={visionSelection ?? undefined}
+        onSelectThinking={chooseThinking}
+        onSelectRuntime={chooseRuntime}
+        {onToggleFavorite}
+        {onReorderFavorite}
+      />
+      <div class="mt-3 flex items-center justify-between gap-2">
+        <Switch
+          bind:checked={remember}
+          label="Don't ask again"
+          aria-label="Don't ask again for worker image model selection"
+        />
+        {#if request.requestingModel}
           <CardButton
-            label="Ignore"
-            title="Ignore and continue without the description"
-            icon={CioCheck}
-            variant="ghost"
+            label="False positive"
+            title="{falsePositiveTitle} so the image descriptor is skipped for it"
+            icon={CioEye}
+            variant="secondary"
+            size="sm"
             disabled={working}
-            onclick={() => void ignore()}
+            onclick={() => void reportFalsePositive()}
           />
-          {#if request.imageId}
-            <CardButton
-              label="Pick new image"
-              title="Choose a different image and retry the description with it"
-              icon={CioImagePlus}
-              variant="secondary"
-              disabled={working}
-              onclick={() => void pickNewImage()}
-            />
-          {/if}
-          {#if request.requestingModel}
-            <CardButton
-              label="False positive"
-              title="{falsePositiveTitle} so the image descriptor is skipped for it"
-              icon={CioEye}
-              variant="secondary"
-              disabled={working}
-              onclick={() => void reportFalsePositive()}
-            />
-          {/if}
-        {/snippet}
-        {#snippet right()}
-          <CardButton
-            label={needsSelection
-              ? 'Continue worker'
-              : changed
-                ? 'Retry with this model'
-                : networkRelated
-                  ? 'Retry with more time'
-                  : 'Retry'}
-            title={retryTitle}
-            icon={working || !visionSelection ? undefined : CioRefresh}
-            variant="primary"
-            loading={working}
-            disabled={working || !visionSelection}
-            onclick={() => void retry()}
-          />
-        {/snippet}
-      </CardFoot>
+        {/if}
+      </div>
+    </div>
+
+    {#if actionError}
+      <p class="text-xs text-danger" role="alert">{actionError}</p>
     {/if}
-  </CardFrame>
+
+    {#snippet footerEnd()}
+      {#if request.imageId}
+        <CardButton
+          label="Pick new image"
+          title="Choose a different image and retry the description with it"
+          icon={CioImagePlus}
+          variant="secondary"
+          disabled={working}
+          onclick={() => void pickNewImage()}
+        />
+      {/if}
+    {/snippet}
+  </ErrorStrip>
 </div>

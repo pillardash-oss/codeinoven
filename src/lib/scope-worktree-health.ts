@@ -35,7 +35,9 @@ export interface ScopeWorktreeHealthGuidance {
   repairable: boolean
 }
 
-const REPAIR_HINT = 'Run "Repair worktree" from the scope\'s actions menu on the project board.'
+/** Where to find the repair, for surfaces that have no button of their own. */
+export const REPAIR_HINT =
+  'Run "Repair worktree" from the scope\'s actions menu on the project board.'
 
 const GUIDANCE: Record<ScopeWorktreeHealthCategory, ScopeWorktreeHealthGuidance> = {
   healthy: {

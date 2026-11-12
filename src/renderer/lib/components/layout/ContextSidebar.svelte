@@ -17,6 +17,7 @@
 </script>
 
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import { fileTabLabels } from '$lib/file-tab-labels'
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioActions from '@pdslng/cio-icon/CioActions.svelte'
@@ -763,7 +764,7 @@
                status module into the first-paint chunk. An indicator
                only ever appears on a tab that is playing or
                capturing, so the browser is open and it is warm. -->
-          {#await import('$lib/components/browser/BrowserTabIndicator.svelte') then { default: BrowserTabIndicator }}
+          {#await loadCachedPanelModule('module:lib/components/browser/BrowserTabIndicator.svelte', () => import('$lib/components/browser/BrowserTabIndicator.svelte')) then { default: BrowserTabIndicator }}
             <BrowserTabIndicator tabId={tab.id} />
           {/await}
         </div>

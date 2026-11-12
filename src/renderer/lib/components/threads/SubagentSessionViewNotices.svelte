@@ -3,7 +3,7 @@
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import AgentProviderStatusCard from './AgentProviderStatusCard.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
-  import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
+  import ErrorStrip from '../ui/ErrorStrip.svelte'
   import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import type {
     SubagentProviderStatus,
@@ -75,18 +75,12 @@
 {/if}
 
 {#if actionError && !noticeDismissals.isDismissed(actionErrorId, actionErrorCondition)}
-  <div class="border border-danger/30 bg-danger/5 px-3 py-2.5" role="alert">
-    <div class="flex items-start gap-2.5">
-      <div class="min-w-0 flex-1">
-        <p class="text-xs font-medium text-danger">Sub-agent action failed</p>
-        <p class="mt-1 text-[0.6875rem] text-muted">{actionError}</p>
-      </div>
-      <NoticeDismissButton
-        id={actionErrorId}
-        condition={actionErrorCondition}
-        title="Dismiss the sub-agent action error"
-        tone="danger"
-      />
-    </div>
-  </div>
+  <ErrorStrip
+    title="Sub-agent action failed"
+    message={actionError}
+    tone="danger"
+    folded={false}
+    onDismiss={() => noticeDismissals.dismiss(actionErrorId, actionErrorCondition)}
+    dismissTitle="Dismiss the sub-agent action error"
+  />
 {/if}

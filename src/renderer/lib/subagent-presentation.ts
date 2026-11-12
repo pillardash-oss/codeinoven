@@ -13,11 +13,32 @@ import type { AgentSubagentActivity, AgentToolStatus } from '$shared/types'
 /** Only used when a harness reports no delegated task at all. */
 export const SUBAGENT_FALLBACK_LABEL = 'Sub-agent'
 
-/** The delegated task type, e.g. `explore`. Falls back to the task text. */
+/**
+ * The name of the work, not the name of the worker.
+ *
+ * A harness reports two strings: the agent definition that ran the task
+ * (`general-purpose` in Claude Code, `explore` in Pi) and the delegated task
+ * itself. The task is what the reader is looking for, so it wins; the agent
+ * definition becomes a secondary chip (see `subagentAgentType`). Pi names both
+ * fields after the purpose, so its label is unchanged.
+ */
 export function subagentTaskLabel(activity: AgentSubagentActivity): string {
+  const description = activity.description?.trim()
+  if (description) return description
   const agent = activity.agent?.trim()
   if (agent) return agent
-  return activity.description?.trim() || SUBAGENT_FALLBACK_LABEL
+  return SUBAGENT_FALLBACK_LABEL
+}
+
+/**
+ * The agent definition that ran the task, humanized, whenever it says something
+ * the label does not already say. `null` when the harness repeats itself.
+ */
+export function subagentAgentType(activity: AgentSubagentActivity): string | null {
+  const agent = activity.agent?.trim()
+  if (!agent || agent === subagentTaskLabel(activity)) return null
+  const words = agent.replaceAll('-', ' ').replaceAll('_', ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
 }
 
 /**

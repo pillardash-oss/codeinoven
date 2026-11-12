@@ -119,6 +119,11 @@ async function setup(knowledge: string): Promise<{
   return { engine, thread, checkpoints: new AssistantAuthoringCheckpoints(storage) }
 }
 
+/** The visible text of one stored message. */
+function messageText(message: AgentMessage | undefined): string {
+  return (message?.parts ?? []).map((part) => (part.type === 'text' ? part.text : '')).join('')
+}
+
 /** One stored question card, shaped as the engine persists an answer. */
 function answeredQuestion(body: string): AgentMessage {
   const id = 'question-answer-0123456789abcdef01234567'
@@ -239,5 +244,70 @@ describe('assistantAuthoringInstruction', () => {
     expect(instruction).not.toContain('two separate single-choice questions')
     expect(instruction).not.toContain('## Getting started checkpoint (app-owned)')
     expect(instruction).not.toContain('- Stale interview state')
+  })
+})
+
+describe('hiring a teammate from a conversation', () => {
+  it('introduces the new teammate where the hire came from, and never asks there', async () => {
+    const { engine } = await setup('')
+    const don = await internals(engine).threadManager.createThread({
+      id: 'don-test',
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Don',
+      titleSource: 'manual'
+    })
+    const sendPrompt = vi.spyOn(engine, 'sendPrompt').mockResolvedValue({
+      id: 'msg-hire',
+      role: 'user',
+      parts: [],
+      createdAt: Date.now()
+    })
+
+    const hired = await engine.openRecruitedAssistantConversation({
+      assistant: assistant(''),
+      purpose: 'Watches the reporting inbox',
+      request: 'Watch the inbox and summarise it every morning',
+      settings: {
+        harnessId: 'pi',
+        providerId: 'openai',
+        modelId: 'gpt-5',
+        thinkingLevel: 'medium',
+        permissionLevel: 'auto_review'
+      },
+      initiator: { projectId: ASSISTANT_SPACE_ID, threadId: don.id }
+    })
+
+    // The team grows where the request was made: one line in Don's conversation
+    // under the new teammate's own name, naming what it was built for.
+    const messages = await engine.threadManager.loadMessageRecords(ASSISTANT_SPACE_ID, don.id)
+    const announced = messages.find((message) => message.id === `don-hire-${hired.id}`)
+    expect(announced?.author?.name).toBe('Slack latest info')
+    expect(messageText(announced)).toContain('Watches the reporting inbox')
+    expect(messageText(announced)).toContain(`@thread:${hired.id}`)
+    // The hiring is never a questionnaire on a thread the user never opened.
+    expect(messageText(announced)).not.toContain('?')
+    // The knowledge was written before the thread existed, so the announcement
+    // never says the instructions are still being drafted.
+    expect(messageText(announced)).toContain('My instructions are written')
+    // The announcement is written while the teammate is created, before the create
+    // result reaches Don and before Don dispatches the waiting request, so it may
+    // only say the teammate is ready. Claiming the work already left for it would
+    // announce a handoff that has not happened yet.
+    expect(messageText(announced)).toContain('ready to take the request')
+    expect(messageText(announced)).not.toMatch(
+      /on its way|already with me|has been dispatched|is running/i
+    )
+
+    // Nothing is written into the teammate's own thread: everything the user is
+    // meant to see about a hire lives in the conversation that asked for it.
+    expect(
+      await engine.threadManager.loadMessageRecords(ASSISTANT_SPACE_ID, hired.id)
+    ).toHaveLength(0)
+
+    // No authoring interview is spent on a hire: the knowledge is written before
+    // the thread exists, so a hire costs no model turn before the work it was
+    // hired for.
+    expect(sendPrompt).not.toHaveBeenCalled()
   })
 })

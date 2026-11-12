@@ -41,6 +41,40 @@ export function textParts(message: AgentMessage): Extract<AgentPart, { type: 'te
   )
 }
 
+/**
+ * The largest live transcript the sub-agent panel builds while it is open.
+ *
+ * A harness that forwards a worker's messages into the parent stream (Claude
+ * Code) leaves one message on the part at a time, so the panel is the only
+ * place a run is accumulated. Keeping that window bounded means a worker that
+ * talks for an hour cannot make the open view grow without limit.
+ */
+export const MAX_SUBAGENT_STREAM_CHARS = 32 * 1024
+
+const TRIM_MARKER = '\n\n[… earlier sub-agent output trimmed …]\n'
+
+/**
+ * Add one forwarded sub-agent message to the run the panel is building.
+ *
+ * The parent part carries only the newest message, so each new one appends
+ * here. A message the stream replays verbatim (a reconnect, or a status update
+ * that re-sends the same text) would otherwise double the paragraph it repeats.
+ */
+export function appendForwardedSubagentText(previous: string, chunk: string): string {
+  const text = chunk.trim()
+  const before = previous.trimEnd()
+  if (!text) return before
+  if (!before) return boundForwardedText(text)
+  if (before.endsWith(text)) return before
+  return boundForwardedText(`${before}\n\n${text}`)
+}
+
+/** Keep the panel's live transcript inside its window, dropping the oldest text. */
+function boundForwardedText(text: string): string {
+  if (text.length <= MAX_SUBAGENT_STREAM_CHARS) return text
+  return `${TRIM_MARKER}${text.slice(text.length - MAX_SUBAGENT_STREAM_CHARS)}`
+}
+
 /** A sub-agent run folded into what the transcript and its trace each render. */
 export interface SubagentSessionRun {
   /** Every renderable part of the run, in stream order, with the closing

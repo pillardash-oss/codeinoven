@@ -3,7 +3,7 @@ import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { is } from '@electron-toolkit/utils'
 import { APP_ID, APP_NAME, WEBSITE_URL, brandUserAgent } from '../lib/brand'
-import { isWindowsStorePackage } from '../lib/utils'
+import { isWindowsStorePackage, skipsOsKeyring } from '../lib/utils'
 import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
@@ -114,6 +114,19 @@ if (process.platform === 'win32') {
 }
 
 configureElectronDataRoot()
+// A launch the build started by itself (the packaged-startup smoke) is unattended,
+// so it must never wait on the macOS login keychain. Chromium keeps its own key in
+// the login keychain for cookie and password encryption (OSCrypt), separate from
+// Electron's `safeStorage`, and reading it from a bundle whose ad-hoc signature is
+// not the one that stored the item raises a SecurityAgent password prompt. That
+// prompt blocks the main thread, so no JavaScript deadline can escape it and a
+// nightly gate would hang until a human typed the password. The mock keychain
+// switch replaces the keychain with an in-process one, which is exactly the
+// non-interactive behaviour an unshipped verification launch needs; the switch is
+// appended only for those launches so a shipped app keeps the real keychain.
+if (process.platform === 'darwin' && skipsOsKeyring()) {
+  app.commandLine.appendSwitch('use-mock-keychain')
+}
 // Enforce Chromium's OS-level renderer sandbox globally before `ready`; the
 // per-window preferences below remain explicit so future windows inherit the
 // secure expectation even when reviewed in isolation.

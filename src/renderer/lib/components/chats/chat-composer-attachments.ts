@@ -11,6 +11,20 @@ import type {
 /** Source thread the next prompt waits for before it starts. */
 export type StartAfterSelection = Pick<Thread, 'id' | 'title'>
 
+/**
+ * A file the composer has accepted but is still moving into attachment storage.
+ *
+ * The chip is drawn from what the gesture already knows (its name and type), so
+ * the drop is answered at once instead of after the copy finishes. The entry is
+ * swapped for the real attachment when the file lands, and never leaves the
+ * renderer: nothing is sent or persisted while it is pending.
+ */
+export interface PendingAttachment {
+  id: string
+  filename: string
+  mime: string
+}
+
 export function projectReferenceToken(reference: Pick<PromptProjectReference, 'path'>): string {
   return `@${reference.path}`
 }

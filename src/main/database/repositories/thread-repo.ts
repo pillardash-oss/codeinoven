@@ -66,6 +66,7 @@ interface ThreadRow {
   assignment_task_id: string | null
   coordinator_thread_id: string | null
   achievement_role: string | null
+  achievement_goal: string | null
   auditor_thread_id: string | null
   user_input_locked: number
   engineering: number
@@ -335,6 +336,7 @@ function rowToThread(row: ThreadRow): Thread {
     assignmentTaskId: row.assignment_task_id ?? undefined,
     coordinatorThreadId: row.coordinator_thread_id ?? undefined,
     achievementRole: (row.achievement_role as Thread['achievementRole']) ?? undefined,
+    ...(row.achievement_goal !== null ? { achievementGoal: row.achievement_goal } : {}),
     auditorThreadId: row.auditor_thread_id ?? undefined,
     userInputLocked: row.user_input_locked === 1,
     engineering: row.engineering === 1,
@@ -567,7 +569,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   session_id, session_harness_id, session_account_id, dismissed_spec_id, dismissed_spec_version,
   audit_state, loop_iteration, active_audit_id, active_audit_version,
   assignment_id, assignment_role, assignment_task_id,
-  coordinator_thread_id, achievement_role, auditor_thread_id, user_input_locked,
+  coordinator_thread_id, achievement_role, achievement_goal, auditor_thread_id, user_input_locked,
   engineering, independent_audit, independent_audit_initialized,
   assistant_id, assistant_icon_type, assistant_icon, schedule_override, scheduled, last_run_at, last_dispatched_at, last_success_at,
   assistant_getting_started,
@@ -576,7 +578,7 @@ const THREAD_UPSERT_SQL = `INSERT INTO threads(
   last_error, last_error_at, last_outcome,
   created_at, updated_at, last_activity, working_directory
 
-) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET
   project_id=excluded.project_id,
   provider_id=excluded.provider_id,
@@ -616,6 +618,7 @@ ON CONFLICT(id) DO UPDATE SET
   assignment_task_id=excluded.assignment_task_id,
   coordinator_thread_id=excluded.coordinator_thread_id,
   achievement_role=excluded.achievement_role,
+  achievement_goal=excluded.achievement_goal,
   auditor_thread_id=excluded.auditor_thread_id,
   user_input_locked=excluded.user_input_locked,
   engineering=excluded.engineering,
@@ -683,6 +686,7 @@ function threadUpsertParams(thread: Thread): unknown[] {
     thread.assignmentTaskId ?? null,
     thread.coordinatorThreadId ?? null,
     thread.achievementRole ?? null,
+    thread.achievementGoal ?? null,
     thread.auditorThreadId ?? null,
     thread.userInputLocked ? 1 : 0,
     thread.engineering ? 1 : 0,

@@ -62,6 +62,7 @@ import {
   broadcastThreadUpdate,
   dismissThreadNotifications
 } from '../chat/thread-events'
+import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
 import { registerEngineeringLifecycleHandlers } from './handlers/lifecycle-handlers'
 import { registerFilesHandlers } from './handlers/files-handlers'
 import { registerConfigHandlers } from './handlers/config-handlers'
@@ -173,7 +174,20 @@ export function registerIpcHandlers(
   // Don, the orchestrator, is seeded before any window asks for it: the assistant
   // sidebar draws it as the first row and the listening panel resolves its thread,
   // and neither can do that until the row and the thread exist.
-  void ensureDonOrchestrator({ assistantManager, threadManager, storage })
+  //
+  // The seed is asynchronous, and on a first install a renderer that reads the
+  // assistant list while it runs gets an empty list it never asks for again: its
+  // store initializes once and only a broadcast refreshes it. So whatever the
+  // seed created is pushed the moment the seed finishes, instead of leaving Don
+  // invisible until the next launch.
+  void ensureDonOrchestrator({ assistantManager, threadManager, storage }).then((result) => {
+    if (result.assistantCreated) {
+      broadcastAssistantsChanged(assistantManager.listAssistants())
+    }
+    if (result.thread && (result.threadCreated || result.threadSettingsRepaired)) {
+      broadcastThreadUpdate(result.thread)
+    }
+  })
 
   threadManager.setIntentSearchProvider(
     options.searchService

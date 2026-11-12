@@ -4,6 +4,7 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
 import { RowPageBudget } from '$lib/components/shared/RowPageBudget.svelte'
 import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
+import { selectedSearchText } from '$lib/selection-text'
 import { isOrchestrationChildThread, type Project, type Thread } from '$shared/types'
 import type { ThreadSearchResult } from '$shared/types'
 import { mergeThreadSearchBatches, isProjectFamilyThread } from './workspace-thread-helpers'
@@ -68,6 +69,18 @@ export class WorkspaceSidebarController {
   /** Project-filter selection the live threads search was run under, so a filter
    *  change re-runs that search instead of leaving stale results on screen. */
   private threadsSearchFilterKey = threadProjectFilterState.selectedIds.join(',')
+
+  /**
+   * The panel searches of the Chats and Projects panels.
+   *
+   * Both filter rows the sidebar already holds, so they answer on the keystroke
+   * and never edit the lists they read. The Threads panel keeps the full-text
+   * search above, because its list spans the whole history.
+   */
+  chatsSearchOpen = $state(false)
+  chatsSearchQuery = $state('')
+  projectsSearchOpen = $state(false)
+  projectsSearchQuery = $state('')
 
   /** Initialise expandedFolders: start with all projects expanded, then fold
    *  any the user has previously collapsed. */
@@ -146,6 +159,12 @@ export class WorkspaceSidebarController {
     this.projectSearchOpen.add(projectId)
     // Keep the folder expanded so search results stay visible in the sidebar.
     this.expandedFolders.add(projectId)
+    // A search opened while the reader has text highlighted starts from that
+    // passage, exactly as the panel-wide searches do.
+    if (!(this.projectSearchQueries.get(projectId) ?? '').trim()) {
+      const selected = selectedSearchText()
+      if (selected) this.projectSearchQueries.set(projectId, selected)
+    }
     if (!this.projectSearchBootstrap) {
       this.projectSearchBootstrap = true
       setTimeout(() => {
@@ -164,7 +183,35 @@ export class WorkspaceSidebarController {
   /** Dismiss every open sidebar search   the composer took the user's focus. */
   closeAllSearches(): void {
     if (this.threadsSearchOpen) this.closeThreadsSearch()
+    if (this.chatsSearchOpen) this.closeChatsSearch()
+    if (this.projectsSearchOpen) this.closeProjectsSearch()
     for (const projectId of [...this.projectSearchOpen]) this.closeProjectSearch(projectId)
+  }
+
+  openChatsSearch(): void {
+    this.chatsSearchOpen = true
+    if (!this.chatsSearchQuery.trim()) {
+      const selected = selectedSearchText()
+      if (selected) this.chatsSearchQuery = selected
+    }
+  }
+
+  closeChatsSearch(): void {
+    this.chatsSearchOpen = false
+    this.chatsSearchQuery = ''
+  }
+
+  openProjectsSearch(): void {
+    this.projectsSearchOpen = true
+    if (!this.projectsSearchQuery.trim()) {
+      const selected = selectedSearchText()
+      if (selected) this.projectsSearchQuery = selected
+    }
+  }
+
+  closeProjectsSearch(): void {
+    this.projectsSearchOpen = false
+    this.projectsSearchQuery = ''
   }
 
   runProjectSearch(projectId: string, raw: string): void {
@@ -202,7 +249,12 @@ export class WorkspaceSidebarController {
 
   openThreadsSearch(): void {
     this.threadsSearchOpen = true
-    if (this.threadsSearchQuery.trim()) this.runThreadsSearch(this.threadsSearchQuery)
+    // The reader's own selection is what they asked to search for, and the
+    // query they may already have typed outranks it.
+    if (!this.threadsSearchQuery.trim()) {
+      const selected = selectedSearchText()
+      if (selected) this.runThreadsSearch(selected)
+    } else this.runThreadsSearch(this.threadsSearchQuery)
   }
 
   closeThreadsSearch(): void {

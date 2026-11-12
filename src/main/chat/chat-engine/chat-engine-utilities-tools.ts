@@ -14,10 +14,7 @@ import type {
   EngineeringToolContext,
   ScopeToolExecutor
 } from '../../utilities/utility-orchestration-service'
-import {
-  CREATE_SPEC_TOOL_NAME,
-  type EngineeringToolOperation
-} from '../../../lib/engineering-tools'
+import type { EngineeringToolOperation } from '../../../lib/engineering-tools'
 import type {
   AgentMessage,
   AgentPart,
@@ -545,13 +542,6 @@ export class ChatEngineUtilitiesTools {
         }
       }
       case 'achievement': {
-        const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, threadId)
-        if (!activeSpec || activeSpec.status !== 'approved') {
-          throw new Error(
-            'Achievement audits against an approved specification. Create the specification with ' +
-              `${CREATE_SPEC_TOOL_NAME}, get it approved, then call this tool again.`
-          )
-        }
         if (
           this.host.state.engineeringLifecycleEngine.get(projectId, threadId)?.activeStage ===
           'achievement'
@@ -561,6 +551,18 @@ export class ChatEngineUtilitiesTools {
             message: 'Achievement is already running for this thread.'
           }
         }
+        // An approved specification is the strongest contract an audit can judge,
+        // so it wins whenever the thread has one. Without it Achievement still
+        // runs: the goal is captured from the tool call or the conversation and
+        // the audit judges the work against that, exactly as an Assignment
+        // decomposes the conversation when no specification exists. Refusing
+        // here is what stopped an agent that was told to keep going until the
+        // goal was reached.
+        const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, threadId)
+        const approvedSpec = activeSpec?.status === 'approved' ? activeSpec : null
+        const goal = approvedSpec
+          ? undefined
+          : await this.resolveAchievementGoal(projectId, threadId, thread.title, instructions)
         this.enableEngineeringStage(projectId, threadId, 'achievement')
         // Achievement owns the audit/rework loop, so the thread keeps running in
         // loop mode until the goal is verified.
@@ -569,15 +571,74 @@ export class ChatEngineUtilitiesTools {
           assignmentMode: true,
           loopMode: true
         })
+        if (goal) {
+          await this.host.threadManager.updateThread(projectId, threadId, {
+            achievementGoal: goal
+          })
+        }
         return {
           artifact: 'achievement',
-          specId: activeSpec.id,
-          specVersion: activeSpec.version,
-          message:
-            'Achievement is enabled. The thread implements, audits and reworks until the approved specification is verified.'
+          ...(approvedSpec
+            ? { specId: approvedSpec.id, specVersion: approvedSpec.version }
+            : goal
+              ? { goal }
+              : {}),
+          message: approvedSpec
+            ? 'Achievement is enabled. The thread implements, audits and reworks until the approved specification is verified.'
+            : goal
+              ? `Achievement is enabled against this goal, taken from the request and this conversation:\n\n${goal}\n\nThe thread implements, audits and reworks until that goal is verified.`
+              : 'Achievement is enabled against the goal this conversation states. The thread implements, audits and reworks until the independent audit verifies it.'
         }
       }
     }
+  }
+
+  /**
+   * The goal an Achievement run without an approved specification works toward.
+   *
+   * The user's own words are the goal, so nothing is invented: the explicit
+   * request made through the achievement tool wins, and otherwise the goal comes
+   * from what this thread already says, its title and the latest request in it.
+   * The audit also reads the whole transcript, so this is the goal statement the
+   * interface can show, not the only thing the auditor sees.
+   */
+  private async resolveAchievementGoal(
+    projectId: string,
+    threadId: string,
+    title: string,
+    instructions: string
+  ): Promise<string> {
+    if (instructions) return instructions
+    const parts: string[] = []
+    const trimmedTitle = title.trim()
+    if (trimmedTitle) parts.push(`Thread: ${trimmedTitle}`)
+    const messages = await this.host.loadMessages(projectId, threadId)
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message?.role !== 'user') continue
+      const text = this.requestText(message).trim()
+      if (!text) continue
+      parts.push(`Latest request from the user:\n${text}`)
+      break
+    }
+    return parts.join('\n\n')
+  }
+
+  /** Plain text of a user message, presentation first and durable parts after. */
+  private requestText(message: AgentMessage): string {
+    const presentation = message.parts.find(
+      (part): part is Extract<AgentPart, { type: 'user-presentation' }> =>
+        part.type === 'user-presentation'
+    )
+    if (presentation) {
+      return [presentation.presentation.action, presentation.presentation.body]
+        .filter((value): value is string => Boolean(value))
+        .join('\n\n')
+    }
+    return message.parts
+      .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
   }
 
   /**

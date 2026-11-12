@@ -344,6 +344,19 @@ export function viewBadgesFor(
     if (!unreadThreadIds.includes(threadId)) unreadThreadIds.push(threadId)
   }
   const unreadCount = unreadThreadIds.length
+  // The mark reports a state, not a brand: the assistant already says who it is
+  // with its own rail icon, so painting the mark with the assistant space colour
+  // read as a second, unknown family instead of as unread work. Every rail unread
+  // mark therefore wears the canonical unread tone, and the assistant's brand
+  // colour stays on the surfaces that identify it (the bell, the panel, the
+  // toast). A project or chat mark still carries the accents its notices earned,
+  // because that hue is the outcome the notice reports.
+  const unreadColors =
+    family === 'assistant'
+      ? ['var(--color-thread-unread)']
+      : (unread?.colors ?? [
+          family === 'chats' ? 'var(--color-chat-success)' : 'var(--color-success)'
+        ])
   const unreadBadge: ViewBadge | null =
     unreadCount > 0
       ? {
@@ -351,11 +364,7 @@ export function viewBadgesFor(
           count: unreadCount,
           label: `${unreadCount} unread ${FAMILY_NOUN[family]}${unreadCount === 1 ? '' : 's'}`,
           icon: FAMILY_ICONS[family],
-          colors:
-            unread?.colors ??
-            (family === 'assistant'
-              ? [notificationPanelState.assistantColor ?? 'var(--color-dimmed)']
-              : [family === 'chats' ? 'var(--color-chat-success)' : 'var(--color-success)'])
+          colors: unreadColors
         }
       : null
   const activity = counts[family]

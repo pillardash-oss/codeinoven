@@ -108,6 +108,9 @@ export interface ProviderErrorPresentation {
   rawError?: string
 }
 
+/** Electron's prefix on a rejected `ipcRenderer.invoke`. */
+const IPC_REJECTION_WRAPPER = /^Error invoking remote method '[^']+':\s*/u
+
 /**
  * Split a provider/harness failure string into the short message the provider
  * error card body may render and the full diagnostic text reserved for the Raw
@@ -129,7 +132,12 @@ export interface ProviderErrorPresentation {
 export function presentProviderError(raw: string): ProviderErrorPresentation {
   const detail = raw.trim()
   if (!detail) return { message: '' }
-  const body = extractProviderErrorEnvelope(detail).message.trim()
+  // A rejected IPC call reaches the card still wrapped in Electron's
+  // `Error invoking remote method 'channel':` sentence, which names the app's
+  // own plumbing instead of the problem. The wrapper stays in `rawError`.
+  const body = extractProviderErrorEnvelope(detail)
+    .message.replace(IPC_REJECTION_WRAPPER, '')
+    .trim()
   const lines = body.split('\n')
   const frameIndex = lines.findIndex((line) => STACK_FRAME_LINE.test(line))
   const header = (frameIndex === -1 ? lines : lines.slice(0, frameIndex)).join('\n').trim()
@@ -228,6 +236,16 @@ export function parseUsageResetAt(message: string, now = Date.now()): number | u
 }
 
 /**
+ * Whether a failure says the scope's managed checkout is missing or unhealthy.
+ * No provider is involved in that, so it is neither a provider outage nor
+ * something Change or Retry can fix: the fix is repairing the worktree.
+ */
+export function isScopeRootFailure(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return normalized.includes('managed scope root') || normalized.includes('managed checkout')
+}
+
+/**
  * Classify a provider/harness failure message and optional HTTP status code into
  * a provider-neutral kind so every driver and the chat engine agree on how the
  * failure is presented (title, retry affordance, raw-error visibility).
@@ -243,6 +261,10 @@ export function classifyProviderIssue(
   // and a scheduled usage-reset wait renders as a terminal error.
   const normalized = envelope.message.replaceAll(/[_-]+/gu, ' ').toLowerCase()
   const normalizedType = (envelope.type ?? '').replaceAll(/[_-]+/gu, ' ').toLowerCase()
+  // A missing or unhealthy managed checkout says "unavailable" too, but no
+  // provider is involved: Change and Retry cannot fix it, so it must not be
+  // filed as a provider outage.
+  if (isScopeRootFailure(normalized)) return 'unknown'
   // A provider-load 429 ("overloaded_error", "temporarily unavailable") is a
   // transient condition, not a usage/rate cap   check it before the blanket
   // `statusCode === 429` branch below, or it always loses to `rate_limit` and
@@ -336,5 +358,29 @@ export function providerIssueTitle(kind: AgentProviderIssueKind, waiting = false
       return 'Provider connection interrupted'
     default:
       return waiting ? 'Provider retry scheduled' : 'Agent output error'
+  }
+}
+
+/**
+ * The status colour a provider issue is reported in, so a card's colour says what
+ * it communicates. A wait the app is already handling is `info`; a limit, a
+ * sign-in, a billing problem or an outage the reader can wait out or fix is
+ * `warning`; only a failure with no such way through is `danger`.
+ */
+export function providerIssueTone(
+  kind: AgentProviderIssueKind,
+  waiting = false
+): 'danger' | 'warning' | 'info' {
+  if (waiting) return 'info'
+  switch (kind) {
+    case 'rate_limit':
+    case 'quota':
+    case 'authentication':
+    case 'billing':
+    case 'provider_unavailable':
+    case 'network':
+      return 'warning'
+    default:
+      return 'danger'
   }
 }

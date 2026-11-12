@@ -30,6 +30,7 @@ import {
   ORCHESTRATION_TARGETS_TOOL_NAME
 } from '../../../lib/orchestration-tools'
 import {
+  DON_ANSWER_TEAMMATE_TOOL_NAME,
   DON_CREATE_ASSISTANT_TOOL_NAME,
   DON_USER_NAME_TOOL_NAME,
   GROUP_CHAT_REPLY_TOOL_NAME,
@@ -213,6 +214,8 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.don(state, input, 'reply-in-chat')
       case DON_CREATE_ASSISTANT_TOOL_NAME:
         return (state, input) => this.don(state, input, 'create-assistant')
+      case DON_ANSWER_TEAMMATE_TOOL_NAME:
+        return (state, input) => this.don(state, input, 'answer-teammate')
       case APP_CONTROL_CATALOG_TOOL_NAME:
         return (state, input) => this.appControl(state, input, 'catalog')
       case APP_CONTROL_CALL_TOOL_NAME:

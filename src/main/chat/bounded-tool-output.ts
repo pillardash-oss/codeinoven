@@ -76,11 +76,42 @@ function boundPersistedText(text: string): string {
 }
 
 /**
+ * Cap oversized strings in a sub-agent part that is about to reach a durable
+ * store. A live sub-agent transcript grows while the worker talks and reaches
+ * the stream log and the mirror on every update, opened or not, so its output,
+ * prompt and error take the same bound a tool output does. Sub-cap parts pass
+ * through by reference, so the common case stays allocation-free.
+ */
+function capSubagentPayload(
+  part: Extract<AgentPart, { type: 'subagent' }>
+): Extract<AgentPart, { type: 'subagent' }> {
+  const activity = part.activity
+  const output =
+    typeof activity.output === 'string' ? boundPersistedText(activity.output) : undefined
+  const error = typeof activity.error === 'string' ? boundPersistedText(activity.error) : undefined
+  const prompt =
+    typeof activity.prompt === 'string' ? boundPersistedText(activity.prompt) : undefined
+  if (output === activity.output && error === activity.error && prompt === activity.prompt) {
+    return part
+  }
+  return {
+    ...part,
+    activity: {
+      ...activity,
+      ...(output === undefined ? {} : { output }),
+      ...(error === undefined ? {} : { error }),
+      ...(prompt === undefined ? {} : { prompt })
+    }
+  }
+}
+
+/**
  * Cap oversized tool-part outputs in a part that is about to reach a durable
  * store (mirror rows, stream log lines). Sub-cap parts pass through by
  * reference, so the common case stays allocation-free.
  */
 function capPartPayload(part: AgentPart): AgentPart {
+  if (part.type === 'subagent') return capSubagentPayload(part)
   if (part.type !== 'tool') return part
   const state = part.state
   let nextState: AgentToolState | null = null

@@ -35,11 +35,9 @@ import {
   isAssistantSetupThread,
   assistantKnowledgeComplete
 } from '../../../lib/types'
-import {
-  ASSISTANT_RECRUIT_SETUP_ACTION,
-  assistantRecruitSetupPrompt
-} from '../../../lib/assistant-chat-setup'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
+import { delegationAuthor } from '../chat-engine-don'
+import { teammateAuthor, writeTeammateLine } from '../delegation-lines'
 import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
 import { assistantReportIsTerminal, isAssistantReportThread } from '../../../lib/assistant-reports'
 import type { SessionInfo } from './chat-engine-types'
@@ -197,17 +195,19 @@ export class ChatEngineAssistantAuthoring {
   }
 
   /**
-   * Open the conversation that writes a recruited teammate's instructions.
+   * Open the Getting started conversation of a recruited teammate.
    *
    * This is the orchestrator building its own team. The assistant row is created by
-   * the caller, which owns the directory, and this opens the other half: the pinned
-   * Getting started thread and the app-owned turn that starts the interview with
-   * the request that caused the hire already in it.
+   * the caller, which owns the directory, and carries the instruction set Don wrote
+   * for it, so nothing is left to interview: the teammate is complete the moment it
+   * exists and the work Don dispatches to it is a real run.
    *
-   * Nothing is known about the assistant yet, which is what makes this thread the
-   * authoring interview: the contract rides the turn exactly as it does for the
-   * other two create paths, and the thread inherits the model of the conversation
-   * the hire came from, so the teammate can answer the first time it is opened.
+   * This opens the other half: the pinned Getting started thread that hosts the
+   * teammate's knowledge for later revisions. Nothing is written into it and no
+   * model turn is spent on it, because a hire happens on a thread the user never
+   * opened: its announcement belongs in Don's conversation, and an authoring
+   * interview there would ask a card nobody answers and leave a teammate that can
+   * never run.
    */
   async openRecruitedAssistantConversation(input: {
     assistant: Assistant
@@ -218,6 +218,18 @@ export class ChatEngineAssistantAuthoring {
     /** The settings of the conversation the hire came from, inherited by the new
      *  thread. */
     settings: ThreadSettings
+    /**
+     * The conversation that asked for the hire, when an assistant did instead of
+     * the user.
+     *
+     * A hiring is work Don started on the user's behalf, so the new thread is a
+     * dispatched child of Don's conversation: its notifications are suppressed, its
+     * wait for an answer is drawn in Don's thread under the new teammate's name,
+     * and its settle is reported there rather than left on a row the user never
+     * opened. Without the origin the Getting started interview would sit in the
+     * teammate's own thread and ask the user everything Don was meant to settle.
+     */
+    initiator?: { projectId: string; threadId: string }
   }): Promise<Thread> {
     const settings = input.settings
     const { thread, finalize } = this.host.threadManager.prepareCreateThread(
@@ -231,7 +243,19 @@ export class ChatEngineAssistantAuthoring {
         // The flag is what pins the row, makes it the assistant's knowledge
         // thread, and keeps it out of eviction for the assistant's whole life.
         assistantGettingStarted: true,
-        workingDirectory: ''
+        workingDirectory: '',
+        ...(input.initiator
+          ? {
+              dispatchOrigin: {
+                assistantId: input.assistant.id,
+                assistantName: input.assistant.name,
+                author: delegationAuthor(input.assistant),
+                initiatorProjectId: input.initiator.projectId,
+                initiatorThreadId: input.initiator.threadId,
+                at: Date.now()
+              }
+            }
+          : {})
       },
       {
         onEviction: (outcome) => {
@@ -247,28 +271,61 @@ export class ChatEngineAssistantAuthoring {
     )
     await finalize()
     broadcastThreadUpdate(thread)
-    // The opening turn is the user's, because the authoring contract rides a user
-    // turn on an assistant whose knowledge is still missing; its visible half is
-    // the app's own line, so the user reads what is happening instead of the
-    // instruction.
-    await this.host.sendPrompt(
-      ASSISTANT_SPACE_ID,
-      thread.id,
-      settings,
-      assistantRecruitSetupPrompt(
-        { name: input.assistant.name, purpose: input.purpose },
-        input.request
-      ),
-      [],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      'user',
-      { action: ASSISTANT_RECRUIT_SETUP_ACTION }
-    )
+    // The team grows where the request was made. The hiring is Don's own work, so
+    // the new teammate says in Don's conversation that it exists, what it was
+    // built for and that it is ready for the request. It never claims the work is
+    // already with it: dispatch is Don's next call, after this creation returns,
+    // so the handoff is announced by Don and only once it is accepted. Nothing
+    // about the hire is ever left on this thread for the user to answer.
+    await this.announceRecruitedTeammate(thread, input.assistant.name, input.purpose)
     return thread
+  }
+
+  /**
+   * The line a freshly hired teammate speaks in the conversation that asked for it.
+   *
+   * Nobody interviews the user for a hire and nothing about it lives only on the
+   * teammate's own row: the introduction lands under the teammate's own name in
+   * Don's thread, which is where the user asked for the work, so a new teammate is
+   * visible the moment it exists instead of after they go looking for it.
+   *
+   * This runs while the teammate is created, before the create result reaches Don
+   * and before Don calls `cio_orchestrate_dispatch`, so the line may announce that
+   * the teammate is built and ready, never that the work is already with it: that
+   * handoff is Don's own line, sent once the dispatch is accepted.
+   *
+   * Best effort: the hire itself has already happened, so a line the app cannot
+   * write must never fail the creation.
+   */
+  private async announceRecruitedTeammate(
+    thread: Thread,
+    name: string,
+    purpose: string
+  ): Promise<void> {
+    const origin = thread.dispatchOrigin
+    if (!origin) return
+    const author = teammateAuthor(thread)
+    if (!author) return
+    const forWhat = purpose.trim()
+    try {
+      await writeTeammateLine(this.host, {
+        author,
+        thread,
+        id: `don-hire-${thread.id}`,
+        projectId: origin.initiatorProjectId,
+        threadId: origin.initiatorThreadId,
+        text: [
+          `I'm ${name.trim() || author.name}. I was built for this: ${forWhat || 'the work you brought'}.`,
+          'My instructions are written and I am ready to take the request.',
+          `\n\n@thread:${thread.id}`
+        ].join(' ')
+      })
+    } catch (error) {
+      Logger.dev('Hire announcement skipped', {
+        threadId: thread.id,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   /**

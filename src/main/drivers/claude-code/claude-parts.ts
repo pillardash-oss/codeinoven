@@ -57,6 +57,7 @@ export function claudeSubagentPart(
       agent: string(input['subagent_type']) ?? string(input['agent']) ?? name,
       description,
       prompt: string(input['prompt']),
+      harnessId: 'claude-code',
       providerTaskId: callId,
       modelId: string(input['model']),
       background: input['run_in_background'] === true || input['background'] === true,
@@ -66,6 +67,14 @@ export function claudeSubagentPart(
   }
 }
 
+/**
+ * The forwarded text of a sub-agent's newest message.
+ *
+ * `--forward-subagent-text` delivers every sub-agent assistant message on the
+ * parent stream, but the part keeps only the message it just reported: the
+ * transcript is accumulated by the panel while it is open, because a run nobody
+ * is watching must cost one bounded record, never a growing one.
+ */
 export function partFromBlock(
   messageId: string,
   block: Record<string, unknown>,

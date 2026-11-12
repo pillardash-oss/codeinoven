@@ -14,6 +14,7 @@ import {
   CIO_SUBAGENT_STREAM_STATUS_KEY
 } from '../../../../lib/core-tools'
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
+import { ORCHESTRATION_TARGETS_TOOL_NAME } from '../../../../lib/orchestration-tools'
 import { PAWN_AGENT_TOOL_NAME } from '../../../../lib/pawn-tools'
 
 export function piCoreToolsSubagentSource(): string {
@@ -1132,6 +1133,16 @@ export function piCoreToolsSubagentSource(): string {
         // the accumulated output stays a live preview for the UI card.
         record.finalOutput = capOutput(subAgentText(lastAssistant(session)))
         record.endedAt = Date.now()
+        // A worker that ends without a word has not done the job, and a
+        // completed card for it told the primary agent the opposite: it kept
+        // waiting on work that had already died, usually on an account or model
+        // that could not pay for the run. Report it as the failure it is, with
+        // the one lookup that can find an account able to pay for the retry.
+        if (record.status === 'completed' && !record.finalOutput && !record.output) {
+          record.status = 'error'
+          record.error =
+            'The sub-agent finished without producing any output, so its work is unverified and probably never ran. It may have stopped before doing anything, or run on an account or model with no remaining usage. Call ${ORCHESTRATION_TARGETS_TOOL_NAME} to find a connected account with subscription capacity, then spawn the work again there, or do it yourself.'
+        }
         sendSubAgentUpdate(onUpdate, record)
         // Flush the tail of the transcript and close the live stream so the
         // view settles on its final transcript instead of a stuck spinner.

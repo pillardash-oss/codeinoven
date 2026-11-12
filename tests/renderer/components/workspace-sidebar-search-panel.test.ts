@@ -207,7 +207,9 @@ function sidebarProps(sidebar: WorkspaceSidebarController): SidebarProps {
     onSwitchScopedProject: vi.fn(async () => {}),
     onLoadProjectThreadsPage: vi.fn(async () => {}),
     onLoadHistoryPage: vi.fn(async () => {}),
-    projectHasMoreInDb: () => false
+    projectHasMoreInDb: () => false,
+    onSelectMode: () => {},
+    panelActions: () => []
   }
 }
 

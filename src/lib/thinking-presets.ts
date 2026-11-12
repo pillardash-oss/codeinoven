@@ -40,6 +40,12 @@ export const THINKING_LEVEL_ORDER: readonly ThinkingLevel[] = [
   'ultra'
 ]
 
+/** One of the standard levels, or `undefined` for anything else a harness reports. */
+export function parseThinkingLevel(value: unknown): ThinkingLevel | undefined {
+  if (typeof value !== 'string') return undefined
+  return THINKING_LEVEL_ORDER.find((level) => level === value)
+}
+
 /**
  * Resolve the thinking level applied when a model is first selected.
  *

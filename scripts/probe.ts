@@ -49,7 +49,15 @@
  *   --                   Everything after this reaches the dev server/Electron
  */
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { createServer } from 'node:net'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -176,7 +184,9 @@ function writeDocumentation(): void {
   const source = readFileSync(fileURLToPath(import.meta.url), 'utf8')
   const start = source.indexOf(' * Probe runner:')
   const end = source.indexOf(' */')
-  write(start === -1 || end === -1 ? 'See the header of scripts/probe.ts' : source.slice(start, end))
+  write(
+    start === -1 || end === -1 ? 'See the header of scripts/probe.ts' : source.slice(start, end)
+  )
 }
 
 /**
@@ -228,7 +238,9 @@ function seedBackgroundMode(root: string): void {
     try {
       config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>
     } catch (error) {
-      fail(`Could not read ${configPath}: ${error instanceof Error ? error.message : String(error)}`)
+      fail(
+        `Could not read ${configPath}: ${error instanceof Error ? error.message : String(error)}`
+      )
     }
   }
   if (config.backgroundMode === 'always') return
@@ -307,7 +319,10 @@ async function closePrimaryWindow(debugPort: number): Promise<{ ok: boolean; det
     const response = await fetch(`http://127.0.0.1:${debugPort}/json/list`)
     targets = (await response.json()) as CdpTarget[]
   } catch (error) {
-    return { ok: false, detail: `CDP was not reachable: ${error instanceof Error ? error.message : String(error)}` }
+    return {
+      ok: false,
+      detail: `CDP was not reachable: ${error instanceof Error ? error.message : String(error)}`
+    }
   }
   const pages = targets.filter((target) => target.type === 'page' && target.webSocketDebuggerUrl)
   const appWindow = selectAppWindow(pages)
@@ -331,7 +346,10 @@ async function closePrimaryWindow(debugPort: number): Promise<{ ok: boolean; det
   } finally {
     socket.close()
   }
-  return { ok: true, detail: `window.close() was delivered to ${appWindow.url ?? 'the primary window'}` }
+  return {
+    ok: true,
+    detail: `window.close() was delivered to ${appWindow.url ?? 'the primary window'}`
+  }
 }
 
 /** Run the shell scenario with the probes coordinates in its environment. */
@@ -343,7 +361,9 @@ async function runScenario(
   let output = ''
   child.stdout?.on('data', (chunk: Buffer) => (output += chunk.toString()))
   child.stderr?.on('data', (chunk: Buffer) => (output += chunk.toString()))
-  const code = await new Promise<number | null>((done) => child.on('exit', (exitCode) => done(exitCode)))
+  const code = await new Promise<number | null>((done) =>
+    child.on('exit', (exitCode) => done(exitCode))
+  )
   return { code, output }
 }
 
@@ -456,7 +476,9 @@ else environment[noBackgroundEnv] = '1'
 write(`Probe run:      ${relative(projectRoot, runDir)}`)
 write(`Probe root:     ${root}`)
 write(`Renderer port:  ${rendererPort}`)
-write(`Background:     ${options.background ? 'registered (menu bar icon for this run)' : 'off (plain window)'}`)
+write(
+  `Background:     ${options.background ? 'registered (menu bar icon for this run)' : 'off (plain window)'}`
+)
 if (options.debugPort !== null) write(`CDP port:       ${options.debugPort}`)
 
 const devArgs = ['run', 'dev']
@@ -506,7 +528,12 @@ hardStop.unref?.()
 async function finish(): Promise<void> {
   clearTimeout(hardStop)
   if (options.keep) {
-    write(`\nKeeping the probe alive. Stop it with: pkill -f ${root}`)
+    // Agents may only stop a process by the pid they captured, so the hint has
+    // to be a pid: a `pkill -f` recipe is refused by the app's process policy.
+    const childPid = child.pid === undefined ? '<pid>' : String(child.pid)
+    write(
+      `\nKeeping the probe alive. Stop it with: kill ${childPid}. If anything started under ${root} survives it, stop that by its own pid too.`
+    )
     write(`Console log: ${relative(projectRoot, consoleLogPath)}`)
     logStream.end()
     process.exit(failed ? 1 : 0)
@@ -545,7 +572,8 @@ while (Date.now() < readyDeadline) {
   }
   await sleep(500)
 }
-if (!ready && !failed) note(`the app never reported a finished boot within ${options.waitReadyMs} ms`, true)
+if (!ready && !failed)
+  note(`the app never reported a finished boot within ${options.waitReadyMs} ms`, true)
 
 if (ready && !failed) {
   if (options.exec !== null) {

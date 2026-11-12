@@ -211,6 +211,7 @@ function museSubagentPart /* worktree_isolation normalized to false */(
       agent,
       description,
       ...(prompt ? { prompt } : {}),
+      harnessId: 'muse',
       ...(childSessionId ? { childSessionId } : {}),
       ...(providerTaskId ? { providerTaskId } : {}),
       background,

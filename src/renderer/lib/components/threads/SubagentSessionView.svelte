@@ -4,11 +4,21 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
-  import type { AgentEvent, AgentMessage, AgentPart, AgentSessionStatus } from '$shared/types'
+  import type {
+    AgentEvent,
+    AgentMessage,
+    AgentPart,
+    AgentSessionStatus,
+    ThinkingLevel
+  } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { openThreadById } from '$lib/threads/open-thread-by-id'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import { latestWorkingTraceParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
-  import { subagentTaskDetail, subagentTaskLabel } from '$lib/subagent-presentation'
+  import {
+    subagentAgentType,
+    subagentTaskDetail,
+    subagentTaskLabel
+  } from '$lib/subagent-presentation'
   import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
@@ -16,6 +26,7 @@
   import SubagentSessionViewLoadState from './SubagentSessionViewLoadState.svelte'
   import SubagentSessionViewNotices from './SubagentSessionViewNotices.svelte'
   import {
+    appendForwardedSubagentText,
     applyStreamedDelta,
     catalogModelLabel,
     catalogProviderName,
@@ -40,9 +51,13 @@
   interface Props {
     tab: SubagentContextTab
     onOpenSubagent?: (part: Extract<AgentPart, { type: 'subagent' }>) => void
+    /** Configuration of the thread that spawned this worker. A nested worker
+     *  inherits its session's harness and reasoning effort, and a harness that
+     *  reports neither per worker still renders truthful attribution here. */
+    inherited?: { harnessId: string | null; thinkingLevel: ThinkingLevel | null }
   }
 
-  let { tab, onOpenSubagent }: Props = $props()
+  let { tab, onOpenSubagent, inherited }: Props = $props()
 
   let messages: AgentMessage[] = $state([])
   let loading = $state(false)
@@ -71,6 +86,17 @@
   }
 
   const sessionId = $derived(tab.activity.childSessionId)
+  /** A harness that names no child session (Claude Code forwards a sub-agent's
+   *  messages into the parent stream instead) has no transcript to load: the
+   *  panel renders the text it is handed, and builds the run itself. */
+  const parentForwarded = $derived(!sessionId)
+  /** The run this panel has watched arrive. Nothing accumulates for a worker
+   *  nobody is looking at, so an unopened panel costs the main process one
+   *  bounded record per message instead of an ever-growing transcript.
+   *  The buffer is plain because the effect below both reads and writes it: a
+   *  reactive buffer would make the append feed its own run. */
+  let forwardedBuffer = ''
+  let forwardedStream = $state('')
   const fallbackIssue = $derived(subagentFallbackIssue(tab.activity))
   const visibleProviderStatus = $derived(subagentProviderStatus(liveStatus, fallbackIssue))
   const effectiveStatus = $derived(
@@ -79,6 +105,7 @@
   const busy = $derived(effectiveStatus === 'running')
   const taskLabel = $derived(subagentTaskLabel(tab.activity))
   const taskDetail = $derived(subagentTaskDetail(tab.activity))
+  const agentType = $derived(subagentAgentType(tab.activity))
   const headerStatus = $derived(subagentHeaderStatus(effectiveStatus))
   // The header answers "how long has this been going" without scrolling, so it
   // owns the same live clock the trace rows use.
@@ -100,6 +127,13 @@
   let modelLabel = $derived(catalogModelLabel(tab.activity, providers))
   let providerName = $derived(catalogProviderName(tab.activity, providers))
   let providerLabel = $derived(providerName ?? tab.activity.providerId ?? 'Provider')
+  // The worker's own report wins; the thread's settings describe what it
+  // inherited when the harness reports nothing per worker.
+  const harnessId = $derived(tab.activity.harnessId ?? inherited?.harnessId ?? undefined)
+  const harnessName = $derived(
+    tab.activity.harnessId ? agentDisplayName(tab.activity.harnessId) : null
+  )
+  const thinkingLevel = $derived(tab.activity.thinkingLevel ?? inherited?.thinkingLevel ?? null)
   const visibleMessages = $derived(filterVisibleMessages(messages, tab.activity.prompt))
   /** Any user message the delegated-prompt filter left behind (a steer into the
    *  worker's session), rendered as its own bubble above the run. */
@@ -110,9 +144,30 @@
   const runParts = $derived(latestWorkingTraceParts(sessionRun.parts))
   const showWorkingTrace = $derived(shouldMountWorkingTrace(runParts.length, busy))
   const finalOutput = $derived(tab.activity.output?.trim() ?? '')
+  // Each forwarded message replaces the one before it on the part, so the run
+  // the panel shows is the sum of what it watched arrive.
+  $effect(() => {
+    if (!parentForwarded) return
+    const chunk = finalOutput
+    if (!chunk) return
+    const next = appendForwardedSubagentText(forwardedBuffer, chunk)
+    if (next === forwardedBuffer) return
+    forwardedBuffer = next
+    forwardedStream = next
+  })
+  const forwardedOutput = $derived(parentForwarded ? forwardedStream : finalOutput)
   const showCapturedOutput = $derived(
-    shouldShowCapturedOutput(finalOutput, busy, loading, loadError, messages)
+    shouldShowCapturedOutput(
+      forwardedOutput,
+      parentForwarded ? false : busy,
+      loading,
+      loadError,
+      messages
+    )
   )
+  // Until the worker's first forwarded message lands there is nothing to show,
+  // so the loader stands in for the wait it would otherwise never end.
+  const showChildLoader = $derived(!parentForwarded || finalOutput.length === 0)
 
   onMount(() => {
     void initializeSession()
@@ -318,24 +373,13 @@
         stopping = false
       })
   }
-
-  /**
-   * Walk back up the delegation chain.
-   *
-   * A sub-agent has no thread of its own: this tab is the only place its work is
-   * read, so the parent it belongs to has to be one control away rather than
-   * something the reader has to remember. The tab already carries the parent's
-   * ids, so opening it is the same reveal every other surface uses.
-   */
-  function openParentThread(): void {
-    void openThreadById(tab.projectId, tab.threadId)
-  }
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
   <SubagentSessionViewHeader
     {taskLabel}
     {taskDetail}
+    {agentType}
     {headerStatus}
     {showDuration}
     {elapsed}
@@ -343,10 +387,12 @@
     {modelLabel}
     {providerName}
     providerId={tab.activity.providerId}
+    {harnessId}
+    {harnessName}
+    {thinkingLevel}
     background={tab.activity.background}
     providerTaskId={tab.activity.providerTaskId}
     {sessionId}
-    onOpenParent={openParentThread}
   />
 
   <div
@@ -380,7 +426,7 @@
 
       <SubagentSessionViewLoadState
         {loading}
-        {busy}
+        busy={busy && showChildLoader}
         {liveStreamed}
         {loadError}
         messageCount={messages.length}
@@ -422,14 +468,14 @@
 
       {#if showCapturedOutput}
         <div class="text-xs text-foreground">
-          <DeferredMarkdownView text={finalOutput} />
+          <DeferredMarkdownView text={forwardedOutput} />
         </div>
-      {:else if !sessionId && !loading && !loadError && !busy}
+      {:else if !sessionId && !loading && !loadError}
         {#if effectiveStatus === 'completed' || effectiveStatus === 'error'}
           <p class="text-[0.625rem] text-dimmed">
             No further output was recorded for this sub-agent.
           </p>
-        {:else}
+        {:else if !busy}
           <p class="text-[0.625rem] text-dimmed">
             Sub-agent output will appear here as it is produced.
           </p>

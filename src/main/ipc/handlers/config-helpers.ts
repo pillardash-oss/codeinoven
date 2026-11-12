@@ -234,6 +234,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'sound',
   'cioCleanupRetentionDays',
   'cioCleanupExcludedCategories',
+  'agentAccountVisibility',
   'llamaCppServers',
   'llamaCppUnload'
 ])
@@ -1170,6 +1171,13 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('resumeWorkOnRestart must be a boolean')
     }
     patch.resumeWorkOnRestart = value.resumeWorkOnRestart
+  }
+
+  if ('agentAccountVisibility' in value) {
+    if (typeof value.agentAccountVisibility !== 'boolean') {
+      throw new TypeError('agentAccountVisibility must be a boolean')
+    }
+    patch.agentAccountVisibility = value.agentAccountVisibility
   }
 
   if ('backgroundMode' in value) {

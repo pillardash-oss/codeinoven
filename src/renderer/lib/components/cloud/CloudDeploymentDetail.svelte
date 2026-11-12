@@ -18,6 +18,7 @@
   import { formatCompactAge } from '$shared/date-time-format'
   import { copyText as copyTextToClipboard } from '$lib/copy-text'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { selectedSearchText } from '$lib/selection-text'
   import { toast } from 'svelte-sonner'
   import { cloudDeployState, CloudDeployState } from '$lib/stores/cloud-deploy.svelte'
   import StatusPill from '../ui/StatusPill.svelte'
@@ -143,6 +144,10 @@
   })
 
   function openSearch(): void {
+    // A log search opened over a highlighted passage starts from it, so a line
+    // the reader selected is what the log is searched for. A search already on
+    // screen keeps the query it has.
+    if (!searchOpen) searchQuery = selectedSearchText()
     searchOpen = true
     activeMatch = searchMatches.length > 0 ? 0 : 0
     requestAnimationFrame(() => searchInputEl?.focus())

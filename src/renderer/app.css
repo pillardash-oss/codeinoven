@@ -35,7 +35,7 @@
   /* Text tokens */
   --color-foreground: #081825;
   --color-muted: #4a5568;
-  --color-dimmed: #8b95a5;
+  --color-dimmed: #646e7e;
 
   /* Brand tokens */
   --color-primary: #081825;
@@ -132,7 +132,7 @@
 
   --color-foreground: #f5f4f0;
   --color-muted: #9d9da6;
-  --color-dimmed: #5f5f68;
+  --color-dimmed: #85858f;
 
   --color-primary: #f5f4f0;
   --color-primary-hover: #e5e4df;

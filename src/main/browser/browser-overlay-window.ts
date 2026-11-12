@@ -169,7 +169,10 @@ export class BrowserOverlayWindow {
     // above every pixel of the app and competes for the cursor over all of them
     // (`forwardsMouseMoves`). It is hidden the moment another application comes
     // forward, so an always-on-top overlay can never float over one.
-    this.parent.on('focus', () => this.showWhileWarm())
+    this.parent.on('focus', () => {
+      this.showWhileWarm()
+      this.restoreModalFocus()
+    })
     this.parent.on('blur', () => {
       setTimeout(() => {
         if (this.parent.isDestroyed()) return
@@ -197,6 +200,30 @@ export class BrowserOverlayWindow {
   }
 
   /**
+   * Hand the keyboard back to the modal this window is drawing.
+   *
+   * Leaving the app hides this overlay (`hideWhileInactive`), and it is always
+   * shown again inactive, because a card must never take the keyboard from the
+   * page beneath it. A modal is the one exception: while one is open it owns the
+   * app, so returning to the app has to return to it. Without this the panel was
+   * still on screen with its field unfocused, because the app document behind it
+   * had been handed the keyboard: the user came back to a search field that
+   * swallowed nothing and had to click it again.
+   *
+   * The handover waits a turn, like `restorePageFocus`: the reactivated window
+   * settles its own focus after the event and would otherwise win the race.
+   */
+  private restoreModalFocus(): void {
+    const modal = [...this.docks.values()].findLast((dock) => dock.modal)
+    if (!modal) return
+    const id = modal.id
+    setImmediate(() => {
+      if (!this.docks.get(id)?.modal) return
+      this.focusDock(id)
+    })
+  }
+
+  /**
    * Whether anything is holding this window loaded.
    *
    * The browser view holds it while it is on screen, and the app renderer holds
@@ -212,6 +239,15 @@ export class BrowserOverlayWindow {
   private hideWhileInactive(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
+    // A hidden window must not keep the keyboard. A modal takes key status for
+    // itself (`focusDock`), and hiding the window while another application is in
+    // front used to leave it as the app's key window: reactivating the app handed
+    // the keyboard back to a window that was not on screen, so the app window
+    // could not become key at all and the modal the user still had open was
+    // unreachable   invisible, and swallowing every keystroke the driver could
+    // only deliver to it. Resigning first lets reactivation settle on the app
+    // window, whose focus is what brings the modal back (`restoreModalFocus`).
+    if (popup.isFocused()) popup.blur()
     if (popup.isVisible()) popup.hide()
   }
 

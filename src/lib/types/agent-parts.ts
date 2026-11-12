@@ -1,3 +1,5 @@
+import type { ThinkingLevel } from './common'
+
 /**
  * Lifecycle state of one tool invocation or delegated sub-agent task.
  *
@@ -143,6 +145,12 @@ export interface AgentSubagentActivity {
   providerTaskId?: string
   providerId?: string
   modelId?: string
+  /** Harness that ran the worker, when it is not simply the parent's harness. */
+  harnessId?: string
+  /** Reasoning effort the worker ran with. A harness that reports none per
+   *  worker leaves this unset and the surface falls back to the parent thread's
+   *  level, which is what a nested worker inherits. */
+  thinkingLevel?: ThinkingLevel
   background: boolean
   output?: string
   error?: string

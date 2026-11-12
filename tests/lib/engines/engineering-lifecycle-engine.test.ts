@@ -56,11 +56,13 @@ async function setup(): Promise<{ db: Database; lifecycle: EngineeringLifecycleE
 afterEach(() => databases.splice(0).forEach(destroyTestDb))
 
 describe('EngineeringLifecycleEngine', () => {
-  it('applies cascade dependencies so Achievement enables Spec but Assignment stands alone', () => {
+  it('enables each stage on its own, so nothing forces a Spec', () => {
     // Assignment decomposes an approved Spec when one exists and the thread
-    // conversation otherwise, so selecting it never forces a Spec.
+    // conversation otherwise, and Achievement judges the work against an
+    // approved Spec when one exists and the captured goal otherwise, so neither
+    // stage may drag Spec into the selection.
     expect(normalizeLifecycleStages(['assignment'])).toEqual(['assignment'])
-    expect(normalizeLifecycleStages(['achievement'])).toEqual(['spec', 'achievement'])
+    expect(normalizeLifecycleStages(['achievement'])).toEqual(['achievement'])
     // Achievement is a loop mode: it never drags Assignment in.
     expect(normalizeLifecycleStages(['achievement'])).not.toContain('assignment')
     expect(normalizeLifecycleStages(['prd', 'brainstorm'])).toEqual(['brainstorm', 'prd'])

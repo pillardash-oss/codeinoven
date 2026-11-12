@@ -277,6 +277,11 @@ export function piCoreToolsEventsSource(): string {
     // this through a permission card that could auto-approve the bypass.
     const cuaBypass = unmanagedCuaShellReason(event.toolName, input)
     if (cuaBypass) return { block: true, reason: cuaBypass }
+    // Same invariant for processes: a kill that resolves its target at run time
+    // can only reach something this session did not start. Never a card, so no
+    // permission mode can approve it.
+    const processKillBypass = unmanagedProcessKillReason(event.toolName, input)
+    if (processKillBypass) return { block: true, reason: processKillBypass }
     const contaminated = findContaminatedToolArg(input)
     if (contaminated) {
       return {

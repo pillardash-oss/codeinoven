@@ -561,6 +561,14 @@ export interface AppConfig {
    * sweepable; the settings page toggles the list.
    */
   cioCleanupExcludedCategories: CioCleanupCategoryId[]
+  /**
+   * Whether an agent may see which connected account still has subscription
+   * capacity. Absent means ON. When OFF, `cio_orchestrate_targets` reports no
+   * account capacity at all and the agent cannot learn which account has
+   * remaining quota, so it must reuse the current thread's own account and
+   * model for its sub-agents instead of hunting for another one.
+   */
+  agentAccountVisibility?: boolean
 }
 
 /** Bounds for `AppConfig.cioCleanupRetentionDays`. */
@@ -639,5 +647,6 @@ export type AppConfigPatch = Partial<
     | 'llamaCppUnload'
     | 'cioCleanupRetentionDays'
     | 'cioCleanupExcludedCategories'
+    | 'agentAccountVisibility'
   >
 >

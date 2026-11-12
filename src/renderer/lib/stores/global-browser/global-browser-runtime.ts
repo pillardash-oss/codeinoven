@@ -8,6 +8,7 @@ import { browserAssistant, type BrowserAssistantChat } from '../browser-assistan
 import { contextSidebarState } from '../context-sidebar.svelte'
 import { browserAudio } from '../browser-audio.svelte'
 import { sidebarState } from '../sidebar.svelte'
+import { selectedSearchText } from '../../selection-text'
 import { threadNotesState } from '../thread-notes.svelte'
 import { recentVisits } from '../recent-visits.svelte'
 import {
@@ -547,7 +548,9 @@ export class GlobalBrowserStateRuntime {
   /** Open the shared search panel and reveal the sidebar containing its results. */
   openTabSearch(groupId: string | null = null): void {
     this.host.tabSearchGroupId = groupId
-    this.host.tabSearchQuery = ''
+    // A search opened while the reader has text highlighted starts from that
+    // passage: a copied address or a tab title is often what they selected.
+    this.host.tabSearchQuery = selectedSearchText()
     this.host.tabSearchOpen = true
     this.host.tabSearchFocusRequest += 1
     // Keep the filtered tab results visible while searching.

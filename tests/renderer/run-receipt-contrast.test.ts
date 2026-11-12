@@ -7,7 +7,7 @@ import { STATUS_INK_MIX_PERCENT } from '../../src/renderer/lib/components/thread
  * Contrast, computed from the app's real semantic tokens.
  *
  * A receipt is a wall of small strings, so every one of them has to clear the
- * body-text floor in both themes, and `--color-dimmed` is reserved for marks.
+ * body-text floor in both themes, and `--color-dimmed`, the app's secondary text colour, clears it too.
  * These cases read the token values out of `src/renderer/app.css` and compute the
  * ratios rather than trusting a screenshot: a theme tweak that drops a string
  * under 4.5:1 fails here, which is the moment to fix it.
@@ -106,10 +106,14 @@ describe('run receipt contrast', () => {
     })
   }
 
-  it('keeps --color-dimmed out of the receipt, because it fails the floor', () => {
-    // The token is a mark colour by design, and this records why: it is below the
-    // body-text floor on its own surface in both themes.
-    expect(contrast(lightToken('--color-dimmed'), lightToken('--color-surface'))).toBeLessThan(4.5)
-    expect(contrast(darkToken('--color-dimmed'), darkToken('--color-surface'))).toBeLessThan(4.5)
+  it('keeps --color-dimmed above the body-text floor on its own surface', () => {
+    // The app sets timestamps, counts and help lines in this token, so it has to
+    // be readable as text in both themes, not only as a mark colour.
+    expect(
+      contrast(lightToken('--color-dimmed'), lightToken('--color-surface'))
+    ).toBeGreaterThanOrEqual(4.5)
+    expect(
+      contrast(darkToken('--color-dimmed'), darkToken('--color-surface'))
+    ).toBeGreaterThanOrEqual(4.5)
   })
 })

@@ -27,8 +27,10 @@ import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
+import { recruitedAssistantKnowledge } from '../../lib/assistant-recruit'
 import { actionEnvironmentDirectories } from '../../lib/project-env'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
+import { answerTeammateQuestion, routeTeammateQuestion } from '../chat/don-question-router'
 import { broadcastAssistantsChanged } from '../scheduler/assistant-events'
 import { assistantIsBuiltin, isGroupThread } from '../../lib/types'
 import { createWorkQueue } from '../../lib/bounded-work'
@@ -674,6 +676,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           const assistant = assistantManager.createAssistant({
             name: input.name,
             description: input.purpose,
+            // The teammate arrives complete. Don is the one that hires it, so Don
+            // is the one that answers everything an interview would have asked:
+            // the name, what it is for and how it works are all in the brief, and
+            // the knowledge written from it is what makes the very next dispatched
+            // run a real run instead of another setup pass.
+            knowledge: recruitedAssistantKnowledge({
+              name: input.name,
+              purpose: input.purpose,
+              ...(input.request ? { request: input.request } : {}),
+              ...(input.instructions ? { instructions: input.instructions } : {})
+            }),
             // A hire is not a schedule: the clock is agreed with the teammate
             // itself later, from its own panel.
             agents: withDefaultAssistantPrimary({ fallbacks: [] }, selection),
@@ -687,14 +700,24 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
             assistant,
             purpose: input.purpose,
             ...(input.request ? { request: input.request } : {}),
-            settings: requesting.settings
+            settings: requesting.settings,
+            // The hire belongs to the conversation that asked for it: everything
+            // the new teammate needs to say reaches Don's thread under that
+            // teammate's name, and nothing interrupts the user from a thread they
+            // never opened.
+            initiator: { projectId: context.projectId, threadId: context.threadId }
           })
           return {
             assistantId: assistant.id,
             name: assistant.name,
             threadId: thread.id
           }
-        }
+        },
+        // The question a teammate's run is blocked on is settled here, in Don's
+        // own turn, so the person who asked for the work is not handed a decision
+        // about work they never started by hand.
+        answerTeammateQuestion: (input, context) =>
+          answerTeammateQuestion(chatEngine, input, context)
       })
       const delegations = new DonDelegations()
       chatEngine.attachDonRuntime({
@@ -704,6 +727,12 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           const assistant = assistantManager.getAssistant(assistantId)
           return assistant ? delegationAuthor(assistant) : null
         }
+      })
+      // A question one of Don's children is blocked on wakes Don once, which is what
+      // makes the orchestrator answer its team instead of turning every runtime
+      // question into the user's decision.
+      chatEngine.attachDelegatedQuestionHandler((pending) => {
+        void routeTeammateQuestion(chatEngine, pending)
       })
       // The orchestration tools dispatch to a project or to one of these
       // assistants. Handing them the directory here is what makes an assistant

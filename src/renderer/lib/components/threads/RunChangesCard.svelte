@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
@@ -283,7 +284,7 @@ one and reviewing is optional, so neither is dressed as the card's main call. --
                 class="group flex min-h-9 w-full items-center gap-1 border-b border-border px-3 transition-colors last:border-b-0 hover:bg-elevated"
                 in:fly={rowArrive()}
               >
-                {#await import('../files/HoverDiffPopover.svelte') then { default: HoverDiffPopover }}
+                {#await loadCachedPanelModule('module:lib/components/files/HoverDiffPopover.svelte', () => import('../files/HoverDiffPopover.svelte')) then { default: HoverDiffPopover }}
                   <HoverDiffPopover
                     {projectId}
                     {threadId}

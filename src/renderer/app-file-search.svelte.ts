@@ -1,6 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { invoke } from '$lib/ipc.svelte'
+import { selectedSearchText } from '$lib/selection-text'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
 import {
@@ -25,6 +26,14 @@ const MAX_RESULTS = 60
  */
 export class FileSearchPaletteController {
   paletteOpen = $state(false)
+  /**
+   * The query the screen opens with.
+   *
+   * A search asked for while text is highlighted is that passage, so the
+   * palette arrives already searching rather than asking the reader to retype
+   * what they had selected.
+   */
+  initialQuery = $state('')
   actions = $state<ActionDefinition[]>([])
   loading = $state(false)
   /** Scoped project ids for the footer picker; empty = all projects. */
@@ -50,6 +59,7 @@ export class FileSearchPaletteController {
 
   openPalette(): void {
     this.reset()
+    this.initialQuery = selectedSearchText()
     this.paletteOpen = true
   }
 

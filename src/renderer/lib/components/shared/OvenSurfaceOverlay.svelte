@@ -1,8 +1,8 @@
 <script lang="ts">
-  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { Snippet } from 'svelte'
+  import ErrorStrip from '$lib/components/ui/ErrorStrip.svelte'
 
   /**
    * The canonical state layer for a surface whose content lives on an Oven.
@@ -82,28 +82,13 @@
         : 'bg-transparent'}"
     >
       {#if failed}
-        <div
-          class="flex w-full max-w-[34ch] flex-col items-center gap-2 border border-border bg-elevated px-4 py-5 text-center shadow-lg"
-          role="alert"
-        >
-          <div class="flex h-9 w-9 items-center justify-center bg-danger/10">
-            <CioAttention size={17} class="text-danger" aria-hidden="true" />
-          </div>
-          <p class="text-xs font-semibold text-foreground">{title}</p>
-          <p class="max-w-[32ch] text-[0.625rem] leading-relaxed break-words text-muted">
-            {error}
-          </p>
-          {#if onRetry}
-            <button
-              type="button"
-              class="mt-1 flex h-7 items-center gap-1.5 border border-border-strong bg-surface px-2.5 text-[0.625rem] font-semibold text-foreground transition-colors hover:bg-overlay"
-              onclick={onRetry}
-            >
-              <CioRefresh size={12} aria-hidden="true" />
-              {retryLabel}
-            </button>
-          {/if}
-        </div>
+        <ErrorStrip
+          class="w-full max-w-lg shadow-lg"
+          {title}
+          message={error ?? undefined}
+          folded={false}
+          primary={onRetry ? { label: retryLabel, icon: CioRefresh, onclick: onRetry } : undefined}
+        />
       {:else}
         <div
           class="flex items-center gap-2 border border-border bg-elevated/95 px-3 py-1.5 shadow-sm"

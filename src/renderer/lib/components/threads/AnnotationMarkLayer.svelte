@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import SeekBar from '../ui/SeekBar.svelte'
   import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
   import CioGrip from '@pdslng/cio-icon/CioGrip.svelte'
@@ -626,7 +627,7 @@
           <span class="mb-2 block text-xs font-medium text-muted">Colour</span>
           <!-- The palette only exists while the pen popover is open, so its chunk
                waits for the popover instead of loading with the first screen. -->
-          {#await import('../shared/ColorSwatches.svelte') then { default: ColorSwatches }}
+          {#await loadCachedPanelModule('module:lib/components/shared/ColorSwatches.svelte', () => import('../shared/ColorSwatches.svelte')) then { default: ColorSwatches }}
             <ColorSwatches
               size="sm"
               allowNone={false}

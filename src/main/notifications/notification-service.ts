@@ -1169,14 +1169,14 @@ export class NotificationService {
         : errorHeadline.length > 240
           ? `${errorHeadline.slice(0, 240).trimEnd()}…`
           : errorHeadline
-    // An assistant run says what it did; naming the hidden assistant space as
-    // the project it "finished in" would read as a project thread, and repeating
-    // the title in the body reads as noise beside a title that is already the
-    // assistant or task name, so a completed assistant run states its outcome.
+    // An assistant run names its own thread: naming the hidden assistant space as
+    // the project it "finished in" would read as a project thread, and the title
+    // is already the assistant or task name, so the body carries the thread the
+    // run produced.
     const body =
       kind === 'completed'
         ? isAssistant
-          ? 'Run completed'
+          ? thread.title.trim()
           : `${thread.title} finished in ${projectName}.`
         : kind === 'attention'
           ? isAssistant

@@ -13,7 +13,10 @@ import {
 } from '../../../../lib/core-tools'
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
 import { PAWN_AGENT_TOOL_NAME } from '../../../../lib/pawn-tools'
-import { unmanagedCuaShellReason } from '../../../../lib/agent-control-policy'
+import {
+  unmanagedCuaShellReason,
+  unmanagedProcessKillReason
+} from '../../../../lib/agent-control-policy'
 import { sensitiveFileTargets } from '../../../../lib/sensitive-file-targets'
 import { CIO_SENSITIVE_ACCESS_REASON_TOOL_NAME } from '../../../../lib/core-tools'
 import {
@@ -200,6 +203,11 @@ function bundledPiSensitiveFileGate(toolName, input, cwd) {
 }
 
 const unmanagedCuaShellReason = ${unmanagedCuaShellReason.toString()}
+
+// Process lifecycle belongs to whoever started the process. A server the user
+// started is unreachable by any rule this session could justify, so this check
+// is a block, not a permission card: Full Access auto-approves cards.
+const unmanagedProcessKillReason = ${unmanagedProcessKillReason.toString()}
 
 // The tools pi bundles itself. When the driver hands this session a tool
 // allowlist (File-System-OFF chat threads), every call to one of these that

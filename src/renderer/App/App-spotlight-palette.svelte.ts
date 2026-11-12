@@ -238,6 +238,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.root.onKeydown.fileSearch.actions,
           title: 'Search files across projects',
           placeholder: 'Type at least two characters…',
+          initialQuery: this.root.onKeydown.fileSearch.initialQuery,
           emptyLabel: this.root.onKeydown.fileSearch.loading
             ? 'Searching project files…'
             : 'No matching files',
@@ -259,6 +260,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.allThreadSearch.actions,
           title: 'Search all threads',
           placeholder: 'Search project threads, chats, and assistant tasks…',
+          initialQuery: this.allThreadSearch.initialQuery,
           emptyLabel: this.allThreadSearch.loading
             ? 'Searching every thread…'
             : 'Type at least two characters to search every thread',
@@ -280,6 +282,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.root.onKeydown.threadSearch.actions,
           title: 'Search threads across projects',
           placeholder: 'Search thread titles and messages across all projects…',
+          initialQuery: this.root.onKeydown.threadSearch.initialQuery,
           emptyLabel: this.root.onKeydown.threadSearch.loading
             ? 'Searching threads…'
             : 'Type at least two characters to search all projects',
@@ -306,6 +309,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.chatSearch.actions,
           title: 'Search chats',
           placeholder: 'Search chat titles and messages…',
+          initialQuery: this.chatSearch.initialQuery,
           emptyLabel: this.chatSearch.loading
             ? 'Searching chats…'
             : 'Type at least two characters to search chats',
@@ -325,6 +329,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.root.onKeydown.assistantSearch.actions,
           title: 'Search assistant tasks',
           placeholder: 'Search assistants, tasks, and messages…',
+          initialQuery: this.root.onKeydown.assistantSearch.initialQuery,
           emptyLabel: this.root.onKeydown.assistantSearch.loading
             ? 'Searching assistant tasks…'
             : 'Type at least two characters to search assistant tasks and assistants',
@@ -349,6 +354,7 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           actions: this.browserTabSearch.actions,
           title: 'Search browser tabs',
           placeholder: 'Search open tabs by title, address, or group…',
+          initialQuery: this.browserTabSearch.initialQuery,
           emptyLabel: browserStore() ? 'No matching tabs' : 'Opening the browser…',
           headerIcon: CioBrowser,
           headerIconBadge: true,

@@ -7,6 +7,7 @@ import {
   type OrchestrationAssistantDirectory
 } from '../chat-engine-orchestration'
 import { LOCAL_OVEN_ID } from '../../../lib/ovens'
+import { mapInBatches } from '../../../lib/bounded-work'
 import { OvenRegistry } from '../../ovens/oven-registry'
 import { OvenService } from '../../ovens/oven-service'
 import { OvenHarnessService } from '../../ovens/oven-harness-service'
@@ -212,6 +213,27 @@ export class ChatEngineRuntimeWorkflows {
         }
       },
       listModelProfiles: async () => (await this.host.storage.getConfig()).modelProfiles ?? [],
+      getConfig: () => this.host.storage.getConfig(),
+      // Subscription capacity is provider-level account state, so it is probed
+      // only for the accounts the target list is about to show, three at a
+      // time. A probe that fails drops out: missing capacity is never an error.
+      accountUsage: async (targets) => {
+        if (targets.length === 0) return []
+        const providersCatalog = this.host.units['providers-catalog']
+        const probed = await mapInBatches(targets, 3, async (target) => {
+          try {
+            return await providersCatalog.refreshAccountUsage({
+              harnessId: target.harnessId,
+              providerId: target.providerId,
+              accountId: target.accountId
+            })
+          } catch (error) {
+            Logger.dev('Account usage probe failed for a dispatch target:', error)
+            return []
+          }
+        })
+        return probed.flat()
+      },
       getThread: (projectId, threadId) => this.host.threadManager.getThread(projectId, threadId),
       getThreadById: (threadId) => this.host.threadManager.getThreadById(threadId),
       listDispatchedThreads: (initiatorProjectId, initiatorThreadId) =>

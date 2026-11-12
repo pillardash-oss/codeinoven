@@ -4,6 +4,14 @@
   interface Props {
     /** Optional leading icon component (lucide icon). */
     icon?: Component
+    /**
+     * Optional art in place of the icon tile.
+     *
+     * A surface that has something more specific to say than "nothing here" draws
+     * it itself: the assistant panel shows the open seat a teammate would take,
+     * so the empty column reads as a list with room in it rather than a warning.
+     */
+    visual?: Snippet
     /** Short heading for the empty state. */
     title: string
     /** Optional explanation of why the surface is empty. */
@@ -13,13 +21,15 @@
     class?: string
   }
 
-  let { icon: Icon, title, description, action, class: className = '' }: Props = $props()
+  let { icon: Icon, visual, title, description, action, class: className = '' }: Props = $props()
 </script>
 
 <div
   class="flex flex-1 flex-col items-center justify-center gap-2.5 px-6 py-8 text-center {className}"
 >
-  {#if Icon}
+  {#if visual}
+    {@render visual()}
+  {:else if Icon}
     <div class="flex h-10 w-10 items-center justify-center bg-elevated">
       <Icon size={18} class="text-dimmed" />
     </div>

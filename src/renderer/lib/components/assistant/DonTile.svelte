@@ -1,8 +1,11 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
+  import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
+  import type { ThreadStateCounts as ThreadStateCountsValue } from '$lib/thread-state-counts'
   import type { Assistant } from '$shared/types'
+  import { formatCompactAge } from '$shared/date-time-format'
+  import { relativeTimeClock } from '$lib/relative-time.svelte'
 
   /**
    * Don, pinned as a centred square at the top of the assistant list.
@@ -28,22 +31,31 @@
     iconUrl?: string | null
     /** Whether Don can run at all: it needs instructions and a model like any assistant. */
     ready: boolean
-    /**
-     * Whether Don's conversation holds an answer nobody has read yet.
-     *
-     * A delegation reports into the group rather than into the run's own row, so
-     * this tile is the one place that says an answer came back.
-     */
-    unread: boolean
+    /** When Don's conversation last moved, so the tile says how long it has been. */
+    lastWorkedAt?: number | null
+    /** Don's working, attention and error breakdown, as the other rows wear it. */
+    stateCounts: ThreadStateCountsValue
     onOpen: () => void
   }
 
-  let { assistant, threadId, selected, iconUrl = null, ready, unread, onOpen }: Props = $props()
+  let {
+    assistant,
+    threadId,
+    selected,
+    iconUrl = null,
+    ready,
+    lastWorkedAt = null,
+    stateCounts,
+    onOpen
+  }: Props = $props()
 
   const name = $derived(assistant?.name?.trim() || 'Don')
-  const title = $derived(
-    ready ? `Open ${name}'s group chat` : `${name} needs a model before it can take work`
+  const title = $derived(ready ? `Open ${name}` : `${name} needs a model before it can take work`)
+  const lastWorkedLabel = $derived(
+    lastWorkedAt ? formatCompactAge(lastWorkedAt, relativeTimeClock.now) : ''
   )
+
+  $effect(() => relativeTimeClock.hold())
 </script>
 
 <div class="flex justify-center px-3 pt-3.5 pb-1">
@@ -57,8 +69,8 @@
     onclick={onOpen}
   >
     <!-- The plate answers hover, focus and selection with a quiet ring: enough
-         to read as the door to the group chat, never bright enough to pull the
-         eye off the conversation it opens. -->
+         to read as the door to Don's conversation, never bright enough to pull the
+         eye off the list it opens. -->
     <span
       class="flex size-24 items-center justify-center bg-brand-plate outline-1 outline-offset-2 transition-[outline-color] duration-150 group-hover:outline-border group-focus-visible:outline-border-strong {selected
         ? 'outline-border-strong'
@@ -70,11 +82,10 @@
         <AssistantIcon mark="mark" size={56} class="text-brand-ink" />
       {/if}
     </span>
-    <span class="flex items-center gap-1 text-sm font-medium text-foreground">
-      {#if unread && !selected}
-        <StatusBadge stage="unread" title={`${name} has an answer you have not read`} />
-      {/if}
-      {name}
+    <!-- One line under the plate: who it is, when it last worked, and what its
+         threads are doing. -->
+    <span class="flex max-w-full items-center gap-1.5 text-sm font-medium whitespace-nowrap">
+      <span class="min-w-0 truncate text-foreground">{name}</span>
       {#if !ready}
         <CioAttention
           size={12}
@@ -83,7 +94,12 @@
           aria-label={`${name} has no model yet`}
         />
       {/if}
+      {#if lastWorkedLabel}
+        <span class="text-dimmed" aria-hidden="true">·</span>
+        <span class="text-xs font-normal text-dimmed group-hover:text-muted">{lastWorkedLabel}</span
+        >
+      {/if}
+      <ThreadStateCounts counts={stateCounts} />
     </span>
-    <span class="-mt-1.5 text-xs text-dimmed group-hover:text-muted">Group chat</span>
   </button>
 </div>

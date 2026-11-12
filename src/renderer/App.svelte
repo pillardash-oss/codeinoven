@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { loadCachedPanelModule } from '$lib/lazy-panel'
   import AppHeader from '$lib/components/layout/AppHeader.svelte'
   import AppPanelHost from '$lib/components/layout/AppPanelHost.svelte'
   import GlobalContextSidebar from '$lib/components/layout/GlobalContextSidebar.svelte'
@@ -116,7 +117,7 @@
         />
       </div>
       {#if board.onKeydown.activeView === 'scope'}
-        {#await import('$lib/components/scope/ScopeView.svelte') then { default: ScopeView }}
+        {#await loadCachedPanelModule('module:lib/components/scope/ScopeView.svelte', () => import('$lib/components/scope/ScopeView.svelte')) then { default: ScopeView }}
           <div class="absolute inset-0" transition:fly={pageReveal()}>
             <ScopeView
               navigateToScopedThreads={board.openAssistantFromSearch.navigateToScopedThreads}
@@ -127,7 +128,7 @@
         <!-- Each settings section is its own dedicated page in the board.openAssistantFromSearch.navigation model.
            The view stays mounted and SettingsView swaps its content on the section
            prop   a keyed remount here would flash the screen on every tab switch. -->
-        {#await import('$lib/components/settings/SettingsView.svelte') then { default: SettingsView }}
+        {#await loadCachedPanelModule('module:lib/components/settings/SettingsView.svelte', () => import('$lib/components/settings/SettingsView.svelte')) then { default: SettingsView }}
           <div class="absolute inset-0" transition:fly={pageReveal()}>
             <SettingsView
               config={board.updateConfig.config}
@@ -150,7 +151,7 @@
              normal flow, because the workspace shell behind it stays mounted as a
              full-height sibling: in flow the browser sits below the fold and only
              enters view once focus scrolls the stage. -->
-        {#await import('$lib/components/browser/BrowserView.svelte') then { default: BrowserView }}
+        {#await loadCachedPanelModule('module:lib/components/browser/BrowserView.svelte', () => import('$lib/components/browser/BrowserView.svelte')) then { default: BrowserView }}
           <div class="absolute inset-0">
             <BrowserView />
           </div>
@@ -168,18 +169,18 @@
       {/if}
       {#if browserStore()?.peekTab}
         {#key browserStore()?.peekTab?.id}
-          {#await import('$lib/components/browser/BrowserPeekWindow.svelte') then { default: BrowserPeekWindow }}
+          {#await loadCachedPanelModule('module:lib/components/browser/BrowserPeekWindow.svelte', () => import('$lib/components/browser/BrowserPeekWindow.svelte')) then { default: BrowserPeekWindow }}
             <BrowserPeekWindow />
           {/await}
         {/key}
       {/if}
       {#if browserStore()?.sitePermissionsPrompt}
-        {#await import('$lib/components/browser/BrowserSitePermissionsModal.svelte') then { default: BrowserSitePermissionsModal }}
+        {#await loadCachedPanelModule('module:lib/components/browser/BrowserSitePermissionsModal.svelte', () => import('$lib/components/browser/BrowserSitePermissionsModal.svelte')) then { default: BrowserSitePermissionsModal }}
           <BrowserSitePermissionsModal />
         {/await}
       {/if}
       {#if browserStore()?.screenSharePrompt}
-        {#await import('$lib/components/browser/BrowserScreenSharePicker.svelte') then { default: BrowserScreenSharePicker }}
+        {#await loadCachedPanelModule('module:lib/components/browser/BrowserScreenSharePicker.svelte', () => import('$lib/components/browser/BrowserScreenSharePicker.svelte')) then { default: BrowserScreenSharePicker }}
           <BrowserScreenSharePicker />
         {/await}
       {/if}
@@ -188,7 +189,7 @@
     <!-- A guide's words, in a column beside the app rather than over it: the app
          reflows beside the dock, so nothing a guide explains is ever covered. -->
     {#if guideState.visible}
-      {#await import('$lib/components/guide/GuideDock.svelte') then { default: GuideDock }}
+      {#await loadCachedPanelModule('module:lib/components/guide/GuideDock.svelte', () => import('$lib/components/guide/GuideDock.svelte')) then { default: GuideDock }}
         <GuideDock />
       {/await}
     {/if}
@@ -197,7 +198,7 @@
   <!-- The marker a guide draws inside the app: one element, a rule to the dock,
        and the notch where it lands. Fixed to the window, and never in the way. -->
   {#if guideState.visible}
-    {#await import('$lib/components/guide/GuideMarks.svelte') then { default: GuideMarks }}
+    {#await loadCachedPanelModule('module:lib/components/guide/GuideMarks.svelte', () => import('$lib/components/guide/GuideMarks.svelte')) then { default: GuideMarks }}
       <GuideMarks />
     {/await}
   {/if}
@@ -214,12 +215,12 @@
     />
   {/if}
   {#if board.spotlightPalette.spotlightScreenId}
-    {#await import('$lib/components/actions/CommandPalette.svelte') then { default: CommandPalette }}
+    {#await loadCachedPanelModule('module:lib/components/actions/CommandPalette.svelte', () => import('$lib/components/actions/CommandPalette.svelte')) then { default: CommandPalette }}
       <CommandPalette {...board.spotlightPalette.spotlightPalette} />
     {/await}
   {/if}
   {#if board.spotlightPalette.newProjectSpotlightOpen}
-    {#await import('$lib/components/shared/ProjectCreateControl.svelte') then { default: ProjectCreateControl }}
+    {#await loadCachedPanelModule('module:lib/components/shared/ProjectCreateControl.svelte', () => import('$lib/components/shared/ProjectCreateControl.svelte')) then { default: ProjectCreateControl }}
       <ProjectCreateControl
         mode="spotlight"
         open={board.spotlightPalette.newProjectSpotlightOpen}
@@ -234,7 +235,7 @@
          its first knowledge, so the question is about the runs the user has just
          set up, and floated above every view because that save happens in the
          thread the assistant belongs to. -->
-    {#await import('$lib/components/layout/StartAtLoginPrompt.svelte') then { default: StartAtLoginPrompt }}
+    {#await loadCachedPanelModule('module:lib/components/layout/StartAtLoginPrompt.svelte', () => import('$lib/components/layout/StartAtLoginPrompt.svelte')) then { default: StartAtLoginPrompt }}
       <StartAtLoginPrompt open onChoose={board.updateConfig.answerStartAtLoginOffer} />
     {/await}
   {/if}
@@ -247,12 +248,12 @@
   {#if scopeConfirmations.current}
     <!-- An agent's destructive scope action is parked in main until this dialog
          is answered, so it floats above every view until the user decides. -->
-    {#await import('$lib/components/scope/ScopeAgentConfirmDialog.svelte') then { default: ScopeAgentConfirmDialog }}
+    {#await loadCachedPanelModule('module:lib/components/scope/ScopeAgentConfirmDialog.svelte', () => import('$lib/components/scope/ScopeAgentConfirmDialog.svelte')) then { default: ScopeAgentConfirmDialog }}
       <ScopeAgentConfirmDialog />
     {/await}
   {/if}
   {#if pipState.active && pipState.frameDataUrl !== null}
-    {#await import('$lib/components/pip/PipOverlay.svelte') then { default: PipOverlay }}
+    {#await loadCachedPanelModule('module:lib/components/pip/PipOverlay.svelte', () => import('$lib/components/pip/PipOverlay.svelte')) then { default: PipOverlay }}
       <PipOverlay />
     {/await}
   {/if}
@@ -262,20 +263,20 @@
          screen-edge chip. Editable text saved straight back to the file, and
          deliberately project-less (no file tree, no tree operations, nothing
          indexed). -->
-    {#await import('$lib/components/files/StandaloneFileDock.svelte') then { default: StandaloneFileDock }}
+    {#await loadCachedPanelModule('module:lib/components/files/StandaloneFileDock.svelte', () => import('$lib/components/files/StandaloneFileDock.svelte')) then { default: StandaloneFileDock }}
       <StandaloneFileDock />
     {/await}
   {:else if standaloneFiles.open}
     <!-- The explicit full screen mode of the same files, one action away from
          the docked panel. -->
-    {#await import('$lib/components/files/StandaloneFileViewer.svelte') then { default: StandaloneFileViewer }}
+    {#await loadCachedPanelModule('module:lib/components/files/StandaloneFileViewer.svelte', () => import('$lib/components/files/StandaloneFileViewer.svelte')) then { default: StandaloneFileViewer }}
       <StandaloneFileViewer />
     {/await}
   {/if}
   {#if standaloneFiles.pendingClose}
     <!-- One unsaved-changes confirmation served to both the docked panel and the
          fullscreen reader. -->
-    {#await import('$lib/components/files/StandaloneFileCloseDialog.svelte') then { default: StandaloneFileCloseDialog }}
+    {#await loadCachedPanelModule('module:lib/components/files/StandaloneFileCloseDialog.svelte', () => import('$lib/components/files/StandaloneFileCloseDialog.svelte')) then { default: StandaloneFileCloseDialog }}
       <StandaloneFileCloseDialog />
     {/await}
   {/if}
@@ -284,7 +285,7 @@
     <!-- The provider connect flow floats above every view: a surface with no AI
          account connected (the first-run setup card, the empty model picker)
          opens the harness's provider list without navigating away. -->
-    {#await import('$lib/components/providers/ProviderConnectHost.svelte') then { default: ProviderConnectHost }}
+    {#await loadCachedPanelModule('module:lib/components/providers/ProviderConnectHost.svelte', () => import('$lib/components/providers/ProviderConnectHost.svelte')) then { default: ProviderConnectHost }}
       <ProviderConnectHost />
     {/await}
   {/if}
@@ -293,7 +294,7 @@
     <!-- The ACP agent editor is a dockable panel owned here for the same reason
          as the base-URL editor: docking it must leave a chip behind after the
          settings page closes. -->
-    {#await import('$lib/components/providers/AcpAgentHost.svelte') then { default: AcpAgentHost }}
+    {#await loadCachedPanelModule('module:lib/components/providers/AcpAgentHost.svelte', () => import('$lib/components/providers/AcpAgentHost.svelte')) then { default: AcpAgentHost }}
       <AcpAgentHost />
     {/await}
   {/if}
@@ -303,13 +304,13 @@
          here rather than by the settings page that lists the providers: docking
          it leaves a chip behind while the user keeps working, and a chip owned
          by the settings subtree would vanish the moment they navigated away. -->
-    {#await import('$lib/components/providers/BaseUrlProviderHost.svelte') then { default: BaseUrlProviderHost }}
+    {#await loadCachedPanelModule('module:lib/components/providers/BaseUrlProviderHost.svelte', () => import('$lib/components/providers/BaseUrlProviderHost.svelte')) then { default: BaseUrlProviderHost }}
       <BaseUrlProviderHost />
     {/await}
   {/if}
 
   {#if board.settleCloseConfirmationThread.closeConfirmation}
-    {#await import('$lib/components/layout/CloseConfirmationModal.svelte') then { default: CloseConfirmationModal }}
+    {#await loadCachedPanelModule('module:lib/components/layout/CloseConfirmationModal.svelte', () => import('$lib/components/layout/CloseConfirmationModal.svelte')) then { default: CloseConfirmationModal }}
       <CloseConfirmationModal
         payload={board.settleCloseConfirmationThread.closeConfirmation}
         projects={scopeState.projectRecords}
@@ -325,7 +326,7 @@
          browser   including the app's own   while the panel keeps polling. It
          floats above every view because the flow outlives the panel it was
          opened from: the Git sidebar is behind the browser view when it lands. -->
-    {#await import('$lib/components/git/GitHubSignInDock.svelte') then { default: GitHubSignInDock }}
+    {#await loadCachedPanelModule('module:lib/components/git/GitHubSignInDock.svelte', () => import('$lib/components/git/GitHubSignInDock.svelte')) then { default: GitHubSignInDock }}
       <GitHubSignInDock />
     {/await}
   {/if}
@@ -334,7 +335,7 @@
     <!-- The step-by-step text a question card handed the user. It floats above
          every view because following it means leaving the app, and it outlives
          the card that opened it. -->
-    {#await import('$lib/components/threads/QuestionWalkthroughDock.svelte') then { default: QuestionWalkthroughDock }}
+    {#await loadCachedPanelModule('module:lib/components/threads/QuestionWalkthroughDock.svelte', () => import('$lib/components/threads/QuestionWalkthroughDock.svelte')) then { default: QuestionWalkthroughDock }}
       <QuestionWalkthroughDock />
     {/await}
   {/if}
@@ -343,13 +344,13 @@
     <!-- The surface the three-tap dictation gesture raises. It floats above every
          view because the gesture works anywhere in the window, and it outlives the
          thread that happened to be open when it was raised. -->
-    {#await import('$lib/components/don/DonListeningPanel.svelte') then { default: DonListeningPanel }}
+    {#await loadCachedPanelModule('module:lib/components/don/DonListeningPanel.svelte', () => import('$lib/components/don/DonListeningPanel.svelte')) then { default: DonListeningPanel }}
       <DonListeningPanel />
     {/await}
   {/if}
 
   {#if ovenSetupStore.initialized}
-    {#await import('$lib/components/settings/OvenSetupModal.svelte') then { default: OvenSetupModal }}
+    {#await loadCachedPanelModule('module:lib/components/settings/OvenSetupModal.svelte', () => import('$lib/components/settings/OvenSetupModal.svelte')) then { default: OvenSetupModal }}
       <OvenSetupModal
         open={ovenSetupStore.open}
         initialOvenId={ovenSetupStore.ovenId}
@@ -361,56 +362,56 @@
 
   {#if harnessLifecycleStore.runs.length}
     <!-- Floats above every view   survives board.openAssistantFromSearch.navigation while tasks keep running. -->
-    {#await import('$lib/components/providers/HarnessRunModal.svelte') then { default: HarnessRunModal }}
+    {#await loadCachedPanelModule('module:lib/components/providers/HarnessRunModal.svelte', () => import('$lib/components/providers/HarnessRunModal.svelte')) then { default: HarnessRunModal }}
       <HarnessRunModal />
     {/await}
   {/if}
 
   {#if prLifecycleStore.drafts.length}
     <!-- Floats above every view   survives thread/project/view and sidebar visibility. -->
-    {#await import('$lib/components/git/PrDockHost.svelte') then { default: PrDockHost }}
+    {#await loadCachedPanelModule('module:lib/components/git/PrDockHost.svelte', () => import('$lib/components/git/PrDockHost.svelte')) then { default: PrDockHost }}
       <PrDockHost />
     {/await}
   {/if}
 
   {#if agentAssist.request || agentAssistJobs.jobs.length}
     <!-- Every "with agent" control opens this one setup panel, wherever it lives. -->
-    {#await import('$lib/components/assist/AgentAssistHost.svelte') then { default: AgentAssistHost }}
+    {#await loadCachedPanelModule('module:lib/components/assist/AgentAssistHost.svelte', () => import('$lib/components/assist/AgentAssistHost.svelte')) then { default: AgentAssistHost }}
       <AgentAssistHost />
     {/await}
   {/if}
 
   {#if scopeJobs.jobs.length}
     <!-- Floats above every view so a worktree run keeps reporting while the user works. -->
-    {#await import('$lib/components/scope/ScopeJobDockHost.svelte') then { default: ScopeJobDockHost }}
+    {#await loadCachedPanelModule('module:lib/components/scope/ScopeJobDockHost.svelte', () => import('$lib/components/scope/ScopeJobDockHost.svelte')) then { default: ScopeJobDockHost }}
       <ScopeJobDockHost />
     {/await}
   {/if}
 
   {#if prBatchJobs.jobs.length}
     <!-- Floats above every view so a confirmed batch keeps closing pull requests while the user works. -->
-    {#await import('$lib/components/git/PrBatchDockHost.svelte') then { default: PrBatchDockHost }}
+    {#await loadCachedPanelModule('module:lib/components/git/PrBatchDockHost.svelte', () => import('$lib/components/git/PrBatchDockHost.svelte')) then { default: PrBatchDockHost }}
       <PrBatchDockHost />
     {/await}
   {/if}
 
   {#if gitSyncJobs.jobs.length}
     <!-- Floats above every view so a sync between two checkouts reports itself, and its outcome is never a dialog. -->
-    {#await import('$lib/components/git/GitSyncDockHost.svelte') then { default: GitSyncDockHost }}
+    {#await loadCachedPanelModule('module:lib/components/git/GitSyncDockHost.svelte', () => import('$lib/components/git/GitSyncDockHost.svelte')) then { default: GitSyncDockHost }}
       <GitSyncDockHost />
     {/await}
   {/if}
 
   {#if gitPullJobs.jobs.length}
     <!-- Floats above every view so a pull reports itself after its chooser is gone, and its outcome is never a dialog. -->
-    {#await import('$lib/components/git/GitPullDockHost.svelte') then { default: GitPullDockHost }}
+    {#await loadCachedPanelModule('module:lib/components/git/GitPullDockHost.svelte', () => import('$lib/components/git/GitPullDockHost.svelte')) then { default: GitPullDockHost }}
       <GitPullDockHost />
     {/await}
   {/if}
 
   {#if cioCleanupStore.jobs.length}
     <!-- Floats above every view so a manual cleanup keeps reporting while the user works. -->
-    {#await import('$lib/components/cio/CioCleanupDockHost.svelte') then { default: CioCleanupDockHost }}
+    {#await loadCachedPanelModule('module:lib/components/cio/CioCleanupDockHost.svelte', () => import('$lib/components/cio/CioCleanupDockHost.svelte')) then { default: CioCleanupDockHost }}
       <CioCleanupDockHost />
     {/await}
   {/if}

@@ -658,7 +658,7 @@
 {/snippet}
 
 {#snippet ovenPicker()}
-  {#await import('./OvenControls.svelte') then { default: OvenControlsComponent }}
+  {#await loadCachedPanelModule('module:lib/components/threads/OvenControls.svelte', () => import('./OvenControls.svelte')) then { default: OvenControlsComponent }}
     <OvenControlsComponent
       bind:this={board.openOvenPicker.ovenControl}
       thread={board.handleAgentEvent.thread}
@@ -681,7 +681,7 @@
   {@const item = board.studioTemporaryChatContext.viewerAnnotatableItem}
   {#if item}
     {#if isVideoMime(item.mime)}
-      {#await import('./ArtifactVideoAnnotator.svelte') then { default: ArtifactVideoAnnotator }}
+      {#await loadCachedPanelModule('module:lib/components/threads/ArtifactVideoAnnotator.svelte', () => import('./ArtifactVideoAnnotator.svelte')) then { default: ArtifactVideoAnnotator }}
         <ArtifactVideoAnnotator
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
@@ -699,7 +699,7 @@
         />
       {/await}
     {:else}
-      {#await import('./ArtifactImageAnnotator.svelte') then { default: ArtifactImageAnnotator }}
+      {#await loadCachedPanelModule('module:lib/components/threads/ArtifactImageAnnotator.svelte', () => import('./ArtifactImageAnnotator.svelte')) then { default: ArtifactImageAnnotator }}
         <ArtifactImageAnnotator
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
@@ -725,7 +725,7 @@
     ? board.unmirroredTraceStartTime.viewerArtifactPath(viewerItem.url)
     : null}
   {#if viewerItem.media}
-    {#await import('../chats/MediaPreview.svelte') then { default: MediaPreview }}
+    {#await loadCachedPanelModule('module:lib/components/chats/MediaPreview.svelte', () => import('../chats/MediaPreview.svelte')) then { default: MediaPreview }}
       <MediaPreview
         src={board.state.imageUrls.getUrl(viewerItem.url)}
         revealUrl={viewerItem.url}
@@ -749,7 +749,7 @@
       />
     {/await}
   {:else}
-    {#await import('../chats/AttachmentPreview.svelte') then { default: AttachmentPreview }}
+    {#await loadCachedPanelModule('module:lib/components/chats/AttachmentPreview.svelte', () => import('../chats/AttachmentPreview.svelte')) then { default: AttachmentPreview }}
       <AttachmentPreview
         attachment={viewerItem}
         src={board.studioTemporaryChatContext.attachmentPreview.urls[viewerItem.url]}
@@ -774,7 +774,7 @@
       board.studioTemporaryChatContext.queuedAttachmentViewer.index
     ]}
   {#if queuedViewerItem}
-    {#await import('../chats/AttachmentPreview.svelte') then { default: AttachmentPreview }}
+    {#await loadCachedPanelModule('module:lib/components/chats/AttachmentPreview.svelte', () => import('../chats/AttachmentPreview.svelte')) then { default: AttachmentPreview }}
       <AttachmentPreview
         attachment={queuedViewerItem}
         src={board.studioTemporaryChatContext.attachmentPreview.urls[queuedViewerItem.url]}
@@ -835,7 +835,7 @@
   {@const editorReference = board.steerQueuedMessage.commentEditorReference()}
   {@const editorPosition = board.studioTemporaryChatContext.commentEditorAnchor}
   {#if editorReference && editorPosition}
-    {#await import('../chats/ResponseAnnotationComment.svelte') then { default: ResponseAnnotationComment }}
+    {#await loadCachedPanelModule('module:lib/components/chats/ResponseAnnotationComment.svelte', () => import('../chats/ResponseAnnotationComment.svelte')) then { default: ResponseAnnotationComment }}
       <ResponseAnnotationComment
         x={editorPosition.x + ANNOTATION_BUBBLE_SIZE / 2}
         y={editorPosition.y}
@@ -868,7 +868,7 @@
 
   {#if board.submitSpecDecision.showSpecStudio}
     {#if findNavState.studioFindOpen}
-      {#await import('./FindInSurface.svelte') then { default: FindInSurface }}
+      {#await loadCachedPanelModule('module:lib/components/threads/FindInSurface.svelte', () => import('./FindInSurface.svelte')) then { default: FindInSurface }}
         <FindInSurface
           container={board.state.threadViewElement}
           focusTrigger={findNavState.studioFindFocusTrigger}
@@ -1224,7 +1224,7 @@
     data-conversation-pane
   >
     {#if board.unmirroredTraceStartTime.showFind}
-      {#await import('./FindInSurface.svelte') then { default: FindInSurface }}
+      {#await loadCachedPanelModule('module:lib/components/threads/FindInSurface.svelte', () => import('./FindInSurface.svelte')) then { default: FindInSurface }}
         <FindInSurface
           container={board.state.threadViewElement}
           focusTrigger={findNavState.conversationFindFocusTrigger}
@@ -1281,7 +1281,7 @@
   <!-- The request travels into the picker's own callback: the palette closes the
        picker before it reports the pick, and that close clears this state. -->
   {@const request = board.currentWorkingTraceAttribution.relocationRequest}
-  {#await import('../chats/RelocateThreadPicker.svelte') then { default: RelocateThreadPicker }}
+  {#await loadCachedPanelModule('module:lib/components/chats/RelocateThreadPicker.svelte', () => import('../chats/RelocateThreadPicker.svelte')) then { default: RelocateThreadPicker }}
     <RelocateThreadPicker
       projectId={board.handleAgentEvent.thread.projectId}
       projectName={board.composerScope.relocationAssistantId

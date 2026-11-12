@@ -381,10 +381,23 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     description: ${JSON.stringify(activateTool.description)},
     promptSnippet: 'Activate an installed app utility for the current turn',
     parameters: Type.Object({
-      utility_id: Type.String({ description: 'Installed utility identifier.' })
+      utility_id: Type.Optional(Type.String({ description: 'Installed utility identifier.' })),
+      force: Type.Optional(
+        Type.Boolean({ description: 'Re-activate an already active utility and re-list it.' })
+      ),
+      inputs: Type.Optional(
+        Type.Array(
+          Type.Object({
+            utility_id: Type.String(),
+            force: Type.Optional(Type.Boolean())
+          }),
+          { description: 'One entry per utility to activate in this one call.' }
+        )
+      )
     }),
     async execute(_toolCallId, params) {
-      const result = await callGateway(${JSON.stringify(activateTool.route)}, { utility_id: params.utility_id })
+      const body = { utility_id: params.utility_id, force: params.force, inputs: params.inputs }
+      const result = await callGateway(${JSON.stringify(activateTool.route)}, body)
       return textResult(result)
     }
   })
@@ -397,13 +410,19 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
     parameters: Type.Object({
       utility_id: Type.String({ description: 'Utility activated earlier this turn.' }),
       operation: Type.String({ description: 'Operation or tool name to invoke.' }),
-      input: Type.Optional(Type.Record(Type.String(), Type.Unknown()))
+      input: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      inputs: Type.Optional(
+        Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+          description: 'One input per item, for the same operation over many items.'
+        })
+      )
     }),
     async execute(_toolCallId, params) {
       const result = await callGateway(${JSON.stringify(invokeTool.route)}, {
         utility_id: params.utility_id,
         operation: params.operation,
-        input: params.input ?? {}
+        input: params.input ?? {},
+        inputs: params.inputs
       })
       return textResult(result)
     }
