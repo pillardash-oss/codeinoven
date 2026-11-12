@@ -31,7 +31,9 @@ import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_CAPABILITY_ID,
   GATEWAY_DISCOVERY_INSTRUCTION,
-  UTILITY_DOCS_TOOL_NAME
+  UTILITY_DOCS_TOOL_NAME,
+  UTILITY_INVOKE_BATCH_CONCURRENCY,
+  UTILITY_INVOKE_BATCH_LIMIT
 } from '../../../lib/gateway-tools'
 import { currentWorkRoots } from '../../design/work-roots-state'
 import { acquireCuaSnapshotLease } from '../cua-snapshot-lease'
@@ -650,7 +652,51 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
     }
   }
 
+  /**
+   * One model call for the same operation over many items: harnesses without
+   * a script runner would otherwise spend a full round trip per item. Items
+   * run through the single-item path with bounded concurrency, and each one
+   * settles on its own so one failure never hides the other results.
+   */
+  private async invokeBatch(
+    state: TurnState,
+    input: Record<string, unknown>,
+    batch: unknown
+  ): Promise<unknown> {
+    if (!Array.isArray(batch) || batch.length === 0)
+      throw new Error('inputs must be a non-empty array of operation inputs')
+    if (batch.length > UTILITY_INVOKE_BATCH_LIMIT)
+      throw new Error(`inputs carries at most ${UTILITY_INVOKE_BATCH_LIMIT} items per call`)
+    if (input['input'] !== undefined) throw new Error('Pass either input or inputs, not both')
+    const results: Array<{ ok: true; result: unknown } | { ok: false; error: string }> = []
+    let next = 0
+    const worker = async (): Promise<void> => {
+      while (next < batch.length) {
+        const index = next++
+        try {
+          const result = await this.invoke(state, {
+            utility_id: input['utility_id'],
+            operation: input['operation'],
+            input: recordValue(batch[index])
+          })
+          results[index] = { ok: true, result }
+        } catch (error) {
+          results[index] = {
+            ok: false,
+            error: error instanceof Error ? error.message : String(error)
+          }
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(UTILITY_INVOKE_BATCH_CONCURRENCY, batch.length) }, worker)
+    )
+    return { results }
+  }
+
   async invoke(state: TurnState, input: Record<string, unknown>): Promise<unknown> {
+    const batch = input['inputs']
+    if (batch !== undefined) return this.invokeBatch(state, input, batch)
     const utilityId = requiredString(input['utility_id'], 'utility_id', 256)
     const operation = requiredString(input['operation'], 'operation', 256)
     const operationInput = recordValue(input['input'] ?? {})

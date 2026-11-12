@@ -10,6 +10,10 @@ import { PAWN_TOOLS } from './pawn-tools'
 export const UTILITY_SEARCH_TOOL_NAME = 'cio_util_find'
 export const UTILITY_ACTIVATE_TOOL_NAME = 'cio_util_init'
 export const UTILITY_INVOKE_TOOL_NAME = 'cio_util_use'
+/** Most items one `cio_util_use` call may carry in `inputs`. */
+export const UTILITY_INVOKE_BATCH_LIMIT = 32
+/** Items of one `inputs` batch in flight at once. */
+export const UTILITY_INVOKE_BATCH_CONCURRENCY = 4
 /** Explicit-setup-only operation for installing validated utility definitions. */
 export const UTILITY_MANAGE_TOOL_NAME = 'cio_util_manage'
 /**
@@ -62,7 +66,7 @@ export function gatewayBatchingInstruction(codeMode: boolean): string {
     'Round-trip contract: batch, always. Every model call re-reads the whole conversation, so a burst of one call per item is a failure of this contract, not a slower path.',
     codeMode
       ? 'Use code mode extensively: cover a list in ONE code-mode script that loops over the inputs with bounded concurrency and returns only the findings, and never issue a separate call for each item when one script could carry them.'
-      : 'This harness gives you no code mode tool, so batch in the tools it does have: cover a list in ONE shell command (a for loop, xargs, or one search command that matches several patterns at once), issue independent reads, searches and utility calls together in a single assistant message, and use the gateway batch operation for up to eight independent read-only app calls. Never issue a separate call for each item.',
+      : `This harness gives you no code mode tool, so batch in the tools it does have: cover a list in ONE shell command (a for loop, xargs, or one search command that matches several patterns at once), issue independent reads, searches and utility calls together in a single assistant message, run one utility operation over many items with a single ${UTILITY_INVOKE_TOOL_NAME} call carrying \`inputs\`, and use the gateway batch operation for up to eight independent read-only app calls. Never issue a separate call for each item.`,
     'Keep dependent operations, mutations, approvals and retries sequential, inspect every result, and filter large results before returning them to the model.'
   ]
   return contract.join(' ')
@@ -72,7 +76,7 @@ export function gatewayBatchingInstruction(codeMode: boolean): string {
 export function gatewayPerItemInstruction(codeMode: boolean): string {
   return codeMode
     ? "One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics, the same lookup for several ids), loop over the inputs inside ONE code-mode script with bounded concurrency and return only the findings, never one invocation per item. The gateway's own batch operation covers the app's read-only tools only, so a server-side utility or MCP operation is scripted, not batched."
-    : 'One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs, drive it from ONE shell command that loops over the inputs and prints only the findings, or from one gateway `batch` when the calls are independent app tools. Never invoke a utility once per item when one command can cover the list, and never call the gateway through the shell.'
+    : `One utility invocation per item is the most expensive shape a turn can take: when the same inspect-only operation must run for many inputs (a validator over every changed file, a documentation read for several topics), make ONE ${UTILITY_INVOKE_TOOL_NAME} call with \`inputs\` set to the list (up to ${UTILITY_INVOKE_BATCH_LIMIT} per call), use one gateway \`batch\` when the calls are independent app tools, or drive local work from ONE shell command. Never invoke a utility once per item, and never call the gateway through the shell.`
 }
 
 export function initialGatewayTools(
@@ -272,13 +276,18 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_INVOKE_TOOL_NAME,
     description:
-      'Invoke an operation on an app utility — activated this turn, or already registered in the thread utilities bank (invoke directly by id; no re-activation needed).',
+      'Invoke an operation on an app utility — activated this turn, or already registered in the thread utilities bank (invoke directly by id; no re-activation needed). To run the same inspect-only operation over many items (a validator over every changed file, several lookups), pass `inputs` instead of `input`: one call runs them with bounded concurrency and returns one {ok, result | error} entry per item, in order.',
     inputSchema: {
       type: 'object',
       properties: {
         utility_id: { type: 'string' },
         operation: { type: 'string' },
-        input: { type: 'object', additionalProperties: true }
+        input: { type: 'object', additionalProperties: true },
+        inputs: {
+          type: 'array',
+          items: { type: 'object', additionalProperties: true },
+          maxItems: UTILITY_INVOKE_BATCH_LIMIT
+        }
       },
       required: ['utility_id', 'operation'],
       additionalProperties: false

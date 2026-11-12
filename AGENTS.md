@@ -17,7 +17,7 @@ After calling list-sections, analyze the returned `use_cases` fields and fetch t
 Analyzes Svelte code and returns issues and suggestions. `code` accepts the component source OR a path to the file, `desired_svelte_version` is 5 for this project (`package.json`), and `filename` is the component name with its extension, never a path. This project does not enable the experimental async option, so leave `async` alone.
 You MUST run it over every Svelte file you write or change before reporting the work as done, and iterate until no issues or suggestions are returned.
 
-**Batch it.** Run the whole set of files in ONE code-mode script that loops over them with bounded concurrency and returns only the findings, never one call per file. A 430-file change was once checked with 2,283 separate calls, one file at a time, and that is a defect even when every answer is correct. The gateway's own batch operation cannot carry these calls (it covers the app's read-only tools only), so code mode is the path.
+**Batch it.** Run the whole set of files in ONE code-mode script that loops over them with bounded concurrency and returns only the findings, never one call per file. A 430-file change was once checked with 2,283 separate calls, one file at a time, and that is a defect even when every answer is correct. The gateway's own batch operation cannot carry these calls (it covers the app's read-only tools only). With code mode, script it; without code mode (Claude Code, for example), make ONE `cio_util_use` call with `inputs` set to one `{code, desired_svelte_version, filename}` entry per file (up to 32 per call).
 
 ### 4. playground-link
 
