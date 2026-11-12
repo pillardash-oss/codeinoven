@@ -225,25 +225,12 @@
   $effect(() => {
     const element = scroller
     if (!element) return
-    // The distance the fold spans is measured once per departure from the top and
-    // kept until the list is home again: the foot's own height changes as it
-    // folds, so re-measuring every event would move the goalposts under the
-    // motion and could leave the buttons hovering between the two shapes.
-    let foldRange = 0
+    // The foot keeps its height, so the list's overflow and its scroll position
+    // are stable while it folds: the range can be measured on any event without
+    // the fold feeding back into its own trigger.
     const onScroll = (): void => {
-      if (element.scrollTop <= 0) {
-        foldRange = 0
-        panelProgress = 0
-        return
-      }
-      if (foldRange === 0) {
-        // The fold must finish within the travel the list actually has. A short
-        // list can run out of scroll halfway through, and a half-folded foot with
-        // nowhere left to scroll is a state the user could never leave.
-        const overflow = Math.max(1, element.scrollHeight - element.clientHeight)
-        foldRange = Math.min(160, overflow)
-      }
-      panelProgress = Math.min(1, element.scrollTop / foldRange)
+      const overflow = Math.max(1, element.scrollHeight - element.clientHeight)
+      panelProgress = Math.min(1, Math.max(0, element.scrollTop / Math.min(160, overflow)))
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
