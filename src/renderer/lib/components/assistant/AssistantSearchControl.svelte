@@ -190,7 +190,9 @@
       No matching assistants, tasks or runs
     </p>
   {:else if trimmed.length > 0}
-    <div class="mt-1 max-h-80 overflow-y-auto overscroll-contain">
+    <!-- The results are the panel's list while they are on screen, so they take
+         the panel's own height and scroller instead of a capped, scrolling box. -->
+    <div class="space-y-px">
       {#if assistantResults.length > 0}
         <div
           class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
