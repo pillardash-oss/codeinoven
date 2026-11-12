@@ -24,16 +24,15 @@ import {
 } from '$shared/thread-status-policy'
 
 /**
- * Top-level panel sections.
+ * Which source the panel's single list draws from.
  *
- * Attention leads the panel and is what the panel opens on. It is not a family
- * of its own: it collects everything waiting on the user whichever family
- * raised it, so a parked gate never requires hunting through Projects, Chats
- * and Assistants to find it.
+ * `all` merges every family into one newest-first list, so a parked gate never
+ * requires hunting through Projects, Chats and Assistants to find it. The other
+ * values narrow that same list to one family.
  */
-export type NotificationTopTab = 'attention' | 'projects' | 'chats' | 'assistants' | 'app-errors'
+export type NotificationTopTab = 'all' | 'projects' | 'chats' | 'assistants' | 'app-errors'
 
-/** Second-level filters shown under the active top tab. */
+/** Kind filters applied to the list, whichever source it draws from. */
 export type NotificationSubFilter = 'all' | 'done' | 'attention' | 'spec' | 'issues'
 
 /**
@@ -196,8 +195,9 @@ class NotificationPanelState {
    * next restore, and what seeds that restore.
    */
   private _dismissed = new SvelteSet<string>()
-  topTab: NotificationTopTab = $state('attention')
-  subFilter: NotificationSubFilter = $state('all')
+  topTab: NotificationTopTab = $state('all')
+  /** Opens on what is waiting on the user; every other kind is one chip away. */
+  subFilter: NotificationSubFilter = $state('attention')
   /** The Assistants tab's assistants/tasks narrowing. Ignored by every other tab. */
   assistantSubject: NotificationAssistantSubject = $state('all')
 
@@ -267,14 +267,14 @@ class NotificationPanelState {
    * came from: the gate notices a project, chat, or assistant run raised, plus
    * the assistant rows the assistant store owns (a scheduled fire that was
    * missed while the app was closed, and an unattended run still parked on a
-   * decision). The Attention tab renders all of them in one list.
+   * decision). The Attention filter shows all of them in one list.
    */
   get attentionNotifications(): InAppNotification[] {
     return newestFirst(this._notifications.filter((n) => n.kind === 'attention'))
   }
 
   /** Missed scheduled fires, newest first. A missed fire is an attention state
-   *  by definition, so it belongs on the Attention tab as well as under its
+   *  by definition, so it belongs under the Attention filter as well as under its
    *  assistant's section on the Assistants tab. */
   get attentionMissedRuns(): MissedRun[] {
     return [...assistants.missedRuns].sort((a, b) => b.dueAt - a.dueAt)
@@ -290,7 +290,7 @@ class NotificationPanelState {
     )
   }
 
-  /** Rows the Attention tab shows, and therefore the number on its tab badge. */
+  /** Rows the Attention filter shows, and therefore its count. */
   get attentionCount(): number {
     return (
       this.attentionNotifications.length +
@@ -300,7 +300,7 @@ class NotificationPanelState {
   }
 
   /**
-   * Clear the Attention tab.
+   * Clear everything the Attention filter shows.
    *
    * The inbox has no `attention` family to clear, so each waiting notice is
    * retired by id on both sides: the tombstone is what keeps thread-state
@@ -394,8 +394,8 @@ class NotificationPanelState {
         return newestFirst(this.byKind(this.chatNotifications, this.subFilter))
       case 'assistants':
         return this.assistantVisibleNotifications
-      case 'attention':
-        return this.attentionNotifications
+      case 'all':
+        return newestFirst(this.byKind(this._notifications, this.subFilter))
       case 'app-errors':
         return []
     }
@@ -636,7 +636,7 @@ class NotificationPanelState {
    * the assistant store and keep their own per-entry dismiss, so clearing the
    * assistants tab drops only its notifications.
    */
-  dismissTab(tab: Exclude<NotificationTopTab, 'app-errors' | 'attention'>): void {
+  dismissTab(tab: Exclude<NotificationTopTab, 'app-errors' | 'all'>): void {
     this.retireBy((n) => this.survivesTabClear(n, tab))
     void invoke('notification:clearInbox', this.familyOf(tab)).catch(() => {})
   }
@@ -664,9 +664,7 @@ class NotificationPanelState {
 
   /** The tab being cleared, as the store groups it. Clearing a tab removes the
    *  family it names, so this is the tab itself rather than its complement. */
-  private familyOf(
-    tab: Exclude<NotificationTopTab, 'app-errors' | 'attention'>
-  ): NotificationFamily {
+  private familyOf(tab: Exclude<NotificationTopTab, 'app-errors' | 'all'>): NotificationFamily {
     if (tab === 'chats') return 'chat'
     return tab === 'assistants' ? 'assistant' : 'project'
   }
@@ -679,7 +677,7 @@ class NotificationPanelState {
    */
   private survivesTabClear(
     n: InAppNotification,
-    tab: Exclude<NotificationTopTab, 'app-errors' | 'attention'>
+    tab: Exclude<NotificationTopTab, 'app-errors' | 'all'>
   ): boolean {
     if (tab === 'projects') return this.isChat(n) || this.isAssistant(n)
     if (tab === 'chats') return !this.isChat(n)
@@ -755,9 +753,10 @@ class NotificationPanelState {
     if (next.length !== this._notifications.length) this._notifications = next
   }
 
-  setTab(tab: NotificationTopTab): void {
-    this.topTab = tab
-    this.subFilter = 'all'
+  /** Narrow the list to one source. The kind filter is kept: the reader chose
+   *  what to look for, and switching source should not undo that. */
+  setSource(source: NotificationTopTab): void {
+    this.topTab = source
     this.assistantSubject = 'all'
   }
 

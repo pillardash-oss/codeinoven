@@ -177,9 +177,15 @@ describe('bulk dismissal', () => {
   })
 })
 
-describe('the attention tab', () => {
-  it('is the tab the panel opens on', () => {
-    expect(panel.topTab).toBe('attention')
+describe('the attention filter', () => {
+  it('is what the panel opens on, across every source', () => {
+    expect(panel.topTab).toBe('all')
+    expect(panel.subFilter).toBe('attention')
+  })
+
+  it('survives a change of source', () => {
+    panel.setSource('chats')
+    expect(panel.subFilter).toBe('attention')
   })
 
   it('collects a waiting notice from every family into one list', () => {
