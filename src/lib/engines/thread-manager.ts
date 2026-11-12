@@ -408,6 +408,7 @@ export class ThreadManager {
         | 'coordinatorThreadId'
         | 'achievementRole'
         | 'auditorThreadId'
+        | 'achievementGoal'
         | 'userInputLocked'
         | 'engineering'
         | 'independentAudit'
@@ -504,6 +505,9 @@ export class ThreadManager {
       assignmentTaskId: input.assignmentTaskId ?? existing.assignmentTaskId,
       coordinatorThreadId: input.coordinatorThreadId ?? existing.coordinatorThreadId,
       achievementRole: input.achievementRole ?? existing.achievementRole,
+      // An explicit goal replaces the previous one (a new Achievement run can
+      // restate the goal); omitting it keeps what the thread already recorded.
+      achievementGoal: input.achievementGoal ?? existing.achievementGoal,
       auditorThreadId: input.auditorThreadId ?? existing.auditorThreadId,
       userInputLocked: input.userInputLocked ?? existing.userInputLocked,
       // The Engineering marker is durable: once set it stays set, so a later

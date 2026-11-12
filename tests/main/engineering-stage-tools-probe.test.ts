@@ -98,8 +98,8 @@ describe('Engineering stage tools probe', () => {
     }
   })
 
-  it('still cascades the Achievement dependency onto Spec', () => {
-    expect(normalizeLifecycleStages(['achievement'])).toEqual(['spec', 'achievement'])
+  it('runs every stage without forcing a Spec onto Achievement', () => {
+    expect(normalizeLifecycleStages(['achievement'])).toEqual(['achievement'])
     expect(normalizeLifecycleStages(['assignment'])).toEqual(['assignment'])
   })
 

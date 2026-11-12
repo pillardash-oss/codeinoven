@@ -37,7 +37,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * already on disk. A data repair that has to run exactly once per install earns
  * a version the same way, with no DDL in it.
  */
-export const DATABASE_SCHEMA_VERSION = 10
+export const DATABASE_SCHEMA_VERSION = 11
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
@@ -159,6 +159,7 @@ export function threadsTableSql(tableName: 'threads' | 'threads_new'): string {
   assignment_task_id   TEXT,
   coordinator_thread_id TEXT,
   achievement_role     TEXT CHECK(achievement_role IN ('coordinator','auditor')),
+  achievement_goal     TEXT,
   auditor_thread_id    TEXT,
   user_input_locked    INTEGER NOT NULL DEFAULT 0,
   engineering          INTEGER NOT NULL DEFAULT 0,

@@ -618,7 +618,7 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   resumeAchievementCoordination(): void {
     if (this.root.switchProject.busy) return
     void this.root.handleAgentEvent.sendMessage(
-      'Continue working toward the approved specification. If implementation is complete, begin the next independent audit.',
+      'Continue working toward the Achievement goal. If implementation is complete, begin the next independent audit.',
       [],
       undefined,
       true,

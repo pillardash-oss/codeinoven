@@ -238,6 +238,14 @@ export interface Thread {
   coordinatorThreadId?: string
   /** Durable Achievement role when the workflow does not use an Assignment graph. */
   achievementRole?: 'coordinator' | 'auditor'
+  /**
+   * The goal this thread's Achievement loop must reach, when it works without an
+   * approved specification. It is captured from the achievement tool call (the
+   * user's own words) or from the thread conversation, and the independent audit
+   * judges the delivered work against it. An approved specification always wins
+   * over this goal; the field stays for the durable record of what was asked.
+   */
+  achievementGoal?: string
   /** Durable Auditor owned by this Achievement coordinator. */
   auditorThreadId?: string
   /** Reject renderer-originated prompts while permitting internal orchestration turns. */

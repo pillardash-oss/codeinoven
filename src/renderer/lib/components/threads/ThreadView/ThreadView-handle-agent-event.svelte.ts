@@ -503,14 +503,11 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
       return
     }
     if (this.root.harnessUsage.specFormulating && specAction !== 'request') return
+    // Achievement implements autonomously: its audit contract is the approved
+    // Spec when the thread has one, and otherwise the goal captured from the
+    // request or this conversation. Blocking the send on an approved Spec is what
+    // stopped a thread told to keep going until the goal was reached.
     if (specAction === undefined && this.engineeringLifecycle?.activeStage === 'achievement') {
-      if (
-        !this.root.submitBrainstormDecision.spec ||
-        this.root.submitBrainstormDecision.spec.status !== 'approved'
-      ) {
-        this.errorMessage = 'Achievement requires an approved Spec.'
-        return
-      }
       specAction = 'implement'
     }
     const dependencyThreads = startAfterThreads.filter(

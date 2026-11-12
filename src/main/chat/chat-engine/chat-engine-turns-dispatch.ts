@@ -469,9 +469,17 @@ export class ChatEngineTurnsDispatch {
       report.threadId,
       join('versions', `${report.id}-audit-v${report.version}.md`)
     )
+    // An audit that judged a captured goal rather than an approved specification
+    // must name that goal, or the rework turn works toward a contract nothing in
+    // its context states.
+    const goal = report.specId
+      ? undefined
+      : (await this.host.threadManager.getThread(report.projectId, report.threadId))
+          ?.achievementGoal
     return [
       `Achievement audit ${iteration} found required corrections.`,
-      'Act as the primary implementation agent. Address every actionable finding against the approved specification.',
+      'Act as the primary implementation agent. Address every actionable finding against the Achievement goal.',
+      ...(goal ? [`Achievement goal:\n${goal}`] : []),
       'Inspect the cited evidence, implement the corrections, run all relevant scoped checks, and report concrete verification evidence. Do not stop at recommendations.',
       ACHIEVEMENT_IMPLEMENT_SYSTEM_PROMPT,
       `Audit report: ${auditPath}`,

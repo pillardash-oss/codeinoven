@@ -1172,10 +1172,16 @@ export class ChatEngineAuditRun {
     coordinatorThreadId: string,
     settings: ThreadSettings
   ): Promise<{ report: AuditReport; auditorThread: Thread }> {
-    const spec = await this.host.units['spec'].getActiveSpec(projectId, coordinatorThreadId)
-    if (!spec || spec.status !== 'approved') {
-      throw new Error('An approved specification is required before Achievement audit.')
-    }
+    // An approved specification is the strongest contract available, so it is
+    // used whenever the thread has one. A thread that never had a specification
+    // is still auditable: the goal captured when Achievement was enabled, plus
+    // the conversation it came from, is the contract. Requiring the specification
+    // here is what stopped an agent that was told to keep going until the goal
+    // was reached.
+    const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, coordinatorThreadId)
+    const spec = activeSpec?.status === 'approved' ? activeSpec : null
+    const coordinator = await this.host.threadManager.getThread(projectId, coordinatorThreadId)
+    const goal = spec ? '' : (coordinator?.achievementGoal ?? '').trim()
     const auditorThread = await this.host.ensureAchievementAuditorThread(
       projectId,
       coordinatorThreadId,
@@ -1190,15 +1196,37 @@ export class ChatEngineAuditRun {
       auditorSettings.accountId
     )
     const sessionId = await this.host.ensureSession(projectId, auditorThread.id, driverId)
-    const specPath = await this.host.units['media-artifacts'].artifactRef(
-      projectId,
-      coordinatorThreadId,
-      join('versions', `${spec.id}-v${spec.version}.md`)
-    )
-    const basePrompt = [
-      `Independently audit the current project implementation against the approved Achievement specification at this project-relative path: ${specPath}`,
-      `Open annotations on the specification:\n${formatOpenAnnotations(spec.annotations)}`
-    ].join('\n\n')
+    const specPath = spec
+      ? await this.host.units['media-artifacts'].artifactRef(
+          projectId,
+          coordinatorThreadId,
+          join('versions', `${spec.id}-v${spec.version}.md`)
+        )
+      : null
+    let transcript: string | null = null
+    if (!spec) {
+      transcript = buildTranscriptMarkdown(
+        await this.host.loadMessages(projectId, coordinatorThreadId),
+        { includeTrace: false }
+      )
+      if (!goal && !transcript.trim()) {
+        throw new Error(
+          'Achievement needs a goal: state the goal in the request, or enable Achievement on a thread that carries the work it should reach.'
+        )
+      }
+    }
+    const basePrompt = specPath
+      ? [
+          `Independently audit the current project implementation against the approved Achievement specification at this project-relative path: ${specPath}`,
+          `Open annotations on the specification:\n${formatOpenAnnotations(spec?.annotations ?? [])}`
+        ].join('\n\n')
+      : [
+          'Independently audit the current project implementation against the Achievement goal below.',
+          'Verify the delivered work against the repository with read-only tools before reporting.',
+          ...(goal ? ['Achievement goal:', '', goal] : []),
+          ...(transcript ? ['', 'Thread transcript:', '', transcript] : [])
+        ].join('\n')
+    const auditSubject = spec?.content.resolutionSummary ?? (goal || 'the goal of this thread')
     let lastError: Error | null = null
 
     await this.host.threadManager.setAuditState(projectId, coordinatorThreadId, 'running')
@@ -1215,14 +1243,12 @@ export class ChatEngineAuditRun {
         projectId,
         auditorThread.id,
         messageId,
-        `Audit Achievement: ${spec.content.resolutionSummary}`,
+        `Audit Achievement: ${auditSubject}`,
         prompt,
         [],
         [],
         [],
-        attemptIndex === 0
-          ? { action: 'Audit Achievement', body: spec.content.resolutionSummary }
-          : undefined,
+        attemptIndex === 0 ? { action: 'Audit Achievement', body: auditSubject } : undefined,
         'internal'
       )
       const outboundIds =
@@ -1258,7 +1284,15 @@ export class ChatEngineAuditRun {
           settings: auditorSettings,
           text: prompt,
           attachments: [],
-          systemPrompt: [AUDIT_GENERATION_SYSTEM_PROMPT, utilityTurn.instructions]
+          systemPrompt: [
+            AUDIT_GENERATION_SYSTEM_PROMPT,
+            ...(spec
+              ? []
+              : [
+                  'No approved specification exists for this Achievement run. The supplied Achievement goal and thread transcript are the contract: judge the delivered work against them and treat every request the user made as a success criterion.'
+                ]),
+            utilityTurn.instructions
+          ]
             .filter(Boolean)
             .join('\n\n'),
           allowedTools: AUDIT_ALLOWED_TOOLS,
@@ -1298,8 +1332,7 @@ export class ChatEngineAuditRun {
         const report = await this.host.state.auditEngine.create({
           projectId,
           threadId: coordinatorThreadId,
-          specId: spec.id,
-          specVersion: spec.version,
+          ...(spec ? { specId: spec.id, specVersion: spec.version } : {}),
           content,
           outcome: auditRequiresRework(content) ? 'rework_required' : 'passed',
           provenance: {
