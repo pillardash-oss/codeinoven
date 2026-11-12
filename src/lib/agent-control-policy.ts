@@ -70,16 +70,44 @@ export function unmanagedProcessKillReason(
   // xargs, or sits behind sudo/exec/env/nohup.
   const killCommand =
     /(?:^[ \t]*|[;&|(][ \t]*|\b(?:xargs|sudo|exec|env|nohup|setsid|time)\b[ \t]+)kill\b([^;&|\n]*)/gu
+  // A pid this same command captured from a background job it started
+  // (`bun run dev & server=$!` ... `kill $server`) is the agent's own process,
+  // so that shape stays allowed: it is the one form of a variable target that
+  // cannot reach anything outside this shell.
+  const capturedPids = new Set(
+    Array.from(command.matchAll(/([A-Za-z_]\w*)=["']?\$!/gu), (match) => match[1] ?? '')
+  )
   let matched = false
   for (const match of command.matchAll(killCommand)) {
     matched = true
     const args = (match[1] ?? '').trim()
-    // A runtime lookup cannot prove which process it reaches.
-    if (/[$`><*[\]{}]/u.test(args) || /%\d/u.test(args)) return refused
-    const targets = args.split(/\s+/u).filter((token) => !/^--?[A-Za-z0-9]+$/u.test(token))
+    // A result computed by another command can never prove ownership.
+    if (/[`]|\$\(/u.test(args)) return refused
+    // `kill -l` lists signals and kills nothing.
+    if (/^--?l(?:ist)?$/u.test(args)) continue
+    const targets: string[] = []
+    let expectsSignalName = false
+    for (const token of args.split(/\s+/u).filter(Boolean)) {
+      const flag = /^--?[A-Za-z0-9]+$/u.exec(token)
+      if (expectsSignalName) {
+        expectsSignalName = false
+        if (/^(?:SIG)?[A-Za-z][A-Za-z0-9]*$/u.test(token)) continue
+        return refused
+      }
+      if (flag) {
+        if (flag[0] === '-s' || flag[0] === '-n' || flag[0] === '--signal') expectsSignalName = true
+        continue
+      }
+      targets.push(token.replace(/^["']+|["']+$/gu, ''))
+    }
     if (targets.length === 0) return refused
     for (const target of targets) {
-      if (!/^[1-9]\d*$/u.test(target)) return refused
+      if (/^[1-9]\d*$/u.test(target)) continue
+      // A job number of this very shell: the job is one this command started.
+      if (/^%[1-9]\d*$/u.test(target)) continue
+      const variable = /^\$\{?([A-Za-z_]\w*)\}?$/u.exec(target)
+      if (variable && capturedPids.has(variable[1] ?? '')) continue
+      return refused
     }
   }
   // A kill this parse never reached (a nested shell, an interpreter one-liner,
