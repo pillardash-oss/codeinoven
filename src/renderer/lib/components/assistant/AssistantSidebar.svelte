@@ -1,4 +1,5 @@
 <script lang="ts">
+  import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import DonTile from './DonTile.svelte'
   import AssistantRow from './AssistantRow.svelte'
@@ -69,6 +70,9 @@
     onCreateAssistantViaChat,
     assistantCreateTrigger = 0
   }: Props = $props()
+
+  /** Whether the search has grown out of its button into the field in the header. */
+  let searchExpanded = $state(false)
 
   const EMPTY_TASKS: readonly Thread[] = []
   const EMPTY_RUNS: readonly Thread[] = []
@@ -184,71 +188,88 @@
 
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
   <div class="flex h-full min-h-0 flex-col">
-    <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5" role="list" aria-label="Assistants">
-      <!-- The assistant view's own controls, above the list: the search that
-           reaches every assistant, task and run, and the door to a new assistant.
-           The app header leaves this view alone, so they live here instead. -->
-      <div class="flex items-center justify-between gap-2 px-1 pt-1 pb-1.5">
-        <span class="pl-1 text-[0.5625rem] font-semibold tracking-wide text-dimmed uppercase"
-          >Assistants</span
-        >
-        <div class="flex shrink-0 items-center gap-0.5">
+    <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+      <!-- The panel's own controls stay pinned above the list as it scrolls: the
+           search morphs out of its button into a field, and the new-assistant
+           door sits beside it. The app header leaves this view alone, so they
+           live here. -->
+      <div class="sticky top-0 z-20 -mx-1.5 mb-1 border-b bg-surface px-1.5 pt-0.5 pb-1.5">
+        <div class="flex min-h-7 items-center justify-center gap-1">
+          {#if !searchExpanded}
+            <button
+              type="button"
+              class="flex h-7 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+              aria-label="Search assistants, tasks and runs"
+              title="Search assistants, tasks and runs"
+              onclick={() => (searchExpanded = true)}
+            >
+              <CioSearch size={13} />
+              <span>Search</span>
+            </button>
+          {/if}
           <AssistantSearchControl
+            inline
+            bind:expanded={searchExpanded}
             {assistants}
             {tasks}
             {runs}
             {onOpenTask}
             onOpenAssistant={onOpenAssistantKnowledge}
           />
-          <AssistantCreateControl
-            onCreate={onCreateAssistant}
-            onCreateViaChat={onCreateAssistantViaChat}
-            trigger={assistantCreateTrigger}
-          />
+          {#if !searchExpanded}
+            <AssistantCreateControl
+              label="New assistant"
+              onCreate={onCreateAssistant}
+              onCreateViaChat={onCreateAssistantViaChat}
+              trigger={assistantCreateTrigger}
+            />
+          {/if}
         </div>
       </div>
 
-      <!-- No empty note here: the shell paints this sidebar only while it holds
+      <div role="list" aria-label="Assistants">
+        <!-- No empty note here: the shell paints this sidebar only while it holds
            an assistant, and the view's own empty state invites the first one. -->
-      {#if donAssistant}
-        <DonTile
-          assistant={donAssistant}
-          threadId={donThread?.id ?? null}
-          selected={donThread !== null && selectedThreadId === donThread.id}
-          iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
-          ready={assistantReady(donAssistant)}
-          lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
-          stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
-          onOpen={() => {
-            if (!donThread) return
-            // The first open is the one moment Don introduces itself. A failure
-            // here is not fatal: the thread is open and the user can write the
-            // first line themselves.
-            void assistantStore.startDonSetup().catch(() => undefined)
-            onOpenTask(donThread)
-          }}
-        />
-      {/if}
+        {#if donAssistant}
+          <DonTile
+            assistant={donAssistant}
+            threadId={donThread?.id ?? null}
+            selected={donThread !== null && selectedThreadId === donThread.id}
+            iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
+            ready={assistantReady(donAssistant)}
+            lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
+            stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
+            onOpen={() => {
+              if (!donThread) return
+              // The first open is the one moment Don introduces itself. A failure
+              // here is not fatal: the thread is open and the user can write the
+              // first line themselves.
+              void assistantStore.startDonSetup().catch(() => undefined)
+              onOpenTask(donThread)
+            }}
+          />
+        {/if}
 
-      {#each listedAssistants as assistant (assistant.id)}
-        {@const counts = assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
-        {@const preview = assistantStore.previews.get(assistant.id) ?? null}
-        <AssistantRow
-          {assistant}
-          stateCounts={counts}
-          attention={counts.attention > 0}
-          missed={assistantMissed(assistant.id)}
-          threadCount={threadsOfAssistant(assistant.id)}
-          iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
-          nextRunAt={assistantNextRun(assistant.id)}
-          preview={preview?.text ?? null}
-          lastWorkedAt={preview?.at ?? null}
-          selected={selectedAssistantId === assistant.id}
-          onOpen={openAssistant}
-          {onMoveAssistant}
-          onDropTask={onAssignTask}
-        />
-      {/each}
+        {#each listedAssistants as assistant (assistant.id)}
+          {@const counts = assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
+          {@const preview = assistantStore.previews.get(assistant.id) ?? null}
+          <AssistantRow
+            {assistant}
+            stateCounts={counts}
+            attention={counts.attention > 0}
+            missed={assistantMissed(assistant.id)}
+            threadCount={threadsOfAssistant(assistant.id)}
+            iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
+            nextRunAt={assistantNextRun(assistant.id)}
+            preview={preview?.text ?? null}
+            lastWorkedAt={preview?.at ?? null}
+            selected={selectedAssistantId === assistant.id}
+            onOpen={openAssistant}
+            {onMoveAssistant}
+            onDropTask={onAssignTask}
+          />
+        {/each}
+      </div>
     </div>
   </div>
 </CollapsibleSidebar>

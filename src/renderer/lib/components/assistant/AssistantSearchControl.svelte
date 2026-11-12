@@ -1,6 +1,7 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
@@ -28,9 +29,27 @@
     onOpenTask: (task: Thread) => void
     /** Open an assistant result (its knowledge panel / first task). */
     onOpenAssistant: (assistant: Assistant) => void
+    /**
+     * Draw the field in place instead of in a popover. The assistant panel's top
+     * row uses this so its Search button can morph into a field on the spot.
+     */
+    inline?: boolean
+    /** Whether the inline field is open. The panel's Search button opens it. */
+    expanded?: boolean
+    /** The inline field's chevron asks to collapse back into that button. */
+    onCollapse?: () => void
   }
 
-  let { assistants, tasks, runs, onOpenTask, onOpenAssistant }: Props = $props()
+  let {
+    assistants,
+    tasks,
+    runs,
+    onOpenTask,
+    onOpenAssistant,
+    inline = false,
+    expanded = $bindable(false),
+    onCollapse = () => undefined
+  }: Props = $props()
 
   let open = $state(false)
   let query = $state('')
@@ -145,7 +164,8 @@
   )
 
   function closeSearch(): void {
-    open = false
+    if (inline) onCollapse()
+    else open = false
     query = ''
     remoteResults = []
     searching = false
@@ -182,207 +202,245 @@
   }
 </script>
 
-<Popover.Root
-  bind:open
-  onOpenChange={(next) => {
-    if (!next) closeSearch()
-  }}
->
-  <Popover.Trigger
-    class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-    aria-label="Search assistants, tasks and runs"
-    title="Search assistants, tasks and runs"
-  >
-    <CioSearch size={15} strokeWidth={1.8} />
-  </Popover.Trigger>
-
-  <Popover.Portal>
-    <Popover.Content
-      side="bottom"
-      align="start"
-      sideOffset={6}
-      collisionPadding={8}
-      class="z-50 w-80 overflow-hidden border bg-surface p-1.5 shadow-lg"
+{#snippet searchField()}
+  <div class="flex min-w-0 flex-1 items-center gap-1.5">
+    <CioSearch size={14} class="shrink-0 text-dimmed" />
+    <input
+      {@attach focusInput}
+      type="text"
+      class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
+      placeholder="Search assistants, tasks and runs…"
       aria-label="Search assistants, tasks and runs"
-      onCloseAutoFocus={(e) => e.preventDefault()}
-    >
-      <div class="flex items-center gap-1.5">
-        <CioSearch size={14} class="shrink-0 text-dimmed" />
-        <input
-          {@attach focusInput}
-          type="text"
-          class="h-7 min-w-0 flex-1 bg-app px-2 text-[0.6875rem] text-foreground outline-none placeholder:text-dimmed"
-          placeholder="Search assistants, tasks and runs…"
-          aria-label="Search assistants, tasks and runs"
-          bind:value={query}
-          oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
-            runThreadSearch(e.currentTarget.value)}
-        />
-        {#if query}
+      bind:value={query}
+      oninput={(e: Event & { currentTarget: HTMLInputElement }) =>
+        runThreadSearch(e.currentTarget.value)}
+      onkeydown={(event: KeyboardEvent) => {
+        if (event.key !== 'Escape') return
+        event.preventDefault()
+        closeSearch()
+      }}
+    />
+    {#if query}
+      <button
+        type="button"
+        class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+        aria-label="Clear search"
+        title="Clear search"
+        onclick={() => {
+          query = ''
+          remoteResults = []
+          searching = false
+          searchRequestId++
+          clearTimeout(searchTimer)
+          inputEl?.focus()
+        }}
+      >
+        <CioClose size={13} />
+      </button>
+    {/if}
+  </div>
+{/snippet}
+
+{#snippet resultsPanel()}
+  {#if empty}
+    <p class="px-2 py-4 text-center text-[0.6875rem] text-dimmed">
+      No matching assistants, tasks or runs
+    </p>
+  {:else if trimmed.length > 0}
+    <div class="mt-1 max-h-80 overflow-y-auto overscroll-contain">
+      {#if assistantResults.length > 0}
+        <div
+          class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+        >
+          Assistants
+        </div>
+        {#each assistantResults as assistant (assistant.id)}
+          {@const icon = assistantIcon(assistant)}
           <button
             type="button"
-            class="flex h-6 w-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-            aria-label="Clear search"
-            title="Clear search"
-            onclick={() => {
-              query = ''
-              remoteResults = []
-              searching = false
-              searchRequestId++
-              clearTimeout(searchTimer)
-              inputEl?.focus()
-            }}
+            class="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+            onclick={() => selectAssistant(assistant)}
           >
-            <CioClose size={13} />
+            <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+              {#if icon}
+                <img src={icon} alt="" class="h-4 w-4 object-contain" draggable="false" />
+              {:else}
+                <AssistantDefaultIcon
+                  size={14}
+                  style="color: {assistant.color ?? 'var(--color-muted)'}"
+                />
+              {/if}
+            </span>
+            <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
+              >{assistant.name}</span
+            >
+            {#if !assistantIsScheduled(assistant)}
+              <span
+                class="shrink-0 border border-border bg-elevated px-1.5 py-px text-[0.5rem] tracking-wide text-dimmed uppercase"
+                title="This assistant runs only when you ask it to"
+              >
+                Unscheduled
+              </span>
+            {/if}
+            {#if assistantGap(assistant)}
+              <span
+                class="flex shrink-0 items-center"
+                style="color: var(--color-warning)"
+                role="img"
+                aria-label={assistantGap(assistant) ?? ''}
+                title={assistantGap(assistant) ?? ''}
+              >
+                <CioAttention size={11} />
+              </span>
+            {/if}
           </button>
-        {/if}
-      </div>
-
-      {#if empty}
-        <p class="px-2 py-4 text-center text-[0.6875rem] text-dimmed">
-          No matching assistants, tasks or runs
-        </p>
-      {:else if trimmed.length > 0}
-        <div class="mt-1 max-h-80 overflow-y-auto overscroll-contain">
-          {#if assistantResults.length > 0}
-            <div
-              class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
-            >
-              Assistants
-            </div>
-            {#each assistantResults as assistant (assistant.id)}
-              {@const icon = assistantIcon(assistant)}
-              <button
-                type="button"
-                class="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-                onclick={() => selectAssistant(assistant)}
+        {/each}
+      {/if}
+      {#if taskResults.length > 0}
+        <div
+          class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+        >
+          Tasks
+        </div>
+        {#each taskResults as task (task.id)}
+          {@const snippet = snippetFor(task.id)}
+          <button
+            type="button"
+            class="flex w-full flex-col gap-0.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+            title={task.title}
+            onclick={() => selectTask(task)}
+          >
+            <span class="flex w-full items-center gap-2">
+              <AssistantIcon
+                mark={task.assistantGettingStarted ? 'knowledge' : 'task'}
+                size={14}
+                class="shrink-0 text-muted"
+              />
+              <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
+                >{task.title}</span
               >
-                <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-                  {#if icon}
-                    <img src={icon} alt="" class="h-4 w-4 object-contain" draggable="false" />
-                  {:else}
-                    <AssistantDefaultIcon
-                      size={14}
-                      style="color: {assistant.color ?? 'var(--color-muted)'}"
-                    />
-                  {/if}
+            </span>
+            {#if snippet}
+              <span class="line-clamp-2 pl-6 text-[0.6875rem] leading-snug text-dimmed">
+                <span class="text-[0.625rem] uppercase tracking-wide text-dimmed/80">
+                  {snippet.role === 'assistant' ? 'Agent' : 'You'}
                 </span>
-                <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
-                  >{assistant.name}</span
-                >
-                {#if !assistantIsScheduled(assistant)}
-                  <span
-                    class="shrink-0 border border-border bg-elevated px-1.5 py-px text-[0.5rem] tracking-wide text-dimmed uppercase"
-                    title="This assistant runs only when you ask it to"
-                  >
-                    Unscheduled
-                  </span>
-                {/if}
-                {#if assistantGap(assistant)}
-                  <span
-                    class="flex shrink-0 items-center"
-                    style="color: var(--color-warning)"
-                    role="img"
-                    aria-label={assistantGap(assistant) ?? ''}
-                    title={assistantGap(assistant) ?? ''}
-                  >
-                    <CioAttention size={11} />
-                  </span>
-                {/if}
-              </button>
-            {/each}
-          {/if}
-          {#if taskResults.length > 0}
-            <div
-              class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
-            >
-              Tasks
-            </div>
-            {#each taskResults as task (task.id)}
-              {@const snippet = snippetFor(task.id)}
-              <button
-                type="button"
-                class="flex w-full flex-col gap-0.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-                title={task.title}
-                onclick={() => selectTask(task)}
-              >
-                <span class="flex w-full items-center gap-2">
-                  <AssistantIcon
-                    mark={task.assistantGettingStarted ? 'knowledge' : 'task'}
+                <span aria-hidden="true"> · </span>
+                {snippet.snippet}
+              </span>
+            {/if}
+          </button>
+        {/each}
+      {/if}
+      {#if runResults.length > 0}
+        <div
+          class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
+        >
+          Runs
+        </div>
+        {#each runResults as run (run.id)}
+          {@const assistant = runAssistant(run)}
+          {@const icon = runIcon(run)}
+          {@const snippet = snippetFor(run.id)}
+          <button
+            type="button"
+            class="flex w-full flex-col gap-0.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
+            title={run.title}
+            onclick={() => selectTask(run)}
+          >
+            <span class="flex w-full items-center gap-2">
+              <span class="flex h-4 w-4 shrink-0 items-center justify-center">
+                {#if icon}
+                  <img src={icon} alt="" class="h-4 w-4 object-contain" draggable="false" />
+                {:else if assistant}
+                  <AssistantDefaultIcon
                     size={14}
-                    class="shrink-0 text-muted"
+                    style="color: {assistant.color ?? 'var(--color-muted)'}"
                   />
-                  <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
-                    >{task.title}</span
-                  >
-                </span>
-                {#if snippet}
-                  <span class="line-clamp-2 pl-6 text-[0.6875rem] leading-snug text-dimmed">
-                    <span class="text-[0.625rem] uppercase tracking-wide text-dimmed/80">
-                      {snippet.role === 'assistant' ? 'Agent' : 'You'}
-                    </span>
-                    <span aria-hidden="true"> · </span>
-                    {snippet.snippet}
-                  </span>
+                {:else}
+                  <AssistantIcon mark="task" size={14} class="text-muted" />
                 {/if}
-              </button>
-            {/each}
-          {/if}
-          {#if runResults.length > 0}
-            <div
-              class="border-b border-border px-2 py-1 text-[0.5625rem] font-semibold uppercase tracking-wide text-dimmed"
-            >
-              Runs
-            </div>
-            {#each runResults as run (run.id)}
-              {@const assistant = runAssistant(run)}
-              {@const icon = runIcon(run)}
-              {@const snippet = snippetFor(run.id)}
-              <button
-                type="button"
-                class="flex w-full flex-col gap-0.5 px-2 py-1.5 text-left transition-colors hover:bg-elevated"
-                title={run.title}
-                onclick={() => selectTask(run)}
+              </span>
+              <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground">{run.title}</span
               >
-                <span class="flex w-full items-center gap-2">
-                  <span class="flex h-4 w-4 shrink-0 items-center justify-center">
-                    {#if icon}
-                      <img src={icon} alt="" class="h-4 w-4 object-contain" draggable="false" />
-                    {:else if assistant}
-                      <AssistantDefaultIcon
-                        size={14}
-                        style="color: {assistant.color ?? 'var(--color-muted)'}"
-                      />
-                    {:else}
-                      <AssistantIcon mark="task" size={14} class="text-muted" />
-                    {/if}
-                  </span>
-                  <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground"
-                    >{run.title}</span
-                  >
+            </span>
+            {#if snippet}
+              <span class="line-clamp-2 pl-6 text-[0.6875rem] leading-snug text-dimmed">
+                <span class="text-[0.625rem] uppercase tracking-wide text-dimmed/80">
+                  {snippet.role === 'assistant' ? 'Agent' : 'You'}
                 </span>
-                {#if snippet}
-                  <span class="line-clamp-2 pl-6 text-[0.6875rem] leading-snug text-dimmed">
-                    <span class="text-[0.625rem] uppercase tracking-wide text-dimmed/80">
-                      {snippet.role === 'assistant' ? 'Agent' : 'You'}
-                    </span>
-                    <span aria-hidden="true"> · </span>
-                    {snippet.snippet}
-                  </span>
-                {/if}
-              </button>
-            {/each}
-          {/if}
-          {#if searching}
-            <p
-              class="flex items-center justify-center gap-1.5 px-2 py-3 text-center text-[0.6875rem] text-dimmed"
-            >
-              <CioSpinner size={12} class="animate-spin" />
-              Searching…
-            </p>
-          {/if}
+                <span aria-hidden="true"> · </span>
+                {snippet.snippet}
+              </span>
+            {/if}
+          </button>
+        {/each}
+      {/if}
+      {#if searching}
+        <p
+          class="flex items-center justify-center gap-1.5 px-2 py-3 text-center text-[0.6875rem] text-dimmed"
+        >
+          <CioSpinner size={12} class="animate-spin" />
+          Searching…
+        </p>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
+{#if inline}
+  {#if expanded}
+    <div class="relative w-full min-w-0">
+      <div class="flex items-center gap-1">
+        <!-- The chevron gives the field back to the button it grew out of. -->
+        <button
+          type="button"
+          class="flex size-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label="Close search"
+          title="Close search"
+          onclick={closeSearch}
+        >
+          <CioBack size={13} />
+        </button>
+        {@render searchField()}
+      </div>
+      {#if trimmed.length > 0}
+        <div
+          class="absolute inset-x-0 top-full z-30 mt-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
+        >
+          {@render resultsPanel()}
         </div>
       {/if}
-    </Popover.Content>
-  </Popover.Portal>
-</Popover.Root>
+    </div>
+  {/if}
+{:else}
+  <Popover.Root
+    bind:open
+    onOpenChange={(next) => {
+      if (!next) closeSearch()
+    }}
+  >
+    <Popover.Trigger
+      class="flex h-7 w-7 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
+      aria-label="Search assistants, tasks and runs"
+      title="Search assistants, tasks and runs"
+    >
+      <CioSearch size={15} strokeWidth={1.8} />
+    </Popover.Trigger>
+
+    <Popover.Portal>
+      <Popover.Content
+        side="bottom"
+        align="start"
+        sideOffset={6}
+        collisionPadding={8}
+        class="z-50 w-80 overflow-hidden border bg-surface p-1.5 shadow-lg"
+        aria-label="Search assistants, tasks and runs"
+        onCloseAutoFocus={(e) => e.preventDefault()}
+      >
+        {@render searchField()}
+        {@render resultsPanel()}
+      </Popover.Content>
+    </Popover.Portal>
+  </Popover.Root>
+{/if}

@@ -18,12 +18,20 @@
      */
     onCreateViaChat?: () => void | Promise<void>
     title?: string
+    /** Draw the trigger as an icon with its name beside it, for a panel toolbar. */
+    label?: string
     /** External open signal (keyboard shortcut); the control opens its dialog
      *  whenever the value grows past the one it already handled. */
     trigger?: number
   }
 
-  let { onCreate, onCreateViaChat, title = 'New assistant', trigger = 0 }: Props = $props()
+  let {
+    onCreate,
+    onCreateViaChat,
+    title = 'New assistant',
+    label = '',
+    trigger = 0
+  }: Props = $props()
 
   let open = $state(false)
   let name = $state('')
@@ -89,12 +97,17 @@
 
 <button
   type="button"
-  class="flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+  class={label
+    ? 'flex h-7 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'
+    : 'flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'}
   aria-label="New assistant"
   title="New assistant"
   onclick={() => (open = true)}
 >
-  <AssistantIcon size={15} />
+  <AssistantIcon size={14} />
+  {#if label}
+    <span>{label}</span>
+  {/if}
 </button>
 
 <Modal {open} {title} size="lg" onClose={() => (open = false)}>
