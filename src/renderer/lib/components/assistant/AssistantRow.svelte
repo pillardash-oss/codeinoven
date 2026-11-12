@@ -1,28 +1,17 @@
 <script lang="ts">
   import MediaActivityTrail from '$lib/components/speech/MediaActivityTrail.svelte'
   import type { MediaActivity } from '$shared/media-activity'
-  import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
-  import { archiveItem } from '$lib/archive-actions'
-  import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import CioCalendar from '@pdslng/cio-icon/CioCalendar.svelte'
-  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
-  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioPause from '@pdslng/cio-icon/CioPause.svelte'
-  import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPin from '@pdslng/cio-icon/CioPin.svelte'
-  import CioPinOff from '@pdslng/cio-icon/CioPinOff.svelte'
-  import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
-  import CioSkipForward from '@pdslng/cio-icon/CioSkipForward.svelte'
-  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
-  import { DropdownMenu, Portal } from 'bits-ui'
-  import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import { Portal } from 'bits-ui'
   import ThreadStateCounts from '$lib/components/shared/ThreadStateCounts.svelte'
   import { type ThreadStateCounts as ThreadStateCountsValue } from '$lib/thread-state-counts'
-  import SidebarSearchControl from '$lib/components/workspace/SidebarSearchControl.svelte'
   import { AssistantDefaultIcon, getAssistantIcon } from '$lib/assistant-icons'
-  import { assistantIsScheduled, type Assistant } from '$shared/types'
   import { assistantGap } from './assistant-view'
+  import type { Assistant } from '$shared/types'
+  import { formatCompactAge } from '$shared/date-time-format'
+  import { relativeTimeClock } from '$lib/relative-time.svelte'
   import {
     THREAD_HOVER_POPOVER_SURFACE_CLASS,
     threadHoverPopoverStyle
@@ -30,14 +19,22 @@
   import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import AssistantHoverPopover from './AssistantHoverPopover.svelte'
 
+  /**
+   * One assistant in the assistant view's sidebar.
+   *
+   * The row is a place, not a container: it names the assistant, the last thing
+   * said in its most recent conversation, and when that was. Its threads are the
+   * header's tabs, so nothing here opens, nests or manages them. The only controls
+   * are the ones a list row needs   the row itself opens the assistant, a drag
+   * reorders or receives a task, and the context menu is gone with the threads.
+   */
   interface Props {
     media?: readonly MediaActivity[]
     assistant: Assistant
-    expanded: boolean
     /**
      * How this assistant's threads break down   its tasks and their runs   by
-     * working, attention, and error. This is the same indicator a project row
-     * wears, so an assistant summarizes its work the same way.
+     * working, attention, and error, so a row summarizes its work the same way a
+     * project row does.
      */
     stateCounts: ThreadStateCountsValue
     /** At least one task or run needs the user: parked on a card, failed, or
@@ -45,34 +42,20 @@
     attention: boolean
     /** Any task carries a pending missed run. */
     missed: boolean
-    /** How many threads this assistant holds: its tasks and their runs. The
-     *  Getting started host is the assistant's behavior, not a thread, so it is
-     *  never counted here. */
+    /** How many threads this assistant holds: its tasks and their runs. */
     threadCount: number
     /** Custom icon data URL for this assistant, when it stores one. */
     iconUrl?: string | null
     /** Next intended fire for the assistant, or null when unscheduled. */
     nextRunAt: number | null
-    /**
-     * The last thing said in this assistant's most recent conversation, so the
-     * row reads as a place with recent work in it instead of a label. Absent
-     * while the assistant has never spoken.
-     */
+    /** The last line of this assistant's most recent conversation. */
     preview?: string | null
-    /** Inline assistant-search state, driven from the sidebar. */
-    searchOpen: boolean
-    searchQuery: string
-    onToggle: (assistant: Assistant) => void
-    onSearchOpenChange: (assistant: Assistant, open: boolean) => void
-    onSearchQueryChange: (assistant: Assistant, value: string) => void
-    onCreateTask: (assistant: Assistant) => void
-    onOpenKnowledge: (assistant: Assistant) => void
-    onEdit: (assistant: Assistant) => void
-    onHasAssistantRunsToday: (assistant: Assistant) => Promise<boolean>
-    onSkipNextAssistantRun: (assistant: Assistant) => Promise<void>
-    onSkipAssistantRunsToday: (assistant: Assistant) => Promise<void>
-    onTogglePin: (assistant: Assistant) => void
-    onDelete: (assistant: Assistant) => void
+    /** When that conversation last moved, so the row says how long it has been. */
+    lastWorkedAt?: number | null
+    /** The open thread belongs to this assistant. */
+    selected: boolean
+    /** Open this assistant: its latest thread, or its setup when it has none. */
+    onOpen: (assistant: Assistant) => void
     /** Drag-to-reorder assistants; position is relative to this row. */
     onMoveAssistant: (draggedId: string, targetId: string, position: 'before' | 'after') => void
     /** A task (thread) drag was dropped onto this assistant. */
@@ -82,7 +65,6 @@
   let {
     assistant,
     media = [],
-    expanded,
     stateCounts,
     attention,
     missed,
@@ -90,19 +72,9 @@
     iconUrl = null,
     nextRunAt,
     preview = null,
-    searchOpen,
-    searchQuery,
-    onToggle,
-    onSearchOpenChange,
-    onSearchQueryChange,
-    onCreateTask,
-    onOpenKnowledge,
-    onEdit,
-    onHasAssistantRunsToday,
-    onSkipNextAssistantRun,
-    onSkipAssistantRunsToday,
-    onTogglePin,
-    onDelete,
+    lastWorkedAt = null,
+    selected,
+    onOpen,
     onMoveAssistant,
     onDropTask
   }: Props = $props()
@@ -115,67 +87,17 @@
   const assistantIcon = $derived(getAssistantIcon(assistant, iconUrl))
   const incomplete = $derived(assistantGap(assistant) !== null)
   const working = $derived(stateCounts.working > 0)
-  /** Line 2's next fire, beside the run count (see `assistantNextRunLine`). */
-  const scheduled = $derived(assistantIsScheduled(assistant))
   const gapLabel = $derived(assistantGap(assistant) ?? '')
-  const toggleTitle = $derived(`${expanded ? 'Collapse' : 'Expand'} assistant: ${assistant.name}`)
+  const lastWorkedLabel = $derived(
+    lastWorkedAt ? formatCompactAge(lastWorkedAt, relativeTimeClock.now) : ''
+  )
 
-  let menuOpen = $state(false)
-  let hasRunsToday = $state(false)
-  let skipConfirm = $state<'next' | 'today' | null>(null)
-  let skipBusy = $state(false)
   let dropIndicator = $state<'before' | 'after' | null>(null)
   let taskDropActive = $state(false)
 
   // ─── Hover popover ───────────────────────────────────────────────────────
   /** The assistant's info popover, shared with every surface that shows one. */
-  const popover = createThreadHoverPopover({ isBlocked: () => menuOpen })
-  let todayRunsCheck = 0
-
-  const skipDialogTitle = $derived(
-    skipConfirm === 'today' ? "Skip today's runs?" : 'Skip next run?'
-  )
-  const skipConfirmLabel = $derived(skipConfirm === 'today' ? 'Skip for today' : 'Skip next run')
-
-  async function confirmSkip(): Promise<void> {
-    const action = skipConfirm
-    if (!action || skipBusy) return
-    skipBusy = true
-    try {
-      if (action === 'next') await onSkipNextAssistantRun(assistant)
-      else await onSkipAssistantRunsToday(assistant)
-      skipConfirm = null
-    } catch {
-      // The workspace reports the error; keep the confirmation open for retry.
-    } finally {
-      skipBusy = false
-    }
-  }
-
-  function onMenuOpenChange(open: boolean): void {
-    menuOpen = open
-    if (!open) {
-      todayRunsCheck += 1
-      hasRunsToday = false
-      return
-    }
-
-    const check = ++todayRunsCheck
-    hasRunsToday = false
-    void onHasAssistantRunsToday(assistant)
-      .then((hasRuns) => {
-        if (menuOpen && check === todayRunsCheck) hasRunsToday = hasRuns
-      })
-      .catch(() => {
-        if (check === todayRunsCheck) hasRunsToday = false
-      })
-  }
-
-  function openContextMenu(event: MouseEvent): void {
-    event.preventDefault()
-    popover.hide()
-    onMenuOpenChange(true)
-  }
+  const popover = createThreadHoverPopover()
 
   function captureRowElement(element: HTMLElement): () => void {
     popover.setRow(element)
@@ -241,15 +163,16 @@
     dropIndicator = null
     taskDropActive = false
   }
+
+  $effect(() => relativeTimeClock.hold())
 </script>
 
 <div
-  class="group relative mb-2.5 flex items-center gap-1 border-l-2 px-1.5 py-2.5 transition-colors {expanded
+  class="group relative mb-0.5 flex items-center px-1.5 py-2 transition-colors {selected
     ? 'bg-elevated/70'
     : taskDropActive
       ? 'bg-primary/10'
       : 'hover:bg-elevated'}"
-  style="border-color: {assistant.color ?? 'var(--color-border-strong)'}"
   role="listitem"
   draggable="true"
   ondragstart={handleDragStart}
@@ -258,7 +181,6 @@
   ondragleave={handleDragLeave}
   onpointerenter={() => popover.enter()}
   onpointerleave={() => popover.leave()}
-  oncontextmenu={openContextMenu}
   {@attach captureRowElement}
 >
   <!-- Stable drop indicator (assistant reorder) -->
@@ -278,31 +200,16 @@
   <button
     type="button"
     class="flex min-w-0 flex-1 items-center gap-2 text-left"
-    aria-expanded={expanded}
-    title={toggleTitle}
-    onclick={() => onToggle(assistant)}
+    title="Open {assistant.name}"
+    aria-current={selected ? 'page' : undefined}
+    onclick={() => onOpen(assistant)}
   >
-    <!-- Assistant icon ↔ chevron swap on hover -->
-    <span class="relative size-8 shrink-0">
-      <span
-        class="absolute inset-0 flex items-center justify-center transition-opacity duration-150 group-hover:opacity-0"
-        aria-hidden="true"
-      >
-        {#if assistantIcon}
-          <img src={assistantIcon} alt="" class="size-7 object-contain" draggable="false" />
-        {:else}
-          <AssistantDefaultIcon size={28} style="color: {color}" />
-        {/if}
-      </span>
-      <span
-        class="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover:opacity-100"
-        aria-hidden="true"
-      >
-        <CioForward
-          size={15}
-          class="text-dimmed transition-transform duration-150 {expanded ? 'rotate-90' : ''}"
-        />
-      </span>
+    <span class="relative flex size-8 shrink-0 items-center justify-center">
+      {#if assistantIcon}
+        <img src={assistantIcon} alt="" class="size-7 object-contain" draggable="false" />
+      {:else}
+        <AssistantDefaultIcon size={28} style="color: {color}" />
+      {/if}
     </span>
 
     <span class="min-w-0 flex-1">
@@ -310,7 +217,7 @@
         {#if assistant.pinned}
           <CioPin size={11} class="shrink-0 text-accent" aria-hidden="true" />
         {/if}
-        <span class="truncate text-sm font-medium text-foreground">{assistant.name}</span>
+        <span class="min-w-0 truncate text-sm font-medium text-foreground">{assistant.name}</span>
         <ThreadStateCounts counts={stateCounts} class="shrink-0" />
         <MediaActivityTrail activities={media} label={assistant.name} />
         {#if assistant.paused}
@@ -346,6 +253,11 @@
             <CioAttention size={11} />
           </span>
         {/if}
+        {#if lastWorkedLabel}
+          <span class="ml-auto shrink-0 text-[0.625rem] tabular-nums text-dimmed"
+            >{lastWorkedLabel}</span
+          >
+        {/if}
       </span>
       <span class="mt-0.5 flex min-w-0 items-center gap-1.5 text-xs text-muted">
         <span class="truncate" title={preview ?? undefined}>
@@ -354,136 +266,7 @@
       </span>
     </span>
   </button>
-
-  <!-- Hover actions float over the row (opaque `elevated`, matching the row's
-       hover surface) instead of reserving space, so the title truncates at the
-       full row width and only gets covered while the actions are visible. -->
-  <span
-    class="pointer-events-none absolute inset-y-1 right-1.5 z-10 flex items-center gap-0.5 bg-elevated px-0.5 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-  >
-    <SidebarSearchControl
-      open={searchOpen}
-      query={searchQuery}
-      onOpenChange={(open) => onSearchOpenChange(assistant, open)}
-      onQueryChange={(value) => onSearchQueryChange(assistant, value)}
-      ariaLabel="Search tasks in {assistant.name}"
-      title="Search tasks"
-      placeholder="Search tasks in {assistant.name}…"
-    />
-    <button
-      type="button"
-      class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-      aria-label="New task in {assistant.name}"
-      title="New task"
-      onclick={() => onCreateTask(assistant)}
-    >
-      <CioPlus size={12} />
-    </button>
-    <DropdownMenu.Root bind:open={menuOpen} onOpenChange={onMenuOpenChange}>
-      <DropdownMenu.Trigger
-        class="flex h-5 w-5 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground data-[state=open]:bg-elevated data-[state=open]:text-foreground"
-        aria-label="Options for {assistant.name}"
-        title="Assistant options"
-        oncontextmenu={(event: MouseEvent) => event.preventDefault()}
-      >
-        <CioEllipsis size={12} />
-      </DropdownMenu.Trigger>
-      <DropdownMenu.Portal>
-        <DropdownMenu.Content
-          side="bottom"
-          align="end"
-          sideOffset={4}
-          collisionPadding={8}
-          class="z-50 w-56 overflow-hidden border bg-surface p-1 whitespace-nowrap shadow-lg"
-        >
-          <DropdownMenu.Item
-            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => onOpenKnowledge(assistant)}
-          >
-            <AssistantIcon mark="knowledge" size={14} class="text-muted" />
-            Assistant behavior
-          </DropdownMenu.Item>
-          <DropdownMenu.Item
-            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => onEdit(assistant)}
-          >
-            <CioPencil size={14} class="text-muted" />
-            Edit assistant
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-          {#if scheduled}
-            <DropdownMenu.Item
-              class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-              onSelect={() => (skipConfirm = 'next')}
-            >
-              <CioSkipForward size={14} class="text-muted" />
-              Skip next run
-            </DropdownMenu.Item>
-            {#if hasRunsToday}
-              <DropdownMenu.Item
-                class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-                onSelect={() => (skipConfirm = 'today')}
-              >
-                <CioCalendar size={14} class="text-muted" />
-                Skip runs for today
-              </DropdownMenu.Item>
-            {/if}
-          {/if}
-          <DropdownMenu.Item
-            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none transition-colors hover:bg-elevated focus:bg-elevated"
-            onSelect={() => onTogglePin(assistant)}
-          >
-            {#if assistant.pinned}
-              <CioPinOff size={14} class="text-muted" />
-              Unpin Assistant
-            {:else}
-              <CioPin size={14} class="text-muted" />
-              Pin Assistant
-            {/if}
-          </DropdownMenu.Item>
-          <DropdownMenu.Item
-            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-foreground outline-none hover:bg-elevated focus:bg-elevated"
-            onSelect={() => void archiveItem('assistant', assistant.id, assistant.name)}
-          >
-            <CioArchive size={14} class="text-muted" />
-            Archive Assistant
-          </DropdownMenu.Item>
-          <DropdownMenu.Separator class="mx-2 my-1 h-px bg-border" />
-          <DropdownMenu.Item
-            class="flex w-full items-center gap-2 px-2.5 py-2 text-sm text-danger outline-none transition-colors hover:bg-danger/10 focus:bg-danger/10"
-            onSelect={() => onDelete(assistant)}
-          >
-            <CioTrash size={14} />
-            Remove Assistant
-          </DropdownMenu.Item>
-        </DropdownMenu.Content>
-      </DropdownMenu.Portal>
-    </DropdownMenu.Root>
-  </span>
 </div>
-
-<ConfirmDialog
-  open={skipConfirm !== null}
-  title={skipDialogTitle}
-  confirmLabel={skipConfirmLabel}
-  busy={skipBusy}
-  variant="primary"
-  onCancel={() => (skipConfirm = null)}
-  onConfirm={confirmSkip}
->
-  {#if skipConfirm === 'today'}
-    <p>
-      Skip all remaining scheduled runs for <strong class="text-foreground">{assistant.name}</strong
-      >
-      today? The assistant will resume at its next scheduled time after today.
-    </p>
-  {:else}
-    <p>
-      Skip the closest scheduled run for <strong class="text-foreground">{assistant.name}</strong>?
-      The next run after that will stay scheduled.
-    </p>
-  {/if}
-</ConfirmDialog>
 
 {#if popover.visible}
   <Portal>

@@ -16,7 +16,7 @@
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
   import { feature } from '$lib/feature-registry'
   import { motionDuration } from '$lib/motion'
-  import { assistants } from '$lib/stores/assistants.svelte'
+  import { assistantHeaderTabs } from '$lib/stores/assistant-header-tabs.svelte'
   import { attentionState } from '$lib/stores/attention.svelte'
   import { browserStore } from '$lib/stores/browser-access.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -36,7 +36,7 @@
   import { threadChangesState } from '$lib/stores/thread-changes.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import type { AutoAnswerThreadScope, Project } from '$shared/types'
+  import type { Assistant, AutoAnswerThreadScope, Project } from '$shared/types'
   import { activeThreadRowId, ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
   import { cubicOut } from 'svelte/easing'
   import { SvelteSet } from 'svelte/reactivity'
@@ -77,6 +77,23 @@
     config,
     updateConfig
   }))
+  /**
+   * The assistant view's thread tabs live in the app header, which this component
+   * does not paint. The board publishes what the strip draws (its assistant-space
+   * threads) and what it can do (open, delete, remove), so the header never owns a
+   * second thread list or a second delete path.
+   */
+  assistantHeaderTabs.publishActions({
+    openThread: board.markThreadReadAndApply.openAssistantTask,
+    deleteThread: board.switcherPanelTabs.handleDelete,
+    openAssistantBehaviour: (assistant: Assistant) => {
+      void board.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)
+    },
+    deleteAssistant: board.mergeThreadsInList.deleteAssistant
+  })
+  $effect(() => {
+    assistantHeaderTabs.publishThreads(board.mergeThreadsInList.assistantThreads)
+  })
   /**
    * Dock contents, grouped: history (which also carries the thread note and, on
    * an assistant task, the assistant's behavior), then workspace tools, then
@@ -611,27 +628,11 @@
         bind:scroller={board.switcherPanelTabs.sidebarScroller}
         assistants={board.mergeThreadsInList.assistantList}
         tasks={board.markThreadReadAndApply.assistantTasks}
-        runsByTask={board.mergeThreadsInList.assistantRunsByTask}
         runsByAssistant={board.mergeThreadsInList.runsByAssistant}
         selectedThreadId={activeThreadRowId(selectedThread)}
         onOpenTask={board.markThreadReadAndApply.openAssistantTask}
-        onOpenTaskKnowledge={board.mergeThreadsInList.openAssistantKnowledgeForTask}
         onOpenAssistantKnowledge={(assistant) =>
           void board.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)}
-        onCreateTaskInAssistant={(assistant) =>
-          void board.mergeThreadsInList.createTaskInAssistant(assistant)}
-        onRenameTask={board.switcherPanelTabs.handleRename}
-        onTogglePinTask={(task) => void board.openThreadFromSwitcher.togglePin(task)}
-        onDeleteTask={board.switcherPanelTabs.handleDelete}
-        onForkTask={(task) => void board.switcherPanelTabs.forkThread(task)}
-        onOpenTaskNotes={board.switcherPanelTabs.openAssistantTaskNotes}
-        onHandedOffTask={board.switcherPanelTabs.handleAssistantHandoff}
-        onHideKnowledge={(task) => void board.switcherPanelTabs.hideAssistantKnowledge(task)}
-        onDeleteAssistant={board.mergeThreadsInList.deleteAssistant}
-        onHasAssistantRunsToday={(assistant) => assistants.hasRunsToday(assistant.id)}
-        onSkipNextAssistantRun={board.state.skipNextRun}
-        onSkipAssistantRunsToday={board.state.skipRunsToday}
-        onTogglePinAssistant={(assistant) => void board.state.toggleAssistantPin(assistant)}
         onMoveAssistant={(draggedId, targetId, position) =>
           void board.state.moveAssistant(draggedId, targetId, position)}
         onAssignTask={(taskId, assistantId) =>

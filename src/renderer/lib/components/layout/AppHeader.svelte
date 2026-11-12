@@ -159,6 +159,14 @@
    */
   let onBrowser = $derived(activeView === 'browser')
 
+  /**
+   * The assistant view owns its centre: the open assistant's name, then its latest
+   * threads as tabs, instead of a single thread title. It is fetched on first
+   * entry, like the browser's centre, so the strip's own model never sits in the
+   * launch chunk.
+   */
+  let onAssistant = $derived(activeView === 'assistant')
+
   /** Chats and Assistant must feel like chat   no editor, spec, or terminal controls. */
   let chatMode = $derived(activeView === 'chats' || activeView === 'assistant')
 
@@ -426,6 +434,11 @@
          one on screen, which is also when its runtime is wired. -->
     {#await loadCachedPanelModule('module:lib/components/layout/AppHeaderBrowserCenter.svelte', () => import('./AppHeaderBrowserCenter.svelte')) then { default: AppHeaderBrowserCenter }}
       <AppHeaderBrowserCenter />
+    {/await}
+  {:else if onAssistant}
+    <!-- The assistant's thread tabs, in their own chunk for the same reason. -->
+    {#await loadCachedPanelModule('module:lib/components/layout/AppHeaderAssistantTabs.svelte', () => import('./AppHeaderAssistantTabs.svelte')) then { default: AppHeaderAssistantTabs }}
+      <AppHeaderAssistantTabs />
     {/await}
   {:else}
     <AppHeaderCenter {activeView} {chatMode} {threadActionsMenu} {titleInset} />

@@ -265,41 +265,25 @@ describe('chats list parity', () => {
   })
 })
 
-describe('assistant sidebar parity', () => {
+describe('assistant sidebar', () => {
   const a1 = assistant('a1', 'Triage')
   const tasks = Array.from({ length: 20 }, (_, index) =>
-    thread(`task-${index}`, 'assistant', { assistantId: 'a1' })
+    thread(`task-${index}`, 'assistant', { assistantId: 'a1', lastActivity: 20 - index })
   )
 
   function renderAssistant(): { target: HTMLElement; close: () => void } {
     const target = document.createElement('div')
     document.body.append(target)
-    const noop = vi.fn(async () => {})
     const component = mount(AssistantSidebar, {
       target,
       props: {
         assistants: [a1],
         tasks,
-        runsByTask: new Map(),
         runsByAssistant: new Map(),
-        // Selecting a task opens its assistant, so the rows below are on screen.
+        // The open thread belongs to this assistant, so its row reads as current.
         selectedThreadId: tasks[0].id,
         onOpenTask: vi.fn(),
-        onOpenTaskKnowledge: vi.fn(),
         onOpenAssistantKnowledge: vi.fn(),
-        onCreateTaskInAssistant: vi.fn(),
-        onRenameTask: noop,
-        onTogglePinTask: vi.fn(),
-        onDeleteTask: noop,
-        onForkTask: vi.fn(),
-        onOpenTaskNotes: vi.fn(),
-        onHandedOffTask: vi.fn(),
-        onHideKnowledge: vi.fn(),
-        onDeleteAssistant: noop,
-        onHasAssistantRunsToday: vi.fn(async () => false),
-        onSkipNextAssistantRun: noop,
-        onSkipAssistantRunsToday: noop,
-        onTogglePinAssistant: vi.fn(),
         onMoveAssistant: vi.fn(),
         onAssignTask: vi.fn()
       }
@@ -307,32 +291,15 @@ describe('assistant sidebar parity', () => {
     return { target, close: () => void unmount(component) }
   }
 
-  it('mounts one page of an assistant\u2019s tasks and puts every row on the reflow grid', async () => {
+  it('lists assistants as flat rows and never nests their threads', async () => {
     const { target, close } = renderAssistant()
     await tick()
 
-    const rows = reflowRows(target)
-    expect(rows).toHaveLength(THREAD_LIST_PAGE_SIZE)
-    for (const row of target.querySelectorAll('[data-assistant-task-row]')) {
-      expect(row.closest('[data-row-key]')).not.toBeNull()
-    }
-    close()
-  })
-
-  it('reveals the rest of an assistant\u2019s tasks one page at a time', async () => {
-    const { target, close } = renderAssistant()
-    await tick()
-
-    const showMore = pageControl(target, 'more')
-    expect(showMore?.textContent).toContain('5')
-
-    showMore!.click()
-    flushSync()
-    expect(reflowRows(target)).toHaveLength(tasks.length)
-
-    pageControl(target, 'less')!.click()
-    flushSync()
-    expect(reflowRows(target)).toHaveLength(THREAD_LIST_PAGE_SIZE)
+    // The row is the assistant itself: its threads are the app header's tabs now,
+    // so no task row, no run row, and no page control belongs in this panel.
+    expect(target.querySelectorAll('[data-assistant-row]')).toHaveLength(1)
+    expect(target.querySelectorAll('[data-assistant-task-row]')).toHaveLength(0)
+    expect(pageControl(target, 'more')).toBeUndefined()
     close()
   })
 })
