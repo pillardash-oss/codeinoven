@@ -72,14 +72,18 @@ export async function ensureDonOrchestrator(deps: {
     const seed = donAssistantSeed(primary ? { primary, fallbacks: [] } : undefined)
     const { created: assistantCreated } = assistantManager.ensureBuiltinAssistant(seed)
     // The instructions moved from a dedicated delegate tool to the unified
-    // dispatch tool, and later from asking the user to settle a dispatched
-    // question to settling it in Don's own turn. Only knowledge that still reads
-    // as one of those shipped versions is upgraded, so an install that changed
-    // Don's own instructions keeps them.
+    // dispatch tool, later from asking the user to settle a dispatched question to
+    // settling it in Don's own turn, and later still to settling an install
+    // suggestion too. Only knowledge that still reads as one of those shipped
+    // versions is upgraded, so an install that changed Don's own instructions keeps
+    // them.
     const existingAssistant = assistantManager.getAssistant(DON_ASSISTANT_ID)
     if (
       existingAssistant?.knowledge.includes('cio_delegate') ||
-      existingAssistant?.knowledge.includes('nothing travels through you')
+      existingAssistant?.knowledge.includes('nothing travels through you') ||
+      existingAssistant?.knowledge.includes(
+        "already in this conversation under the thread's own badge"
+      )
     ) {
       assistantManager.updateAssistant(DON_ASSISTANT_ID, { knowledge: DON_KNOWLEDGE })
     }

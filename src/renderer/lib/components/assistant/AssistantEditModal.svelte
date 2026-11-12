@@ -180,11 +180,6 @@
         class="w-full resize-none border bg-elevated px-3 py-2 text-sm text-foreground placeholder:text-dimmed"
         placeholder="Keeps my X and LinkedIn accounts moving, and flags anything that needs me."
         bind:value={description}></textarea>
-      <p class="mt-1 text-[0.625rem] leading-relaxed text-dimmed">
-        What it is for, in your own words. It is your note about the assistant, shown when you hover
-        its row. How it behaves lives in the Personality section of its behavior, and its schedule
-        sits beside it there.
-      </p>
     </div>
 
     {#if error}

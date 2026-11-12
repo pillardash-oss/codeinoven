@@ -122,8 +122,7 @@
          action never does, because it is the empty panel's only button. -->
     <span
       class={variant === 'primary' ? '' : labelClass}
-      data-panel-label={variant === 'toolbar' ? true : undefined}
-      >{label || 'New assistant'}</span
+      data-panel-label={variant === 'toolbar' ? true : undefined}>{label || 'New assistant'}</span
     >
   {/if}
 </button>
@@ -163,10 +162,6 @@
         placeholder="Keeps my X and LinkedIn accounts moving, and flags anything that needs me."
         aria-label="Assistant description"
         bind:value={description}></textarea>
-      <p class="mt-1.5 text-[0.625rem] leading-relaxed text-dimmed">
-        What it is for, in your own words. It is your note about the assistant, shown when you hover
-        its row; how it behaves is agreed with it in its first conversation.
-      </p>
     </div>
   </form>
 

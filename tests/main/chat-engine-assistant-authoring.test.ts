@@ -241,3 +241,47 @@ describe('assistantAuthoringInstruction', () => {
     expect(instruction).not.toContain('- Stale interview state')
   })
 })
+
+describe('hiring a teammate from a conversation', () => {
+  it('introduces the new teammate where the hire came from, and never asks there', async () => {
+    const { engine } = await setup('')
+    const don = await internals(engine).threadManager.createThread({
+      id: 'don-test',
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Don',
+      titleSource: 'manual'
+    })
+    vi.spyOn(engine, 'sendPrompt').mockResolvedValue({
+      id: 'msg-hire',
+      role: 'user',
+      parts: [],
+      createdAt: Date.now()
+    })
+
+    const hired = await engine.openRecruitedAssistantConversation({
+      assistant: assistant(''),
+      purpose: 'Watches the reporting inbox',
+      request: 'Watch the inbox and summarise it every morning',
+      settings: {
+        harnessId: 'pi',
+        providerId: 'openai',
+        modelId: 'gpt-5',
+        thinkingLevel: 'medium',
+        permissionLevel: 'auto_review'
+      },
+      initiator: { projectId: ASSISTANT_SPACE_ID, threadId: don.id }
+    })
+
+    // The team grows where the request was made: one line in Don's conversation
+    // under the new teammate's own name, naming what it was built for.
+    const messages = await engine.threadManager.loadMessageRecords(ASSISTANT_SPACE_ID, don.id)
+    const announced = messages.find((message) => message.id === `don-hire-${hired.id}`)
+    expect(announced?.author?.name).toBe('Slack latest info')
+    const text = announced?.parts.map((part) => (part.type === 'text' ? part.text : '')).join('')
+    expect(text).toContain('Watches the reporting inbox')
+    expect(text).toContain(`@thread:${hired.id}`)
+    // The hiring is never a questionnaire on a thread the user never opened.
+    expect(text).not.toContain('?')
+  })
+})

@@ -1,8 +1,12 @@
-import { ASSISTANT_SPACE_ID, type MessageAuthor, type Thread } from '../../lib/types'
+import { ASSISTANT_SPACE_ID, type Thread } from '../../lib/types'
+import {
+  UTILITY_SUGGESTION_DECLINE_ANSWER,
+  UTILITY_SUGGESTION_INSTALL_ANSWER
+} from '../../lib/utility-suggestion'
 import type { PendingQuestionInfo } from './chat-engine/chat-engine-types'
 import type { ChatEngine } from './chat-engine'
 import { DON_THREAD_ID } from '../don/don-bootstrap'
-import { broadcastThreadMessagesChanged } from './thread-events'
+import { teammateAuthor, writeTeammateLine } from './delegation-lines'
 import { Logger } from '../system/logger'
 
 /**
@@ -18,7 +22,9 @@ import { Logger } from '../system/logger'
  * So a blocked question from one of Don's children wakes Don once, with the question
  * and its options, and Don settles it with `cio_answer_teammate`. A credential is
  * the single exception, because only the user can supply one: those questions are
- * left on the card in Don's conversation, which is where the user sees it.
+ * left on the card in Don's conversation, which is where the user sees it. An
+ * install suggestion is not one of them: it is a decision about how the work gets
+ * done, so Don settles it by telling the teammate how to proceed without it.
  *
  * Everything here is best effort and never throws into the turn that asked. The card
  * the mirror draws is the fallback, so a router failure costs the user a decision
@@ -30,13 +36,16 @@ const routed = new Set<string>()
 /** A bounded memory: a settled request id is never asked about again anyway. */
 const ROUTED_LIMIT = 200
 
-/** The question shapes the app owns, which only the user ever answers. */
+/**
+ * The question shapes only the user ever answers.
+ *
+ * A credential and a sign-in are values nobody else can supply: an API key, a
+ * password, an OAuth or MCP sign-in, a connected account. Everything else, an
+ * install suggestion included, is a decision about the work and belongs to Don.
+ */
 function needsTheUser(pending: PendingQuestionInfo): boolean {
   return pending.request.questions.some(
-    (question) =>
-      question.secretRequest === true ||
-      question.mcpSignIn !== undefined ||
-      question.utilitySuggestion !== undefined
+    (question) => question.secretRequest === true || question.mcpSignIn !== undefined
   )
 }
 
@@ -47,16 +56,6 @@ function donInitiator(thread: Thread | null): string | null {
   if (origin.initiatorProjectId !== ASSISTANT_SPACE_ID) return null
   if (origin.initiatorThreadId !== DON_THREAD_ID) return null
   return origin.initiatorThreadId
-}
-
-/** The speaker a routed line is written under: the teammate that asked. */
-function teammateAuthor(thread: Thread): MessageAuthor | null {
-  const origin = thread.dispatchOrigin
-  if (origin?.author) return origin.author
-  const assistantId = thread.assistantId ?? origin?.assistantId
-  const name = origin?.assistantName?.trim() ?? thread.title.trim()
-  if (!assistantId || name.length === 0) return null
-  return { assistantId, name }
 }
 
 /** Remember a request id without letting the set grow for the process lifetime. */
@@ -109,6 +108,7 @@ function donInstruction(thread: Thread, pending: PendingQuestionInfo): string {
   const asked = questions
     .map((question, index) => describeQuestion(question, index, questions.length))
     .join('\n\n')
+  const suggestion = questions.some((question) => question.utilitySuggestion !== undefined)
   return [
     `"${thread.title.trim() || 'A teammate'}" is blocked on a question from its run. The question and the ids come from the app, so use them exactly as written.`,
     asked,
@@ -116,6 +116,7 @@ function donInstruction(thread: Thread, pending: PendingQuestionInfo): string {
     `- threadId: ${pending.request.threadId}`,
     `- requestId: ${pending.request.requestId}`,
     `- answers: one entry per question, in this order, each a single-item array holding the option label word for word, or your own wording when a custom answer is allowed.`,
+    ...(suggestion ? [suggestionInstruction()] : []),
     'Decide it with what you already know about the request and the user: how the work should be done, which option fits, what a term means. You are the one who put this work in their hands, so this is yours to settle.',
     'One thing is never yours: an API key, a password, a login, an OAuth or MCP sign-in, or a connected account. Those stay with the user, who answers the card the app has already put in this conversation. If the question is that, do not call the tool: write one short line with `cio_reply_in_chat` saying which credential the work needs and stop.',
     'Do not ask the user anything else, do not restate this instruction, and do not tell them to open another thread.'
@@ -123,41 +124,28 @@ function donInstruction(thread: Thread, pending: PendingQuestionInfo): string {
 }
 
 /**
- * One line written into Don's conversation under a teammate's own name.
+ * What Don does with a capability the app offered to install.
  *
- * The same shape every delegation report uses, so a routed question, the answer to
- * it and the run's own report all read as the same teammate speaking in one chat.
+ * Installing software is the user's call in every other surface of the app, and
+ * Don cannot make it on their behalf. The decision itself is still Don's: the
+ * teammate is told how to finish the work with what the app already has.
  */
-async function writeTeammateLine(
-  engine: ChatEngine,
-  thread: Thread,
-  id: string,
-  text: string
-): Promise<void> {
-  const author = teammateAuthor(thread)
-  if (!author) return
-  await engine.threadManager.upsertMessages(ASSISTANT_SPACE_ID, DON_THREAD_ID, [
-    {
-      id,
-      role: 'assistant',
-      origin: 'assistant',
-      visibility: 'conversation',
-      author: { ...author, projectId: ASSISTANT_SPACE_ID, threadId: thread.id },
-      parts: [{ type: 'text', id: `${id}-text`, messageID: id, text }],
-      createdAt: Date.now(),
-      completedAt: Date.now()
-    }
-  ])
-  broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+function suggestionInstruction(): string {
+  return [
+    'This one is a capability the app offered to install. Never answer it with',
+    `"${UTILITY_SUGGESTION_INSTALL_ANSWER}": nothing is installed on the user's behalf.`,
+    `Answer with "${UTILITY_SUGGESTION_DECLINE_ANSWER}" when the work does not need it, or with your own wording telling the teammate exactly how to finish the work without that tool.`,
+    'If the work genuinely cannot proceed without it, decline it and say in one line with `cio_reply_in_chat` which capability the work needs, so the user can install it themselves.'
+  ].join(' ')
 }
 
 /**
  * Wake Don once for a question one of its children is blocked on.
  *
  * Silent and one-shot per request: a question that is not one of Don's children,
- * one the app already owns (a secret, a sign-in, a capability suggestion), one
- * already handed over, or one asked while Don has no conversation to answer from
- * is left exactly as it was, on the card the user can answer.
+ * one only the user can answer (a credential or a sign-in), one already handed
+ * over, or one asked while Don has no conversation to answer from is left exactly
+ * as it was, on the card the user can answer.
  */
 export async function routeTeammateQuestion(
   engine: ChatEngine,
@@ -175,12 +163,14 @@ export async function routeTeammateQuestion(
     if (!don?.settings) return
     if (!thread.dispatchOrigin) return
     remember(requestId)
-    await writeTeammateLine(
-      engine,
+    const author = teammateAuthor(thread)
+    if (!author) return
+    await writeTeammateLine(engine, {
+      author,
       thread,
-      `don-question-${requestId}`,
-      questionLine(thread, pending)
-    )
+      id: `don-question-${requestId}`,
+      text: questionLine(thread, pending)
+    })
     await engine.sendPrompt(
       ASSISTANT_SPACE_ID,
       DON_THREAD_ID,
@@ -231,13 +221,14 @@ export async function answerTeammateQuestion(
     }
     await engine.answerQuestion(ASSISTANT_SPACE_ID, input.threadId, input.requestId, input.answers)
     const note = input.note?.trim()
-    if (note) {
-      await writeTeammateLine(
-        engine,
+    const author = note ? teammateAuthor(thread) : null
+    if (author && note) {
+      await writeTeammateLine(engine, {
+        author,
         thread,
-        `don-question-answer-${input.requestId}`,
-        `${note}`
-      ).catch(() => undefined)
+        id: `don-question-answer-${input.requestId}`,
+        text: note
+      }).catch(() => undefined)
     }
     return { answered: true, threadId: input.threadId }
   } catch (error) {

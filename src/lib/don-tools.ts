@@ -171,7 +171,7 @@ export const DON_TOOLS: GatewayToolDefinition[] = [
   {
     name: DON_CREATE_ASSISTANT_TOOL_NAME,
     description:
-      'Create the teammate this request needs, and only after the roster has answered. Read cio_orchestrate_targets on this turn and check every assistant first: hire only when the request is assistant-category work and not one assistant fits it, never when one plausibly fits, never for codebase work that belongs to a project, and never when the user has asked you not to create assistants. It gives the assistant the name and purpose you chose and opens its Getting started conversation with the waiting request already in it, so the person only answers its first questions. Say one line afterwards naming who was created and that the work is already with them.',
+      'Create the teammate this request needs, and only after the roster has answered. Read cio_orchestrate_targets on this turn and check every assistant first: hire only when the request is assistant-category work and not one assistant fits it, never when one plausibly fits, never for codebase work that belongs to a project, and never when the user has asked you not to create assistants. It gives the assistant the name and purpose you chose, and the new teammate writes its own instructions and takes the waiting request without interviewing anyone. The teammate introduces itself in this conversation under its own name the moment it exists, and anything it needs to ask reaches this conversation for you to settle. Say one line afterwards naming who was created and that the work is already with them.',
     inputSchema: CREATE_ASSISTANT_INPUT_SCHEMA,
     outputSchema: DON_RESULT_SCHEMA,
     route: '/don-create-assistant',
@@ -180,7 +180,7 @@ export const DON_TOOLS: GatewayToolDefinition[] = [
   {
     name: DON_ANSWER_TEAMMATE_TOOL_NAME,
     description:
-      "Answer the question a teammate's run is waiting on, so the work continues without the user. Use it whenever a teammate stops on a question about how the work should be done, what to prefer, which option to pick or what something means: those are yours to decide. Fill the answers in the order the question asks them, using one of the offered options word for word. Never use it for a credential, a login, an OAuth or MCP sign-in, or a connected account: only the user can supply those, so say one line about what you need with cio_reply_in_chat and leave the card for them.",
+      "Answer the question a teammate's run is waiting on, so the work continues without the user. Use it whenever a teammate stops on a question about how the work should be done, what to prefer, which option to pick or what something means: those are yours to decide. Fill the answers in the order the question asks them, using one of the offered options word for word. A capability the app offered to install is settled the same way, and never by accepting the install: decline it when the work does not need it, or answer in your own words telling the teammate how to finish with what the app already has. Never use it for a credential, a login, an OAuth or MCP sign-in, or a connected account: only the user can supply those, so say one line about what you need with cio_reply_in_chat and leave the card for them.",
     inputSchema: ANSWER_TEAMMATE_INPUT_SCHEMA,
     outputSchema: DON_RESULT_SCHEMA,
     route: '/don-answer-teammate',

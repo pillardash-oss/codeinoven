@@ -41,6 +41,7 @@ import {
 } from '../../../lib/assistant-chat-setup'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { delegationAuthor } from '../chat-engine-don'
+import { teammateAuthor, writeTeammateLine } from '../delegation-lines'
 import { writeAssistantReport, type AssistantReportFile } from '../assistant-report-service'
 import { assistantReportIsTerminal, isAssistantReportThread } from '../../../lib/assistant-reports'
 import type { SessionInfo } from './chat-engine-types'
@@ -272,6 +273,13 @@ export class ChatEngineAssistantAuthoring {
     )
     await finalize()
     broadcastThreadUpdate(thread)
+    // The team grows where the request was made. The hiring is Don's own work, so
+    // the new teammate says in Don's conversation that it exists, what it was
+    // built for and that the waiting request is already with it, before its
+    // instructions are written. The authoring turn below is a dispatched child of
+    // that conversation, so its answer is reported there too and the user never
+    // has to open this thread to find out what was hired.
+    await this.announceRecruitedTeammate(thread, input.assistant.name, input.purpose)
     // The opening turn is the user's, because the authoring contract rides a user
     // turn on an assistant whose knowledge is still missing; its visible half is
     // the app's own line, so the user reads what is happening instead of the
@@ -294,6 +302,48 @@ export class ChatEngineAssistantAuthoring {
       { action: ASSISTANT_RECRUIT_SETUP_ACTION }
     )
     return thread
+  }
+
+  /**
+   * The line a freshly hired teammate speaks in the conversation that asked for it.
+   *
+   * Nobody interviews the user for a hire and nothing about it lives only on the
+   * teammate's own row: the introduction lands under the teammate's own name in
+   * Don's thread, which is where the user asked for the work, so a new teammate is
+   * visible the moment it exists instead of after they go looking for it.
+   *
+   * Best effort: the hire itself has already happened, so a line the app cannot
+   * write must never fail the creation.
+   */
+  private async announceRecruitedTeammate(
+    thread: Thread,
+    name: string,
+    purpose: string
+  ): Promise<void> {
+    const origin = thread.dispatchOrigin
+    if (!origin) return
+    const author = teammateAuthor(thread)
+    if (!author) return
+    const forWhat = purpose.trim()
+    try {
+      await writeTeammateLine(this.host, {
+        author,
+        thread,
+        id: `don-hire-${thread.id}`,
+        projectId: origin.initiatorProjectId,
+        threadId: origin.initiatorThreadId,
+        text: [
+          `I'm ${name.trim() || author.name}. I was built for this: ${forWhat || 'the work you brought'}.`,
+          "I'm writing my instructions now and I'll take the request as soon as they are saved.",
+          `\n\n@thread:${thread.id}`
+        ].join(' ')
+      })
+    } catch (error) {
+      Logger.dev('Hire announcement skipped', {
+        threadId: thread.id,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   /**
