@@ -5,7 +5,6 @@ import { claudeApiRetryKind, claudeResultIssue, claudeSessionLimitIssue } from '
 import {
   CLAUDE_ASYNC_AGENT_LAUNCH_MARKER,
   activeClaudeSubagentParts,
-  appendSubagentOutput,
   findSubagentPart,
   findToolPart,
   latestAssistant,
@@ -167,19 +166,16 @@ export function mapClaudeCodeRecord(
             .filter((text): text is string => Boolean(text))
             .join('\n')
         : undefined
-      // Each forwarded record is one finished message of the sub-agent's own
-      // transcript, so they accumulate: the panel shows the run as it grows
-      // instead of only the newest message.
-      const forwarded = output
-        ? appendSubagentOutput(existing.activity.output, output)
-        : existing.activity.output
+      // The part keeps the message just reported, never the run: the panel
+      // accumulates what it is shown, so a worker nobody is watching writes one
+      // bounded record per message instead of an ever-growing transcript.
       const part: Extract<AgentPart, { type: 'subagent' }> = {
         ...existing,
         activity: {
           ...existing.activity,
           status: 'running',
           modelId: resolvedModelId ?? existing.activity.modelId,
-          ...(forwarded ? { output: forwarded } : {})
+          ...(output ? { output } : {})
         }
       }
       return {

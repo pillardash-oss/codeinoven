@@ -68,43 +68,13 @@ export function claudeSubagentPart(
 }
 
 /**
- * Largest live transcript a sub-agent part carries while it runs.
+ * The forwarded text of a sub-agent's newest message.
  *
- * A sub-agent's forwarded text is kept so the panel can show the run as it
- * happens, but the part travels to the durable stream log and the mirror on
- * every update, whether or not anyone opened that panel, so the window is
- * bounded: the newest text is what a reader is looking at, and the final result
- * still replaces the tail when the worker settles.
+ * `--forward-subagent-text` delivers every sub-agent assistant message on the
+ * parent stream, but the part keeps only the message it just reported: the
+ * transcript is accumulated by the panel while it is open, because a run nobody
+ * is watching must cost one bounded record, never a growing one.
  */
-export const MAX_SUBAGENT_STREAM_CHARS = 32 * 1024
-
-const TRIM_MARKER = '\n\n[… earlier sub-agent output trimmed …]\n'
-
-/**
- * The forwarded text of a sub-agent's live messages, accumulated.
- *
- * `--forward-subagent-text` delivers every sub-agent assistant message as its
- * own record, one after another, so the part's output is a growing transcript.
- * Replacing it would keep only the newest message, which is what left the
- * sub-agent panel holding one paragraph of a long run.
- */
-export function appendSubagentOutput(previous: string | undefined, chunk: string): string {
-  const text = chunk.trim()
-  const before = previous?.trimEnd() ?? ''
-  if (!text) return before
-  if (!before) return boundSubagentStream(text)
-  // A record replayed by a reconnect must not double the paragraph it repeats.
-  if (before.endsWith(text)) return before
-  return boundSubagentStream(`${before}\n\n${text}`)
-}
-
-/** Keep a live sub-agent transcript inside its window, dropping the oldest text. */
-function boundSubagentStream(text: string): string {
-  if (text.length <= MAX_SUBAGENT_STREAM_CHARS) return text
-  const tail = text.slice(text.length - MAX_SUBAGENT_STREAM_CHARS)
-  return `${TRIM_MARKER}${tail}`
-}
-
 export function partFromBlock(
   messageId: string,
   block: Record<string, unknown>,

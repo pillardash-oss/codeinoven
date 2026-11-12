@@ -26,6 +26,7 @@
   import SubagentSessionViewLoadState from './SubagentSessionViewLoadState.svelte'
   import SubagentSessionViewNotices from './SubagentSessionViewNotices.svelte'
   import {
+    appendForwardedSubagentText,
     applyStreamedDelta,
     catalogModelLabel,
     catalogProviderName,
@@ -87,10 +88,15 @@
   const sessionId = $derived(tab.activity.childSessionId)
   /** A harness that names no child session (Claude Code forwards a sub-agent's
    *  messages into the parent stream instead) has no transcript to load: the
-   *  text on the part is the only record of the run, and it grows as the
-   *  worker speaks. The panel therefore renders it live rather than waiting for
-   *  the run to settle. */
+   *  panel renders the text it is handed, and builds the run itself. */
   const parentForwarded = $derived(!sessionId)
+  /** The run this panel has watched arrive. Nothing accumulates for a worker
+   *  nobody is looking at, so an unopened panel costs the main process one
+   *  bounded record per message instead of an ever-growing transcript.
+   *  The buffer is plain because the effect below both reads and writes it: a
+   *  reactive buffer would make the append feed its own run. */
+  let forwardedBuffer = ''
+  let forwardedStream = $state('')
   const fallbackIssue = $derived(subagentFallbackIssue(tab.activity))
   const visibleProviderStatus = $derived(subagentProviderStatus(liveStatus, fallbackIssue))
   const effectiveStatus = $derived(
@@ -138,9 +144,21 @@
   const runParts = $derived(latestWorkingTraceParts(sessionRun.parts))
   const showWorkingTrace = $derived(shouldMountWorkingTrace(runParts.length, busy))
   const finalOutput = $derived(tab.activity.output?.trim() ?? '')
+  // Each forwarded message replaces the one before it on the part, so the run
+  // the panel shows is the sum of what it watched arrive.
+  $effect(() => {
+    if (!parentForwarded) return
+    const chunk = finalOutput
+    if (!chunk) return
+    const next = appendForwardedSubagentText(forwardedBuffer, chunk)
+    if (next === forwardedBuffer) return
+    forwardedBuffer = next
+    forwardedStream = next
+  })
+  const forwardedOutput = $derived(parentForwarded ? forwardedStream : finalOutput)
   const showCapturedOutput = $derived(
     shouldShowCapturedOutput(
-      finalOutput,
+      forwardedOutput,
       parentForwarded ? false : busy,
       loading,
       loadError,
@@ -450,7 +468,7 @@
 
       {#if showCapturedOutput}
         <div class="text-xs text-foreground">
-          <DeferredMarkdownView text={finalOutput} />
+          <DeferredMarkdownView text={forwardedOutput} />
         </div>
       {:else if !sessionId && !loading && !loadError}
         {#if effectiveStatus === 'completed' || effectiveStatus === 'error'}
