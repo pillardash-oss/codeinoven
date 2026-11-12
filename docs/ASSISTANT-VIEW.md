@@ -1127,6 +1127,35 @@ stored by an older build is folded into the knowledge at startup
   `GATEWAY_UTILITY_ID_PREFIX`), Codex sets the `AbortSignal` from the endpoint,
   and the Pi extension waits at least the published value.
 
+### A hired teammate arrives complete
+
+A teammate the orchestrator hires is the one assistant nobody interviews. Don hires
+while the user is talking to it, in a request it is already answering, and a hire
+happens on a thread the user never opened: an authoring interview there would draw a
+recap card in a conversation they are not reading, and a teammate whose knowledge is
+never saved cannot run at all, because `assistantConversation` treats every thread of
+an assistant with incomplete knowledge as an interview and `assistantCanDelegate`
+refuses to dispatch to it.
+
+So the knowledge is written when the teammate is created, not by a conversation.
+`cio_create_assistant` takes the name, the purpose, the waiting request and the
+instructions Don itself writes, and `recruitedAssistantKnowledge`
+(`src/lib/assistant-recruit.ts`) turns that brief into the document the run contract
+reads as the assistant's instruction set: a `Personality` section first, what it is
+for, the work it was hired for, Don's own instructions, then the shared behavior that
+says to decide the work itself and to ask only for a credential or a sign-in. The
+teammate is complete the moment the call returns, so Don dispatches the waiting
+request to it in the same turn and the dispatch is a real run.
+
+Nothing about the hire is broadcast anywhere but Don's own conversation. The teammate
+introduces itself there under its own name the moment its thread exists
+(`announceRecruitedTeammate`), its Getting started thread opens with one app-owned
+line from it and no model turn (`writeRecruitedAssistantIntro`), and any question its
+run stops on is routed into Don's thread for Don to settle
+(`don-question-router.ts`). Only a credential, an OAuth or MCP sign-in, or a
+connected account is left on a card for the user. A hired teammate has no authoring
+card to answer, because it was never asked anything.
+
 ## Assistant panel
 
 `AssistantPanel.svelte` is the assistant's whole surface, docked in the right
