@@ -54,8 +54,18 @@
     actions.length * ACTION_ROW + Math.max(0, actions.length - 1) * ROW_GAP
   )
   const rowWidth = $derived(stackHeight)
-  /** The block folds from one row per action to a single row of marks. */
-  const blockHeight = $derived(ACTION_ROW + (stackHeight - ACTION_ROW) * (1 - progress))
+  /**
+   * The block folds from one row per action to a single row of marks.
+   *
+   * It follows the last action's own slice, never the raw scroll: the block must
+   * give up a row exactly when the action that left it has arrived, otherwise the
+   * tabs climb into a row an action is still standing in.
+   */
+  const blockHeight = $derived(
+    ACTION_ROW +
+      (stackHeight - ACTION_ROW) *
+        (1 - (actions.length > 0 ? actionProgress(actions.length - 1, actions.length) : progress))
+  )
 
   /** One action's box, travelling from its own line in the stack to its slot in
    *  the centred row above the tabs: top, left and width all interpolate, so a
