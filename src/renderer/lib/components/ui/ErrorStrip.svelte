@@ -83,6 +83,10 @@
     foldLabel?: string
     primary?: ErrorStripAction
     onDismiss?: () => void
+    /** Tooltip and accessible name of Dismiss when it means more than dismissing. */
+    dismissTitle?: string
+    /** Disables Dismiss while the card's own work is in flight. */
+    dismissDisabled?: boolean
     /** The body, below the message. */
     children?: Snippet
     /** Falsy actions beyond Dismiss and Raw error, at the left of the footer. */
@@ -111,6 +115,8 @@
     foldLabel,
     primary,
     onDismiss,
+    dismissTitle = 'Dismiss this error',
+    dismissDisabled = false,
     children,
     footerStart,
     footerEnd,
@@ -122,13 +128,12 @@
   let rawOpen = $state(false)
   let copied = $state(false)
 
-  const TONE_CLASS: Record<
-    ErrorStripTone,
-    { frame: string; wash: string; head: 'danger' | 'warn' | 'info' }
-  > = {
-    danger: { frame: 'border-danger/40! border-l-danger!', wash: 'bg-danger/10', head: 'danger' },
-    warning: { frame: 'border-warning/40! border-l-warning!', wash: 'bg-warning/10', head: 'warn' },
-    info: { frame: 'border-info/40! border-l-info!', wash: 'bg-info/10', head: 'info' }
+  // The frame and the header wash carry the status colour. Icons and the
+  // headline stay in the card's own ink: the card is already the colour.
+  const TONE_CLASS: Record<ErrorStripTone, { frame: string; wash: string }> = {
+    danger: { frame: 'border-danger/40! border-l-danger!', wash: 'bg-danger/10' },
+    warning: { frame: 'border-warning/40! border-l-warning!', wash: 'bg-warning/10' },
+    info: { frame: 'border-info/40! border-l-info!', wash: 'bg-info/10' }
   }
   const toneClass = $derived(TONE_CLASS[tone])
 
@@ -157,7 +162,6 @@
       {meta}
       bind:folded
       foldLabel={foldLabel ?? title}
-      tone={toneClass.head}
       class={toneClass.wash}
     >
       {#snippet actions()}
@@ -215,9 +219,10 @@
             {#if onDismiss}
               <CardButton
                 label="Dismiss"
-                title="Dismiss this error"
+                title={dismissTitle}
                 icon={CioClose}
                 variant="ghost"
+                disabled={dismissDisabled}
                 onclick={onDismiss}
               />
             {/if}
