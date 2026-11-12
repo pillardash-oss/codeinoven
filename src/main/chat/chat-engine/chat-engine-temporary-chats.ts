@@ -142,14 +142,39 @@ export class ChatEngineTemporaryChats {
   }
 
   /** Refuse a mid-conversation harness or account switch, on the same terms. */
-  private async assertBoundIdentity(
+  /** Whether the bound session still runs on the identity these settings name. */
+  private async identityMatches(
     temporary: TemporaryChatSession,
     settings: ThreadSettings
-  ): Promise<void> {
+  ): Promise<boolean> {
     const bound = await this.boundIdentity(settings)
-    if (temporary.driverId !== bound.driverId || temporary.accountId !== bound.accountId) {
-      throw new Error('The temporary chat harness or account cannot change after its first message')
-    }
+    return temporary.driverId === bound.driverId && temporary.accountId === bound.accountId
+  }
+
+  /**
+   * Retire a side chat's session so the next turn binds the model, harness or
+   * account the user just picked.
+   *
+   * A session cannot change identity in place, exactly as a thread's cannot, and
+   * that must never trap the user on a model that expired mid-chat. The
+   * conversation so far is kept as the display history and handed to the
+   * replacement session as its hidden context, the same recap a history edit
+   * already produces.
+   */
+  private async retireForRebind(temporary: TemporaryChatSession): Promise<void> {
+    const conversation = await this.host
+      .loadTemporaryConversation(temporary.id)
+      .catch(() => [] as AgentMessage[])
+    const pendingContext = conversation.length > 0 ? formatHistoryRecap(conversation) : ''
+    await this.destroyTemporaryChat(temporary.id)
+    if (conversation.length === 0 && !pendingContext) return
+    this.host.state.temporaryChatDisplayMessages.set(temporary.id, {
+      records: conversation.map((message) => ({
+        message,
+        references: message.references ?? []
+      })),
+      ...(pendingContext ? { pendingContext } : {})
+    })
   }
 
   async sendTemporaryPrompt(
@@ -220,6 +245,14 @@ export class ChatEngineTemporaryChats {
       : ''
 
     let temporary = this.host.state.temporaryChats.get(temporaryChatId)
+    // Switching model, harness or account mid-chat is allowed exactly as it is in
+    // a thread, and it becomes a different session behind the same conversation.
+    // A pick that crossed harnesses used to be refused after the first message,
+    // which trapped the user on a model whose session had just run out.
+    if (temporary && !(await this.identityMatches(temporary, settings))) {
+      await this.retireForRebind(temporary)
+      temporary = undefined
+    }
     if (!temporary) {
       const thread = await this.host.threadManager.getThread(projectId, threadId)
       if (!thread) throw new Error(`Thread not found: ${threadId}`)
@@ -288,7 +321,6 @@ export class ChatEngineTemporaryChats {
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('Temporary chat does not belong to this thread')
     }
-    await this.assertBoundIdentity(temporary, settings)
     this.refreshTemporaryChatExpiry(temporary)
     this.host.broadcast({
       type: 'temporary-chat.started',
@@ -500,7 +532,26 @@ export class ChatEngineTemporaryChats {
     if (temporary.projectId !== projectId || temporary.threadId !== threadId) {
       throw new Error('Temporary chat does not belong to this thread')
     }
-    await this.assertBoundIdentity(temporary, settings)
+    if (!(await this.identityMatches(temporary, settings))) {
+      // The user picked another model, harness or account while this turn was
+      // running. That session cannot take the message, so the side chat rebinds
+      // and the message arrives as the first turn of the new session instead of
+      // being refused: a side chat is a conversation, not a session.
+      await this.retireForRebind(temporary)
+      await this.sendTemporaryPrompt(
+        projectId,
+        threadId,
+        temporaryChatId,
+        settings,
+        text,
+        validatedAttachments,
+        validatedReferences,
+        undefined,
+        userMessageId,
+        safeDisplayText
+      )
+      return
+    }
     if (this.host.sessionStatuses.get(temporary.sessionId)?.state !== 'working') {
       throw new Error('The quick chat turn finished before the steer message could be delivered')
     }
