@@ -148,7 +148,7 @@
     "bits-ui": "^2.20.2",
     "builder-util": "26.15.3",
     "dompurify": "^3.4.17",
-    "electron": "^45.3.0",
+    "electron": "^45.3.1",
     "electron-builder": "^26.18.0",
     "electron-vite": "^6.0.0",
     "esbuild": "^0.28.2",
@@ -177,6 +177,7 @@
     "vitest": "^5.0.5"
   },
   "patchedDependencies": {
-    "svelte-sonner@1.2.1": "patches/svelte-sonner@1.2.1.patch"
+    "svelte-sonner@1.2.1": "patches/svelte-sonner@1.2.1.patch",
+    "ghostty-web@0.4.0": "patches/ghostty-web@0.4.0.patch"
   }
 }
