@@ -169,7 +169,10 @@ export class BrowserOverlayWindow {
     // above every pixel of the app and competes for the cursor over all of them
     // (`forwardsMouseMoves`). It is hidden the moment another application comes
     // forward, so an always-on-top overlay can never float over one.
-    this.parent.on('focus', () => this.showWhileWarm())
+    this.parent.on('focus', () => {
+      this.showWhileWarm()
+      this.restoreModalFocus()
+    })
     this.parent.on('blur', () => {
       setTimeout(() => {
         if (this.parent.isDestroyed()) return
@@ -194,6 +197,30 @@ export class BrowserOverlayWindow {
     if (!popup || popup.isDestroyed()) return
     if (!this.hasContent()) return
     this.reveal(popup)
+  }
+
+  /**
+   * Hand the keyboard back to the modal this window is drawing.
+   *
+   * Leaving the app hides this overlay (`hideWhileInactive`), and it is always
+   * shown again inactive, because a card must never take the keyboard from the
+   * page beneath it. A modal is the one exception: while one is open it owns the
+   * app, so returning to the app has to return to it. Without this the panel was
+   * still on screen with its field unfocused, because the app document behind it
+   * had been handed the keyboard: the user came back to a search field that
+   * swallowed nothing and had to click it again.
+   *
+   * The handover waits a turn, like `restorePageFocus`: the reactivated window
+   * settles its own focus after the event and would otherwise win the race.
+   */
+  private restoreModalFocus(): void {
+    const modal = [...this.docks.values()].findLast((dock) => dock.modal)
+    if (!modal) return
+    const id = modal.id
+    setImmediate(() => {
+      if (!this.docks.get(id)?.modal) return
+      this.focusDock(id)
+    })
   }
 
   /**
