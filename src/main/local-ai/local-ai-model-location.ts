@@ -14,6 +14,7 @@
  * nothing about it and the Hugging Face cache layout is read instead.
  */
 import { readFile, readdir, stat } from 'node:fs/promises'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { LocalAiModelLocation, LocalAiRuntimeId } from '../../lib/llama-cpp'
@@ -110,6 +111,49 @@ async function isCompleteSnapshot(directory: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Whether a repository's weights are already complete on this machine.
+ *
+ * Synchronous on purpose: the close gate asks this while it builds the prompt it
+ * is about to send, and a model that is only being loaded must not be reported as
+ * a download that a close would throw away. Only a handful of directory reads, no
+ * file is opened.
+ */
+export function mlxModelCached(reference: string): boolean {
+  const repository = reference.trim()
+  const separator = repository.indexOf('/')
+  if (separator < 1 || separator === repository.length - 1) return false
+  const folder = `models--${repository.slice(0, separator)}--${repository.slice(separator + 1)}`
+  for (const root of huggingFaceCacheRoots()) {
+    const repositoryDirectory = join(root, folder)
+    const snapshotsDirectory = join(repositoryDirectory, 'snapshots')
+    let snapshots: string[]
+    try {
+      snapshots = readdirSync(snapshotsDirectory)
+    } catch {
+      continue
+    }
+    let main: string
+    try {
+      main = readFileSync(join(repositoryDirectory, 'refs', 'main'), 'utf8').trim()
+    } catch {
+      main = ''
+    }
+    for (const snapshot of main && snapshots.includes(main) ? [main, ...snapshots] : snapshots) {
+      const directory = join(snapshotsDirectory, snapshot)
+      if (!existsSync(join(directory, 'config.json'))) continue
+      try {
+        if (readdirSync(directory).some((entry) => /\.(?:safetensors|npz)$/iu.test(entry))) {
+          return true
+        }
+      } catch {
+        continue
+      }
+    }
+  }
+  return false
 }
 
 /** The commit a repository's `main` ref points at, empty when it names none. */

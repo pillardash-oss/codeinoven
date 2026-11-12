@@ -249,7 +249,8 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
       !park &&
       payload.projects.length === 0 &&
       files.length === 0 &&
-      payload.downloads.length === 0
+      payload.downloads.length === 0 &&
+      payload.localAiDownloads.length === 0
     ) {
       void deps.confirmForceClose()
       return
@@ -258,6 +259,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
       projects: payload.projects,
       files,
       downloads: payload.downloads,
+      localAiDownloads: payload.localAiDownloads,
       park
     })
   })
