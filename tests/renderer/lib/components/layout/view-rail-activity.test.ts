@@ -23,8 +23,7 @@ vi.mock('$lib/ipc.svelte', () => ({ invoke: vi.fn(), subscribe: vi.fn() }))
 vi.mock('$lib/stores/notification-panel.svelte', () => ({
   notificationPanelState: {
     attentionRailSummary: () => rail.attention,
-    unreadRailSummary: () => rail.unread,
-    assistantColor: null
+    unreadRailSummary: () => rail.unread
   }
 }))
 
@@ -162,6 +161,22 @@ describe('the rail badge for a view', () => {
       NO_TRANSFERS
     )
     expect(badges.unread?.count).toBe(2)
+  })
+
+  it('wears the canonical unread tone on the assistant item, never the space brand colour', () => {
+    rail.unread = {
+      count: 1,
+      threadIds: ['thread-1'],
+      label: '1 unread assistant',
+      colors: ['#8b5cf6']
+    }
+    const badges = viewBadgesFor(
+      'assistant',
+      null,
+      counts({ unread: 1, unreadThreadIds: new Set(['thread-1']) }, 'assistant'),
+      NO_TRANSFERS
+    )
+    expect(badges.unread?.colors).toEqual(['var(--color-thread-unread)'])
   })
 
   it('keeps the project badge on one option only', () => {
