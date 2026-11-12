@@ -4,7 +4,7 @@ import {
   broadcastAssistantCheckpointChanged,
   broadcastAssistantsChanged
 } from '../../scheduler/assistant-events'
-import { broadcastThreadUpdate } from '../thread-events'
+import { broadcastThreadMessagesChanged, broadcastThreadUpdate } from '../thread-events'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import {
   ASSISTANT_AUTHORING_DECISION_LIMIT,
@@ -35,10 +35,7 @@ import {
   isAssistantSetupThread,
   assistantKnowledgeComplete
 } from '../../../lib/types'
-import {
-  ASSISTANT_RECRUIT_SETUP_ACTION,
-  assistantRecruitSetupPrompt
-} from '../../../lib/assistant-chat-setup'
+import { recruitedAssistantIntro } from '../../../lib/assistant-recruit'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { delegationAuthor } from '../chat-engine-don'
 import { teammateAuthor, writeTeammateLine } from '../delegation-lines'
@@ -199,17 +196,18 @@ export class ChatEngineAssistantAuthoring {
   }
 
   /**
-   * Open the conversation that writes a recruited teammate's instructions.
+   * Open the Getting started conversation of a recruited teammate.
    *
    * This is the orchestrator building its own team. The assistant row is created by
-   * the caller, which owns the directory, and this opens the other half: the pinned
-   * Getting started thread and the app-owned turn that starts the interview with
-   * the request that caused the hire already in it.
+   * the caller, which owns the directory, and carries the instruction set Don wrote
+   * for it, so nothing is left to interview: the teammate is complete the moment it
+   * exists and the work Don dispatches to it is a real run.
    *
-   * Nothing is known about the assistant yet, which is what makes this thread the
-   * authoring interview: the contract rides the turn exactly as it does for the
-   * other two create paths, and the thread inherits the model of the conversation
-   * the hire came from, so the teammate can answer the first time it is opened.
+   * This opens the other half: the pinned Getting started thread that hosts the
+   * teammate's knowledge for later revisions, with one app-owned line from the
+   * teammate so the thread is never blank. No model turn is spent here, because a
+   * hire happens on a thread the user never opened: an authoring interview there
+   * would ask a card nobody answers and leave a teammate that can never run.
    */
   async openRecruitedAssistantConversation(input: {
     assistant: Assistant
@@ -275,33 +273,62 @@ export class ChatEngineAssistantAuthoring {
     broadcastThreadUpdate(thread)
     // The team grows where the request was made. The hiring is Don's own work, so
     // the new teammate says in Don's conversation that it exists, what it was
-    // built for and that the waiting request is already with it, before its
-    // instructions are written. The authoring turn below is a dispatched child of
-    // that conversation, so its answer is reported there too and the user never
-    // has to open this thread to find out what was hired.
+    // built for and that the waiting request is already with it. Nothing about the
+    // hire is ever left on this thread for the user to answer.
     await this.announceRecruitedTeammate(thread, input.assistant.name, input.purpose)
-    // The opening turn is the user's, because the authoring contract rides a user
-    // turn on an assistant whose knowledge is still missing; its visible half is
-    // the app's own line, so the user reads what is happening instead of the
-    // instruction.
-    await this.host.sendPrompt(
-      ASSISTANT_SPACE_ID,
-      thread.id,
-      settings,
-      assistantRecruitSetupPrompt(
-        { name: input.assistant.name, purpose: input.purpose },
-        input.request
-      ),
-      [],
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      'user',
-      { action: ASSISTANT_RECRUIT_SETUP_ACTION }
-    )
+    // Its own Getting started thread still opens with a line from it, so the row is
+    // never blank when the user later opens it to revise the knowledge. The line is
+    // written by the app, not by a turn, so a hire costs no tokens before the work
+    // it was hired for.
+    await this.writeRecruitedAssistantIntro(thread, input)
     return thread
+  }
+
+  /**
+   * The one line a recruited teammate's own Getting started thread opens with.
+   *
+   * The thread is the teammate's knowledge host, so the user can find it and
+   * revise it later. It is app-owned and written once: it explains what the
+   * teammate is for without spending a model turn on a conversation nobody asked
+   * for.
+   */
+  private async writeRecruitedAssistantIntro(
+    thread: Thread,
+    input: { assistant: Assistant; purpose: string; request?: string }
+  ): Promise<void> {
+    const author = delegationAuthor(input.assistant)
+    const id = `${thread.id}-intro`
+    try {
+      await this.host.threadManager.upsertMessages(ASSISTANT_SPACE_ID, thread.id, [
+        {
+          id,
+          role: 'assistant',
+          origin: 'assistant',
+          visibility: 'conversation',
+          author: { ...author, projectId: ASSISTANT_SPACE_ID, threadId: thread.id },
+          parts: [
+            {
+              type: 'text',
+              id: `${id}-text`,
+              messageID: id,
+              text: recruitedAssistantIntro({
+                name: input.assistant.name,
+                purpose: input.purpose,
+                ...(input.request ? { request: input.request } : {})
+              })
+            }
+          ],
+          createdAt: Date.now(),
+          completedAt: Date.now()
+        }
+      ])
+      broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, thread.id)
+    } catch (error) {
+      Logger.dev('Recruited assistant intro skipped', {
+        threadId: thread.id,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
   }
 
   /**

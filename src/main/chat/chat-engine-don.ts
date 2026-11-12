@@ -107,7 +107,7 @@ export interface DonRuntime {
 export interface DonRecruitedAssistant {
   assistantId: string
   name: string
-  /** The Getting started conversation the request was carried into. */
+  /** The Getting started conversation that belongs to it. */
   threadId: string
 }
 
@@ -124,13 +124,13 @@ export interface DonDeps {
   readUserName: () => Promise<string>
   writeUserName: (name: string) => Promise<string>
   /**
-   * Hire the teammate a request needs: create it, then open its Getting started
-   * conversation with the request already in it. The chat engine owns assistant
-   * rows, thread creation and the turn lifecycle, so the executor only names what
-   * it wants and forwards the turn it came from.
+   * Hire the teammate a request needs: create it with the instruction set Don
+   * wrote, then open its Getting started conversation. The chat engine owns
+   * assistant rows, thread creation and the turn lifecycle, so the executor only
+   * names what it wants and forwards the turn it came from.
    */
   createAssistant: (
-    input: { name: string; purpose: string; request?: string },
+    input: { name: string; purpose: string; request?: string; instructions?: string },
     context: { projectId: string; threadId: string }
   ) => Promise<DonRecruitedAssistant>
   /**
@@ -224,8 +224,15 @@ export function createDonExecutor(deps: DonDeps): DonExecutor {
         throw new Error('A new assistant needs a name and what it is for')
       }
       const request = typeof input['request'] === 'string' ? input['request'].trim() : ''
+      const instructions =
+        typeof input['instructions'] === 'string' ? input['instructions'].trim() : ''
       const created = await deps.createAssistant(
-        { name, purpose, ...(request.length > 0 ? { request } : {}) },
+        {
+          name,
+          purpose,
+          ...(request.length > 0 ? { request } : {}),
+          ...(instructions.length > 0 ? { instructions } : {})
+        },
         { projectId: context.projectId, threadId: context.threadId }
       )
       return {
@@ -233,7 +240,7 @@ export function createDonExecutor(deps: DonDeps): DonExecutor {
         assistant: { id: created.assistantId, name: created.name },
         threadId: created.threadId,
         projectId: ASSISTANT_SPACE_ID,
-        note: `The new assistant is being set up by the app in its own Getting started conversation, with the request already with it. Say one short line naming who was created and that the work is with them. Do not do the work yourself, and do not wait for it.`
+        note: `The new assistant exists with the instructions you wrote, and its request is already with it. Anything it stops on reaches this conversation for you to answer, except a credential, which is the user's. Dispatch the waiting work to it now with cio_orchestrate_dispatch, then say one short line naming who was created and that the work is with them. Do not do the work yourself.`
       }
     }
     if (operation === 'answer-teammate') {

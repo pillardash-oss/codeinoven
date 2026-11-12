@@ -119,6 +119,11 @@ async function setup(knowledge: string): Promise<{
   return { engine, thread, checkpoints: new AssistantAuthoringCheckpoints(storage) }
 }
 
+/** The visible text of one stored message. */
+function messageText(message: AgentMessage | undefined): string {
+  return (message?.parts ?? []).map((part) => (part.type === 'text' ? part.text : '')).join('')
+}
+
 /** One stored question card, shaped as the engine persists an answer. */
 function answeredQuestion(body: string): AgentMessage {
   const id = 'question-answer-0123456789abcdef01234567'
@@ -252,7 +257,7 @@ describe('hiring a teammate from a conversation', () => {
       title: 'Don',
       titleSource: 'manual'
     })
-    vi.spyOn(engine, 'sendPrompt').mockResolvedValue({
+    const sendPrompt = vi.spyOn(engine, 'sendPrompt').mockResolvedValue({
       id: 'msg-hire',
       role: 'user',
       parts: [],
@@ -278,10 +283,21 @@ describe('hiring a teammate from a conversation', () => {
     const messages = await engine.threadManager.loadMessageRecords(ASSISTANT_SPACE_ID, don.id)
     const announced = messages.find((message) => message.id === `don-hire-${hired.id}`)
     expect(announced?.author?.name).toBe('Slack latest info')
-    const text = announced?.parts.map((part) => (part.type === 'text' ? part.text : '')).join('')
-    expect(text).toContain('Watches the reporting inbox')
-    expect(text).toContain(`@thread:${hired.id}`)
+    expect(messageText(announced)).toContain('Watches the reporting inbox')
+    expect(messageText(announced)).toContain(`@thread:${hired.id}`)
     // The hiring is never a questionnaire on a thread the user never opened.
-    expect(text).not.toContain('?')
+    expect(messageText(announced)).not.toContain('?')
+
+    // Its own Getting started thread opens with a line from it, written by the app,
+    // so the knowledge host the user may later revise is never a blank thread.
+    const own = await engine.threadManager.loadMessageRecords(ASSISTANT_SPACE_ID, hired.id)
+    const intro = own.find((message) => message.id === `${hired.id}-intro`)
+    expect(intro?.author?.name).toBe('Slack latest info')
+    expect(messageText(intro)).toContain('Watches the reporting inbox')
+
+    // No authoring interview is spent on a hire: the knowledge is written before
+    // the thread exists, so a hire costs no model turn before the work it was
+    // hired for.
+    expect(sendPrompt).not.toHaveBeenCalled()
   })
 })

@@ -27,6 +27,7 @@ import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
+import { recruitedAssistantKnowledge } from '../../lib/assistant-recruit'
 import { actionEnvironmentDirectories } from '../../lib/project-env'
 import { createDonExecutor, delegationAuthor, DonDelegations } from '../chat/chat-engine-don'
 import { answerTeammateQuestion, routeTeammateQuestion } from '../chat/don-question-router'
@@ -675,6 +676,17 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           const assistant = assistantManager.createAssistant({
             name: input.name,
             description: input.purpose,
+            // The teammate arrives complete. Don is the one that hires it, so Don
+            // is the one that answers everything an interview would have asked:
+            // the name, what it is for and how it works are all in the brief, and
+            // the knowledge written from it is what makes the very next dispatched
+            // run a real run instead of another setup pass.
+            knowledge: recruitedAssistantKnowledge({
+              name: input.name,
+              purpose: input.purpose,
+              ...(input.request ? { request: input.request } : {}),
+              ...(input.instructions ? { instructions: input.instructions } : {})
+            }),
             // A hire is not a schedule: the clock is agreed with the teammate
             // itself later, from its own panel.
             agents: withDefaultAssistantPrimary({ fallbacks: [] }, selection),

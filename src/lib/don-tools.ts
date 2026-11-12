@@ -107,7 +107,12 @@ const CREATE_ASSISTANT_INPUT_SCHEMA: Record<string, unknown> = {
     request: {
       type: 'string',
       description:
-        "The work that is waiting for it, in the user's own words and with the detail they gave. It is carried into the new assistant's first conversation, so nothing has to be explained twice."
+        "The work that is waiting for it, in the user's own words and with the detail they gave. It is carried into the new assistant's instructions and its first task, so nothing has to be explained twice."
+    },
+    instructions: {
+      type: 'string',
+      description:
+        'The instruction set you write for the teammate, in Markdown: what it is for, what it should take on, how it should answer, and anything specific about this work. Nobody interviews the user for a hire, so this is where the teammate\u2019s behavior comes from. Open it with a "Personality" section holding how it should behave; leaving it out gives the teammate a plain baseline you can revise later.'
     }
   },
   required: ['name', 'purpose'],
@@ -171,7 +176,7 @@ export const DON_TOOLS: GatewayToolDefinition[] = [
   {
     name: DON_CREATE_ASSISTANT_TOOL_NAME,
     description:
-      'Create the teammate this request needs, and only after the roster has answered. Read cio_orchestrate_targets on this turn and check every assistant first: hire only when the request is assistant-category work and not one assistant fits it, never when one plausibly fits, never for codebase work that belongs to a project, and never when the user has asked you not to create assistants. It gives the assistant the name and purpose you chose, and the new teammate writes its own instructions and takes the waiting request without interviewing anyone. The teammate introduces itself in this conversation under its own name the moment it exists, and anything it needs to ask reaches this conversation for you to settle. Say one line afterwards naming who was created and that the work is already with them.',
+      'Create the teammate this request needs, and only after the roster has answered. Read cio_orchestrate_targets on this turn and check every assistant first: hire only when the request is assistant-category work and not one assistant fits it, never when one plausibly fits, never for codebase work that belongs to a project, and never when the user has asked you not to create assistants. You give it the name, the purpose and its instruction set, and the request it was hired for, so it arrives ready and never interviews the person. Nothing about the hire ever interrupts them: it introduces itself in this conversation under its own name, and anything it needs to ask reaches this conversation for you to settle. After it is created, dispatch the waiting request to it in this same turn with cio_orchestrate_dispatch, then say one line naming who was created and that the work is with them.',
     inputSchema: CREATE_ASSISTANT_INPUT_SCHEMA,
     outputSchema: DON_RESULT_SCHEMA,
     route: '/don-create-assistant',
