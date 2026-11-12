@@ -30,3 +30,63 @@ export function unmanagedCuaShellReason(
   if (!direct.test(command) && !subprocess) return null
   return 'Not executed: direct cua-driver automation bypasses the app-owned cursor session and cleanup. Use the app-managed computer-use utility or native computer-use tools. Reuse its session; do not create helper scripts or random session names. If unavailable, report the blocker.'
 }
+
+/**
+ * The one process kill this app allows, and everything it refuses.
+ *
+ * A server belongs to whoever started it, and the user runs servers (dev
+ * servers most of all) outside the app. An agent that frees a port with
+ * `lsof -ti:5173 | xargs kill`, `pkill -f vite` or `killall node` reliably
+ * kills servers it never started, including the user's, so those commands are
+ * refused outright: they discover their target at run time and can never prove
+ * ownership. Only a literal pid can, so the agent must pass the pid it captured
+ * when it started that process itself.
+ *
+ * Kept self-contained so Pi embeds the same implementation in its generated
+ * extension, and returned as a reason rather than a permission card so Full
+ * Access cannot auto-approve it.
+ */
+export function unmanagedProcessKillReason(
+  toolName: string,
+  input: Record<string, unknown>
+): string | null {
+  if (!['bash', 'powershell', 'cmd'].includes(toolName)) return null
+  const command = typeof input['command'] === 'string' ? input['command'] : ''
+  if (!command.trim()) return null
+  const refused =
+    'Not executed: this command stops a process by name, by port, by pattern, or by a pid it looks up at run time, so it can hit a server or process this session never started. Kill only a pid you captured yourself when you started that process, for example "kill 48213". If you did not capture a pid, leave the process running and report it, and if a port is busy start your own server on another port instead of freeing it.'
+  // Name-, pattern- and port-matching killers: pkill, killall, xkill, and
+  // fuser's kill flag, which resolves whatever holds a port.
+  if (/\b(?:pkill|killall|xkill)\b/u.test(command)) return refused
+  if (/\bfuser\b[^\n]*\s-[a-zA-Z]*k/u.test(command)) return refused
+  if (
+    /\bStop-Process\b/iu.test(command) &&
+    (/\|\s*Stop-Process/iu.test(command) ||
+      /-(?:Name|ProcessName|InputObject)\b/iu.test(command) ||
+      /\$\w+\.(?:Id|ProcessId)/iu.test(command))
+  )
+    return refused
+  // Every `kill` command word, whether it starts the line, follows a pipe into
+  // xargs, or sits behind sudo/exec/env/nohup.
+  const killCommand =
+    /(?:^[ \t]*|[;&|(][ \t]*|\b(?:xargs|sudo|exec|env|nohup|setsid|time)\b[ \t]+)kill\b([^;&|\n]*)/gu
+  let matched = false
+  for (const match of command.matchAll(killCommand)) {
+    matched = true
+    const args = (match[1] ?? '').trim()
+    // A runtime lookup cannot prove which process it reaches.
+    if (/[$`><*[\]{}]/u.test(args) || /%\d/u.test(args)) return refused
+    const targets = args.split(/\s+/u).filter((token) => !/^--?[A-Za-z0-9]+$/u.test(token))
+    if (targets.length === 0) return refused
+    for (const target of targets) {
+      if (!/^[1-9]\d*$/u.test(target)) return refused
+    }
+  }
+  // A kill this parse never reached (a nested shell, an interpreter one-liner,
+  // a lookup piped into some other helper) still resolves its target at run
+  // time, so a command that both looks one up and kills gets the same answer.
+  const runtimeLookup =
+    /\b(?:lsof|pgrep|pidof|fuser|pstree|ps|ss|netstat|xargs|jobs)\b|\$\(|`/u.test(command)
+  if (!matched && runtimeLookup && /\bkill\b/u.test(command)) return refused
+  return null
+}
