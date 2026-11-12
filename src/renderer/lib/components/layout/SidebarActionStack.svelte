@@ -86,7 +86,11 @@
 <div class="relative w-full" style="height: {blockHeight}px">
   {#each actions as action, index (action.id)}
     {@const ActionIcon = action.icon}
-    <div class="absolute overflow-hidden" style={styleFor(index)} data-panel-action={action.id}>
+    <div
+      class="action-fold absolute overflow-hidden"
+      style={styleFor(index)}
+      data-panel-action={action.id}
+    >
       {#if action.component}
         {@const ActionControl = action.component}
         <ActionControl {...action.props ?? {}} />
@@ -109,3 +113,21 @@
     </div>
   {/each}
 </div>
+
+<style>
+  /* The fold follows the scroll position itself, and this short transition only
+     smooths the gaps between scroll events, in both directions: coming back to
+     the top, every mark travels out of the row and back to its own line. */
+  .action-fold {
+    transition:
+      top 90ms linear,
+      left 90ms linear,
+      width 90ms linear;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .action-fold {
+      transition: none;
+    }
+  }
+</style>

@@ -217,15 +217,16 @@
    * How far the panel's list has scrolled, 0 to 1 across the first stretch of it.
    *
    * The foot of the panel folds its actions from named buttons to marks over
-   * that range, one action at a time. The scroller belongs to the shell (it is
-   * bound in), so this watches the element it hands over and nothing else.
+   * that range, one action at a time, and back out of it as the list returns to
+   * the top. The scroller belongs to the shell (it is bound in), so this watches
+   * the element it hands over and nothing else.
    */
   let panelProgress = $state(0)
   $effect(() => {
     const element = scroller
     if (!element) return
     const onScroll = (): void => {
-      panelProgress = Math.min(1, Math.max(0, element.scrollTop / 96))
+      panelProgress = Math.min(1, Math.max(0, element.scrollTop / 160))
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
