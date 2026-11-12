@@ -44,7 +44,7 @@
    */
 
   /** Tabs shown before the rest fold behind the count. */
-  const MAX_TABS = 5
+  const MAX_TABS = 4
   /** Threads with no assistant still need a strip when one of them is open, so
    *  they gather under this name instead of vanishing with the sidebar rows. */
   const UNASSIGNED_LABEL = 'Tasks'
@@ -293,14 +293,16 @@
       class="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
       aria-label="{groupLabel} threads"
     >
-      <div class="flex h-full w-max max-w-full items-center gap-0.5">
+      <!-- Right-aligned: the strip grows towards the name, so the tabs sit at the
+           bar's right end and the newest work is the nearest thing to reach. -->
+      <div class="ml-auto flex h-full w-max max-w-full items-center gap-0.5">
         {#each visibleThreads as thread (thread.id)}
           {@const active = thread.id === activeId}
           {@const working = isThreadWorking(thread)}
           <div
             role="group"
             aria-label={thread.title}
-            class="relative flex min-h-8 min-w-[4rem] items-center gap-1 overflow-hidden pl-2 pr-0.5 text-[0.6875rem] transition-colors {active
+            class="relative flex min-h-8 min-w-[4rem] max-w-44 items-center gap-1 overflow-hidden pl-2 pr-0.5 text-[0.6875rem] transition-colors {active
               ? 'bg-selected text-foreground'
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
             oncontextmenu={(event: MouseEvent) => {
