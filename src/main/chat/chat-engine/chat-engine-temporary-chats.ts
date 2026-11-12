@@ -141,7 +141,6 @@ export class ChatEngineTemporaryChats {
     return { driverId, accountId }
   }
 
-  /** Refuse a mid-conversation harness or account switch, on the same terms. */
   /** Whether the bound session still runs on the identity these settings name. */
   private async identityMatches(
     temporary: TemporaryChatSession,
