@@ -318,8 +318,7 @@
 
   {#if board.handleDropData.selectedHarnessLacksAttachments && (board.handleDropData.attachmentBlockedNotice || board.submit.attachments.length > 0)}
     <CardNotice placement="composer" tone="danger">
-      This model cannot accept file board.submit.attachments. Choose another model before sending
-      this file.
+      This model cannot accept file attachments. Choose another model before sending this file.
     </CardNotice>
   {/if}
 
@@ -331,6 +330,7 @@
 
   <ChatComposerAttachmentStrip
     attachments={board.submit.attachments}
+    pendingAttachments={board.submit.pendingAttachments}
     references={board.props.references}
     directReply={board.props.directReply ?? null}
     directReplyBusy={board.props.directReplyBusy ?? false}
@@ -345,6 +345,7 @@
     previewUrls={board.handleDropData.preview.urls}
     onPreviewAttachment={board.handleDropData.preview.open}
     onRemoveAttachment={board.submit.removeAttachment}
+    onRemovePendingAttachment={board.submit.cancelPendingAttachment}
     onToggleFileSystemMode={board.handleDropData.toggleFileSystemMode}
     startAfterPopoverOpen={board.captureComposerRoot.startAfterPopoverOpen}
     onOpenStartAfterPopover={board.captureComposerRoot.openStartAfterPopover}

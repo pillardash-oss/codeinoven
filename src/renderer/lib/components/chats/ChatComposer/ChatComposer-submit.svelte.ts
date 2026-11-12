@@ -9,7 +9,8 @@ import {
   projectReferenceToken,
   restoredDraft,
   taskReferenceToken,
-  uniqueAttachments
+  uniqueAttachments,
+  type PendingAttachment
 } from '../chat-composer-attachments'
 import {
   normalizeComposerMessage,
@@ -70,6 +71,24 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
   // the same file twice, which the keyed attachment chips cannot render, so the
   // restored list is collapsed here before it ever reaches the markup.
   attachments = $state<PromptAttachment[]>([])
+
+  /**
+   * Attachments a gesture has handed over that the composer is still storing.
+   *
+   * They are drawn as chips with a spinner the instant the gesture happens, so
+   * the user sees their file arrive instead of a composer that looks unchanged
+   * while a screenshot is copied into the project. They never reach the prompt:
+   * a send waits for the list to empty first.
+   */
+  pendingAttachments = $state<PendingAttachment[]>([])
+
+  /** Resolvers waiting for the pending list to empty (set by a send). */
+  private pendingWaiters: Array<() => void> = []
+
+  /** Pending ids whose chip the user removed before the file landed. */
+  private cancelledPending: string[] = []
+
+  private pendingAttachmentSeq = 0
 
   projectReferences = $state<PromptProjectReference[]>([])
 
@@ -394,6 +413,10 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
       return
     }
     this.cancelStop()
+    // A file the user dropped is still being moved into the project. The chip is
+    // already on screen with a spinner, so hold the turn until it lands instead
+    // of sending a prompt without the attachment the user just gave it.
+    if (this.pendingAttachments.length > 0) await this.waitForPendingAttachments()
     // A tag typed but never picked still targets what it names. Resolve it
     // before anything reads the draft, so the expert gate sees a session tag
     // and the dispatched turn carries the tagged reference.
@@ -725,6 +748,65 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     if (removed) this.root.handleDropData.preview.clear(removed.url)
     this.attachments = this.attachments.filter((_, i) => i !== index)
     this.root.props.onAttachmentsChange?.(this.attachments)
+  }
+
+  /**
+   * Put a placeholder chip up for a file whose transfer has not finished yet.
+   *
+   * Called synchronously at the gesture, before the first await, so every file a
+   * drop carries is visible at once rather than one at a time as each copy lands.
+   */
+  beginPendingAttachment(filename: string, mime: string): string {
+    const id = `pending-${++this.pendingAttachmentSeq}`
+    this.pendingAttachments = [...this.pendingAttachments, { id, filename, mime }]
+    return id
+  }
+
+  /**
+   * Swap a placeholder for the file that finally landed.
+   *
+   * Returns the adopted attachment, or null when the chip was removed while the
+   * transfer ran (the file stays in storage, it simply is not attached) or when
+   * the duplicate guard and the file ceiling rejected it. Adoption happens here,
+   * in arrival order, so the strip keeps the same order the drop carried.
+   */
+  settlePendingAttachment(id: string, attachment: PromptAttachment): PromptAttachment | null {
+    const cancelledAt = this.cancelledPending.indexOf(id)
+    const cancelled = cancelledAt !== -1
+    if (cancelled) this.cancelledPending.splice(cancelledAt, 1)
+    this.removePendingAttachment(id)
+    if (cancelled) return null
+    const [added] = this.adoptAttachments([attachment])
+    return added ?? null
+  }
+
+  /** Take a placeholder down after a transfer that produced no attachment. */
+  failPendingAttachment(id: string): void {
+    const cancelledAt = this.cancelledPending.indexOf(id)
+    if (cancelledAt !== -1) this.cancelledPending.splice(cancelledAt, 1)
+    this.removePendingAttachment(id)
+  }
+
+  /** Take a placeholder down on the user's own action, and drop what lands. */
+  cancelPendingAttachment(id: string): void {
+    if (!this.cancelledPending.includes(id)) this.cancelledPending.push(id)
+    this.removePendingAttachment(id)
+  }
+
+  /** Resolves when nothing is left in flight, so a send never leaves a file behind. */
+  waitForPendingAttachments(): Promise<void> {
+    if (this.pendingAttachments.length === 0) return Promise.resolve()
+    return new Promise<void>((resolve) => this.pendingWaiters.push(resolve))
+  }
+
+  private removePendingAttachment(id: string): void {
+    const next = this.pendingAttachments.filter((pending) => pending.id !== id)
+    if (next.length === this.pendingAttachments.length) return
+    this.pendingAttachments = next
+    if (next.length > 0) return
+    const waiters = this.pendingWaiters
+    this.pendingWaiters = []
+    for (const resolve of waiters) resolve()
   }
 
   keydownContext: ComposerKeydownContext = {
