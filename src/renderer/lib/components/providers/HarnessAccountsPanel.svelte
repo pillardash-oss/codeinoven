@@ -2,6 +2,7 @@
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioKey from '@pdslng/cio-icon/CioKey.svelte'
   import CioLogIn from '@pdslng/cio-icon/CioLogIn.svelte'
+  import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioPerson from '@pdslng/cio-icon/CioPerson.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
@@ -70,6 +71,8 @@
   let editNotice = $state('')
   let newApiKey = $state('')
   let replacingKey = $state(false)
+  /** Account whose stored credential is being cleared before its sign-in re-runs. */
+  let reconnecting = $state(false)
   /** Account whose credential is being re-authenticated through the sign-in panel. */
   let signInTarget = $state<HarnessAccount | null>(null)
 
@@ -380,14 +383,13 @@
       (editCapabilities.inAppLogin || editCapabilities.loginHandoff)
   )
 
-  /** Human label for the credential method an account's auth entry reports. */
-  function credentialMethodLabel(method: string | undefined): string {
-    if (!method) return 'stored credentials'
-    const normalized = method.toLowerCase()
-    if (normalized === 'oauth') return 'an OAuth sign-in'
-    if (normalized === 'api-key' || normalized === 'api_key') return 'an API key'
-    return method
-  }
+  /**
+   * Whether the credential can only be changed by disconnecting and connecting
+   * again, which needs a sign-in flow to run afterwards.
+   */
+  const canReconnect = $derived(
+    !canReplaceApiKey && !canSignInAgain && editCapabilities?.loginHandoff === true
+  )
 
   function openEdit(account: HarnessAccount): void {
     editTarget = account
@@ -464,6 +466,37 @@
   function startSignIn(account: HarnessAccount): void {
     closeEdit()
     signInTarget = account
+  }
+
+  /**
+   * Clear the account's stored credential and immediately re-run its provider's
+   * sign-in, which writes the new credential back into the same account. A
+   * harness that cannot replace a credential in place is still connected again
+   * from here instead of making the user disconnect and reconnect by hand.
+   */
+  async function reconnectAccount(): Promise<void> {
+    if (!editTarget || reconnecting) return
+    const account = editTarget
+    reconnecting = true
+    editError = ''
+    editNotice = ''
+    try {
+      await invoke(
+        'providerAccounts:logout',
+        account.harnessId,
+        account.providerId || undefined,
+        account.id
+      )
+      harnessAccountCache.invalidate(account.harnessId)
+      startSignIn(account)
+    } catch (reconnectError) {
+      editError =
+        reconnectError instanceof Error
+          ? reconnectError.message
+          : 'The account was not disconnected.'
+    } finally {
+      reconnecting = false
+    }
   }
 
   async function completeSignIn(account: HarnessAccount): Promise<void> {
@@ -790,12 +823,6 @@
           {/if}
         </div>
 
-        <p class="text-[0.6875rem] text-muted">
-          {account.label} is connected to {providerLabel(account)} with {credentialMethodLabel(
-            editAuthEntry?.method
-          )}. Replacing it keeps this account and its label.
-        </p>
-
         {#if editError}
           <p
             class="border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger"
@@ -869,10 +896,31 @@
         {/if}
 
         {#if !editStatusLoading && !canReplaceApiKey && !canSignInAgain}
-          <p class="text-[0.6875rem] text-dimmed">
-            {providerLabel(account)} does not let CodeInOven replace this account's credentials from here.
-            Disconnect and connect again to change them.
-          </p>
+          <div class="space-y-3">
+            <p class="text-[0.6875rem] text-dimmed">
+              {providerLabel(account)} does not let CodeInOven replace this account's credentials from
+              here.
+            </p>
+            {#if canReconnect}
+              <div class="flex justify-end">
+                <button
+                  type="button"
+                  class="flex h-9 items-center gap-1.5 border bg-surface px-3 text-xs font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
+                  disabled={reconnecting}
+                  title={`Disconnect and connect ${account.label} again to ${providerLabel(account)}`}
+                  onclick={() => void reconnectAccount()}
+                >
+                  {#if reconnecting}
+                    <CioSpinner size={13} class="animate-spin" aria-hidden="true" />
+                    Disconnecting…
+                  {:else}
+                    <CioPlug size={13} aria-hidden="true" />
+                    Disconnect and connect
+                  {/if}
+                </button>
+              </div>
+            {/if}
+          </div>
         {/if}
       </div>
     </div>
