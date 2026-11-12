@@ -70,6 +70,9 @@
   import type { Snippet } from 'svelte'
   import FileTypeIcon from '../files/FileTypeIcon.svelte'
   import DisplaySourceIcon from '../display/DisplaySourceIcon.svelte'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { subagentVendorMark } from '../threads/subagent-session-view-helpers'
 
   const failedPopupIcons = new SvelteSet<string>()
 
@@ -508,11 +511,19 @@
     {:else if tab.kind === 'sources'}
       <CioTabInfo size={ICON_SIZE.row} class="shrink-0" />
     {:else if tab.kind === 'subagent'}
-      <!-- The sub-agent mark is the one a sub-agent wears on every surface; a
-           hue would make it a second class of tab rather than one more tab. A
-           pawn agent wears the assistant mark instead, so the rail tells the two
-           apart at a glance while the tab body stays the same. -->
-      {#if tab.activity.pawn}
+      <!-- A worker wears the mark of the model running it, so the strip says
+           which provider is spending tokens before the tab is opened. A worker
+           that has not named a model yet (and every pawn) keeps the sub-agent
+           or assistant mark. -->
+      {@const workerMark = subagentVendorMark(tab.activity, providerCatalog.allCached())}
+      {#if workerMark}
+        <VendorIcon
+          name={workerMark.name}
+          id={workerMark.id}
+          size={ICON_SIZE.row}
+          class="shrink-0"
+        />
+      {:else if tab.activity.pawn}
         <AssistantIcon mark="agent" size={ICON_SIZE.row} class="shrink-0" />
       {:else}
         <CioSubagent size={ICON_SIZE.row} class="shrink-0" />

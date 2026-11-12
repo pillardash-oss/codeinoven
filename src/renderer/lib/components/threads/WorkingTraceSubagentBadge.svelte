@@ -8,6 +8,9 @@
     subagentTaskLabel
   } from '$lib/subagent-presentation'
   import type { SubagentPart } from '$lib/working-trace-parts'
+  import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
+  import { subagentVendorMark } from './subagent-session-view-helpers'
   import SubagentModeBadge from './SubagentModeBadge.svelte'
   import SubagentStatusIcon from './SubagentStatusIcon.svelte'
 
@@ -36,7 +39,36 @@
     onOpen,
     onOpenSheet
   }: Props = $props()
+
+  /**
+   * The model mark this badge wears in place of the generic sub-agent glyph.
+   *
+   * The badge stands for a whole group, so it only takes a worker's mark when
+   * every worker in it runs on the same model: showing one model's logo over
+   * several different workers would name the wrong thing. Otherwise it keeps
+   * the sub-agent mark.
+   */
+  const providers = $derived(providerCatalog.allCached())
+  const marks = $derived(parts.map((part) => subagentVendorMark(part.activity, providers)))
+  const sharedMark = $derived.by(() => {
+    if (marks.length === 0) return null
+    const first = marks[0]
+    if (!first) return null
+    const key = `${first.id ?? ''}\u0000${first.name}`
+    const same = marks.every(
+      (mark) => mark !== null && `${mark.id ?? ''}\u0000${mark.name}` === key
+    )
+    return same ? first : null
+  })
 </script>
+
+{#snippet modelMark(size: number, className?: string)}
+  {#if sharedMark}
+    <VendorIcon name={sharedMark.name} id={sharedMark.id} {size} class={className ?? ''} />
+  {:else}
+    <CioSubagent {size} class={className ?? ''} />
+  {/if}
+{/snippet}
 
 {#if coarsePointer}
   <button
@@ -50,7 +82,7 @@
       onOpenSheet()
     }}
   >
-    <CioSubagent size={10} />
+    {@render modelMark(10)}
     {label}
   </button>
 {:else}
@@ -64,7 +96,7 @@
         e.stopPropagation()
       }}
     >
-      <CioSubagent size={10} />
+      {@render modelMark(10)}
       {label}
     </DropdownMenu.Trigger>
     <DropdownMenu.Portal>
@@ -76,7 +108,7 @@
         class="z-50 w-96 overflow-hidden border bg-surface p-1 shadow-lg"
       >
         <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-          <CioSubagent size={12} class="shrink-0 text-muted" />
+          {@render modelMark(12, 'shrink-0 text-muted')}
           <span class="text-[0.6875rem] font-semibold text-foreground">
             {subagentCount}
             {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
@@ -91,6 +123,7 @@
             {@const taskLabel = subagentTaskLabel(part.activity)}
             {@const taskDetail = subagentTaskDetail(part.activity)}
             {@const workerModel = subagentModelLabel(part.activity, true)}
+            {@const workerMark = subagentVendorMark(part.activity, providers)}
             <DropdownMenu.Item
               class="flex w-full cursor-pointer items-center gap-2 px-2 py-1.5 text-left outline-none transition-colors hover:bg-elevated focus:bg-elevated"
               onSelect={() => onOpen(part)}
@@ -112,10 +145,13 @@
               <SubagentModeBadge background={part.activity.background} />
               {#if workerModel}
                 <span
-                  class="max-w-24 shrink-0 truncate text-[0.625rem] text-dimmed"
+                  class="flex max-w-24 shrink-0 items-center gap-1 text-[0.625rem] text-dimmed"
                   title={part.activity.modelId ?? workerModel}
                 >
-                  {workerModel}
+                  {#if workerMark}
+                    <VendorIcon name={workerMark.name} id={workerMark.id} size={11} />
+                  {/if}
+                  <span class="truncate">{workerModel}</span>
                 </span>
               {/if}
               {#if part.activity.time?.start}

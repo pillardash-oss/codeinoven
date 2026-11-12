@@ -88,6 +88,7 @@
         {thinkingLevel}
         {providerName}
         {providerId}
+        showProviderName
         {harnessId}
         {harnessName}
       />

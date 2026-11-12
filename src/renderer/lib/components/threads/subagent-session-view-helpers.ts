@@ -420,3 +420,32 @@ export function catalogProviderName(
     modelId: activity.modelId
   })?.name
 }
+
+/** The vendor mark a worker wears: the one on the model running it. */
+export interface SubagentVendorMark {
+  /** Vendor display name, or the provider id when the catalog names none. */
+  name: string
+  id?: string
+}
+
+/**
+ * Identify the mark of the vendor this worker runs on, so a tab or a dropdown
+ * row can wear the model's logo instead of the generic sub-agent glyph.
+ *
+ * A harness reports ids, so the catalog is what turns them into a vendor name;
+ * a provider the catalog does not know still gets its own id, which the icon
+ * registry may bundle. `null` when the worker named no model at all.
+ */
+export function subagentVendorMark(
+  activity: AgentSubagentActivity,
+  providers: ProviderCatalog[]
+): SubagentVendorMark | null {
+  const name = catalogProviderName(activity, providers)
+  const id = activity.providerId
+  if (name) return id ? { name, id } : { name }
+  if (id) return { name: id, id }
+  const modelId = activity.modelId?.trim()
+  if (!modelId) return null
+  // A `provider/model` id lets the registry resolve the vendor on its own.
+  return { name: modelId }
+}
