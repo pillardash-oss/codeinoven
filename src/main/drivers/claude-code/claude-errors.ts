@@ -56,6 +56,37 @@ export function claudeSessionLimitIssue(
  * card that lets the user switch models. Classify them the same way every
  * other driver does.
  */
+/**
+ * Human-readable text for a `result` record that carried no `result` field.
+ *
+ * Claude Code ends a turn it could not run with a machine subtype and no
+ * message (an interrupted query while the session was still starting reports
+ * `error_during_execution` with an empty `result`). The stream fold used to
+ * fall back to the bare subtype, so the thread showed the literal token
+ * "error_during_execution" with no cause and no next step. A subtype is never
+ * user copy: known ones get a real sentence, unknown ones get a generic one.
+ */
+export function claudeResultFailure(
+  subtype: string | undefined,
+  result: string | undefined
+): string | undefined {
+  const message = result?.trim()
+  if (message) return message
+  if (!subtype || subtype === 'success') return undefined
+  switch (subtype) {
+    case 'error_during_execution':
+      return 'Claude Code ended the turn with an execution error before it produced a reply. Retry the message.'
+    case 'error_max_turns':
+      return 'Claude Code stopped after reaching its maximum number of turns for this prompt.'
+    case 'error_max_budget_usd':
+      return 'Claude Code stopped after reaching its spending limit for this prompt.'
+    case 'error_max_structured_output_retries':
+      return 'Claude Code could not produce the requested structured output for this prompt.'
+    default:
+      return 'Claude Code ended the turn without reporting a result. Retry the message.'
+  }
+}
+
 export function claudeResultIssue(error: string | undefined): AgentProviderIssue | undefined {
   if (!error) return undefined
   const kind = classifyProviderIssue(error)
