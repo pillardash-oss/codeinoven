@@ -16,6 +16,7 @@
     type MediaPlayheadCheckpoint
   } from '$lib/stores/media-playhead.svelte'
   import { preloadNearViewport } from './preload-near-viewport'
+  import { ARROW_FRAME_STEP } from '$shared/video/frame-grid'
 
   /**
    * The shape of a picture this session has already measured, keyed by source.
@@ -777,7 +778,7 @@
         min={0}
         max={Math.max(duration, 0.1)}
         step={frameDuration}
-        arrowStep={frameDuration * 5}
+        arrowStep={frameDuration * ARROW_FRAME_STEP}
         fineStep={frameDuration}
         label="Seek {label}"
         disabled={duration === 0}

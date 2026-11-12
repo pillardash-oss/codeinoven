@@ -15,11 +15,12 @@
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
   import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import { invoke } from '$lib/ipc.svelte'
+  import { releaseTabSeekSilence, silenceTabForSeek } from '$lib/stores/seek-silence'
   import { compositionPlayheadFor } from '$lib/stores/composition-playhead.svelte'
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { compositionPlaybackPrefs } from '$lib/stores/composition-playback-prefs.svelte'
-  import { snapVideoFrame } from '$shared/video/frame-grid'
+  import { snapVideoFrame, ARROW_FRAME_STEP } from '$shared/video/frame-grid'
   import { videoClockLabel, videoTimecode } from '$shared/video/timeline'
   import {
     compositionFrameFocusState,
@@ -354,6 +355,9 @@
   }
 
   function step(direction: 1 | -1): void {
+    // Stepping is a seek, and a seek is heard as the page running through the
+    // frames between the two: the sound is held down for the gesture.
+    silenceTabForSeek(tabId)
     playhead.hold(clamp(shown + direction * frameStep))
   }
 
@@ -868,8 +872,13 @@
     min={0}
     max={duration}
     step={frameStep}
+    arrowStep={frameStep * ARROW_FRAME_STEP}
+    fineStep={frameStep}
     label="Seek the composition"
     title="Seek the composition"
+    onScrubStart={() => silenceTabForSeek(tabId)}
+    onScrubEnd={() => releaseTabSeekSilence(tabId)}
+    onKeyStep={() => silenceTabForSeek(tabId)}
     onInput={(seconds) => holdSecond(seconds)}
     onCommit={() => commitScrub()}
   />

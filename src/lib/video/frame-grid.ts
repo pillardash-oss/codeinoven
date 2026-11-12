@@ -19,6 +19,16 @@ export function snapVideoFrame(seconds: number, duration: number, fps: number): 
   return Math.min(last, Math.max(0, Math.round(seconds * fps))) / fps
 }
 
+/**
+ * The frames one arrow press moves a playhead.
+ *
+ * An arrow is for travelling and a single frame is for studying the cut beside
+ * the one on screen, so the plain press takes this many and Shift takes one.
+ * Every surface that scrubs a video reads it here, so the player, the composition
+ * bar and the editor move the same distance.
+ */
+export const ARROW_FRAME_STEP = 5
+
 /** Virtualize the visible strip. At high zoom each cell is exactly one frame. */
 export function visibleVideoFrames(
   duration: number,

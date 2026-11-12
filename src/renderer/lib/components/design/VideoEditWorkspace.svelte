@@ -24,6 +24,7 @@
   import EnumSelect from '$lib/components/ui/EnumSelect.svelte'
   import ShortcutHint from '$lib/components/ui/ShortcutHint.svelte'
   import { appConfirm } from '$lib/stores/app-confirm.svelte'
+  import { ARROW_FRAME_STEP } from '$shared/video/frame-grid'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { videoEditorController } from '$lib/stores/video-editor.svelte'
@@ -465,8 +466,10 @@
           void editor.importFiles()
         }
       ],
-      ['video-edit-frame-back', () => editor.seek(editor.time - 1 / editor.fps)],
-      ['video-edit-frame-forward', () => editor.seek(editor.time + 1 / editor.fps)]
+      ['video-edit-frame-back', () => editor.seek(editor.time - ARROW_FRAME_STEP / editor.fps)],
+      ['video-edit-frame-forward', () => editor.seek(editor.time + ARROW_FRAME_STEP / editor.fps)],
+      ['video-edit-frame-back-one', () => editor.seek(editor.time - 1 / editor.fps)],
+      ['video-edit-frame-forward-one', () => editor.seek(editor.time + 1 / editor.fps)]
     ]
     for (const [id, run] of actions)
       if (keymapState.matches(id, event)) {
