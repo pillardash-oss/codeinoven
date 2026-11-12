@@ -279,13 +279,15 @@ describe('assistant sidebar', () => {
       props: {
         assistants: [a1],
         tasks,
+        runs: [],
         runsByAssistant: new Map(),
         // The open thread belongs to this assistant, so its row reads as current.
         selectedThreadId: tasks[0].id,
         onOpenTask: vi.fn(),
         onOpenAssistantKnowledge: vi.fn(),
         onMoveAssistant: vi.fn(),
-        onAssignTask: vi.fn()
+        onAssignTask: vi.fn(),
+        onCreateAssistant: vi.fn()
       }
     })
     return { target, close: () => void unmount(component) }

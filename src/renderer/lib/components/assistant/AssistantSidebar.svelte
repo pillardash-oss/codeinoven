@@ -2,6 +2,9 @@
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import DonTile from './DonTile.svelte'
   import AssistantRow from './AssistantRow.svelte'
+  import AssistantSearchControl from './AssistantSearchControl.svelte'
+  import AssistantCreateControl from './AssistantCreateControl.svelte'
+  import type { NewAssistantDraft } from './assistant-create'
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { lastViewedAssistantThreadId } from '$lib/stores/assistant-last-viewed.svelte'
@@ -27,6 +30,8 @@
     assistants: Assistant[]
     /** Assistant tasks only: a run is never a task. */
     tasks: Thread[]
+    /** Every run thread, for the search's own results. */
+    runs: Thread[]
     /**
      * Every assistant's runs, newest first, keyed by assistant id. A run inherits
      * its task's `assistantId`, so a run whose task is hidden still groups here.
@@ -42,18 +47,27 @@
     onMoveAssistant: (draggedId: string, targetId: string, position: 'before' | 'after') => void
     /** Group a dragged task into an assistant. */
     onAssignTask: (taskId: string, assistantId: string) => void
+    /** Create an assistant from the sidebar's own top row. */
+    onCreateAssistant: (draft: NewAssistantDraft) => void | Promise<void>
+    onCreateAssistantViaChat?: () => void | Promise<void>
+    /** External open signal (a keyboard shortcut) for the new-assistant dialog. */
+    assistantCreateTrigger?: number
   }
 
   let {
     assistants,
     tasks,
+    runs,
     runsByAssistant,
     selectedThreadId,
     scroller = $bindable(null),
     onOpenTask,
     onOpenAssistantKnowledge,
     onMoveAssistant,
-    onAssignTask
+    onAssignTask,
+    onCreateAssistant,
+    onCreateAssistantViaChat,
+    assistantCreateTrigger = 0
   }: Props = $props()
 
   const EMPTY_TASKS: readonly Thread[] = []
@@ -171,6 +185,29 @@
 <CollapsibleSidebar title="Assistant" hideHeader bind:scroller>
   <div class="flex h-full min-h-0 flex-col">
     <div class="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5" role="list" aria-label="Assistants">
+      <!-- The assistant view's own controls, above the list: the search that
+           reaches every assistant, task and run, and the door to a new assistant.
+           The app header leaves this view alone, so they live here instead. -->
+      <div class="flex items-center justify-between gap-2 px-1 pt-1 pb-1.5">
+        <span class="pl-1 text-[0.5625rem] font-semibold tracking-wide text-dimmed uppercase"
+          >Assistants</span
+        >
+        <div class="flex shrink-0 items-center gap-0.5">
+          <AssistantSearchControl
+            {assistants}
+            {tasks}
+            {runs}
+            {onOpenTask}
+            onOpenAssistant={onOpenAssistantKnowledge}
+          />
+          <AssistantCreateControl
+            onCreate={onCreateAssistant}
+            onCreateViaChat={onCreateAssistantViaChat}
+            trigger={assistantCreateTrigger}
+          />
+        </div>
+      </div>
+
       <!-- No empty note here: the shell paints this sidebar only while it holds
            an assistant, and the view's own empty state invites the first one. -->
       {#if donAssistant}

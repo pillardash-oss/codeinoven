@@ -648,6 +648,7 @@
         bind:scroller={board.switcherPanelTabs.sidebarScroller}
         assistants={board.mergeThreadsInList.assistantList}
         tasks={board.markThreadReadAndApply.assistantTasks}
+        runs={board.mergeThreadsInList.assistantRuns}
         runsByAssistant={board.mergeThreadsInList.runsByAssistant}
         selectedThreadId={activeThreadRowId(selectedThread)}
         onOpenTask={board.markThreadReadAndApply.openAssistantTask}
@@ -657,6 +658,9 @@
           void board.state.moveAssistant(draggedId, targetId, position)}
         onAssignTask={(taskId, assistantId) =>
           void board.mergeThreadsInList.assignAssistantTask(taskId, assistantId)}
+        onCreateAssistant={board.markThreadReadAndApply.createAssistant}
+        onCreateAssistantViaChat={board.markThreadReadAndApply.createAssistantViaChat}
+        assistantCreateTrigger={board.mergeThreadsInList.assistantCreateTrigger}
       />
     {/await}
   {:else if board.markThreadReadAndApply.workspaceSidebarVisible}

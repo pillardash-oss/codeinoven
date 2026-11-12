@@ -27,7 +27,7 @@ import { threadUnreadIntent } from '$lib/stores/thread-unread-intent'
 import { viewActions, type ViewActionItem } from '$lib/stores/view-actions.svelte'
 import { threadStatusSortKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { GLOBAL_BROWSER_PROJECT_ID, type AuthoredWorkKind } from '$shared/ipc-contract'
-import type { Project, Assistant, Thread } from '$shared/types'
+import type { Project, Thread } from '$shared/types'
 import {
   activeThreadRowId,
   ASSISTANT_SPACE_ID,
@@ -40,8 +40,6 @@ import {
   threadTracksReadStatus
 } from '$shared/types'
 import { onMount } from 'svelte'
-import AssistantSearchControl from '../../assistant/AssistantSearchControl.svelte'
-import AssistantCreateControl from '../../assistant/AssistantCreateControl.svelte'
 import ProjectCreateControl from '../../shared/ProjectCreateControl.svelte'
 import ScopeCreateControl from '../../shared/ScopeCreateControl.svelte'
 import ThreadProjectFilterMenu from '../../shared/ThreadProjectFilterMenu.svelte'
@@ -1066,32 +1064,11 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
         ]
         viewActions.set('scoped-threads', scopedActions)
       } else if (this.root.props.mode === 'assistant') {
-        const assistantActions: ViewActionItem[] = [
-          {
-            id: 'search',
-            component: AssistantSearchControl as unknown as ViewActionItem['component'],
-            props: {
-              assistants: this.root.mergeThreadsInList.assistantList,
-              tasks: this.root.markThreadReadAndApply.assistantTasks,
-              runs: this.root.mergeThreadsInList.assistantRuns,
-              onOpenTask: this.root.markThreadReadAndApply.openAssistantTask,
-              onOpenAssistant: (assistant: Assistant) =>
-                void this.root.markThreadReadAndApply.openAssistantKnowledgeFor(assistant)
-            }
-          },
-          {
-            id: 'new-assistant',
-            component: AssistantCreateControl as unknown as ViewActionItem['component'],
-            props: {
-              onCreate: this.root.markThreadReadAndApply.createAssistant,
-              onCreateViaChat: this.root.markThreadReadAndApply.createAssistantViaChat,
-              trigger: this.root.mergeThreadsInList.assistantCreateTrigger
-            }
-          }
-        ]
-        // New task moved beside the assistant's name in the header strip, where
-        // the assistant it lands in is the one named right next to it.
-        viewActions.set('assistant', assistantActions)
+        // The assistant view keeps no actions in the bar: its search, its new
+        // assistant control and its new task all live in the view's own surfaces
+        // (the sidebar's top row and the strip beside the assistant's name), so
+        // the bar is left to the assistant and its threads.
+        viewActions.set('assistant', [])
       } else {
         const projectActions: ViewActionItem[] = [
           {
