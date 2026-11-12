@@ -160,6 +160,16 @@
   /** Every assistant the user owns, in sidebar order. Built-ins hold their own slot. */
   const listedAssistants = $derived(orderedAssistants.filter((row) => !assistantIsBuiltin(row)))
 
+  /**
+   * Whether the panel has nothing to list.
+   *
+   * The empty panel is one door, not two: while it stands, the copy and the
+   * create button under it are the only invitation, so the toolbar's search and
+   * New assistant row is not drawn beneath them. A search the user opened keeps
+   * the toolbar, because its field lives there.
+   */
+  const panelEmpty = $derived(listedAssistants.length === 0 && !searchExpanded)
+
   function assistantTasks(assistantId: string): readonly Thread[] {
     return tasksByAssistant.get(assistantId) ?? EMPTY_TASKS
   }
@@ -221,36 +231,40 @@
   <!-- The panel's controls live at its foot, on the same line as the rail's own
        utility icons, so the list keeps the whole column above them. -->
   {#snippet footer()}
-    <div class="@container bg-surface px-2 pt-1.5 pb-2">
-      <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
-        <div class="min-w-0 {searchExpanded ? 'flex-1' : ''}">
-          <SidebarSearchBar
-            open={searchExpanded}
-            query={searchQuery}
-            placeholder="Search assistants, tasks and runs…"
-            ariaLabel="Search assistants and threads"
-            onOpenChange={(open) => {
-              if (open) openSearch()
-              else {
-                searchExpanded = false
-                searchQuery = ''
-              }
-            }}
-            onQueryChange={(value) => (searchQuery = value)}
-            label="Search all"
-          />
+    <!-- The empty panel carries its own create door, so the toolbar is not drawn
+         under it: one way in, where the user is already reading. -->
+    {#if !panelEmpty}
+      <div class="@container bg-surface px-2 pt-1.5 pb-2">
+        <div class="flex min-h-7 items-center justify-center gap-1 overflow-hidden">
+          <div class="min-w-0 {searchExpanded ? 'flex-1' : ''}">
+            <SidebarSearchBar
+              open={searchExpanded}
+              query={searchQuery}
+              placeholder="Search assistants, tasks and runs…"
+              ariaLabel="Search assistants and threads"
+              onOpenChange={(open) => {
+                if (open) openSearch()
+                else {
+                  searchExpanded = false
+                  searchQuery = ''
+                }
+              }}
+              onQueryChange={(value) => (searchQuery = value)}
+              label="Search all"
+            />
+          </div>
+          {#if !searchExpanded}
+            <AssistantCreateControl
+              label="New assistant"
+              labelClass="assistant-panel-label truncate"
+              onCreate={onCreateAssistant}
+              onCreateViaChat={onCreateAssistantViaChat}
+              trigger={assistantCreateTrigger}
+            />
+          {/if}
         </div>
-        {#if !searchExpanded}
-          <AssistantCreateControl
-            label="New assistant"
-            labelClass="assistant-panel-label truncate"
-            onCreate={onCreateAssistant}
-            onCreateViaChat={onCreateAssistantViaChat}
-            trigger={assistantCreateTrigger}
-          />
-        {/if}
       </div>
-    </div>
+    {/if}
   {/snippet}
 
   <div class="flex h-full min-h-0 flex-col [container-type:inline-size]">
@@ -265,71 +279,69 @@
           onOpenAssistant={onOpenAssistantKnowledge}
         />
       {:else}
-        {#if listedAssistants.length === 0 && !donAssistant}
-          <!-- An install with no assistant at all has nothing to list, so the
-             invitation takes the whole column instead of standing over an empty
-             list. -->
-          <EmptyState
-            class="h-full"
-            icon={AssistantIcon}
-            title="No assistants yet"
-            description="Create one to get going."
-          />
-        {:else}
-          <div role="list" aria-label="Assistants">
-            {#if donAssistant}
-              <DonTile
-                assistant={donAssistant}
-                threadId={donThread?.id ?? null}
-                selected={donThread !== null && selectedThreadId === donThread.id}
-                iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
-                ready={assistantReady(donAssistant)}
-                lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
-                stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
-                onOpen={() => {
-                  if (!donThread) return
-                  // The first open is the one moment Don introduces itself. A failure
-                  // here is not fatal: the thread is open and the user can write the
-                  // first line themselves.
-                  void assistantStore.startDonSetup().catch(() => undefined)
-                  onOpenTask(donThread)
-                }}
-              />
-            {/if}
-
-            {#each listedAssistants as assistant (assistant.id)}
-              {@const counts = assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
-              {@const preview = assistantStore.previews.get(assistant.id) ?? null}
-              <AssistantRow
-                {assistant}
-                stateCounts={counts}
-                attention={counts.attention > 0}
-                missed={assistantMissed(assistant.id)}
-                threadCount={threadsOfAssistant(assistant.id)}
-                iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
-                nextRunAt={assistantNextRun(assistant.id)}
-                preview={preview?.text ?? null}
-                lastWorkedAt={preview?.at ?? null}
-                selected={selectedAssistantId === assistant.id}
-                onOpen={openAssistant}
-                {onMoveAssistant}
-                onDropTask={onAssignTask}
-              />
-            {/each}
-          </div>
-
-          <!-- Don is always in the list, so a panel with nothing under him is not
-             empty, it is missing teammates. The invitation sits where their rows
-             would start and points at the footer's own create door, so the panel
-             never opens a second way in. -->
-          {#if listedAssistants.length === 0}
-            <EmptyState
-              class="pt-2 pb-6"
-              icon={AssistantIcon}
-              title="Add a teammate"
-              description="Click New assistant below to hand off more of the work."
+        <div role="list" aria-label="Assistants">
+          {#if donAssistant}
+            <DonTile
+              assistant={donAssistant}
+              threadId={donThread?.id ?? null}
+              selected={donThread !== null && selectedThreadId === donThread.id}
+              iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
+              ready={assistantReady(donAssistant)}
+              lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}
+              stateCounts={assistantStateCounts.get(donAssistant.id) ?? EMPTY_STATE_COUNTS}
+              onOpen={() => {
+                if (!donThread) return
+                // The first open is the one moment Don introduces itself. A failure
+                // here is not fatal: the thread is open and the user can write the
+                // first line themselves.
+                void assistantStore.startDonSetup().catch(() => undefined)
+                onOpenTask(donThread)
+              }}
             />
           {/if}
+
+          {#each listedAssistants as assistant (assistant.id)}
+            {@const counts = assistantStateCounts.get(assistant.id) ?? EMPTY_STATE_COUNTS}
+            {@const preview = assistantStore.previews.get(assistant.id) ?? null}
+            <AssistantRow
+              {assistant}
+              stateCounts={counts}
+              attention={counts.attention > 0}
+              missed={assistantMissed(assistant.id)}
+              threadCount={threadsOfAssistant(assistant.id)}
+              iconUrl={assistantStore.iconUrls.get(assistant.id) ?? null}
+              nextRunAt={assistantNextRun(assistant.id)}
+              preview={preview?.text ?? null}
+              lastWorkedAt={preview?.at ?? null}
+              selected={selectedAssistantId === assistant.id}
+              onOpen={openAssistant}
+              {onMoveAssistant}
+              onDropTask={onAssignTask}
+            />
+          {/each}
+        </div>
+
+        <!-- Don keeps his place at the top. With no teammate under him the panel
+               is not empty, it is missing them, so the invitation stands where
+               their rows would start and carries its own create door: the toolbar
+               that would duplicate it stays hidden. -->
+        {#if panelEmpty}
+          <EmptyState
+            class={donAssistant ? 'pt-2 pb-6' : 'h-full'}
+            icon={AssistantIcon}
+            title="Add a teammate"
+            description="Create one to get going."
+          >
+            {#snippet action()}
+              <AssistantCreateControl
+                variant="primary"
+                label="New assistant"
+                onCreate={onCreateAssistant}
+                onCreateViaChat={onCreateAssistantViaChat}
+                trigger={assistantCreateTrigger}
+              />
+            {/snippet}
+          </EmptyState>
         {/if}
       {/if}
     </div>

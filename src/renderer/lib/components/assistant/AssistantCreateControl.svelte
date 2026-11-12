@@ -20,6 +20,12 @@
     title?: string
     /** Draw the trigger as an icon with its name beside it, for a panel toolbar. */
     label?: string
+    /**
+     * How much weight the trigger carries. `toolbar` is the panel's quiet row
+     * control; `primary` is the one call to action an empty panel shows under its
+     * copy, so it is filled and always carries its name.
+     */
+    variant?: 'toolbar' | 'primary'
     /** Classes for that label, so a host can decide when it stops showing. */
     labelClass?: string
     /** External open signal (keyboard shortcut); the control opens its dialog
@@ -33,6 +39,7 @@
     title = 'New assistant',
     label = '',
     labelClass = '',
+    variant = 'toolbar',
     trigger = 0
   }: Props = $props()
 
@@ -100,16 +107,24 @@
 
 <button
   type="button"
-  class={label
-    ? 'flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium whitespace-nowrap text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'
-    : 'flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'}
+  class={variant === 'primary'
+    ? 'flex h-8 items-center gap-2 bg-primary px-3 text-xs font-semibold whitespace-nowrap text-on-primary transition-opacity duration-150 hover:opacity-90'
+    : label
+      ? 'flex h-7 min-w-0 items-center gap-1.5 px-2 text-[0.6875rem] font-medium whitespace-nowrap text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'
+      : 'flex h-7 w-7 items-center justify-center text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground'}
   aria-label="New assistant"
   title="New assistant"
   onclick={() => (open = true)}
 >
   <AssistantIcon size={14} class="shrink-0" />
-  {#if label}
-    <span class={labelClass} data-panel-label>{label}</span>
+  {#if label || variant === 'primary'}
+    <!-- The toolbar label folds away in a narrow panel; the primary call to
+         action never does, because it is the empty panel's only button. -->
+    <span
+      class={variant === 'primary' ? '' : labelClass}
+      data-panel-label={variant === 'toolbar' ? true : undefined}
+      >{label || 'New assistant'}</span
+    >
   {/if}
 </button>
 
