@@ -177,6 +177,7 @@
     "vitest": "^5.0.5"
   },
   "patchedDependencies": {
-    "svelte-sonner@1.2.1": "patches/svelte-sonner@1.2.1.patch"
+    "svelte-sonner@1.2.1": "patches/svelte-sonner@1.2.1.patch",
+    "ghostty-web@0.4.0": "patches/ghostty-web@0.4.0.patch"
   }
 }
