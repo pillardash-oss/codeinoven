@@ -32,7 +32,13 @@
   let visibleDownloads = $derived(downloads.slice(0, VISIBLE_DOWNLOADS))
   let remainingDownloadCount = $derived(Math.max(0, downloads.length - VISIBLE_DOWNLOADS))
   let hasDownloads = $derived(downloads.length > 0)
-  let hasListings = $derived(hasThreads || hasSpeech || hasDownloads)
+  let localAiDownloads = $derived(payload?.localAiDownloads ?? [])
+  let visibleLocalAiDownloads = $derived(localAiDownloads.slice(0, VISIBLE_DOWNLOADS))
+  let remainingLocalAiCount = $derived(Math.max(0, localAiDownloads.length - VISIBLE_DOWNLOADS))
+  let hasLocalAiDownloads = $derived(localAiDownloads.length > 0)
+  /** The model fetches an install throws away, as opposed to the ones that resume. */
+  let lostLocalAiDownloads = $derived(localAiDownloads.filter((entry) => !entry.resumable))
+  let hasListings = $derived(hasThreads || hasSpeech || hasDownloads || hasLocalAiDownloads)
   let forcing = $derived(updateBlockers.forcing)
   let failure = $derived(updateBlockers.failure)
 
@@ -56,6 +62,13 @@
       )
     }
     if (hasDownloads) parts.push('running downloads pause and continue next time')
+    if (lostLocalAiDownloads.length > 0) {
+      parts.push(
+        `the ${lostLocalAiDownloads.length === 1 ? 'model download' : 'model downloads'} start over`
+      )
+    } else if (hasLocalAiDownloads) {
+      parts.push('the model downloads pause and continue next time')
+    }
     if (parts.length === 0) return ''
     const listed =
       parts.length === 1
@@ -91,6 +104,29 @@
       ? 'A voice recording is still open. The update installs once it has been transcribed and pasted.'
       : 'A voice recording is still being transcribed. The update installs once it has been pasted.'
   )
+
+  /**
+   * What installing does to a local model that is still being fetched. The answer
+   * belongs to the engine, not the row: llama.cpp keeps its partial file and asks
+   * the server for the rest, while the MLX engine's downloader always starts a
+   * file from zero.
+   */
+  let localAiDownloadsNote = $derived.by(() => {
+    const lost = lostLocalAiDownloads.length
+    const kept = localAiDownloads.length - lost
+    const parts: string[] = []
+    if (lost > 0) {
+      parts.push(
+        `${lost === 1 ? 'One is' : `${lost} are`} fetched by the MLX engine, which downloads a model file from the beginning, so ${lost === 1 ? 'it starts' : 'they start'} over after the restart.`
+      )
+    }
+    if (kept > 0) {
+      parts.push(
+        `${kept === 1 ? 'The other keeps' : `The other ${kept} keep`} the bytes already fetched and carr${kept === 1 ? 'ies' : 'y'} on where ${kept === 1 ? 'it left' : 'they left'} off.`
+      )
+    }
+    return parts.join(' ')
+  })
 
   /** What installing does to the downloads above: a pause with the bytes kept,
    *  not a loss, so it says where they continue instead of what it costs. */
@@ -152,6 +188,35 @@
             {/if}
           </ul>
           <p class="text-xs leading-relaxed text-dimmed">{downloadsNote}</p>
+        </div>
+      {/if}
+
+      {#if hasLocalAiDownloads}
+        <div class="space-y-2">
+          <p class="text-sm text-muted">These local models are still downloading:</p>
+          <ul class="space-y-2">
+            {#each visibleLocalAiDownloads as download (download.entryId)}
+              <li class="flex min-w-0 items-center gap-2 text-xs">
+                <CioDownload size={13} class="shrink-0 text-dimmed" />
+                <span
+                  class="min-w-0 flex-1 truncate font-mono text-foreground"
+                  title={download.reference}
+                >
+                  {download.reference}
+                </span>
+                <StatusPill tone={download.resumable ? 'info' : 'danger'} dot>
+                  {download.resumable ? 'Resumes' : 'Starts over'}
+                </StatusPill>
+              </li>
+            {/each}
+            {#if remainingLocalAiCount > 0}
+              <li class="pl-5 text-xs text-dimmed">
+                +{remainingLocalAiCount} more
+                {remainingLocalAiCount === 1 ? 'model' : 'models'}
+              </li>
+            {/if}
+          </ul>
+          <p class="text-xs leading-relaxed text-dimmed">{localAiDownloadsNote}</p>
         </div>
       {/if}
 

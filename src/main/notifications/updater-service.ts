@@ -4,6 +4,7 @@ import os from 'node:os'
 import { Logger } from '../system/logger'
 import type {
   BrowserDownload,
+  CloseConfirmationLocalAiDownload,
   CloseConfirmationProject,
   UpdateBlockerSpeechPhase,
   UpdateBlockers,
@@ -132,6 +133,20 @@ export interface DownloadActivitySource {
 }
 
 /**
+ * The Local AI models this process is still fetching from Hugging Face, as the
+ * install gate sees them.
+ *
+ * Supply-only, like {@link DownloadActivitySource}: the PTY service owns those
+ * processes and this service owns the install decision. They are the one kind of
+ * download whose bytes an install can destroy outright, so the gate has to know
+ * about them rather than counting browser transfers alone.
+ */
+export interface LocalAiDownloadActivitySource {
+  /** Models whose weights are still arriving, one per row still fetching. */
+  inFlightDownloads(): CloseConfirmationLocalAiDownload[]
+}
+
+/**
  * The dictation pipeline this process is running, as the install gate sees it.
  *
  * Supply-only, like the downloads: the speech service owns the open microphones
@@ -163,6 +178,8 @@ export class UpdaterService {
   private activitySources: SessionActivitySource[] = []
   /** The browser's live transfers, or null before the browser graph exists. */
   private downloadSource: DownloadActivitySource | null = null
+  /** The Local AI rows still fetching weights, or null before the page ever ran. */
+  private localAiDownloadSource: LocalAiDownloadActivitySource | null = null
   /** The dictation pipeline, or null while speech is unavailable. */
   private dictationSource: DictationActivitySource | null = null
   private timer: ReturnType<typeof setInterval> | null = null
@@ -579,6 +596,20 @@ export class UpdaterService {
   }
 
   /**
+   * Register the Local AI page's in-flight model fetches as a gate on the
+   * unattended install.
+   *
+   * An install restarts the app, which ends the PTY a row is fetching in. A GGUF
+   * fetch survives that (llama.cpp keeps its partial file and asks for the rest),
+   * but the MLX engine's downloader starts a file from zero, so an install during
+   * one throws away every byte already fetched. Same rule as the browser
+   * transfers: only an install the user asked for goes through anyway.
+   */
+  setLocalAiDownloadActivitySource(source: LocalAiDownloadActivitySource | null): void {
+    this.localAiDownloadSource = source
+  }
+
+  /**
    * Register dictation as a gate on the unattended install.
    *
    * A recording the user is still producing and a transcript the model has not
@@ -622,6 +653,23 @@ export class UpdaterService {
   }
 
   /**
+   * Local AI models the unattended install is still waiting on.
+   *
+   * An explicit install and a tray-initiated one proceed, exactly as they do past
+   * a browser transfer: the user asked, and the prompt that would have warned
+   * about the wasted bytes is theirs to skip.
+   */
+  private blockingLocalAiDownloads(): CloseConfirmationLocalAiDownload[] {
+    if (this.installApproved || this.forceUpdateInBackground) return []
+    try {
+      return this.localAiDownloadSource?.inFlightDownloads() ?? []
+    } catch (error: unknown) {
+      Logger.error('Updater: failed to read local AI downloads', error)
+      return []
+    }
+  }
+
+  /**
    * Describe everything standing between the app and the update it is waiting to
    * install, for the force-install modal.
    *
@@ -640,16 +688,22 @@ export class UpdaterService {
     // Read once: the count and the list must describe the same instant, or the
     // modal's wording disagrees with the rows under it.
     const downloads = this.blockingDownloads()
+    const localAiDownloads = this.blockingLocalAiDownloads()
     const dictation = this.dictationActivity()
     const speechPhase: UpdateBlockerSpeechPhase | null =
       dictation.recording > 0 ? 'recording' : dictation.transcribing > 0 ? 'transcribing' : null
     return {
       version: this._status.availableVersion ?? '',
       activeCount:
-        this.activeSessionCount() + dictation.recording + dictation.transcribing + downloads.length,
+        this.activeSessionCount() +
+        dictation.recording +
+        dictation.transcribing +
+        downloads.length +
+        localAiDownloads.length,
       projects,
       speech: speechPhase ? { phase: speechPhase } : null,
-      downloads
+      downloads,
+      localAiDownloads
     }
   }
 
@@ -1293,13 +1347,23 @@ export class UpdaterService {
       // on a path that is about to install anyway, and never for an install the
       // user or the tray asked for directly.
       const downloads = threadCount === 0 && speechCount === 0 ? this.blockingDownloads() : []
-      if (threadCount === 0 && speechCount === 0 && downloads.length === 0) {
+      const localAiDownloads =
+        threadCount === 0 && speechCount === 0 ? this.blockingLocalAiDownloads() : []
+      if (
+        threadCount === 0 &&
+        speechCount === 0 &&
+        downloads.length === 0 &&
+        localAiDownloads.length === 0
+      ) {
         this.quitAndInstallNow()
         return
       }
 
       this.updateState({ state: 'waiting' })
-      this.broadcastWaitingForWork(threadCount, downloads.length, speechCount)
+      // Both kinds count as running downloads on the rail: they are transfers
+      // whose bytes are still arriving, and the rail names the number, not the
+      // surface that started them.
+      this.broadcastWaitingForWork(threadCount, downloads.length + localAiDownloads.length, speechCount)
 
       this.clearDeferredInstall()
       this.deferredInstallPoll = setInterval(() => {
