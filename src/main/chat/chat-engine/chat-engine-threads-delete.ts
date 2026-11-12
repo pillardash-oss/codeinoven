@@ -105,6 +105,23 @@ export class ChatEngineThreadsDelete {
   }
 
   /**
+   * Run one teardown step whose failure must never abandon the deletion.
+   *
+   * Every resource released here is best-effort by design. A throw from one of
+   * them used to escape `deleteThread` before its rows were removed, so a
+   * thread the user had already dismissed came back with half its cleanup done
+   * and the abort error on screen. The row removal is what the user asked for;
+   * nothing in this teardown may outrank it.
+   */
+  private async bestEffort(step: string, work: () => Promise<unknown>): Promise<void> {
+    try {
+      await work()
+    } catch (error) {
+      Logger.dev(`Thread deletion could not ${step}:`, error)
+    }
+  }
+
+  /**
    * Tear down every harness resource owned by a thread before its rows are
    * removed: abort in-flight turns, release utility runtimes, retire session
    * state, and delete the harness sessions (main + child) so any server or
@@ -115,13 +132,23 @@ export class ChatEngineThreadsDelete {
   async deleteThreadSession(projectId: string, threadId: string): Promise<void> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
-    await this.host.state.agentProcesses.releaseThread(projectId, threadId)
+    await this.bestEffort('release the thread processes', () =>
+      this.host.state.agentProcesses.releaseThread(projectId, threadId)
+    )
     // The durable stream log is per-thread and lives in the directory the
     // deletion removes, so its cache and its queued appends are dropped before
     // anything else: neither may outlive the file.
-    await this.host.units['thread-lifecycle'].forgetThreadStream(projectId, threadId)
+    await this.bestEffort('forget its stream log', () =>
+      this.host.units['thread-lifecycle'].forgetThreadStream(projectId, threadId)
+    )
 
-    if (await this.host.state.ovenChat.release(projectId, threadId)) {
+    let releasedByOven = false
+    try {
+      releasedByOven = await this.host.state.ovenChat.release(projectId, threadId)
+    } catch (error) {
+      Logger.dev('Thread deletion could not release its oven runtime:', error)
+    }
+    if (releasedByOven) {
       let localSession = false
       for (const [sessionId, owner] of this.host.sessionRegistry) {
         if (owner.projectId === projectId && owner.threadId === threadId) {
@@ -205,7 +232,9 @@ export class ChatEngineThreadsDelete {
     for (const temporaryChatId of [...this.host.state.temporaryChats.keys()]) {
       const temporary = this.host.state.temporaryChats.get(temporaryChatId)
       if (temporary && temporary.projectId === projectId && temporary.threadId === threadId) {
-        await this.host.units['temporary-chats'].destroyTemporaryChat(temporaryChatId)
+        await this.bestEffort('destroy a temporary chat', () =>
+          this.host.units['temporary-chats'].destroyTemporaryChat(temporaryChatId)
+        )
       }
     }
     const thread = await this.host.threadManager.getThread(projectId, threadId)

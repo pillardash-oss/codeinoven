@@ -460,18 +460,52 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
     workspaceState.updateThread(updated)
   }
 
+  /**
+   * The tab the assistant strip will draw where the deleted one was.
+   *
+   * Closing the open tab has to land the reader on the tab beside it, never on
+   * the empty state: the strip is drawn from the open thread's assistant, so an
+   * empty selection empties every tab and reads as if the assistant had lost
+   * its whole list. The order here is the strip's own (pinned threads first,
+   * newest first inside each group), and the successor wins over the
+   * predecessor because that is the tab that slides left under the closing one.
+   */
+  private tabBeside(thread: Thread): Thread | null {
+    const sameGroup = this.root.mergeThreadsInList.assistantThreads.filter((candidate) =>
+      thread.assistantId ? candidate.assistantId === thread.assistantId : !candidate.assistantId
+    )
+    const byActivity = (a: Thread, b: Thread) => b.lastActivity - a.lastActivity
+    const ordered = [
+      ...sameGroup.filter((candidate) => candidate.pinned).sort(byActivity),
+      ...sameGroup.filter((candidate) => !candidate.pinned).sort(byActivity)
+    ]
+    const index = ordered.findIndex((candidate) => candidate.id === thread.id)
+    if (index === -1) return ordered[0] ?? null
+    return ordered[index + 1] ?? ordered[index - 1] ?? null
+  }
+
   async handleDelete(thread: Thread): Promise<void> {
+    const wasOpen = this.root.openThreadFromSwitcher.selectedThread?.id === thread.id
+    // Read the neighbour while the row is still in the list: it is what the
+    // strip shows in this tab's place once the deletion settles.
+    const beside = wasOpen ? this.tabBeside(thread) : null
     this.root.createThreadInProject.allThreads = this.root.createThreadInProject.allThreads.filter(
       (t) => t.id !== thread.id
     )
     scopeState.removeThread(thread.id)
-    if (this.root.openThreadFromSwitcher.selectedThread?.id === thread.id)
-      workspaceState.clearThread()
+    if (wasOpen) {
+      if (beside) this.root.openThreadFromSwitcher.openThread(beside)
+      else workspaceState.clearThread()
+    }
     try {
       await invoke('thread:delete', thread.projectId, thread.id)
     } catch (error) {
       this.root.createThreadInProject.upsertThreadInList(thread)
       scopeState.updateThread(thread)
+      // A failed deletion puts the row back, so it also has to put the reader
+      // back: leaving the strip on the neighbour hid the thread that never left
+      // and made a failed deletion look like a successful one.
+      if (wasOpen) this.root.openThreadFromSwitcher.openThread(thread)
       reportError(error, 'The thread could not be deleted.')
     }
   }
