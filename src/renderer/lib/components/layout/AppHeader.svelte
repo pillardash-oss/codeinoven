@@ -96,25 +96,48 @@
     return column >= CHROME_WIDTH_WITH_LONG_NAME ? 'long' : 'short'
   })
 
+  /** The chrome's measured width. The column it owns is a target, not a fact: with
+   *  no panel docked the cluster is content-sized, and using the worst-case width
+   *  there pushed the title a few pixels right of the line it was aligning to.
+   *
+   *  This is the cluster as drawn, so it equals the panel's column whenever the
+   *  chrome fits inside it. It is therefore the wordmark's alignment reference,
+   *  never a floor: see `chromeFloorWidth` for that. */
+  let clusterWidth = $state(0)
+
+  /** The chrome's content width with no attention paid to the column: the box the
+   *  bar's mark, navigation and actions take on their own. */
+  let chromeWidth = $state(0)
+
+  /** The brand name's own width, which is the part of the chrome that gives way. */
+  let brandNameWidth = $state(0)
+
+  /** The narrowest the chrome ever gets, because the name is the one part of it
+   *  the bar drops as the column narrows.
+   *
+   *  The floor has to be the chrome's own content width and never the drawn
+   *  cluster width: the cluster is exactly as wide as the panel's column, so a
+   *  floor read from it equals the panel's current width, and the drag could only
+   *  ever widen the panel (which is what it did: every move was clamped back to
+   *  where it started, while a move outward grew the floor with it). Measured
+   *  rather than estimated, because a dev build carries a build pill the
+   *  production bar does not. */
+  let chromeFloorWidth = $derived.by(() => {
+    if (chromeWidth <= 0) return CHROME_WIDTH
+    return Math.max(0, chromeWidth - (brandForm === 'none' ? 0 : brandNameWidth))
+  })
+
   /** The narrowest panel that still contains the header's chrome, so a drag can
    *  never pull the action buttons out of the panel's column and into the
-   *  thread's. Measured, not estimated: a dev build carries a build pill the
-   *  production bar does not, and an estimate that ignores it lets the chrome
-   *  overflow the column by exactly that pill's width. */
+   *  thread's. */
   let minimumPanelWidth = $derived.by(() => {
-    const chrome = clusterWidth > 0 ? clusterWidth : CHROME_WIDTH
-    const floor = chrome + leftInset - layoutPanelState.railWidth
+    const floor = chromeFloorWidth + leftInset - layoutPanelState.railWidth
     return Math.max(0, Math.min(420, floor))
   })
 
   $effect(() => {
     layoutPanelState.minimumWidth = minimumPanelWidth
   })
-
-  /** The chrome's measured width. The column it owns is a target, not a fact: with
-   *  no panel docked the cluster is content-sized, and using the worst-case width
-   *  there pushed the title a few pixels right of the line it was aligning to. */
-  let clusterWidth = $state(0)
 
   /** How far the thread's block sits from the end of the chrome so that its left
    *  edge lands on the reading column's own left edge. The page being read is the
@@ -337,92 +360,101 @@
     style:width={panelColumnWidth > 0 ? `${panelColumnWidth}px` : undefined}
     bind:clientWidth={clusterWidth}
   >
-    <button
-      type="button"
-      class="flex shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
-      aria-label="Open thread switcher"
-      title="Open thread switcher"
-      onclick={() => threadSwitcherRequest.requestOpen()}
-    >
-      <VendorIcon name="CodeInOven" size={20} />
-      {#if brandForm !== 'none'}
-        <span class="header-brand-name">{brandForm === 'long' ? 'CodeInOven' : 'cio'}</span>
-      {/if}
-    </button>
-
-    {#if buildLabel}
-      <StatusPill
-        tone={buildTone}
-        dot
-        truncate
-        title="CodeInOven {buildLabel} build"
-        aria-label="CodeInOven build: {buildLabel}"
-        class="min-w-0 px-1 py-0">{buildLabel}</StatusPill
-      >
-    {/if}
-
-    <!-- Global navigation: back / forward -->
-    <div class="header-cluster-nav flex items-center gap-0.5">
+    <!-- The chrome measures itself inside its own content box. The cluster above
+         is forced to the panel's column, so its width says where the column is,
+         never how wide the chrome needs to be. -->
+    <div class="flex w-max shrink-0 items-center gap-1" bind:clientWidth={chromeWidth}>
       <button
-        class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
-        aria-label="Go back"
-        title="Go back"
-        disabled={!navigationHistoryState.canGoBack}
-        onclick={goBack}
+        type="button"
+        class="flex shrink-0 items-center px-1.5 text-muted transition-colors duration-150 hover:bg-elevated hover:text-foreground"
+        aria-label="Open thread switcher"
+        title="Open thread switcher"
+        onclick={() => threadSwitcherRequest.requestOpen()}
       >
-        <CioBack size={ICON_SIZE.control} />
+        <VendorIcon name="CodeInOven" size={20} />
+        {#if brandForm !== 'none'}
+          <!-- The gap to the mark is the name's own padding, so its measured
+               width is the whole space the name takes. -->
+          <span class="header-brand-name pl-1.5" bind:clientWidth={brandNameWidth}
+            >{brandForm === 'long' ? 'CodeInOven' : 'cio'}</span
+          >
+        {/if}
       </button>
-      <button
-        class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
-        aria-label="Go forward"
-        title="Go forward"
-        disabled={!navigationHistoryState.canGoForward}
-        onclick={goForward}
-      >
-        <CioForward size={ICON_SIZE.control} />
-      </button>
-    </div>
 
-    {#if onSettings}
-      <!-- Settings owns this slot while it is on screen: the per-view actions
-           belong to the view that was here before. -->
-      <button
-        class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {settingsUiState.searchOpen
-          ? 'bg-elevated text-foreground'
-          : 'text-dimmed hover:bg-elevated hover:text-muted'}"
-        aria-label="Search settings"
-        title="Search settings"
-        onclick={() => (settingsUiState.searchOpen = true)}
-      >
-        <CioSearch size={ICON_SIZE.control} />
-      </button>
-    {:else}
-      {#if navigation.layoutToggle}
-        {@const toggle = navigation.layoutToggle}
-        {@const ToggleIcon = toggle.icon}
-        <!-- The second layout of the rail item on screen: Thread beside the
-             project view, Scoped beside the board. -->
-        <button
-          class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {toggle.pressed
-            ? 'bg-elevated text-foreground'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
-          aria-label={toggle.label}
-          aria-pressed={toggle.pressed}
-          title={toggle.label}
-          data-shortcut={encodeShortcutTokens(toggle.keys)}
-          onclick={toggle.select}
+      {#if buildLabel}
+        <StatusPill
+          tone={buildTone}
+          dot
+          truncate
+          title="CodeInOven {buildLabel} build"
+          aria-label="CodeInOven build: {buildLabel}"
+          class="min-w-0 px-1 py-0">{buildLabel}</StatusPill
         >
-          <ToggleIcon size={ICON_SIZE.control} />
-        </button>
       {/if}
-      <div class="header-cluster-actions">
-        <!-- Folded only when the bar genuinely has no room for them: no panel
+
+      <!-- Global navigation: back / forward -->
+      <div class="header-cluster-nav flex items-center gap-0.5">
+        <button
+          class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
+          aria-label="Go back"
+          title="Go back"
+          disabled={!navigationHistoryState.canGoBack}
+          onclick={goBack}
+        >
+          <CioBack size={ICON_SIZE.control} />
+        </button>
+        <button
+          class="flex h-7 w-7 items-center justify-center text-foreground transition-colors duration-150 hover:bg-elevated disabled:pointer-events-none disabled:text-muted disabled:opacity-30"
+          aria-label="Go forward"
+          title="Go forward"
+          disabled={!navigationHistoryState.canGoForward}
+          onclick={goForward}
+        >
+          <CioForward size={ICON_SIZE.control} />
+        </button>
+      </div>
+
+      {#if onSettings}
+        <!-- Settings owns this slot while it is on screen: the per-view actions
+           belong to the view that was here before. -->
+        <button
+          class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {settingsUiState.searchOpen
+            ? 'bg-elevated text-foreground'
+            : 'text-dimmed hover:bg-elevated hover:text-muted'}"
+          aria-label="Search settings"
+          title="Search settings"
+          onclick={() => (settingsUiState.searchOpen = true)}
+        >
+          <CioSearch size={ICON_SIZE.control} />
+        </button>
+      {:else}
+        {#if navigation.layoutToggle}
+          {@const toggle = navigation.layoutToggle}
+          {@const ToggleIcon = toggle.icon}
+          <!-- The second layout of the rail item on screen: Thread beside the
+             project view, Scoped beside the board. -->
+          <button
+            class="flex h-7 w-7 items-center justify-center transition-colors duration-150 {toggle.pressed
+              ? 'bg-elevated text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-label={toggle.label}
+            aria-pressed={toggle.pressed}
+            title={toggle.label}
+            data-shortcut={encodeShortcutTokens(toggle.keys)}
+            onclick={toggle.select}
+          >
+            <ToggleIcon size={ICON_SIZE.control} />
+          </button>
+        {/if}
+        <div class="header-cluster-actions">
+          <!-- Folded only when the bar genuinely has no room for them: no panel
              column to spend, and the context panel open, which is what narrows the
              conversation and the title with it. Both panels closed, or a panel
              docked on the left, and the actions stay in the bar. -->
-        <AppHeaderViewActions compact={panelColumnWidth === 0 && contextSidebarState.visible} />
-      </div>
-    {/if}
+          <AppHeaderViewActions compact={panelColumnWidth === 0 && contextSidebarState.visible} />
+        </div>
+      {/if}
+    </div>
   </nav>
 
   {#if onScope}
