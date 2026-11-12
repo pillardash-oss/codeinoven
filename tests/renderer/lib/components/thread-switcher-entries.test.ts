@@ -73,26 +73,112 @@ describe('buildThreadSwitcherEntries', () => {
 
   it('interleaves threads and browser tabs in one recency order', () => {
     const thread = makeThread('t0', 1)
-    const tabs = Array.from({ length: 10 }, (_, index) => makeTab(`browser:${index}`, 2 + index))
-    const tabKeys = tabs.map((tab) => browserTabVisitKey(tab.id))
-    const fiveTabs = tabKeys.slice(0, 5)
+    const tabs = [makeTab('browser:1', 3), makeTab('browser:2', 2), makeTab('browser:3', 1)]
+    // Separate sessions, so each tab is its own row and they compete with the
+    // thread on the same terms.
+    const visits = [
+      browserTabVisitKey(tabs[0].id),
+      threadVisitKey(thread),
+      browserTabVisitKey(tabs[1].id),
+      browserTabVisitKey(tabs[2].id)
+    ]
 
-    for (const visits of [
-      [...fiveTabs, threadVisitKey(thread)],
-      [threadVisitKey(thread), ...fiveTabs],
-      [fiveTabs[0], threadVisitKey(thread), ...fiveTabs.slice(1)],
-      [...tabKeys, threadVisitKey(thread)]
-    ]) {
+    const entries = buildThreadSwitcherEntries({
+      visits,
+      threads: [thread],
+      tabs,
+      currentBrowserTabId: null,
+      limit: 10
+    })
+
+    // The last two tabs are one session, so they collapse to the newer one.
+    expect(keys(entries)).toEqual([
+      browserTabVisitKey(tabs[0].id),
+      threadVisitKey(thread),
+      browserTabVisitKey(tabs[1].id)
+    ])
+  })
+
+  it('claims one row for a browsing session, so the thread it left stays next in line', () => {
+    const thread = makeThread('t0', 10)
+    // The user was on the thread, opened the browser, then stepped through three
+    // tabs. One Control+Tab out of the browser must land on the thread, not on a
+    // sibling browser tab: the session is one surface.
+    const tabs = [makeTab('browser:1', 9), makeTab('browser:2', 8), makeTab('browser:3', 7)]
+    const visits = [
+      browserTabVisitKey(tabs[2].id),
+      browserTabVisitKey(tabs[1].id),
+      browserTabVisitKey(tabs[0].id),
+      threadVisitKey(thread)
+    ]
+
+    for (const [currentBrowserTabId, expected] of [
+      [null, tabs[2].id],
+      [tabs[2].id, tabs[2].id],
+      // The tab on screen represents the session she is in, so the row she
+      // leaves the browser through is the tab she is looking at.
+      [tabs[0].id, tabs[0].id]
+    ] as const) {
       const entries = buildThreadSwitcherEntries({
         visits,
         threads: [thread],
         tabs,
-        currentBrowserTabId: null,
+        currentBrowserTabId,
         limit: 10
       })
 
-      expect(keys(entries)).toEqual(visits.slice(0, 10))
+      expect(keys(entries)).toEqual([browserTabVisitKey(expected), threadVisitKey(thread)])
     }
+  })
+
+  it('reaches a session through the newest tab of its run that still exists', () => {
+    const thread = makeThread('t0', 10)
+    const live = makeTab('browser:live', 8)
+    // The newest tab of the session was closed: the row falls to the next tab of
+    // the same session instead of the session disappearing.
+    const visits = [
+      browserTabVisitKey('browser:gone'),
+      browserTabVisitKey(live.id),
+      threadVisitKey(thread)
+    ]
+
+    const entries = buildThreadSwitcherEntries({
+      visits,
+      threads: [thread],
+      tabs: [live],
+      currentBrowserTabId: null,
+      limit: 10
+    })
+
+    expect(keys(entries)).toEqual([browserTabVisitKey(live.id), threadVisitKey(thread)])
+  })
+
+  it('gives the browser its own row again after another surface was used', () => {
+    const first = makeThread('t0', 10)
+    const second = makeThread('t1', 9)
+    const tabs = [makeTab('browser:1', 8), makeTab('browser:2', 7), makeTab('browser:3', 6)]
+    const visits = [
+      browserTabVisitKey(tabs[0].id),
+      browserTabVisitKey(tabs[1].id),
+      threadVisitKey(first),
+      browserTabVisitKey(tabs[2].id),
+      threadVisitKey(second)
+    ]
+
+    const entries = buildThreadSwitcherEntries({
+      visits,
+      threads: [first, second],
+      tabs,
+      currentBrowserTabId: null,
+      limit: 10
+    })
+
+    expect(keys(entries)).toEqual([
+      browserTabVisitKey(tabs[0].id),
+      threadVisitKey(first),
+      browserTabVisitKey(tabs[2].id),
+      threadVisitKey(second)
+    ])
   })
 
   it('lets newer thread visits push older browser tabs off the end of the one list', () => {
