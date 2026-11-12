@@ -1,7 +1,6 @@
 <script lang="ts">
   import AssistantIcon from '$lib/components/icons/cio/AssistantIcon.svelte'
   import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
@@ -18,8 +17,6 @@
   } from '$shared/types'
   import { assistantGap } from './assistant-view'
   import type { Attachment } from 'svelte/attachments'
-  import { slide } from 'svelte/transition'
-  import { motionDuration } from '$lib/motion'
 
   interface Props {
     assistants: Assistant[]
@@ -33,25 +30,13 @@
     onOpenAssistant: (assistant: Assistant) => void
     /**
      * Draw the field in place instead of in a popover. The assistant panel's top
-     * row uses this so its Search button can morph into a field on the spot.
+     * row uses this: the field is always there, and its placeholder is what says
+     * what it searches, so no button and no collapse are needed.
      */
     inline?: boolean
-    /** Whether the inline field is open. The panel's Search button opens it. */
-    expanded?: boolean
-    /** The inline field's chevron asks to collapse back into that button. */
-    onCollapse?: () => void
   }
 
-  let {
-    assistants,
-    tasks,
-    runs,
-    onOpenTask,
-    onOpenAssistant,
-    inline = false,
-    expanded = $bindable(false),
-    onCollapse = () => undefined
-  }: Props = $props()
+  let { assistants, tasks, runs, onOpenTask, onOpenAssistant, inline = false }: Props = $props()
 
   let open = $state(false)
   let query = $state('')
@@ -166,12 +151,7 @@
   )
 
   function closeSearch(): void {
-    if (inline) {
-      // The parent's own signal first, then the binding: the field and the
-      // buttons it grew out of are two halves of the same control.
-      onCollapse()
-      expanded = false
-    } else open = false
+    if (!inline) open = false
     query = ''
     remoteResults = []
     searching = false
@@ -395,30 +375,16 @@
 {/snippet}
 
 {#if inline}
-  {#if expanded}
-    <div class="relative w-full min-w-0" in:slide={{ axis: 'x', duration: motionDuration(180) }}>
-      <div class="flex items-center gap-1">
-        <!-- The chevron gives the field back to the button it grew out of. -->
-        <button
-          type="button"
-          class="flex size-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-          aria-label="Close search"
-          title="Close search"
-          onclick={closeSearch}
-        >
-          <CioBack size={13} />
-        </button>
-        {@render searchField()}
+  <div class="relative min-w-0 flex-1">
+    {@render searchField()}
+    {#if trimmed.length > 0}
+      <div
+        class="absolute inset-x-0 top-full z-30 mt-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
+      >
+        {@render resultsPanel()}
       </div>
-      {#if trimmed.length > 0}
-        <div
-          class="absolute inset-x-0 top-full z-30 mt-1 max-h-80 overflow-y-auto overscroll-contain border bg-surface p-1.5 shadow-lg"
-        >
-          {@render resultsPanel()}
-        </div>
-      {/if}
-    </div>
-  {/if}
+    {/if}
+  </div>
 {:else}
   <Popover.Root
     bind:open
