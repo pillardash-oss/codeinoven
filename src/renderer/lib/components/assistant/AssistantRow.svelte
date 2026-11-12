@@ -18,6 +18,7 @@
   } from '$lib/components/shared/thread-hover-popover-layout'
   import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import AssistantHoverPopover from './AssistantHoverPopover.svelte'
+  import AssistantOptionsMenu from './AssistantOptionsMenu.svelte'
 
   /**
    * One assistant in the assistant view's sidebar.
@@ -94,10 +95,12 @@
 
   let dropIndicator = $state<'before' | 'after' | null>(null)
   let taskDropActive = $state(false)
+  /** The assistant's menu, opened by right-clicking the row. */
+  let menuOpen = $state(false)
 
   // ─── Hover popover ───────────────────────────────────────────────────────
   /** The assistant's info popover, shared with every surface that shows one. */
-  const popover = createThreadHoverPopover()
+  const popover = createThreadHoverPopover({ isBlocked: () => menuOpen })
 
   function captureRowElement(element: HTMLElement): () => void {
     popover.setRow(element)
@@ -164,12 +167,23 @@
     taskDropActive = false
   }
 
+  /**
+   * Right-click anywhere on the row opens the assistant's own menu   the same one
+   * the header opens from its mark   so an assistant is configurable from the
+   * place that lists it, not only from the thread strip.
+   */
+  function openContextMenu(event: MouseEvent): void {
+    event.preventDefault()
+    popover.hide()
+    menuOpen = true
+  }
+
   $effect(() => relativeTimeClock.hold())
 </script>
 
 <div
   class="group relative mb-0.5 flex items-center px-1.5 py-2 transition-colors {selected
-    ? 'bg-elevated/70'
+    ? 'bg-selected'
     : taskDropActive
       ? 'bg-primary/10'
       : 'hover:bg-elevated'}"
@@ -181,6 +195,7 @@
   ondragleave={handleDragLeave}
   onpointerenter={() => popover.enter()}
   onpointerleave={() => popover.leave()}
+  oncontextmenu={openContextMenu}
   {@attach captureRowElement}
 >
   <!-- Stable drop indicator (assistant reorder) -->
@@ -273,6 +288,10 @@
       </span>
     </span>
   </button>
+
+  <!-- Right-click opens the same assistant menu the header's mark does; the
+       trigger is an invisible anchor, so the row keeps its flat shape. -->
+  <AssistantOptionsMenu {assistant} bind:open={menuOpen} anchorOnly />
 </div>
 
 {#if popover.visible}

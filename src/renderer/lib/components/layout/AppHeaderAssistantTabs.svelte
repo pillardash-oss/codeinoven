@@ -1,16 +1,23 @@
 <script lang="ts">
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
+  import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { tick } from 'svelte'
+  import { Portal } from 'bits-ui'
   import PickerMenuShell from '$lib/components/shared/PickerMenuShell.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
+  import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import AssistantOptionsMenu from '$lib/components/assistant/AssistantOptionsMenu.svelte'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import { createThreadActionsMenu } from '$lib/components/shared/thread-actions-menu.svelte'
+  import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
+  import {
+    THREAD_HOVER_POPOVER_SURFACE_CLASS,
+    threadHoverPopoverStyle
+  } from '$lib/components/shared/thread-hover-popover-layout'
   import { isThreadLiveWorking, statusBadgeForThread } from '$lib/thread-status-badge'
   import {
     AssistantDefaultIcon,
@@ -28,20 +35,23 @@
   /**
    * The assistant view's header centre.
    *
-   * It is the one page whose threads sit under the bar instead of in the sidebar:
-   * the open assistant's mark, colour and name are fixed at the left, the plus
-   * beside the name adds a task to that assistant, and its most recently worked
-   * threads follow as tabs. A tab is a plain title and a close button   the
-   * assistant already names itself once, so repeating its mark on every tab would
-   * say nothing. The rest of the threads wait behind a count with a filter.
+   * It is the one page whose threads sit under the bar instead of in the sidebar.
+   * The open assistant's mark, colour and name are fixed at the left, the plus
+   * beside the name adds a task to that assistant, and its threads follow as tabs
+   * on the right.
    *
-   * The assistant's mark becomes a chevron under the pointer, and either mouse
-   * button on it opens the assistant's own menu. Right-clicking a tab opens that
-   * thread's actions.
+   * Pinned threads keep their own group nearest the name, divided from the rest by
+   * a rule: the two groups never mix, and each holds its newest few tabs with the
+   * remainder behind a count. Hovering a tab opens the same thread popover a row
+   * does, the assistant's mark becomes an ellipsis under the pointer to say a menu
+   * is there, right-clicking a tab opens that thread's actions, and right-clicking
+   * the name opens the assistant's own menu.
    */
 
-  /** Tabs shown before the rest fold behind the count. */
-  const MAX_TABS = 4
+  /** Unpinned tabs shown before the rest fold behind the count. */
+  const OPEN_TABS = 4
+  /** Pinned tabs are the ones the user chose, so they get a shallower window. */
+  const PINNED_TABS = 3
   /** Threads with no assistant still need a strip when one of them is open, so
    *  they gather under this name instead of vanishing with the sidebar rows. */
   const UNASSIGNED_LABEL = 'Tasks'
@@ -83,47 +93,68 @@
       .sort((a, b) => b.lastActivity - a.lastActivity)
   })
 
-  /** The latest threads keep a tab, and the open thread always does, taking the
-   *  last slot when it is not among them. */
-  let visibleThreads = $derived.by(() => {
-    const latest = groupThreads.slice(0, MAX_TABS)
+  /** Pinned threads are their own group: a pin is a choice, not a recency. */
+  let pinnedGroup = $derived(groupThreads.filter((thread) => thread.pinned))
+  let openGroup = $derived(groupThreads.filter((thread) => !thread.pinned))
+
+  /**
+   * The newest few of one group keep a tab, and the open thread always does,
+   * taking the last slot when it is not among them.
+   */
+  function withActive(list: readonly Thread[], limit: number): Thread[] {
+    const latest = list.slice(0, limit)
     const active = selectedThread
     if (active && !latest.some((thread) => thread.id === active.id)) {
-      const open = groupThreads.find((thread) => thread.id === active.id)
-      if (open) latest.splice(Math.max(0, MAX_TABS - 1), latest.length, open)
+      const open = list.find((thread) => thread.id === active.id)
+      if (open) latest.splice(Math.max(0, limit - 1), latest.length, open)
     }
     return latest
-  })
+  }
 
-  let hiddenThreads = $derived.by(() => {
-    const shown = new SvelteSet(visibleThreads.map((thread) => thread.id))
-    return groupThreads.filter((thread) => !shown.has(thread.id))
-  })
+  function withoutShown(list: readonly Thread[], shown: readonly Thread[]): Thread[] {
+    const ids = new SvelteSet(shown.map((thread) => thread.id))
+    return list.filter((thread) => !ids.has(thread.id))
+  }
+
+  let visiblePinned = $derived(withActive(pinnedGroup, PINNED_TABS))
+  let visibleOpen = $derived(withActive(openGroup, OPEN_TABS))
+  let hiddenPinned = $derived(withoutShown(pinnedGroup, visiblePinned))
+  let hiddenOpen = $derived(withoutShown(openGroup, visibleOpen))
 
   let activeId = $derived(selectedThread?.id ?? null)
 
-  // ─── Overflow picker ──────────────────────────────────────────────────────
-  let overflowOpen = $state(false)
+  // ─── Overflow picker (one per group) ──────────────────────────────────────
+  type OverflowKind = 'pinned' | 'open'
+
+  let overflow = $state<OverflowKind | null>(null)
   let overflowQuery = $state('')
-  let overflowRoot: HTMLDivElement | undefined
+  let overflowAnchor: HTMLElement | null = null
 
-  function captureOverflowRoot(node: HTMLDivElement): () => void {
-    overflowRoot = node
-    return () => {
-      if (overflowRoot === node) overflowRoot = undefined
-    }
-  }
+  let overflowThreads = $derived(
+    overflow === 'pinned' ? hiddenPinned : overflow === 'open' ? hiddenOpen : []
+  )
 
-  let filteredHidden = $derived.by(() => {
+  let filteredOverflow = $derived.by(() => {
     const query = overflowQuery.trim().toLowerCase()
     return query
-      ? hiddenThreads.filter((thread) => thread.title.toLowerCase().includes(query))
-      : hiddenThreads
+      ? overflowThreads.filter((thread) => thread.title.toLowerCase().includes(query))
+      : overflowThreads
   })
 
-  function closeOverflow(): void {
-    overflowOpen = false
+  function toggleOverflow(kind: OverflowKind, event: MouseEvent): void {
+    if (overflow === kind) {
+      closeOverflow()
+      return
+    }
+    overflowAnchor = event.currentTarget as HTMLElement
     overflowQuery = ''
+    overflow = kind
+  }
+
+  function closeOverflow(): void {
+    overflow = null
+    overflowQuery = ''
+    overflowAnchor = null
   }
 
   function pickOverflow(thread: Thread): void {
@@ -135,20 +166,19 @@
     if (event.key === 'Escape') {
       event.preventDefault()
       closeOverflow()
-    } else if (event.key === 'Enter' && filteredHidden[0]) {
+    } else if (event.key === 'Enter' && filteredOverflow[0]) {
       event.preventDefault()
-      pickOverflow(filteredHidden[0])
+      pickOverflow(filteredOverflow[0])
     }
   }
 
   /**
    * Lift the menu into the browser's top layer. The header is its own stacking
    * context, so a z-index alone loses to the panels below it; a manual popover
-   * escapes every stacking context and is anchored under the trigger by its own
-   * rect.
+   * escapes every stacking context and is anchored under the count that opened it.
    */
   function topLayer(node: HTMLDivElement): () => void {
-    const anchor = overflowRoot?.getBoundingClientRect()
+    const anchor = overflowAnchor?.getBoundingClientRect()
     if (anchor) {
       node.style.top = `${anchor.bottom + 4}px`
       node.style.right = `${Math.max(0, window.innerWidth - anchor.right)}px`
@@ -161,9 +191,29 @@
   }
 
   function onWindowPointerDown(event: PointerEvent): void {
-    if (!overflowOpen || !overflowRoot) return
-    if (event.target instanceof Node && overflowRoot.contains(event.target)) return
+    if (!overflow) return
+    if (event.target instanceof Node && overflowAnchor?.contains(event.target)) return
     closeOverflow()
+  }
+
+  // ─── Hovering a tab shows the thread's own popover ────────────────────────
+  const hover = createThreadHoverPopover({ isBlocked: () => Boolean(overflow) || threadMenuOpen })
+  let hoverThread = $state<Thread | null>(null)
+
+  function tabEnter(event: PointerEvent, thread: Thread): void {
+    hover.setRow(event.currentTarget as HTMLElement)
+    hoverThread = thread
+    hover.enter()
+  }
+
+  function tabLeave(): void {
+    hover.leave()
+    hoverThread = null
+  }
+
+  function captureHoverSurface(element: HTMLElement): () => void {
+    hover.setPopover(element)
+    return () => hover.setPopover(undefined)
   }
 
   // ─── The thread a right-click is about ────────────────────────────────────
@@ -202,6 +252,7 @@
   })
 
   async function openThreadMenu(thread: Thread, element: HTMLElement): Promise<void> {
+    hover.hide()
     const strip = stripElement?.getBoundingClientRect()
     const tab = element.getBoundingClientRect()
     contextAnchor = strip
@@ -242,8 +293,8 @@
   >
     {#if groupAssistant}
       <AssistantOptionsMenu assistant={groupAssistant} bind:open={assistantMenuOpen}>
-        <!-- The mark becomes the chevron that says the click opens a menu, the
-               same swap every list row uses. -->
+        <!-- The mark becomes the menu ellipsis under the pointer, the same swap a
+             row's icon uses to say a click opens something. -->
         <span class="relative flex size-4 items-center justify-center">
           <span
             class="flex items-center justify-center transition-opacity duration-150 group-hover/label:opacity-0"
@@ -257,7 +308,7 @@
           <span
             class="absolute inset-0 flex items-center justify-center opacity-0 transition-opacity duration-150 group-hover/label:opacity-100"
           >
-            <CioForward size={11} class="rotate-90 text-muted" />
+            <CioEllipsis size={11} class="text-muted" />
           </span>
         </span>
       </AssistantOptionsMenu>
@@ -289,115 +340,90 @@
       class="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
       aria-label="{groupLabel} threads"
     >
-      <!-- Right-aligned: the strip grows towards the name, so the tabs sit at the
-           bar's right end and the newest work is the nearest thing to reach. -->
+      <!-- Right-aligned: the strip grows towards the name, so the pinned group
+           sits closest to it and the newest work is the nearest thing to reach. -->
       <div class="ml-auto flex h-full w-max max-w-full items-center gap-0.5">
-        {#each visibleThreads as thread (thread.id)}
-          {@const active = thread.id === activeId}
-          {@const status = statusBadgeForThread(thread, isThreadLiveWorking(thread))}
-          <div
-            role="group"
-            aria-label={thread.title}
-            class="relative flex min-h-8 min-w-[4rem] max-w-44 items-center gap-1 overflow-hidden pl-2 pr-0.5 text-[0.6875rem] transition-colors {active
+        {#each visiblePinned as thread (thread.id)}
+          {@render threadTab(thread)}
+        {/each}
+
+        {#if hiddenPinned.length > 0}
+          <button
+            type="button"
+            class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
+            'pinned'
               ? 'bg-selected text-foreground'
               : 'text-muted hover:bg-elevated hover:text-foreground'}"
-            oncontextmenu={(event: MouseEvent) => {
-              event.preventDefault()
-              void openThreadMenu(thread, event.currentTarget as HTMLElement)
-            }}
+            aria-haspopup="menu"
+            aria-expanded={overflow === 'pinned'}
+            aria-label="Show {hiddenPinned.length} more pinned threads"
+            title="Show {hiddenPinned.length} more pinned threads"
+            onclick={(event: MouseEvent) => toggleOverflow('pinned', event)}
           >
-            <!-- The left slot is the tab's state: a thin square that fills with
-                 the state's colour while work is live or waiting on the user, and
-                 keeps only its outline once the thread is done. -->
-            <StatusBadge
-              stage={status.stage}
-              tone={status.tone}
-              kind={status.kind}
-              variant="square"
-              hollow={status.stage === 'done'}
-              title={status.label}
-              class="shrink-0"
-            />
-            <button
-              type="button"
-              class="min-w-0 flex-1 truncate text-left"
-              title={thread.title}
-              aria-current={active ? 'page' : undefined}
-              onclick={() => assistantHeaderTabs.openThread(thread)}
-            >
-              {thread.title}
-            </button>
-            <button
-              type="button"
-              class="flex size-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
-              aria-label="Delete thread {thread.title}"
-              title="Delete thread"
-              onclick={() => {
-                contextThread = thread
-                actionsMenu.startDelete()
-              }}
-            >
-              <CioClose size={10} />
-            </button>
-            {#if active}
-              <span
-                class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground"
-                aria-hidden="true"
-              ></span>
-            {/if}
-          </div>
+            +{hiddenPinned.length}
+          </button>
+        {/if}
+
+        {#if pinnedGroup.length > 0 && openGroup.length > 0}
+          <!-- The two groups never mix: the rule is the boundary a tab crosses
+               when it is pinned or unpinned. -->
+          <div class="mx-1 h-5 w-px shrink-0 bg-border" aria-hidden="true"></div>
+        {/if}
+
+        {#each visibleOpen as thread (thread.id)}
+          {@render threadTab(thread)}
         {/each}
+
+        {#if hiddenOpen.length > 0}
+          <button
+            type="button"
+            class="flex min-h-8 shrink-0 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflow ===
+            'open'
+              ? 'bg-selected text-foreground'
+              : 'text-muted hover:bg-elevated hover:text-foreground'}"
+            aria-haspopup="menu"
+            aria-expanded={overflow === 'open'}
+            aria-label="Show {hiddenOpen.length} more threads"
+            title="Show {hiddenOpen.length} more threads"
+            onclick={(event: MouseEvent) => toggleOverflow('open', event)}
+          >
+            +{hiddenOpen.length}
+          </button>
+        {/if}
       </div>
     </div>
 
-    {#if hiddenThreads.length > 0}
-      <div class="relative ml-0.5 shrink-0" {@attach captureOverflowRoot}>
-        <button
-          type="button"
-          class="flex min-h-8 items-center px-2 text-[0.6875rem] font-medium tabular-nums transition-colors {overflowOpen
-            ? 'bg-selected text-foreground'
-            : 'text-muted hover:bg-elevated hover:text-foreground'}"
-          aria-haspopup="menu"
-          aria-expanded={overflowOpen}
-          aria-label="Show {hiddenThreads.length} more threads"
-          title="Show {hiddenThreads.length} more threads"
-          onclick={() => (overflowOpen ? closeOverflow() : (overflowOpen = true))}
+    {#if overflow}
+      <div
+        popover="manual"
+        class="fixed bottom-auto left-auto m-0 overflow-visible border-0 bg-transparent p-0"
+        {@attach topLayer}
+      >
+        <PickerMenuShell
+          bind:query={overflowQuery}
+          label={overflow === 'pinned' ? 'More pinned threads' : 'More threads'}
+          placeholder="Filter threads"
+          autofocusSearch
+          onSearchInput={() => {}}
+          onSearchKeydown={onOverflowKeydown}
         >
-          +{hiddenThreads.length}
-        </button>
-        {#if overflowOpen}
-          <div
-            popover="manual"
-            class="fixed bottom-auto left-auto m-0 overflow-visible border-0 bg-transparent p-0"
-            {@attach topLayer}
-          >
-            <PickerMenuShell
-              bind:query={overflowQuery}
-              label="More threads"
-              placeholder="Filter threads"
-              autofocusSearch
-              onSearchInput={() => {}}
-              onSearchKeydown={onOverflowKeydown}
+          {#each filteredOverflow as thread (thread.id)}
+            <button
+              type="button"
+              role="menuitem"
+              class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-elevated"
+              title={thread.title}
+              onclick={() => pickOverflow(thread)}
             >
-              {#each filteredHidden as thread (thread.id)}
-                <button
-                  type="button"
-                  role="menuitem"
-                  class="flex w-full items-center gap-2 px-2 py-1.5 text-left text-xs text-foreground hover:bg-elevated"
-                  title={thread.title}
-                  onclick={() => pickOverflow(thread)}
-                >
-                  <span class="min-w-0 flex-1 truncate">{thread.title}</span>
-                  <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
-                    >{formatCompactAge(thread.lastActivity, relativeTimeClock.now)}</span
-                  >
-                </button>
-              {:else}
-                <p class="px-2 py-1.5 text-xs text-dimmed">No thread matches</p>
-              {/each}
-            </PickerMenuShell>
-          </div>
-        {/if}
+              <span class="min-w-0 flex-1 truncate">{thread.title}</span>
+              <span class="shrink-0 text-[0.625rem] tabular-nums text-dimmed"
+                >{formatCompactAge(thread.lastActivity, relativeTimeClock.now)}</span
+              >
+            </button>
+          {:else}
+            <p class="px-2 py-1.5 text-xs text-dimmed">No thread matches</p>
+          {/each}
+        </PickerMenuShell>
       </div>
     {/if}
   {/if}
@@ -420,6 +446,81 @@
     </div>
   {/if}
 </div>
+
+{#if hover.visible && hoverThread}
+  <Portal>
+    <div
+      {@attach captureHoverSurface}
+      class={THREAD_HOVER_POPOVER_SURFACE_CLASS}
+      style={threadHoverPopoverStyle(hover.position.x, hover.position.y)}
+    >
+      <ThreadHoverPopover
+        thread={hoverThread}
+        isWorking={isThreadLiveWorking(hoverThread)}
+        hideProject
+      />
+    </div>
+  </Portal>
+{/if}
+
+{#snippet threadTab(thread: Thread)}
+  {@const active = thread.id === activeId}
+  {@const status = statusBadgeForThread(thread, isThreadLiveWorking(thread))}
+  <div
+    role="group"
+    aria-label={thread.title}
+    class="relative flex min-h-8 min-w-[4rem] max-w-44 items-center gap-1 overflow-hidden pl-2 pr-0.5 text-[0.6875rem] transition-colors {active
+      ? 'bg-selected text-foreground'
+      : 'text-muted hover:bg-elevated hover:text-foreground'}"
+    onpointerenter={(event: PointerEvent) => tabEnter(event, thread)}
+    onpointerleave={tabLeave}
+    oncontextmenu={(event: MouseEvent) => {
+      event.preventDefault()
+      void openThreadMenu(thread, event.currentTarget as HTMLElement)
+    }}
+  >
+    <!-- The left slot is the tab's state: a thin square that fills with the
+         state's colour while work is live or waiting on the user, and keeps only
+         its outline once the thread is done. -->
+    <StatusBadge
+      stage={status.stage}
+      tone={status.tone}
+      kind={status.kind}
+      variant="square"
+      hollow={status.stage === 'done'}
+      title={status.label}
+      class="shrink-0"
+    />
+    <button
+      type="button"
+      class="min-w-0 flex-1 truncate text-left"
+      title={thread.title}
+      aria-current={active ? 'page' : undefined}
+      onclick={() => assistantHeaderTabs.openThread(thread)}
+    >
+      {thread.title}
+    </button>
+    <button
+      type="button"
+      class="flex size-5 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+      aria-label="Delete thread {thread.title}"
+      title="Delete thread"
+      onclick={() => {
+        hover.hide()
+        contextThread = thread
+        actionsMenu.startDelete()
+      }}
+    >
+      <CioClose size={10} />
+    </button>
+    {#if active}
+      <span
+        class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground"
+        aria-hidden="true"
+      ></span>
+    {/if}
+  </div>
+{/snippet}
 
 <!-- Rename Thread -->
 <Modal open={actionsMenu.showRenameModal} title="Rename Thread" onClose={actionsMenu.cancelRename}>

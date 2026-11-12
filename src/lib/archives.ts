@@ -44,6 +44,11 @@ export function unarchivedThreadSql(alias = 'threads'): string {
       (a.kind = 'assistant' AND a.entity_id = ${alias}.assistant_id))
     AND NOT EXISTS (SELECT 1 FROM threads archive_parent
       WHERE archive_parent.id IN (${alias}.assistant_task_id, ${alias}.coordinator_thread_id)
+        -- An assistant's "Getting started" host is hidden once the user folds
+        -- that conversation away, which is cosmetic: the runs the assistant
+        -- executed under it are the assistant's history, not the host's, so an
+        -- archived host never buries them.
+        AND COALESCE(archive_parent.assistant_getting_started, 0) = 0
         AND (archive_parent.archived = 1 OR EXISTS (
           SELECT 1 FROM archives parent_archive
           WHERE parent_archive.kind = 'thread' AND parent_archive.entity_id = archive_parent.id)))`

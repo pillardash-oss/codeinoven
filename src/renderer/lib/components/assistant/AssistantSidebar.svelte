@@ -73,10 +73,20 @@
     return map
   })
 
-  /** The assistant whose thread is open, so its row reads as the current one. */
-  const selectedAssistantId = $derived(
-    tasks.find((task) => task.id === selectedThreadId)?.assistantId ?? null
-  )
+  /**
+   * The assistant whose thread is open, so its row reads as the current one.
+   * The open thread can be a run as well as a task, and a run is a thread of its
+   * assistant too, so the lookup has to see both or the row the user is in stays
+   * unlit.
+   */
+  const selectedAssistantId = $derived.by(() => {
+    const task = tasks.find((candidate) => candidate.id === selectedThreadId)
+    if (task?.assistantId) return task.assistantId
+    for (const [assistantId, runs] of runsByAssistant) {
+      if (runs.some((run) => run.id === selectedThreadId)) return assistantId
+    }
+    return null
+  })
 
   /**
    * How each assistant's threads break down   working, attention, error   over

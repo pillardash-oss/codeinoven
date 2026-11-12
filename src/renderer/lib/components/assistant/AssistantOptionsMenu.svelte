@@ -29,10 +29,16 @@
   interface Props {
     assistant: Assistant
     open?: boolean
-    children: Snippet
+    /**
+     * Draw no trigger of its own. A sidebar row is a row, not a button with a
+     * menu: the row's right-click opens this through `open`, and the anchor stays
+     * in the layout invisibly so the menu still opens beside the row.
+     */
+    anchorOnly?: boolean
+    children?: Snippet
   }
 
-  let { assistant, open = $bindable(false), children }: Props = $props()
+  let { assistant, open = $bindable(false), anchorOnly = false, children }: Props = $props()
 
   let hasRunsToday = $state(false)
   let editOpen = $state(false)
@@ -105,15 +111,21 @@
 
 <DropdownMenu.Root bind:open onOpenChange={onMenuOpenChange}>
   <DropdownMenu.Trigger
-    class="flex shrink-0 items-center justify-center outline-none"
+    class={anchorOnly
+      ? 'pointer-events-none absolute inset-0 h-full w-full opacity-0'
+      : 'flex shrink-0 items-center justify-center outline-none'}
     aria-label="Options for {assistant.name}"
+    aria-hidden={anchorOnly ? 'true' : undefined}
+    tabindex={anchorOnly ? -1 : undefined}
     title="Assistant options"
     oncontextmenu={(event: MouseEvent) => {
       event.preventDefault()
       open = true
     }}
   >
-    {@render children()}
+    {#if children}
+      {@render children()}
+    {/if}
   </DropdownMenu.Trigger>
   <DropdownMenu.Portal>
     <DropdownMenu.Content
