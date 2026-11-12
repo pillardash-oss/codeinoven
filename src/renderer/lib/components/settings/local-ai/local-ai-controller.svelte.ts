@@ -39,6 +39,16 @@ const LOG_LINE_LIMIT = 400
 const PROBE_INTERVAL_MS = 2_000
 /** A first start downloads its model, so readiness can be many minutes out. */
 const PROBE_LIMIT = 900
+/**
+ * The same budget for a row whose weights are not on disk yet.
+ *
+ * Nothing in the app resumes a fetch that was cut short: the downloader the
+ * engines ship starts every file from zero. So a multi-gigabyte model over a home
+ * connection needs hours, and the 30-minute budget above would abort it just as it
+ * finished, which is exactly what made a start look like it began again every
+ * time. A row that names a local path keeps the short budget.
+ */
+const REFERENCE_PROBE_LIMIT = 7_200
 /** A card keeps the last lines of a failure, never the whole log, in its notice. */
 const FAILURE_TAIL_LINES = 6
 /** An adopted server is watched for as long as it runs, since nothing else tells
@@ -80,6 +90,10 @@ export class LocalAiController {
   logs = $state<Record<string, string[]>>({})
   loadedModel = $state<Record<string, string>>({})
   notice = $state<Record<string, string>>({})
+  /** Bytes each saved model path occupies, keyed by path, filled on demand. */
+  modelSizes = $state<Record<string, number>>({})
+  /** Paths already asked about, so a card re-render never walks a model twice. */
+  private measured = new SvelteSet<string>()
   private handles = new SvelteMap<string, RunningHandle>()
 
   statusOf(entryId: string): LlamaCppServerStatus {
@@ -93,6 +107,41 @@ export class LocalAiController {
   isBusy(entryId: string): boolean {
     const status = this.statusOf(entryId)
     return status === 'starting' || status === 'running'
+  }
+
+  /**
+   * Bytes the model at this path occupies on disk, or undefined until the main
+   * process has answered. 0 stands for a path it could not measure, so a card
+   * can tell "still reading" from "unavailable".
+   */
+  sizeOf(path: string): number | undefined {
+    return this.modelSizes[path]
+  }
+
+  /**
+   * Ask the main process how large a saved model is.
+   *
+   * A multi-gigabyte snapshot is walked there, never here, and each path is asked
+   * once per session: a card that re-renders or a tab that is reopened reuses the
+   * answer instead of re-reading the disk.
+   */
+  async loadModelSize(path: string): Promise<void> {
+    if (path.length === 0 || this.measured.has(path)) return
+    this.measured.add(path)
+    let bytes: number
+    try {
+      bytes = (await invoke('localAi:modelSize', path)) ?? 0
+    } catch {
+      bytes = 0
+    }
+    this.modelSizes = { ...this.modelSizes, [path]: bytes }
+  }
+
+  /** Show a saved model in the OS file manager, reporting a refusal honestly. */
+  async revealModel(entry: LlamaCppServerEntry): Promise<boolean> {
+    const path = entry.modelPath.trim()
+    if (path.length === 0) return false
+    return await invoke('localAi:revealModel', path).catch(() => false)
   }
 
   /** A start waiting for the user to accept that the model already bound to
@@ -486,13 +535,18 @@ export class LocalAiController {
   private scheduleProbe(entry: LlamaCppServerEntry): void {
     const handle = this.handles.get(entry.id)
     if (!handle) return
-    if (handle.probes >= PROBE_LIMIT) {
+    const limit = this.isReferenceRow(entry) ? REFERENCE_PROBE_LIMIT : PROBE_LIMIT
+    if (handle.probes >= limit) {
       this.stopHandle(entry.id)
       void invoke('pty:destroy', localAiPtyId(entry.id))
       this.setStatus(entry.id, 'failed')
       this.notice = {
         ...this.notice,
-        [entry.id]: this.failureTail(entry.id) || 'The server never answered on its port'
+        [entry.id]:
+          this.failureTail(entry.id) ||
+          (this.isReferenceRow(entry)
+            ? 'The model was still being downloaded when the server was stopped'
+            : 'The server never answered on its port')
       }
       return
     }

@@ -17,7 +17,7 @@
 
   /** What a pinned pattern protects, so the row says why it cannot be removed. */
   function permanentPatternDescription(pattern: string): string {
-    return pattern.endsWith('.cio-backup')
+    return pattern === '.cio/secrets/**'
       ? 'Previous contents kept when an env file is written'
       : 'Secret-tool files in app data'
   }

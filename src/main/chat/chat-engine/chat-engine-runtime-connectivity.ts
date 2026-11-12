@@ -383,7 +383,10 @@ export class ChatEngineRuntimeConnectivity {
       sessionId,
       projectId: info.projectId,
       threadId: info.threadId,
-      harnessId: issue.harnessId ?? info.driverId,
+      // The session owner is the only honest harness for this wait: an issue
+      // that names a fallback model must not make the retry look like it ran on
+      // the runtime that produced the failure.
+      harnessId: info.driverId,
       ...(hasRetryAt ? { retryAt, resetAt } : {}),
       issueKind: issue.kind,
       issueMessage: issue.message,

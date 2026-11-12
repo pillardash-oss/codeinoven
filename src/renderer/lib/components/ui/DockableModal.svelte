@@ -88,6 +88,11 @@
      */
     flushBody?: boolean
     /**
+     * Optional replacement for the header's plain title text, for a panel whose
+     * title is editable (e.g. a file name). `title` stays the accessible name.
+     */
+    headerTitle?: Snippet
+    /**
      * Optional content rendered before the title in the header (e.g. a project
      * icon and name), so the panel states which project it belongs to.
      */
@@ -130,6 +135,7 @@
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
     headerActions,
+    headerTitle,
     flushBody = false,
     headerPrefix,
     onPrimaryAction,
@@ -250,8 +256,14 @@
 
   function onHeaderPointerDown(event: PointerEvent): void {
     if (minimized || event.button !== 0) return
-    // Let the header's own buttons keep their click behavior   never start a drag.
-    if (event.target instanceof Element && event.target.closest('button')) return
+    // Let the header's own controls keep their behavior   never start a drag from a
+    // button, nor from an editable title the panel renders in this row.
+    if (
+      event.target instanceof Element &&
+      event.target.closest('button, input, select, textarea, a, [contenteditable="true"]')
+    ) {
+      return
+    }
     dragging = true
     dragStart = { x: event.screenX, y: event.screenY }
     dragOrigin = { x: position.x, y: position.y }
@@ -597,7 +609,11 @@
           {#if headerPrefix}
             <span class="flex min-w-0 items-center gap-1.5">{@render headerPrefix()}</span>
           {/if}
-          <h2 class="truncate text-xs font-semibold">{title}</h2>
+          {#if headerTitle}
+            <span class="flex min-w-0 items-center">{@render headerTitle()}</span>
+          {:else}
+            <h2 class="truncate text-xs font-semibold">{title}</h2>
+          {/if}
         </span>
         <span class="flex shrink-0 items-center gap-1">
           {#if headerActions}

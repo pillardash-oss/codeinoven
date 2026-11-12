@@ -467,8 +467,7 @@
             {#if selectedFile.importedFrom}
               <p class="border-t px-4 py-2 text-[0.6875rem] text-dimmed">
                 Imported from <span class="font-mono">{selectedFile.importedFrom}</span>; the
-                original is kept beside it as
-                <span class="font-mono">.cio-backup</span>.
+                original is kept under <span class="font-mono">.cio/secrets</span> at that path.
               </p>
             {/if}
           </section>

@@ -83,6 +83,10 @@ export const invokeAppContract = {
   >,
   /** Pick a local model: a `.gguf` file, or an MLX folder. */
   'localAi:pickModel': {} as Contract<[runtime?: LocalAiRuntimeId], string | null>,
+  /** Bytes a saved model path occupies on disk, for the card's size column. */
+  'localAi:modelSize': {} as Contract<[path: string], number | null>,
+  /** Show a saved model path in the OS file manager: the folder, or the weights file. */
+  'localAi:revealModel': {} as Contract<[path: string], boolean>,
   'dialog:pickFolder': {} as Contract<[], string | null>,
   'dialog:pickCloneDestination': {} as Contract<[], string | null>,
   'clipboard:saveImage': {} as Contract<[scope: AttachmentStorageScope], string | null>,

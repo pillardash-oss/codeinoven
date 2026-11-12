@@ -14,6 +14,7 @@
  * nothing about it and the Hugging Face cache layout is read instead.
  */
 import { readFile, readdir, stat } from 'node:fs/promises'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import type { LocalAiModelLocation, LocalAiRuntimeId } from '../../lib/llama-cpp'
@@ -55,11 +56,11 @@ async function fileSize(path: string): Promise<number> {
 }
 
 /**
- * Bytes a snapshot occupies. A snapshot is a folder of links into the cache's own
+ * Bytes a folder occupies. A snapshot is a folder of links into the cache's own
  * blob store, and `stat` follows them, so the answer is the size of the weights the
  * user is actually storing.
  */
-async function snapshotBytes(directory: string): Promise<number> {
+async function folderBytes(directory: string): Promise<number> {
   let total = 0
   let seen = 0
   let entries: string[]
@@ -73,12 +74,28 @@ async function snapshotBytes(directory: string): Promise<number> {
     const path = join(directory, entry)
     try {
       const info = await stat(path)
-      total += info.isDirectory() ? await snapshotBytes(path) : info.size
+      total += info.isDirectory() ? await folderBytes(path) : info.size
     } catch {
       // A snapshot link whose blob is gone contributes nothing.
     }
   }
   return total
+}
+
+/** A snapshot is complete when its config and at least one weights file are there. */
+/**
+ * Bytes the model at this path occupies on disk: the weights file itself for a
+ * GGUF model, every file inside the folder for an MLX snapshot. Null when the path
+ * cannot be read, so a row can say it is unavailable instead of claiming zero.
+ */
+export async function measureModelPath(path: string): Promise<number | null> {
+  try {
+    const info = await stat(path)
+    if (info.isDirectory()) return await folderBytes(path)
+    return info.isFile() ? info.size : null
+  } catch {
+    return null
+  }
 }
 
 /** A snapshot is complete when its config and at least one weights file are there. */
@@ -94,6 +111,49 @@ async function isCompleteSnapshot(directory: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Whether a repository's weights are already complete on this machine.
+ *
+ * Synchronous on purpose: the close gate asks this while it builds the prompt it
+ * is about to send, and a model that is only being loaded must not be reported as
+ * a download that a close would throw away. Only a handful of directory reads, no
+ * file is opened.
+ */
+export function mlxModelCached(reference: string): boolean {
+  const repository = reference.trim()
+  const separator = repository.indexOf('/')
+  if (separator < 1 || separator === repository.length - 1) return false
+  const folder = `models--${repository.slice(0, separator)}--${repository.slice(separator + 1)}`
+  for (const root of huggingFaceCacheRoots()) {
+    const repositoryDirectory = join(root, folder)
+    const snapshotsDirectory = join(repositoryDirectory, 'snapshots')
+    let snapshots: string[]
+    try {
+      snapshots = readdirSync(snapshotsDirectory)
+    } catch {
+      continue
+    }
+    let main: string
+    try {
+      main = readFileSync(join(repositoryDirectory, 'refs', 'main'), 'utf8').trim()
+    } catch {
+      main = ''
+    }
+    for (const snapshot of main && snapshots.includes(main) ? [main, ...snapshots] : snapshots) {
+      const directory = join(snapshotsDirectory, snapshot)
+      if (!existsSync(join(directory, 'config.json'))) continue
+      try {
+        if (readdirSync(directory).some((entry) => /\.(?:safetensors|npz)$/iu.test(entry))) {
+          return true
+        }
+      } catch {
+        continue
+      }
+    }
+  }
+  return false
 }
 
 /** The commit a repository's `main` ref points at, empty when it names none. */
@@ -130,7 +190,7 @@ async function resolveMlxSnapshot(reference: string): Promise<LocalAiModelLocati
     for (const snapshot of ordered) {
       const directory = join(snapshotsDirectory, snapshot)
       if (!(await isCompleteSnapshot(directory))) continue
-      return { path: directory, bytes: await snapshotBytes(directory) }
+      return { path: directory, bytes: await folderBytes(directory) }
     }
   }
   return null

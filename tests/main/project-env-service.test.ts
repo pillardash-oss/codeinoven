@@ -367,12 +367,14 @@ describe('ProjectEnvService writing the file into the project', () => {
     expect(written).toEqual({
       path: 'packages/api/.env',
       changed: true,
-      backupPath: 'packages/api/.env.cio-backup'
+      backupPath: '.cio/secrets/packages/api/.env'
     })
     const content = await readFile(target, 'utf8')
     expect(content).toMatch(/^DATABASE_URL=cio:\/\/secret_/mu)
     expect(content).not.toContain('postgres://old')
-    expect(await readFile(`${target}.cio-backup`, 'utf8')).toBe('DATABASE_URL=postgres://old\n')
+    const backupTarget = join(projectRoot, '.cio', 'secrets', 'packages', 'api', '.env')
+    expect(await readFile(backupTarget, 'utf8')).toBe('DATABASE_URL=postgres://old\n')
+    await expectOwnerOnly(backupTarget)
     await expectOwnerOnly(target)
 
     expect(await readFile(target, 'utf8')).toBe(content)
@@ -424,11 +426,11 @@ describe('ProjectEnvService import', () => {
     expect(rewritten).toContain('# local only')
     expect(rewritten).toMatch(/^DATABASE_URL=cio:\/\/secret_/mu)
     expect(rewritten).not.toContain('postgres://secret')
-    expect(applied.backupPath).toBe('.env.cio-backup')
+    expect(applied.backupPath).toBe('.cio/secrets/.env')
 
-    const backup = await readFile(join(projectRoot, '.env.cio-backup'), 'utf8')
+    const backup = await readFile(join(projectRoot, '.cio', 'secrets', '.env'), 'utf8')
     expect(backup).toBe(original)
-    await expectOwnerOnly(join(projectRoot, '.env.cio-backup'))
+    await expectOwnerOnly(join(projectRoot, '.cio', 'secrets', '.env'))
     await expectOwnerOnly(join(projectRoot, '.env'))
 
     const launch = await service.environmentForLaunch({ projectId: PROJECT_ID, cwd: projectRoot })

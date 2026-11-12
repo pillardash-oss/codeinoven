@@ -1,7 +1,12 @@
 import { normalizeAgentQuestions, permissionPatterns } from '../../../lib/agent-interactions'
 import type { AgentPart, SessionAgentEvent } from '../../../lib/types'
 import type { CliLineParseContext, CliLineParseResult } from '../persistent-cli-driver'
-import { claudeApiRetryKind, claudeResultIssue, claudeSessionLimitIssue } from './claude-errors'
+import {
+  claudeApiRetryKind,
+  claudeResultFailure,
+  claudeResultIssue,
+  claudeSessionLimitIssue
+} from './claude-errors'
 import {
   CLAUDE_ASYNC_AGENT_LAUNCH_MARKER,
   activeClaudeSubagentParts,
@@ -495,7 +500,8 @@ export function mapClaudeCodeRecord(
     const error =
       entry['subtype'] === 'success' && entry['is_error'] !== true
         ? undefined
-        : (string(entry['result']) ?? string(entry['subtype']) ?? 'Claude Code turn failed')
+        : (claudeResultFailure(string(entry['subtype']), string(entry['result'])) ??
+          'Claude Code turn failed')
     const inheritedRateLimits = claudeSessionLimitIssue(error, [])
       ? latestClaudeRateLimits(context)
       : []

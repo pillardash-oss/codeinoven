@@ -137,6 +137,23 @@
   }
 
   /**
+   * Open the row's model in the OS file manager, and say so when the path is
+   * gone instead of leaving the click unanswered.
+   */
+  async function reveal(entry: LlamaCppServerEntry): Promise<void> {
+    if (await localAi.revealModel(entry)) return
+    toast.error('Could not open the file manager', {
+      description: `${entry.modelPath.trim()} could not be found on disk.`
+    })
+  }
+
+  // A row's weights are measured once per path, by the main process: the card's
+  // size column only reads what this page has already asked for.
+  $effect(() => {
+    for (const entry of entries) void localAi.loadModelSize(entry.modelPath.trim())
+  })
+
+  /**
    * A local server never writes to the provider registry. The user creates their
    * own custom base-URL provider, and this button is the handoff: it opens the
    * app's provider editor so the server's address can be copied into it.
@@ -239,6 +256,7 @@
                 status={localAi.statusOf(entry.id)}
                 logLines={localAi.logOf(entry.id)}
                 loadedModel={localAi.loadedModel[entry.id] ?? ''}
+                modelSize={localAi.sizeOf(entry.modelPath.trim())}
                 notice={localAi.notice[entry.id] ?? ''}
                 expanded={expanded[entry.id] ?? false}
                 onToggle={() => toggle(entry.id)}
@@ -246,6 +264,7 @@
                 onStop={() => void localAi.stop(entry.id)}
                 onEdit={() => openEdit(entry)}
                 onDelete={() => (pendingDelete = entry)}
+                onReveal={() => void reveal(entry)}
               />
             {/each}
           </section>

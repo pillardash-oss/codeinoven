@@ -11,9 +11,11 @@
   import { formatCompactAge } from '$shared/date-time-format'
   import {
     notificationPanelState,
+    type NotificationSourceFilter,
     type NotificationSubFilter,
     type InAppNotification
   } from '$lib/stores/notification-panel.svelte'
+  import NotificationFilterMenu from './NotificationFilterMenu.svelte'
   import { appErrorState, errorHeadline, type AppErrorEntry } from '$lib/stores/app-errors.svelte'
   import { scopeState, STATUS_TONE_COLORS } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -100,6 +102,30 @@
    *  every other filter counts. */
   function filterCount(sub: NotificationSubFilter): number {
     return sub === 'exceptions' ? appErrorState.count : notificationPanelState.count(sub)
+  }
+
+  /**
+   * The family menu beside the close button.
+   *
+   * Every kind shares one list now, so the list itself is the "all" case and
+   * this menu only narrows it to projects, chats or assistants.
+   */
+  const sourceOptions: Array<{ id: NotificationSourceFilter; label: string; hint?: string }> = [
+    { id: 'all', label: 'All families', hint: 'Projects, chats and assistants' },
+    { id: 'projects', label: 'Projects only', hint: 'Project threads' },
+    { id: 'chats', label: 'Chats only', hint: 'Conversations from the Inbox' },
+    { id: 'assistants', label: 'Assistants only', hint: 'Assistant runs and scheduled tasks' }
+  ]
+
+  const sourceLabel = $derived(
+    sourceOptions.find((option) => option.id === notificationPanelState.sourceFilter)?.label ??
+      'All families'
+  )
+
+  /** Both narrowings returned to their defaults, so a list that reads empty for
+   *  a filter the reader forgot about can be brought back in one click. */
+  function resetFilters(): void {
+    notificationPanelState.resetFilters()
   }
 
   let busyId = $state<string | null>(null)
@@ -302,7 +328,7 @@
       appErrorState.dismissAll()
       return
     }
-    if (sub === 'all') {
+    if (sub === 'all' && notificationPanelState.sourceFilter === 'all') {
       // Everything goes in one pass: the notices the notification panel owns,
       // then the missed fires and unattended runs the assistant store owns.
       notificationPanelState.dismissAll()
@@ -693,7 +719,7 @@
 {/snippet}
 
 <div class="flex h-full flex-col">
-  <!-- One list, narrowed by kind -->
+  <!-- One list, narrowed by kind (chips) and by family (menu beside the close) -->
   <div class="flex shrink-0 items-center gap-0.5 border-b border-border px-2 py-1.5">
     {#each filters as sub (sub)}
       {@const count = filterCount(sub)}
@@ -713,16 +739,26 @@
         {/if}
       </button>
     {/each}
-    {#if hasVisibleItems}
-      <button
-        class="ml-auto flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        aria-label={showingExceptions ? 'Dismiss all exceptions' : 'Dismiss all notifications'}
-        title={showingExceptions ? 'Dismiss all exceptions' : 'Dismiss all'}
-        onclick={dismissAll}
-      >
-        <CioClose size={12} />
-      </button>
-    {/if}
+    <div class="ml-auto flex items-center gap-0.5">
+      <NotificationFilterMenu
+        value={notificationPanelState.sourceFilter}
+        options={sourceOptions}
+        onValueChange={(next) => notificationPanelState.setSourceFilter(next)}
+        label="Filter notifications by projects, chats or assistants"
+        current={sourceLabel}
+        narrowed={notificationPanelState.sourceFilter !== 'all'}
+      />
+      {#if hasVisibleItems}
+        <button
+          class="flex h-6 w-6 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
+          aria-label={showingExceptions ? 'Dismiss all exceptions' : 'Dismiss all notifications'}
+          title={showingExceptions ? 'Dismiss all exceptions' : 'Dismiss all'}
+          onclick={dismissAll}
+        >
+          <CioClose size={12} />
+        </button>
+      {/if}
+    </div>
   </div>
 
   <!-- Content -->
@@ -749,12 +785,12 @@
           <CioNotifications size={20} class="text-dimmed" />
           <p class="text-xs text-muted">No notifications</p>
         {/if}
-        {#if notificationPanelState.subFilter !== 'all' && filterCount('all') > 0}
+        {#if notificationPanelState.subFilter !== 'all' || notificationPanelState.sourceFilter !== 'all'}
           <button
             class="px-2 py-0.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
             title="Show every notification"
             aria-label="Show every notification"
-            onclick={() => notificationPanelState.setSubFilter('all')}
+            onclick={resetFilters}
           >
             Show all
           </button>
