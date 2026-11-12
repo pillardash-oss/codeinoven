@@ -58,6 +58,8 @@
 
   let files = $state<ProjectEnvFile[]>([])
   let fileName = $state(DEFAULT_ENV_FILE_NAME)
+  /** The file the rows and editor currently hold, so a stray blur cannot reload. */
+  let loadedFileName = $state('')
   let body = $state('')
   let rows = $state<KeyRow[]>([])
   let savedBody = $state('')
@@ -202,6 +204,7 @@
             null))
       fileName = initial?.fileName ?? preferred ?? DEFAULT_ENV_FILE_NAME
       await resetDocument(initial)
+      loadedFileName = fileName
     } catch (cause) {
       error = cause instanceof Error ? cause.message : 'Could not read this path’s env files'
     } finally {
@@ -276,10 +279,17 @@
     error = ''
     outcome = ''
     skipped = []
+    // The header field doubles as the file's name, so a blur that changed nothing
+    // must not reopen the file and throw away its undo history.
+    if (next === loadedFileName) {
+      fileName = next
+      return
+    }
     fileName = next
     await resetDocument(
       files.find((candidate) => candidate.group === group && candidate.fileName === next) ?? null
     )
+    loadedFileName = next
   }
 
   function undo(): void {
@@ -476,6 +486,27 @@
     return true
   }}
 >
+  {#snippet headerTitle()}
+    <input
+      id="env-file-name"
+      class="h-6 w-40 min-w-0 truncate border border-transparent bg-transparent px-1 font-mono text-xs font-semibold text-foreground outline-none transition-colors hover:border-border focus:border-primary"
+      type="text"
+      autocomplete="off"
+      spellcheck="false"
+      aria-label="Env file name"
+      title="Rename this env file"
+      value={fileName}
+      oninput={(event) => (fileName = event.currentTarget.value)}
+      onblur={() => void openFile(fileName)}
+      onkeydown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          void openFile(fileName)
+        }
+      }}
+    />
+  {/snippet}
+
   {#snippet headerPrefix()}
     <span class="flex min-w-0 items-center gap-2">
       <span
@@ -519,26 +550,6 @@
 
   <div class="flex h-full min-h-0 flex-col">
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
-      <label class="flex min-w-0 items-center gap-2" for="env-file-name">
-        <span class="text-[0.6875rem] font-medium text-muted">File</span>
-        <input
-          id="env-file-name"
-          class="h-7 w-44 border bg-elevated px-2 font-mono text-xs text-foreground outline-none focus:border-primary"
-          type="text"
-          autocomplete="off"
-          spellcheck="false"
-          value={fileName}
-          oninput={(event) => (fileName = event.currentTarget.value)}
-          onblur={() => void openFile(fileName)}
-          onkeydown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault()
-              void openFile(fileName)
-            }
-          }}
-        />
-      </label>
-
       <label class="flex min-w-0 items-center gap-2" for="env-file-picker">
         <span class="text-[0.6875rem] font-medium text-muted">Stored</span>
         <select
