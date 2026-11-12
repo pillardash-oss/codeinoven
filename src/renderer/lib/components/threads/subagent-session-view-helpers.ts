@@ -411,22 +411,53 @@ export function catalogModelLabel(
   return model?.name ?? modelId
 }
 /**
- * Display name of the provider that runs this worker, when the catalog has it.
+ * Configuration a worker inherits from the thread that spawned it.
  *
- * A harness may qualify the provider with the account serving it (OpenCode
- * reports `codeinoven-2 / OpenCode`). The account is a credential detail that
- * the run's own badge explains, so the provider is named on its own here; that
- * also lets its name resolve to the vendor's bundled mark instead of a
- * monogram of the workspace name.
+ * A harness that broadens a session into a child session (Claude Code) does not
+ * report the child's provider, and a child shares its parent's credential, so
+ * the parent's provider is the child's provider. `harnessId` lets a surface
+ * refuse that inheritance for a worker that runs under a different harness.
+ */
+export interface SubagentInheritedSelection {
+  harnessId?: string | null
+  providerId?: string | null
+}
+
+/** The provider a worker ran through, resolved inside the worker's own harness. */
+export function subagentProvider(
+  activity: AgentSubagentActivity,
+  providers: ProviderCatalog[],
+  inherited?: SubagentInheritedSelection
+): ProviderCatalog | undefined {
+  const reportedHarness = activity.harnessId ?? undefined
+  const harnessId = reportedHarness ?? inherited?.harnessId ?? undefined
+  // Only the same harness can be inherited from: a nested worker that named its
+  // own harness runs on that harness's provider, not the parent's.
+  const equalHarness = harnessId !== undefined && harnessId === (inherited?.harnessId ?? undefined)
+  const providerId =
+    activity.providerId ?? (equalHarness ? (inherited?.providerId ?? undefined) : undefined)
+  // A worker's provider is never borrowed from another harness's catalog: the
+  // same id (and the same model) is routinely offered by several of them.
+  const scoped = harnessId
+    ? providers.filter((provider) => provider.harnessId === harnessId)
+    : providers
+  return resolveModelProvider(scoped, {
+    providerId,
+    harnessId,
+    modelId: activity.modelId
+  })
+}
+
+/**
+ * Display name of the provider that runs this worker, when its harness reports
+ * one (directly or through the account it inherited).
  */
 export function catalogProviderName(
   activity: AgentSubagentActivity,
-  providers: ProviderCatalog[]
+  providers: ProviderCatalog[],
+  inherited?: SubagentInheritedSelection
 ): string | undefined {
-  const name = resolveModelProvider(providers, {
-    providerId: activity.providerId,
-    modelId: activity.modelId
-  })?.name
+  const name = subagentProvider(activity, providers, inherited)?.name
   return name ? providerDisplayName(name) : undefined
 }
 
@@ -443,18 +474,18 @@ export interface SubagentVendorMark {
  *
  * A harness reports ids, so the catalog is what turns them into a vendor name;
  * a provider the catalog does not know still gets its own id, which the icon
- * registry may bundle. `null` when the worker named no model at all.
+ * registry may bundle. `null` when the worker's provider is unknown.
  */
 export function subagentVendorMark(
   activity: AgentSubagentActivity,
-  providers: ProviderCatalog[]
+  providers: ProviderCatalog[],
+  inherited?: SubagentInheritedSelection
 ): SubagentVendorMark | null {
-  const name = catalogProviderName(activity, providers)
-  const id = activity.providerId
+  const provider = subagentProvider(activity, providers, inherited)
+  const name = provider?.name ? providerDisplayName(provider.name) : undefined
+  const id = provider?.id ?? activity.providerId
   if (name) return id ? { name, id } : { name }
-  if (id) return { name: id, id }
-  const modelId = activity.modelId?.trim()
-  if (!modelId) return null
-  // A `provider/model` id lets the registry resolve the vendor on its own.
-  return { name: modelId }
+  // No resolved provider means no brand to wear: a model id on its own is not a
+  // vendor (a monogram of it names nothing), so the caller keeps its own glyph.
+  return null
 }

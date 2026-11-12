@@ -30,6 +30,7 @@
     applyStreamedDelta,
     catalogModelLabel,
     catalogProviderName,
+    subagentProvider,
     filterVisibleMessages,
     isAtBottom,
     loadSessionTranscript,
@@ -54,7 +55,11 @@
     /** Configuration of the thread that spawned this worker. A nested worker
      *  inherits its session's harness and reasoning effort, and a harness that
      *  reports neither per worker still renders truthful attribution here. */
-    inherited?: { harnessId: string | null; thinkingLevel: ThinkingLevel | null }
+    inherited?: {
+      harnessId: string | null
+      providerId?: string | null
+      thinkingLevel: ThinkingLevel | null
+    }
   }
 
   let { tab, onOpenSubagent, inherited }: Props = $props()
@@ -125,8 +130,12 @@
   )
   let providers = $derived(providerCatalog.cached(tab.projectId) ?? providerCatalog.allCached())
   let modelLabel = $derived(catalogModelLabel(tab.activity, providers))
-  let providerName = $derived(catalogProviderName(tab.activity, providers))
-  let providerLabel = $derived(providerName ?? tab.activity.providerId ?? 'Provider')
+  // The worker's own provider, else the one it inherited from the parent
+  // session, always resolved inside the harness that ran it.
+  const provider = $derived(subagentProvider(tab.activity, providers, inherited))
+  let providerName = $derived(catalogProviderName(tab.activity, providers, inherited))
+  const providerId = $derived(provider?.id ?? tab.activity.providerId)
+  let providerLabel = $derived(providerName ?? providerId ?? 'Provider')
   // The worker's own report wins; the thread's settings describe what it
   // inherited when the harness reports nothing per worker.
   const harnessId = $derived(tab.activity.harnessId ?? inherited?.harnessId ?? undefined)
@@ -386,7 +395,7 @@
     {busy}
     {modelLabel}
     {providerName}
-    providerId={tab.activity.providerId}
+    {providerId}
     {harnessId}
     {harnessName}
     {thinkingLevel}
@@ -455,7 +464,7 @@
           startTime={tab.activity.time?.start}
           {modelLabel}
           {providerName}
-          providerId={tab.activity.providerId}
+          {providerId}
           {onOpenSubagent}
         />
       {/if}

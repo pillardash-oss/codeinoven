@@ -12,6 +12,7 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { subagentVendorMark } from './subagent-session-view-helpers'
   import SubagentModeBadge from './SubagentModeBadge.svelte'
+  import SubagentModelMark from './SubagentModelMark.svelte'
   import SubagentStatusIcon from './SubagentStatusIcon.svelte'
 
   interface Props {
@@ -49,22 +50,22 @@
    * the sub-agent mark.
    */
   const providers = $derived(providerCatalog.allCached())
-  const marks = $derived(parts.map((part) => subagentVendorMark(part.activity, providers)))
-  const sharedMark = $derived.by(() => {
-    if (marks.length === 0) return null
-    const first = marks[0]
+  /** The worker the badge stands for, when every worker in it wears one mark. */
+  const groupActivity = $derived.by(() => {
+    const first = parts[0]
     if (!first) return null
-    const key = `${first.id ?? ''}\u0000${first.name}`
-    const same = marks.every(
-      (mark) => mark !== null && `${mark.id ?? ''}\u0000${mark.name}` === key
-    )
-    return same ? first : null
+    const keyOf = (part: SubagentPart): string => {
+      const mark = subagentVendorMark(part.activity, providers)
+      return `${part.activity.harnessId ?? ''}\u0000${mark?.id ?? ''}\u0000${mark?.name ?? ''}`
+    }
+    const key = keyOf(first)
+    return parts.every((part) => keyOf(part) === key) ? first.activity : null
   })
 </script>
 
 {#snippet modelMark(size: number, className?: string)}
-  {#if sharedMark}
-    <VendorIcon name={sharedMark.name} id={sharedMark.id} {size} class={className ?? ''} />
+  {#if groupActivity}
+    <SubagentModelMark activity={groupActivity} {size} class={className ?? ''} />
   {:else}
     <CioSubagent {size} class={className ?? ''} />
   {/if}
@@ -108,7 +109,7 @@
         class="z-50 w-96 overflow-hidden border bg-surface p-1 shadow-lg"
       >
         <div class="flex items-center gap-1.5 px-2.5 py-1.5">
-          {@render modelMark(12, 'shrink-0 text-muted')}
+          {@render modelMark(12)}
           <span class="text-[0.6875rem] font-semibold text-foreground">
             {subagentCount}
             {subagentCount === 1 ? 'sub-agent' : 'sub-agents'}
