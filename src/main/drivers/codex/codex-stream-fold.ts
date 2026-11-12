@@ -178,6 +178,7 @@ function parseCollaboration(
       description:
         stringValue(item['description']) ?? COLLABORATION_TOOL_LABELS[tool] ?? prompt ?? tool,
       ...(prompt ? { prompt } : {}),
+      harnessId: 'codex',
       ...(childSessionId ? { childSessionId } : {}),
       providerTaskId: itemId,
       background: item['background'] === true,

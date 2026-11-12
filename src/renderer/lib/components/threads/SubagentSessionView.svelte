@@ -4,11 +4,21 @@
   import { providerCatalog } from '$lib/stores/provider-catalog.svelte'
   import { appQuitState } from '$lib/stores/app-quit.svelte'
   import type { SubagentContextTab } from '$lib/stores/context-sidebar.svelte'
-  import type { AgentEvent, AgentMessage, AgentPart, AgentSessionStatus } from '$shared/types'
+  import type {
+    AgentEvent,
+    AgentMessage,
+    AgentPart,
+    AgentSessionStatus,
+    ThinkingLevel
+  } from '$shared/types'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
-  import { openThreadById } from '$lib/threads/open-thread-by-id'
+  import { agentDisplayName } from '$lib/agent-icons/agent-display-name'
   import { latestWorkingTraceParts, shouldMountWorkingTrace } from '$lib/working-trace-parts'
-  import { subagentTaskDetail, subagentTaskLabel } from '$lib/subagent-presentation'
+  import {
+    subagentAgentType,
+    subagentTaskDetail,
+    subagentTaskLabel
+  } from '$lib/subagent-presentation'
   import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import MessageTimestamp from '../shared/MessageTimestamp.svelte'
   import WorkingTrace from './WorkingTrace.svelte'
@@ -40,9 +50,13 @@
   interface Props {
     tab: SubagentContextTab
     onOpenSubagent?: (part: Extract<AgentPart, { type: 'subagent' }>) => void
+    /** Configuration of the thread that spawned this worker. A nested worker
+     *  inherits its session's harness and reasoning effort, and a harness that
+     *  reports neither per worker still renders truthful attribution here. */
+    inherited?: { harnessId: string | null; thinkingLevel: ThinkingLevel | null }
   }
 
-  let { tab, onOpenSubagent }: Props = $props()
+  let { tab, onOpenSubagent, inherited }: Props = $props()
 
   let messages: AgentMessage[] = $state([])
   let loading = $state(false)
@@ -79,6 +93,7 @@
   const busy = $derived(effectiveStatus === 'running')
   const taskLabel = $derived(subagentTaskLabel(tab.activity))
   const taskDetail = $derived(subagentTaskDetail(tab.activity))
+  const agentType = $derived(subagentAgentType(tab.activity))
   const headerStatus = $derived(subagentHeaderStatus(effectiveStatus))
   // The header answers "how long has this been going" without scrolling, so it
   // owns the same live clock the trace rows use.
@@ -100,6 +115,13 @@
   let modelLabel = $derived(catalogModelLabel(tab.activity, providers))
   let providerName = $derived(catalogProviderName(tab.activity, providers))
   let providerLabel = $derived(providerName ?? tab.activity.providerId ?? 'Provider')
+  // The worker's own report wins; the thread's settings describe what it
+  // inherited when the harness reports nothing per worker.
+  const harnessId = $derived(tab.activity.harnessId ?? inherited?.harnessId ?? undefined)
+  const harnessName = $derived(
+    tab.activity.harnessId ? agentDisplayName(tab.activity.harnessId) : null
+  )
+  const thinkingLevel = $derived(tab.activity.thinkingLevel ?? inherited?.thinkingLevel ?? null)
   const visibleMessages = $derived(filterVisibleMessages(messages, tab.activity.prompt))
   /** Any user message the delegated-prompt filter left behind (a steer into the
    *  worker's session), rendered as its own bubble above the run. */
@@ -318,24 +340,13 @@
         stopping = false
       })
   }
-
-  /**
-   * Walk back up the delegation chain.
-   *
-   * A sub-agent has no thread of its own: this tab is the only place its work is
-   * read, so the parent it belongs to has to be one control away rather than
-   * something the reader has to remember. The tab already carries the parent's
-   * ids, so opening it is the same reveal every other surface uses.
-   */
-  function openParentThread(): void {
-    void openThreadById(tab.projectId, tab.threadId)
-  }
 </script>
 
 <div class="flex h-full min-h-0 flex-col">
   <SubagentSessionViewHeader
     {taskLabel}
     {taskDetail}
+    {agentType}
     {headerStatus}
     {showDuration}
     {elapsed}
@@ -343,10 +354,12 @@
     {modelLabel}
     {providerName}
     providerId={tab.activity.providerId}
+    {harnessId}
+    {harnessName}
+    {thinkingLevel}
     background={tab.activity.background}
     providerTaskId={tab.activity.providerTaskId}
     {sessionId}
-    onOpenParent={openParentThread}
   />
 
   <div

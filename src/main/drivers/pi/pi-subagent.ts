@@ -1,5 +1,6 @@
 import type { AgentPart, AgentSubagentActivity, AgentToolStatus } from '../../../lib/types'
 import { parseRecord } from '../../../lib/agent-interactions'
+import { parseThinkingLevel } from '../../../lib/thinking-presets'
 import { CIO_SPAWN_AGENT_TOOL_NAME, CIO_SUBAGENT_DONE_MESSAGE_TYPE } from '../../../lib/core-tools'
 import { CIO_SUBAGENT_MARKER } from '../pi-core-tools-extension'
 import type { CliLineParseResult } from '../persistent-cli-driver'
@@ -37,6 +38,7 @@ function cioSubagentPart(
       agent: purpose,
       description: purpose,
       prompt: stringValue(input?.['instructions']),
+      harnessId: 'pi',
       background: input?.['background'] === true,
       ...patch
     }
@@ -119,6 +121,7 @@ function subagentActivityFromPayload(
   const purpose = stringValue(payload['purpose'])
   const childSessionId = stringValue(payload['childSessionId'])
   const modelId = stringValue(payload['model'])
+  const thinkingLevel = parseThinkingLevel(payload['thinkingLevel'])
   const output = stringValue(payload['output'])
   const error = stringValue(payload['error'])
   const sessionFile = stringValue(payload['sessionFile'])
@@ -131,6 +134,7 @@ function subagentActivityFromPayload(
     ...(purpose ? { agent: purpose, description: purpose } : {}),
     ...(childSessionId ? { childSessionId } : {}),
     ...(modelId ? { modelId } : {}),
+    ...(thinkingLevel ? { thinkingLevel } : {}),
     ...(files && files.length > 0 ? { files } : {}),
     ...(output ? { output } : {}),
     ...(error ? { error } : {}),

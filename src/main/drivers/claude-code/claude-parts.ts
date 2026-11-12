@@ -57,6 +57,7 @@ export function claudeSubagentPart(
       agent: string(input['subagent_type']) ?? string(input['agent']) ?? name,
       description,
       prompt: string(input['prompt']),
+      harnessId: 'claude-code',
       providerTaskId: callId,
       modelId: string(input['model']),
       background: input['run_in_background'] === true || input['background'] === true,
