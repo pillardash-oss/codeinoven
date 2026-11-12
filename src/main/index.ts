@@ -710,7 +710,11 @@ function createWindow(): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      devTools: true,
+      // The shipped app offers no inspector for its own renderer. The embedded
+      // browser keeps DevTools for the pages it shows (those are separate
+      // WebContents with their own preference), because inspecting a page is a
+      // feature the user asked for, while inspecting the app shell is not.
+      devTools: !isProduction,
       // The preload resolves the platform traffic-light layout from this flag
       // so the renderer never flashes a wrong inset on first paint.
       additionalArguments: [getTrafficLightArg(), getBuildEnvironmentArg()],
