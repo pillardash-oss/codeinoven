@@ -103,6 +103,7 @@
    * and end are still the element's.
    */
   function onKeydown(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
     const stride = event.shiftKey ? (fineStep ?? step) : (arrowStep ?? step)
     const input = event.currentTarget

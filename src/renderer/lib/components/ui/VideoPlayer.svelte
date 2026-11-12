@@ -9,6 +9,7 @@
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import type { Snippet } from 'svelte'
   import { onDestroy } from 'svelte'
+  import { on } from 'svelte/events'
   import SeekBar from './SeekBar.svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import {
@@ -182,6 +183,8 @@
   }: Props = $props()
 
   let video = $state<HTMLVideoElement | null>(null)
+  /** The player's own box, for telling a press in this picture from any other. */
+  let figure: HTMLElement | undefined
   /**
    * The second this element should land on once it can seek.
    *
@@ -473,6 +476,46 @@
     seekTo(Math.min(last, Math.max(0, next)))
   }
 
+  /**
+   * The arrows scrub the picture, wherever inside the player the focus is.
+   *
+   * The track answers its own arrows, but a reader who has just clicked the picture
+   * has the player's play control under the caret, not the track, and a press there
+   * would otherwise do nothing at all. The picture is what the press is about, so it
+   * is answered for the whole player: five frames a press, and the frame beside the
+   * one on screen under Shift.
+   */
+  function stepKey(event: KeyboardEvent): void {
+    if (event.defaultPrevented) return
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+    const box = figure
+    const focused = document.activeElement
+    if (!box || !(focused instanceof Node) || !box.contains(focused)) return
+    if (focused instanceof HTMLElement && focused.closest('textarea,select,[contenteditable]'))
+      return
+    event.preventDefault()
+    event.stopPropagation()
+    nudgeFrames((event.key === 'ArrowRight' ? 1 : -1) * (event.shiftKey ? 1 : ARROW_FRAME_STEP))
+  }
+
+  /** Move the head by whole frames, as a step of the track would. */
+  function nudgeFrames(frames: number): void {
+    const element = video
+    if (!element || !Number.isFinite(element.duration) || element.duration <= 0) return
+    started = true
+    silenceForSeek()
+    const reach = frames * frameDuration
+    const last = Math.max(0, element.duration - frameDuration / 2)
+    seekTo(Math.min(last, Math.max(0, element.currentTime + reach)))
+  }
+
+  // Registered while the picture exists, and answered only by a press that lands
+  // inside this player: a conversation holds several of them at once.
+  $effect(() => {
+    if (!video) return
+    return on(window, 'keydown', stepKey, { capture: true })
+  })
+
   // The element reports every frame it paints, which is the only place a
   // recording's frame rate can be read: a step that lands on exactly one frame,
   // and a track whose arrow keys move that same frame, both need it.
@@ -668,6 +711,7 @@
 {/snippet}
 
 <figure
+  bind:this={figure}
   class={[
     'group/md-video relative min-w-0 max-w-full self-start bg-black',
     fit === 'fill' ? 'flex h-full w-full flex-col' : 'w-full',

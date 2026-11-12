@@ -291,6 +291,30 @@
     if (!event.repeat) togglePlay()
   }
 
+  /**
+   * The arrows scrub the panel, wherever inside it the focus is.
+   *
+   * The picture is a page that answers none of the app's keys, and the bar is what
+   * the reader actually clicks: the play control, the step buttons, the empty space
+   * beside the track. A press on the panel is therefore a press about the picture
+   * even when the track itself is not the thing being typed at, which is the same
+   * reason space belongs to this bar. The coarse move is the arrow and the frame
+   * beside the one on screen is Shift with it.
+   */
+  function scrubKey(event: KeyboardEvent): void {
+    if (!ownsPlaybackKey || event.defaultPrevented) return
+    const forward = event.key === 'ArrowRight'
+    if (!forward && event.key !== 'ArrowLeft') return
+    const target = event.target
+    if (!pressBelongsToPlayer(target)) return
+    if (overlayOwnsKeys(target)) return
+    event.preventDefault()
+    event.stopPropagation()
+    nudge(
+      forward ? (event.shiftKey ? 1 : ARROW_FRAME_STEP) : event.shiftKey ? -1 : -ARROW_FRAME_STEP
+    )
+  }
+
   /** The caret is taken once, when the control that answers the key exists. */
   let claimedFocus = false
   $effect(() => {
@@ -305,7 +329,12 @@
   // play/pause key that works everywhere except the sidebar panel.
   $effect(() => {
     if (!ownsPlaybackKey) return
-    return on(window, 'keydown', playbackKey, { capture: true })
+    const offPlay = on(window, 'keydown', playbackKey, { capture: true })
+    const offScrub = on(window, 'keydown', scrubKey, { capture: true })
+    return () => {
+      offPlay()
+      offScrub()
+    }
   })
 
   /**
@@ -355,10 +384,22 @@
   }
 
   function step(direction: 1 | -1): void {
+    nudge(direction)
+  }
+
+  /**
+   * Move the picture by whole frames and hold it there.
+   *
+   * The second is kept as the bar's own until the page answers, because a page
+   * reports the frame it painted rather than the one it was asked for: stepping
+   * twice from the answer would land both presses on the same frame.
+   */
+  function nudge(frames: number): void {
     // Stepping is a seek, and a seek is heard as the page running through the
     // frames between the two: the sound is held down for the gesture.
     silenceTabForSeek(tabId)
-    playhead.hold(clamp(shown + direction * frameStep))
+    holdSecond((scrubbing ? scrubValue : shown) + frames * frameStep)
+    commitScrub()
   }
 
   function toggleLoop(): void {
