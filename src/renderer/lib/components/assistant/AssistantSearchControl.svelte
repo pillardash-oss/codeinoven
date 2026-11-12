@@ -18,6 +18,8 @@
   } from '$shared/types'
   import { assistantGap } from './assistant-view'
   import type { Attachment } from 'svelte/attachments'
+  import { slide } from 'svelte/transition'
+  import { motionDuration } from '$lib/motion'
 
   interface Props {
     assistants: Assistant[]
@@ -164,8 +166,12 @@
   )
 
   function closeSearch(): void {
-    if (inline) onCollapse()
-    else open = false
+    if (inline) {
+      // The parent's own signal first, then the binding: the field and the
+      // buttons it grew out of are two halves of the same control.
+      onCollapse()
+      expanded = false
+    } else open = false
     query = ''
     remoteResults = []
     searching = false
@@ -390,7 +396,7 @@
 
 {#if inline}
   {#if expanded}
-    <div class="relative w-full min-w-0">
+    <div class="relative w-full min-w-0" in:slide={{ axis: 'x', duration: motionDuration(180) }}>
       <div class="flex items-center gap-1">
         <!-- The chevron gives the field back to the button it grew out of. -->
         <button

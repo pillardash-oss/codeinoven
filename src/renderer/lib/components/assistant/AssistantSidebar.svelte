@@ -1,5 +1,7 @@
 <script lang="ts">
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import { fade } from 'svelte/transition'
+  import { motionDuration } from '$lib/motion'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import DonTile from './DonTile.svelte'
   import AssistantRow from './AssistantRow.svelte'
@@ -193,19 +195,30 @@
            search morphs out of its button into a field, and the new-assistant
            door sits beside it. The app header leaves this view alone, so they
            live here. -->
-      <div class="sticky top-0 z-20 -mx-1.5 mb-1 border-b bg-surface px-1.5 pt-0.5 pb-1.5">
+      <div class="sticky top-0 z-20 -mx-1.5 mb-1 bg-surface px-1.5 pt-0.5 pb-1.5">
         <div class="flex min-h-7 items-center justify-center gap-1">
           {#if !searchExpanded}
-            <button
-              type="button"
-              class="flex h-7 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-              aria-label="Search assistants, tasks and runs"
-              title="Search assistants, tasks and runs"
-              onclick={() => (searchExpanded = true)}
+            <div
+              class="flex items-center gap-1"
+              transition:fade={{ duration: motionDuration(140) }}
             >
-              <CioSearch size={13} />
-              <span>Search</span>
-            </button>
+              <button
+                type="button"
+                class="flex h-7 items-center gap-1.5 px-2 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
+                aria-label="Search assistants, tasks and runs"
+                title="Search assistants, tasks and runs"
+                onclick={() => (searchExpanded = true)}
+              >
+                <CioSearch size={13} />
+                <span>Search</span>
+              </button>
+              <AssistantCreateControl
+                label="New assistant"
+                onCreate={onCreateAssistant}
+                onCreateViaChat={onCreateAssistantViaChat}
+                trigger={assistantCreateTrigger}
+              />
+            </div>
           {/if}
           <AssistantSearchControl
             inline
@@ -216,14 +229,6 @@
             {onOpenTask}
             onOpenAssistant={onOpenAssistantKnowledge}
           />
-          {#if !searchExpanded}
-            <AssistantCreateControl
-              label="New assistant"
-              onCreate={onCreateAssistant}
-              onCreateViaChat={onCreateAssistantViaChat}
-              trigger={assistantCreateTrigger}
-            />
-          {/if}
         </div>
       </div>
 
