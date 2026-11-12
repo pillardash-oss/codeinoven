@@ -1,5 +1,4 @@
 <script lang="ts">
-  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioWrench from '@pdslng/cio-icon/CioWrench.svelte'
   import { onMount } from 'svelte'
@@ -12,7 +11,7 @@
   } from '$shared/scope-worktree-health'
   import { ipcErrorMessage } from '$lib/ipc-errors'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
-  import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
+  import ErrorStrip from '../ui/ErrorStrip.svelte'
   import type { ScopeWorktreeHealth } from '$shared/types'
 
   interface Props {
@@ -162,50 +161,26 @@
 {/snippet}
 
 {#if visible && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
-  {#if variant === 'inline'}
-    <div
-      class="flex min-w-0 items-center gap-2 border border-warning/30 bg-warning/10 px-2 py-1.5"
-      role="status"
-    >
-      <CioAttention size={12} class="shrink-0 text-warning" />
-      <div class="min-w-0 flex-1">
-        <p class="truncate text-[0.6875rem] text-warning" title="{title}. {fix}">{title}</p>
-        {#if actionError}
-          <p class="truncate text-[0.625rem] text-danger" title={actionError}>{actionError}</p>
-        {/if}
-      </div>
-      {@render actions()}
-      <NoticeDismissButton
-        id={noticeId}
-        condition={noticeCondition}
-        title="Dismiss the worktree health notice"
-        size="sm"
-      />
-    </div>
-  {:else}
-    <div
-      class="flex items-start gap-2.5 border border-warning/30 bg-warning/10 px-3 py-2.5"
-      role="status"
-    >
-      <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
-      <div class="min-w-0 flex-1 space-y-1.5">
-        <p class="text-xs font-medium text-warning">{title}</p>
-        <p class="text-[0.6875rem] text-muted">{fix}</p>
-        {#if expectedPath}
-          <p class="truncate font-mono text-[0.625rem] text-dimmed" title={expectedPath}>
-            {expectedPath}
-          </p>
-        {/if}
-        {#if actionError}
-          <p class="text-[0.6875rem] text-danger">{actionError}</p>
-        {/if}
-        {@render actions()}
-      </div>
-      <NoticeDismissButton
-        id={noticeId}
-        condition={noticeCondition}
-        title="Dismiss the worktree health notice"
-      />
-    </div>
-  {/if}
+  <!--
+    One strip for both variants: the card's compact row starts folded, the panel
+    banner starts open. The fix is the headline's own button, so it is reachable
+    either way.
+  -->
+  <ErrorStrip
+    {title}
+    message={fix}
+    tone="warning"
+    folded={variant === 'inline'}
+    primary={actions}
+    onDismiss={() => noticeDismissals.dismiss(noticeId, noticeCondition)}
+  >
+    {#snippet body()}
+      {#if expectedPath}
+        <p class="truncate font-mono text-xs text-muted" title={expectedPath}>{expectedPath}</p>
+      {/if}
+      {#if actionError}
+        <p class="text-xs text-danger">{actionError}</p>
+      {/if}
+    {/snippet}
+  </ErrorStrip>
 {/if}

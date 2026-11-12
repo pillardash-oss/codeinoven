@@ -236,6 +236,16 @@ export function parseUsageResetAt(message: string, now = Date.now()): number | u
 }
 
 /**
+ * Whether a failure says the scope's managed checkout is missing or unhealthy.
+ * No provider is involved in that, so it is neither a provider outage nor
+ * something Change or Retry can fix: the fix is repairing the worktree.
+ */
+export function isScopeRootFailure(message: string): boolean {
+  const normalized = message.toLowerCase()
+  return normalized.includes('managed scope root') || normalized.includes('managed checkout')
+}
+
+/**
  * Classify a provider/harness failure message and optional HTTP status code into
  * a provider-neutral kind so every driver and the chat engine agree on how the
  * failure is presented (title, retry affordance, raw-error visibility).
@@ -254,9 +264,7 @@ export function classifyProviderIssue(
   // A missing or unhealthy managed checkout says "unavailable" too, but no
   // provider is involved: Change and Retry cannot fix it, so it must not be
   // filed as a provider outage.
-  if (normalized.includes('managed scope root') || normalized.includes('managed checkout')) {
-    return 'unknown'
-  }
+  if (isScopeRootFailure(normalized)) return 'unknown'
   // A provider-load 429 ("overloaded_error", "temporarily unavailable") is a
   // transient condition, not a usage/rate cap   check it before the blanket
   // `statusCode === 429` branch below, or it always loses to `rate_limit` and
