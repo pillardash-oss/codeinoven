@@ -214,6 +214,24 @@
   let frameDuration = $state(1 / 30)
   /** The newest frame the element reported painting, in seconds. */
   let paintedAt = -1
+  /**
+   * Whether a seek in progress is holding the sound down.
+   *
+   * Dragging the head or holding an arrow key runs the decoder through a stretch
+   * of the recording, and the audio that comes with it is nothing but noise. The
+   * sound is therefore kept off for the length of the gesture and let back in
+   * once the head has settled, which is the moment the reader is listening again.
+   */
+  let seekSilent = $state(false)
+  let seekSilenceTimer: ReturnType<typeof setTimeout> | undefined
+  /**
+   * How long a seek holds the sound down after its last move.
+   *
+   * A held arrow repeats every few tens of milliseconds and a drag reports every
+   * position it crosses, so the silence has to outlast the gap between two moves;
+   * releasing it any sooner makes the audio stutter back in mid-scrub.
+   */
+  const SEEK_SILENCE_MS = 300
 
   /** The box the picture reserves, so metadata can land without moving it. */
   const ratio = $derived(measuredRatio ?? measuredRatios.get(src) ?? FALLBACK_RATIO)
@@ -264,6 +282,7 @@
 
   onDestroy(() => {
     clearTimeout(seekTimer)
+    clearTimeout(seekSilenceTimer)
     publishPlayhead()
   })
 
@@ -336,10 +355,30 @@
   }
 
   function toggleMute(): void {
+    muted = !muted
+  }
+
+  // The element's own mute flag is the reader's toggle or a seek in flight,
+  // whichever is holding it down, so the two never fight over it.
+  $effect(() => {
     const element = video
     if (!element) return
-    element.muted = !element.muted
-    muted = element.muted
+    element.muted = muted || seekSilent
+  })
+
+  /** Hold the recording silent for the length of a seek. */
+  function silenceForSeek(): void {
+    seekSilent = true
+    clearTimeout(seekSilenceTimer)
+    seekSilenceTimer = setTimeout(() => {
+      seekSilent = false
+    }, SEEK_SILENCE_MS)
+  }
+
+  /** The head has settled: let the sound back in now rather than on the timer. */
+  function resumeAfterSeek(): void {
+    clearTimeout(seekSilenceTimer)
+    seekSilent = false
   }
 
   /** The newest position a scrub has asked for, while a seek is still resolving. */
@@ -360,6 +399,7 @@
    * without ever pressing play.
    */
   function previewSeek(value: number): void {
+    silenceForSeek()
     scrubValue = value
     if (duration === 0) return
     previewTarget = value
@@ -424,6 +464,7 @@
       playing = false
     }
     started = true
+    silenceForSeek()
     const step = frameDuration
     let next = element.currentTime + direction * step
     if (direction > 0 && paintedAt >= 0 && next <= paintedAt + step / 2) next = paintedAt + step
@@ -736,21 +777,30 @@
         min={0}
         max={Math.max(duration, 0.1)}
         step={frameDuration}
+        arrowStep={frameDuration * 5}
+        fineStep={frameDuration}
         label="Seek {label}"
         disabled={duration === 0}
         onScrubStart={(value) => {
           scrubbing = true
           scrubValue = value
+          silenceForSeek()
         }}
         onScrubEnd={() => {
           scrubbing = false
+          resumeAfterSeek()
         }}
         onInput={previewSeek}
+        onKeyStep={silenceForSeek}
         onCommit={() => {
           // The release is the one signal a missed pointerup cannot swallow:
           // settling here is what returns the readout to the element's own clock.
+          const dragged = scrubbing
           scrubbing = false
           seekTo(scrubValue)
+          // A keyboard step commits too, and it must keep the silence its next
+          // press is about to ask for; only a released drag resumes the sound.
+          if (dragged) resumeAfterSeek()
         }}
       />
 
