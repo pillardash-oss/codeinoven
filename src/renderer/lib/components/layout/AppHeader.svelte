@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { loadCachedPanelModule } from '$lib/lazy-panel'
   import CioBack from '@pdslng/cio-icon/CioBack.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
@@ -67,6 +68,56 @@
     const docked = layoutPanelState.dockedWidth
     if (docked <= 0) return 0
     return Math.max(0, layoutPanelState.railWidth + docked - leftInset)
+  })
+
+  /**
+   * The panel column the bar is drawing right now.
+   *
+   * The assistant view's name sits on the panel's right edge, so closing the
+   * panel has to carry that name across to the chrome. The sidebar unmounts in
+   * its own animated pass, and its registration only drops once that pass ends,
+   * which would leave the name standing until the panel was already gone. This
+   * column follows the target itself, so the name slides from where the panel was
+   * to where the chrome ends at the moment the target changes.
+   */
+  // Intentional initial-value capture: the slide starts from wherever the column
+  // is at mount, then the effect below owns it.
+  // svelte-ignore state_referenced_locally
+  let renderedColumn = $state(panelColumnWidth)
+  /** The value the animation has reached, kept out of state to avoid a cycle. */
+  // svelte-ignore state_referenced_locally
+  let columnNow = panelColumnWidth
+  let columnFrame: number | null = null
+
+  $effect(() => {
+    const target = panelColumnWidth
+    if (target === columnNow) return
+    slideColumnTo(target)
+  })
+
+  function slideColumnTo(target: number): void {
+    if (columnFrame !== null) cancelAnimationFrame(columnFrame)
+    const from = columnNow
+    const startedAt = performance.now()
+    const duration = 220
+    const step = (now: number): void => {
+      const progress = Math.min(1, (now - startedAt) / duration)
+      const eased = 1 - Math.pow(1 - progress, 3)
+      columnNow = from + (target - from) * eased
+      renderedColumn = columnNow
+      if (progress < 1) {
+        columnFrame = requestAnimationFrame(step)
+        return
+      }
+      columnNow = target
+      renderedColumn = target
+      columnFrame = null
+    }
+    columnFrame = requestAnimationFrame(step)
+  }
+
+  onDestroy(() => {
+    if (columnFrame !== null) cancelAnimationFrame(columnFrame)
   })
 
   /**
@@ -349,11 +400,13 @@
   style={trafficLightInsetStyle({ mirrorRightInset: false, rightPadding: '0.25rem' })}
 >
   <nav
-    class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1 {onAssistant
-      ? 'transition-[width] duration-200 ease-out'
-      : ''}"
+    class="header-cluster titlebar-no-drag relative flex shrink-0 items-center gap-1"
     aria-label="Primary navigation"
-    style:width={panelColumnWidth > 0 || onAssistant ? `${panelColumnWidth}px` : undefined}
+    style:width={onAssistant
+      ? `${renderedColumn}px`
+      : panelColumnWidth > 0
+        ? `${panelColumnWidth}px`
+        : undefined}
     bind:clientWidth={clusterWidth}
   >
     <!-- The chrome measures itself inside its own content box. The cluster above
