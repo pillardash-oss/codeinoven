@@ -282,4 +282,11 @@
       </span>
     {/if}
   {/each}
+  {#if viewActions.scopeTabItems.length > 0}
+    <!-- The same rule the bar draws between its own clusters. The project control
+         adds a tab, so it closes the tabs row; the window-wide controls that
+         follow it (notes, notifications) are another cluster and start after
+         this line. -->
+    <div class="mx-2 h-5 w-px shrink-0 bg-border/50" aria-hidden="true"></div>
+  {/if}
 </div>
