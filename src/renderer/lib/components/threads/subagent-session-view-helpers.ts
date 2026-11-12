@@ -1,5 +1,5 @@
 import { appendPartDelta, mergeStreamedPart } from '$shared/agent-part-merge'
-import { resolveModelProvider } from '$shared/provider-identity'
+import { providerDisplayName, resolveModelProvider } from '$shared/provider-identity'
 import type {
   AgentMessage,
   AgentPart,
@@ -410,15 +410,24 @@ export function catalogModelLabel(
     models.find((m) => modelId.endsWith(`/${m.id}`))
   return model?.name ?? modelId
 }
-/** Display name of the provider that runs this worker, when the catalog has it. */
+/**
+ * Display name of the provider that runs this worker, when the catalog has it.
+ *
+ * A harness may qualify the provider with the account serving it (OpenCode
+ * reports `codeinoven-2 / OpenCode`). The account is a credential detail that
+ * the run's own badge explains, so the provider is named on its own here; that
+ * also lets its name resolve to the vendor's bundled mark instead of a
+ * monogram of the workspace name.
+ */
 export function catalogProviderName(
   activity: AgentSubagentActivity,
   providers: ProviderCatalog[]
 ): string | undefined {
-  return resolveModelProvider(providers, {
+  const name = resolveModelProvider(providers, {
     providerId: activity.providerId,
     modelId: activity.modelId
   })?.name
+  return name ? providerDisplayName(name) : undefined
 }
 
 /** The vendor mark a worker wears: the one on the model running it. */
