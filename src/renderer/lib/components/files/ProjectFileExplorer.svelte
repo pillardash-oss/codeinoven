@@ -23,6 +23,7 @@
   import { projectFilesWorkspace, type ProjectFilesState } from '$lib/stores/project-files.svelte'
   import { projectWorkState } from '$lib/stores/project-work.svelte'
   import { findNavState } from '$lib/stores/find-nav.svelte'
+  import { selectedSearchText } from '$lib/selection-text'
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
@@ -431,6 +432,12 @@
   })
 
   async function openFilter(): Promise<void> {
+    // A filter opened over a highlighted passage starts from it, the same way
+    // every other search does.
+    if (!filterOpen && !filterQuery.trim()) {
+      const selected = selectedSearchText()
+      if (selected) filterQuery = selected
+    }
     filterOpen = true
     await tick()
     filterInput?.focus()

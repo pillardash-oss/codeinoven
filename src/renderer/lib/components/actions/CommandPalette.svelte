@@ -135,6 +135,10 @@
       wasOpen = true
       wasScreenKey = screen
       query = initialQuery
+      // A screen that opens with a query (a search seeded from the reader's own
+      // selection) has to announce it, because the search behind the palette
+      // only runs from this callback.
+      if (initialQuery) onQueryChange?.(initialQuery)
       selectedActionId = ''
       if (mode === 'inline') void tick().then(() => inputElement?.focus())
     } else if (!open) {

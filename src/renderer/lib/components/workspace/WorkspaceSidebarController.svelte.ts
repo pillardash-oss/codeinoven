@@ -4,6 +4,7 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
 import { RowPageBudget } from '$lib/components/shared/RowPageBudget.svelte'
 import { threadProjectFilterState } from '$lib/stores/thread-project-filter.svelte'
+import { selectedSearchText } from '$lib/selection-text'
 import { isOrchestrationChildThread, type Project, type Thread } from '$shared/types'
 import type { ThreadSearchResult } from '$shared/types'
 import { mergeThreadSearchBatches, isProjectFamilyThread } from './workspace-thread-helpers'
@@ -158,6 +159,12 @@ export class WorkspaceSidebarController {
     this.projectSearchOpen.add(projectId)
     // Keep the folder expanded so search results stay visible in the sidebar.
     this.expandedFolders.add(projectId)
+    // A search opened while the reader has text highlighted starts from that
+    // passage, exactly as the panel-wide searches do.
+    if (!(this.projectSearchQueries.get(projectId) ?? '').trim()) {
+      const selected = selectedSearchText()
+      if (selected) this.projectSearchQueries.set(projectId, selected)
+    }
     if (!this.projectSearchBootstrap) {
       this.projectSearchBootstrap = true
       setTimeout(() => {
@@ -183,6 +190,10 @@ export class WorkspaceSidebarController {
 
   openChatsSearch(): void {
     this.chatsSearchOpen = true
+    if (!this.chatsSearchQuery.trim()) {
+      const selected = selectedSearchText()
+      if (selected) this.chatsSearchQuery = selected
+    }
   }
 
   closeChatsSearch(): void {
@@ -192,6 +203,10 @@ export class WorkspaceSidebarController {
 
   openProjectsSearch(): void {
     this.projectsSearchOpen = true
+    if (!this.projectsSearchQuery.trim()) {
+      const selected = selectedSearchText()
+      if (selected) this.projectsSearchQuery = selected
+    }
   }
 
   closeProjectsSearch(): void {
@@ -234,7 +249,12 @@ export class WorkspaceSidebarController {
 
   openThreadsSearch(): void {
     this.threadsSearchOpen = true
-    if (this.threadsSearchQuery.trim()) this.runThreadsSearch(this.threadsSearchQuery)
+    // The reader's own selection is what they asked to search for, and the
+    // query they may already have typed outranks it.
+    if (!this.threadsSearchQuery.trim()) {
+      const selected = selectedSearchText()
+      if (selected) this.runThreadsSearch(selected)
+    } else this.runThreadsSearch(this.threadsSearchQuery)
   }
 
   closeThreadsSearch(): void {

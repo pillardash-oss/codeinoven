@@ -4,6 +4,7 @@ import { SvelteMap } from 'svelte/reactivity'
 import type { Component } from 'svelte'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { invoke } from '$lib/ipc.svelte'
+import { selectedSearchText } from '$lib/selection-text'
 import { warmIntentSearch } from './app-search-warm'
 import { ovens } from '$lib/stores/ovens.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
@@ -74,6 +75,14 @@ export interface ThreadSearchPaletteDeps {
  */
 export class ThreadSearchPaletteController {
   paletteOpen = $state(false)
+  /**
+   * The query the screen opens with.
+   *
+   * A search asked for while text is highlighted is that passage, so the
+   * palette arrives already searching rather than asking the reader to retype
+   * what they had selected.
+   */
+  initialQuery = $state('')
   actions = $state<ActionDefinition[]>([])
   loading = $state(false)
   /**
@@ -146,6 +155,7 @@ export class ThreadSearchPaletteController {
 
   openPalette(): void {
     this.reset()
+    this.initialQuery = selectedSearchText()
     this.paletteOpen = true
     // The model ranks by meaning and boots cold after its five-minute idle
     // retire; start that boot while the user is still typing. Main no-ops it

@@ -12,8 +12,9 @@
 </script>
 
 <script lang="ts">
-  import { onDestroy, tick } from 'svelte'
+  import { onDestroy, onMount, tick } from 'svelte'
   import FindInBar from '../files/FindInBar.svelte'
+  import { selectedSearchText } from '$lib/selection-text'
 
   const MATCH_HIGHLIGHT = 'conversation-find-match'
   const ACTIVE_HIGHLIGHT = 'conversation-find-active'
@@ -52,7 +53,10 @@
     label = 'Find'
   }: Props = $props()
 
-  let query = $state('')
+  // A find that opens over a highlighted passage starts from it: the reader
+  // selected the words they want to find, in a conversation, a document or a
+  // note, so the bar arrives with the query already in the field.
+  let query = $state(selectedSearchText())
   let activeIndex = $state(0)
   let matches = $state.raw<SurfaceMatch[]>([])
 
@@ -204,6 +208,15 @@
       observer.disconnect()
       cancelScheduledScan()
     }
+  })
+
+  // A query the bar opened with was never typed, so nothing has scanned it yet.
+  onMount(() => {
+    if (!query) return
+    void tick().then(() => {
+      refreshMatches()
+      scrollToCurrent()
+    })
   })
 
   onDestroy(() => {

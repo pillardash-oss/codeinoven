@@ -10,6 +10,7 @@
   import { SvelteMap, SvelteSet } from 'svelte/reactivity'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { panelSearchRequest } from '$lib/stores/panel-search-request.svelte'
+  import { selectedSearchText } from '$lib/selection-text'
   import { lastViewedAssistantThreadId } from '$lib/stores/assistant-last-viewed.svelte'
   import { sortAssistants } from '$shared/assistant-order'
   import { DON_ASSISTANT_ID, assistantIsBuiltin, assistantReady } from '$shared/types'
@@ -76,6 +77,21 @@
   /** Whether the search owns the panel's top row instead of its button. */
   let searchExpanded = $state(false)
   let searchQuery = $state('')
+
+  /**
+   * Open the panel's own search on its top row.
+   *
+   * A search asked for while text is highlighted starts from that passage
+   * instead of an empty field, whether it was asked for by the chord or by the
+   * button. A query already on screen is left alone.
+   */
+  function openSearch(): void {
+    if (!searchExpanded && !searchQuery.trim()) {
+      const selected = selectedSearchText()
+      if (selected) searchQuery = selected
+    }
+    searchExpanded = true
+  }
 
   const EMPTY_TASKS: readonly Thread[] = []
   const EMPTY_RUNS: readonly Thread[] = []
@@ -196,7 +212,7 @@
     const request = panelSearchRequest.requestId
     if (request === handledPanelSearch) return
     handledPanelSearch = request
-    searchExpanded = true
+    openSearch()
   })
 </script>
 
@@ -213,11 +229,14 @@
             placeholder="Search assistants, tasks and runs…"
             ariaLabel="Search assistants and threads"
             onOpenChange={(open) => {
-              searchExpanded = open
-              if (!open) searchQuery = ''
+              if (open) openSearch()
+              else {
+                searchExpanded = false
+                searchQuery = ''
+              }
             }}
             onQueryChange={(value) => (searchQuery = value)}
-            label="Search assistants and threads"
+            label="Search all"
           />
         </div>
         {#if !searchExpanded}

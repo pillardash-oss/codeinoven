@@ -4,6 +4,7 @@ import { SvelteSet } from 'svelte/reactivity'
 import type { ActionDefinition, ActionSelection } from '$lib/actions'
 import { browserStore, loadBrowser } from '$lib/stores/browser-access.svelte'
 import { browserTabLabel } from '$lib/stores/global-browser-types'
+import { selectedSearchText } from '$lib/selection-text'
 import { actionId } from './app-palette-actions'
 
 export interface BrowserTabSearchPaletteDeps {
@@ -32,6 +33,8 @@ function tabHost(url: string): string {
  */
 export class BrowserTabPaletteController {
   paletteOpen = $state(false)
+  /** The query the screen opens with, taken from the reader's own selection. */
+  initialQuery = $state('')
   /** Selected group ids for the footer picker; empty = every group. */
   groupIds = $state<string[]>([])
   private query = $state('')
@@ -49,6 +52,7 @@ export class BrowserTabPaletteController {
     this.paletteOpen = true
     this.groupIds = []
     this.query = ''
+    this.initialQuery = selectedSearchText()
     void loadBrowser()
   }
 
