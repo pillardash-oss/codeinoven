@@ -87,20 +87,8 @@
           {title}
           message={error ?? undefined}
           folded={false}
-        >
-          {#snippet primary()}
-            {#if onRetry}
-              <button
-                type="button"
-                class="flex h-7 items-center gap-1.5 bg-primary px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover"
-                onclick={onRetry}
-              >
-                <CioRefresh size={12} aria-hidden="true" />
-                {retryLabel}
-              </button>
-            {/if}
-          {/snippet}
-        </ErrorStrip>
+          primary={onRetry ? { label: retryLabel, icon: CioRefresh, onclick: onRetry } : undefined}
+        />
       {:else}
         <div
           class="flex items-center gap-2 border border-border bg-elevated/95 px-3 py-1.5 shadow-sm"

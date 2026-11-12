@@ -1284,11 +1284,7 @@
       {@render staleVersionAlert('top-[4.5rem]')}
 
       {#if activeSession?.error}
-        <ErrorStrip
-          class="shrink-0 border-x-0 border-t-0"
-          title="This file could not be opened"
-          message={activeSession.error}
-        />
+        <ErrorStrip title="This file could not be opened" message={activeSession.error} />
       {/if}
 
       {#if findNavState.fileDocumentFindOpen && documentFindAvailable && !fullscreenOpen}

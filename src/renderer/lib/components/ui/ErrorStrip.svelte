@@ -1,200 +1,255 @@
-<script lang="ts">
-  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
-  import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
-  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
-  import CioDebugger from '@pdslng/cio-icon/CioDebugger.svelte'
-  import CioForward from '@pdslng/cio-icon/CioForward.svelte'
-  import { onMount, type Snippet } from 'svelte'
-  import { fade } from 'svelte/transition'
-  import { formatCompactAge } from '$shared/date-time-format'
+<script lang="ts" module>
+  import type { Component } from 'svelte'
 
   /**
-   * The one error card: a single row that unfolds for the rest.
+   * The one action an error card asks for. There is exactly one: it sits in the
+   * header while the card is folded and moves to the right of the footer when it
+   * unfolds, so the open card stays balanced. Every other button belongs in the
+   * footer, which only exists while the card is unfolded.
+   */
+  export interface ErrorStripAction {
+    label: string
+    /** Tooltip and accessible name; defaults to the label. */
+    title?: string
+    icon?: Component
+    loading?: boolean
+    disabled?: boolean
+    onclick: () => void
+  }
+
+  /**
+   * What the card is communicating, which is also its colour: `danger` for a
+   * failure, `warning` for a limit or an outage the reader can wait out or fix,
+   * `info` for a pause the app is already handling.
+   */
+  export type ErrorStripTone = 'danger' | 'warning' | 'info'
+</script>
+
+<script lang="ts">
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CioCheck from '@pdslng/cio-icon/CioCheck.svelte'
+  import CioClose from '@pdslng/cio-icon/CioClose.svelte'
+  import CioCode from '@pdslng/cio-icon/CioCode.svelte'
+  import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import type { Snippet } from 'svelte'
+  import { fade, slide } from 'svelte/transition'
+  import CardButton from '../shared/CardButton.svelte'
+  import CardFoot from '../shared/CardFoot.svelte'
+  import CardFrame from '../shared/CardFrame.svelte'
+  import CardHead from '../shared/CardHead.svelte'
+  import type { CardChipData } from '../shared/CardTimer.svelte'
+  import type { CardFramePlacement } from '../shared/card-frame'
+  import { foldSlide } from '../shared/card-motion'
+  import { copyText } from '$lib/copy-text'
+  import { motionDuration } from '$lib/motion'
+
+  /**
+   * The base every error card builds on.
    *
-   * Folded, it is the plain headline, how long ago it failed, and the fix, so a
-   * recoverable failure costs one line wherever it appears (the composer dock, a
-   * panel, a terminal). Unfolded, it states the cause in full and offers the
-   * secondary actions. Falsy actions (Dismiss, Raw error) sit on the left of the
-   * footer and the primary action sits on the right, as in every other card.
+   * It is a card like any other in the composer stack: the shared frame, head
+   * (icon, name, reading, fold) and foot (falsy actions left, the truthy action
+   * right), so an error folds, times and places its actions exactly as the rest
+   * do. What it adds is what an error needs and nothing else: a tone drawn from
+   * the status it reports, the one primary action that follows the fold, Dismiss,
+   * and the raw diagnostic text behind Raw error with a copy button. The headline
+   * stays plain language; the plumbing only ever appears in the raw view.
    *
-   * The headline is always plain language. The raw diagnostic text, with the IPC
-   * wrapper and error class, only ever appears behind Raw error.
+   * Other cards (engineering, questions, secrets, MCP, assistants) are not errors
+   * and do not build on this.
    */
   interface Props {
     /** Plain headline naming the problem, never the plumbing. */
     title: string
-    /** The cause and fix in a sentence or two. Inline when there is room, in full when unfolded. */
+    /** Leading mark; defaults to the attention mark. */
+    icon?: Component
+    tone?: ErrorStripTone
+    /** The reading beside the fold: a countdown, an elapsed time, or a state word. */
+    chip?: CardChipData
+    /** Chips beside the headline, such as the provider's name. */
+    meta?: Snippet
+    /** Where the card belongs, as every composer card states it. */
+    placement?: CardFramePlacement
+    /** Accessible name of the card; defaults to the headline. */
+    label?: string
+    /** `alert` for a failure, `status` for a wait that is not one. */
+    role?: 'alert' | 'status'
+    /** A single plain sentence of cause and fix. Richer bodies use `children`. */
     message?: string
     /** Full diagnostic text, shown only on request. */
     rawError?: string
-    /** When it failed, as epoch milliseconds. Drives the age beside the headline. */
-    failedAt?: number
-    tone?: 'danger' | 'warning'
-    /** Starts folded; the reader unfolds it. */
+    /** Starts folded; bindable so a card can remember the reader's choice. */
     folded?: boolean
-    /** The fix. It sits in the row while folded, and moves to the right of the
-     *  footer when unfolded so the open card stays balanced. */
-    primary?: Snippet
-    /** Extra detail for the unfolded body, such as the path that was expected. */
-    body?: Snippet
-    /** Secondary actions at the right of the unfolded footer. */
-    footerEnd?: Snippet
+    /** Names the card in the fold control; defaults to the headline. */
+    foldLabel?: string
+    primary?: ErrorStripAction
     onDismiss?: () => void
+    /** The body, below the message. */
+    children?: Snippet
+    /** Falsy actions beyond Dismiss and Raw error, at the left of the footer. */
+    footerStart?: Snippet
+    /** Every other action, at the right of the footer and before the primary. */
+    footerEnd?: Snippet
+    /** Another card sits directly above, so the top rule becomes the broken line. */
+    stackedAbove?: boolean
+    /** The surface below carries the join, so this card drops its bottom rule. */
+    joinsBelow?: boolean
     class?: string
   }
 
   let {
     title,
+    icon = CioAttention,
+    tone = 'danger',
+    chip,
+    meta,
+    placement = 'top',
+    label,
+    role = 'alert',
     message,
     rawError,
-    failedAt,
-    tone = 'danger',
     folded = $bindable(true),
+    foldLabel,
     primary,
-    body,
-    footerEnd,
     onDismiss,
+    children,
+    footerStart,
+    footerEnd,
+    stackedAbove = false,
+    joinsBelow = false,
     class: className = ''
   }: Props = $props()
 
-  const bodyId = $props.id()
-  const rawId = `${bodyId}-raw`
-
   let rawOpen = $state(false)
+  let copied = $state(false)
 
-  // The age is only worth redrawing while a failure time is on screen, and a
-  // minute is the smallest step it ever shows.
-  let now = $state(Date.now())
-  let age = $derived(failedAt === undefined ? '' : formatCompactAge(failedAt, now))
-  /** "Now" and the compact steps read as a sentence; an older date stands alone. */
-  let ageLabel = $derived(age === 'Now' ? 'just now' : /^\d+[mhd]$/u.test(age) ? `${age} ago` : age)
+  const TONE_CLASS: Record<
+    ErrorStripTone,
+    { frame: string; wash: string; head: 'danger' | 'warn' | 'info' }
+  > = {
+    danger: { frame: 'border-danger/40! border-l-danger!', wash: 'bg-danger/10', head: 'danger' },
+    warning: { frame: 'border-warning/40! border-l-warning!', wash: 'bg-warning/10', head: 'warn' },
+    info: { frame: 'border-info/40! border-l-info!', wash: 'bg-info/10', head: 'info' }
+  }
+  const toneClass = $derived(TONE_CLASS[tone])
 
-  onMount(() => {
-    if (failedAt === undefined) return
-    const timer = setInterval(() => (now = Date.now()), 30_000)
-    return () => clearInterval(timer)
-  })
-
-  let toneBorder = $derived(tone === 'danger' ? 'border-danger/40' : 'border-warning/40')
-  let toneWash = $derived(tone === 'danger' ? 'bg-danger/10' : 'bg-warning/10')
-  /** Status ink mixed toward the foreground: the raw status colours do not clear
-   *  4.5:1 on either surface. */
-  let ink = $derived(
-    `color-mix(in srgb, var(--color-${tone === 'danger' ? 'danger' : 'warning'}) 62%, var(--color-foreground))`
+  const hasFoot = $derived(
+    Boolean(primary || onDismiss || rawError || footerStart || footerEnd) && !folded
   )
 
-  const FADE_MS = 120
-
-  const buttonClass =
-    'flex h-7 items-center gap-1.5 border border-border-strong bg-surface px-2.5 text-xs transition-colors hover:bg-elevated'
+  async function copyRaw(): Promise<void> {
+    if (!rawError) return
+    try {
+      await copyText(rawError, null)
+      copied = true
+      setTimeout(() => (copied = false), 1500)
+    } catch {
+      // The clipboard is not available; the text stays selectable.
+    }
+  }
 </script>
 
-<article
-  class="@container flex min-w-0 flex-col border bg-surface {toneBorder} {className}"
-  style:--ink={ink}
-  role="alert"
-  aria-label="Error: {title}"
->
-  <header class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-1.5 {toneWash}">
-    <CioAttention size={14} class="shrink-0 text-(--ink)" aria-hidden="true" />
-    <h3 class="min-w-0 truncate text-[0.8125rem] font-semibold text-foreground">{title}</h3>
-    {#if message}
-      <p
-        class="hidden min-w-0 flex-1 truncate text-[0.8125rem] text-muted @4xl:block @max-lg:order-3 @max-lg:block @max-lg:basis-full @max-lg:whitespace-normal"
-      >
-        {message}
-      </p>
-    {/if}
-    <span class="min-w-0 flex-1 @4xl:hidden @max-lg:hidden"></span>
-    {#if age}
-      <span
-        class="shrink-0 text-xs tabular-nums text-muted @max-lg:order-2 @max-lg:basis-full"
-        title="Failed {ageLabel}"
-      >
-        {ageLabel}
-      </span>
-    {/if}
-    {#if primary && folded}
+<div {role} aria-live="polite" class={className}>
+  <CardFrame {placement} label={label ?? title} {stackedAbove} {joinsBelow} class={toneClass.frame}>
+    <CardHead
+      {icon}
+      {title}
+      {chip}
+      {meta}
+      bind:folded
+      foldLabel={foldLabel ?? title}
+      tone={toneClass.head}
+      class={toneClass.wash}
+    >
+      {#snippet actions()}
+        {#if primary && folded}
+          <span transition:fade={{ duration: motionDuration(120) }}>
+            <CardButton
+              label={primary.label}
+              title={primary.title}
+              icon={primary.icon}
+              variant="primary"
+              size="sm"
+              loading={primary.loading}
+              disabled={primary.disabled}
+              onclick={primary.onclick}
+            />
+          </span>
+        {/if}
+      {/snippet}
+    </CardHead>
+
+    {#if !folded && (message || children || (rawError && rawOpen))}
       <div
-        class="flex shrink-0 items-center gap-1.5 @max-lg:order-4 @max-lg:basis-full"
-        transition:fade={{ duration: FADE_MS }}
+        transition:slide={foldSlide()}
+        class="flex flex-col gap-2 px-3 py-2.5 text-xs leading-relaxed text-muted"
       >
-        {@render primary()}
-      </div>
-    {/if}
-    <button
-      type="button"
-      class="flex h-7 w-7 shrink-0 items-center justify-center text-muted transition-colors hover:bg-elevated hover:text-foreground @max-lg:order-1 @max-lg:ml-auto"
-      aria-expanded={!folded}
-      aria-controls={bodyId}
-      title={folded ? `Unfold: ${title}` : `Fold: ${title}`}
-      aria-label={folded ? `Unfold: ${title}` : `Fold: ${title}`}
-      onclick={() => (folded = !folded)}
-    >
-      {#if folded}
-        <CioForward size={14} aria-hidden="true" />
-      {:else}
-        <CioChevronDown size={14} aria-hidden="true" />
-      {/if}
-    </button>
-  </header>
-
-  <div id={bodyId} class="grid gap-2.5 border-t border-border px-3 py-2.5" hidden={folded}>
-    {#if message}
-      <p class="text-[0.8125rem] text-muted">{message}</p>
-    {/if}
-    {@render body?.()}
-    {#if rawError}
-      <pre
-        id={rawId}
-        class="m-0 border border-border bg-elevated px-2.5 py-2 font-mono text-xs break-words whitespace-pre-wrap text-muted"
-        hidden={!rawOpen}>{rawError}</pre>
-    {/if}
-  </div>
-
-  {#if onDismiss || rawError || footerEnd || primary}
-    <footer
-      class="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2"
-      hidden={folded}
-    >
-      <div class="flex items-center gap-1.5">
-        {#if onDismiss}
-          <button
-            type="button"
-            class={buttonClass}
-            title="Dismiss this error"
-            aria-label="Dismiss this error"
-            onclick={onDismiss}
-          >
-            <CioClose size={12} aria-hidden="true" />
-            Dismiss
-          </button>
+        {#if message}
+          <p class="select-text">{message}</p>
         {/if}
-        {#if rawError}
-          <button
-            type="button"
-            class={buttonClass}
-            aria-expanded={rawOpen}
-            aria-controls={rawId}
-            title={rawOpen ? 'Hide the raw error' : 'Show the raw error'}
-            aria-label={rawOpen ? 'Hide the raw error' : 'Show the raw error'}
-            onclick={() => (rawOpen = !rawOpen)}
-          >
-            <CioDebugger size={12} aria-hidden="true" />
-            Raw error
-          </button>
-        {/if}
-      </div>
-      {#if footerEnd || primary}
-        <div class="ml-auto flex items-center gap-1.5">
-          {@render footerEnd?.()}
-          {#if primary && !folded}
-            <div class="flex items-center gap-1.5" in:fade={{ duration: FADE_MS, delay: FADE_MS }}>
-              {@render primary()}
+        {@render children?.()}
+        {#if rawError && rawOpen}
+          <div class="flex flex-col gap-1.5">
+            <pre
+              class="m-0 max-h-60 overflow-auto border border-border bg-raised p-2.5 text-xs leading-relaxed whitespace-pre-wrap break-words text-foreground select-text"><code
+                >{rawError}</code
+              ></pre>
+            <div>
+              <CardButton
+                label={copied ? 'Copied' : 'Copy'}
+                title={copied ? 'Copied' : 'Copy the raw error'}
+                icon={copied ? CioCheck : CioCopy}
+                variant="ghost"
+                size="xs"
+                onclick={() => void copyRaw()}
+              />
             </div>
-          {/if}
-        </div>
-      {/if}
-    </footer>
-  {/if}
-</article>
+          </div>
+        {/if}
+      </div>
+    {/if}
+
+    {#if hasFoot}
+      <div transition:slide={foldSlide()}>
+        <CardFoot yields="right">
+          {#snippet left()}
+            {#if onDismiss}
+              <CardButton
+                label="Dismiss"
+                title="Dismiss this error"
+                icon={CioClose}
+                variant="ghost"
+                onclick={onDismiss}
+              />
+            {/if}
+            {#if rawError}
+              <CardButton
+                label="Raw error"
+                title={rawOpen ? 'Hide the raw error' : 'Show the raw error'}
+                icon={CioCode}
+                variant="ghost"
+                onclick={() => (rawOpen = !rawOpen)}
+              />
+            {/if}
+            {@render footerStart?.()}
+          {/snippet}
+          {#snippet right()}
+            {@render footerEnd?.()}
+            {#if primary}
+              <span in:fade={{ duration: motionDuration(120), delay: motionDuration(120) }}>
+                <CardButton
+                  label={primary.label}
+                  title={primary.title}
+                  icon={primary.icon}
+                  variant="primary"
+                  loading={primary.loading}
+                  disabled={primary.disabled}
+                  onclick={primary.onclick}
+                />
+              </span>
+            {/if}
+          {/snippet}
+        </CardFoot>
+      </div>
+    {/if}
+  </CardFrame>
+</div>

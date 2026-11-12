@@ -12,7 +12,9 @@
   } from '$shared/scope-worktree-health'
   import { ipcErrorMessage } from '$lib/ipc-errors'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
-  import ErrorStrip from '../ui/ErrorStrip.svelte'
+  import CioAttention from '@pdslng/cio-icon/CioAttention.svelte'
+  import CardButton from '../shared/CardButton.svelte'
+  import ErrorStrip, { type ErrorStripAction } from '../ui/ErrorStrip.svelte'
   import type { ScopeWorktreeHealth } from '$shared/types'
 
   interface Props {
@@ -52,6 +54,29 @@
   let expectedPath = $derived(unhealthy ? health?.expectedPath : undefined)
 
   let scopeLabel = $derived(name ? `"${name}"` : 'this scope')
+
+  let repairAction = $derived<ErrorStripAction | undefined>(
+    repairable
+      ? {
+          label: busyAction === 'repair' ? 'Repairing…' : 'Repair worktree',
+          title: `Repair the managed worktree of ${name ?? 'this scope'}`,
+          icon: CioWrench,
+          disabled: busyAction !== null,
+          onclick: () => void repair()
+        }
+      : undefined
+  )
+  let setupAction = $derived<ErrorStripAction | undefined>(
+    setupStale
+      ? {
+          label: busyAction === 'setup' ? 'Running setup…' : 'Re-run setup',
+          title: `Re-run the setup commands in the worktree of ${name ?? 'this scope'}`,
+          icon: CioRefresh,
+          disabled: busyAction !== null,
+          onclick: () => void rerunSetup()
+        }
+      : undefined
+  )
 
   /**
    * One key for both variants: this is one condition about one scope, so closing
@@ -126,61 +151,38 @@
   }
 </script>
 
-{#snippet actions()}
-  <div class="flex flex-wrap items-center gap-2">
-    {#if repairable}
-      <button
-        type="button"
-        class="bg-primary px-2 py-1 text-[0.6875rem] font-medium text-on-primary transition-colors hover:bg-primary-hover disabled:opacity-50"
-        title="Repair the managed worktree of {name ?? 'this scope'}"
-        aria-label="Repair the managed worktree of {name ?? 'this scope'}"
-        disabled={busyAction !== null}
-        onclick={() => void repair()}
-      >
-        <span class="flex items-center gap-1.5">
-          <CioWrench size={11} />
-          {busyAction === 'repair' ? 'Repairing…' : 'Repair worktree'}
-        </span>
-      </button>
-    {/if}
-    {#if setupStale}
-      <button
-        type="button"
-        class="border border-overlay px-2 py-1 text-[0.6875rem] font-medium text-foreground transition-colors hover:bg-elevated disabled:opacity-50"
-        title="Re-run the setup commands in the worktree of {name ?? 'this scope'}"
-        aria-label="Re-run the setup commands in the worktree of {name ?? 'this scope'}"
-        disabled={busyAction !== null}
-        onclick={() => void rerunSetup()}
-      >
-        <span class="flex items-center gap-1.5">
-          <CioRefresh size={11} />
-          {busyAction === 'setup' ? 'Running setup…' : 'Re-run setup'}
-        </span>
-      </button>
-    {/if}
-  </div>
-{/snippet}
-
 {#if visible && !noticeDismissals.isDismissed(noticeId, noticeCondition)}
   <!--
     One strip for both variants: the card's compact row starts folded, the panel
-    banner starts open. The fix is the headline's own button, so it is reachable
-    either way.
+    banner starts open. The fix is the strip's one primary action, so it is in
+    the header while folded and in the footer once open; a stale setup beside a
+    repair is the footer's other button.
   -->
   <ErrorStrip
     {title}
+    icon={CioAttention}
     message={repairable ? fix.replace(REPAIR_HINT, '').trim() : fix}
     tone="warning"
     folded={variant === 'inline'}
-    primary={actions}
+    primary={repairAction ?? setupAction}
     onDismiss={() => noticeDismissals.dismiss(noticeId, noticeCondition)}
   >
-    {#snippet body()}
-      {#if expectedPath}
-        <p class="truncate font-mono text-xs text-muted" title={expectedPath}>{expectedPath}</p>
-      {/if}
-      {#if actionError}
-        <p class="text-xs text-danger">{actionError}</p>
+    {#if expectedPath}
+      <p class="truncate font-mono text-xs text-muted" title={expectedPath}>{expectedPath}</p>
+    {/if}
+    {#if actionError}
+      <p class="text-xs text-danger">{actionError}</p>
+    {/if}
+    {#snippet footerEnd()}
+      {#if repairAction && setupAction}
+        <CardButton
+          label={setupAction.label}
+          title={setupAction.title}
+          icon={setupAction.icon}
+          variant="secondary"
+          disabled={setupAction.disabled}
+          onclick={setupAction.onclick}
+        />
       {/if}
     {/snippet}
   </ErrorStrip>

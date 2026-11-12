@@ -360,3 +360,27 @@ export function providerIssueTitle(kind: AgentProviderIssueKind, waiting = false
       return waiting ? 'Provider retry scheduled' : 'Agent output error'
   }
 }
+
+/**
+ * The status colour a provider issue is reported in, so a card's colour says what
+ * it communicates. A wait the app is already handling is `info`; a limit, a
+ * sign-in, a billing problem or an outage the reader can wait out or fix is
+ * `warning`; only a failure with no such way through is `danger`.
+ */
+export function providerIssueTone(
+  kind: AgentProviderIssueKind,
+  waiting = false
+): 'danger' | 'warning' | 'info' {
+  if (waiting) return 'info'
+  switch (kind) {
+    case 'rate_limit':
+    case 'quota':
+    case 'authentication':
+    case 'billing':
+    case 'provider_unavailable':
+    case 'network':
+      return 'warning'
+    default:
+      return 'danger'
+  }
+}

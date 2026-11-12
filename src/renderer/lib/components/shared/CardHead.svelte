@@ -30,8 +30,9 @@
     /** A rule under the header. Stacks that separate their body themselves
      *  turn it off, so the head and the first row never double up. */
     divider?: boolean
-    /** `warn` inks the mark and the name, for a head that reports trouble. */
-    tone?: 'default' | 'warn'
+    /** Inks the mark and the name with the status the head reports: `warn` for
+     *  trouble, `danger` for a failure, `info` for a pause the app is handling. */
+    tone?: 'default' | 'warn' | 'danger' | 'info'
     class?: string
   }
 
@@ -49,8 +50,14 @@
     class: className = ''
   }: Props = $props()
 
-  const titleClass = $derived(tone === 'warn' ? 'text-warning' : 'text-foreground')
-  const iconClass = $derived(tone === 'warn' ? 'text-warning' : 'text-muted')
+  const TONE_TEXT = {
+    default: { title: 'text-foreground', icon: 'text-muted' },
+    warn: { title: 'text-warning', icon: 'text-warning' },
+    danger: { title: 'text-danger', icon: 'text-danger' },
+    info: { title: 'text-info', icon: 'text-info' }
+  } as const
+  const titleClass = $derived(TONE_TEXT[tone].title)
+  const iconClass = $derived(TONE_TEXT[tone].icon)
 </script>
 
 <!-- The design's card head: icon, title, then the card's quiet actions, then the
