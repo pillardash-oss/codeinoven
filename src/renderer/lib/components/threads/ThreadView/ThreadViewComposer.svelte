@@ -173,6 +173,7 @@
             <ScopeHealthNotice
               projectId={board.handleAgentEvent.thread.projectId}
               scopeBucketId={brokenScopeId}
+              variant="inline"
             />
           {:else}
             <AgentProviderStatusCard

@@ -5,6 +5,7 @@
   import CioDebugger from '@pdslng/cio-icon/CioDebugger.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import { onMount, type Snippet } from 'svelte'
+  import { fade } from 'svelte/transition'
   import { formatCompactAge } from '$shared/date-time-format'
 
   /**
@@ -31,7 +32,8 @@
     tone?: 'danger' | 'warning'
     /** Starts folded; the reader unfolds it. */
     folded?: boolean
-    /** The fix, rendered in the row so it is reachable while folded. */
+    /** The fix. It sits in the row while folded, and moves to the right of the
+     *  footer when unfolded so the open card stays balanced. */
     primary?: Snippet
     /** Extra detail for the unfolded body, such as the path that was expected. */
     body?: Snippet
@@ -81,6 +83,8 @@
     `color-mix(in srgb, var(--color-${tone === 'danger' ? 'danger' : 'warning'}) 62%, var(--color-foreground))`
   )
 
+  const FADE_MS = 120
+
   const buttonClass =
     'flex h-7 items-center gap-1.5 border border-border-strong bg-surface px-2.5 text-xs transition-colors hover:bg-elevated'
 </script>
@@ -110,8 +114,11 @@
         {ageLabel}
       </span>
     {/if}
-    {#if primary}
-      <div class="flex shrink-0 items-center gap-1.5 @max-lg:order-4 @max-lg:basis-full">
+    {#if primary && folded}
+      <div
+        class="flex shrink-0 items-center gap-1.5 @max-lg:order-4 @max-lg:basis-full"
+        transition:fade={{ duration: FADE_MS }}
+      >
         {@render primary()}
       </div>
     {/if}
@@ -145,7 +152,7 @@
     {/if}
   </div>
 
-  {#if onDismiss || rawError || footerEnd}
+  {#if onDismiss || rawError || footerEnd || primary}
     <footer
       class="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2"
       hidden={folded}
@@ -178,8 +185,15 @@
           </button>
         {/if}
       </div>
-      {#if footerEnd}
-        <div class="ml-auto flex items-center gap-1.5">{@render footerEnd()}</div>
+      {#if footerEnd || primary}
+        <div class="ml-auto flex items-center gap-1.5">
+          {@render footerEnd?.()}
+          {#if primary && !folded}
+            <div class="flex items-center gap-1.5" in:fade={{ duration: FADE_MS, delay: FADE_MS }}>
+              {@render primary()}
+            </div>
+          {/if}
+        </div>
       {/if}
     </footer>
   {/if}

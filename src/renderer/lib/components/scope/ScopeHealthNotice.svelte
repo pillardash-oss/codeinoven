@@ -7,6 +7,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import {
     isScopeWorktreeHealthRepairable,
+    REPAIR_HINT,
     scopeWorktreeHealthGuidance
   } from '$shared/scope-worktree-health'
   import { ipcErrorMessage } from '$lib/ipc-errors'
@@ -168,7 +169,7 @@
   -->
   <ErrorStrip
     {title}
-    message={fix}
+    message={repairable ? fix.replace(REPAIR_HINT, '').trim() : fix}
     tone="warning"
     folded={variant === 'inline'}
     primary={actions}
