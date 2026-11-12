@@ -239,6 +239,15 @@ export class BrowserOverlayWindow {
   private hideWhileInactive(): void {
     const popup = this.popup
     if (!popup || popup.isDestroyed()) return
+    // A hidden window must not keep the keyboard. A modal takes key status for
+    // itself (`focusDock`), and hiding the window while another application is in
+    // front used to leave it as the app's key window: reactivating the app handed
+    // the keyboard back to a window that was not on screen, so the app window
+    // could not become key at all and the modal the user still had open was
+    // unreachable   invisible, and swallowing every keystroke the driver could
+    // only deliver to it. Resigning first lets reactivation settle on the app
+    // window, whose focus is what brings the modal back (`restoreModalFocus`).
+    if (popup.isFocused()) popup.blur()
     if (popup.isVisible()) popup.hide()
   }
 
