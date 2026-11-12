@@ -1,5 +1,29 @@
 import { scopeState } from '$lib/stores/scope.svelte'
-import { DEFAULT_SCOPE_BUCKET_ID, type ScopeBucket, type Thread } from '$shared/types'
+import {
+  DEFAULT_SCOPE_BUCKET_ID,
+  isRealProjectId,
+  type ScopeBucket,
+  type Thread
+} from '$shared/types'
+
+/**
+ * The project whose board the Board view shows, or null when neither candidate
+ * is a real project.
+ *
+ * The board is a project surface only: a chat, an assistant task or a browser
+ * tab is a conversation in a hidden container with no checkout to scope. So the
+ * open thread's project is used when it is a project, and otherwise the shell
+ * falls back to the project that is active, which leaves the board on the last
+ * real project instead of drawing one for a conversation.
+ */
+export function boardProjectId(
+  threadProjectId: string | null | undefined,
+  activeProjectId: string | null | undefined
+): string | null {
+  if (isRealProjectId(threadProjectId)) return threadProjectId ?? null
+  if (isRealProjectId(activeProjectId)) return activeProjectId ?? null
+  return null
+}
 
 /**
  * The scope a thread belongs to, or null when it sits in the project-rooted

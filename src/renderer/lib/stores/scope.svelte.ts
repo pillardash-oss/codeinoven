@@ -4,6 +4,7 @@ import { invoke } from '$lib/ipc.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import {
   DEFAULT_SCOPE_BUCKET_ID,
+  isRealProjectId,
   type AdoptableWorktreeInfo,
   type ManagedWorktreeDescriptor,
   type Project,
@@ -205,6 +206,10 @@ class ScopeState {
   }
 
   async activateProject(id: string): Promise<void> {
+    // The board belongs to real projects only. A chat, an assistant task or a
+    // browser tab lives in a hidden container with no checkout and no lanes, so
+    // activating its id would render the board over a conversation.
+    if (!isRealProjectId(id)) return
     if (id === this.activeProjectId) {
       const loadedBoard = this.boards.get(id)
       if (loadedBoard) {
@@ -236,6 +241,7 @@ class ScopeState {
   }
 
   async ensureBoardLoaded(projectId: string): Promise<void> {
+    if (!isRealProjectId(projectId)) return
     if (this.boards.has(projectId)) return
     await this.loadBoard(projectId)
   }
@@ -252,6 +258,7 @@ class ScopeState {
    * concurrently for different projects: each call owns its own cache entry.
    */
   async cacheBoardForLookup(projectId: string): Promise<void> {
+    if (!isRealProjectId(projectId)) return
     if (this.boards.has(projectId)) return
     try {
       const board = await invoke('scope:get', projectId)
@@ -262,7 +269,7 @@ class ScopeState {
   }
 
   async loadBoard(projectId = this.activeProjectId): Promise<void> {
-    if (!projectId) {
+    if (!projectId || !isRealProjectId(projectId)) {
       this.board = cloneBoard(EMPTY_BOARD)
       return
     }

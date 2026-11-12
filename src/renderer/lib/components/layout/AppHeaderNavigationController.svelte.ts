@@ -12,6 +12,7 @@ import { isSettingsView, type MainView } from '$lib/stores/renderer-recovery.sve
 import { scopeState } from '$lib/stores/scope.svelte'
 import { sidebarState } from '$lib/stores/sidebar.svelte'
 import { preloadThreadConversation } from '$lib/stores/thread-preload'
+import { boardProjectId } from '$lib/threads/thread-scope'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
 import { type Project, type Thread } from '$shared/types'
 import { type Component } from 'svelte'
@@ -221,7 +222,13 @@ export class AppHeaderNavigationController {
       scopeState.clearSidebarContext()
     }
     if (view === 'scope') {
-      const projectId = workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
+      // Board is a project view: replace the board's project only when the open
+      // thread belongs to a real project, so an assistant task or a chat never
+      // hands the board its hidden conversation container.
+      const projectId = boardProjectId(
+        workspaceState.selectedThread?.projectId,
+        workspaceState.activeProject?.id
+      )
       if (projectId) await scopeState.activateProject(projectId)
       scopeState.clearSidebarContext()
       this.navigate('scope')

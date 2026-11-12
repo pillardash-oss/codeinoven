@@ -13,6 +13,7 @@
   import {
     DEFAULT_THREAD_TITLE,
     activeThreadRowId,
+    isRealProjectId,
     threadTracksReadStatus,
     type Thread
   } from '$shared/types'
@@ -286,7 +287,7 @@
 </script>
 
 <div class="flex h-full flex-col overflow-hidden bg-app">
-  {#if !scopeState.activeProjectId}
+  {#if !isRealProjectId(scopeState.activeProjectId)}
     <div class="flex h-full items-center justify-center">
       <p class="text-sm text-dimmed">Select a project to organize its threads by scope.</p>
     </div>

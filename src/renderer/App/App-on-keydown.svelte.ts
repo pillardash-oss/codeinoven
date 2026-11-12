@@ -18,6 +18,7 @@ import {
   viewShowsThread
 } from '$lib/content-view-threads'
 import { viewShowsScopedSidebar } from '$lib/content-view-projects'
+import { boardProjectId } from '$lib/threads/thread-scope'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { openThreadBrowserFor } from '$lib/stores/thread-browser-open'
 import { settingsRouteState } from '$lib/stores/settings-route.svelte'
@@ -85,7 +86,13 @@ export class AppOnKeydown extends BoardUnit<App> {
       preloadSettingsChunk()
     }
     if (view === 'scope') {
-      const projectId = workspaceState.selectedThread?.projectId ?? workspaceState.activeProject?.id
+      // The board is a project surface: the open thread's project is used when it
+      // is a real project, so pressing Board from an assistant task or a chat
+      // never scopes a board to that hidden conversation container.
+      const projectId = boardProjectId(
+        workspaceState.selectedThread?.projectId,
+        workspaceState.activeProject?.id
+      )
       if (projectId) void scopeState.activateProject(projectId)
       scopeState.clearSidebarContext()
     } else if (view === 'chats') {
