@@ -27,7 +27,10 @@ import {
   type Thread,
   type ThreadSettings
 } from '../../src/lib/types'
-import { UTILITY_SUGGESTION_DECLINE_ANSWER } from '../../src/lib/utility-suggestion'
+import {
+  UTILITY_SUGGESTION_DECLINE_ANSWER,
+  UTILITY_SUGGESTION_INSTALL_ANSWER
+} from '../../src/lib/utility-suggestion'
 
 /**
  * The questions Don's team stops on are settled where the work was asked for.
@@ -272,6 +275,79 @@ describe('Don answering its own child', () => {
 
     expect(result.answered).toBe(false)
     expect(result.error).toBe('That thread was not started from this conversation')
+  })
+
+  it('never installs a capability, even when the answer asks for it', async () => {
+    const fixture = await setup()
+    const answerQuestion = vi.spyOn(fixture.engine, 'answerQuestion').mockResolvedValue()
+    pendingQuestion(fixture.engine, fixture, 'req-install-answer', [
+      {
+        prompt: 'Install Reporting Kit (mcp)?',
+        header: 'Suggested capability',
+        richOptions: [
+          { label: UTILITY_SUGGESTION_INSTALL_ANSWER, description: 'Add it to Utilities.' },
+          { label: UTILITY_SUGGESTION_DECLINE_ANSWER, description: 'Leave it out for now.' }
+        ],
+        utilitySuggestion: {
+          id: 'suggestion-2',
+          name: 'Reporting Kit',
+          kinds: ['mcp'],
+          reason: 'The work reads from a reporting API.',
+          utilities: []
+        }
+      }
+    ])
+
+    const result = await answerTeammateQuestion(
+      fixture.engine,
+      {
+        threadId: fixture.childThread.id,
+        requestId: 'req-install-answer',
+        answers: [[UTILITY_SUGGESTION_INSTALL_ANSWER]]
+      },
+      { projectId: ASSISTANT_SPACE_ID, threadId: DON_THREAD_ID }
+    )
+
+    // The prompt says so, and the app enforces it: a model's answer can never
+    // approve an installation on the user's behalf.
+    expect(result.answered).toBe(false)
+    expect(result.error).toContain('Nothing is installed')
+    expect(answerQuestion).not.toHaveBeenCalled()
+  })
+
+  it('settles a declined suggestion through the ordinary answer path', async () => {
+    const fixture = await setup()
+    const answerQuestion = vi.spyOn(fixture.engine, 'answerQuestion').mockResolvedValue()
+    pendingQuestion(fixture.engine, fixture, 'req-install-declined', [
+      {
+        prompt: 'Install Reporting Kit (mcp)?',
+        header: 'Suggested capability',
+        richOptions: [
+          { label: UTILITY_SUGGESTION_INSTALL_ANSWER, description: 'Add it to Utilities.' },
+          { label: UTILITY_SUGGESTION_DECLINE_ANSWER, description: 'Leave it out for now.' }
+        ],
+        utilitySuggestion: {
+          id: 'suggestion-3',
+          name: 'Reporting Kit',
+          kinds: ['mcp'],
+          reason: 'The work reads from a reporting API.',
+          utilities: []
+        }
+      }
+    ])
+
+    const result = await answerTeammateQuestion(
+      fixture.engine,
+      {
+        threadId: fixture.childThread.id,
+        requestId: 'req-install-declined',
+        answers: [[UTILITY_SUGGESTION_DECLINE_ANSWER]]
+      },
+      { projectId: ASSISTANT_SPACE_ID, threadId: DON_THREAD_ID }
+    )
+
+    expect(result.answered).toBe(true)
+    expect(answerQuestion).toHaveBeenCalledTimes(1)
   })
 
   it('answers the request and says so in Don’s thread under the teammate', async () => {

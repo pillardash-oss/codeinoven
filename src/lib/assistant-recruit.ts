@@ -30,25 +30,6 @@ export interface RecruitedAssistantBrief {
   instructions?: string
 }
 
-/** The one line a recruited assistant says in its own Getting started thread. */
-export function recruitedAssistantIntro(brief: {
-  name: string
-  purpose: string
-  request?: string
-}): string {
-  const name = brief.name.trim()
-  const purpose = brief.purpose.trim()
-  const request = brief.request?.trim()
-  return [
-    `I'm ${name}.`,
-    purpose ? `I was hired for this: ${purpose}` : '',
-    request ? `The request waiting for me, in your words: "${request}".` : '',
-    'My instructions are written and the work is already with me. Revise them any time from my knowledge panel.'
-  ]
-    .filter((line) => line.length > 0)
-    .join(' ')
-}
-
 /**
  * The knowledge document a recruited teammate starts with.
  *

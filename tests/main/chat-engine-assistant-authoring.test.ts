@@ -287,13 +287,15 @@ describe('hiring a teammate from a conversation', () => {
     expect(messageText(announced)).toContain(`@thread:${hired.id}`)
     // The hiring is never a questionnaire on a thread the user never opened.
     expect(messageText(announced)).not.toContain('?')
+    // The knowledge was written before the thread existed, so the announcement
+    // never says the instructions are still being drafted.
+    expect(messageText(announced)).toContain('My instructions are written')
 
-    // Its own Getting started thread opens with a line from it, written by the app,
-    // so the knowledge host the user may later revise is never a blank thread.
-    const own = await engine.threadManager.loadMessageRecords(ASSISTANT_SPACE_ID, hired.id)
-    const intro = own.find((message) => message.id === `${hired.id}-intro`)
-    expect(intro?.author?.name).toBe('Slack latest info')
-    expect(messageText(intro)).toContain('Watches the reporting inbox')
+    // Nothing is written into the teammate's own thread: everything the user is
+    // meant to see about a hire lives in the conversation that asked for it.
+    expect(
+      await engine.threadManager.loadMessageRecords(ASSISTANT_SPACE_ID, hired.id)
+    ).toHaveLength(0)
 
     // No authoring interview is spent on a hire: the knowledge is written before
     // the thread exists, so a hire costs no model turn before the work it was

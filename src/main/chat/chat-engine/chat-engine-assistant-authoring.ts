@@ -4,7 +4,7 @@ import {
   broadcastAssistantCheckpointChanged,
   broadcastAssistantsChanged
 } from '../../scheduler/assistant-events'
-import { broadcastThreadMessagesChanged, broadcastThreadUpdate } from '../thread-events'
+import { broadcastThreadUpdate } from '../thread-events'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import {
   ASSISTANT_AUTHORING_DECISION_LIMIT,
@@ -35,7 +35,6 @@ import {
   isAssistantSetupThread,
   assistantKnowledgeComplete
 } from '../../../lib/types'
-import { recruitedAssistantIntro } from '../../../lib/assistant-recruit'
 import { nextAssistantModel, settingsWithAssistantModel } from '../../../lib/assistant-agents'
 import { delegationAuthor } from '../chat-engine-don'
 import { teammateAuthor, writeTeammateLine } from '../delegation-lines'
@@ -204,10 +203,11 @@ export class ChatEngineAssistantAuthoring {
    * exists and the work Don dispatches to it is a real run.
    *
    * This opens the other half: the pinned Getting started thread that hosts the
-   * teammate's knowledge for later revisions, with one app-owned line from the
-   * teammate so the thread is never blank. No model turn is spent here, because a
-   * hire happens on a thread the user never opened: an authoring interview there
-   * would ask a card nobody answers and leave a teammate that can never run.
+   * teammate's knowledge for later revisions. Nothing is written into it and no
+   * model turn is spent on it, because a hire happens on a thread the user never
+   * opened: its announcement belongs in Don's conversation, and an authoring
+   * interview there would ask a card nobody answers and leave a teammate that can
+   * never run.
    */
   async openRecruitedAssistantConversation(input: {
     assistant: Assistant
@@ -276,59 +276,7 @@ export class ChatEngineAssistantAuthoring {
     // built for and that the waiting request is already with it. Nothing about the
     // hire is ever left on this thread for the user to answer.
     await this.announceRecruitedTeammate(thread, input.assistant.name, input.purpose)
-    // Its own Getting started thread still opens with a line from it, so the row is
-    // never blank when the user later opens it to revise the knowledge. The line is
-    // written by the app, not by a turn, so a hire costs no tokens before the work
-    // it was hired for.
-    await this.writeRecruitedAssistantIntro(thread, input)
     return thread
-  }
-
-  /**
-   * The one line a recruited teammate's own Getting started thread opens with.
-   *
-   * The thread is the teammate's knowledge host, so the user can find it and
-   * revise it later. It is app-owned and written once: it explains what the
-   * teammate is for without spending a model turn on a conversation nobody asked
-   * for.
-   */
-  private async writeRecruitedAssistantIntro(
-    thread: Thread,
-    input: { assistant: Assistant; purpose: string; request?: string }
-  ): Promise<void> {
-    const author = delegationAuthor(input.assistant)
-    const id = `${thread.id}-intro`
-    try {
-      await this.host.threadManager.upsertMessages(ASSISTANT_SPACE_ID, thread.id, [
-        {
-          id,
-          role: 'assistant',
-          origin: 'assistant',
-          visibility: 'conversation',
-          author: { ...author, projectId: ASSISTANT_SPACE_ID, threadId: thread.id },
-          parts: [
-            {
-              type: 'text',
-              id: `${id}-text`,
-              messageID: id,
-              text: recruitedAssistantIntro({
-                name: input.assistant.name,
-                purpose: input.purpose,
-                ...(input.request ? { request: input.request } : {})
-              })
-            }
-          ],
-          createdAt: Date.now(),
-          completedAt: Date.now()
-        }
-      ])
-      broadcastThreadMessagesChanged(ASSISTANT_SPACE_ID, thread.id)
-    } catch (error) {
-      Logger.dev('Recruited assistant intro skipped', {
-        threadId: thread.id,
-        error: error instanceof Error ? error.message : String(error)
-      })
-    }
   }
 
   /**
@@ -361,7 +309,7 @@ export class ChatEngineAssistantAuthoring {
         threadId: origin.initiatorThreadId,
         text: [
           `I'm ${name.trim() || author.name}. I was built for this: ${forWhat || 'the work you brought'}.`,
-          "I'm writing my instructions now and I'll take the request as soon as they are saved.",
+          'My instructions are written and the request is on its way to me.',
           `\n\n@thread:${thread.id}`
         ].join(' ')
       })

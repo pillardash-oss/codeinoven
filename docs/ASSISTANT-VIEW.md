@@ -1147,14 +1147,22 @@ says to decide the work itself and to ask only for a credential or a sign-in. Th
 teammate is complete the moment the call returns, so Don dispatches the waiting
 request to it in the same turn and the dispatch is a real run.
 
-Nothing about the hire is broadcast anywhere but Don's own conversation. The teammate
-introduces itself there under its own name the moment its thread exists
-(`announceRecruitedTeammate`), its Getting started thread opens with one app-owned
-line from it and no model turn (`writeRecruitedAssistantIntro`), and any question its
-run stops on is routed into Don's thread for Don to settle
-(`don-question-router.ts`). Only a credential, an OAuth or MCP sign-in, or a
-connected account is left on a card for the user. A hired teammate has no authoring
-card to answer, because it was never asked anything.
+Nothing about the hire is written or broadcast anywhere but Don's own conversation.
+The teammate introduces itself there under its own name the moment its thread exists
+(`announceRecruitedTeammate`, in Don's thread), and nothing is written into the
+teammate's Getting started thread at all: it is created as the host its knowledge is
+revised from later, and stays empty until the user opens it. Any question its run
+stops on is routed into Don's thread for Don to settle (`don-question-router.ts`).
+Only a credential, an OAuth or MCP sign-in, or a connected account is left on a card
+for the user. A hired teammate has no authoring card to answer, because it was never
+asked anything.
+
+The one thing Don may never settle is an install. `cio_answer_teammate` refuses the
+install label in `answerTeammateQuestion`: the prompt tells Don not to approve a
+capability, and the app enforces it, because a model's answer must never make an
+unattended installation happen. Don declines the suggestion or answers in its own
+words with how to finish the work without it, and only the user's own click on the
+card installs anything.
 
 ## Assistant panel
 

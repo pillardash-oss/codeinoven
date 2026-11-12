@@ -193,6 +193,36 @@ export async function routeTeammateQuestion(
   }
 }
 
+/**
+ * The one answer this tool may never give: approving an installation.
+ *
+ * The app installs software only when the user clicks that option themselves, and
+ * an instruction in a prompt is not a boundary: a model that answered with the
+ * install label would make an unattended install happen. The refusal is enforced
+ * here, in the path the tool calls, so no model output can approve one.
+ *
+ * Returns the refusal when any answer picks the install option, and null when none
+ * does. A declined suggestion and Don's own wording are both fine: the first
+ * settles the request, the second is carried to the teammate as an instruction and
+ * never installs anything.
+ */
+function refusedInstallAnswer(
+  questions: NonNullable<PendingQuestionInfo['request']['questions']>,
+  answers: readonly string[][]
+): string | null {
+  for (const [index, question] of questions.entries()) {
+    if (question.utilitySuggestion === undefined) continue
+    const chosen = answers[index] ?? []
+    if (!chosen.some((answer) => answer.trim() === UTILITY_SUGGESTION_INSTALL_ANSWER)) continue
+    return [
+      `Nothing is installed on the user's behalf, so "${UTILITY_SUGGESTION_INSTALL_ANSWER}" is never your answer.`,
+      `Answer the same request again with "${UTILITY_SUGGESTION_DECLINE_ANSWER}", or with your own wording telling the teammate how to finish the work with what the app already has.`,
+      'If the work cannot go on without that capability, decline it and say one line with `cio_reply_in_chat` naming what the work needs.'
+    ].join(' ')
+  }
+  return null
+}
+
 /** What Don's answer operation hands back to the turn that called it. */
 export interface TeammateAnswerResult {
   answered: boolean
@@ -204,9 +234,10 @@ export interface TeammateAnswerResult {
  * Settle a teammate's blocked question from Don's own turn.
  *
  * The app's ordinary answer path validates everything: the request must still be
- * registered for that exact thread, and the answers must match the questions. The
- * one rule added here is the one the tool must never cross: only a thread this
- * conversation started can be answered this way.
+ * registered for that exact thread, and the answers must match the questions. Two
+ * rules are added here, both about what the tool must never cross: only a thread
+ * this conversation started can be answered this way, and no answer of Don's may
+ * approve an installation.
  */
 export async function answerTeammateQuestion(
   engine: ChatEngine,
@@ -219,6 +250,9 @@ export async function answerTeammateQuestion(
     if (thread.dispatchOrigin?.initiatorThreadId !== context.threadId) {
       return { answered: false, error: 'That thread was not started from this conversation' }
     }
+    const pending = engine.pendingQuestions.get(input.requestId)
+    const refused = pending ? refusedInstallAnswer(pending.request.questions, input.answers) : null
+    if (refused) return { answered: false, error: refused }
     await engine.answerQuestion(ASSISTANT_SPACE_ID, input.threadId, input.requestId, input.answers)
     const note = input.note?.trim()
     const author = note ? teammateAuthor(thread) : null

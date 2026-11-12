@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { recruitedAssistantIntro, recruitedAssistantKnowledge } from '$shared/assistant-recruit'
+import { recruitedAssistantKnowledge } from '$shared/assistant-recruit'
 
 /**
  * A recruited teammate arrives complete.
@@ -58,20 +58,5 @@ describe('recruitedAssistantKnowledge', () => {
     })
 
     expect(knowledge).toContain('No single request was waiting')
-  })
-})
-
-describe('recruitedAssistantIntro', () => {
-  it('names the teammate, what it was built for and the request it took', () => {
-    const intro = recruitedAssistantIntro({
-      name: 'Scout',
-      purpose: 'Watches the reporting inbox',
-      request: 'Summarise the inbox every morning'
-    })
-
-    expect(intro).toContain("I'm Scout.")
-    expect(intro).toContain('Watches the reporting inbox')
-    expect(intro).toContain('Summarise the inbox every morning')
-    expect(intro).not.toContain('?')
   })
 })
