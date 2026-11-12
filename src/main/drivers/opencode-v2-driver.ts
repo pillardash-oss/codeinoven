@@ -177,6 +177,12 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
     // V2 has no JSON-schema output mode: both `generate` routes take only a
     // prompt and return text, so deterministic JSON flows must not target it.
     structuredOutput: false,
+    // OpenCode 2.x carries Code Mode: the model is handed a code-mode catalog
+    // plus a script tool whose restricted JavaScript calls tools as
+    // `tools.<namespace>.<tool>(...)`, and an MCP server's tools are exposed to
+    // it unless that server sets `codemode: false` (from the 2.2.5 build). V1
+    // has no such surface, so only this transport declares one.
+    codeMode: true,
     nativeUtilities: ['web_fetch', 'web_search'],
     // Retries are not events in V2; they appear as `retry` on the message.
     scheduledRetry: false
