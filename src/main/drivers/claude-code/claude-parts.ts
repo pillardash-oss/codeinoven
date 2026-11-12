@@ -68,6 +68,19 @@ export function claudeSubagentPart(
 }
 
 /**
+ * Largest live transcript a sub-agent part carries while it runs.
+ *
+ * A sub-agent's forwarded text is kept so the panel can show the run as it
+ * happens, but the part travels to the durable stream log and the mirror on
+ * every update, whether or not anyone opened that panel, so the window is
+ * bounded: the newest text is what a reader is looking at, and the final result
+ * still replaces the tail when the worker settles.
+ */
+export const MAX_SUBAGENT_STREAM_CHARS = 32 * 1024
+
+const TRIM_MARKER = '\n\n[… earlier sub-agent output trimmed …]\n'
+
+/**
  * The forwarded text of a sub-agent's live messages, accumulated.
  *
  * `--forward-subagent-text` delivers every sub-agent assistant message as its
@@ -79,10 +92,17 @@ export function appendSubagentOutput(previous: string | undefined, chunk: string
   const text = chunk.trim()
   const before = previous?.trimEnd() ?? ''
   if (!text) return before
-  if (!before) return text
+  if (!before) return boundSubagentStream(text)
   // A record replayed by a reconnect must not double the paragraph it repeats.
   if (before.endsWith(text)) return before
-  return `${before}\n\n${text}`
+  return boundSubagentStream(`${before}\n\n${text}`)
+}
+
+/** Keep a live sub-agent transcript inside its window, dropping the oldest text. */
+function boundSubagentStream(text: string): string {
+  if (text.length <= MAX_SUBAGENT_STREAM_CHARS) return text
+  const tail = text.slice(text.length - MAX_SUBAGENT_STREAM_CHARS)
+  return `${TRIM_MARKER}${tail}`
 }
 
 export function partFromBlock(
