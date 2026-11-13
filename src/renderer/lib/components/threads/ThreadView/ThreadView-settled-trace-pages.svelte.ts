@@ -64,8 +64,10 @@ export class ThreadViewSettledTracePages extends BoardUnit<ThreadView> {
   /** Steps mounted per trace, by the trace's stable key. */
   private shown = new SvelteMap<string, number>()
 
-  /** Pages already computed, so a streamed frame cannot re-slice a long trace. */
-  private slots = new SvelteMap<string, SettledTracePageSlot>()
+  /** One page already computed. Plain, never reactive: it is a read cache that
+   *  `page()` fills while the transcript renders, and writing reactive state
+   *  there is exactly what Svelte forbids. */
+  private slots: Record<string, SettledTracePageSlot> = {}
 
   /**
    * Identity of one mounted trace.
@@ -94,7 +96,7 @@ export class ThreadViewSettledTracePages extends BoardUnit<ThreadView> {
    */
   page(key: string, parts: readonly AgentPart[]): SettledTracePage {
     const limit = this.shown.get(key) ?? SETTLED_TRACE_PAGE_SIZE
-    const cached = this.slots.get(key)
+    const cached = this.slots[key]
     if (cached && cached.source === parts && cached.limit === limit) return cached.page
     const mounted = parts.length > limit ? parts.slice(parts.length - limit) : [...parts]
     const page: SettledTracePage = {
@@ -106,7 +108,7 @@ export class ThreadViewSettledTracePages extends BoardUnit<ThreadView> {
       compacted: parts.some(isCompactionPart),
       span: traceSpanOfParts(parts)
     }
-    this.slots.set(key, { source: parts, limit, page })
+    this.slots[key] = { source: parts, limit, page }
     return page
   }
 
