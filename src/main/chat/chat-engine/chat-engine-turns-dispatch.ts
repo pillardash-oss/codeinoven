@@ -304,6 +304,12 @@ export class ChatEngineTurnsDispatch {
     const activeAssignmentDraft = this.host.state.activeAssignmentDraftSessions.get(brainstormKey)
     if (activeAssignmentDraft) {
       markNotificationAborting(projectId, threadId)
+      // A Stop revokes the run's authority, so its late result can never settle
+      // the thread status back over the `interrupted` written below.
+      this.host.state.assignmentDraftRevisions.set(
+        brainstormKey,
+        (this.host.state.assignmentDraftRevisions.get(brainstormKey) ?? 0) + 1
+      )
       this.host.state.userAbortedAssignmentDraftOperations.add(brainstormKey)
       this.host.state.userAbortedSessions.add(activeAssignmentDraft.sessionId)
       if (

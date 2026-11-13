@@ -28,6 +28,11 @@ import type {
   UsageEventFeature
 } from '../../../lib/types'
 import { APPLICATION_AGENT_TOOLS } from '../../../lib/agent-tools'
+import {
+  mergeAssignmentPlanContent,
+  parseAssignmentPlanPart,
+  requireValidAssignment
+} from '../../../lib/assignment/assignment-validation'
 import { UTILITY_SEARCH_TOOL_NAME } from '../../../lib/gateway-tools'
 import { messageId as createMessageId } from '../../../lib/id'
 import { detectUnavailableToolCall, searchNudgePromptForToolCall } from '../not-available-detector'
@@ -507,38 +512,68 @@ export class ChatEngineUtilitiesTools {
       }
       case 'assignment': {
         const active = this.host.state.assignmentEngine.getActive(projectId, threadId)
-        if (active && active.status !== 'draft') {
+        const rawPlan = input['plan']
+        this.enableEngineeringStage(projectId, threadId, 'assignment')
+        // The agent authored the graph itself, so the app never generates one. A
+        // progressive call adds by id to the unsigned draft, which is how a task
+        // graph can be written in parts while the user watches it grow.
+        if (rawPlan !== undefined) {
+          const part = parseAssignmentPlanPart(rawPlan)
+          const base = active?.status === 'draft' ? active.content : null
+          const content = requireValidAssignment(
+            input['mode'] === 'append' && base ? mergeAssignmentPlanContent(base, part) : part
+          )
+          const assignment = await this.host.submitAgentAssignmentDraft({
+            projectId,
+            coordinatorThreadId: threadId,
+            content,
+            sessionId: context.sessionId,
+            harnessId: settings.harnessId,
+            providerId: settings.providerId,
+            modelId: settings.modelId
+          })
           return {
             artifact: 'assignment',
+            status: assignment.status,
+            id: assignment.id,
+            version: assignment.version,
+            message: `The Assignment draft v${assignment.version} was authored from the submitted plan and is ready for review and sign-off.`
+          }
+        }
+        if (active) {
+          return {
+            artifact: 'assignment',
+            status: active.status,
             id: active.id,
             version: active.version,
             message: `This thread already has an Assignment with status ${active.status}.`
           }
         }
-        this.enableEngineeringStage(projectId, threadId, 'assignment')
         // Assignment generation is gated on the mode flag, which a plain thread
         // does not carry. The gate stops an ordinary turn from silently raising a
         // board; this call is the agent acting on the user's request, so the flag
         // is supplied for this dispatch only and never persisted.
-        const assignment = await this.host.generateAssignmentDraft(
+        const started = await this.host.requestAssignmentDraft({
           projectId,
-          threadId,
-          { ...settings, assignmentMode: true },
-          instructions || undefined
-        )
-        this.host.broadcast({
-          type: 'assignment.ready',
-          sessionId: context.sessionId,
-          projectId,
-          threadId,
-          assignmentId: assignment.id,
-          version: assignment.version
+          coordinatorThreadId: threadId,
+          settings: { ...settings, assignmentMode: true },
+          instructions: instructions || undefined,
+          sessionId: context.sessionId
         })
+        if (started.state === 'draft') {
+          return {
+            artifact: 'assignment',
+            status: started.assignment.status,
+            id: started.assignment.id,
+            version: started.assignment.version,
+            message: `The Assignment draft v${started.assignment.version} already exists for this thread.`
+          }
+        }
         return {
           artifact: 'assignment',
-          id: assignment.id,
-          version: assignment.version,
-          message: `The Assignment draft v${assignment.version} is ready for review and sign-off.`
+          status: 'formulating',
+          message:
+            'The Assignment draft is being formulated in the background and the thread already shows it as in progress, so do not wait for it: finish your turn. Call cio_create_assignment again to read the outcome, or pass plan (with mode "append" to extend it in parts) to write the task graph yourself, in which case the app stops generating one.'
         }
       }
       case 'achievement': {

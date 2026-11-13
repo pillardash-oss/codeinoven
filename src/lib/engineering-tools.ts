@@ -1,4 +1,5 @@
 import type { GatewayToolDefinition } from './gateway-tools'
+import { ASSIGNMENT_PLAN_SCHEMA } from './assignment/assignment-plan-schema'
 import { APP_NAME } from './brand'
 
 /**
@@ -91,6 +92,34 @@ const INSTRUCTIONS_INPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false
 }
 
+/**
+ * The Assignment tool also accepts the graph itself, which is what makes the
+ * agent an author rather than only a requester: the app generates a draft only
+ * when the agent supplied none.
+ */
+const ASSIGNMENT_INPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    instructions: {
+      type: 'string',
+      description:
+        "What the Assignment should cover, in the user's own words, plus any constraint they named. Carries your document when you want the app to build the graph from it. Optional: when omitted the graph comes from the approved specification, otherwise from the thread conversation."
+    },
+    plan: {
+      ...ASSIGNMENT_PLAN_SCHEMA,
+      description:
+        'The task graph you authored yourself. Supply it when you already know the phases, tasks, dependencies and expected files: the app then never generates one and stores this as the draft for sign-off. Omit it to have the app generate the draft from instructions and the conversation.'
+    },
+    mode: {
+      type: 'string',
+      enum: ['replace', 'append'],
+      description:
+        'How a supplied plan applies to an existing unsigned draft. append adds phases and tasks by id, so a graph can be written in parts across several calls; replace makes the supplied plan the whole draft. Ignored when no plan is supplied.'
+    }
+  },
+  additionalProperties: false
+}
+
 export const ENGINEERING_TOOLS: GatewayToolDefinition[] = [
   {
     name: CREATE_BRAINSTORM_TOOL_NAME,
@@ -118,8 +147,8 @@ export const ENGINEERING_TOOLS: GatewayToolDefinition[] = [
   },
   {
     name: CREATE_ASSIGNMENT_TOOL_NAME,
-    description: `Create the thread's Assignment for ${APP_NAME}: a reviewable task graph that splits the work across worker threads the user can monitor and, after sign-off, prompt and steer individually. Call it only when the user explicitly asks to split the work across workers, tasks or agents, or to spread it across agents. A plan or a step list is not an Assignment: write that plan in prose instead. Choose it over inline sub-agents by this rule: an Assignment and the sub-agents from cio_spawn_agent can both be watched, but only Assignment workers can be given independent follow-up instructions, so an Assignment is the right tool exactly when the user wants to prompt the workers themselves. If the user has not already said which they want, ask with cio_ask_user before choosing: offer "workers I can monitor and prompt" (this tool) against "sub-agents working alongside you" (cio_spawn_agent). Do not ask again when the user has already stated a preference in this conversation. The draft is built from what exists: the approved specification when there is one, otherwise the thread conversation plus the optional instructions. Nothing runs until the user reviews the graph, picks worker models and signs it off.`,
-    inputSchema: INSTRUCTIONS_INPUT_SCHEMA,
+    description: `Create the thread's Assignment for ${APP_NAME}: a reviewable task graph that splits the work across worker threads the user can monitor and, after sign-off, prompt and steer individually. Call it only when the user explicitly asks to split the work across workers, tasks or agents, or to spread it across agents. A plan or a step list is not an Assignment: write that plan in prose instead. Choose it over inline sub-agents by this rule: an Assignment and the sub-agents from cio_spawn_agent can both be watched, but only Assignment workers can be given independent follow-up instructions, so an Assignment is the right tool exactly when the user wants to prompt the workers themselves. If the user has not already said which they want, ask with cio_ask_user before choosing: offer "workers I can monitor and prompt" (this tool) against "sub-agents working alongside you" (cio_spawn_agent). Do not ask again when the user has already stated a preference in this conversation. It answers at once: an existing draft is returned, otherwise the draft is formulated in the background and the thread shows it as in progress, so never wait for it and never re-request it to make it go faster. When you already know the graph, pass \`plan\` and the app will not generate one; pass \`mode: "append"\` to add more phases and tasks to the same draft across calls. Nothing runs until the user reviews the graph, picks worker models and signs it off.`,
+    inputSchema: ASSIGNMENT_INPUT_SCHEMA,
     outputSchema: ENGINEERING_RESULT_SCHEMA,
     route: '/engineering/assignment',
     sentWhen:

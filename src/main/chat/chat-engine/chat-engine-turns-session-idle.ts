@@ -1104,6 +1104,12 @@ export class ChatEngineTurnsSessionIdle {
       // only the thread status stays paused.
       const resetWaitActive =
         !userAborted && this.host.units['turns-dispatch'].isAutomaticRetryWaitActive(sessionId)
+      // A draft the app formulated in the background while this turn ran is a
+      // reviewable artifact by the time the turn settles, so it parks the thread
+      // on the user exactly as a draft created inside the turn does.
+      const backgroundAssignmentDraft =
+        this.host.state.assignmentEngine.getActive(info.projectId, info.threadId)?.status ===
+        'draft'
       const finalStatus = resetWaitActive
         ? 'working-paused'
         : userAborted || contractBlocked
@@ -1120,7 +1126,8 @@ export class ChatEngineTurnsSessionIdle {
                 // state, which is reserved for real harness gates (permissions,
                 // questions, secrets). The `failed` guard keeps an already-failed
                 // thread from being shadowed by a late successful artifact.
-                (createdPrd || createdAssignment) && threadBeforeFinalize?.status !== 'failed'
+                (createdPrd || createdAssignment || backgroundAssignmentDraft) &&
+                  threadBeforeFinalize?.status !== 'failed'
                 ? 'spec'
                 : auxiliaryFailure
                   ? // An auxiliary artifact update failed: settle on the
@@ -1138,9 +1145,19 @@ export class ChatEngineTurnsSessionIdle {
                     : threadBeforeFinalize?.status === 'failed'
                       ? 'failed'
                       : 'completed'
-      await this.host.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
-        read: userAborted
-      })
+      // A background Assignment draft owns the thread status while it is in
+      // flight. The turn that asked for it was already answered with
+      // "formulating", so settling this turn must not claim the thread is idle
+      // while the draft is still being written; the draft run writes the single
+      // terminal status when it settles.
+      const assignmentDrafting = this.host.state.activeAssignmentDraftRuns.has(
+        `${info.projectId}:${info.threadId}`
+      )
+      if (!assignmentDrafting) {
+        await this.host.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
+          read: userAborted
+        })
+      }
       // A live usage-reset wait already owns this turn's outcome (see
       // `resetWaitActive` above). Broadcasting the generic "incomplete turn"
       // failure here would overwrite the session's `waiting` status back to

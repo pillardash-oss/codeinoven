@@ -13,6 +13,7 @@ import type { SendPromptOptions } from '../../drivers/driver.interface'
 import type {
   AgentEvent,
   AgentMessage,
+  AssignmentDraftStart,
   AssignmentPlan,
   AssignmentPlanContent,
   AssignmentProvenance,
@@ -895,6 +896,204 @@ export class ChatEngineAssignment {
     this.host.state.assignmentEngine.removeApiCapabilitiesForAssignment(assignmentId)
   }
 
+  /** The identity a coordinator's draft run and its revision counter share. */
+  private assignmentDraftKey(projectId: string, coordinatorThreadId: string): string {
+    return `${projectId}:${coordinatorThreadId}`
+  }
+
+  private assignmentDraftRevision(key: string): number {
+    return this.host.state.assignmentDraftRevisions.get(key) ?? 0
+  }
+
+  /**
+   * Revoke the authority of the draft run in flight for this thread and abort its
+   * model session.
+   *
+   * Every later result of that run is discarded: the run compares the revision it
+   * started with, so a draft the agent authored or a Stop the user pressed can
+   * never be overwritten by a generation that was already on its way.
+   */
+  cancelAssignmentDraftRun(projectId: string, coordinatorThreadId: string): void {
+    const key = this.assignmentDraftKey(projectId, coordinatorThreadId)
+    this.host.state.assignmentDraftRevisions.set(key, this.assignmentDraftRevision(key) + 1)
+    const session = this.host.state.activeAssignmentDraftSessions.get(key)
+    if (!session) return
+    this.host.state.userAbortedAssignmentDraftOperations.add(key)
+    const abort =
+      session.isolated && supportsIsolatedSessions(session.driver)
+        ? session.driver.abort(session.projectPath, session.sessionId, session.isolated)
+        : session.driver.abort(session.projectPath, session.sessionId)
+    void abort.catch(() => undefined)
+    this.host.state.activeAssignmentDraftSessions.delete(key)
+    this.host.state.activeAssignmentDraftRuns.delete(key)
+  }
+
+  /**
+   * Ask for the thread's Assignment draft without waiting for it.
+   *
+   * The contract is deliberately one-way and idempotent:
+   * - a draft that already exists is returned as-is and nothing regenerates;
+   * - a formulation already in flight is joined, never duplicated;
+   * - otherwise the model run starts in the background and the caller is answered
+   *   with `formulating`, so no harness request is ever held open for minutes.
+   *
+   * The settled run owns exactly one terminal transition: `spec` with an
+   * `assignment.ready` event when a draft exists, `failed` with an
+   * `assignment.failed` event when it does not, and nothing at all when its
+   * authority was revoked while it was working.
+   */
+  async requestAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+    settings: ThreadSettings
+    instructions?: string
+    sessionId: string
+  }): Promise<AssignmentDraftStart> {
+    const projectId = validateEntityId(input.projectId, 'Project ID')
+    const coordinatorThreadId = validateEntityId(input.coordinatorThreadId, 'Coordinator thread ID')
+    const settings = validateThreadSettings(input.settings)
+    if (settings.assignmentMode !== true) {
+      throw new Error('Assignment mode must be enabled to generate an Assignment.')
+    }
+    const request =
+      input.instructions === undefined
+        ? undefined
+        : validateBoundedString(input.instructions, 'Assignment instructions', 1, 20_000)
+    const active = this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (active) return { state: 'draft', assignment: active }
+    // Preflight here, synchronously, so a caller that is answered with
+    // `formulating` cannot be handed a rejection it will never see.
+    const spec = await this.host.units['spec'].getActiveSpec(projectId, coordinatorThreadId)
+    if (spec && spec.status !== 'approved') {
+      throw new Error(
+        'Approve the specification before generating an Assignment from it, or dismiss the specification to build the Assignment from this conversation.'
+      )
+    }
+    const key = this.assignmentDraftKey(projectId, coordinatorThreadId)
+    if (this.host.state.activeAssignmentDraftRuns.has(key)) return { state: 'formulating' }
+    const revision = this.assignmentDraftRevision(key)
+    const task = this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request)
+    void task.then(
+      (assignment) =>
+        this.settleAssignmentDraftRun({
+          projectId,
+          coordinatorThreadId,
+          revision,
+          sessionId: input.sessionId,
+          assignment
+        }),
+      (error: unknown) =>
+        this.settleAssignmentDraftRun({
+          projectId,
+          coordinatorThreadId,
+          revision,
+          sessionId: input.sessionId,
+          error
+        })
+    )
+    return { state: 'formulating' }
+  }
+
+  /**
+   * Persist a task graph the agent authored itself and cancel any generation that
+   * is still working on the same thread.
+   *
+   * `content` must already be validated by the caller; the engine validates it
+   * again before it is stored, so a malformed graph is refused rather than shown.
+   */
+  async submitAgentAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+    content: AssignmentPlanContent
+    sessionId: string
+    harnessId: string
+    providerId: string
+    modelId: string
+  }): Promise<AssignmentPlan> {
+    const projectId = validateEntityId(input.projectId, 'Project ID')
+    const coordinatorThreadId = validateEntityId(input.coordinatorThreadId, 'Coordinator thread ID')
+    this.cancelAssignmentDraftRun(projectId, coordinatorThreadId)
+    const assignment = await this.persistAssignmentDraft({
+      projectId,
+      coordinatorThreadId,
+      content: input.content,
+      replaceDraft: true,
+      provenance: {
+        source: 'agent',
+        actor: 'Agent',
+        harnessId: input.harnessId,
+        providerId: input.providerId,
+        modelId: input.modelId
+      }
+    })
+    await this.settleAssignmentDraftStatus(projectId, coordinatorThreadId, 'spec')
+    this.host.broadcast({
+      type: 'assignment.ready',
+      sessionId: input.sessionId,
+      projectId,
+      threadId: coordinatorThreadId,
+      assignmentId: assignment.id,
+      version: assignment.version
+    })
+    return assignment
+  }
+
+  /** Announce the one terminal state a settled draft run leaves behind. */
+  private settleAssignmentDraftRun(input: {
+    projectId: string
+    coordinatorThreadId: string
+    revision: number
+    sessionId: string
+    assignment?: AssignmentPlan
+    error?: unknown
+  }): void {
+    const key = this.assignmentDraftKey(input.projectId, input.coordinatorThreadId)
+    if (this.assignmentDraftRevision(key) !== input.revision) return
+    if (input.assignment) {
+      void this.settleAssignmentDraftStatus(input.projectId, input.coordinatorThreadId, 'spec')
+      this.host.broadcast({
+        type: 'assignment.ready',
+        sessionId: input.sessionId,
+        projectId: input.projectId,
+        threadId: input.coordinatorThreadId,
+        assignmentId: input.assignment.id,
+        version: input.assignment.version
+      })
+      return
+    }
+    const error =
+      input.error instanceof Error ? input.error.message : 'Assignment generation failed.'
+    void this.settleAssignmentDraftStatus(
+      input.projectId,
+      input.coordinatorThreadId,
+      'failed',
+      error
+    )
+    this.host.broadcast({
+      type: 'assignment.failed',
+      sessionId: input.sessionId,
+      projectId: input.projectId,
+      threadId: input.coordinatorThreadId,
+      error
+    })
+  }
+
+  private async settleAssignmentDraftStatus(
+    projectId: string,
+    coordinatorThreadId: string,
+    status: 'spec' | 'failed',
+    error?: string
+  ): Promise<void> {
+    try {
+      await this.host.threadManager.setStatus(projectId, coordinatorThreadId, status, {
+        read: false,
+        ...(error ? { error } : {})
+      })
+    } catch {
+      // A thread deleted while its draft was settling has no status left to own.
+    }
+  }
+
   /**
    * Generate a reviewable Assignment from the exact active Spec without revising
    * that Spec, or from the thread conversation when no Spec exists. `instructions`
@@ -970,6 +1169,10 @@ export class ChatEngineAssignment {
       ? { kind: 'spec', spec }
       : { kind: 'conversation' }
 
+    const draftKey = this.assignmentDraftKey(projectId, coordinatorThreadId)
+    // A Stop pressed for a previous run must never silence this one's fallback.
+    this.host.state.userAbortedAssignmentDraftOperations.delete(draftKey)
+    const revision = this.assignmentDraftRevision(draftKey)
     await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'planning', {
       read: false
     })
@@ -981,16 +1184,16 @@ export class ChatEngineAssignment {
         source,
         instructions
       )
+      // The agent authored the draft while this run was generating, or the run was
+      // cancelled: its content is the thread's draft and this result is thrown away
+      // instead of being persisted over it.
+      if (this.assignmentDraftRevision(draftKey) !== revision)
+        return this.requireDraft(projectId, coordinatorThreadId)
       const concurrentlyCreated = this.host.state.assignmentEngine.getActive(
         projectId,
         coordinatorThreadId
       )
-      if (concurrentlyCreated) {
-        await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
-          read: false
-        })
-        return concurrentlyCreated
-      }
+      if (concurrentlyCreated) return concurrentlyCreated
 
       if (source.kind === 'spec') {
         const currentSpec = await this.host.units['spec'].getActiveSpec(
@@ -1008,7 +1211,7 @@ export class ChatEngineAssignment {
         }
       }
 
-      const assignment = await this.persistAssignmentDraft({
+      return await this.persistAssignmentDraft({
         projectId,
         coordinatorThreadId,
         content,
@@ -1023,14 +1226,7 @@ export class ChatEngineAssignment {
           modelId: settings.modelId
         }
       })
-      await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
-        read: false
-      })
-      return assignment
     } catch (error) {
-      await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
-        read: false
-      })
       this.host.units['turns'].markEngineeringLifecycleFailure(
         projectId,
         coordinatorThreadId,
@@ -1038,6 +1234,20 @@ export class ChatEngineAssignment {
       )
       throw error
     }
+  }
+
+  /**
+   * The draft a superseded run hands back instead of its own result.
+   *
+   * A superseded run never persisted anything, so the thread either holds the
+   * draft that superseded it or holds nothing at all.
+   */
+  private requireDraft(projectId: string, coordinatorThreadId: string): AssignmentPlan {
+    const active = this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (active) return active
+    throw new Error(
+      'The Assignment draft was replaced by another request while it was being generated.'
+    )
   }
 
   /**
