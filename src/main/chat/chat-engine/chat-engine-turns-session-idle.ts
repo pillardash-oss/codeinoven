@@ -1398,16 +1398,28 @@ export class ChatEngineTurnsSessionIdle {
     if (assignmentContinuation) {
       try {
         await this.host.units['assignment-run'].ensureAssignmentApi()
-        const assignmentId = assignmentContinuation.assignment.id
-        const coordinatorThreadId = assignmentContinuation.assignment.coordinatorThreadId
+        const { assignment, settings } = assignmentContinuation
+        const assignmentId = assignment.id
+        const coordinatorThreadId = assignment.coordinatorThreadId
+        const actionable = this.host.units['assignment'].assignmentHasActionableTask(assignment)
         let dispatched = await this.host.units['assignment'].sendAssignmentCoordinatorPrompt(
-          assignmentContinuation.assignment,
-          assignmentContinuation.settings,
-          await this.host.units['assignment'].coordinatorResumePrompt(
-            assignmentContinuation.assignment
-          )
+          assignment,
+          settings,
+          await this.host.units['assignment'].coordinatorResumePrompt(assignment)
         )
-        if (!dispatched) {
+        if (!dispatched && !actionable) {
+          // The snapshot claim refused the turn because the durable state is
+          // exactly what the completed turn already observed, and nothing in it
+          // needs the coordinator. Forcing an identical turn only bought a full
+          // re-read of the thread to conclude that nothing changed, so the next
+          // real event (a report, a freed slot, an attention task) is what wakes
+          // coordination instead.
+          this.host.state.assignmentContinuationStalls.delete(assignmentId)
+          Logger.info('Assignment continuation skipped because no task needs the coordinator', {
+            assignmentId,
+            threadId: coordinatorThreadId
+          })
+        } else if (!dispatched) {
           const stalls = (this.host.state.assignmentContinuationStalls.get(assignmentId) ?? 0) + 1
           if (stalls > ChatEngine.MAX_ASSIGNMENT_CONTINUATION_STALLS) {
             this.host.state.assignmentContinuationStalls.delete(assignmentId)
@@ -1432,11 +1444,9 @@ export class ChatEngineTurnsSessionIdle {
           } else {
             this.host.state.assignmentContinuationStalls.set(assignmentId, stalls)
             dispatched = await this.host.units['assignment'].sendAssignmentCoordinatorPrompt(
-              assignmentContinuation.assignment,
-              assignmentContinuation.settings,
-              await this.host.units['assignment'].coordinatorResumePrompt(
-                assignmentContinuation.assignment
-              ),
+              assignment,
+              settings,
+              await this.host.units['assignment'].coordinatorResumePrompt(assignment),
               undefined,
               true
             )
