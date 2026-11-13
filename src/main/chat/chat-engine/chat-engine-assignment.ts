@@ -711,6 +711,28 @@ export class ChatEngineAssignment {
   }
 
   /**
+   * Whether the only work left for the coordinator is queued behind its workers.
+   *
+   * A `ready` task with every worker slot taken is work the coordinator cannot
+   * start, and the app wakes it the moment a worker reports or frees its slot.
+   * An idle turn in that state is a turn spent waiting, so it must never be read
+   * as a stall.
+   */
+  assignmentQueuedBehindRunningWorkers(assignment: AssignmentPlan): boolean {
+    const tasks = assignment.content.tasks
+    const runningWorker = tasks.some((task) => task.owner === 'worker' && task.status === 'running')
+    if (!runningWorker) return false
+    return !tasks.some(
+      (task) =>
+        task.status === 'reported' ||
+        task.status === 'attention' ||
+        task.status === 'failed' ||
+        task.status === 'rework' ||
+        (task.owner === 'senior' && task.status === 'running')
+    )
+  }
+
+  /**
    * The wake gate for an automatic coordinator turn.
    *
    * It used to fall through to "some task is not completed", so an Assignment

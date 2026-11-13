@@ -63,7 +63,7 @@ import {
   taskReconcilePrompt,
   SUPERSEDED_TURN_MESSAGE
 } from './chat-engine-constants'
-import { broadcastToast, assignmentStallNoticeId } from './chat-engine-pure'
+import { broadcastToast, assignmentStallNoticeId, withdrawToast } from './chat-engine-pure'
 import { ChatEngine } from '../chat-engine'
 
 /** ChatEngine turns-session-idle: one concern, moved verbatim from the composition root. */
@@ -1410,47 +1410,73 @@ export class ChatEngineTurnsSessionIdle {
             threadId: coordinatorThreadId
           })
         } else if (!dispatched) {
-          const stalls = (this.host.state.assignmentContinuationStalls.get(assignmentId) ?? 0) + 1
-          if (stalls > ChatEngine.MAX_ASSIGNMENT_CONTINUATION_STALLS) {
+          if (this.host.units['assignment'].assignmentQueuedBehindRunningWorkers(assignment)) {
+            // Nothing else is waiting on the coordinator and every worker slot is
+            // taken, so this idle turn is waiting, not stalling. Forcing an
+            // identical turn only repeats the same answer until the app mistakes
+            // it for a stall, interrupts a healthy coordinator and asks the user
+            // to resume work that never stopped.
             this.host.state.assignmentContinuationStalls.delete(assignmentId)
-            Logger.error('Assignment coordinator stalled without making progress', {
-              assignmentId,
-              threadId: coordinatorThreadId,
-              consecutiveNoOpContinuations: stalls
-            })
-            await this.host.threadManager.setStatus(
+            withdrawToast(assignmentStallNoticeId(assignmentId))
+            const coordinatorThread = await this.host.threadManager.getThread(
               info.projectId,
-              coordinatorThreadId,
-              'interrupted',
-              {
-                read: false
-              }
+              coordinatorThreadId
             )
-            broadcastToast(
-              'The Sr. Engineer ended its turn without resolving the Assignment tasks. Resume coordination to continue.',
-              'info',
-              assignmentStallNoticeId(assignmentId)
-            )
+            if (coordinatorThread?.status === 'interrupted') {
+              await this.host.threadManager.setStatus(
+                info.projectId,
+                coordinatorThreadId,
+                'completed',
+                { read: true }
+              )
+            }
+            Logger.info('Assignment continuation is waiting on running workers', {
+              assignmentId,
+              threadId: coordinatorThreadId
+            })
           } else {
-            this.host.state.assignmentContinuationStalls.set(assignmentId, stalls)
-            dispatched = await this.host.units['assignment'].sendAssignmentCoordinatorPrompt(
-              assignment,
-              settings,
-              await this.host.units['assignment'].coordinatorResumePrompt(assignment),
-              undefined,
-              true
-            )
-            if (dispatched) {
-              Logger.info('Forced Assignment coordinator continuation after a no-op turn', {
+            const stalls = (this.host.state.assignmentContinuationStalls.get(assignmentId) ?? 0) + 1
+            if (stalls > ChatEngine.MAX_ASSIGNMENT_CONTINUATION_STALLS) {
+              this.host.state.assignmentContinuationStalls.delete(assignmentId)
+              Logger.error('Assignment coordinator stalled without making progress', {
                 assignmentId,
                 threadId: coordinatorThreadId,
                 consecutiveNoOpContinuations: stalls
               })
+              await this.host.threadManager.setStatus(
+                info.projectId,
+                coordinatorThreadId,
+                'interrupted',
+                {
+                  read: false
+                }
+              )
+              broadcastToast(
+                'The Sr. Engineer ended its turn without resolving the Assignment tasks. Resume coordination to continue.',
+                'info',
+                assignmentStallNoticeId(assignmentId)
+              )
             } else {
-              Logger.info('Assignment continuation skipped because its snapshot is unchanged', {
-                assignmentId,
-                threadId: coordinatorThreadId
-              })
+              this.host.state.assignmentContinuationStalls.set(assignmentId, stalls)
+              dispatched = await this.host.units['assignment'].sendAssignmentCoordinatorPrompt(
+                assignment,
+                settings,
+                await this.host.units['assignment'].coordinatorResumePrompt(assignment),
+                undefined,
+                true
+              )
+              if (dispatched) {
+                Logger.info('Forced Assignment coordinator continuation after a no-op turn', {
+                  assignmentId,
+                  threadId: coordinatorThreadId,
+                  consecutiveNoOpContinuations: stalls
+                })
+              } else {
+                Logger.info('Assignment continuation skipped because its snapshot is unchanged', {
+                  assignmentId,
+                  threadId: coordinatorThreadId
+                })
+              }
             }
           }
         } else {
