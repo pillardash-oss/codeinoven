@@ -418,16 +418,6 @@ export class ChatEngineTurnsSessionIdle {
           turnAssistant
         )
       }
-      if (
-        parentTurnId &&
-        turnAssistant &&
-        !failure &&
-        !turnAssistant.error &&
-        !contractContinuationRequired &&
-        !contractBlocked
-      ) {
-        await this.host.openRankingSnapshot(info, thread, merged, turnAssistant, awaitingUser)
-      }
       // Snapshot this turn's harness usage into the dedicated analytics table.
       // Runs on every turn end (success or failure) and is ledger-guarded, so
       // cost/tokens are added to the thread's existing per-harness totals once.

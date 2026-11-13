@@ -382,12 +382,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     scopeRootProvider(scopeRootResolver),
     state.modelPricingService
   )
-  // Grade any ranking snapshots whose persisted close deadline elapsed while
-  // the app was closed (non-fatal: a failed sweep leaves rows queued for the
-  // next launch).
-  void state.chatEngine
-    .recoverPendingRankingGrades()
-    .catch((error) => Logger.dev('Pending ranking grade recovery failed (non-fatal):', error))
   // Swap the OpenCode driver to the detected transport the moment the probe
   // settles: the map was built against the cached install, which is still
   // empty on the first launch of a session. This is the same swap the runtime

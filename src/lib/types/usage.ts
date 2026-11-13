@@ -32,7 +32,6 @@ export interface AgentTokenUsage {
 export const USAGE_EVENT_FEATURES = [
   'main',
   'title',
-  'turn_grade',
   'memory',
   'image_descriptor',
   'search_nudge',

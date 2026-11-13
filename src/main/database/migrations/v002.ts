@@ -14,18 +14,7 @@ import {
   hasAssistantPersonalitySection,
   hasKnowledgeHeading
 } from '../../../lib/assistant-personality'
-import {
-  DATABASE_SCHEMA_SQL,
-  LEGACY_RUBRIC_VERSION,
-  MAX_PLAUSIBLE_SHOT_COST_USD,
-  MODEL_RANKINGS_COLUMNS_SQL,
-  MODEL_RANKING_CALC_VERSION,
-  MODEL_RANKING_SNAPSHOT_INDEXES_SQL,
-  MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL,
-  MODEL_RANKING_INDEXES_SQL,
-  USAGE_EVENTS_COLUMNS_SQL,
-  USAGE_EVENTS_INDEXES_SQL
-} from '../schema'
+import { DATABASE_SCHEMA_SQL, USAGE_EVENTS_COLUMNS_SQL, USAGE_EVENTS_INDEXES_SQL } from '../schema'
 import type { DatabaseMigration, LedgerMigrationHost } from './migration'
 import {
   addColumn,
@@ -46,9 +35,9 @@ import {
  * weight and can be deleted: that is the point of one file per version.
  *
  * Order is part of the contract and is not alphabetical. The vocabulary rename
- * and the ranking fold run before the schema snapshot, because
- * `CREATE TABLE IF NOT EXISTS` would otherwise create tables those steps can no
- * longer rewrite; every column step after it needs the tables it creates.
+ * runs before the schema snapshot, because `CREATE TABLE IF NOT EXISTS` would
+ * otherwise create tables that step can no longer rewrite; every column step
+ * after it needs the tables it creates.
  *
  * The two ledger rebuilds are this version's worker-backed steps: they rewrite
  * a whole table, so they run on the maintenance worker after the schema
@@ -108,154 +97,6 @@ function applyAssistantVocabulary(connection: DatabaseType): void {
       connection.exec('ALTER TABLE assistants ADD COLUMN knowledge_updated_at INTEGER')
     }
   }
-}
-
-/**
- * One-time replacement of the legacy per-turn `turn_feedback` ledger (1-5
- * grades) with the `model_rankings` aggregate + `model_ranking_snapshots`
- * queue. Graded legacy rows are folded into the aggregate with the linear
- * map grade -> (grade - 1) x 2.5 under `rubric_version = 'legacy-1to5-map-v1'`
- * (no duration information existed, so duration sums stay 0), and only then
- * is the legacy table dropped. Idempotent: without a legacy table this is a
- * no-op. The fold-in is a single grouped INSERT ... SELECT, so large ledgers
- * stay one bounded pass rather than per-row inserts.
- */
-function applyModelRankingTables(connection: DatabaseType): void {
-  const columns = tableColumns(connection, 'turn_feedback')
-  if (columns.size === 0) return
-  if (!columns.has('grade')) {
-    // Databases predating LLM-graded turn feedback carry the useless binary
-    // pass/fail ledger (status 'success'/'corrected', regex-driven). The
-    // metric was unreliable by construction: nothing is worth translating.
-    connection.exec('DROP TABLE turn_feedback')
-    return
-  }
-  // The aggregate must exist before the fold-in; the canonical schema's
-  // CREATE IF NOT EXISTS stays a no-op afterwards.
-  connection.exec(
-    `CREATE TABLE IF NOT EXISTS model_rankings (${MODEL_RANKINGS_COLUMNS_SQL});
-     CREATE TABLE IF NOT EXISTS model_ranking_snapshots (${MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL});`
-  )
-  connection.exec(MODEL_RANKING_INDEXES_SQL)
-  connection.exec(MODEL_RANKING_SNAPSHOT_INDEXES_SQL)
-  connection.exec(`
-    INSERT INTO model_rankings(
-      id, harness_id, provider_id, model_id, thinking_level,
-      one_shot_score_sum, one_shot_samples, one_shot_duration_sum_ms, one_shot_cost_usd,
-      multi_shot_score_sum, multi_shot_samples, multi_shot_duration_sum_ms, multi_shot_cost_usd,
-      rubric_version, calc_version, updated_at
-    )
-    SELECT
-      'legacy-' || MIN(legacy.rowid),
-      legacy.harness_id,
-      COALESCE(legacy.provider_id, ''),
-      legacy.model_id,
-      COALESCE(legacy.thinking_level, ''),
-      SUM((legacy.grade - 1) * 2.5),
-      COUNT(*),
-      0,
-      COALESCE(SUM(CASE WHEN legacy.cost_status <> 'unavailable' AND legacy.cost_usd IS NOT NULL
-                        THEN legacy.cost_usd ELSE 0 END), 0),
-      0, 0, 0, 0,
-      '${LEGACY_RUBRIC_VERSION}',
-      '${MODEL_RANKING_CALC_VERSION}',
-      MAX(legacy.created_at)
-    FROM turn_feedback AS legacy
-    WHERE legacy.status = 'graded'
-      AND legacy.grade IS NOT NULL
-      AND legacy.harness_id IS NOT NULL
-      AND legacy.model_id IS NOT NULL
-    GROUP BY legacy.harness_id, COALESCE(legacy.provider_id, ''), legacy.model_id,
-             COALESCE(legacy.thinking_level, '')
-  `)
-  connection.exec('DROP TABLE turn_feedback')
-}
-
-/**
- * Discard ranking cost sums that an arithmetic artifact poisoned.
- *
- * The cost columns of `model_rankings` are running sums whose snapshots are
- * hard-deleted the moment they are scored, so one absurd addend can never be
- * subtracted back out: it only ever surfaces as an impossible per-sample
- * average, and it takes the "spent across ranked conversations" figure with it
- * forever. Anything above `MAX_PLAUSIBLE_SHOT_COST_USD` per ranked
- * conversation is therefore dropped to 0, exactly how an unpriced session is
- * already recorded: the priced siblings of those samples under-report by the
- * few cents they actually cost, which is the honest direction for a sum
- * nothing can recompute. Scores, sample counts, and durations are untouched,
- * because those are the ranking's own numbers and they were never corrupt.
- * The 2026-10-10 pi cumulative-cost fix stopped the one producer of such
- * addends, and `ModelRankingRepo` now refuses to fold a new one in at all.
- * Idempotent: a repaired row is already below the ceiling.
- */
-function applyModelRankingCostPlausibility(connection: DatabaseType): void {
-  if (tableColumns(connection, 'model_rankings').size === 0) return
-  const beyondCeiling = (samplesColumn: string, costColumn: string): string =>
-    `${samplesColumn} > 0 AND ${costColumn} > ${samplesColumn} * ${MAX_PLAUSIBLE_SHOT_COST_USD}`
-  connection.exec(`
-    UPDATE model_rankings
-    SET one_shot_cost_usd = CASE
-          WHEN ${beyondCeiling('one_shot_samples', 'one_shot_cost_usd')} THEN 0
-          ELSE one_shot_cost_usd
-        END,
-        multi_shot_cost_usd = CASE
-          WHEN ${beyondCeiling('multi_shot_samples', 'multi_shot_cost_usd')} THEN 0
-          ELSE multi_shot_cost_usd
-        END
-    WHERE (${beyondCeiling('one_shot_samples', 'one_shot_cost_usd')})
-       OR (${beyondCeiling('multi_shot_samples', 'multi_shot_cost_usd')})
-  `)
-}
-
-/**
- * Databases created before claim-token tagging carry a `claim_token`-less
- * snapshot queue. Add the column in place (nullable, no backfill needed:
- * unclaimed rows are NULL by definition). Idempotent and safe to re-run.
- */
-function applyModelRankingSnapshotClaimToken(connection: DatabaseType): void {
-  const columns = tableColumns(connection, 'model_ranking_snapshots')
-  if (columns.size === 0) return
-  addColumn(connection, columns, 'model_ranking_snapshots', 'claim_token', 'TEXT')
-}
-
-/**
- * Databases created before the anchor tag carry an `anchor_message_id`-less
- * snapshot queue. Add the column in place and point each still-open row at
- * the same visible user message the capture path would resolve today: the
- * thread's most recent user-origin message. Without the backfill a queued row
- * would treat its next turn as a follow-up and keep the pre-fix behaviour for
- * one more exchange. Rows whose thread is gone (or that are already closed)
- * keep a null anchor, which reads as "unknown". Idempotent and safe to
- * re-run.
- */
-function applyModelRankingSnapshotAnchorMessage(connection: DatabaseType): void {
-  const columns = tableColumns(connection, 'model_ranking_snapshots')
-  if (columns.size === 0 || columns.has('anchor_message_id')) return
-  addColumn(connection, columns, 'model_ranking_snapshots', 'anchor_message_id', 'TEXT')
-  connection
-    .prepare(
-      `UPDATE model_ranking_snapshots
-       SET anchor_message_id = (
-         SELECT candidate.id FROM agent_messages candidate
-         WHERE candidate.thread_id = model_ranking_snapshots.thread_id
-           AND candidate.role = 'user' AND candidate.origin = 'user'
-         ORDER BY candidate.created_at DESC, candidate.id DESC
-         LIMIT 1
-       )
-       WHERE closed_at_ms IS NULL`
-    )
-    .run()
-}
-
-/**
- * Databases created before the undo flag carry a snapshot queue with no
- * `undone_at_ms` column. Add it in place; existing rows read as `null`, which
- * is exactly "not undone". Idempotent and safe to re-run.
- */
-function applyModelRankingSnapshotUndoneAt(connection: DatabaseType): void {
-  const columns = tableColumns(connection, 'model_ranking_snapshots')
-  if (columns.size === 0) return
-  addColumn(connection, columns, 'model_ranking_snapshots', 'undone_at_ms', 'INTEGER')
 }
 
 /**
@@ -1166,13 +1007,8 @@ export const versionTwoMigration: DatabaseMigration = {
   summary: 'every compatibility step a database written before the version gate still needs',
   apply(connection: DatabaseType): void {
     applyAssistantVocabulary(connection)
-    applyModelRankingTables(connection)
     // The snapshot lands here on purpose: see the file comment above.
     connection.exec(DATABASE_SCHEMA_SQL)
-    applyModelRankingCostPlausibility(connection)
-    applyModelRankingSnapshotClaimToken(connection)
-    applyModelRankingSnapshotAnchorMessage(connection)
-    applyModelRankingSnapshotUndoneAt(connection)
     applyEngineeringLifecycleColumns(connection)
     applyUsageEventColumns(connection)
     applyThreadIndependentAuditColumns(connection)

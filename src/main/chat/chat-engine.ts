@@ -10,8 +10,6 @@ import type { SearchSummaryRequest } from '../search/thread-search-summary'
 import type { ProjectFingerprint } from '../git/change-tracking-service'
 import type { HarnessDriver } from '../drivers/driver.interface'
 import type { Database } from '../database/database'
-import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
-import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import type { TypesafeDecisionService } from '../typesafe/typesafe-decision-service'
 import type { StorageEngine } from '../storage/storage-engine'
 import type {
@@ -115,8 +113,6 @@ import type {
   TurnStreamCompletedTurns,
   ThinkingLevel,
   BrainstormPrototypeFidelity,
-  LocalRankingGradeProgress,
-  LocalRankingGradeScope,
   Assistant,
   AssistantAgents
 } from '../../lib/types'
@@ -266,55 +262,6 @@ export class ChatEngine {
    */
   readonly units = buildChatEngineUnits(this)
   readonly state = new ChatEngineState(this)
-  /** Close deadline: an untouched conversation is graded after this much inactivity. */
-  static readonly RANKING_INACTIVITY_CLOSE_MS = 24 * 60 * 60_000
-
-  /** Failed judges retry out of band without blocking newer closed conversations. */
-  static readonly RANKING_RETRY_BASE_MS = 5 * 60_000
-
-  /** Bounded retries before a snapshot parks as failed for recovery. */
-  static readonly RANKING_ATTEMPT_CAP = 5
-
-  /** Failed snapshots re-enter the queue this long after their last attempt. */
-  static readonly RANKING_RECOVERY_COOLDOWN_MS = 24 * 60 * 60_000
-
-  /** Bound each drain so model ranking never monopolizes the main process. */
-  static readonly RANKING_DRAIN_BATCH_SIZE = 3
-
-  /**
-   * How far past the batch size one pass looks into the due queue. A pass reads
-   * this window, holds back the rows whose judge route the provider already
-   * reported closed, and claims only what remains, so a blocked head cannot
-   * hide judgeable rows behind it. The window carries no conversation payload.
-   */
-  static readonly RANKING_QUEUE_SCAN_SIZE = 48
-
-  /**
-   * Retry interval for a pass whose held-back rows could not be re-dated in the
-   * queue. The rows stay due, so the pass has to pace itself instead of waking
-   * on them again, and the interval is short enough that a recovered database
-   * is noticed promptly.
-   */
-  static readonly RANKING_HELD_RETRY_MS = 60_000
-
-  /**
-   * Consecutive judge failures for one harness before its whole due queue is
-   * held back. A judge that cannot run   an unauthenticated first-party
-   * transport, a provider usage limit whose reset is hours away, a candidate
-   * list whose credentials are rejected   fails identically for every row of
-   * that harness, so retrying each row on its own schedule only spawns harness
-   * processes for work that cannot succeed.
-   */
-  static readonly RANKING_JUDGE_FAILURE_THRESHOLD = 3
-
-  /**
-   * Cooldown for a harness whose judge keeps failing: doubles per threshold
-   * crossing up to the cap, so a persistently blocked judge costs attempts
-   * logarithmically instead of linearly.
-   */
-  static readonly RANKING_JUDGE_COOLDOWN_BASE_MS = 30 * 60_000
-  static readonly RANKING_JUDGE_COOLDOWN_MAX_MS = 6 * 60 * 60_000
-
   /**
    * How long a "can the TypeSafe capability answer?" reading is reused.
    *
@@ -323,39 +270,6 @@ export class ChatEngine {
    * key-resolution cache, so a key stored in Settings qualifies without a restart.
    */
   static readonly TYPESAFE_ANSWERABLE_TTL_MS = 30_000
-
-  /**
-   * Spread added to a held-back or retried deadline. Conversations that closed
-   * in the same session share one inactivity deadline, so without this a whole
-   * batch of them expires together and is judged as one back-to-back burst  
-   * each run being another full harness process. Jitter only ever moves a
-   * deadline later, so nothing is graded early to compensate.
-   */
-  static readonly RANKING_DEADLINE_JITTER_RATIO = 0.2
-
-  /**
-   * Breath between full drain batches. Judging runs a harness process per row,
-   * so batches never chain back to back even while a backlog is being cleared.
-   */
-  static readonly RANKING_DRAIN_RESTART_MS = 2_000
-
-  /**
-   * Breath between the passes of one user-requested run. Shorter than the
-   * automatic restart because a person is watching, and long enough that the
-   * main thread, the database worker and the provider are never hammered by a
-   * backlog being cleared as fast as the queue allows.
-   */
-  static readonly RANKING_MANUAL_PASS_PAUSE_MS = 250
-
-  /** Wait before re-checking a queue another pass currently owns. */
-  static readonly RANKING_MANUAL_POLL_MS = 500
-
-  /**
-   * Consecutive passes that grade nothing before a user-requested run stops and
-   * reports what is left. A run must end even when the queue cannot move, for
-   * instance while every judge route sits inside a closed provider window.
-   */
-  static readonly RANKING_MANUAL_IDLE_PASSES = 2
 
   /** Frame-aligned (16ms) stream coalescing: token deltas still batch per
    *  frame to bound IPC traffic, but no longer stack into perceptible ~50ms
@@ -482,12 +396,6 @@ export class ChatEngine {
    * and memory) until the next launch.
    */
   static readonly ORPHAN_SWEEP_INTERVAL_MS = 5 * 60_000
-
-  public rankingRepo!: ModelRankingRepo
-
-  public rankingSnapshotRepo!: ModelRankingSnapshotRepo
-
-  public gradeDrainTimer: ReturnType<typeof setTimeout> | null = null
 
   /** The workstation tools' implementation and the dispatches awaiting a report. */
   public orchestration: OrchestrationRuntime | null = null
@@ -1688,54 +1596,6 @@ export class ChatEngine {
   }
   async refreshSensitiveFilePermissions(): Promise<void> {
     return this.units['permissions'].refreshSensitiveFilePermissions()
-  }
-  async recoverPendingRankingGrades(): Promise<void> {
-    return this.units['rankings-grade'].recoverPendingRankingGrades()
-  }
-  markTurnRankingUndone(threadId: string, sourceMessageId: string | undefined): number {
-    return this.units['rankings'].markTurnRankingUndone(threadId, sourceMessageId)
-  }
-  clearTurnRankingUndone(threadId: string, sourceMessageId: string | undefined): number {
-    return this.units['rankings'].clearTurnRankingUndone(threadId, sourceMessageId)
-  }
-  rankingGradeRunStatus(): LocalRankingGradeProgress | null {
-    return this.units['rankings-grade'].rankingGradeRunStatus()
-  }
-  cancelRankingGrade(): void {
-    return this.units['rankings-grade'].cancelRankingGrade()
-  }
-  async gradeRankingQueueNow(
-    scope: LocalRankingGradeScope,
-    onProgress?: (progress: LocalRankingGradeProgress) => void
-  ): Promise<LocalRankingGradeProgress> {
-    return this.units['rankings-grade'].gradeRankingQueueNow(scope, onProgress)
-  }
-  scheduleRankingDrain(delayOverrideMs?: number): void {
-    return this.units['rankings-queue'].scheduleRankingDrain(delayOverrideMs)
-  }
-
-  /**
-   * Spread a deadline by up to the configured ratio, never pulling it forward.
-   * Applied to every retry and to each conversation's inactivity close so that
-   * work that was queued together is never judged together.
-   */
-  static spreadDeadline(delayMs: number): number {
-    return delayMs + Math.floor(Math.random() * delayMs * ChatEngine.RANKING_DEADLINE_JITTER_RATIO)
-  }
-  async openRankingSnapshot(
-    info: SessionInfo,
-    thread: Thread | null,
-    mirror: AgentMessage[],
-    turnAssistant: AgentMessage,
-    awaitingUser: boolean
-  ): Promise<void> {
-    return this.units['rankings-queue'].openRankingSnapshot(
-      info,
-      thread,
-      mirror,
-      turnAssistant,
-      awaitingUser
-    )
   }
   reassertTurnToolEvidence(session: SessionInfo, messages: readonly AgentMessage[]): void {
     return this.units['utilities-tools'].reassertTurnToolEvidence(session, messages)

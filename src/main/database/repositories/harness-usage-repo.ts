@@ -924,19 +924,9 @@ export class HarnessUsageRepo {
       activityDays,
       dailyUsage,
       hourlyUsage,
-      // Model ranking aggregates and grading spend live in ModelRankingRepo;
-      // the IPC layer overlays them.
-      modelRankings: [],
-      gradingSpend: {
-        costUsd: 0
-      },
       records: {
         agentResponses,
-        utilities: utilityMessageCount,
-        // The ranking store is overlaid by the IPC layer with the same repo it
-        // reads the aggregates from, so the counts and the rows always agree.
-        modelRankings: 0,
-        pendingGrades: 0
+        utilities: utilityMessageCount
       },
       generatedAt: Date.now()
     }

@@ -63,8 +63,7 @@ Inside it:
 - **Browser session cookies** for the built-in browser, encrypted at rest with
   the same operating-system storage. A cookie jar is never written to a
   plaintext backend (`src/main/browser/browser-service/browser-session-cookies.ts`).
-- **Usage records and model rankings** shown on your own Profile and Usage
-  pages, and one small file, `analytics/usage.json`, that remembers the
+- **Usage records** shown on your own Profile and Usage pages, and one small file, `analytics/usage.json`, that remembers the
   installation identifier described in section 4.6
   (`src/main/system/usage-analytics.ts`).
 - **Imported model registrations.** If you point the app at a model file or

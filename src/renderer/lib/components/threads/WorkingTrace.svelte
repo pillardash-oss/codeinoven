@@ -266,9 +266,18 @@
   let traceBodyEl = $state<HTMLDivElement>()
   /** The transcript scroller that now drives the trace's own scrolling. */
   const scrollRoot = $derived(traceRootEl?.closest('.conversation-scroll') ?? null)
+  /** The element whose scrolling reaches this trace's older pages.
+   *
+   * A full-width trace has no scroller of its own, so the transcript arriving at
+   * its top is the reader reaching its oldest work. A group reply is height
+   * bounded and scrolls inside its own body, and a scroll never leaves that box,
+   * so the body is what paging has to listen to there. */
+  const pagingRoot = $derived(bodyMaxHeightRem === undefined ? scrollRoot : (traceBodyEl ?? null))
   /** The sticky header's measured height, published as a custom property so a
    *  chain's fold header pins directly beneath it instead of under it. */
   let traceHeaderHeight = $state(0)
+  /** How far below the scroller's top the oldest mounted work counts as the top. */
+  const pagingTopInset = $derived(bodyMaxHeightRem === undefined ? traceHeaderHeight : 0)
   /** The turn's trace as chains of thought, grouped from the mounted steps.
    *  A chain that produced an output is keyed by that output, which is the
    *  boundary that defines it, so paging older steps in above never remounts a
@@ -299,7 +308,7 @@
    *  moved down by exactly the height they added. The transcript turns native
    *  scroll anchoring off, so this is the only correction applied. */
   async function pullOlderPage(): Promise<void> {
-    const root = scrollRoot
+    const root = pagingRoot
     if (!root || loadingOlderParts || !olderPartsAvailable || !onLoadOlderParts) return
     loadingOlderParts = true
     const previousHeight = root.scrollHeight
@@ -312,7 +321,7 @@
       loadingOlderParts = false
     }
     await tick()
-    const scroller = scrollRoot
+    const scroller = pagingRoot
     if (!scroller) return
     scroller.scrollTop += scroller.scrollHeight - previousHeight
   }
@@ -322,7 +331,7 @@
    *  child is the sentinel: once a page lands above it the sentinel is pushed
    *  out of the zone, which is what stops one arrival loading page after page. */
   function traceTopReached(): boolean {
-    const root = scrollRoot
+    const root = pagingRoot
     const body = traceBodyEl
     if (!root || !body) return false
     const oldest = body.firstElementChild
@@ -330,7 +339,7 @@
     // has to pull its first page before it has a sentinel to measure.
     if (!oldest) return isOpen
     const offset = oldest.getBoundingClientRect().top - root.getBoundingClientRect().top
-    return offset >= traceHeaderHeight - 4 && offset <= traceHeaderHeight + TRACE_TOP_REACH
+    return offset >= pagingTopInset - 4 && offset <= pagingTopInset + TRACE_TOP_REACH
   }
 
   /** Fold the trace so its header keeps the screen position it already had.
@@ -356,12 +365,13 @@
     root.scrollTop = headerOffset
   }
 
-  // The transcript scroller drives this trace now. Reaching the top of the
-  // mounted work on a scroll-up loads one older page; following the live tail
-  // and keeping the reader's place across content growth stay the transcript's
-  // job, so nothing scrolls this trace by hand any more.
+  // The transcript scroller drives a full-width trace, and a height-bounded
+  // reply body drives its own. Reaching the top of the mounted work on a
+  // scroll-up loads one older page; following the live tail and keeping the
+  // reader's place across content growth stay the transcript's job, so nothing
+  // scrolls this trace by hand any more.
   $effect(() => {
-    const root = scrollRoot
+    const root = pagingRoot
     if (!root || !isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
     let previousTop = root.scrollTop
     const onScroll = (): void => {
@@ -391,7 +401,7 @@
     void isOpen
     void olderPartsAvailable
     if (!isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
-    const root = scrollRoot
+    const root = pagingRoot
     const body = traceBodyEl
     if (!root || !body) return
     // Only a trace that already shows something waits for the transcript to

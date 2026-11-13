@@ -23,11 +23,7 @@ export interface UsageClearTargetInfo {
   description: string
 }
 
-export const USAGE_RECORD_STORES: readonly LocalUsageRecordStore[] = [
-  'agentResponses',
-  'utilities',
-  'modelRankings'
-]
+export const USAGE_RECORD_STORES: readonly LocalUsageRecordStore[] = ['agentResponses', 'utilities']
 
 const STORE_INFO: Record<LocalUsageRecordStore, UsageClearTargetInfo> = {
   agentResponses: {
@@ -37,11 +33,6 @@ const STORE_INFO: Record<LocalUsageRecordStore, UsageClearTargetInfo> = {
   utilities: {
     label: 'Utilities',
     description: 'Image descriptor, memory and title generation calls in the selected range.'
-  },
-  modelRankings: {
-    label: 'Model rankings',
-    description:
-      'One-shot, multi-shot and design-quality results, plus conversations awaiting grading.'
   }
 }
 
@@ -72,7 +63,11 @@ export function usageClearInfo(target: UsageClearTarget): UsageClearTargetInfo {
   return target === 'all' ? ALL_INFO : STORE_INFO[target]
 }
 
-/** Records a clear action removes, counting queued conversations as records. */
+/** Irreversibility line shared by every clear action. */
+const CLEAR_NOTE =
+  'Clearing usage records cannot be undone, and removes them from this device only.'
+
+/** Records a clear action removes. */
 export function usageClearRecordCount(
   target: UsageClearTarget,
   counts: LocalUsageRecordCounts
@@ -82,10 +77,8 @@ export function usageClearRecordCount(
       return counts.agentResponses
     case 'utilities':
       return counts.utilities
-    case 'modelRankings':
-      return counts.modelRankings + counts.pendingGrades
     case 'all':
-      return counts.agentResponses + counts.utilities + counts.modelRankings + counts.pendingGrades
+      return counts.agentResponses + counts.utilities
   }
 }
 
@@ -95,29 +88,15 @@ export function usageRecordSummary(
   counts: LocalUsageRecordCounts,
   range: LocalProfileAnalyticsRange
 ): string {
-  if (store === 'agentResponses') {
-    return `${recordClause(counts.agentResponses, 'record', 'records')} · ${formatDateRange(range)}`
-  }
-  if (store === 'utilities') {
-    return `${recordClause(counts.utilities, 'record', 'records')} · ${formatDateRange(range)}`
-  }
-  return [
-    recordClause(counts.modelRankings, 'ranking record', 'ranking records'),
-    recordClause(
-      counts.pendingGrades,
-      'conversation awaiting grading',
-      'conversations awaiting grading'
-    ),
-    'all time'
-  ].join(' · ')
+  const count = store === 'agentResponses' ? counts.agentResponses : counts.utilities
+  return `${recordClause(count, 'record', 'records')} · ${formatDateRange(range)}`
 }
 
 /**
  * Build the confirmation shown before a clear runs.
  *
- * The copy names the exact dates for range-scoped stores and says plainly that
- * the ranking store is all-time, so the promise a user confirms always matches
- * what the purge actually removes.
+ * The copy names the exact dates the purge covers, so the promise a user
+ * confirms always matches what the purge actually removes.
  */
 export function usageClearConfirmation(
   target: UsageClearTarget,
@@ -129,36 +108,14 @@ export function usageClearConfirmation(
     confirmLabel: target === 'all' ? 'Clear all records' : 'Clear records',
     scope: scopeParts(target, range),
     removal: removalParts(target, counts),
-    note: noteFor(target)
+    note: CLEAR_NOTE
   }
-}
-
-/**
- * Irreversibility line. The ranking stores additionally warn that discarding the
- * grading queue means those conversations can never be scored, which a user
- * cannot infer from a record count alone.
- */
-function noteFor(target: UsageClearTarget): string {
-  const ledgerNote =
-    'Clearing usage records cannot be undone, and removes them from this device only.'
-  const rankingNote =
-    'Conversations awaiting grading are discarded with the ranking records, so they are never scored.'
-  if (target === 'modelRankings') return `Clearing ranking records cannot be undone. ${rankingNote}`
-  if (target === 'all') return `${ledgerNote} ${rankingNote}`
-  return ledgerNote
 }
 
 function scopeParts(
   target: UsageClearTarget,
   range: LocalProfileAnalyticsRange
 ): UsageClearCopyPart[] {
-  if (target === 'modelRankings') {
-    return [
-      quoted('You are about to start from a clean slate for '),
-      emphasised(STORE_INFO.modelRankings.label),
-      quoted(', including design-quality results. This clears ranking records across all dates.')
-    ]
-  }
   const windowParts = rangeParts(range)
   if (target === 'all') {
     return [
@@ -168,8 +125,6 @@ function scopeParts(
       emphasised(STORE_INFO.agentResponses.label),
       quoted(' and '),
       emphasised(STORE_INFO.utilities.label),
-      quoted(', and all time for '),
-      emphasised(STORE_INFO.modelRankings.label),
       quoted('.')
     ]
   }
@@ -220,16 +175,6 @@ function removalClauses(target: UsageClearTarget, counts: LocalUsageRecordCounts
   }
   if (target === 'all' || target === 'utilities') {
     clauses.push(recordClause(counts.utilities, 'utility record', 'utility records'))
-  }
-  if (target === 'all' || target === 'modelRankings') {
-    clauses.push(recordClause(counts.modelRankings, 'ranking record', 'ranking records'))
-    clauses.push(
-      recordClause(
-        counts.pendingGrades,
-        'conversation awaiting grading',
-        'conversations awaiting grading'
-      )
-    )
   }
   return clauses
 }

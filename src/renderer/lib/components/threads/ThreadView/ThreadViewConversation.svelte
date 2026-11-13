@@ -57,7 +57,11 @@
   import CioReplyMark from '$lib/components/icons/cio/CioReplyMark.svelte'
   import { assistantIsDon, isGroupThread } from '$shared/types'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
-  import { conversationAnswerText, conversationProseText } from '../conversation-text'
+  import {
+    conversationAnswerText,
+    conversationProseText,
+    conversationQuoteExcerpt
+  } from '../conversation-text'
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
@@ -257,12 +261,12 @@
         ? (openThread.title ?? 'this conversation')
         : (known?.title ?? speaker?.name ?? msg.author?.name ?? 'that conversation')
     // The `@thread:` marker is how the group links back to the run's own thread;
-    // it is not part of what the speaker said, so a quote never carries it.
-    const excerpt = messageText(msg)
-      .replace(/@thread:\S+/gu, ' ')
-      .replace(/\s+/gu, ' ')
-      .trim()
-      .slice(0, 240)
+    // it is not part of what the speaker said, so a quote never carries it. The
+    // quote is prose, read through the same rule as the answer it came from, so
+    // the run's transport boundary can never open a quote.
+    const excerpt = conversationQuoteExcerpt(
+      conversationAnswerText(textScope, messageText(msg).replace(/@thread:\S+/gu, ' '))
+    )
     return {
       projectId,
       threadId,
@@ -684,15 +688,28 @@
               : turnClosingVisible && turnClosingText
                 ? turnClosingText.id
                 : null}
-        {@const turnParts = board.pollStreamParts.segmentTraceParts(
+        {@const traceParts = board.pollStreamParts.segmentTraceParts(
           segment,
           traceIsLiveTurn,
           turnClosingTextId,
           traceHoldsClosingText
         )}
+        <!-- A settled turn's work is already in the transcript, so nothing can
+             fetch it page by page: what a 600-step run costs is mounting it. The
+             newest page mounts, and the top of the trace pulls the next older one
+             exactly as the live trace does. A live turn keeps its own durable
+             paging, which this never touches. -->
+        {@const settledTrace = traceIsLiveTurn
+          ? null
+          : board.settledTracePages.page(
+              board.settledTracePages.keyFor(traceMsg.id, segment.segmentIndex),
+              traceParts
+            )}
+        {@const turnParts = settledTrace ? settledTrace.parts : traceParts}
         {@const segmentIsLast = segment.segmentIndex === segment.boundaries.length}
         {@const segmentBusy = traceIsLive && segmentIsLast}
         {@const segmentDone = segmentIsLast ? turnDone : true}
+        {@const liveTracePaging = isCurrentAssistantTurn && segmentIsLast}
         {@const segmentStartTime =
           segment.segmentIndex === 0
             ? isTraceTurnLatest
@@ -753,24 +770,26 @@
             rehydrated={traceIsRestored && segmentIsLast}
             foreignRun={traceRunIsForeign}
             active={board.props.active}
-            olderPartsAvailable={isCurrentAssistantTurn &&
-              segmentIsLast &&
-              board.pollStreamParts.streamTrace.hasOlder}
-            onLoadOlderParts={isCurrentAssistantTurn && segmentIsLast
+            olderPartsAvailable={liveTracePaging
+              ? board.pollStreamParts.streamTrace.hasOlder
+              : (settledTrace?.hasOlder ?? false)}
+            onLoadOlderParts={liveTracePaging
               ? board.pollStreamParts.loadOlderStreamParts
-              : undefined}
-            totalSteps={isCurrentAssistantTurn && segmentIsLast
+              : settledTrace?.hasOlder
+                ? () => board.settledTracePages.loadOlder(settledTrace.key, traceParts.length)
+                : undefined}
+            totalSteps={liveTracePaging
               ? board.pollStreamParts.streamTrace.totalSteps
-              : undefined}
-            turnSubagentParts={isCurrentAssistantTurn && segmentIsLast
+              : settledTrace?.totalSteps}
+            turnSubagentParts={liveTracePaging
               ? board.pollStreamParts.streamTrace.subagentParts
-              : undefined}
-            turnCompacted={isCurrentAssistantTurn && segmentIsLast
+              : settledTrace?.subagentParts}
+            turnCompacted={liveTracePaging
               ? board.pollStreamParts.streamTrace.turnCompacted
-              : undefined}
-            turnSpan={isCurrentAssistantTurn && segmentIsLast
+              : settledTrace?.compacted}
+            turnSpan={liveTracePaging
               ? board.pollStreamParts.streamTrace.turnSpan
-              : undefined}
+              : settledTrace?.span}
             startTime={segmentStartTime}
             modelLabel={useSegmentLiveAttribution
               ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.modelLabel
@@ -1056,7 +1075,7 @@
                               {part.speakerName} · {part.title}
                             </span>
                             <span class="line-clamp-2 block text-[0.75rem] text-foreground">
-                              {part.excerpt}
+                              {conversationQuoteExcerpt(part.excerpt)}
                             </span>
                           </span>
                         </button>

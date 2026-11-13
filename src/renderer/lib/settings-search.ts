@@ -350,7 +350,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'profile',
     group: 'data',
     title: 'Usage',
-    description: 'Local usage, cost, and model rankings.',
+    description: 'Local usage and cost by model, project, and period.',
     keywords: ['quota', 'usage', 'spend', 'activity'],
     icon: CioMessage
   },

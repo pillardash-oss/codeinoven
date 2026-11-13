@@ -18,7 +18,6 @@ import type {
   CheapModelRequest,
   CheapModelResult,
   GenerateTitleOptions,
-  GradeTurnOptions,
   HarnessAuthStatus,
   HarnessCapabilities,
   SendPromptOptions,
@@ -269,15 +268,6 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     )
   }
 
-  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    if (!(await this.auxiliaryTransportReady(options))) return null
-    return this.gradeTurnWithCandidates(
-      projectPath,
-      options,
-      options.candidates ?? (await this.cheapAnthropicCandidates(projectPath))
-    )
-  }
-
   async provideCheapModel(
     projectPath: string,
     request: CheapModelRequest
@@ -301,7 +291,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * authenticated transport.
    */
   private async auxiliaryTransportReady(
-    options: GenerateTitleOptions | GradeTurnOptions | CheapModelRequest
+    options: GenerateTitleOptions | CheapModelRequest
   ): Promise<boolean> {
     const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
     if (

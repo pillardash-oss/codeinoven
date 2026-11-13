@@ -161,8 +161,7 @@ export class ThreadManager {
       this.projectRepo,
       this.transcripts,
       (thread) => this.onDelete?.(thread),
-      (threads) => this.onDeleted?.(threads),
-      (projectId, threadIds) => this.onThreadsDeletedForRanking?.(projectId, threadIds)
+      (threads) => this.onDeleted?.(threads)
     )
     this.scopeThreads = new ThreadScopeThreadsService(
       this.threadRepo,
@@ -202,13 +201,6 @@ export class ThreadManager {
 
   /** Reads scope boards to keep pinned scopes outside the thread bucket. */
   private readonly scopeManager: ScopeManager
-
-  /**
-   * Set by the ChatEngine so deleting a thread closes its open ranking
-   * snapshot conversation for immediate grading before the thread foreign
-   * key is detached   deletion is the conversation close signal.
-   */
-  onThreadsDeletedForRanking?: (projectId: string, threadIds: string[]) => void
 
   /** Distinct harness ids used across a thread's session, newest first. */
   /** Distinct harness ids used across a thread's session, newest first. */

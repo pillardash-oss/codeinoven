@@ -47,8 +47,6 @@ import type { ConnectivityService } from '../../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../../system/heartbeat-scheduler-service'
 import type { AttachmentGrantRepo } from '../../database/repositories/attachment-grant-repo'
 import type { HarnessUsageRepo } from '../../database/repositories/harness-usage-repo'
-import type { ModelRankingRepo } from '../../database/repositories/model-ranking-repo'
-import type { ModelRankingSnapshotRepo } from '../../database/repositories/model-ranking-snapshot-repo'
 import type { NoteRepo } from '../../database/repositories/note-repo'
 import type { OrchestrationDispatchRepo } from '../../database/repositories/orchestration-dispatch-repo'
 import type { AssistantManager } from '../../../lib/engines/assistant-manager'
@@ -156,8 +154,6 @@ export type IpcChatEngine = Pick<
   | 'connectionRestored'
   | 'deleteThreadSession'
   | 'activeTurnChangeSummary'
-  | 'markTurnRankingUndone'
-  | 'clearTurnRankingUndone'
   | 'hasActiveProcessesInScope'
   | 'abort'
   | 'recordUserFileSave'
@@ -171,9 +167,6 @@ export type IpcChatEngine = Pick<
       | 'runVirtualTask'
       | 'setScopeToolService'
       | 'setAssignmentWorkerScopeProvisioner'
-      | 'gradeRankingQueueNow'
-      | 'cancelRankingGrade'
-      | 'rankingGradeRunStatus'
       | 'refreshSensitiveFilePermissions'
       | 'gitHeadCommit'
     >
@@ -229,9 +222,6 @@ export interface IpcHandlerContext {
   memoryService: MemoryService
   attachmentGrantRepo: AttachmentGrantRepo
   harnessUsageRepo: HarnessUsageRepo
-  modelRankingRepo: ModelRankingRepo
-  /** Transient grading queue behind the ranking aggregates, cleared with them. */
-  rankingSnapshotRepo: ModelRankingSnapshotRepo
   noteRepo: NoteRepo
   /** The dispatch ledger the orchestrator board reads. */
   orchestrationDispatchRepo: OrchestrationDispatchRepo

@@ -2,52 +2,17 @@ import { SvelteDate, SvelteMap } from 'svelte/reactivity'
 import { APP_LOCALE } from '$shared/date-time-format'
 import type {
   LocalProfileAnalytics,
-  LocalProfileModelRanking,
   LocalProfileUsageBreakdown,
   LocalProfileUsageHour
 } from '$shared/types'
 import {
   localDateKey,
-  rankingAggregate,
   type CalendarDay,
   type CalendarWeek,
-  type ModelRankMetric,
-  type RankingSortKey
+  type ModelRankMetric
 } from './profile-settings-format'
 
 const MONTH_FORMATTER = new Intl.DateTimeFormat(APP_LOCALE, { month: 'short' })
-
-export function rankingSortValue(
-  entry: LocalProfileModelRanking,
-  key: RankingSortKey
-): number | null {
-  if (key === 'aggregate') return rankingAggregate(entry)
-  const stats = key === 'one_shot' ? entry.oneShot : entry.multiShot
-  return stats.samples === 0 ? null : stats.averageScore
-}
-
-export function compareRankings(
-  left: LocalProfileModelRanking,
-  right: LocalProfileModelRanking,
-  key: RankingSortKey,
-  direction: 1 | -1
-): number {
-  const leftValue = rankingSortValue(left, key)
-  const rightValue = rankingSortValue(right, key)
-  // Unranked configurations (null) always sink below scored ones.
-  if (leftValue === null || rightValue === null) {
-    if (leftValue === rightValue) return right.updatedAt - left.updatedAt
-    return leftValue === null ? 1 : -1
-  }
-  const difference = (leftValue - rightValue) * direction
-  if (difference !== 0) return difference
-  const sampleDifference =
-    left.oneShot.samples +
-    left.multiShot.samples -
-    (right.oneShot.samples + right.multiShot.samples)
-  if (sampleDifference !== 0) return sampleDifference * -1
-  return right.updatedAt - left.updatedAt
-}
 
 export function buildCalendarWeeks(
   usage: LocalProfileAnalytics,

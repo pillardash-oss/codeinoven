@@ -447,21 +447,6 @@ export class ChatEngineMisc {
     })
   }
 
-  /**
-   * The moment the judge routes of one row reopen, or null while one lane can
-   * still judge it. A resolvable route with no window knowledge is treated as
-   * free, so a row is held back only when every existing route sits inside a
-   * window the provider itself reported closed.
-   */
-  blockedUntilOf(lando: ReadonlyArray<number | null | undefined>): number | null {
-    const closed = lando.filter(
-      (until): until is number => typeof until === 'number' && until < Number.POSITIVE_INFINITY
-    )
-    if (closed.length === 0) return null
-    if (lando.some((until) => until === null)) return null
-    return Math.min(...closed)
-  }
-
   /** Apply in-memory reasoning time stamps to loaded messages (populated during streaming). */
   applyReasoningStamps(sessionId: string, messages: AgentMessage[]): void {
     const sessionReasoning = this.host.state.reasoningTimes.get(sessionId)

@@ -41,7 +41,6 @@ export const defaultConfig: AppConfig = {
   design: { assignments: [] },
   modelProfiles: [],
   mediaGeneration: { providerId: null },
-  rankingJudge: { kind: 'automatic' },
   agentBehaviorPrompt: DEFAULT_AGENT_BEHAVIOR_PROMPT,
   autoDownloadUpdates: true,
   autoInstallUpdates: true,

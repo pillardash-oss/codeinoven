@@ -25,7 +25,6 @@ import { prependHistoryRecap } from './history-recap-prompt'
 import { attachmentReference } from './attachment-reference'
 import {
   type GenerateTitleOptions,
-  type GradeTurnOptions,
   type HarnessCapabilities,
   type IdleNativeSessionHandOffProbe,
   type IdleNativeSessionReleaseResult,
@@ -200,9 +199,6 @@ export class CodexDriver extends PersistentCliDriver {
   }
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     return this.units['usage'].generateTitle(projectPath, options)
-  }
-  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    return this.units['turns'].gradeTurn(projectPath, options)
   }
   async publishUtilityGatewayEndpoint(
     _projectPath: string,
@@ -488,11 +484,6 @@ export class CodexDriver extends PersistentCliDriver {
         options: GenerateTitleOptions,
         candidates: TitleModelCandidate[]
       ) => driver.generateTitleWithCandidates(projectPath, options, candidates),
-      gradeTurnWithCandidates: (
-        projectPath: string,
-        options: GradeTurnOptions,
-        candidates: TitleModelCandidate[]
-      ) => driver.gradeTurnWithCandidates(projectPath, options, candidates),
       get id() {
         return driver.id
       },
