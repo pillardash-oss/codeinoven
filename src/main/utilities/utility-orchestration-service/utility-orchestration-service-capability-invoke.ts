@@ -93,6 +93,7 @@ import {
   videoUtilityTools
 } from '../utility-orchestration/utility-gateway-scripts'
 import {
+  isRecord,
   optionalKinds,
   optionalNumber,
   optionalString,
@@ -716,9 +717,10 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
       throw new Error(`inputs carries at most ${UTILITY_INVOKE_BATCH_LIMIT} items per call`)
     // An empty `input` object is not "both": harness bridges serialize every
     // declared parameter, so a batch call can arrive carrying `input: {}` beside
-    // `inputs`. Only a non-empty `input` is a real conflict.
-    const single = recordValue(input['input'])
-    if (single && Object.keys(single).length > 0)
+    // `inputs`. Only a non-empty `input` is a real conflict, and an absent one
+    // must stay absent: probing it with the throwing helper fails every batch.
+    const single = input['input']
+    if (single !== undefined && (!isRecord(single) || Object.keys(single).length > 0))
       throw new Error('Pass either input or inputs, not both')
     const results: Array<{ ok: true; result: unknown } | { ok: false; error: string }> = []
     let next = 0
