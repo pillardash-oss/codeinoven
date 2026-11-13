@@ -718,12 +718,19 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
   aiAccountPromptVisible = $derived(this.aiAccountPromptOpen && !this.threadCanRunTurns)
 
   openSubagent(part: SubagentPart): void {
-    contextSidebarState.openSubagent(
-      this.root.handleAgentEvent.thread.projectId,
-      this.root.handleAgentEvent.thread.id,
-      part.id,
-      part.activity
-    )
+    const projectId = this.root.handleAgentEvent.thread.projectId
+    const threadId = this.root.handleAgentEvent.thread.id
+    contextSidebarState.openSubagent(projectId, threadId, part.id, part.activity)
+    if (part.activity.assignmentDraft) {
+      // Seed the panel with the work already received, so opening the card mid-run
+      // never starts blank just because the first trace event has been consumed.
+      contextSidebarState.updateSubagentDraftTrace(
+        projectId,
+        threadId,
+        part.id,
+        this.root.sources.assignmentGenerationTraceParts
+      )
+    }
   }
 
   isLatestTurnCompleted(): boolean {

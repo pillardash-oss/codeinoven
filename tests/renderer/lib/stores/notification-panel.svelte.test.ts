@@ -20,7 +20,10 @@ vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
 vi.mock('$lib/stores/assistants.svelte', () => ({ assistants: assistantStore }))
 
 import { APP_SLUG } from '$shared/brand'
-import { notificationMatchesSubFilter } from '$lib/stores/notification-panel.svelte'
+import {
+  backgroundRunNotificationKind,
+  notificationMatchesSubFilter
+} from '$lib/stores/notification-panel.svelte'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
 import type { Thread } from '$shared/types'
@@ -236,6 +239,19 @@ describe('the filters', () => {
 
     expect(panel.attentionBackgroundRuns.map((run) => run.runThreadId)).toEqual(['parked'])
     expect(panel.attentionCount).toBe(2)
+  })
+
+  it('never counts a still-running unattended run as attention', async () => {
+    const { assistants } = await import('$lib/stores/assistants.svelte')
+    const mocked = assistants as unknown as {
+      recentBackgroundRuns: Array<{ runThreadId: string; outcome?: string }>
+    }
+    mocked.recentBackgroundRuns = [{ runThreadId: 'running' }]
+
+    expect(backgroundRunNotificationKind(undefined)).toBe('working')
+    expect(panel.attentionBackgroundRuns).toEqual([])
+    expect(panel.attentionCount).toBe(0)
+    expect(panel.visibleBackgroundRuns.map((run) => run.runThreadId)).toEqual(['running'])
   })
 })
 
@@ -549,7 +565,7 @@ describe('attention summary for the view rail', () => {
   it('counts a missed scheduled fire and a parked unattended run as assistant attention', () => {
     assistantStore.missedRuns = [{ threadId: 'missed-1', assistantId: 'a1', dueAt: 10 }]
     assistantStore.recentBackgroundRuns = [
-      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: undefined }
+      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: 'parked' }
     ]
     expect(panel.attentionRailSummary('assistant')).toEqual({
       count: 2,
@@ -560,7 +576,7 @@ describe('attention summary for the view rail', () => {
 
   it('never counts the same parked run twice: its own notice already stands for it', () => {
     assistantStore.recentBackgroundRuns = [
-      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: undefined }
+      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: 'parked' }
     ]
     panel.add(
       payload('run-gate', {

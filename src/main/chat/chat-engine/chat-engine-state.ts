@@ -307,8 +307,32 @@ export class ChatEngineState {
   /** Concurrent late-Assignment requests for one coordinator share one model run. */
   activeAssignmentDraftRuns = new Map<string, Promise<AssignmentPlan>>()
 
+  /**
+   * Bumped whenever an Assignment draft's authority changes hands: an agent
+   * authored the content, the user stopped the run, or a newer formulation
+   * started. A background run compares the value it captured when it began, so a
+   * result that arrives after its authority was revoked is discarded instead of
+   * overwriting the draft the thread actually shows.
+   */
+  assignmentDraftRevisions = new Map<string, number>()
+
   /** The killable driver session currently drafting an Assignment, so Stop/Esc can reach it. */
   activeAssignmentDraftSessions = new Map<string, ActiveAssignmentDraftSession>()
+
+  /**
+   * The live session of a draft run that failed terminally.
+   *
+   * A retry continues this exact session instead of starting a fresh model run,
+   * so the agent keeps the context it already built. The entry is disposed on
+   * retry, on success, on a harness change, on Stop and at shutdown.
+   */
+  preservedAssignmentDraftSessions = new Map<string, ActiveAssignmentDraftSession>()
+
+  /** Parent-thread session a draft run reports its card into, so it stays live. */
+  assignmentDraftParentSessions = new Map<string, string>()
+
+  /** When the current draft run started, so its card keeps one honest start time. */
+  assignmentDraftStartedAt = new Map<string, number>()
 
   userAbortedAssignmentDraftOperations = new Set<string>()
 

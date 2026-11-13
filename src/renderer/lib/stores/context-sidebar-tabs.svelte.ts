@@ -35,7 +35,7 @@ import {
   type ThreadSidebarContext
 } from './context-sidebar-types'
 import { usesThreadWorkspaceMount } from '$shared/types'
-import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
+import type { AgentSubagentActivity, AgentPart, ThreadSettings } from '$shared/types'
 
 /**
  * Host access the tab-context controller needs from the sidebar store. The
@@ -1282,6 +1282,35 @@ export class SidebarTabContexts {
     if (context.activeTabIds.subagent === current.id) {
       context.activeTabIds.subagent = context.tabs[index].id
     }
+    context.tabs = [...context.tabs]
+  }
+
+  /**
+   * Keep the live work of an app-owned draft run on its own tab.
+   *
+   * The offshoot session has no provider-native transcript to load, so the trace
+   * the parent already receives is what the panel shows. Nothing accumulates for
+   * a tab nobody opened: the caller only updates tabs that exist.
+   */
+  updateSubagentDraftTrace(
+    projectId: string,
+    threadId: string,
+    partId: string,
+    trace: AgentPart[]
+  ): void {
+    const context = this.contextFor(projectId, threadId)
+    if (!context) return
+    const index = context.tabs.findIndex(
+      (tab) =>
+        tab.kind === 'subagent' &&
+        tab.projectId === projectId &&
+        tab.threadId === threadId &&
+        tab.sourcePartId === partId
+    )
+    if (index < 0) return
+    const current = context.tabs[index]
+    if (current.kind !== 'subagent') return
+    context.tabs[index] = { ...current, draftTrace: trace }
     context.tabs = [...context.tabs]
   }
 

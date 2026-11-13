@@ -73,7 +73,9 @@ import type {
   AgentCapabilitySource,
   AgentRunningProcess,
   TaskManagerSnapshot,
+  AssignmentDraftStart,
   AssignmentPlan,
+  AssignmentPlanContent,
   AuditGenerationRequest,
   AuditReport,
   BrainstormDocument,
@@ -1360,6 +1362,39 @@ export class ChatEngine {
       settings,
       instructions
     )
+  }
+  /** Start or join the thread's Assignment draft without waiting for it. */
+  async requestAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+    settings: ThreadSettings
+    instructions?: string
+    sessionId: string
+  }): Promise<AssignmentDraftStart> {
+    return this.units['assignment'].requestAssignmentDraft(input)
+  }
+  /** Persist a task graph the agent authored, cancelling the app's own generation. */
+  async submitAgentAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+    content: AssignmentPlanContent
+    sessionId: string
+    harnessId: string
+    providerId: string
+    modelId: string
+  }): Promise<AssignmentPlan> {
+    return this.units['assignment'].submitAgentAssignmentDraft(input)
+  }
+  /** A user Stop ends the draft run and leaves its card honest about it. */
+  stopAssignmentDraftRun(projectId: string, coordinatorThreadId: string): void {
+    this.units['assignment'].stopAssignmentDraftRun(projectId, coordinatorThreadId)
+  }
+  /** Retry a failed draft by continuing the session it preserved. */
+  async retryAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+  }): Promise<AssignmentDraftStart> {
+    return this.units['assignment'].retryAssignmentDraft(input)
   }
   async generateAudit(
     projectId: string,

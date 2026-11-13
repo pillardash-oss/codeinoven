@@ -306,6 +306,41 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
   assignmentGenerationTraceStartedAt = $state<number | undefined>()
 
   /**
+   * The message a failed Assignment draft left behind, shown as a card on the
+   * parent thread so the user can retry it there and change its model.
+   */
+  assignmentDraftError = $state('')
+
+  /** True while the retry of a failed draft is being started. */
+  assignmentDraftRetrying = $state(false)
+
+  /**
+   * Retry the failed draft by continuing its own session.
+   *
+   * The main process keeps the failed run's session, so this continues the work
+   * the user watched instead of paying for the same analysis again. The model is
+   * whatever the thread now says, so a model the user just picked is the one the
+   * retry runs on.
+   */
+  async retryAssignmentDraft(): Promise<void> {
+    if (this.assignmentDraftRetrying) return
+    this.assignmentDraftRetrying = true
+    try {
+      await invoke(
+        'agent:retryAssignmentDraft',
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )
+      this.assignmentDraftError = ''
+    } catch (error) {
+      this.assignmentDraftError =
+        error instanceof Error ? error.message : 'The Assignment draft could not be retried.'
+    } finally {
+      this.assignmentDraftRetrying = false
+    }
+  }
+
+  /**
    * The Engineering artifact a tool started that is still being generated, or
    * null when nothing is in flight. A tool call can take minutes before its
    * document exists, which is exactly the window where the studio has nothing

@@ -47,7 +47,23 @@
     /** What the app is doing before the harness streams, e.g. preparing a remote
      *  checkout or cloning a repository. */
     note?: string | null
+    /** What this trace is, in the header. Defaults to "Working Trace". A trace
+     *  that belongs to another session   an Assignment draft offshoot bubbled
+     *  up into its coordinator thread   names itself here, so it never reads as
+     *  a second copy of the turn's own trace above it. */
+    headerLabel?: string
     initialOpen?: boolean
+    /**
+     * This trace's fold state, when the caller already keeps it.
+     *
+     * The conversation keeps the fold for the live turn so the line underneath
+     * can say what is happening while the trace is closed, and it is the only
+     * way those two can never disagree: passing it makes the trace draw exactly
+     * this value, and every change goes back through `onToggle` instead of being
+     * applied here. Leave it undefined for a trace that owns its own fold, which
+     * is every other trace.
+     */
+    folded?: boolean
     initialUserOpened?: boolean
     /** True when the user explicitly folded this turn's trace. A folded trace
      *  stays folded   it is never force-opened by the busy state or a remount
@@ -153,7 +169,9 @@
     rehydrated = false,
     foreignRun = false,
     note = null,
+    headerLabel = 'Working Trace',
     initialOpen = false,
+    folded,
     initialUserOpened = false,
     initiallyFolded = false,
     startTime,
@@ -196,13 +214,18 @@
   // restart mid-turn leaves `done` false for a turn that is no longer working)
   //   mounts folded instead of staying expanded forever.
   // svelte-ignore state_referenced_locally
-  let isOpen = $state(
+  let localOpen = $state(
     initialUserOpened || (busy && !done && !initiallyFolded && (open || initialOpen))
   )
   // svelte-ignore state_referenced_locally
-  let userOpened = $state(initialUserOpened)
+  let localUserOpened = $state(initialUserOpened)
   // svelte-ignore state_referenced_locally
-  let userFolded = $state(initiallyFolded)
+  let localUserFolded = $state(initiallyFolded)
+  /** True when the caller owns the fold, so this trace only reflects it. */
+  const controlled = $derived(folded !== undefined)
+  const isOpen = $derived(controlled ? !folded : localOpen)
+  const userOpened = $derived(controlled ? initialUserOpened : localUserOpened)
+  const userFolded = $derived(controlled ? initiallyFolded : localUserFolded)
   /** True once this mount has carried live work. A trace that was live and is
    *  not any more has settled, whether or not the turn reported its completion.
    *  Plain, not reactive: only the run-state effect below reads it. */
@@ -421,8 +444,24 @@
 
   onDestroy(() => imageUrls.destroy())
 
-  function notify(): void {
-    onToggle?.(isOpen, userOpened, userFolded)
+  /** Request a fold-state change.
+   *
+   * A controlled trace reports it to the owner, which stores it and hands it
+   * straight back as `folded`; an uncontrolled trace keeps it here. Either way
+   * nothing else in this component writes the fold, so the state the reader sees
+   * and the state the owner knows about are one value. */
+  function setFold(nextOpen: boolean, nextUserOpened = userOpened, nextUserFolded = userFolded): void {
+    if (controlled) {
+      onToggle?.(nextOpen, nextUserOpened, nextUserFolded)
+      return
+    }
+    if (localOpen === nextOpen && localUserOpened === nextUserOpened && localUserFolded === nextUserFolded) {
+      return
+    }
+    localOpen = nextOpen
+    localUserOpened = nextUserOpened
+    localUserFolded = nextUserFolded
+    onToggle?.(nextOpen, nextUserOpened, nextUserFolded)
   }
 
   $effect(() => {
@@ -435,8 +474,7 @@
     if (busy) {
       sawLiveWork = true
       if (visibleParts.length > 0 && !isOpen && !userFolded && activity > openedAtActivity) {
-        isOpen = true
-        notify()
+        setFold(true)
       }
       return
     }
@@ -449,19 +487,16 @@
     // opened is left exactly as they left it.
     if ((done || sawLiveWork) && isOpen && !userOpened) {
       foldToHeader()
-      isOpen = false
+      setFold(false)
       openedAtActivity = activity
-      notify()
     }
   })
 
   function onSummaryClick(event: MouseEvent): void {
     event.preventDefault()
     if (isOpen) foldToHeader()
-    isOpen = !isOpen
-    userOpened = isOpen
-    userFolded = !isOpen
-    notify()
+    const nextOpen = !isOpen
+    setFold(nextOpen, nextOpen, !nextOpen)
   }
 
   let lastReasoningId = $derived.by((): string | null => {
@@ -549,6 +584,7 @@
       {activeSubagentCount}
       {subagentParts}
       {coarsePointer}
+      {headerLabel}
       title={subagentBadgeTitleText}
       label={subagentBadgeLabelText}
       elapsedFor={subagentElapsed}

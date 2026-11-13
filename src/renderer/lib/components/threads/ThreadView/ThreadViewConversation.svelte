@@ -547,6 +547,12 @@
             board.handleAgentEvent.thread.projectId,
             board.pollStreamParts.conversationId
           )}
+          folded={
+            !agentRuns.isTraceOpen(
+              board.handleAgentEvent.thread.projectId,
+              board.pollStreamParts.conversationId
+            )
+          }
           initialUserOpened={agentRuns.isTraceUserOpened(
             board.handleAgentEvent.thread.projectId,
             board.pollStreamParts.conversationId
@@ -796,6 +802,12 @@
                 board.handleAgentEvent.thread.projectId,
                 board.handleAgentEvent.thread.id
               )}
+            folded={isCurrentAssistantTurn
+              ? !agentRuns.isTraceOpen(
+                  board.handleAgentEvent.thread.projectId,
+                  board.handleAgentEvent.thread.id
+                )
+              : undefined}
             initialUserOpened={isCurrentAssistantTurn &&
               agentRuns.isTraceUserOpened(
                 board.handleAgentEvent.thread.projectId,
@@ -1778,10 +1790,12 @@
             {#if traceBusyForTurn}
               <TraceActivityLine
                 parts={board.pollStreamParts.latestTurnRenderableParts}
-                folded={!agentRuns.isTraceOpen(
-                  board.handleAgentEvent.thread.projectId,
-                  board.handleAgentEvent.thread.id
-                )}
+                folded={
+                  !agentRuns.isTraceOpen(
+                    board.handleAgentEvent.thread.projectId,
+                    board.pollStreamParts.conversationId
+                  )
+                }
                 onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
                 formatProse={conversationLiveProse}
               />
@@ -1798,17 +1812,7 @@
           open
           busy={board.switchProject.busy}
           startTime={board.sources.specGenerationTraceStartedAt}
-          projectId={board.handleAgentEvent.thread.projectId}
-          threadId={board.handleAgentEvent.thread.id}
-        />
-      {/if}
-
-      {#if board.sources.assignmentGenerationTraceActive && board.sources.assignmentGenerationTraceParts.length > 0}
-        <WorkingTrace
-          parts={board.sources.assignmentGenerationTraceParts}
-          open
-          busy={board.switchProject.busy}
-          startTime={board.sources.assignmentGenerationTraceStartedAt}
+          headerLabel="Spec draft"
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
         />
@@ -1831,12 +1835,17 @@
       {/if}
 
       {#if board.pollStreamParts.conversationBusy && !groupThread}
+        <!-- The line reports the work in progress whenever the trace is folded,
+             whoever folded it: the trace draws the fold state the run store
+             keeps, so this reads the same value it does. -->
         <TraceActivityLine
           parts={board.pollStreamParts.latestTurnRenderableParts}
-          folded={!agentRuns.isTraceOpen(
-            board.handleAgentEvent.thread.projectId,
-            board.handleAgentEvent.thread.id
-          )}
+          folded={
+            !agentRuns.isTraceOpen(
+              board.handleAgentEvent.thread.projectId,
+              board.pollStreamParts.conversationId
+            )
+          }
           onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
           formatProse={conversationLiveProse}
         />

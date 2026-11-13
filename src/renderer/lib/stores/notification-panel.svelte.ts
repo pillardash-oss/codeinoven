@@ -40,7 +40,14 @@ export type NotificationSourceFilter = 'all' | 'projects' | 'chats' | 'assistant
 
 export interface InAppNotification {
   id: string
-  kind: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
+  /**
+   * What the entry reports.
+   *
+   * `working` is the state of an unattended run that is still executing: it is on
+   * the panel because the user asked to see background work, but nothing is
+   * waiting on them, so it must never count as attention.
+   */
+  kind: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error' | 'working'
   title: string
   body: string
   projectId: string
@@ -117,14 +124,22 @@ export function notificationMatchesSubFilter(
 
 /**
  * Which sub-filter an unattended (background) run answers to: a finished run is
- * Done, and anything failed, still running or parked on the user is Attention.
+ * Done, a failure is an Attention entry, a run parked on a gate is Attention
+ * too, and a run still executing is working.
+ *
+ * A running run is deliberately not attention: nothing is waiting on the user
+ * while it executes, and classifying it as attention painted the rail amber for
+ * an assistant that was simply working (the run thread itself is the one that
+ * reports working). The panel row already labels that state "Running" with the
+ * working tone, so the filter matches the row it renders.
  */
 export function backgroundRunNotificationKind(
   outcome: BackgroundRunOutcome | undefined
 ): InAppNotification['kind'] {
   if (outcome === 'completed') return 'completed'
   if (outcome === 'failed') return 'error'
-  return 'attention'
+  if (outcome === 'parked') return 'attention'
+  return 'working'
 }
 
 /**
@@ -151,7 +166,8 @@ export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string>
   'chat-completed': 'var(--color-chat-success)',
   attention: 'var(--color-warning)',
   spec: 'var(--color-thread-spec)',
-  error: 'var(--color-danger)'
+  error: 'var(--color-danger)',
+  working: 'var(--color-thread-working)'
 }
 
 /**
@@ -164,7 +180,12 @@ export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string>
  * could not see. Only activity a source owns (a completion) is branded by the
  * space it came from.
  */
-const STATUS_KINDS: ReadonlySet<InAppNotification['kind']> = new Set(['attention', 'spec', 'error'])
+const STATUS_KINDS: ReadonlySet<InAppNotification['kind']> = new Set([
+  'attention',
+  'spec',
+  'error',
+  'working'
+])
 
 /** Newest first: a fresh notification leads its tab and older ones follow it. */
 function newestFirst(items: readonly InAppNotification[]): InAppNotification[] {

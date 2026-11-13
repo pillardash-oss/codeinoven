@@ -396,7 +396,8 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       )
     }),
     async execute(_toolCallId, params) {
-      const body = { utility_id: params.utility_id, force: params.force, inputs: params.inputs }
+      const body: Record<string, unknown> = { utility_id: params.utility_id, force: params.force }
+      if (params.inputs !== undefined) body.inputs = params.inputs
       const result = await callGateway(${JSON.stringify(activateTool.route)}, body)
       return textResult(result)
     }
@@ -418,12 +419,15 @@ export default function codeInOvenUtilityGatewayExtension(pi) {
       )
     }),
     async execute(_toolCallId, params) {
-      const result = await callGateway(${JSON.stringify(invokeTool.route)}, {
+      // Never send both shapes: a batch call carries inputs alone. Sending
+      // input alongside it (even as an empty object) is rejected as "both".
+      const body: Record<string, unknown> = {
         utility_id: params.utility_id,
-        operation: params.operation,
-        input: params.input ?? {},
-        inputs: params.inputs
-      })
+        operation: params.operation
+      }
+      if (params.inputs !== undefined) body.inputs = params.inputs
+      else body.input = params.input ?? {}
+      const result = await callGateway(${JSON.stringify(invokeTool.route)}, body)
       return textResult(result)
     }
   })

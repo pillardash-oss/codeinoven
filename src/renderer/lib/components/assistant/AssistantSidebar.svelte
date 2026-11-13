@@ -210,7 +210,15 @@
       ? (assistantTasks(assistant.id).find((task) => task.id === rememberedId) ??
         runsOfAssistant(assistant.id).find((run) => run.id === rememberedId))
       : undefined
-    const target = remembered ?? assistantTasks(assistant.id)[0]
+    const target =
+      remembered ??
+      assistantTasks(assistant.id)[0] ??
+      // An assistant can be left with no task on screen: its only task is the
+      // Getting started conversation, and folding that away archives it while
+      // every run it produced stays visible. A run is a thread the user can
+      // read, so the row opens the newest one instead of answering with the
+      // knowledge panel, which reads as the assistant refusing to open at all.
+      runsOfAssistant(assistant.id)[0]
     if (target) onOpenTask(target)
     else onOpenAssistantKnowledge(assistant)
   }

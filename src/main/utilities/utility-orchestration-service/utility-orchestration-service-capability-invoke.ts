@@ -93,6 +93,7 @@ import {
   videoUtilityTools
 } from '../utility-orchestration/utility-gateway-scripts'
 import {
+  isRecord,
   optionalKinds,
   optionalNumber,
   optionalString,
@@ -507,7 +508,8 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
       throw new Error('inputs must be a non-empty array of {utility_id} entries')
     if (batch.length > UTILITY_ACTIVATE_BATCH_LIMIT)
       throw new Error(`inputs carries at most ${UTILITY_ACTIVATE_BATCH_LIMIT} entries per call`)
-    if (input['utility_id'] !== undefined)
+    const singleId = input['utility_id']
+    if (typeof singleId === 'string' ? singleId.length > 0 : singleId !== undefined)
       throw new Error('Pass either utility_id or inputs, not both')
     const results: Array<{ ok: true; result: unknown } | { ok: false; error: string }> = []
     let next = 0
@@ -713,7 +715,13 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
       throw new Error('inputs must be a non-empty array of operation inputs')
     if (batch.length > UTILITY_INVOKE_BATCH_LIMIT)
       throw new Error(`inputs carries at most ${UTILITY_INVOKE_BATCH_LIMIT} items per call`)
-    if (input['input'] !== undefined) throw new Error('Pass either input or inputs, not both')
+    // An empty `input` object is not "both": harness bridges serialize every
+    // declared parameter, so a batch call can arrive carrying `input: {}` beside
+    // `inputs`. Only a non-empty `input` is a real conflict, and an absent one
+    // must stay absent: probing it with the throwing helper fails every batch.
+    const single = input['input']
+    if (single !== undefined && (!isRecord(single) || Object.keys(single).length > 0))
+      throw new Error('Pass either input or inputs, not both')
     const results: Array<{ ok: true; result: unknown } | { ok: false; error: string }> = []
     let next = 0
     const worker = async (): Promise<void> => {

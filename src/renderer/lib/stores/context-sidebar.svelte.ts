@@ -22,7 +22,12 @@ import {
   type TerminalPlacement,
   type ThreadNoteContextTab
 } from './context-sidebar-types'
-import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
+import {
+  conversationScopeId,
+  type AgentPart,
+  type AgentSubagentActivity,
+  type ThreadSettings
+} from '$shared/types'
 import type { DisplayTarget } from './context-sidebar-tabs.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 
@@ -1118,6 +1123,16 @@ class ContextSidebarState {
     activity: AgentSubagentActivity
   ): void {
     this.tabContexts.updateSubagent(projectId, threadId, partId, activity)
+  }
+
+  /** Keep the app-owned draft run's live work on its already-open tab. */
+  updateSubagentDraftTrace(
+    projectId: string,
+    threadId: string,
+    partId: string,
+    trace: AgentPart[]
+  ): void {
+    this.tabContexts.updateSubagentDraftTrace(projectId, threadId, partId, trace)
   }
 
   focus(id: string): void {

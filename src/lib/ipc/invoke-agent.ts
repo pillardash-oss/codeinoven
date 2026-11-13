@@ -10,6 +10,7 @@ import type {
   AgentSecretDraft,
   AgentSessionStatus,
   AgentToolCatalog,
+  AssignmentDraftStart,
   AssignmentPlan,
   AttachmentStorageScope,
   AuditGenerationRequest,
@@ -188,7 +189,9 @@ export const invokeAgentContract = {
     { report: AuditReport; auditorThread: Thread }
   >,
   /** `instructions` carries the user's own request when no Spec exists, so the
-   *  Assignment is decomposed from the message that triggered it. */
+   *  Assignment is decomposed from the message that triggered it. The call answers
+   *  as soon as the draft is either already there or building in the background;
+   *  the outcome arrives as `assignment.ready` or `assignment.failed`. */
   'agent:generateAssignmentDraft': {} as Contract<
     [
       projectId: string,
@@ -196,7 +199,12 @@ export const invokeAgentContract = {
       settings: ThreadSettings,
       instructions?: string
     ],
-    AssignmentPlan
+    AssignmentDraftStart
+  >,
+  /** Continue the failed draft's own session: the retry keeps its context. */
+  'agent:retryAssignmentDraft': {} as Contract<
+    [projectId: string, coordinatorThreadId: string],
+    AssignmentDraftStart
   >,
   'agent:ensureAchievementScope': {} as Contract<
     [projectId: string, coordinatorThreadId: string],

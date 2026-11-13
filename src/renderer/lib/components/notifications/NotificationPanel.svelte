@@ -422,6 +422,8 @@
         return 'Spec ready'
       case 'error':
         return 'Error'
+      case 'working':
+        return 'Working'
     }
   }
 
