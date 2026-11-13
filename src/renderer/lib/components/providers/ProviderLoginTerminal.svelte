@@ -1,11 +1,12 @@
 <script lang="ts">
   import { loadTerminalFontFamily } from '$lib/app-typography'
-  import type { ITheme, Terminal } from 'ghostty-web'
+  import type { Terminal } from 'ghostty-web'
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { TerminalCursorController } from '$lib/terminal/cursor-visibility'
   import { patchSelectionCopy } from '$lib/terminal/selection-copy'
   import { registerTerminalHost } from '$lib/terminal/host-registry'
   import { loadGhosttyWeb } from '$lib/terminal/runtime'
+  import { terminalThemeFromTokens } from '$lib/terminal/theme'
   import type { Attachment } from 'svelte/attachments'
 
   interface Props {
@@ -40,36 +41,6 @@
   let printed = ''
   const PRINTED_LIMIT = 8_000
 
-  function readThemeColor(styles: CSSStyleDeclaration, token: string): string {
-    return styles.getPropertyValue(token).trim()
-  }
-
-  function terminalTheme(): ITheme {
-    const styles = getComputedStyle(document.documentElement)
-    return {
-      background: readThemeColor(styles, '--color-terminal-background'),
-      foreground: readThemeColor(styles, '--color-terminal-foreground'),
-      cursor: readThemeColor(styles, '--color-terminal-cursor'),
-      selectionBackground: readThemeColor(styles, '--color-terminal-selection'),
-      black: readThemeColor(styles, '--color-terminal-black'),
-      red: readThemeColor(styles, '--color-terminal-red'),
-      green: readThemeColor(styles, '--color-terminal-green'),
-      yellow: readThemeColor(styles, '--color-terminal-yellow'),
-      blue: readThemeColor(styles, '--color-terminal-blue'),
-      magenta: readThemeColor(styles, '--color-terminal-magenta'),
-      cyan: readThemeColor(styles, '--color-terminal-cyan'),
-      white: readThemeColor(styles, '--color-terminal-white'),
-      brightBlack: readThemeColor(styles, '--color-terminal-bright-black'),
-      brightRed: readThemeColor(styles, '--color-terminal-bright-red'),
-      brightGreen: readThemeColor(styles, '--color-terminal-bright-green'),
-      brightYellow: readThemeColor(styles, '--color-terminal-bright-yellow'),
-      brightBlue: readThemeColor(styles, '--color-terminal-bright-blue'),
-      brightMagenta: readThemeColor(styles, '--color-terminal-bright-magenta'),
-      brightCyan: readThemeColor(styles, '--color-terminal-bright-cyan'),
-      brightWhite: readThemeColor(styles, '--color-terminal-bright-white')
-    }
-  }
-
   let term: Terminal | undefined
   const unsubs: Array<() => void> = []
 
@@ -90,7 +61,7 @@
         fontFamily,
         scrollback: 5000,
         smoothScrollDuration: 80,
-        theme: terminalTheme()
+        theme: terminalThemeFromTokens()
       })
       const fit = new ghosttyWeb.FitAddon()
       terminal.loadAddon(fit)
