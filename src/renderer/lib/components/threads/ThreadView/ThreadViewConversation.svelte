@@ -1798,6 +1798,7 @@
           open
           busy={board.switchProject.busy}
           startTime={board.sources.specGenerationTraceStartedAt}
+          headerLabel="Spec draft"
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
         />
@@ -1809,6 +1810,7 @@
           open
           busy={board.switchProject.busy}
           startTime={board.sources.assignmentGenerationTraceStartedAt}
+          headerLabel="Assignment draft"
           projectId={board.handleAgentEvent.thread.projectId}
           threadId={board.handleAgentEvent.thread.id}
         />

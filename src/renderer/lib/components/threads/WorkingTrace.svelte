@@ -47,6 +47,11 @@
     /** What the app is doing before the harness streams, e.g. preparing a remote
      *  checkout or cloning a repository. */
     note?: string | null
+    /** What this trace is, in the header. Defaults to "Working Trace". A trace
+     *  that belongs to another session   an Assignment draft offshoot bubbled
+     *  up into its coordinator thread   names itself here, so it never reads as
+     *  a second copy of the turn's own trace above it. */
+    headerLabel?: string
     initialOpen?: boolean
     initialUserOpened?: boolean
     /** True when the user explicitly folded this turn's trace. A folded trace
@@ -153,6 +158,7 @@
     rehydrated = false,
     foreignRun = false,
     note = null,
+    headerLabel = 'Working Trace',
     initialOpen = false,
     initialUserOpened = false,
     initiallyFolded = false,
@@ -549,6 +555,7 @@
       {activeSubagentCount}
       {subagentParts}
       {coarsePointer}
+      {headerLabel}
       title={subagentBadgeTitleText}
       label={subagentBadgeLabelText}
       elapsedFor={subagentElapsed}
