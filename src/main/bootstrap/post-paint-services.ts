@@ -39,7 +39,8 @@ import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import {
   prepareCheckpointIndexes,
-  runOneTimeCheckpointRepairs
+  runOneTimeCheckpointRepairs,
+  trimHistoricalCheckpointMapsOnLaunch
 } from '../storage/checkpoint/checkpoint-startup-maintenance'
 import { Logger } from '../system/logger'
 import { resolveAutoAnswerScope } from '../system/auto-answer-scope'
@@ -1752,6 +1753,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         // Legacy checkpoint repairs, in order on the database worker. A pass that
         // has already finished is skipped instead of rescanning every checkpoint.
         await runOneTimeCheckpointRepairs(database)
+        // Six workers writing checkpoints made this table hundreds of megabytes
+        // of project-wide file maps that no reader needs once a turn is old,
+        // which is what slowed every database read until the app stalled. It is
+        // bounded per launch and yields between batches.
+        await trimHistoricalCheckpointMapsOnLaunch(database)
       },
       async () => {
         try {

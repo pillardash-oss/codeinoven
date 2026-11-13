@@ -69,6 +69,37 @@
       ['attention', 'failed', 'stopped'].includes(task.status)
     ).length
   )
+
+  /** Which group of tasks the list below the meters shows. */
+  type TaskStatusFilter = 'all' | 'done' | 'active' | 'blocked' | 'pending' | 'attention'
+
+  /** The status meter the user last picked; `all` shows every task. */
+  let taskFilter = $state<TaskStatusFilter>('all')
+
+  const FILTER_STATUSES: Readonly<Record<Exclude<TaskStatusFilter, 'all'>, readonly string[]>> = {
+    done: ['completed'],
+    active: ['running', 'reported', 'auditing', 'rework'],
+    blocked: ['blocked'],
+    pending: ['planned', 'ready'],
+    attention: ['attention', 'failed', 'stopped']
+  }
+
+  function matchesFilter(status: AssignmentTaskStatus, filter: TaskStatusFilter): boolean {
+    if (filter === 'all') return true
+    return FILTER_STATUSES[filter].includes(status)
+  }
+
+  /** Tasks in the order the graph declares them, numbered by that order. */
+  const visibleTasks = $derived(
+    assignment.content.tasks
+      .map((task, index) => ({ task, index }))
+      .filter((entry) => matchesFilter(entry.task.status, taskFilter))
+  )
+
+  /** Toggle one meter as the list filter; picking it again restores every task. */
+  function toggleFilter(filter: Exclude<TaskStatusFilter, 'all'>): void {
+    taskFilter = taskFilter === filter ? 'all' : filter
+  }
   const progress = $derived(
     assignment.content.tasks.length === 0
       ? 0
@@ -317,27 +348,77 @@
       <div class="mt-3 h-1.5 overflow-hidden bg-elevated">
         <div class="h-full bg-primary transition-[width]" style:width={`${progress}%`}></div>
       </div>
-      <div class="mt-3 grid grid-cols-5 gap-1 text-center">
-        <div>
+      <div class="mt-3 grid grid-cols-5 gap-1 text-center" aria-label="Filter tasks by status">
+        <button
+          type="button"
+          class="border px-1 py-1 transition-colors hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border {taskFilter ===
+          'done'
+            ? 'border-success/40 bg-success/10'
+            : 'border-transparent'}"
+          title="Show only completed tasks"
+          aria-label="Show only completed tasks"
+          aria-pressed={taskFilter === 'done'}
+          onclick={() => toggleFilter('done')}
+        >
           <p class="text-sm font-semibold tabular-nums text-success">{completed}</p>
           <p class="text-[0.5625rem] uppercase text-dimmed">Done</p>
-        </div>
-        <div>
+        </button>
+        <button
+          type="button"
+          class="border px-1 py-1 transition-colors hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border {taskFilter ===
+          'active'
+            ? 'border-info/40 bg-info/10'
+            : 'border-transparent'}"
+          title="Show only tasks that are working now"
+          aria-label="Show only tasks that are working now"
+          aria-pressed={taskFilter === 'active'}
+          onclick={() => toggleFilter('active')}
+        >
           <p class="text-sm font-semibold tabular-nums text-info">{running}</p>
           <p class="text-[0.5625rem] uppercase text-dimmed">Active</p>
-        </div>
-        <div>
+        </button>
+        <button
+          type="button"
+          class="border px-1 py-1 transition-colors hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border {taskFilter ===
+          'blocked'
+            ? 'border-warning/40 bg-warning/10'
+            : 'border-transparent'}"
+          title="Show only blocked tasks"
+          aria-label="Show only blocked tasks"
+          aria-pressed={taskFilter === 'blocked'}
+          onclick={() => toggleFilter('blocked')}
+        >
           <p class="text-sm font-semibold tabular-nums text-warning">{blocked}</p>
           <p class="text-[0.5625rem] uppercase text-dimmed">Blocked</p>
-        </div>
-        <div>
+        </button>
+        <button
+          type="button"
+          class="border px-1 py-1 transition-colors hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border {taskFilter ===
+          'pending'
+            ? 'border-border bg-elevated'
+            : 'border-transparent'}"
+          title="Show only tasks that have not started"
+          aria-label="Show only tasks that have not started"
+          aria-pressed={taskFilter === 'pending'}
+          onclick={() => toggleFilter('pending')}
+        >
           <p class="text-sm font-semibold tabular-nums text-muted">{pending}</p>
           <p class="text-[0.5625rem] uppercase text-dimmed">Pending</p>
-        </div>
-        <div>
+        </button>
+        <button
+          type="button"
+          class="border px-1 py-1 transition-colors hover:bg-elevated focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-border {taskFilter ===
+          'attention'
+            ? 'border-danger/40 bg-danger/10'
+            : 'border-transparent'}"
+          title="Show only tasks that need attention"
+          aria-label="Show only tasks that need attention"
+          aria-pressed={taskFilter === 'attention'}
+          onclick={() => toggleFilter('attention')}
+        >
           <p class="text-sm font-semibold tabular-nums text-danger">{attention}</p>
           <p class="text-[0.5625rem] uppercase text-dimmed">Attention</p>
-        </div>
+        </button>
       </div>
     </section>
 
@@ -384,7 +465,20 @@
 
     <section class="p-4" aria-label="Assignment tasks">
       <div class="flex items-baseline justify-between gap-2 pb-2">
-        <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
+        <div class="flex items-baseline gap-2">
+          <h3 class="text-[0.625rem] font-semibold uppercase tracking-wide text-dimmed">Tasks</h3>
+          {#if taskFilter !== 'all'}
+            <button
+              type="button"
+              class="text-[0.5625rem] font-semibold uppercase tracking-wide text-muted hover:text-foreground"
+              title="Show every task again"
+              aria-label="Show every task again"
+              onclick={() => (taskFilter = 'all')}
+            >
+              {visibleTasks.length} shown · clear
+            </button>
+          {/if}
+        </div>
         <CoordinatorRunTimer
           startedAt={runStartedAt}
           endedAt={runEndedAt}
@@ -393,7 +487,7 @@
         />
       </div>
       <div class="space-y-1">
-        {#each assignment.content.tasks as task, taskIndex (task.id)}
+        {#each visibleTasks as { task, index: taskIndex } (task.id)}
           {@const linkedWorker = linkedThread(task.threadId)}
           {@const active = task.threadId === selectedThreadId}
           {@const reworkCycle = taskReworkCycle(task)}

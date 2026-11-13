@@ -44,6 +44,7 @@ import {
   repairEvidenceDroppedCheckpoints,
   repairMisattributedInternalCheckpoints,
   repairTruncatedLineStats,
+  trimHistoricalCheckpointMaps,
   type CheckpointMaintenanceHost
 } from './checkpoint/checkpoint-maintenance'
 import { repairCheckpointChanges, toTurnCheckpointSummary } from './checkpoint/checkpoint-summary'
@@ -1189,6 +1190,14 @@ export class CheckpointManager {
 
   async repairTruncatedLineStats(): Promise<number> {
     return repairTruncatedLineStats(this.maintenanceHost())
+  }
+
+  /**
+   * Drop whole-project file maps from a thread's older checkpoints, which is what
+   * keeps the checkpoint table from bloating the database into unresponsiveness.
+   */
+  async trimHistoricalCheckpointMaps(): Promise<number> {
+    return trimHistoricalCheckpointMaps(this.maintenanceHost())
   }
 
   async repairMisattributedInternalCheckpoints(): Promise<number> {

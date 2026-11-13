@@ -2,7 +2,11 @@ import { mkdir, readdir, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { getConfigRoot, generateId } from '../../../lib/utils'
 import { Logger } from '../../system/logger'
-import type { ChangeTrackingService } from '../../git/change-tracking-service'
+import type {
+  ChangeTrackingService,
+  CheckpointFile,
+  ProjectCheckpoint
+} from '../../git/change-tracking-service'
 import { assertId } from './checkpoint-errors'
 import { isMissing } from './checkpoint-blob-store'
 import { EXCLUDED_DIRECTORY_NAMES, isExcludedRelativePath } from '../../git/change-tracking-service'
@@ -542,4 +546,104 @@ export async function pruneUnusedBlobs(
     }
     return deleted
   })
+}
+
+/**
+ * How many of a thread's newest checkpoints keep their full project maps.
+ *
+ * The newest checkpoint's `after` map is the diff baseline for the next turn, and
+ * the last few are what a user opens and rolls back. Everything older only needs
+ * its own changed paths, which the `changes` array already names.
+ */
+const HISTORICAL_MAP_KEEP_PER_THREAD = 2
+
+/** Only rows this large can still be carrying whole-project maps worth dropping. */
+const HISTORICAL_MAP_MIN_ROW_BYTES = 60_000
+
+/** Rows one pass rewrites, so the database worker stays responsive. */
+const HISTORICAL_MAP_BATCH = 40
+
+/**
+ * Drop whole-project file maps from a thread's older checkpoints.
+ *
+ * A turn with no changes keeps both of its full project maps (that is deliberate:
+ * an empty checkpoint is the legacy recovery record and the next diff reads the
+ * map). Six agents exploring a repository therefore wrote hundreds of kilobytes
+ * per turn, and `turn_checkpoints` grew to hundreds of megabytes, which is what
+ * made every read and write on the database slow enough to stall the app.
+ *
+ * The newest checkpoints of each thread are untouched, so the diff baseline and
+ * recent rollbacks are intact. Older rows keep every field that describes the
+ * turn (changes, line stats, breakdown, timestamps) and the map entries for the
+ * paths they actually changed; only the unchanged project-wide entries go.
+ * Returns how many rows were rewritten.
+ */
+export async function trimHistoricalCheckpointMaps(
+  host: CheckpointMaintenanceHost
+): Promise<number> {
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await host.queryRowsStrict(
+      `SELECT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
+         FROM turn_checkpoints tc
+        WHERE length(tc.data) > ?
+          AND tc.turn_id NOT IN (
+            SELECT recent.turn_id FROM turn_checkpoints recent
+             WHERE recent.project_id = tc.project_id AND recent.thread_id = tc.thread_id
+             ORDER BY recent.created_at DESC
+             LIMIT ?
+          )
+        ORDER BY length(tc.data) DESC
+        LIMIT ?`,
+      [HISTORICAL_MAP_MIN_ROW_BYTES, HISTORICAL_MAP_KEEP_PER_THREAD, HISTORICAL_MAP_BATCH],
+      HISTORICAL_MAP_BATCH
+    )
+  } catch (error) {
+    Logger.info('Historical checkpoint maps could not be listed (non-fatal):', error)
+    return 0
+  }
+  let trimmed = 0
+  for (const row of rows) {
+    const turnId = row['turn_id']
+    const projectId = row['project_id']
+    const threadId = row['thread_id']
+    if (
+      typeof turnId !== 'string' ||
+      typeof projectId !== 'string' ||
+      typeof threadId !== 'string'
+    ) {
+      continue
+    }
+    try {
+      const checkpoint = await host.get(projectId, threadId, turnId)
+      if (!checkpoint) continue
+      const paths = new Set(checkpoint.changes.map((change) => change.path))
+      const trimFiles = (snapshot: ProjectCheckpoint): ProjectCheckpoint => {
+        const files: Record<string, CheckpointFile> = {}
+        for (const path of paths) {
+          const file = snapshot.files[path]
+          if (file) files[path] = file
+        }
+        return { ...snapshot, files }
+      }
+      const next: TurnCheckpoint = {
+        ...checkpoint,
+        before: trimFiles(checkpoint.before),
+        ...(checkpoint.after ? { after: trimFiles(checkpoint.after) } : {})
+      }
+      // Only write when the row actually shrinks: an old checkpoint whose maps
+      // were already trimmed must never be rewritten for nothing.
+      const beforeEntries = Object.keys(checkpoint.before.files).length
+      const afterEntries = Object.keys(next.before.files).length
+      if (beforeEntries === afterEntries) continue
+      await host.save(next)
+      trimmed += 1
+    } catch (error) {
+      Logger.info('Historical checkpoint map could not be trimmed (non-fatal):', {
+        turnId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+  return trimmed
 }

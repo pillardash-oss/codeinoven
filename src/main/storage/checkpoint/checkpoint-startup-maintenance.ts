@@ -130,3 +130,28 @@ export async function runOneTimeCheckpointRepairs(database: Database): Promise<v
     }
   }
 }
+
+/** Most rows one launch rewrites while trimming historical checkpoint maps. */
+const HISTORICAL_MAP_PASSES_PER_LAUNCH = 6
+
+/**
+ * Shrink the checkpoint table without holding the launch.
+ *
+ * Each pass rewrites a bounded batch and yields between passes, so the database
+ * worker stays free for the reads the window needs. A large backlog drains over a
+ * few launches instead of blocking this one.
+ */
+export async function trimHistoricalCheckpointMapsOnLaunch(database: Database): Promise<number> {
+  const manager = new CheckpointManager(database)
+  let total = 0
+  for (let pass = 0; pass < HISTORICAL_MAP_PASSES_PER_LAUNCH; pass += 1) {
+    const trimmed = await manager.trimHistoricalCheckpointMaps()
+    total += trimmed
+    if (trimmed === 0) break
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  if (total > 0) {
+    Logger.info('Trimmed historical checkpoint maps', { rows: total })
+  }
+  return total
+}
