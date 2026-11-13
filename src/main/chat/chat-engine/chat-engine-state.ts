@@ -486,8 +486,12 @@ export class ChatEngineState {
   /** Serializes durable child-to-coordinator queue reads and writes per Sr. Engineer thread. */
   readonly coordinatorHandoffQueueLocks = new Map<string, Promise<void>>()
 
-  /** Prevents concurrent idle signals from dispatching the same queued handoff twice. */
-  readonly coordinatorHandoffDrains = new Map<string, Promise<void>>()
+  /**
+   * Prevents concurrent idle signals from dispatching the same queued handoff
+   * twice. It resolves to whether that drain delivered a handoff, so the idle
+   * finalization can tell a delivered handoff from an empty queue.
+   */
+  readonly coordinatorHandoffDrains = new Map<string, Promise<boolean>>()
 
   /** Identifies the one queued handoff currently being delivered through sendPrompt. */
   readonly dispatchingCoordinatorHandoffIds = new Set<string>()

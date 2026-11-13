@@ -352,24 +352,24 @@ export class ChatEngineAssignment {
     })
   }
 
-  async drainCoordinatorHandoffQueue(projectId: string, threadId: string): Promise<void> {
+  async drainCoordinatorHandoffQueue(projectId: string, threadId: string): Promise<boolean> {
     const key = coordinatorHandoffQueueKey(projectId, threadId)
     const active = this.host.state.coordinatorHandoffDrains.get(key)
     if (active) return active
-    const drain = (async () => {
+    const drain = (async (): Promise<boolean> => {
       const queue = await this.withCoordinatorHandoffQueueLock(projectId, threadId, () =>
         this.readCoordinatorHandoffQueue(projectId, threadId)
       )
       const next = queue.items[0]
-      if (!next) return
+      if (!next) return false
       const thread = await this.host.threadManager.getThread(projectId, threadId)
       if (!thread || !isCoordinatorThread(thread)) {
         await this.host.storage.remove(coordinatorHandoffQueuePath(projectId, threadId))
-        return
+        return false
       }
       const status = thread.sessionId ? this.host.sessionStatuses.get(thread.sessionId) : undefined
       if (status?.state === 'working' || status?.state === 'waiting' || status?.state === 'error') {
-        return
+        return false
       }
       this.host.state.dispatchingCoordinatorHandoffIds.add(next.id)
       try {
@@ -388,9 +388,25 @@ export class ChatEngineAssignment {
           next.presentation,
           next.taskReferences
         )
+        // A delivered handoff leaves the queue. Without this the same first
+        // item is re-dispatched by every later drain (a session idle signal, a
+        // new internal prompt), so the coordinator answers one handed-off
+        // message twice and the queue can never advance past its first entry.
+        await this.withCoordinatorHandoffQueueLock(projectId, threadId, async () => {
+          const latest = await this.readCoordinatorHandoffQueue(projectId, threadId)
+          const remaining = latest.items.filter((item) => item.id !== next.id)
+          if (remaining.length === latest.items.length) return
+          const path = coordinatorHandoffQueuePath(projectId, threadId)
+          if (remaining.length === 0) {
+            await this.host.storage.remove(path)
+            return
+          }
+          await this.host.storage.write(path, { ...latest, items: remaining })
+        })
       } finally {
         this.host.state.dispatchingCoordinatorHandoffIds.delete(next.id)
       }
+      return true
     })().finally(() => {
       if (this.host.state.coordinatorHandoffDrains.get(key) === drain) {
         this.host.state.coordinatorHandoffDrains.delete(key)
