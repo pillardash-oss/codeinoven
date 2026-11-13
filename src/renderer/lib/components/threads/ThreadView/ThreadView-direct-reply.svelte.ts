@@ -1,3 +1,4 @@
+import { tick } from 'svelte'
 import { invoke } from '$lib/ipc.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
 import type {
@@ -36,6 +37,10 @@ export class ThreadViewDirectReply extends BoardUnit<ThreadView> {
   attach(target: DirectReplyTarget): void {
     this.target = target
     this.error = ''
+    // Attaching a quote is the user saying what they want to answer, so the
+    // words are next: the composer takes the caret instead of the reply control
+    // keeping it, which left the reader typing into a focused icon button.
+    void tick().then(() => this.root.state.composer?.focusComposerAtSavedCaret())
   }
 
   /** Detach the conversation, so the next message goes to the open one again. */
@@ -84,7 +89,11 @@ export class ThreadViewDirectReply extends BoardUnit<ThreadView> {
 
   /** Scroll the conversation to the reply that was answered, and mark it. */
   async reveal(messageId: string): Promise<void> {
-    await this.root.loadOlderMessages.scrollToMessageSection(messageId, '')
+    // A quoted reply is usually far outside the mounted window, and asking the
+    // transcript for it through the jump path is what loads the window around it
+    // and detaches the live tail: without that detach the smooth scroll was
+    // pulled straight back to the latest message, so the quote looked inert.
+    await this.root.loadOlderMessages.jumpToMessage(messageId)
     const element = document.getElementById(`msg-${messageId}`)
     if (!element) return
     // The quote is a link back to the words it answered, so the reply lands on
