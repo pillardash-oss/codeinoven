@@ -685,8 +685,21 @@ export class ChatEngineAssignment {
     }
   }
 
-  async assignmentNeedsCoordinatorTurn(assignment: AssignmentPlan): Promise<boolean> {
-    const immediatelyActionable = assignment.content.tasks.some(
+  /**
+   * Whether any task genuinely needs the coordinator to act on this turn: a
+   * task waiting to be assigned, a report or an attention state to review, a
+   * failed task to re-dispatch, or a Sr. Engineer task the coordinator runs
+   * itself.
+   *
+   * Every other status is either app-owned or waiting on something the app will
+   * announce, so it is not a reason to spend a coordinator turn. `blocked`
+   * becomes `ready` through `unblockDependentTasks` when its dependencies
+   * complete, `auditing` belongs to the audit cycle, and a worker task that is
+   * `running` is handed over by the report, unreported-completion and
+   * recovered-worker paths the moment it stops running.
+   */
+  assignmentHasActionableTask(assignment: AssignmentPlan): boolean {
+    return assignment.content.tasks.some(
       (task) =>
         task.status === 'ready' ||
         task.status === 'rework' ||
@@ -695,29 +708,38 @@ export class ChatEngineAssignment {
         task.status === 'failed' ||
         (task.owner === 'senior' && task.status === 'running')
     )
-    if (immediatelyActionable) return true
+  }
 
+  /**
+   * The wake gate for an automatic coordinator turn.
+   *
+   * It used to fall through to "some task is not completed", so an Assignment
+   * whose only remaining work was workers still running woke the coordinator
+   * after every turn, and each wake re-read the whole thread to conclude that
+   * nothing had changed. Only an actionable task, or a worker that stopped
+   * running without reporting, is a reason to wake coordination; the app
+   * announces both.
+   */
+  async assignmentNeedsCoordinatorTurn(assignment: AssignmentPlan): Promise<boolean> {
+    if (this.assignmentHasActionableTask(assignment)) return true
     const runningWorkers = assignment.content.tasks.filter(
       (task) => task.owner === 'worker' && task.status === 'running'
     )
-    if (runningWorkers.length > 0) {
-      const workers = await Promise.all(
-        runningWorkers.map((task) =>
-          task.threadId
-            ? this.host.threadManager.getThread(assignment.projectId, task.threadId)
-            : Promise.resolve(null)
-        )
+    if (runningWorkers.length === 0) return false
+    const workers = await Promise.all(
+      runningWorkers.map((task) =>
+        task.threadId
+          ? this.host.threadManager.getThread(assignment.projectId, task.threadId)
+          : Promise.resolve(null)
       )
-      return workers.some(
-        (worker) =>
-          !worker ||
-          (worker.status !== 'created' &&
-            worker.status !== 'planning' &&
-            worker.status !== 'executing')
-      )
-    }
-
-    return assignment.content.tasks.some((task) => task.status !== 'completed')
+    )
+    return workers.some(
+      (worker) =>
+        !worker ||
+        (worker.status !== 'created' &&
+          worker.status !== 'planning' &&
+          worker.status !== 'executing')
+    )
   }
 
   /**
@@ -810,9 +832,28 @@ export class ChatEngineAssignment {
    * actionable task state.
    */
   async coordinatorContinuationPrompt(assignment: AssignmentPlan): Promise<string> {
-    const actionableTasks = assignment.content.tasks.filter(
-      (task) => task.status !== 'completed' && task.status !== 'blocked'
-    )
+    // The state line carries what the coordinator decides on, not what it
+    // already read: task definitions (prompt, description, checklist) live in
+    // the brief in its own conversation, and repeating them here made every
+    // wake a 44k-character message that was re-cached on each call.
+    const actionableTasks = assignment.content.tasks
+      .filter((task) => task.status !== 'completed' && task.status !== 'blocked')
+      .map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        owner: task.owner,
+        workerName: task.workerName ?? null,
+        threadId: task.threadId ?? null,
+        report: task.report
+          ? {
+              status: task.report.status,
+              summary: task.report.summary,
+              commitHash: task.report.commitHash ?? null
+            }
+          : null,
+        review: task.review ? { decision: task.review.decision, notes: task.review.notes } : null
+      }))
     await this.host.units['assignment-run'].ensureAssignmentApi()
     return [
       'Continue coordinating the approved Assignment. Your coordinator brief, the Assignment API contract and the full task list are already in this thread, so do not reopen the work from them.',
