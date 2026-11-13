@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { homedir } from 'node:os'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
-import { broadcastAppToast } from '../../ipc/app-toast'
+import { broadcastAppToast, dismissAppToast } from '../../ipc/app-toast'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { listHarnesses } from '../../agents/harness-registry'
@@ -1091,8 +1091,33 @@ export function deliverBroadcast(event: AgentEvent): void {
   instanceEventBus.publishAgentEvent(event)
 }
 
-export function broadcastToast(message: string, type: 'error' | 'info' = 'error'): void {
-  broadcastAppToast({ message, type })
+/**
+ * The one notice that asks the user to resume a stalled Assignment coordinator.
+ *
+ * It carries a stable id so the app can withdraw it the moment coordination
+ * actually resumes, instead of leaving a warning on screen that describes a state
+ * the thread already left.
+ */
+export function assignmentStallNoticeId(assignmentId: string): string {
+  return `assignment-stall:${assignmentId}`
+}
+
+export function broadcastToast(
+  message: string,
+  type: 'error' | 'info' = 'error',
+  id?: string
+): void {
+  broadcastAppToast({ message, type, ...(id ? { id } : {}) })
+}
+
+/**
+ * Withdraw a toast whose condition the app has since resolved.
+ *
+ * The id is the one the notice was raised with, so a resolved condition can never
+ * leave its warning on screen, and an unrelated notice is never touched.
+ */
+export function withdrawToast(id: string): void {
+  dismissAppToast(id)
 }
 
 export function chatSkillPaths(driverId: string): string[] {

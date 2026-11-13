@@ -8,6 +8,8 @@ import { sendToRenderer } from './renderer-delivery'
  * is shown as-is. `details` is the optional extra text behind Copy.
  */
 export interface AppToastPayload {
+  /** Identity a raiser can use to withdraw the notice once it is resolved. */
+  id?: string
   message: string
   type?: 'error' | 'info'
   details?: string
@@ -20,5 +22,17 @@ export interface AppToastPayload {
 export function broadcastAppToast(payload: AppToastPayload): void {
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'app:toast', payload)
+  }
+}
+
+/**
+ * Withdraw a toast whose reason no longer holds.
+ *
+ * A notice that says "resume coordination" is obsolete the moment coordination
+ * resumes, and leaving it on screen describes a state the app already left.
+ */
+export function dismissAppToast(id: string): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    sendToRenderer(win.webContents, 'app:toast:dismiss', id)
   }
 }

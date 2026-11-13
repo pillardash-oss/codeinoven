@@ -50,10 +50,12 @@ import {
 } from './chat-engine-prompts'
 import { isRecord, parseGeneratedJson } from './chat-engine-generated-artifacts'
 import {
+  assignmentStallNoticeId,
   coordinatorHandoffQueueKey,
   coordinatorHandoffQueuePath,
   isCoordinatorThread,
-  pendingAssignmentTurnPath
+  pendingAssignmentTurnPath,
+  withdrawToast
 } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
 
@@ -672,6 +674,9 @@ export class ChatEngineAssignment {
         'internal',
         presentation
       )
+      // The stall notice asked for exactly this turn. It is withdrawn the moment
+      // coordination resumes, so it can never describe a state the app left.
+      withdrawToast(assignmentStallNoticeId(assignment.id))
       return true
     } catch (error) {
       if (snapshotHash)
