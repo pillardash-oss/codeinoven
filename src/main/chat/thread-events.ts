@@ -1,5 +1,10 @@
 import { BrowserWindow } from 'electron'
-import type { AgentEvent, RemoteAgentEventPayload, Thread } from '../../lib/types'
+import type {
+  AgentEvent,
+  RemoteAgentEventPayload,
+  Thread,
+  ThreadAnnounceOptions
+} from '../../lib/types'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import type { NotificationService } from '../notifications/notification-service'
 import type { PowerWakeService } from '../system/power-wake-service'
@@ -75,7 +80,7 @@ export function dismissThreadNotifications(projectId: string, threadId: string):
  * indicators, headers) can react to status/read changes without polling,
  * then fire an OS notification if the app is backgrounded.
  */
-export function broadcastThreadUpdate(thread: Thread): void {
+export function broadcastThreadUpdate(thread: Thread, options: ThreadAnnounceOptions = {}): void {
   for (const listener of corpusListeners) listener.updated(thread)
   for (const win of BrowserWindow.getAllWindows()) {
     sendToRenderer(win.webContents, 'thread:updated', thread)
@@ -88,7 +93,10 @@ export function broadcastThreadUpdate(thread: Thread): void {
   // working threads, so every persisted status or read change is a moment the
   // icon's state can have changed.
   _backgroundTray?.requestTrayRefresh()
-  void _notificationService?.notify(thread)
+  // One user prompt earns one completion announcement. A settle that only ends
+  // an internal continuation of a turn the user was already told about arrives
+  // here with `notify: false`, and the row still reaches every window above.
+  if (options.notify !== false) void _notificationService?.notify(thread)
   // The row is shared with every other instance, and none of them receives this
   // fan-out, so the change is also announced for a sibling to re-read.
   instanceRegistry.publishThreadChanged(thread.projectId, thread.id, 'row')

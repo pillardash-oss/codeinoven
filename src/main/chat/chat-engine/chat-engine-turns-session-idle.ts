@@ -64,6 +64,7 @@ import {
   SUPERSEDED_TURN_MESSAGE
 } from './chat-engine-constants'
 import { broadcastToast, assignmentStallNoticeId, withdrawToast } from './chat-engine-pure'
+import { completionAnnouncement } from './chat-engine-completion-announcement'
 import { ChatEngine } from '../chat-engine'
 
 /** ChatEngine turns-session-idle: one concern, moved verbatim from the composition root. */
@@ -1143,10 +1144,28 @@ export class ChatEngineTurnsSessionIdle {
       const assignmentDrafting = this.host.state.activeAssignmentDraftRuns.has(
         `${info.projectId}:${info.threadId}`
       )
+      // A harness can settle the same user prompt twice (pi ends the turn, then
+      // continues it to publish a corrected task list), and only the first of
+      // those settles is news: the second still updates the row, so the UI sees
+      // the truth, but it must not interrupt the reader with a second alert for
+      // an answer they already have.
+      const announcement = completionAnnouncement(
+        this.host.state.announcedCompletionPrompts,
+        info.threadId,
+        messages[latestUserIndex]?.id,
+        finalStatus
+      )
       if (!assignmentDrafting) {
         await this.host.threadManager.setStatus(info.projectId, info.threadId, finalStatus, {
-          read: userAborted
+          read: userAborted,
+          notify: announcement.notify
         })
+        if (announcement.record) {
+          this.host.state.announcedCompletionPrompts.set(
+            info.threadId,
+            messages[latestUserIndex]!.id
+          )
+        }
       }
       // A live usage-reset wait already owns this turn's outcome (see
       // `resetWaitActive` above). Broadcasting the generic "incomplete turn"

@@ -215,6 +215,17 @@ export class ChatEngineState {
    */
   taskReconcileTurns = new Set<string>()
 
+  /**
+   * The user prompt whose answer the app already announced, per thread.
+   *
+   * A settle only interrupts the reader once per prompt: a harness that ends a
+   * turn and then continues it with its own internal instruction (pi's task-list
+   * reconcile) settles the same prompt twice, and the second settle is the same
+   * answer. Kept per thread rather than per session because a thread's prompt is
+   * what the user is waiting on. See `completionAnnouncement`.
+   */
+  announcedCompletionPrompts = new Map<string, string>()
+
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
   /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
   turnStreamCache = new Map<string, TurnStreamCacheEntry>()

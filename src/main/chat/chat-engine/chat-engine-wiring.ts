@@ -88,6 +88,7 @@ export function wireChatEngine(
       broadcastThreadUpdate,
       async (thread) => {
         engine.state.chatAttachmentAllowlists.delete(thread.id)
+        engine.state.announcedCompletionPrompts.delete(thread.id)
         await engine.deleteThreadSession(thread.projectId, thread.id)
         await engine.state.memoryService.deleteThreadMemory(thread.projectId, thread.id)
         await engine.storage.remove(coordinatorHandoffQueuePath(thread.projectId, thread.id))
