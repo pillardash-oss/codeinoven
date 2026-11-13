@@ -276,9 +276,13 @@ class AgentRunsStore {
     }
 
     // Auto-open the trace when a new turn starts; auto-close when it ends
-    // unless the user explicitly opened it.
+    // unless the user explicitly opened it. A fold is the reader's: a trace they
+    // folded is never force-opened again inside the same turn, so a run that
+    // goes quiet and resumes (a retry, a steer) cannot reopen work they closed.
+    // The line under the trace reports the work in progress while it stays
+    // folded, which is exactly the state this keeps.
     if (busy && (!wasBusy || isNewTurn)) {
-      if (openTrace) entry.traceOpen = true
+      if (openTrace && !entry.traceUserFolded) entry.traceOpen = true
     } else if (!busy && !entry.traceUserOpened) {
       entry.traceOpen = false
     }
