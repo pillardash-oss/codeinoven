@@ -319,6 +319,21 @@ export class ChatEngineState {
   /** The killable driver session currently drafting an Assignment, so Stop/Esc can reach it. */
   activeAssignmentDraftSessions = new Map<string, ActiveAssignmentDraftSession>()
 
+  /**
+   * The live session of a draft run that failed terminally.
+   *
+   * A retry continues this exact session instead of starting a fresh model run,
+   * so the agent keeps the context it already built. The entry is disposed on
+   * retry, on success, on a harness change, on Stop and at shutdown.
+   */
+  preservedAssignmentDraftSessions = new Map<string, ActiveAssignmentDraftSession>()
+
+  /** Parent-thread session a draft run reports its card into, so it stays live. */
+  assignmentDraftParentSessions = new Map<string, string>()
+
+  /** When the current draft run started, so its card keeps one honest start time. */
+  assignmentDraftStartedAt = new Map<string, number>()
+
   userAbortedAssignmentDraftOperations = new Set<string>()
 
   activeAchievementAuditorEnsures = new Map<string, Promise<Thread>>()

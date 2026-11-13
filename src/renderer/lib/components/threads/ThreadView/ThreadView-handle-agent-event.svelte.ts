@@ -4,6 +4,8 @@ import { reconcilesPendingAttention } from '$lib/session-attention'
 import { normalizeComposerMessage } from '../../chats/composer-mentions'
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
+import { assignmentDraftPartId } from '$shared/assignment/assignment-draft'
+import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import {
   rendererRecovery,
   type StartAfterThreadReference
@@ -100,6 +102,14 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     ) {
       this.root.unmirroredTraceStartTime.knownEphemeralSessionIds.add(event.sessionId)
       this.root.sources.applyAssignmentGenerationTrace(event.update)
+      // The offshoot is one worker, not a second conversation: its live work
+      // belongs to the sub-agent panel its card opens, not to a trace of its own.
+      contextSidebarState.updateSubagentDraftTrace(
+        event.projectId,
+        event.threadId,
+        assignmentDraftPartId(event.projectId, event.threadId),
+        this.root.sources.assignmentGenerationTraceParts
+      )
       return
     }
     if (
@@ -148,6 +158,7 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
           // The draft landed in the background: clear the formulation state and
           // reveal the board the user just spent minutes waiting for.
           this.root.composerScope.assignmentFormulatingDurable = false
+          this.root.sources.assignmentDraftError = ''
           this.root.harnessUsage.studioDocument = 'assignment'
           this.root.submitSpecDecision.showSpecStudio = true
         })
@@ -164,6 +175,7 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     ) {
       this.root.composerScope.assignmentFormulatingDurable = false
       this.root.sources.clearAssignmentGenerationTrace()
+      this.root.sources.assignmentDraftError = event.error
       this.errorMessage = event.error
       return
     }

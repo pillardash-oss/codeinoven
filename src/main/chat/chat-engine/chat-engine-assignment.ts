@@ -28,6 +28,7 @@ import type {
 import { isWorkflowCoordinatorThread } from '../../../lib/types'
 import { resolveWorkflowCoordinatorThreadId } from '../../../lib/engines/thread-manager-lineage'
 import { ASSIGNMENT_PLAN_SCHEMA } from '../../../lib/agent-tools'
+import { ChatEngineAssignmentDraftRun } from './chat-engine-assignment-draft-run'
 import { ensureFeatureSlug, featureArtifactDirectory } from '../../../lib/project-artifacts'
 import { parseGeneratedAssignmentContent } from '../../../lib/assignment/assignment-validation'
 import type {
@@ -58,7 +59,11 @@ import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine assignment: one concern, moved verbatim from the composition root. */
 export class ChatEngineAssignment {
-  constructor(private readonly host: ChatEngine) {}
+  private readonly draftRun: ChatEngineAssignmentDraftRun
+
+  constructor(private readonly host: ChatEngine) {
+    this.draftRun = new ChatEngineAssignmentDraftRun(host)
+  }
 
   /** Retry every failed worker first, then wake the coordinator only if work remains actionable. */
   async resumeAssignmentAttention(
@@ -898,7 +903,7 @@ export class ChatEngineAssignment {
 
   /** The identity a coordinator's draft run and its revision counter share. */
   private assignmentDraftKey(projectId: string, coordinatorThreadId: string): string {
-    return `${projectId}:${coordinatorThreadId}`
+    return this.draftRun.draftKey(projectId, coordinatorThreadId)
   }
 
   private assignmentDraftRevision(key: string): number {
@@ -914,18 +919,12 @@ export class ChatEngineAssignment {
    * never be overwritten by a generation that was already on its way.
    */
   cancelAssignmentDraftRun(projectId: string, coordinatorThreadId: string): void {
-    const key = this.assignmentDraftKey(projectId, coordinatorThreadId)
-    this.host.state.assignmentDraftRevisions.set(key, this.assignmentDraftRevision(key) + 1)
-    const session = this.host.state.activeAssignmentDraftSessions.get(key)
-    if (!session) return
-    this.host.state.userAbortedAssignmentDraftOperations.add(key)
-    const abort =
-      session.isolated && supportsIsolatedSessions(session.driver)
-        ? session.driver.abort(session.projectPath, session.sessionId, session.isolated)
-        : session.driver.abort(session.projectPath, session.sessionId)
-    void abort.catch(() => undefined)
-    this.host.state.activeAssignmentDraftSessions.delete(key)
-    this.host.state.activeAssignmentDraftRuns.delete(key)
+    this.draftRun.cancel(projectId, coordinatorThreadId)
+  }
+
+  /** A user Stop ends the draft run and leaves its card honest about it. */
+  stopAssignmentDraftRun(projectId: string, coordinatorThreadId: string): void {
+    this.draftRun.cancel(projectId, coordinatorThreadId, 'stopped')
   }
 
   /**
@@ -937,10 +936,9 @@ export class ChatEngineAssignment {
    * - otherwise the model run starts in the background and the caller is answered
    *   with `formulating`, so no harness request is ever held open for minutes.
    *
-   * The settled run owns exactly one terminal transition: `spec` with an
-   * `assignment.ready` event when a draft exists, `failed` with an
-   * `assignment.failed` event when it does not, and nothing at all when its
-   * authority was revoked while it was working.
+   * The settled run owns exactly one terminal transition, and it also owns the
+   * worker card the parent thread shows, so the draft reads as one delegated job
+   * rather than a second conversation.
    */
   async requestAssignmentDraft(input: {
     projectId: string
@@ -949,49 +947,53 @@ export class ChatEngineAssignment {
     instructions?: string
     sessionId: string
   }): Promise<AssignmentDraftStart> {
-    const projectId = validateEntityId(input.projectId, 'Project ID')
-    const coordinatorThreadId = validateEntityId(input.coordinatorThreadId, 'Coordinator thread ID')
-    const settings = validateThreadSettings(input.settings)
-    if (settings.assignmentMode !== true) {
-      throw new Error('Assignment mode must be enabled to generate an Assignment.')
-    }
-    const request =
+    const instructions =
       input.instructions === undefined
         ? undefined
         : validateBoundedString(input.instructions, 'Assignment instructions', 1, 20_000)
-    const active = this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)
-    if (active) return { state: 'draft', assignment: active }
-    // Preflight here, synchronously, so a caller that is answered with
-    // `formulating` cannot be handed a rejection it will never see.
-    const spec = await this.host.units['spec'].getActiveSpec(projectId, coordinatorThreadId)
-    if (spec && spec.status !== 'approved') {
-      throw new Error(
-        'Approve the specification before generating an Assignment from it, or dismiss the specification to build the Assignment from this conversation.'
-      )
-    }
-    const key = this.assignmentDraftKey(projectId, coordinatorThreadId)
-    if (this.host.state.activeAssignmentDraftRuns.has(key)) return { state: 'formulating' }
-    const revision = this.assignmentDraftRevision(key)
-    const task = this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request)
-    void task.then(
-      (assignment) =>
-        this.settleAssignmentDraftRun({
-          projectId,
-          coordinatorThreadId,
-          revision,
-          sessionId: input.sessionId,
-          assignment
-        }),
-      (error: unknown) =>
-        this.settleAssignmentDraftRun({
-          projectId,
-          coordinatorThreadId,
-          revision,
-          sessionId: input.sessionId,
-          error
+    return this.draftRun.request({
+      ...input,
+      ...(instructions === undefined ? {} : { instructions }),
+      generate: (projectId, coordinatorThreadId, settings, request) =>
+        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request)
+    })
+  }
+
+  /**
+   * Retry a failed Assignment draft by continuing its own session.
+   *
+   * The thread's current settings decide the model, so a user who changed the
+   * model retries on the new one; a changed harness cannot resume the session and
+   * starts a fresh run instead.
+   */
+  async retryAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+  }): Promise<AssignmentDraftStart> {
+    return this.draftRun.retry({
+      ...input,
+      generate: (projectId, coordinatorThreadId, settings, request) =>
+        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request),
+      persist: (content) => {
+        const threadId = input.coordinatorThreadId
+        return this.host.threadManager.getThread(input.projectId, threadId).then((thread) => {
+          const settings = thread?.settings
+          return this.persistAssignmentDraft({
+            projectId: input.projectId,
+            coordinatorThreadId: threadId,
+            content,
+            replaceDraft: true,
+            provenance: {
+              source: 'agent',
+              actor: 'Sr. Engineer',
+              harnessId: settings?.harnessId ?? '',
+              providerId: settings?.providerId ?? '',
+              modelId: settings?.modelId ?? ''
+            }
+          })
         })
-    )
-    return { state: 'formulating' }
+      }
+    })
   }
 
   /**
@@ -1012,6 +1014,10 @@ export class ChatEngineAssignment {
   }): Promise<AssignmentPlan> {
     const projectId = validateEntityId(input.projectId, 'Project ID')
     const coordinatorThreadId = validateEntityId(input.coordinatorThreadId, 'Coordinator thread ID')
+    const key = this.assignmentDraftKey(projectId, coordinatorThreadId)
+    const hadRun =
+      this.host.state.activeAssignmentDraftRuns.has(key) ||
+      this.host.state.preservedAssignmentDraftSessions.has(key)
     this.cancelAssignmentDraftRun(projectId, coordinatorThreadId)
     const assignment = await this.persistAssignmentDraft({
       projectId,
@@ -1027,6 +1033,21 @@ export class ChatEngineAssignment {
       }
     })
     await this.settleAssignmentDraftStatus(projectId, coordinatorThreadId, 'spec')
+    if (hadRun) {
+      void this.draftRun.publish({
+        projectId,
+        coordinatorThreadId,
+        activity: {
+          status: 'completed',
+          agent: 'Sr. Engineer',
+          description: 'Assignment draft',
+          assignmentDraft: true,
+          background: true,
+          output: `Assignment draft v${assignment.version} was authored by the agent.`,
+          time: { start: Date.now(), end: Date.now() }
+        }
+      })
+    }
     this.host.broadcast({
       type: 'assignment.ready',
       sessionId: input.sessionId,
@@ -1039,45 +1060,6 @@ export class ChatEngineAssignment {
   }
 
   /** Announce the one terminal state a settled draft run leaves behind. */
-  private settleAssignmentDraftRun(input: {
-    projectId: string
-    coordinatorThreadId: string
-    revision: number
-    sessionId: string
-    assignment?: AssignmentPlan
-    error?: unknown
-  }): void {
-    const key = this.assignmentDraftKey(input.projectId, input.coordinatorThreadId)
-    if (this.assignmentDraftRevision(key) !== input.revision) return
-    if (input.assignment) {
-      void this.settleAssignmentDraftStatus(input.projectId, input.coordinatorThreadId, 'spec')
-      this.host.broadcast({
-        type: 'assignment.ready',
-        sessionId: input.sessionId,
-        projectId: input.projectId,
-        threadId: input.coordinatorThreadId,
-        assignmentId: input.assignment.id,
-        version: input.assignment.version
-      })
-      return
-    }
-    const error =
-      input.error instanceof Error ? input.error.message : 'Assignment generation failed.'
-    void this.settleAssignmentDraftStatus(
-      input.projectId,
-      input.coordinatorThreadId,
-      'failed',
-      error
-    )
-    this.host.broadcast({
-      type: 'assignment.failed',
-      sessionId: input.sessionId,
-      projectId: input.projectId,
-      threadId: input.coordinatorThreadId,
-      error
-    })
-  }
-
   private async settleAssignmentDraftStatus(
     projectId: string,
     coordinatorThreadId: string,
@@ -1369,8 +1351,9 @@ export class ChatEngineAssignment {
       !this.host.state.unsupportedStructuredOutputModels.has(structuredOutputKey)
     let lastError: Error | null = null
     const draftKey = `${projectId}:${coordinatorThreadId}`
+    const attempts = structured ? [true, false] : [false]
 
-    for (const useStructuredOutput of structured ? [true, false] : [false]) {
+    for (const [attemptIndex, useStructuredOutput] of attempts.entries()) {
       const isolated = supportsIsolatedSessions(driver)
         ? await driver.createIsolatedSession(
             projectPath,
@@ -1397,6 +1380,30 @@ export class ChatEngineAssignment {
         projectPath,
         ...(isolated ? { isolated } : {})
       })
+      // The card now knows the session the user can open while the draft is
+      // being written, so the work is watchable from the moment it exists.
+      void this.draftRun.publish({
+        projectId,
+        coordinatorThreadId,
+        activity: {
+          status: 'running',
+          agent: 'Sr. Engineer',
+          description: 'Assignment draft',
+          assignmentDraft: true,
+          background: true,
+          childSessionId: sessionId,
+          harnessId: driverId,
+          providerId: settings.providerId,
+          modelId: settings.modelId,
+          time: {
+            start: this.host.state.assignmentDraftStartedAt.get(draftKey) ?? Date.now()
+          }
+        }
+      })
+      // A failed attempt only keeps its session when it was the last one: that
+      // session is what a retry continues, so the next try resumes the work
+      // instead of paying for the same analysis again.
+      let preserveSession = false
       const completion = this.host.units['turns-sessions'].waitForSessionCompletion(
         sessionId,
         180_000,
@@ -1459,6 +1466,15 @@ export class ChatEngineAssignment {
             modelId: settings.modelId,
             error: lastError.message
           })
+        } else if (attemptIndex === attempts.length - 1) {
+          preserveSession = true
+          this.draftRun.preserve(draftKey, {
+            sessionId,
+            driver,
+            driverId,
+            projectPath,
+            ...(isolated ? { isolated } : {})
+          })
         }
       } finally {
         await this.host.units['messages-write'].recordEphemeralSessionUsage({
@@ -1469,11 +1485,13 @@ export class ChatEngineAssignment {
           driver,
           isolated
         })
-        this.host.units['runtime-connectivity'].clearCompletionWaiter(sessionId)
-        this.host.sessionRegistry.delete(sessionId)
-        this.host.state.reasoningTimes.delete(sessionId)
-        this.host.state.toolTimes.delete(sessionId)
-        if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
+        if (!preserveSession) {
+          this.host.units['runtime-connectivity'].clearCompletionWaiter(sessionId)
+          this.host.sessionRegistry.delete(sessionId)
+          this.host.state.reasoningTimes.delete(sessionId)
+          this.host.state.toolTimes.delete(sessionId)
+          if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
+        }
         if (this.host.state.activeAssignmentDraftSessions.get(draftKey)?.sessionId === sessionId) {
           this.host.state.activeAssignmentDraftSessions.delete(draftKey)
         }

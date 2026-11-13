@@ -120,6 +120,48 @@
     </button>
   {/if}
   <div class="flex min-w-0 flex-col">
+    <!-- A failed Assignment draft stays on the thread that asked for it: the
+         retry continues the draft's own session, and the model can be changed
+         here before retrying. -->
+    {#if board.sources.assignmentDraftError}
+      <div class="conversation-gutter shrink-0 px-6">
+        <div class="mx-auto max-w-3xl">
+          <AgentProviderStatusCard
+            status={{
+              state: 'error',
+              issue: {
+                kind: 'unknown',
+                message: board.sources.assignmentDraftError,
+                rawError: board.sources.assignmentDraftError,
+                harnessId: board.loadOlderMessages.settings.harnessId,
+                retryable: true
+              }
+            }}
+            providerName={harnessDisplayName(board.loadOlderMessages.settings.harnessId)}
+            settings={board.loadOlderMessages.settings}
+            providers={board.currentWorkingTraceAttribution.providers}
+            projectId={board.handleAgentEvent.thread.projectId}
+            favoriteModels={rendererRecovery.favoriteModels}
+            recentModels={rendererRecovery.recentModels}
+            onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
+            sourceLabel="Assignment draft"
+            sourceDetail={board.handleAgentEvent.thread.title}
+            retryLabel="Retry draft"
+            retrying={board.sources.assignmentDraftRetrying}
+            threadId={board.handleAgentEvent.thread.id}
+            foldKey="assignment-draft"
+            joinsBelow
+            onDismiss={() => (board.sources.assignmentDraftError = '')}
+            onModelChange={(selected) => board.contextUsage.updateSettings(selected)}
+            onToggleFavorite={(providerId, modelId, harnessId) =>
+              rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}
+            onReorderFavorite={(draggedKey, targetKey, position) =>
+              rendererRecovery.reorderFavorite(draggedKey, targetKey, position)}
+            onRetry={() => void board.sources.retryAssignmentDraft()}
+          />
+        </div>
+      </div>
+    {/if}
     <!-- Assignment worker failures stay visible on the coordinator, but their
          actions target the owning durable worker rather than this thread. -->
     {#each board.submitBrainstormDecision.assignmentWorkerAttentionItems as item, index (item.task.id)}

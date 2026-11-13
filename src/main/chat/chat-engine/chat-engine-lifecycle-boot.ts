@@ -729,6 +729,11 @@ export class ChatEngineLifecycleBoot {
       }
     )
     ipcMain.handle(
+      'agent:retryAssignmentDraft',
+      async (_, projectId: string, coordinatorThreadId: string) =>
+        this.host.retryAssignmentDraft({ projectId, coordinatorThreadId })
+    )
+    ipcMain.handle(
       'agent:ensureAchievementScope',
       (_, projectId: string, coordinatorThreadId: string) =>
         this.host.ensureAchievementScope(projectId, coordinatorThreadId)

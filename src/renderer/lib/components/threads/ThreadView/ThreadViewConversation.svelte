@@ -1804,18 +1804,6 @@
         />
       {/if}
 
-      {#if board.sources.assignmentGenerationTraceActive && board.sources.assignmentGenerationTraceParts.length > 0}
-        <WorkingTrace
-          parts={board.sources.assignmentGenerationTraceParts}
-          open
-          busy={board.switchProject.busy}
-          startTime={board.sources.assignmentGenerationTraceStartedAt}
-          headerLabel="Assignment draft"
-          projectId={board.handleAgentEvent.thread.projectId}
-          threadId={board.handleAgentEvent.thread.id}
-        />
-      {/if}
-
       {#if receiptThread}
         {@const receipt = runReceiptState.receiptFor(receiptThread.id)}
         {#if receipt}

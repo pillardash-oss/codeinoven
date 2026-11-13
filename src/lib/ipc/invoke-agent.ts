@@ -201,6 +201,11 @@ export const invokeAgentContract = {
     ],
     AssignmentDraftStart
   >,
+  /** Continue the failed draft's own session: the retry keeps its context. */
+  'agent:retryAssignmentDraft': {} as Contract<
+    [projectId: string, coordinatorThreadId: string],
+    AssignmentDraftStart
+  >,
   'agent:ensureAchievementScope': {} as Contract<
     [projectId: string, coordinatorThreadId: string],
     Thread
