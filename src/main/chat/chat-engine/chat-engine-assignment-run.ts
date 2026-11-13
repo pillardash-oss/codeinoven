@@ -200,6 +200,24 @@ export class ChatEngineAssignmentRun {
     ].join('\n')
   }
 
+  /**
+   * The volatile half of the Assignment API contract.
+   *
+   * A continuation turn used to rely on the contract already in the thread, which
+   * is true for the endpoints and false for the address and access key: the app
+   * restarts, the port or the capability is reissued, and the agent keeps sending
+   * the pair it was briefed with until every call answers `Unauthorized`. Every
+   * later turn therefore states the pair that is live right now, and says it
+   * replaces any earlier one.
+   */
+  assignmentApiReconnectInstructions(token: string): string {
+    return [
+      'Assignment API reconnect for this app run (the address and access key change when the app restarts; this pair replaces any earlier one, and the endpoints and the rest of the contract are already in this thread):',
+      `API base URL: ${this.host.state.assignmentApiBaseUrl}`,
+      `Authorization header: Bearer ${token}`
+    ].join('\n')
+  }
+
   async ensureAssignmentApi(): Promise<void> {
     if (this.host.state.assignmentApiServer && this.host.state.assignmentApiBaseUrl) return
     const server = createServer((request, response) => {
