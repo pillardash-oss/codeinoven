@@ -547,12 +547,10 @@
             board.handleAgentEvent.thread.projectId,
             board.pollStreamParts.conversationId
           )}
-          folded={
-            !agentRuns.isTraceOpen(
-              board.handleAgentEvent.thread.projectId,
-              board.pollStreamParts.conversationId
-            )
-          }
+          folded={!agentRuns.isTraceOpen(
+            board.handleAgentEvent.thread.projectId,
+            board.pollStreamParts.conversationId
+          )}
           initialUserOpened={agentRuns.isTraceUserOpened(
             board.handleAgentEvent.thread.projectId,
             board.pollStreamParts.conversationId
@@ -631,7 +629,8 @@
       {#snippet turnTraceSegment(
         segment: TraceSegmentLayout,
         traceMsg: AgentMessage,
-        inlineInBubble = false
+        inlineInBubble = false,
+        closingTextIdOverride?: string | null
       )}
         {@const turnStart = segment.turnStart}
         {@const turnDone = board.pollStreamParts.transcriptIndex.turnCompleted[turnStart] ?? false}
@@ -671,8 +670,20 @@
              the trace show a clipped second answer above the real one. -->
         {@const traceHoldsClosingText = !groupThread && traceIsLive && !turnClosingVisible}
         {@const traceIsLiveTurn = isCurrentAssistantTurn || traceIsLive || traceIsRestored}
+        <!-- A group reply owns its answer from the first streamed word: its bubble
+             is the only place that text renders, so the trace never carries a
+             copy of it, whether or not the turn has handed the floor back yet.
+             A reply pinned above a held steer shows the text it closed on, which
+             can be older than the turn's newest text, so it names that text
+             itself and the trace drops that one instead. -->
         {@const turnClosingTextId =
-          turnClosingVisible && turnClosingText ? turnClosingText.id : null}
+          closingTextIdOverride !== undefined
+            ? closingTextIdOverride
+            : groupThread
+              ? (turnClosingText?.id ?? null)
+              : turnClosingVisible && turnClosingText
+                ? turnClosingText.id
+                : null}
         {@const turnParts = board.pollStreamParts.segmentTraceParts(
           segment,
           traceIsLiveTurn,
@@ -853,8 +864,11 @@
           (board.loadOlderMessages.messages.length - board.composerScope.visibleMessages.length)}
         <!-- The work of the turn a steer interrupted sits directly above the
                  message that closed it, which is the order the run was lived in:
-                 prompt, its trace, the steer, then the next turn's trace. -->
-        {#if !groupThread}
+                 prompt, its trace, the steer, then the next turn's trace. A group
+                 reply closes on the assistant row that ends its turn, so a turn a
+                 steer cut short has no reply bubble of its own: its work lives
+                 here, above the steer, and must not vanish into the next bubble. -->
+        {#if !groupThread || msg.role !== 'assistant'}
           {#each board.pollStreamParts.completedTurnViews.filter((view) => view.anchorId === msg.id) as view (view.turn.endTs)}
             {@render completedTurnTraceBlock(view.turn)}
           {/each}
@@ -1263,6 +1277,17 @@
         {:else}
           <!-- Assistant message   one WorkTrace slice per answer the turn crossed -->
           {@const isTurnEnd = board.pollStreamParts.transcriptIndex.isTurnEnd[absIndex] ?? false}
+          <!-- A group reply sits at the row that closes its turn. While a steered
+               message waits below it, the harness keeps streaming, so that closing
+               row would drift past the steer and drag the reply's whole trace into
+               the next bubble. Pin the reply to the work row above the steer
+               instead, and let the rows under it wait for the turn to split. -->
+          {@const heldSteerIndex = groupThread ? board.buildSpecActionPrompt.heldSteerAbsIndex : -1}
+          {@const heldSteerAnchor = groupThread ? board.pollStreamParts.heldSteerReplyAnchor : -1}
+          {@const pinnedAboveHeldSteer = heldSteerAnchor !== -1 && heldSteerAnchor === absIndex}
+          {@const hiddenBehindHeldSteer =
+            heldSteerAnchor !== -1 && heldSteerIndex !== -1 && absIndex > heldSteerIndex}
+          {@const closesReply = (isTurnEnd && !hiddenBehindHeldSteer) || pinnedAboveHeldSteer}
           {@const provider = messageProvider(msg, board.currentWorkingTraceAttribution.providers)}
           {@const modelLabel = messageModelLabel(
             msg,
@@ -1298,7 +1323,7 @@
                 )
               : null}
 
-          {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || isTurnEnd}
+          {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || closesReply}
             <div class="group mb-6 flex min-w-0 flex-col">
               {#if !groupThread}
                 {#each traceSegmentsAbove as segment (segment.segmentIndex)}
@@ -1306,7 +1331,7 @@
                 {/each}
               {/if}
 
-              {#if isTurnEnd}
+              {#if closesReply}
                 <!-- Final text output + footer   hide only on the active in-progress turn -->
                 {#if board.unmirroredTraceStartTime.isAssignmentAuditorThread}
                   {#if !board.pollStreamParts.conversationBusy || !isLatest || turnAuditReport}
@@ -1352,7 +1377,11 @@
                     rawClosingText,
                     !msg.completedAt
                   )}
-                  {#if turnClosingVisible && turnClosingText}
+                  <!-- A group reply renders from its first streamed word instead of
+                       waiting for the turn to hand the floor back: hiding the
+                       bubble withheld the whole answer while the agent was still
+                       writing it, so the message simply vanished mid-stream. -->
+                  {#if (turnClosingText && (groupThread || turnClosingVisible)) || pinnedAboveHeldSteer}
                     {@const isReadingThisTurn =
                       'messageId' in speechController.playback &&
                       speechController.playback.messageId === msg.id &&
@@ -1415,9 +1444,17 @@
                         {#each board.pollStreamParts.completedTurnViews.filter( (view) => turnMessageIds.has(view.anchorId) ) as view (view.turn.endTs)}
                           {@render completedTurnTraceBlock(view.turn)}
                         {/each}
-                        {#each board.pollStreamParts.traceSegmentLayout.filter((slice) => slice.turnStart === turnOpeningIndex) as segment (segment.segmentIndex)}
-                          {@render turnTraceSegment(segment, msg, true)}
-                        {/each}
+                        <!-- One trace per reply. A turn is cut at an answered
+                             question so the work can bracket the answer card, but
+                             a group reply draws the whole turn in one bubble, so
+                             those cuts would stack several trace cards under one
+                             answer and read as duplicated work. -->
+                        {@render turnTraceSegment(
+                          board.pollStreamParts.wholeTurnSegment(turnOpeningIndex),
+                          msg,
+                          true,
+                          pinnedAboveHeldSteer ? (turnClosingText?.id ?? null) : undefined
+                        )}
                       {/if}
                       {#if isReadingActiveLine}
                         <!-- The read-along only exists while a turn is being
@@ -1790,12 +1827,10 @@
             {#if traceBusyForTurn}
               <TraceActivityLine
                 parts={board.pollStreamParts.latestTurnRenderableParts}
-                folded={
-                  !agentRuns.isTraceOpen(
-                    board.handleAgentEvent.thread.projectId,
-                    board.pollStreamParts.conversationId
-                  )
-                }
+                folded={!agentRuns.isTraceOpen(
+                  board.handleAgentEvent.thread.projectId,
+                  board.pollStreamParts.conversationId
+                )}
                 onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
                 formatProse={conversationLiveProse}
               />
@@ -1840,12 +1875,10 @@
              keeps, so this reads the same value it does. -->
         <TraceActivityLine
           parts={board.pollStreamParts.latestTurnRenderableParts}
-          folded={
-            !agentRuns.isTraceOpen(
-              board.handleAgentEvent.thread.projectId,
-              board.pollStreamParts.conversationId
-            )
-          }
+          folded={!agentRuns.isTraceOpen(
+            board.handleAgentEvent.thread.projectId,
+            board.pollStreamParts.conversationId
+          )}
           onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
           formatProse={conversationLiveProse}
         />

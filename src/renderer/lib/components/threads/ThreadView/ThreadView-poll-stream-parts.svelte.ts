@@ -100,6 +100,48 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
   }
 
   /**
+   * The assistant row a group reply must stay pinned under while a steered
+   * message sits below it awaiting delivery, or -1.
+   *
+   * A held steer is transparent to the turn so the trace keeps the work it
+   * interrupted, but a group reply is drawn at the row that closes its turn. As
+   * the harness keeps streaming rows under the held steer, that closing row
+   * migrates below the message and the whole trace with it, which read as the
+   * old bubble's work transferring into the next reply. Pinning the reply to the
+   * last work row above the held steer keeps it where the reader was.
+   */
+  heldSteerReplyAnchor = $derived.by(() => {
+    const heldIndex = this.root.buildSpecActionPrompt.heldSteerAbsIndex
+    if (heldIndex === -1) return -1
+    for (let index = heldIndex - 1; index >= 0; index--) {
+      const message = this.root.buildSpecActionPrompt.structureMessages[index]
+      if (!message) break
+      if (message.role === 'assistant') return index
+      if (!this.isTransparentTurnMessage(message)) break
+    }
+    return -1
+  })
+
+  /**
+   * One turn's trace as a single slice.
+   *
+   * A group reply draws every step of its turn inside the bubble that closes it,
+   * where the cuts made for an answered question cannot interleave with the
+   * answer card. Passing those cuts would render one trace card per segment under
+   * the same answer, which reads as the same work shown twice.
+   */
+  wholeTurnSegment(turnStart: number): TraceSegmentLayout {
+    return {
+      turnStart,
+      answerIndex: null,
+      mountIndex: turnStart,
+      placement: 'before',
+      boundaries: [],
+      segmentIndex: 0
+    }
+  }
+
+  /**
    * A user message transparent to the turn span the live parts are read with: an
    * activity notice, or a steer still held for its undo window. Held state is not
    * on the message, so it is checked here; the persisted rule covers reloads.
