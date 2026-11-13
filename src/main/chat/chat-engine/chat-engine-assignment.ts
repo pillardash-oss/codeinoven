@@ -804,14 +804,22 @@ export class ChatEngineAssignment {
    * must never break as a reminder, then the one thing that is new: the
    * actionable task state.
    */
-  coordinatorContinuationPrompt(assignment: AssignmentPlan): string {
+  async coordinatorContinuationPrompt(assignment: AssignmentPlan): Promise<string> {
     const actionableTasks = assignment.content.tasks.filter(
       (task) => task.status !== 'completed' && task.status !== 'blocked'
     )
+    await this.host.units['assignment-run'].ensureAssignmentApi()
     return [
       'Continue coordinating the approved Assignment. Your coordinator brief, the Assignment API contract and the full task list are already in this thread, so do not reopen the work from them.',
       `Waiting is the application's job: end this turn instead of polling when every remaining task is a running worker. ${this.coordinatorSteeringInstruction()}`,
       'Act on the current state below. Assign ready tasks, review reported or attention tasks, and perform any Sr. Engineer task that is yours.',
+      this.host.units['assignment-run'].assignmentApiReconnectInstructions(
+        this.host.units['assignment-run'].assignmentApiCapability({
+          role: 'coordinator',
+          assignmentId: assignment.id,
+          threadId: assignment.coordinatorThreadId
+        })
+      ),
       'Actionable Assignment state:',
       JSON.stringify(
         {
@@ -842,7 +850,7 @@ export class ChatEngineAssignment {
       assignment.coordinatorThreadId
     )
     return coordinator?.sessionId
-      ? this.coordinatorContinuationPrompt(assignment)
+      ? await this.coordinatorContinuationPrompt(assignment)
       : this.coordinatorAssignmentPrompt(assignment)
   }
 

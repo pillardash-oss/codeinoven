@@ -44,6 +44,7 @@ import {
   repairEvidenceDroppedCheckpoints,
   repairMisattributedInternalCheckpoints,
   repairTruncatedLineStats,
+  trimHistoricalCheckpointMaps,
   type CheckpointMaintenanceHost
 } from './checkpoint/checkpoint-maintenance'
 import { repairCheckpointChanges, toTurnCheckpointSummary } from './checkpoint/checkpoint-summary'
@@ -1174,6 +1175,7 @@ export class CheckpointManager {
     return {
       get: (projectId, threadId, turnId) => this.get(projectId, threadId, turnId),
       save: (checkpoint) => this.save(checkpoint),
+      saveTrimmed: (checkpoint) => this.writeCheckpoint(checkpoint),
       tracker: (projectId) => this.tracker(projectId),
       queryRows: (sql, params, maxRows) => this.queryRows(sql, params, maxRows),
       queryRowsStrict: async (sql, params, maxRows) => {
@@ -1189,6 +1191,14 @@ export class CheckpointManager {
 
   async repairTruncatedLineStats(): Promise<number> {
     return repairTruncatedLineStats(this.maintenanceHost())
+  }
+
+  /**
+   * Drop whole-project file maps from a thread's older checkpoints, which is what
+   * keeps the checkpoint table from bloating the database into unresponsiveness.
+   */
+  async trimHistoricalCheckpointMaps(): Promise<number> {
+    return trimHistoricalCheckpointMaps(this.maintenanceHost())
   }
 
   async repairMisattributedInternalCheckpoints(): Promise<number> {
@@ -1652,7 +1662,11 @@ export class CheckpointManager {
   }
 
   private async save(checkpoint: TurnCheckpoint, keepProjectMaps = false): Promise<void> {
-    const stored = this.compactCheckpoint(checkpoint, keepProjectMaps)
+    await this.writeCheckpoint(this.compactCheckpoint(checkpoint, keepProjectMaps))
+  }
+
+  /** Write one checkpoint row exactly as given. The caller owns compaction. */
+  private async writeCheckpoint(stored: TurnCheckpoint): Promise<void> {
     await this.writeRow(
       'INSERT OR REPLACE INTO turn_checkpoints(turn_id, project_id, thread_id, data, created_at) VALUES(?, ?, ?, ?, ?)',
       [stored.id, stored.projectId, stored.threadId, JSON.stringify(stored), stored.createdAt]

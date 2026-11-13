@@ -11,6 +11,7 @@ export interface DisplayTarget {
   /** The target's own mark, when the platform gave one (a window's app icon). */
   iconUrl?: string
 }
+
 import { agentRuns } from './agent-runs.svelte'
 import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
@@ -24,6 +25,7 @@ import {
   sameSubagentActivity,
   TEMPORARY_CHAT_INACTIVITY_MS,
   type ContextSidebarTab,
+  type DisplayContextTab,
   type FilesContextTab,
   type MemorySection,
   type ProjectSidebarContext,
@@ -36,6 +38,15 @@ import {
 } from './context-sidebar-types'
 import { usesThreadWorkspaceMount } from '$shared/types'
 import type { AgentSubagentActivity, AgentPart, ThreadSettings } from '$shared/types'
+
+/** The device one docked display tab is mirroring, with the thread that owns it. */
+export interface MirroredDisplay {
+  tabId: string
+  kind: DisplaySourceKind
+  sourceId: string
+  threadId: string
+  projectId: string
+}
 
 /**
  * Host access the tab-context controller needs from the sidebar store. The
@@ -212,7 +223,9 @@ export class SidebarTabContexts {
       // whichever assistant the user selected next. Its assistant id is the panel's
       // identity, so it stays put while every other project tab follows the
       // active thread.
-      if ('threadId' in tab && tab.kind !== 'assistant-knowledge') tab.threadId = threadId
+      if ('threadId' in tab && tab.kind !== 'assistant-knowledge' && tab.kind !== 'display') {
+        tab.threadId = threadId
+      }
     }
   }
 
@@ -283,6 +296,7 @@ export class SidebarTabContexts {
   ): void {
     if (!usesThreadWorkspaceMount(projectId)) return
     const context = this.ensureProjectContext(projectId, threadId)
+    if (kind === 'display') this.adoptProjectDisplayTabs(projectId, context)
     const existing = context.tabs.filter((tab) => tab.kind === kind).at(-1)
     if (existing) {
       context.activeKind = kind
@@ -294,6 +308,34 @@ export class SidebarTabContexts {
     else if (kind === 'git') this.openGit(projectId, threadId)
     else if (kind === 'actions') this.openActions(projectId, threadId)
     else context.visible = false
+  }
+
+  /**
+   * Bring this project's display tabs into the conversation now on screen.
+   *
+   * A display tab mirrors a device, and a device belongs to the project rather
+   * than to one conversation. A hidden conversation container keeps a tab
+   * context per conversation, so leaving the conversation that opened the mirror
+   * used to leave the tab behind in it: the dock closed on the way in, the stage
+   * unmounted, and the device stopped being captured until the person found that
+   * conversation again. Moving the tab keeps one capture per device, and the tab
+   * keeps the thread that owns the mirror, which is what the row's mark reads.
+   */
+  private adoptProjectDisplayTabs(projectId: string, context: ProjectSidebarContext): void {
+    for (const other of Object.values(this.projectContexts)) {
+      if (other === context || other.projectId !== projectId) continue
+      const moved = other.tabs.filter((tab) => tab.kind === 'display')
+      if (moved.length === 0) continue
+      const activeId = other.activeTabIds.display
+      other.tabs = other.tabs.filter((tab) => tab.kind !== 'display')
+      if (other.activeKind === 'display') other.visible = false
+      const known = context.tabs.map((tab) => tab.id)
+      const additions = moved.filter((tab) => !known.includes(tab.id))
+      if (additions.length > 0) context.tabs = [...context.tabs, ...additions]
+      if (context.activeTabIds.display === undefined && activeId !== undefined) {
+        context.activeTabIds.display = activeId
+      }
+    }
   }
 
   /** Focus an existing tab in its owning project or thread context. */
@@ -810,7 +852,8 @@ export class SidebarTabContexts {
     projectId: string,
     threadId: string,
     tabId: string,
-    target: DisplayTarget
+    target: DisplayTarget,
+    options: { focus?: boolean } = {}
   ): void {
     const context = this.ensureProjectContext(projectId, threadId)
     const duplicate = context.tabs.find(
@@ -822,7 +865,7 @@ export class SidebarTabContexts {
     )
     if (duplicate) {
       context.tabs = context.tabs.filter((candidate) => candidate.id !== tabId)
-      this.focusInProjectContext(context, duplicate.id)
+      if (options.focus !== false) this.focusInProjectContext(context, duplicate.id)
       return
     }
     const tab = context.tabs.find((candidate) => candidate.id === tabId)
@@ -834,23 +877,28 @@ export class SidebarTabContexts {
       tab.threadId = threadId
       context.tabs = [...context.tabs]
     }
-    this.focusInProjectContext(context, tabId)
+    if (options.focus !== false) this.focusInProjectContext(context, tabId)
   }
 
   /** Mirror one target immediately, in a fresh tab. Used when the picker is not
    *  in front (a target that is already open simply takes focus). */
-  openDisplayTarget(projectId: string, threadId: string, target: DisplayTarget): void {
+  openDisplayTarget(
+    projectId: string,
+    threadId: string,
+    target: DisplayTarget,
+    options: { focus?: boolean } = {}
+  ): void {
     const context = this.ensureProjectContext(projectId, threadId)
     const existing = context.tabs.find(
       (tab) =>
         tab.kind === 'display' && tab.sourceId === target.sourceId && tab.sourceKind === target.kind
     )
     if (existing) {
-      this.focusInProjectContext(context, existing.id)
+      if (options.focus !== false) this.focusInProjectContext(context, existing.id)
       return
     }
     const id = `display:${projectId}:${crypto.randomUUID()}`
-    this.openProject(context, {
+    const tab: DisplayContextTab = {
       id,
       kind: 'display',
       title: target.label,
@@ -859,7 +907,8 @@ export class SidebarTabContexts {
       sourceKind: target.kind,
       sourceId: target.sourceId,
       iconUrl: target.iconUrl ?? null
-    })
+    }
+    this.addProjectTab(context, tab, options.focus !== false)
   }
 
   /**
@@ -1391,6 +1440,46 @@ export class SidebarTabContexts {
     this.focusInContext(context, tab.id)
   }
 
+  /**
+   * Every display tab mirroring something, in whichever project's dock it sits.
+   *
+   * A display tab belongs to the project that owns the mirror, not to the project
+   * on screen, so the workspace reads every dock instead of only the active one.
+   * Reading only the active docks made a project switch look like the mirror had
+   * ended, and the report went to `null` while the tab was still mirroring the
+   * device in the other project.
+   */
+  mirroredDisplayTabs(): MirroredDisplay[] {
+    const mirrored: MirroredDisplay[] = []
+    for (const context of Object.values(this.projectContexts)) {
+      for (const tab of context.tabs) {
+        if (tab.kind !== 'display' || tab.sourceKind === null || tab.sourceId === null) continue
+        mirrored.push({
+          tabId: tab.id,
+          kind: tab.sourceKind,
+          sourceId: tab.sourceId,
+          threadId: tab.threadId,
+          projectId: tab.projectId
+        })
+      }
+    }
+    return mirrored
+  }
+
+  /** The project that already has a tab mirroring this target, when one does.
+   *  A second agent attaching to the same device wears its own row's mark, but it
+   *  does not earn a second capture of a device that is already on display. */
+  displayTabProjectFor(kind: DisplaySourceKind, sourceId: string): string | null {
+    for (const context of Object.values(this.projectContexts)) {
+      for (const tab of context.tabs) {
+        if (tab.kind === 'display' && tab.sourceKind === kind && tab.sourceId === sourceId) {
+          return tab.projectId
+        }
+      }
+    }
+    return null
+  }
+
   private focusInProjectContext(context: ProjectSidebarContext, id: string): void {
     const tab = context.tabs.find((candidate) => candidate.id === id)
     if (!tab) return
@@ -1408,6 +1497,22 @@ export class SidebarTabContexts {
   }
 
   private openProject(context: ProjectSidebarContext, tab: ContextSidebarTab): void {
+    this.addProjectTab(context, tab, true)
+  }
+
+  /**
+   * Put a tab in a project's dock, focusing it only when asked.
+   *
+   * A mirror an agent asked for belongs to that agent's thread, which may well be
+   * in another project than the one on screen. The tab belongs in that project's
+   * dock, but focusing it would yank the surface the person is reading, so a tab
+   * that is not theirs is docked silently and waits there.
+   */
+  private addProjectTab(
+    context: ProjectSidebarContext,
+    tab: ContextSidebarTab,
+    focus: boolean
+  ): void {
     const index = context.tabs.findIndex((existing) => existing.id === tab.id)
     if (index >= 0) {
       context.tabs[index] = tab
@@ -1415,7 +1520,7 @@ export class SidebarTabContexts {
     } else {
       context.tabs = [...context.tabs, tab]
     }
-    this.focusInProjectContext(context, tab.id)
+    if (focus) this.focusInProjectContext(context, tab.id)
   }
 
   private scheduleTemporaryChatExpiry(tab: TemporaryChatContextTab): void {

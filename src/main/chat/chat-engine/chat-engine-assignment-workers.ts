@@ -1001,10 +1001,28 @@ export class ChatEngineAssignmentWorkers {
     // whole contract. Turning reporting off still replaces both with the explicit
     // disabled instruction.
     const workerReporting = workerReportsToCoordinator(result.thread.settings)
-    const reportingPrompt =
+    let reportingPrompt =
       resumingWorker && workerReporting
         ? `Reporting is unchanged: submit fresh baseline evidence before the correction and check evidence after verifying it, each with its own operationId, then POST report-task with assignmentId ${result.assignment.id}, taskId ${result.task.id}, and workerThreadId ${result.thread.id}.`
         : reportInstruction
+    if (resumingWorker && workerReporting) {
+      // A resumed worker keeps its old context, and that context holds the API
+      // address and key from whenever it was briefed. After a restart those are
+      // stale, so the current pair travels with the reminder that tells it to
+      // report.
+      await this.host.units['assignment-run'].ensureAssignmentApi()
+      reportingPrompt = [
+        reportingPrompt,
+        this.host.units['assignment-run'].assignmentApiReconnectInstructions(
+          this.host.units['assignment-run'].assignmentApiCapability({
+            role: 'worker',
+            assignmentId: result.assignment.id,
+            threadId: result.thread.id,
+            taskId: result.task.id
+          })
+        )
+      ].join('\n\n')
+    }
     const taskPrompt = resumingWorker
       ? [
           `Continue Assignment task “${result.task.title}” in this thread. Its full brief, scope and the work already done are in your existing context, so do not start the task over from the beginning.`,

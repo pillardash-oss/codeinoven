@@ -340,7 +340,20 @@ class AgentRunsStore {
     userOpened: boolean,
     userFolded: boolean
   ): void {
+    const existed = this.runs.has(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
+    // A trace that reports the fold it already has is not a change. Notifying
+    // anyway re-runs every reader of this store, which a trace that re-reports
+    // its state on each render (a controlled fold the owner keeps answering)
+    // turns into an endless render loop.
+    if (
+      existed &&
+      entry.traceOpen === open &&
+      entry.traceUserOpened === userOpened &&
+      entry.traceUserFolded === userFolded
+    ) {
+      return
+    }
     entry.traceOpen = open
     entry.traceUserOpened = userOpened
     entry.traceUserFolded = userFolded

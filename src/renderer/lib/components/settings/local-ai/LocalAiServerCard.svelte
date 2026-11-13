@@ -11,6 +11,7 @@
   import { formatBytes } from '$lib/format/bytes'
   import { osFileManagerLabel } from '$lib/os-file-manager'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import LocalAiServerLog from './LocalAiServerLog.svelte'
   import SettingsDisclosure from '../../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../../shared/SettingsEntry.svelte'
   import SettingsStatusBadge from '../../shared/SettingsStatusBadge.svelte'
@@ -66,11 +67,6 @@
   let copied = $state(false)
 
   const command = $derived(describeLocalAiServerCommand(entry, executable))
-  const logText = $derived(
-    logLines.length > 0
-      ? logLines.join('\n')
-      : 'No output yet. Start the server to see its log here.'
-  )
   const busy = $derived(status === 'starting' || status === 'running')
   /** A row saved from a Hugging Face tag names nothing on disk yet, so there is
    *  no file to reveal and no size to measure until its download lands. */
@@ -134,23 +130,6 @@
     await invoke('clipboard:writeText', `${entry.host}:${entry.port}`)
     copied = true
     setTimeout(() => (copied = false), 1_500)
-  }
-
-  /**
-   * Keep the newest line in view while output streams in, without pinning the
-   * scroll position when the user has scrolled back to read something. An
-   * attachment watches the tail's own text, so no state is assigned here.
-   */
-  function followLog(node: HTMLPreElement): () => void {
-    const sync = (): void => {
-      if (node.scrollHeight - node.scrollTop - node.clientHeight < 40) {
-        node.scrollTop = node.scrollHeight
-      }
-    }
-    const observer = new MutationObserver(sync)
-    observer.observe(node, { childList: true, characterData: true, subtree: true })
-    sync()
-    return () => observer.disconnect()
   }
 </script>
 
@@ -292,13 +271,13 @@
             class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.6875rem] leading-relaxed text-danger/90">{notice}</pre>
         </div>
       {/if}
-      <div class="border bg-raised">
-        <p class="px-3 pt-2 text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">
-          Log
-        </p>
-        <pre
-          {@attach followLog}
-          class="max-h-64 min-h-24 overflow-auto whitespace-pre-wrap break-words px-3 pb-2 font-mono text-[0.6875rem] leading-relaxed text-muted">{logText}</pre>
+      <div class="space-y-1.5">
+        <p class="px-3 text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">Log</p>
+        <LocalAiServerLog
+          entryId={entry.id}
+          history={logLines}
+          emptyLabel="No output yet. Start the server to see its log here."
+        />
       </div>
     </div>
   {/if}

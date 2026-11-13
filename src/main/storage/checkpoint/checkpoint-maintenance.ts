@@ -2,7 +2,11 @@ import { mkdir, readdir, rm, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { getConfigRoot, generateId } from '../../../lib/utils'
 import { Logger } from '../../system/logger'
-import type { ChangeTrackingService } from '../../git/change-tracking-service'
+import type {
+  ChangeTrackingService,
+  CheckpointFile,
+  ProjectCheckpoint
+} from '../../git/change-tracking-service'
 import { assertId } from './checkpoint-errors'
 import { isMissing } from './checkpoint-blob-store'
 import { EXCLUDED_DIRECTORY_NAMES, isExcludedRelativePath } from '../../git/change-tracking-service'
@@ -27,6 +31,9 @@ const REPAIR_MAX_FILES = 500
 export interface CheckpointMaintenanceHost {
   get(projectId: string, threadId: string, turnId: string): Promise<TurnCheckpoint | null>
   save(checkpoint: TurnCheckpoint): Promise<void>
+  /** Write a checkpoint exactly as given, without re-deciding its project maps.
+   *  Only a pass that has already compacted the row may use this. */
+  saveTrimmed(checkpoint: TurnCheckpoint): Promise<void>
   tracker(projectId: string): ChangeTrackingService
   queryRows(sql: string, params: unknown[], maxRows: number): Promise<Record<string, unknown>[]>
   /**
@@ -542,4 +549,112 @@ export async function pruneUnusedBlobs(
     }
     return deleted
   })
+}
+
+/**
+ * How long a finished checkpoint keeps its whole-project file maps.
+ *
+ * A turn keeps both maps until it is genuinely over: a retry continues a failed
+ * or interrupted attempt inside this window and reads that attempt's `before`
+ * map as its own baseline, and a card that recorded no changes is still healed
+ * from the two maps at read time. After the window nothing reads a whole-project
+ * map again, so keeping it only makes every query on the table slow. Mirrors the
+ * manager's own retry-continuation window.
+ */
+const HISTORICAL_MAP_KEEP_RECENT_MS = 30 * 60 * 1000
+
+/** Only rows this large can still be carrying whole-project maps worth dropping. */
+const HISTORICAL_MAP_MIN_ROW_BYTES = 60_000
+
+/** Rows one pass rewrites, so the database worker stays responsive. */
+const HISTORICAL_MAP_BATCH = 40
+
+/**
+ * Drop whole-project file maps from every finished checkpoint that is over.
+ *
+ * A turn with no changes keeps both of its full project maps (that is deliberate:
+ * an empty checkpoint is the legacy recovery record and a read heals its card
+ * from those maps). Six agents exploring a repository therefore wrote hundreds of
+ * kilobytes per turn, and `turn_checkpoints` grew to hundreds of megabytes, which
+ * is what made every read and write on the database slow enough to stall the app.
+ *
+ * Only checkpoints that can still be used are left alone: an `active` turn owns
+ * its row, and a finished turn younger than the retry window can still be
+ * continued or healed from its maps. Every older row keeps every field that
+ * describes the turn (changes, line stats, breakdown, timestamps) and the map
+ * entries for the paths it actually changed; only the unchanged project-wide
+ * entries go, so rollback and blob pruning still find what they read.
+ * Returns how many rows were rewritten.
+ */
+export async function trimHistoricalCheckpointMaps(
+  host: CheckpointMaintenanceHost
+): Promise<number> {
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await host.queryRowsStrict(
+      `SELECT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
+         FROM turn_checkpoints tc
+        WHERE length(tc.data) > ?
+          AND tc.created_at < ?
+          AND json_extract(tc.data, '$.status') != 'active'
+        ORDER BY length(tc.data) DESC
+        LIMIT ?`,
+      [
+        HISTORICAL_MAP_MIN_ROW_BYTES,
+        Date.now() - HISTORICAL_MAP_KEEP_RECENT_MS,
+        HISTORICAL_MAP_BATCH
+      ],
+      HISTORICAL_MAP_BATCH
+    )
+  } catch (error) {
+    Logger.info('Historical checkpoint maps could not be listed (non-fatal):', error)
+    return 0
+  }
+  let trimmed = 0
+  for (const row of rows) {
+    const turnId = row['turn_id']
+    const projectId = row['project_id']
+    const threadId = row['thread_id']
+    if (
+      typeof turnId !== 'string' ||
+      typeof projectId !== 'string' ||
+      typeof threadId !== 'string'
+    ) {
+      continue
+    }
+    try {
+      const checkpoint = await host.get(projectId, threadId, turnId)
+      if (!checkpoint) continue
+      const paths = new Set(checkpoint.changes.map((change) => change.path))
+      const trimFiles = (snapshot: ProjectCheckpoint): ProjectCheckpoint => {
+        const files: Record<string, CheckpointFile> = {}
+        for (const path of paths) {
+          const file = snapshot.files[path]
+          if (file) files[path] = file
+        }
+        return { ...snapshot, files }
+      }
+      const next: TurnCheckpoint = {
+        ...checkpoint,
+        before: trimFiles(checkpoint.before),
+        ...(checkpoint.after ? { after: trimFiles(checkpoint.after) } : {})
+      }
+      // Only write when the row actually shrinks: an old checkpoint whose maps
+      // were already trimmed must never be rewritten for nothing.
+      const beforeEntries = Object.keys(checkpoint.before.files).length
+      const afterEntries = Object.keys(next.before.files).length
+      if (beforeEntries === afterEntries) continue
+      // The plain `save` deliberately keeps a read-only turn's whole-project maps
+      // (that is what a card with no recorded changes is healed from), so this
+      // pass writes the row it already compacted instead of re-deciding it.
+      await host.saveTrimmed(next)
+      trimmed += 1
+    } catch (error) {
+      Logger.info('Historical checkpoint map could not be trimmed (non-fatal):', {
+        turnId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+  return trimmed
 }

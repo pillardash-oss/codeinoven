@@ -242,6 +242,20 @@
    *  it has not been captured yet. Plain not reactive: the run-state effect owns
    *  it. */
   let openedAtActivity = -1
+  /**
+   * The fold this effect last asked the owner for, and the activity it asked at.
+   *
+   * A controlled trace reports a fold to its owner and reads the answer back as
+   * `folded`. When the owner does not hand that answer back (the run store keeps
+   * its own idea of whether a trace is open, and a run whose stream and run state
+   * disagree clears it again), asking on every flush is an update-depth loop:
+   * the trace opens, the owner closes it, the effect opens it again, and Svelte
+   * aborts after a thousand passes with `effect_update_depth_exceeded`. One
+   * request per activity value is enough: either the owner honours it, or it has
+   * a reason this component cannot see, and repeating cannot change either.
+   * Plain not reactive: only this effect writes it.
+   */
+  let foldRequest: { open: boolean; activity: number } | null = null
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
   /** The trace's root. It exists only to find the transcript scroller the trace
@@ -450,12 +464,20 @@
    * straight back as `folded`; an uncontrolled trace keeps it here. Either way
    * nothing else in this component writes the fold, so the state the reader sees
    * and the state the owner knows about are one value. */
-  function setFold(nextOpen: boolean, nextUserOpened = userOpened, nextUserFolded = userFolded): void {
+  function setFold(
+    nextOpen: boolean,
+    nextUserOpened = userOpened,
+    nextUserFolded = userFolded
+  ): void {
     if (controlled) {
       onToggle?.(nextOpen, nextUserOpened, nextUserFolded)
       return
     }
-    if (localOpen === nextOpen && localUserOpened === nextUserOpened && localUserFolded === nextUserFolded) {
+    if (
+      localOpen === nextOpen &&
+      localUserOpened === nextUserOpened &&
+      localUserFolded === nextUserFolded
+    ) {
       return
     }
     localOpen = nextOpen
@@ -464,17 +486,29 @@
     onToggle?.(nextOpen, nextUserOpened, nextUserFolded)
   }
 
+  /** Ask the owner for a fold, once per distinct request. */
+  function requestFold(open: boolean, activity: number): void {
+    if (foldRequest && foldRequest.open === open && foldRequest.activity === activity) return
+    foldRequest = { open, activity }
+    setFold(open)
+  }
+
   $effect(() => {
     // The newest activity mounted right now. A retry keeps the old parts, so
     // this value stands still until the attempt really produces work.
     const activity = traceSpan?.end ?? traceSpan?.start ?? 0
     if (openedAtActivity < 0) openedAtActivity = isOpen ? 0 : activity
+    // The owner's answer arrived, so a later change may ask again.
+    if (foldRequest && foldRequest.open === isOpen) foldRequest = null
     // A live turn keeps its work on screen; a trace the user explicitly folded
     // stays folded while it works, so a harness busy blip never re-opens it.
     if (busy) {
       sawLiveWork = true
       if (visibleParts.length > 0 && !isOpen && !userFolded && activity > openedAtActivity) {
-        setFold(true)
+        requestFold(true, activity)
+        // This activity has now been opened for; asking again at the same mark
+        // is what turned a disagreeing owner into a loop.
+        openedAtActivity = activity
       }
       return
     }
@@ -487,7 +521,7 @@
     // opened is left exactly as they left it.
     if ((done || sawLiveWork) && isOpen && !userOpened) {
       foldToHeader()
-      setFold(false)
+      requestFold(false, activity)
       openedAtActivity = activity
     }
   })
