@@ -780,6 +780,8 @@ export class ChatEngineAssignment {
     return [
       "Waiting for a worker is the application's job, not yours.",
       'When every task you can act on is dispatched and the rest are workers still running, end your turn: the application starts a new coordinator turn the moment a worker reports, finishes without reporting, or leaves an attention task, and that turn carries the report.',
+      'Assignment workers are durable threads the application owns, not sub-agents of this turn: the four-sub-agent cap of the spawning tools does not apply, the application sets no limit on how many workers run at once, and no worker count is ever over a limit. Dispatch every ready task the dependencies allow.',
+      'A task that already carries a report is never dispatched again: the report is the evidence the review endpoint reads, so review it instead of assigning the task a second time.',
       'Never poll, sleep, or loop on /v1/assignments/get or any other endpoint to wait for a worker: a waiting loop keeps this thread busy, delays the report you are waiting for, and the report reaches you as a new turn anyway. Call get only to read state you are about to act on right now.'
     ].join(' ')
   }
