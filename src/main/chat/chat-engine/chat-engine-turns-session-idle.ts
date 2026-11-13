@@ -63,7 +63,7 @@ import {
   taskReconcilePrompt,
   SUPERSEDED_TURN_MESSAGE
 } from './chat-engine-constants'
-import { broadcastToast } from './chat-engine-pure'
+import { broadcastToast, assignmentStallNoticeId } from './chat-engine-pure'
 import { ChatEngine } from '../chat-engine'
 
 /** ChatEngine turns-session-idle: one concern, moved verbatim from the composition root. */
@@ -1426,7 +1426,8 @@ export class ChatEngineTurnsSessionIdle {
             )
             broadcastToast(
               'The Sr. Engineer ended its turn without resolving the Assignment tasks. Resume coordination to continue.',
-              'info'
+              'info',
+              assignmentStallNoticeId(assignmentId)
             )
           } else {
             this.host.state.assignmentContinuationStalls.set(assignmentId, stalls)

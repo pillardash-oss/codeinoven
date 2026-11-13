@@ -246,9 +246,11 @@ export const IPC_EVENT_CONTRACT = {
   'notification:show': [] as unknown as [payload: AgentNotificationPayload, appFocused: boolean],
   /** Transient in-app toast (error/info, optional navigation action). An error
    *  toast keeps `details` behind its Copy action and is also filed in the App
-   *  Errors panel. */
+   *  Errors panel. `id` lets the process that raised a condition withdraw the
+   *  notice when the condition no longer holds. */
   'app:toast': [] as unknown as [
     payload: {
+      id?: string
       message: string
       type: 'error' | 'info'
       details?: string
@@ -257,6 +259,8 @@ export const IPC_EVENT_CONTRACT = {
       action?: { label: string; projectId: string; threadId: string }
     }
   ],
+  /** Withdraw one still-visible toast, because what it warned about was resolved. */
+  'app:toast:dismiss': [] as unknown as [id: string],
   'notification:threadClicked': [] as unknown as [payload: ThreadClickedPayload],
   /** macOS notification authorization changed (delivery outcome or re-verification). */
   'notification:permissionStatus': [] as unknown as [status: SystemNotificationPermissionStatus],
