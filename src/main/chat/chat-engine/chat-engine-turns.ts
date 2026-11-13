@@ -4,13 +4,12 @@ import { warmOpenCodeInstallation } from '../../agents/opencode-installation'
 import { LATE_CLAIM_REOPEN_WINDOW_MS } from '../../storage/checkpoint-manager'
 import { updateRetryWakeWindow } from '../thread-events'
 import { validateBoundedString, validateEntityId } from '../../ipc/ipc-validation'
-import type { AuxiliaryModelCandidate, HarnessDriver } from '../../drivers/driver.interface'
+import type { HarnessDriver } from '../../drivers/driver.interface'
 import {
   continuationRequestPrompt,
   pendingContinuationRequest,
   type PendingContinuationRequest
 } from '../../../lib/pending-request'
-import type { RankingQueueHead } from '../../database/repositories/model-ranking-snapshot-repo'
 import { instanceRegistry } from '../../system/instance-registry'
 import type {
   AgentAccountUsage,
@@ -468,20 +467,6 @@ export class ChatEngineTurns {
     }
     if (!projectPath) throw new Error(`Project has no working directory: ${projectId}`)
     return projectPath
-  }
-
-  /**
-   * Neutral working directory for auxiliary disposable sessions (grading
-   * judges and quota reads) so they never depend on where a conversation
-   * lived: the project row may be gone long before its snapshots are.
-   */
-  async auxiliaryWorkingDirectory(): Promise<string> {
-    try {
-      return await this.resolveProjectPath(INBOX_PROJECT_ID)
-    } catch {
-      await this.host.storage.ensureDirectory(CHATS_CWD_DIR)
-      return this.host.storage.resolve(CHATS_CWD_DIR)
-    }
   }
 
   /**
@@ -1425,39 +1410,6 @@ export class ChatEngineTurns {
         error: rawErrorMessage(error)
       })
       return { text: nudge, attachments: [] }
-    }
-  }
-
-  /**
-   * Window covering the graded harness's own grading route: the candidates its
-   * driver discovered, plus the graded model the one-shot runner appends as the
-   * settings fallback. An unknown route reports null, because a route reported
-   * closed without knowing it would postpone work that can run.
-   */
-  nativeRouteWindowUntil(row: RankingQueueHead, native: HarnessDriver | null): number | null {
-    const route = native?.auxiliaryRouteCandidates?.() ?? null
-    if (!route || !native) return null
-    return this.windowUntil(native, [
-      ...route,
-      { providerId: row.provider_id, modelId: row.model_id }
-    ])
-  }
-
-  /**
-   * Ask one driver about one route, treating a driver that throws as a driver
-   * that knows nothing: the contract says an unknown route must keep callers
-   * judging, and a planning pass must never fail the drain.
-   */
-  windowUntil(
-    driver: HarnessDriver,
-    candidates: readonly AuxiliaryModelCandidate[]
-  ): number | null {
-    if (!driver.auxiliaryWindowUntil) return null
-    try {
-      return driver.auxiliaryWindowUntil(candidates)
-    } catch (error) {
-      Logger.dev('Auxiliary window check failed; judging normally:', rawErrorMessage(error))
-      return null
     }
   }
 

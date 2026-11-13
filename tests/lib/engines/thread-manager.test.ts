@@ -394,57 +394,6 @@ describe('ThreadManager', () => {
       'Thread not found in project missing-project'
     )
   })
-
-  it('closes pending ranking snapshots before deletion on every delete path', async () => {
-    vi.useFakeTimers()
-    vi.setSystemTime(new Date('2026-07-26T12:00:00.000Z'))
-    const { manager, db } = await createManager()
-    const thread = await manager.createThread({
-      projectId: 'project1',
-      providerId: 'openai',
-      title: 'To delete'
-    })
-
-    const closeAt = Date.now()
-    // An open ranking snapshot for the thread (as chat-engine would capture
-    // it). The row survives deletion with its thread reference detached
-    // (SET NULL) so the judge can still score the raw conversation; the
-    // close-then-grade step itself is wired via onThreadsDeletedForRanking
-    // and covered by the chat-engine model-ranking tests.
-    db.run(
-      `INSERT INTO model_ranking_snapshots(
-         id, thread_id, project_id, shot_category, status,
-         harness_id, provider_id, model_id, thinking_level,
-         started_at, ended_at, closed_at_ms, due_at_ms,
-         user_message_text, assistant_output_text, created_at
-       ) VALUES('ranking:turn-1', ?, 'project1', 'first_shot', 'pending',
-         'opencode', 'openai', 'gpt-x', 'high',
-         1, 2, NULL, ?, 'fix the bug', 'fixed', 1)`,
-      thread.id,
-      closeAt + 24 * 3_600_000
-    )
-
-    await manager.deleteThread('project1', thread.id)
-
-    // The open snapshot survived deletion (thread reference SET NULL,
-    // attribution intact) and stays pending for the grader.
-    const row = db.get(
-      'SELECT thread_id, status, shot_category, closed_at_ms, model_id FROM model_ranking_snapshots WHERE id = ?',
-      'ranking:turn-1'
-    ) as {
-      thread_id: string | null
-      status: string
-      shot_category: string
-      closed_at_ms: number | null
-      model_id: string
-    }
-    expect(row).toBeDefined()
-    expect(row.thread_id).toBeNull()
-    expect(row.status).toBe('pending')
-    expect(row.shot_category).toBe('first_shot')
-    expect(row.closed_at_ms).toBeNull()
-    expect(row.model_id).toBe('gpt-x')
-  })
 })
 
 describe('ThreadManager oven settings guard', () => {

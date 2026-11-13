@@ -32,9 +32,7 @@ import { PromptAssembler } from '../prompt-assembler'
 import type { HarnessDriver } from '../../drivers/driver.interface'
 import type { Database } from '../../database/database'
 import { HarnessUsageRepo } from '../../database/repositories/harness-usage-repo'
-import { ModelRankingRepo } from '../../database/repositories/model-ranking-repo'
 import { AssistantRepo } from '../../database/repositories/assistant-repo'
-import { ModelRankingSnapshotRepo } from '../../database/repositories/model-ranking-snapshot-repo'
 import type { StorageEngine } from '../../storage/storage-engine'
 import { WorkflowOwnershipService } from '../../system/workflow-ownership-service'
 import { SecretsService } from '../../secrets/secrets-service'
@@ -73,8 +71,6 @@ export function wireChatEngine(
     engine.state.agentProcesses.attachJournal(processJournalPath)
     engine.threadCreation = threadCreation ?? new ThreadCreationCoordinator()
     engine.state.usageRepo = new HarnessUsageRepo(database)
-    engine.rankingRepo = new ModelRankingRepo(database)
-    engine.rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
     engine.state.assistantRepo = new AssistantRepo(database)
     engine.state.projectManager = new ProjectManager(database)
     // Tagged composer references are resolved against the sending thread's
@@ -107,11 +103,6 @@ export function wireChatEngine(
       },
       engine.scopeRoots
     )
-    engine.threadManager.onThreadsDeletedForRanking = (_projectId, threadIds) => {
-      void _projectId
-      engine.rankingSnapshotRepo.closeForThreads(threadIds, Date.now())
-      engine.scheduleRankingDrain()
-    }
     engine.state.memoryService = new MemoryService(storage)
     engine.state.generatedArtifactService = new GeneratedArtifactService(storage)
     engine.state.promptAssembler = new PromptAssembler(engine.state.memoryService)

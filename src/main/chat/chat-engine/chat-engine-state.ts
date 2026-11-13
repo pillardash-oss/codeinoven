@@ -52,7 +52,6 @@ import type {
   Thread,
   ThreadTransferResult,
   ThinkingLevel,
-  LocalRankingGradeProgress,
   AssistantAgents
 } from '../../../lib/types'
 import { OpenUsageClient } from '../../usage/openusage-client'
@@ -743,59 +742,8 @@ export class ChatEngineState {
    */
   typesafeDecision: TypesafeDecisionService | null = null
 
-  /**
-   * Fall-through outcomes already reported, so a standing one logs once.
-   *
-   * An unconfigured capability falls through on every single grade, and the log
-   * line that describes it is identical every time. Recording the outcome once
-   * is what keeps a configuration fact out of the per-turn noise.
-   */
-  readonly reportedTypesafeFallthroughs = new Set<string>()
-
   /** Last reading of whether the capability is currently in a state that answers. */
   typesafeAnswerable: { value: boolean; checkedAt: number } | null = null
-
-  gradeDrainRunning = false
-
-  /**
-   * The user-requested run in flight, or null when the queue is idle. Held here
-   * (not only in the IPC layer) so the panel can read live progress from
-   * anywhere and a second request joins the run instead of starting a rival one.
-   */
-  rankingManualRun: LocalRankingGradeProgress | null = null
-
-  /**
-   * The run in flight, so a second request awaits the same result instead of
-   * reading a half-filled snapshot of it. Cleared by whichever caller started
-   * the run, once that run settles.
-   */
-  rankingManualRunPromise: Promise<LocalRankingGradeProgress> | null = null
-
-  /**
-   * Earliest moment the next ranking pass may run, set while rows a pass could
-   * not re-date are still due in the queue. Read by every `scheduleRankingDrain`
-   * call, so no external trigger can bypass it; cleared as soon as it passes.
-   */
-  rankingHeldRetryAtMs: number | null = null
-
-  /**
-   * Consecutive judge failures per harness. Deliberately in-memory: a restart
-   * gives a blocked judge one fresh attempt, which is cheap, and a single
-   * scored row clears the record.
-   */
-  rankingJudgeFailures = new Map<string, number>()
-
-  /**
-   * Native graded-harness judge strikes. Set once a harness's own grading
-   * route failed one row, cleared only when that route scores again. While a
-   * harness carries a strike, its queue stops spending harness processes on
-   * its own candidates and judges through the harness-agnostic fallback lane
-   * (see `resolveFallbackRankingJudge`). Deliberately in-memory like
-   * `rankingJudgeFailures`: a restart gives the native route one fresh
-   * attempt, which is cheap, and the fallback lane keeps that attempt from
-   * ever duplicating the held-back herd of a permanently unusable account.
-   */
-  rankingNativeJudgeStrikes = new Map<string, number>()
 
   utilityTurns = new Map<
     string,

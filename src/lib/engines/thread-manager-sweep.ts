@@ -38,8 +38,6 @@ export class ThreadSweepService {
    * tear down live harness resources (sessions, servers, ports) first.
    * @param onDeleted Invoked after the rows are gone, so every window can drop
    * them.
-   * @param onThreadsDeletedForRanking Ranked-conversation close signal, read at
-   * call time because the chat engine wires it after the manager exists.
    */
   constructor(
     private readonly db: Database,
@@ -49,8 +47,7 @@ export class ThreadSweepService {
     private readonly onDelete: (thread: Thread) => void | Promise<void>,
     private readonly onDeleted: (
       threads: Pick<Thread, 'projectId' | 'id'>[]
-    ) => void | Promise<void>,
-    private readonly onThreadsDeletedForRanking: (projectId: string, threadIds: string[]) => void
+    ) => void | Promise<void>
   ) {}
 
   async deleteThread(
@@ -109,10 +106,6 @@ export class ThreadSweepService {
     for (const candidate of deletionOrder) {
       await this.onDelete(candidate)
     }
-    this.onThreadsDeletedForRanking(
-      projectId,
-      deletionOrder.map((candidate) => candidate.id)
-    )
     const outcome = await this.db.transactionViaWorker(
       buildThreadDeletionStatements(deletionOrder, assignmentIds)
     )

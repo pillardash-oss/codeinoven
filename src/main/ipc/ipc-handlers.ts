@@ -48,8 +48,6 @@ import { DiagnosticsService } from '../system/diagnostics-service'
 import { MemoryService } from '../chat/memory-service'
 import { AttachmentGrantRepo } from '../database/repositories/attachment-grant-repo'
 import { HarnessUsageRepo } from '../database/repositories/harness-usage-repo'
-import { ModelRankingRepo } from '../database/repositories/model-ranking-repo'
-import { ModelRankingSnapshotRepo } from '../database/repositories/model-ranking-snapshot-repo'
 import { NoteRepo } from '../database/repositories/note-repo'
 import { OrchestrationDispatchRepo } from '../database/repositories/orchestration-dispatch-repo'
 import { CheckpointManager } from '../storage/checkpoint-manager'
@@ -298,11 +296,6 @@ export function registerIpcHandlers(
   const memoryService = new MemoryService(storage)
   const attachmentGrantRepo = new AttachmentGrantRepo(database)
   const harnessUsageRepo = new HarnessUsageRepo(database)
-  const modelRankingRepo = new ModelRankingRepo(database)
-  // The ranking drain in ChatEngine owns its own instance; repositories are
-  // stateless views over the same file, so this one exists only so a user
-  // purge can clear the queue together with the aggregates it feeds.
-  const rankingSnapshotRepo = new ModelRankingSnapshotRepo(database)
   const noteRepo = new NoteRepo(database)
   const orchestrationDispatchRepo = new OrchestrationDispatchRepo(database)
 
@@ -520,8 +513,6 @@ export function registerIpcHandlers(
     memoryService,
     attachmentGrantRepo,
     harnessUsageRepo,
-    modelRankingRepo,
-    rankingSnapshotRepo,
     noteRepo,
     orchestrationDispatchRepo,
     assistantManager,

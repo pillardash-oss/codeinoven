@@ -13,7 +13,6 @@ import type {
   ComputerUsePipFrame,
   ComputerUsePipState,
   CuaUpdateProgress,
-  LocalRankingGradeProgress,
   ProviderConnectionInfo,
   Thread,
   TypesafeStatus
@@ -353,13 +352,6 @@ export const IPC_EVENT_CONTRACT = {
    * showing the same utility never reports a stale grant.
    */
   'utilities:mcpOAuthEvent': [] as unknown as [payload: import('../types').McpOAuthEventPayload],
-  /**
-   * Progress of a manual ranking grade run, pushed after every pass so a queue
-   * of conversations graded three at a time never looks like a hang. The run
-   * itself answers over `account:gradeRankingQueue`; this stream carries only
-   * the counters, so a pass never triggers a second read of the queue.
-   */
-  'account:rankingGradeProgress': [] as unknown as [progress: LocalRankingGradeProgress | null],
   /**
    * A language server's own work-done progress for IDE Mode.
    *

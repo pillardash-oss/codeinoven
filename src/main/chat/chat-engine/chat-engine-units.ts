@@ -38,7 +38,6 @@ import { ChatEngineTurnsSendPrompt } from './chat-engine-turns-send-prompt'
 import { ChatEngineBrainstorm } from './chat-engine-brainstorm'
 import { ChatEngineUtilitiesGateway } from './chat-engine-utilities-gateway'
 import { ChatEngineRuntimeAgents } from './chat-engine-runtime-agents'
-import { ChatEngineRankingsGrade } from './chat-engine-rankings-grade'
 import { ChatEngineRuntimeConnectivity } from './chat-engine-runtime-connectivity'
 import { ChatEnginePermissions } from './chat-engine-permissions'
 import { ChatEngineBrainstormReview } from './chat-engine-brainstorm-review'
@@ -56,8 +55,6 @@ import { ChatEngineTurnsStream } from './chat-engine-turns-stream'
 import { ChatEngineLifecycle } from './chat-engine-lifecycle'
 import { ChatEngineThreadsCreate } from './chat-engine-threads-create'
 import { ChatEngineTurnsSessionIdle } from './chat-engine-turns-session-idle'
-import { ChatEngineRankings } from './chat-engine-rankings'
-import { ChatEngineRankingsQueue } from './chat-engine-rankings-queue'
 import { ChatEngineCitations } from './chat-engine-citations'
 import { ChatEngineDirectReply } from './chat-engine-direct-reply'
 
@@ -104,7 +101,6 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     brainstorm: new ChatEngineBrainstorm(engine),
     'utilities-gateway': new ChatEngineUtilitiesGateway(engine),
     'runtime-agents': new ChatEngineRuntimeAgents(engine),
-    'rankings-grade': new ChatEngineRankingsGrade(engine),
     'runtime-connectivity': new ChatEngineRuntimeConnectivity(engine),
     permissions: new ChatEnginePermissions(engine),
     'brainstorm-review': new ChatEngineBrainstormReview(engine),
@@ -122,8 +118,6 @@ export function buildChatEngineUnits(engine: ChatEngine) {
     lifecycle: new ChatEngineLifecycle(engine),
     'threads-create': new ChatEngineThreadsCreate(engine),
     'turns-session-idle': new ChatEngineTurnsSessionIdle(engine),
-    rankings: new ChatEngineRankings(engine),
-    'rankings-queue': new ChatEngineRankingsQueue(engine),
     'direct-reply': new ChatEngineDirectReply(engine)
   } as const
 }

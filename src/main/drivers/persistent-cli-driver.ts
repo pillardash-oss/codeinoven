@@ -27,7 +27,6 @@ import type {
   CheapModelRequest,
   CheapModelResult,
   GenerateTitleOptions,
-  GradeTurnOptions,
   HarnessCapabilities,
   HarnessDriver,
   PreparedUtilityRuntime,
@@ -41,7 +40,6 @@ import {
   sanitizeGeneratedTitle,
   sanitizeHeartbeatReply
 } from '../chat/title-generator'
-import { buildRankingGradePrompt } from '../chat/turn-grader-prompt'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -66,7 +64,6 @@ import {
 } from './persistent-cli/persistent-cli-transcript'
 import { PersistentCliLineReader } from './persistent-cli/persistent-cli-stream'
 import {
-  parseRankingGradeForAttempt,
   sanitizeAuxiliaryText,
   TITLE_GENERATION_TIMEOUT_MS,
   TitleTurnRegistry
@@ -163,7 +160,6 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   private auxiliaryRoute: { at: number; candidates: TitleModelCandidate[] } | null = null
   /** Outcomes of the most recent title-candidate run, for ledger integration. */
   private lastTitleAttempts: TitleAttemptAccounting[] = []
-  private lastGradeTurnAttempts: TitleAttemptAccounting[] = []
   private processObserver: AgentProcessObserver | null = null
   /** Provider-neutral interaction cards already surfaced for this driver instance. */
   private interactionRequests = new Set<string>()
@@ -319,32 +315,6 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return outcome.value
   }
 
-  /** Grade a completed turn with disposable sessions, cheapest candidate first. */
-  protected async gradeTurnWithCandidates(
-    projectPath: string,
-    options: GradeTurnOptions,
-    candidates: TitleModelCandidate[]
-  ): Promise<number | null> {
-    if (!options.candidates?.length) this.recordAuxiliaryRoute(candidates)
-    const outcome = await this.oneShotWithCandidates(
-      projectPath,
-      {
-        settings: options.settings,
-        message: '',
-        ...(options.parentSessionId ? { parentSessionId: options.parentSessionId } : {})
-      },
-      candidates,
-      buildRankingGradePrompt({
-        userMessage: options.userMessage,
-        assistantOutput: options.assistantOutput,
-        followUp: options.followUp ?? null
-      }),
-      parseRankingGradeForAttempt
-    )
-    this.lastGradeTurnAttempts = outcome.attempts
-    return outcome.value === null ? null : Number.parseInt(outcome.value, 10)
-  }
-
   /**
    * One self-contained cheap-model completion, cheapest candidate first.
    * Subclasses expose their cheapest models through `cheapCandidateModels`;
@@ -444,14 +414,6 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return outcome.value !== null
   }
 
-  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    return this.gradeTurnWithCandidates(
-      projectPath,
-      options,
-      options.candidates ?? (await this.cheapCandidateModels(projectPath))
-    )
-  }
-
   /**
    * Outcomes of the most recent title-candidate run. Each entry exposes the
    * candidate identity, whether it produced a usable title, why it fell back,
@@ -460,13 +422,6 @@ export abstract class PersistentCliDriver implements HarnessDriver {
    */
   getTitleAttempts(): readonly TitleAttemptAccounting[] {
     return this.lastTitleAttempts
-  }
-
-  /**
-   * Outcomes of the most recent turn-grading run, mirroring getTitleAttempts.
-   */
-  getGradeTurnAttempts(): readonly TitleAttemptAccounting[] {
-    return this.lastGradeTurnAttempts
   }
 
   /**

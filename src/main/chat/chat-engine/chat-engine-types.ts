@@ -35,8 +35,7 @@ import type {
   UserMessagePresentation,
   ThreadStatus,
   Thread,
-  ThreadSettings,
-  ThinkingLevel
+  ThreadSettings
 } from '../../../lib/types'
 import type { TurnStreamEvent } from '../turn-stream'
 
@@ -106,8 +105,7 @@ export interface SessionInfo {
    *
    * The persisted record cannot answer this: a prompt that carries a
    * presentation is stored with the user role and origin so the transcript
-   * reads naturally, whatever dispatched it. Model-ranking capture is the
-   * consumer.
+   * reads naturally, whatever dispatched it.
    */
   activeTurnOrigin?: 'user' | 'internal'
   /** Last bound turn id for this session. Stream events emitted while
@@ -605,82 +603,4 @@ export interface VirtualTaskOptions {
     accepts(response: AgentMessage): boolean
     repairPrompt(response: AgentMessage, attempt: number): string
   }
-}
-
-/** Minimal judge payload reconstructed from one durable queue row. */
-export interface RankingGradeCandidate {
-  id: string
-  harnessId: string
-  providerId: string
-  modelId: string
-  thinkingLevel: ThinkingLevel
-  userMessage: string
-  assistantOutput: string
-  followUp: string | null
-}
-
-/**
- * Which judge produced one grading result, or failed to produce one. Grading
- * can run on the user-assigned auxiliary model or on the graded harness's own
- * cheap candidate, so a failure is only diagnosable when the log names the
- * judge that actually ran.
- */
-export interface RankingJudgeOutcome {
-  /** 0–10 score, or null when no judge returned a number. */
-  score: number | null
-  /** Harness that ran the judge: the assigned auxiliary harness, or the graded harness. */
-  judgeHarnessId: string
-  /** Model that ran the judge. */
-  judgeModelId: string
-  /** True when the attempt ran on the user-assigned auxiliary model. */
-  viaAuxiliary: boolean
-}
-
-/**
- * A judge route decided last, after the graded harness's own row and every
- * user-assigned auxiliary model have failed: the model and account the user is
- * actively using, or a cheap model of any other resolvable harness. Ranking
- * measures the graded model, so the judge's harness is an implementation
- * detail and grading must never be tied to one harness.
- */
-export interface FallbackRankingJudgeRoute {
-  driver: HarnessDriver
-  harnessId: string
-  providerId: string
-  modelId: string
-  accountId: string
-  /** Explicit candidates the disposable session must try, cheapest first. */
-  candidates: AuxiliaryModelCandidate[]
-  /** Harness-correct settings for the disposable auxiliary session. */
-  settings: ThreadSettings
-}
-
-/**
- * What one ranking drain pass may judge, decided before it claims anything.
- *
- * A row whose every judge route sits inside a provider usage window the
- * provider itself reported is held back unclaimed: claiming it would consume a
- * judge attempt on work that cannot run and would report a null score no user
- * asked for. Held rows are keyed by the moment their window reopens, so the
- * pass writes one deadline per distinct window rather than one per row.
- */
-export interface RankingPassPlan {
-  /** Ids this pass may judge, in queue order. */
-  claimIds: string[]
-  /** Held-back rows grouped by the deadline they wait for. */
-  heldBack: Array<{ untilMs: number; ids: string[] }>
-}
-
-/**
- * What one drain pass actually did.
- *
- * `null` (the return of the drain itself) means the pass never ran because
- * another one already owned the queue, which a caller driving a run must wait
- * out rather than mistake for a pass that found nothing to grade.
- */
-export interface RankingDrainOutcome {
-  /** Rows judged and folded into the aggregates. */
-  scored: number
-  /** Rows the judge could not score, deferred or parked for a later attempt. */
-  failed: number
 }

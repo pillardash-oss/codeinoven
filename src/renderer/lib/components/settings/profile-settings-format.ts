@@ -4,15 +4,11 @@ import type {
   AccountUsageBreakdown,
   LocalProfileAnalytics,
   LocalProfileAnalyticsRange,
-  LocalProfileModelRanking,
-  LocalProfileRankingModeStats,
   ThinkingLevel
 } from '$shared/types'
 import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
 
 export type ThinkingFilter = 'all' | ThinkingLevel
-export type ShotFilter = 'all' | 'one_shot' | 'multi_shot'
-export type RankingSortKey = 'aggregate' | 'one_shot' | 'multi_shot'
 export type RangePreset = 'today' | 'yesterday' | '7d' | '30d' | 'year' | 'custom'
 export type ModelRankMetric = 'cost' | 'tokens' | 'runtime'
 
@@ -97,16 +93,10 @@ export const EMPTY_USAGE: LocalProfileAnalytics = {
   activityDays: [],
   dailyUsage: [],
   hourlyUsage: [],
-  modelRankings: [],
   responseDurationMs: 0,
-  gradingSpend: {
-    costUsd: 0
-  },
   records: {
     agentResponses: 0,
-    utilities: 0,
-    modelRankings: 0,
-    pendingGrades: 0
+    utilities: 0
   },
   generatedAt: 0
 }
@@ -225,43 +215,4 @@ export function thinkingLevelLabel(level: ThinkingLevel): string {
     STANDARD_THINKING_PRESETS.find((preset) => preset.id === level)?.label ??
     level.charAt(0).toUpperCase() + level.slice(1)
   )
-}
-
-export function rankingScoreLabel(stats: LocalProfileRankingModeStats): string {
-  if (stats.samples === 0 || stats.averageScore === null) return ' '
-  return `${stats.averageScore.toFixed(1)}/10`
-}
-
-export function rankingSamplesLabel(stats: LocalProfileRankingModeStats): string {
-  return stats.samples === 1 ? '1 conversation' : `${stats.samples} conversations`
-}
-
-export function rankingDurationLabel(stats: LocalProfileRankingModeStats): string {
-  if (stats.samples === 0 || stats.averageDurationMs === null) return ' '
-  return formatDuration(stats.averageDurationMs)
-}
-
-export function rankingAggregateLabel(entry: LocalProfileModelRanking): string {
-  const aggregate = rankingAggregate(entry)
-  return aggregate === null ? ' ' : `${aggregate.toFixed(1)}/10`
-}
-
-export function rankingTotalSamplesLabel(entry: LocalProfileModelRanking): string {
-  const total = entry.oneShot.samples + entry.multiShot.samples
-  return total === 1 ? '1 conversation' : `${total} conversations`
-}
-
-/** Sample-weighted average across both shot categories; null when nothing is ranked yet. */
-export function rankingAggregate(entry: LocalProfileModelRanking): number | null {
-  const oneShotScore = entry.oneShot.averageScore
-  const multiShotScore = entry.multiShot.averageScore
-  const samples = entry.oneShot.samples + entry.multiShot.samples
-  if (samples === 0) return null
-  const weighted =
-    (oneShotScore === null ? 0 : oneShotScore * entry.oneShot.samples) +
-    (multiShotScore === null ? 0 : multiShotScore * entry.multiShot.samples)
-  const scoredSamples =
-    (oneShotScore === null ? 0 : entry.oneShot.samples) +
-    (multiShotScore === null ? 0 : entry.multiShot.samples)
-  return scoredSamples === 0 ? null : weighted / scoredSamples
 }

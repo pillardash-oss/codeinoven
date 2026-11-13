@@ -90,16 +90,6 @@ const SYNC_READ_ALLOWANCES: readonly SyncReadAllowance[] = [
     reason: REPOSITORY_READ
   },
   { file: 'src/main/database/repositories/history-repo.ts', maxSites: 7, reason: REPOSITORY_READ },
-  {
-    file: 'src/main/database/repositories/model-ranking-repo.ts',
-    maxSites: 3,
-    reason: REPOSITORY_READ
-  },
-  {
-    file: 'src/main/database/repositories/model-ranking-snapshot-repo.ts',
-    maxSites: 8,
-    reason: REPOSITORY_READ
-  },
   { file: 'src/main/database/repositories/note-repo.ts', maxSites: 4, reason: REPOSITORY_READ },
   { file: 'src/main/database/repositories/project-repo.ts', maxSites: 5, reason: REPOSITORY_READ },
   {

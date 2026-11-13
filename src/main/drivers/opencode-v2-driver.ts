@@ -16,7 +16,6 @@ import type {
   CheapModelRequest,
   CheapModelResult,
   GenerateTitleOptions,
-  GradeTurnOptions,
   HarnessCapabilities,
   HarnessDriver,
   PreparedUtilityRuntime,
@@ -36,7 +35,6 @@ import { runHarnessCommand } from './harness-runtime'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { SecretsService } from '../secrets/secrets-service'
 import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
-import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
 import {
   OpenCodeV2Client,
   OpenCodeV2RequestError,
@@ -1018,22 +1016,6 @@ export class OpenCodeV2Driver implements HarnessDriver, IsolatedSessionDriver {
       request.validateResponse
     )
     return { text, attempts }
-  }
-
-  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    const candidates = options.candidates ?? (await this.cheapCandidates())
-    const result = await this.isolatedOneShot(
-      projectPath,
-      options.settings,
-      'Turn grade',
-      candidates,
-      buildRankingGradePrompt({
-        userMessage: options.userMessage,
-        assistantOutput: options.assistantOutput,
-        followUp: options.followUp ?? null
-      })
-    )
-    return result === null ? null : parseRankingGrade(result)
   }
 
   /** Run one auxiliary completion per candidate, each on its own server. */

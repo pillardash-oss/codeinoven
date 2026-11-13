@@ -1,6 +1,6 @@
+import { BrowserWindow } from 'electron'
 import { ideService } from '../../editor/ide-service'
 import { usageAnalytics } from '../../system/usage-analytics'
-import { BrowserWindow } from 'electron'
 import { randomUUID } from 'node:crypto'
 import { CIO_PROMPT_MAX_LENGTH, isCioPromptId } from '../../../lib/cio-prompts'
 import { prototypeCdnPolicyFromConfig } from '../../../lib/prototypes/prototype-cdn'
@@ -17,8 +17,7 @@ import {
   validateHeartbeatCreateInput,
   validateHeartbeatPatchInput,
   validateLocalProfileAnalyticsRange,
-  validateLocalUsageClearInput,
-  validateRankingGradeScope
+  validateLocalUsageClearInput
 } from './config-helpers'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { Logger } from '../../system/logger'
@@ -27,9 +26,6 @@ import { sendToRenderer } from '../renderer-delivery'
 import type {
   AgentRole,
   AppConfig,
-  LocalRankingGradeProgress,
-  LocalRankingJudgeView,
-  LocalRankingQueueStatus,
   LocalUsageClearInput,
   LocalUsageRecordCounts
 } from '../../../lib/types'
@@ -41,16 +37,7 @@ const AGENT_ROLES = new Set<AgentRole>(['seniorEngineer', 'worker', 'auditor'])
 const RECORD_STORE_LABELS: Record<LocalUsageClearInput['store'], string> = {
   all: 'all usage records',
   agentResponses: 'agent response records',
-  utilities: 'utility records',
-  modelRankings: 'model ranking records'
-}
-
-/** Push ranking-grade progress to every window, the way other status streams do. */
-function broadcastRankingGradeProgress(progress: LocalRankingGradeProgress | null): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed() || win.webContents.isDestroyed()) continue
-    sendToRenderer(win.webContents, 'account:rankingGradeProgress', progress)
-  }
+  utilities: 'utility records'
 }
 
 /**
@@ -67,97 +54,28 @@ function broadcastConfigChanged(config: AppConfig): void {
   }
 }
 
-/**
- * The judge a manual run would use, described for the panel that offers it.
- *
- * A `model` pin that is missing any of its parts is reported as "No model
- * chosen" rather than quietly presented as the automatic chain, because a
- * settings page that claims a judge the engine cannot use is worse than one
- * that says the choice needs finishing. Only a hand-edited config can reach that
- * state: the write boundary rejects an incomplete pin.
- */
-function rankingJudgeView(config: AppConfig): LocalRankingJudgeView {
-  const judge = config.rankingJudge ?? { kind: 'automatic' }
-  if (judge.kind === 'typesafe') return { kind: 'typesafe', label: 'TypeSafe (Jev)' }
-  if (judge.kind === 'model') {
-    const named = judge.harnessId && judge.providerId && judge.modelId
-    return {
-      kind: 'model',
-      label: named ? `${judge.harnessId} · ${judge.modelId}` : 'No model chosen'
-    }
-  }
-  return { kind: 'automatic', label: 'Automatic' }
-}
-
 export function registerConfigHandlers(ctx: IpcHandlerContext): void {
-  const {
-    storage,
-    database,
-    options,
-    harnessUsageRepo,
-    modelRankingRepo,
-    rankingSnapshotRepo,
-    chatEngine
-  } = ctx
-
-  /**
-   * One read of everything the grading panel shows: the queue, the judge, and
-   * the run in flight. Assembled in one place so the panel, the progress event
-   * and the run's return value can never describe the same queue differently.
-   */
-  async function rankingQueueStatus(): Promise<LocalRankingQueueStatus> {
-    const [counts, config] = await Promise.all([
-      Promise.resolve(rankingSnapshotRepo.queueCounts(Date.now())),
-      storage.getConfig()
-    ])
-    return {
-      awaiting: counts.awaiting,
-      due: counts.due,
-      failed: counts.failed,
-      judge: rankingJudgeView(config),
-      run: chatEngine?.rankingGradeRunStatus?.() ?? null
-    }
-  }
+  const { storage, database, options, harnessUsageRepo, chatEngine } = ctx
 
   // ─── Application config ────────────────────────────────────────────────
   ipcMain.handle('account:getLocalUsage', async (_, input: unknown) => {
     const range = validateLocalProfileAnalyticsRange(input)
-    const [analytics, pendingGrades] = await Promise.all([
-      harnessUsageRepo.profileAnalytics(range),
-      rankingSnapshotRepo.totalCount()
-    ])
-    analytics.modelRankings = modelRankingRepo.analytics()
-    analytics.gradingSpend = modelRankingRepo.gradingSpend()
-    // The stores the Usage page can clear are reported alongside the analytics,
-    // so the counts a clear dialog promises always match the rows on screen.
-    analytics.records.modelRankings = modelRankingRepo.recordCount()
-    const designCount = await database.queryViaWorker(
-      'SELECT COUNT(*) AS count FROM design_reviews',
-      [],
-      1,
-      { allowPrimaryFallback: false }
-    )
-    if (designCount.ok)
-      analytics.records.modelRankings += Number(designCount.rows[0]?.['count'] ?? 0)
-    analytics.records.pendingGrades = pendingGrades
-    return analytics
+    return harnessUsageRepo.profileAnalytics(range)
   })
 
   /**
    * Start one Usage page record store from a clean slate.
    *
-   * Ledger stores are scoped to the supplied range. The ranking store carries
-   * no per-range timestamp, so it is cleared all-time together with the grading
-   * queue that would otherwise repopulate it. Every purge is logged, because a
-   * destructive action that empties visible history must never be silent.
+   * Ledger stores are scoped to the supplied range. Design-quality reviews carry
+   * no per-range timestamp, so clearing every record takes them all-time. Every
+   * purge is logged, because a destructive action that empties visible history
+   * must never be silent.
    */
   ipcMain.handle('account:clearLocalUsage', async (_, input: unknown) => {
     const request = validateLocalUsageClearInput(input)
     const cleared: LocalUsageRecordCounts = {
       agentResponses: 0,
-      utilities: 0,
-      modelRankings: 0,
-      pendingGrades: 0
+      utilities: 0
     }
     if (request.store === 'all' || request.store === 'agentResponses') {
       const result = await harnessUsageRepo.clearLedgerRecords('agentResponses', request.range)
@@ -173,25 +91,12 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       }
       cleared.utilities = result.deleted
     }
-    if (request.store === 'all' || request.store === 'modelRankings') {
-      cleared.modelRankings = modelRankingRepo.clearAll()
-      const designCount = await database.queryViaWorker(
-        'SELECT COUNT(*) AS count FROM design_reviews',
-        [],
-        1,
-        { allowPrimaryFallback: false }
-      )
+    if (request.store === 'all') {
       const designClear = await database.executeViaWorker('DELETE FROM design_reviews', [], {
         allowPrimaryFallback: false
       })
       if (!designClear.ok)
         throw new Error(designClear.error ?? 'Design quality records could not be cleared')
-      if (designCount.ok) cleared.modelRankings += Number(designCount.rows[0]?.['count'] ?? 0)
-      const queue = await rankingSnapshotRepo.clearAllViaWorker()
-      if (!queue.ok) {
-        throw new Error(queue.error ?? 'The ranking grading queue could not be cleared')
-      }
-      cleared.pendingGrades = queue.deleted
     }
     Logger.info('Local usage records cleared', {
       store: RECORD_STORE_LABELS[request.store],
@@ -202,37 +107,6 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
     return cleared
   })
 
-  ipcMain.handle('account:getRankingQueue', () => rankingQueueStatus())
-
-  /**
-   * Grade the ranking queue on request.
-   *
-   * The run is bounded and paced by the engine; every pass pushes its counters
-   * so a queue graded three conversations at a time shows real progress instead
-   * of a spinner, and the call itself resolves with the run's own result. A run
-   * already in flight is joined rather than duplicated, so a double click cannot
-   * grade the same conversation twice.
-   */
-  ipcMain.handle('account:gradeRankingQueue', async (_, input: unknown) => {
-    const scope = validateRankingGradeScope(input)
-    if (!chatEngine?.gradeRankingQueueNow) {
-      throw new Error('Ranking grading is unavailable in this build')
-    }
-    Logger.info('Ranking queue grading requested', { scope })
-    const progress = await chatEngine.gradeRankingQueueNow(scope, broadcastRankingGradeProgress)
-    broadcastRankingGradeProgress(null)
-    Logger.info('Ranking queue grading finished', {
-      scope,
-      graded: progress.graded,
-      remaining: progress.remaining,
-      cancelled: progress.cancelled
-    })
-    return progress
-  })
-
-  ipcMain.handle('account:cancelRankingGrade', () => {
-    chatEngine?.cancelRankingGrade?.()
-  })
   if (!options.hydrationHandlersRegistered) {
     ipcMain.handle('config:get', () => storage.getConfig())
   }

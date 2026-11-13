@@ -1,5 +1,4 @@
 import { Logger } from '../../system/logger'
-import type { GradeTurnOptions } from '../driver.interface'
 import { type CodexAppServerTurn } from '../codex/codex-protocol'
 import { normalizeAppServerItem } from '../codex/codex-tools'
 import { notificationThreadId, recordValue, stringValue } from '../codex/codex-values'
@@ -12,14 +11,6 @@ export class CodexDriverTurns {
     private readonly host: CodexDriver,
     private readonly base: CodexDriver['base']
   ) {}
-
-  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    return this.host.base.gradeTurnWithCandidates(
-      projectPath,
-      options,
-      options.candidates ?? (await this.host.units['title'].cheapestCandidate(projectPath))
-    )
-  }
 
   /** Whether the driver still has a registered live turn for this session.
    *  The engine's watchdog uses this to distinguish a session whose turn
