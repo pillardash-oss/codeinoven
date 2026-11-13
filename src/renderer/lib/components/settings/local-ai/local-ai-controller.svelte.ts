@@ -9,6 +9,7 @@
  */
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { terminalLines } from '$shared/terminal-lines'
 import {
   localAiModelAliases,
   localAiModelSource,
@@ -81,8 +82,9 @@ interface RunningHandle {
   adopted: boolean
   /** True when the row's log is read from its own file rather than a live PTY. */
   following: boolean
-  /** Partial last line, kept so a chunk boundary never splits a log line. */
-  partial: string
+  /** True when the last chunk ended on a carriage return, so the next one either
+   *  finishes the same line or rewrites it from its first column. */
+  afterCarriageReturn: boolean
 }
 
 export class LocalAiController {
@@ -283,7 +285,7 @@ export class LocalAiController {
       stopping: false,
       adopted: false,
       following: false,
-      partial: ''
+      afterCarriageReturn: false
     }
     this.handles.set(entry.id, handle)
     this.setStatus(entry.id, 'starting')
@@ -345,7 +347,7 @@ export class LocalAiController {
       stopping: false,
       adopted: true,
       following: false,
-      partial: ''
+      afterCarriageReturn: false
     }
     this.handles.set(entry.id, handle)
     handle.unsubscribe.push(
@@ -481,15 +483,38 @@ export class LocalAiController {
     }
   }
 
+  /**
+   * Fold one chunk of a server's output into the card's log.
+   *
+   * A download progress bar redraws its own line with a carriage return, so the
+   * log is read the way a terminal draws it: the last entry of `logs` is the line
+   * still being written, and a carriage return replaces it instead of pushing a
+   * new line. A model fetch therefore reads as one line whose bar grows, not as a
+   * wall of near-identical lines.
+   */
   private appendOutput(entryId: string, chunk: string): void {
     const handle = this.handles.get(entryId)
     if (!handle) return
-    const text = (handle.partial + stripTerminalEscapes(chunk)).replaceAll('\r\n', '\n')
-    const lines = text.split(/\n|\r/u)
-    handle.partial = lines.pop() ?? ''
-    if (lines.length === 0) return
+    let text = stripTerminalEscapes(chunk)
+    let rewriteOpen = handle.afterCarriageReturn
+    handle.afterCarriageReturn = false
+    // A CRLF split by the chunk boundary is one line ending, not a redraw, so it
+    // is left in the chunk for `terminalLines` to read as the newline it is.
+    if (rewriteOpen && text.startsWith('\n')) rewriteOpen = false
+    if (text.endsWith('\r')) {
+      // The redraw itself arrives in the next chunk; nothing to show yet.
+      handle.afterCarriageReturn = true
+      text = text.slice(0, -1)
+    }
     const current = this.logs[entryId] ?? []
-    const next = [...current, ...lines].slice(-LOG_LINE_LIMIT)
+    const open = rewriteOpen || current.length === 0 ? '' : (current.at(-1) ?? '')
+    const { lines, pending } = terminalLines(text.replaceAll('\r\n', '\n'), open)
+    // The last entry was the line still being written, and `pending` is it now.
+    const next = [
+      ...(current.length > 0 ? current.slice(0, -1) : current),
+      ...lines,
+      pending
+    ].slice(-LOG_LINE_LIMIT)
     this.logs = { ...this.logs, [entryId]: next }
   }
 
