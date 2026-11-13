@@ -131,27 +131,62 @@ export async function runOneTimeCheckpointRepairs(database: Database): Promise<v
   }
 }
 
-/** Most rows one launch rewrites while trimming historical checkpoint maps. */
-const HISTORICAL_MAP_PASSES_PER_LAUNCH = 6
+/** Wall-clock ceiling for one launch's trimming, so a large backlog drains in
+ *  the background without ever holding the app. */
+const HISTORICAL_MAP_LAUNCH_BUDGET_MS = 60_000
+
+/** Passes one launch may run; each rewrites a bounded batch. */
+const HISTORICAL_MAP_MAX_PASSES = 40
+
+/** Pages one reclaim step hands back, and how many steps one launch runs. */
+const RECLAIM_PAGES_PER_STEP = 2_048
+const RECLAIM_MAX_STEPS = 60
+const RECLAIM_STEP_GAP_MS = 150
 
 /**
  * Shrink the checkpoint table without holding the launch.
  *
  * Each pass rewrites a bounded batch and yields between passes, so the database
- * worker stays free for the reads the window needs. A large backlog drains over a
- * few launches instead of blocking this one.
+ * worker stays free for the reads the window needs. A large backlog used to
+ * drain over many launches, which left the table hundreds of megabytes and every
+ * read on it seconds slow until it caught up, so one launch now drains it inside
+ * a time budget instead.
  */
 export async function trimHistoricalCheckpointMapsOnLaunch(database: Database): Promise<number> {
   const manager = new CheckpointManager(database)
   let total = 0
-  for (let pass = 0; pass < HISTORICAL_MAP_PASSES_PER_LAUNCH; pass += 1) {
+  const startedAt = Date.now()
+  for (let pass = 0; pass < HISTORICAL_MAP_MAX_PASSES; pass += 1) {
     const trimmed = await manager.trimHistoricalCheckpointMaps()
     total += trimmed
     if (trimmed === 0) break
-    await new Promise((resolve) => setTimeout(resolve, 250))
+    if (Date.now() - startedAt >= HISTORICAL_MAP_LAUNCH_BUDGET_MS) break
+    await new Promise((resolve) => setTimeout(resolve, 150))
   }
   if (total > 0) {
     Logger.info('Trimmed historical checkpoint maps', { rows: total })
+    // The rows are small now, but the pages they used are still in the file. The
+    // reclaim is bounded and off the main thread, and whatever is left over is
+    // picked up by the next launch.
+    await reclaimFreedPages(database)
   }
   return total
+}
+
+/** Hand the pages the trim freed back to the filesystem, a bounded step at a time. */
+async function reclaimFreedPages(database: Database): Promise<void> {
+  let reclaimed = 0
+  for (let step = 0; step < RECLAIM_MAX_STEPS; step += 1) {
+    const result = await database.incrementalVacuum(RECLAIM_PAGES_PER_STEP)
+    if (!result.ok) {
+      Logger.dev('Database space reclaim stopped early', { error: result.error ?? '' })
+      break
+    }
+    const freed = result.freedPages ?? 0
+    reclaimed += freed
+    if (freed === 0) break
+    await new Promise((resolve) => setTimeout(resolve, RECLAIM_STEP_GAP_MS))
+  }
+  if (reclaimed > 0)
+    Logger.info('Reclaimed database pages left by trimmed checkpoints', { reclaimed })
 }

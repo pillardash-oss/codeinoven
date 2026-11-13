@@ -20,6 +20,10 @@ const IDLE_RELEASE_DELAY_MS = 5_000
  * work is in progress or a scheduled auto-retry (usage/rate-limit reset) is due
  * within the shared wake window. The window itself lives in `provider-issue.ts`
  * so the renderer's working-activity badge classifies the same threshold.
+ *
+ * The active-thread probe is read on the database worker and cached, because a
+ * `NOT EXISTS` scan over `threads` can take hundreds of milliseconds: on the
+ * main thread that is a frozen UI, not a wake decision.
  */
 export class PowerWakeService {
   /** Blocker that keeps the whole system (CPU) from sleeping. */
@@ -39,6 +43,20 @@ export class PowerWakeService {
   /** When the machine started being held awake for an upcoming scheduled run. */
   private scheduledHoldStartedAt: number | null = null
   private backgroundTimer: ReturnType<typeof setInterval> | null = null
+  /**
+   * Last worker-read answer for "is any thread active".
+   *
+   * The probe is a `NOT EXISTS` scan over `threads`, which takes hundreds of
+   * milliseconds on a large database and would freeze the UI if it ran on the
+   * main thread. It is therefore read on the database worker, and the answer is
+   * cached here so the synchronous re-checks (the idle release timer, a retry
+   * window landing) never have to touch SQLite themselves.
+   */
+  private activeThread = false
+  /** Serial number of the newest evaluation, so a slow one cannot win. */
+  private refreshRequest = 0
+  /** True once the service is torn down; in-flight reads are then dropped. */
+  private stopped = false
 
   constructor(
     private storage: StorageEngine,
@@ -49,6 +67,7 @@ export class PowerWakeService {
   async start(): Promise<void> {
     const config = await this.storage.getConfig()
     this.enabled = config.keepAwakeWhileWorking === true
+    this.stopped = false
     this.refresh()
   }
 
@@ -118,6 +137,7 @@ export class PowerWakeService {
 
   /** Release the blocker on shutdown. */
   stop(): void {
+    this.stopped = true
     this.cancelScheduledRelease()
     this.retryWakeWindows.clear()
     if (this.backgroundTimer !== null) {
@@ -128,7 +148,25 @@ export class PowerWakeService {
     this.release()
   }
 
+  /**
+   * Re-evaluate, reading the active-thread probe on the database worker.
+   *
+   * Only the newest evaluation applies its decision, so a burst of thread
+   * updates (or one slow read landing after a newer one) can never leave the
+   * blockers in a state an older read described.
+   */
   private refresh(releaseImmediately = false): void {
+    const request = ++this.refreshRequest
+    void this.applyWakeState(request, releaseImmediately).catch((error: unknown) => {
+      Logger.error('Power wake: evaluation failed (non-fatal)', error)
+    })
+  }
+
+  private async applyWakeState(request: number, releaseImmediately: boolean): Promise<void> {
+    const activeThread = this.enabled ? await this.readActiveThread() : false
+    if (this.stopped || request !== this.refreshRequest) return
+    this.activeThread = activeThread
+
     if (this.shouldKeepAwake()) {
       this.cancelScheduledRelease()
       this.acquire()
@@ -233,10 +271,19 @@ export class PowerWakeService {
     this.releaseTimer = null
   }
 
+  /** The cached answer from the last worker read; see {@link activeThread}. */
   private hasActiveThread(): boolean {
+    return this.activeThread
+  }
+
+  /**
+   * Whether any non-archived thread is mid-run, read on the database worker.
+   * A failed read answers "no", exactly as the previous main-thread probe did.
+   */
+  private async readActiveThread(): Promise<boolean> {
     if (!this.database.isOpen()) return false
     try {
-      return new ThreadRepo(this.database).hasActive()
+      return (await new ThreadRepo(this.database).countActiveViaWorker()) > 0
     } catch (error) {
       Logger.error('Power wake: could not query active threads', error)
       return false

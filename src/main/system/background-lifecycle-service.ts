@@ -128,8 +128,11 @@ export interface BackgroundLifecycleDeps {
    * Read at every close decision and again while parked, so it must stay cheap.
    */
   residencyReason: () => ResidencyReason | null
-  /** Something needs the user: a parked gate or an unread failure. */
-  computeAttention: () => boolean
+  /**
+   * Something needs the user: a parked gate or an unread failure.
+   * Read on the database worker, for the same reason as the working count.
+   */
+  computeAttention: () => Promise<boolean>
   /**
    * How many threads are producing work right now, for the menu bar figure.
    * Read on the database worker, because it is refreshed from thread-update
@@ -175,6 +178,8 @@ export class BackgroundLifecycleService {
   private readonly optedOut = isBackgroundRegistrationDisabled()
   private config: AppConfig | null = null
   private attention = false
+  /** Serial number of the newest attention read, so a slow one cannot win. */
+  private attentionRequest = 0
   /**
    * How many threads are working right now. The macOS menu bar shows this as
    * the figure beside the mark, and it wins the slot over the attention
@@ -365,16 +370,30 @@ export class BackgroundLifecycleService {
       clearTimeout(this.attentionRefreshTimer)
       this.attentionRefreshTimer = null
     }
+    // Both figures are read on the database worker, so they land a moment after
+    // the change that asked for them and redraw the icon when they arrive.
+    void this.refreshAttention()
+    void this.refreshWorkingCount()
+  }
+
+  /**
+   * Re-read what needs the user, and redraw the icon when it changed.
+   *
+   * The read is asynchronous, so two can overlap (a burst of thread updates, a
+   * run settling while another parks on a gate). Only the newest answer is
+   * applied, which is what stops a slow earlier read from overwriting a newer
+   * state.
+   */
+  private async refreshAttention(): Promise<void> {
+    const request = ++this.attentionRequest
     let attention = false
     try {
-      attention = this.deps.computeAttention()
+      attention = await this.deps.computeAttention()
     } catch (error) {
       Logger.error('Background attention check failed', error)
     }
-    // The figure is read on the database worker, so it lands a moment after the
-    // attention state does and redraws the icon when it arrives.
-    void this.refreshWorkingCount()
-    if (attention === this.attention && this.tray) return
+    if (this.stopped || request !== this.attentionRequest) return
+    if (attention === this.attention) return
     this.attention = attention
     this.updateTrayAppearance()
   }

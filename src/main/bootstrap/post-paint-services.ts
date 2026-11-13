@@ -1758,6 +1758,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         // which is what slowed every database read until the app stalled. It is
         // bounded per launch and yields between batches.
         await trimHistoricalCheckpointMapsOnLaunch(database)
+        // A session that stays open for days finishes turns the launch pass could
+        // not trim yet (a checkpoint keeps its maps for the retry window), so the
+        // same bounded pass runs again while the app keeps running instead of
+        // letting the table grow back until the next launch.
+        scheduleCheckpointTrim(database)
       },
       async () => {
         try {
@@ -1796,4 +1801,29 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         .catch((error: unknown) => Logger.dev('Browser profile sweep failed:', error))
     }, 25_000)
   })()
+}
+
+/** How often an open session re-checks the checkpoint table it keeps growing. */
+const CHECKPOINT_TRIM_INTERVAL_MS = 30 * 60 * 1000
+
+/**
+ * Re-run the bounded checkpoint trim while the app stays open.
+ *
+ * The launch pass cannot trim a turn that finished minutes ago (a checkpoint
+ * keeps its whole-project maps through the retry window), so a long session that
+ * never restarts would hold every map it ever wrote. This timer repeats the same
+ * bounded pass, which reads and writes only the database worker's connection.
+ * Unreferenced, so it never keeps the process alive, and re-armed from `finally`
+ * so one failure does not end the schedule.
+ */
+function scheduleCheckpointTrim(database: Database): void {
+  const timer = setTimeout(() => {
+    void trimHistoricalCheckpointMapsOnLaunch(database)
+      .catch((error: unknown) => {
+        Logger.dev('Checkpoint trim failed (non-fatal):', error)
+        return 0
+      })
+      .finally(() => scheduleCheckpointTrim(database))
+  }, CHECKPOINT_TRIM_INTERVAL_MS)
+  timer.unref?.()
 }

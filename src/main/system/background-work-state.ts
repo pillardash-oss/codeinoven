@@ -6,14 +6,16 @@
  * from a renderer, because while the window is closed there is no renderer to
  * ask. The menu bar icon's states and its tooltip are the only consumers.
  *
- * Their thread reads stay on the primary connection on purpose. Residency and
- * attention are synchronous by contract: the close decision, the parked drain
- * tick and the tray tooltip all ask synchronously, and the answer decides whether
- * a run may be interrupted, so it cannot lag behind by the round trip of a worker
- * read. A cached value fed by an async read would be exactly that lag, and a
- * cache that is a moment behind a run that just started is a process that exits
- * mid-turn. Where a caller can await instead, `countWorkingThreads` below and
- * `ThreadRepo.countActiveViaWorker` read the same rows off the main thread.
+ * The residency predicates' thread reads stay on the primary connection on
+ * purpose. Residency is synchronous by contract: the close decision and the
+ * parked drain tick ask synchronously, and the answer decides whether a run may
+ * be interrupted, so it cannot lag behind by the round trip of a worker read. A
+ * cached value fed by an async read would be exactly that lag, and a cache that
+ * is a moment behind a run that just started is a process that exits mid-turn.
+ * The two predicates the tray can await, `computeAttention` and
+ * `countWorkingThreads` below, read their rows on the database worker instead:
+ * they refresh on every thread update, which is an interaction path, and must
+ * never hold the main thread on SQLite.
  */
 
 import { SCHEDULED_RETRY_WAKE_WINDOW_MS } from '../../lib/provider-issue'
@@ -158,16 +160,24 @@ export function residencyReason(state: BootstrapState, database: Database): Resi
  * the window is open, windowless, or was restarted overnight. The provider
  * issue records the retry scheduler holds live on a thread that is also
  * `working-paused`, so the durable thread status is the single source of truth.
+ *
+ * The read runs on the database worker: the tray refreshes it on every thread
+ * update, which is an interaction path, and even a COUNT over `threads` holds
+ * the whole main process for as long as the OS takes to serve it.
  */
-export function computeAttention(database: Database): boolean {
+export async function computeAttention(database: Database): Promise<boolean> {
   if (!database.isOpen()) return false
   try {
-    const row = database.get<{ cnt: number }>(
-      `SELECT COUNT(*) AS cnt FROM threads
+    const result = await database.queryViaWorker(
+      `SELECT 1 AS attention FROM threads
         WHERE status IN ('working-paused', 'awaiting_approval')
-           OR (read = 0 AND status = 'failed')`
+           OR (read = 0 AND status = 'failed')
+        LIMIT 1`,
+      [],
+      1
     )
-    return (row?.cnt ?? 0) > 0
+    if (!result.ok) return false
+    return result.rows.length > 0
   } catch (error) {
     Logger.error('Background attention check failed', error)
     return false
