@@ -335,7 +335,10 @@
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto">
-    <section class="border-b border-border p-4" aria-label="Assignment progress">
+    <section
+      class="sticky top-0 z-10 border-b border-border bg-surface p-4"
+      aria-label="Assignment progress"
+    >
       <div class="flex items-end justify-between gap-3">
         <div>
           <p class="text-2xl font-semibold tabular-nums text-foreground">
