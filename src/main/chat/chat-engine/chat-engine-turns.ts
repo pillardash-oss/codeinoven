@@ -544,7 +544,11 @@ export class ChatEngineTurns {
       // An agent that goes straight to a device with adb or simctl never calls
       // the mirroring tool, so the panel follows the device command it did run
       // instead of waiting for an announcement that will not come.
-      displayDeviceAttention.noteToolCall(eventOwner.threadId, event.part.state.input)
+      displayDeviceAttention.noteToolCall(
+        eventOwner.threadId,
+        event.part.state.input,
+        eventOwner.projectId
+      )
     }
     if (eventOwner) {
       this.host.state.projectIdleSince.delete(eventOwner.projectId)

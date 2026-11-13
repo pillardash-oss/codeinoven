@@ -28,7 +28,8 @@ import {
   type AgentSubagentActivity,
   type ThreadSettings
 } from '$shared/types'
-import type { DisplayTarget } from './context-sidebar-tabs.svelte'
+import type { DisplaySourceKind } from '$shared/ipc/display'
+import type { DisplayTarget, MirroredDisplay } from './context-sidebar-tabs.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 
 export type {
@@ -912,8 +913,23 @@ class ContextSidebarState {
     return this.tabContexts.openDisplayChooser(projectId, threadId)
   }
 
-  openDisplayTarget(projectId: string, threadId: string, target: DisplayTarget): void {
-    this.tabContexts.openDisplayTarget(projectId, threadId, target)
+  openDisplayTarget(
+    projectId: string,
+    threadId: string,
+    target: DisplayTarget,
+    options: { focus?: boolean } = {}
+  ): void {
+    this.tabContexts.openDisplayTarget(projectId, threadId, target, options)
+  }
+
+  /** Every display tab mirroring a device, in whichever project's dock it sits. */
+  mirroredDisplayTabs(): MirroredDisplay[] {
+    return this.tabContexts.mirroredDisplayTabs()
+  }
+
+  /** The project that already mirrors this target, when one does. */
+  displayTabProjectFor(kind: DisplaySourceKind, sourceId: string): string | null {
+    return this.tabContexts.displayTabProjectFor(kind, sourceId)
   }
 
   applyDisplayTarget(

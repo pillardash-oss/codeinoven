@@ -34,9 +34,16 @@ class DisplayAvailabilityState {
 
   private cleanups: Array<() => void> = []
   private started = false
-  /** Last mirrored target reported, for the same reason. Undefined until the
-   *  first report, so a launch with no panel still arms the watch. */
-  private reportedPanelTarget: string | null | undefined = undefined
+  /**
+   * The display tabs last reported to main, by tab id, with the project each
+   * belongs to.
+   *
+   * Reported as a set rather than as one "current" target, because the docks hold
+   * mirrors in more than one project at a time: closing the tab in one project
+   * must end that project's mirror and nothing else, and the other project's
+   * threads keep their marks.
+   */
+  private reportedPanels = new Map<string, { projectId: string; key: string }>()
 
   init(): void {
     if (this.started) return
@@ -74,7 +81,7 @@ class DisplayAvailabilityState {
     for (const cleanup of this.cleanups) cleanup()
     this.cleanups = []
     this.started = false
-    this.reportedPanelTarget = undefined
+    this.reportedPanels = new Map()
     this.pendingTarget = null
   }
 
@@ -89,21 +96,46 @@ class DisplayAvailabilityState {
   }
 
   /**
-   * Tell main which device the panel is mirroring, and which thread owns it.
+   * Tell main which devices the docks are mirroring, and which thread owns each.
    *
-   * A repeat request for the same device is then a no-op instead of a stream
-   * restart, and closing the panel clears the thread marks that claimed an agent
-   * was driving something. The thread travels with it because a person who picks
-   * a device themselves is still mirroring it on some thread, and that row is the
-   * one place the app can say where the picture came from.
+   * The whole set is reported, not just the visible project's tab: a mirror that
+   * ends is a tab that disappeared, and the project it belonged to is what says
+   * whose marks to clear. Reading only the docks on screen made a project switch
+   * look like every mirror in the app ending at once, which wiped the marks of
+   * threads in projects the person was not looking at.
+   *
+   * A tab whose target or owning thread changes is announced again, so main can
+   * follow a retargeted panel and let go of the device it no longer shows.
    */
-  notePanelTarget(mirrored: DisplayPanelTarget | null): void {
-    const key = mirrored ? `${mirrored.kind}:${mirrored.sourceId}:${mirrored.threadId ?? ''}` : null
-    if (this.reportedPanelTarget === key) return
-    this.reportedPanelTarget = key
-    void invoke('display:notePanel', mirrored).catch((error: unknown) =>
-      logRendererError('The display panel target could not be reported', error)
-    )
+  notePanelTargets(panels: DisplayPanelTarget[]): void {
+    const closedProjects: string[] = []
+    for (const [tabId, previous] of [...this.reportedPanels]) {
+      if (panels.some((panel) => panel.tabId === tabId)) continue
+      this.reportedPanels.delete(tabId)
+      const stillOpen = [...this.reportedPanels.values()].some(
+        (panel) => panel.projectId === previous.projectId
+      )
+      if (
+        !stillOpen &&
+        previous.projectId.length > 0 &&
+        !closedProjects.includes(previous.projectId)
+      )
+        closedProjects.push(previous.projectId)
+    }
+    for (const projectId of closedProjects) {
+      void invoke('display:notePanel', null, projectId).catch((error: unknown) =>
+        logRendererError('The display panel target could not be reported', error)
+      )
+    }
+    for (const panel of panels) {
+      const key = `${panel.kind}:${panel.sourceId}:${panel.threadId ?? ''}`
+      const previous = this.reportedPanels.get(panel.tabId)
+      this.reportedPanels.set(panel.tabId, { projectId: panel.projectId ?? '', key })
+      if (previous?.key === key) continue
+      void invoke('display:notePanel', panel, panel.projectId).catch((error: unknown) =>
+        logRendererError('The display panel target could not be reported', error)
+      )
+    }
   }
 
   /** Drop the offer the workspace just acted on, so nothing opens twice. */
