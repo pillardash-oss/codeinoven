@@ -109,13 +109,27 @@ const PAGE_TARGET_FIELD = {
 const REF_FIELD = {
   type: 'string',
   description:
-    'The ref a snapshot reported for the element, such as "r12". Acts on exactly the element that was read; use it or selector.'
+    'The ref a snapshot reported for the element, such as "r12", or "f2r7" for an element inside frame 2. Acts on exactly the element that was read, in the document it was read from; use it or selector.'
 }
 
 /** The element an action addresses, by CSS selector. */
 const SELECTOR_FIELD = {
   type: 'string',
   description: 'A CSS selector, including the unique selectors a snapshot reports. Use it or ref.'
+}
+
+/**
+ * The document an action addresses, when no ref names it.
+ *
+ * A ref already carries the frame it came from, so this exists for the cases a
+ * selector cannot express: the snapshot's `frames` list numbers every document
+ * the page is made of, and a bare selector, an expression, or a scroll is pointed
+ * at one of them with this.
+ */
+const FRAME_FIELD = {
+  type: 'number',
+  description:
+    'The frame a snapshot listed, for an element you name by selector instead of ref. A ref already says which frame it came from, so this is only needed with a bare selector, or with evaluate, wait and scroll when they work on an embedded document. Defaults to the page\u2019s own document.'
 }
 
 export const BROWSER_UTILITY_TOOLS: McpTool[] = [
@@ -159,7 +173,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the page: its title, URL, visible text, scroll position, and every element you could act on. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state and its box on screen, so you can see a form exactly as it stands before you fill it. The page this conversation\u2019s thread browser resolved for you is readable with page "user", and page "strip" reads whatever that browser shows now; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
+      'Read the page: its title, URL, visible text, scroll position, and every element you could act on, in every document the page is made of. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state and its box on screen, so you can see a form exactly as it stands before you fill it. A page renders much of its real content inside frames (a portal blade, a payment form, a chat widget), so the snapshot reads those too: their elements carry a ref prefixed with the frame (f2r7) and work with every operation exactly as a page-level ref does, and the frames list names each document that was read, with the text of every embedded one. The page this conversation\u2019s thread browser resolved for you is readable with page "user", and page "strip" reads whatever that browser shows now; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -195,6 +209,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
       properties: {
         ref: REF_FIELD,
         selector: SELECTOR_FIELD,
+        frame: FRAME_FIELD,
         clickCount: { type: 'number', description: '1 for a click, 2 for a double click.' },
         modifiers: {
           type: 'array',
@@ -215,6 +230,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
       properties: {
         ref: REF_FIELD,
         selector: SELECTOR_FIELD,
+        frame: FRAME_FIELD,
         text: { type: 'string' },
         append: {
           type: 'boolean',
@@ -244,6 +260,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
         },
         ref: REF_FIELD,
         selector: SELECTOR_FIELD,
+        frame: FRAME_FIELD,
         modifiers: {
           type: 'array',
           items: { type: 'string' },
@@ -265,6 +282,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
       properties: {
         ref: REF_FIELD,
         selector: SELECTOR_FIELD,
+        frame: FRAME_FIELD,
         value: { type: 'string', description: 'The option value, or its visible label.' },
         label: { type: 'string', description: 'The option\u2019s visible label.' },
         values: {
@@ -286,6 +304,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
       properties: {
         ref: REF_FIELD,
         selector: SELECTOR_FIELD,
+        frame: FRAME_FIELD,
         checked: { type: 'boolean', description: 'false to untick; defaults to true.' },
         page: PAGE_TARGET_FIELD
       },
@@ -306,6 +325,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
         },
         ref: REF_FIELD,
         selector: SELECTOR_FIELD,
+        frame: FRAME_FIELD,
         x: {
           type: 'number',
           description: 'Point x in page pixels, used when no element is named.'
@@ -335,8 +355,16 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        from: { type: 'object', description: 'Start: {ref}, {selector}, or {x, y}.' },
-        to: { type: 'object', description: 'End: {ref}, {selector}, or {x, y}.' },
+        from: {
+          type: 'object',
+          description:
+            'Start: {ref}, {selector, frame}, or {x, y, frame}, with frame as a snapshot listed it.'
+        },
+        to: {
+          type: 'object',
+          description:
+            'End: {ref}, {selector, frame}, or {x, y, frame}, with frame as a snapshot listed it.'
+        },
         modifiers: {
           type: 'array',
           items: { type: 'string' },
@@ -357,6 +385,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
       properties: {
         ref: REF_FIELD,
         selector: SELECTOR_FIELD,
+        frame: FRAME_FIELD,
         to: { type: 'string', enum: ['top', 'bottom'] },
         deltaX: { type: 'number', description: 'Horizontal distance in pixels.' },
         deltaY: { type: 'number', description: 'Vertical distance in pixels. Defaults to 600.' },
@@ -393,6 +422,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           type: 'number',
           description: `Up to ${BROWSER_WAIT_MAX_TIMEOUT_MS}. Defaults to 5000.`
         },
+        frame: FRAME_FIELD,
         page: PAGE_TARGET_FIELD
       },
       additionalProperties: false
@@ -410,6 +440,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           description:
             'JavaScript evaluated in the page. The last expression\u2019s value is returned; a promise is awaited. Example: document.title'
         },
+        frame: FRAME_FIELD,
         page: PAGE_TARGET_FIELD
       },
       required: ['expression'],
@@ -475,6 +506,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           type: 'string',
           description: 'Capture only this element, by the selector a snapshot reported.'
         },
+        frame: FRAME_FIELD,
         page: PAGE_TARGET_FIELD
       },
       additionalProperties: false

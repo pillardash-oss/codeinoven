@@ -1,11 +1,10 @@
 import { agentDialog } from '../../system/file-dialogs'
-import { nativeImage, type NativeImage } from 'electron'
+import { nativeImage, type NativeImage, type WebContents } from 'electron'
 import { createHash } from 'node:crypto'
 import { realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 import type { PermissionLevel } from '../../../lib/types'
 import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../../lib/image-payload'
-import { agentElementRectScript } from './browser-agent-page'
 import { Logger } from '../../system/logger'
 import { type BrowserTab } from './browser-types'
 import { SCREENSHOT_JPEG_QUALITY, SCREENSHOT_MAX_BYTES } from './browser-validation'
@@ -28,8 +27,10 @@ import { asObject, safeOrigin } from './browser-service-common'
  * root cannot drift apart: a changed signature is a compile error here.
  */
 export interface AgentFilesHost {
+  readonly pageRectFor: BrowserService['pageRectFor']
   readonly lastScreenshot: BrowserService['lastScreenshot']
   readonly optionalAgentSelector: BrowserService['optionalAgentSelector']
+  readonly optionalAgentTarget: BrowserService['optionalAgentTarget']
   readonly runAgentScript: BrowserService['runAgentScript']
   readonly window: BrowserService['window']
 }
@@ -201,9 +202,7 @@ export class BrowserServiceAgentFiles {
     const lossless = png.byteLength <= SCREENSHOT_MAX_BYTES
     const encoded = lossless ? png : resized.toJPEG(SCREENSHOT_JPEG_QUALITY)
     const hash = createHash('sha256').update(encoded).digest('hex')
-    // One capture record per target: a full-page capture must not be reported as
-    // unchanged because the viewport happened to look the same a moment ago.
-    const captureKey = `${tabId}:${this.host.optionalAgentSelector(input) ?? (input['fullPage'] === true ? 'page' : 'viewport')}`
+    const captureKey = `${tabId}:${this.captureKeyFor(input, tab.view.webContents)}`
     if (input['force'] !== true && this.host.lastScreenshot.get(captureKey)?.hash === hash) {
       return {
         unchanged: true,
@@ -225,6 +224,28 @@ export class BrowserServiceAgentFiles {
   }
 
   /**
+   * Which picture one screenshot asks for, for the unchanged-capture check.
+   *
+   * One record per target, so a full-page capture is never reported as unchanged
+   * because the viewport happened to look the same a moment ago, and the same
+   * selector inside two different frames is two different targets. Talking to a
+   * page, not reading it: this never fails, and a target it cannot resolve falls
+   * back to the selector it names.
+   */
+  captureKeyFor(input: Record<string, unknown>, contents: WebContents): string {
+    const selector = this.host.optionalAgentSelector(input)
+    if (!selector) return input['fullPage'] === true ? 'page' : 'viewport'
+    const frame = (() => {
+      try {
+        return this.host.optionalAgentTarget(input, contents)?.entry.index ?? 0
+      } catch {
+        return 0
+      }
+    })()
+    return `${selector}|${frame}`
+  }
+
+  /**
    * The pixels one screenshot asks for: the viewport, the whole page, or one
    * element.
    *
@@ -237,27 +258,19 @@ export class BrowserServiceAgentFiles {
   async captureAgentImage(tab: BrowserTab, input: Record<string, unknown>): Promise<NativeImage> {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
-    const selector = this.host.optionalAgentSelector(input)
+    const target = this.host.optionalAgentTarget(input, contents)
     const fullPage = input['fullPage'] === true
-    if (!selector && !fullPage) return contents.capturePage()
+    if (!target && !fullPage) return contents.capturePage()
     const debuggerSession = contents.debugger
     const attachedHere = !debuggerSession.isAttached()
     try {
       if (attachedHere) debuggerSession.attach('1.3')
       await debuggerSession.sendCommand('Page.enable').catch(() => undefined)
       let clip: { x: number; y: number; width: number; height: number; scale: number }
-      if (selector) {
-        const rect = asObject(
-          await this.host.runAgentScript(contents, agentElementRectScript(selector))
-        )
+      if (target) {
+        const rect = await this.host.pageRectFor(tab, target)
         if (!rect) throw new Error('the element could not be measured')
-        clip = {
-          x: Number(rect['x']),
-          y: Number(rect['y']),
-          width: Number(rect['width']),
-          height: Number(rect['height']),
-          scale: 1
-        }
+        clip = { ...rect, scale: 1 }
       } else {
         const metrics = asObject(await debuggerSession.sendCommand('Page.getLayoutMetrics'))
         const size = asObject(metrics?.['cssContentSize']) ?? asObject(metrics?.['contentSize'])

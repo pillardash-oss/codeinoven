@@ -1,4 +1,3 @@
-import type { WebContents } from 'electron'
 import type { PermissionLevel } from '../../../lib/types'
 import {
   browserActionTargetScript,
@@ -40,6 +39,7 @@ import {
   validateViewportRequest
 } from './browser-validation'
 import type { BrowserService } from '../browser-service'
+import type { AgentTarget } from './browser-service-agent-script'
 import { asObject, safeOrigin } from './browser-service-common'
 import { liveContents, liveWindowContents } from './browser-view-contents'
 import {
@@ -56,6 +56,11 @@ import {
  * switch, the approval path, and the sentence a person reads on the card.
  */
 
+/** Elements one embedded document reports, so one frame cannot fill the whole read. */
+const MAX_FRAME_ELEMENTS = 120
+/** Characters of an embedded document's text a snapshot reports. */
+const MAX_FRAME_TEXT = 4000
+
 /**
  * What `browser-service-agent-utility` reads off the browser service.
  *
@@ -66,12 +71,17 @@ export interface AgentUtilityHost {
   readonly activeTabId: BrowserService['activeTabId']
   readonly agentActionApprover: BrowserService['agentActionApprover']
   readonly agentBoundedNumber: BrowserService['agentBoundedNumber']
+  readonly agentEntry: BrowserService['agentEntry']
+  readonly agentFrames: BrowserService['agentFrames']
   readonly agentPointFrom: BrowserService['agentPointFrom']
   readonly agentSelector: BrowserService['agentSelector']
   readonly agentSignedNumber: BrowserService['agentSignedNumber']
   readonly agentTabClaims: BrowserService['agentTabClaims']
   readonly agentTabIds: BrowserService['agentTabIds']
+  readonly agentTarget: BrowserService['agentTarget']
   readonly agentTargetChanged: BrowserService['agentTargetChanged']
+  readonly optionalAgentTarget: BrowserService['optionalAgentTarget']
+  readonly runAgentScriptIn: BrowserService['runAgentScriptIn']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
   readonly boxOfExistingTab: BrowserService['boxOfExistingTab']
   readonly closeUnreferencedAgentTabs: BrowserService['closeUnreferencedAgentTabs']
@@ -85,8 +95,8 @@ export interface AgentUtilityHost {
   readonly optionalAgentSelector: BrowserService['optionalAgentSelector']
   readonly paintAgentCursor: BrowserService['paintAgentCursor']
   readonly paintAgentCursorAtElement: BrowserService['paintAgentCursorAtElement']
-  readonly parkedViewportFor: BrowserService['parkedViewportFor']
   readonly parkTab: BrowserService['parkTab']
+  readonly parkedViewportFor: BrowserService['parkedViewportFor']
   readonly rememberReveal: BrowserService['rememberReveal']
   readonly requiredInputString: BrowserService['requiredInputString']
   readonly runAgentScript: BrowserService['runAgentScript']
@@ -299,80 +309,70 @@ export class BrowserServiceAgentUtility {
       return { ...utilityContext, reloading: true }
     }
     if (operation === 'snapshot') {
-      const snapshot = await this.host.runAgentScript(
-        tab.view.webContents,
-        agentSnapshotScript({
-          interactiveOnly: input['interactiveOnly'] !== false,
-          maxElements: this.host.agentBoundedNumber(input['maxElements'], 300, 1, 1000),
-          maxText:
-            input['text'] === false
-              ? 0
-              : this.host.agentBoundedNumber(input['maxText'], 20000, 0, 40000)
-        })
-      )
-      return {
-        ...utilityContext,
-        snapshot,
-        detail:
-          'Each element carries ref (pass it as ref to act on that element), its unique CSS selector, its live value, checked state and box, so an action targets exactly what was read.'
-      }
+      return { ...utilityContext, ...(await this.readSnapshot(tab, input)) }
     }
     if (operation === 'click') {
-      const selector = this.host.agentSelector(input)
-      const contents = tab.view.webContents
-      if (await this.host.agentTargetChanged(contents, selector, reviewedTarget)) {
+      const target = this.host.agentTarget(input, tab.view.webContents)
+      if (await this.host.agentTargetChanged(target, reviewedTarget)) {
         return {
           ...utilityContext,
           result: { clicked: false, reason: 'target changed; inspect the page and retry' }
         }
       }
-      return { ...utilityContext, result: await this.host.clickAgentTarget(tab, selector, input) }
+      return { ...utilityContext, result: await this.host.clickAgentTarget(tab, target, input) }
     }
     if (operation === 'type') {
-      const selector = this.host.agentSelector(input)
+      const target = this.host.agentTarget(input, tab.view.webContents)
       const text = this.host.requiredInputString(input, 'text', true)
-      const contents = tab.view.webContents
-      if (await this.host.agentTargetChanged(contents, selector, reviewedTarget)) {
+      if (await this.host.agentTargetChanged(target, reviewedTarget)) {
         return {
           ...utilityContext,
           result: { typed: false, reason: 'target changed; inspect the page and retry' }
         }
       }
-      const result = await this.typeWithKeys(contents, {
-        selector,
+      const result = await this.typeWithKeys(tab, target, {
         text,
         append: input['append'] === true
       })
-      await this.host.paintAgentCursorAtElement(tab, selector)
+      await this.host.paintAgentCursorAtElement(tab, target)
       if (input['submit'] === true) {
-        await pressAgentKey(contents, { key: 'Enter', modifiers: [], times: 1 })
+        await pressAgentKey(tab.view.webContents, {
+          key: 'Enter',
+          modifiers: [],
+          times: 1
+        })
       }
       return { ...utilityContext, result }
     }
     if (operation === 'press') {
       const contents = tab.view.webContents
-      const selector = this.host.optionalAgentSelector(input)
-      if (selector) {
-        const focused = await this.host.runAgentScript(contents, agentFocusScript(selector))
+      const target = this.host.optionalAgentTarget(input, contents)
+      if (target) {
+        const focused = await this.host.runAgentScriptIn(
+          target.entry,
+          agentFocusScript(target.selector)
+        )
         if (asObject(focused)?.['focused'] !== true) {
           return {
             ...utilityContext,
             result: { pressed: false, reason: 'the target could not be focused', detail: focused }
           }
         }
-        await this.host.paintAgentCursorAtElement(tab, selector)
+        await this.host.paintAgentCursorAtElement(tab, target)
       }
       const result = await pressAgentKey(contents, {
         key: this.host.requiredInputString(input, 'key'),
         modifiers: normalizeAgentModifiers(input['modifiers']),
         times: agentCount(input['times'], 1, 20)
       })
-      return { ...utilityContext, result: { ...result, focused: selector ?? 'current focus' } }
+      return {
+        ...utilityContext,
+        result: { ...result, focused: target?.selector ?? 'current focus' }
+      }
     }
     if (operation === 'select') {
-      const selector = this.host.agentSelector(input)
-      const contents = tab.view.webContents
-      if (await this.host.agentTargetChanged(contents, selector, reviewedTarget)) {
+      const target = this.host.agentTarget(input, tab.view.webContents)
+      if (await this.host.agentTargetChanged(target, reviewedTarget)) {
         return {
           ...utilityContext,
           result: { selected: false, reason: 'target changed; inspect the page and retry' }
@@ -383,10 +383,10 @@ export class BrowserServiceAgentUtility {
             (value): value is string => typeof value === 'string'
           )
         : []
-      const result = await this.host.runAgentScript(
-        contents,
+      const result = await this.host.runAgentScriptIn(
+        target.entry,
         agentSelectScript({
-          selector,
+          selector: target.selector,
           ...(typeof input['value'] === 'string' ? { value: input['value'] } : {}),
           ...(typeof input['label'] === 'string' ? { label: input['label'] } : {}),
           ...(values.length > 0 ? { values } : {})
@@ -395,30 +395,30 @@ export class BrowserServiceAgentUtility {
       return { ...utilityContext, result }
     }
     if (operation === 'check') {
-      const selector = this.host.agentSelector(input)
-      const contents = tab.view.webContents
-      if (await this.host.agentTargetChanged(contents, selector, reviewedTarget)) {
+      const target = this.host.agentTarget(input, tab.view.webContents)
+      if (await this.host.agentTargetChanged(target, reviewedTarget)) {
         return {
           ...utilityContext,
           result: { checked: false, reason: 'target changed; inspect the page and retry' }
         }
       }
-      const result = await this.host.runAgentScript(
-        contents,
-        agentCheckScript({ selector, checked: input['checked'] !== false })
+      const result = await this.host.runAgentScriptIn(
+        target.entry,
+        agentCheckScript({ selector: target.selector, checked: input['checked'] !== false })
       )
       return { ...utilityContext, result }
     }
     if (operation === 'scroll') {
       const contents = tab.view.webContents
-      const selector = this.host.optionalAgentSelector(input)
+      const target = this.host.optionalAgentTarget(input, contents)
+      const entry = target?.entry ?? this.host.agentEntry(input, contents)
       const to = input['to'] === 'top' || input['to'] === 'bottom' ? input['to'] : undefined
-      const result = await this.host.runAgentScript(
-        contents,
+      const result = await this.host.runAgentScriptIn(
+        entry,
         agentScrollScript({
-          ...(selector ? { selector } : {}),
+          ...(target ? { selector: target.selector } : {}),
           deltaX: this.host.agentSignedNumber(input['deltaX'], 0),
-          deltaY: this.host.agentSignedNumber(input['deltaY'], selector || to ? 0 : 600),
+          deltaY: this.host.agentSignedNumber(input['deltaY'], target || to ? 0 : 600),
           ...(to ? { to } : {})
         })
       )
@@ -463,11 +463,19 @@ export class BrowserServiceAgentUtility {
       const modifiers = normalizeAgentModifiers(input['modifiers'])
       const result = await dragAgentMouse(contents, { from, to, modifiers })
       await this.host.paintAgentCursor(tab, to)
-      return { ...utilityContext, result: { ...result, from, to, trusted: true } }
+      return {
+        ...utilityContext,
+        result: {
+          ...result,
+          from: { x: from.x, y: from.y },
+          to: { x: to.x, y: to.y },
+          trusted: true
+        }
+      }
     }
     if (operation === 'wait') {
-      const result = await this.host.runAgentScript(
-        tab.view.webContents,
+      const result = await this.host.runAgentScriptIn(
+        this.host.agentEntry(input, tab.view.webContents),
         agentWaitScript({
           ...(typeof input['selector'] === 'string' ? { selector: input['selector'] } : {}),
           ...(typeof input['text'] === 'string' ? { text: input['text'] } : {}),
@@ -489,8 +497,8 @@ export class BrowserServiceAgentUtility {
     }
     if (operation === 'evaluate') {
       const expression = this.host.requiredInputString(input, 'expression')
-      const result = await this.host.runAgentScript(
-        tab.view.webContents,
+      const result = await this.host.runAgentScriptIn(
+        this.host.agentEntry(input, tab.view.webContents),
         agentEvaluateScript(expression)
       )
       return { ...utilityContext, result }
@@ -529,11 +537,16 @@ export class BrowserServiceAgentUtility {
    * and the result says which happened.
    */
   private async typeWithKeys(
-    contents: WebContents,
-    request: { selector: string; text: string; append: boolean }
+    tab: BrowserTab,
+    target: AgentTarget,
+    request: { text: string; append: boolean }
   ): Promise<Record<string, unknown>> {
+    const contents = tab.view.webContents
     const prepared = asObject(
-      await this.host.runAgentScript(contents, agentPrepareTypingScript(request))
+      await this.host.runAgentScriptIn(
+        target.entry,
+        agentPrepareTypingScript({ selector: target.selector, append: request.append })
+      )
     )
     if (prepared?.['ok'] !== true) {
       return { typed: false, reason: prepared?.['reason'] ?? 'element is not editable' }
@@ -549,17 +562,17 @@ export class BrowserServiceAgentUtility {
       // Keys already replaced the prepared selection, so only the rest of the text has
       // to append. When no key was sent (a line break, or an empty text that clears the
       // field) the insert carries the caller's own append flag instead.
-      await this.host.runAgentScript(
-        contents,
+      await this.host.runAgentScriptIn(
+        target.entry,
         agentTypeScript({
-          selector: request.selector,
+          selector: target.selector,
           text: remainder,
           append: request.append || typedWithKeys.length > 0
         })
       )
     }
     const read = asObject(
-      await this.host.runAgentScript(contents, agentFieldValueScript(request.selector))
+      await this.host.runAgentScriptIn(target.entry, agentFieldValueScript(target.selector))
     )
     const expected =
       (request.append ? Number(prepared['previousLength'] ?? 0) : 0) + request.text.length
@@ -572,11 +585,105 @@ export class BrowserServiceAgentUtility {
       applied: length === expected,
       length,
       value: read?.['value'] ?? '',
+      ...(target.entry.index === 0 ? {} : { frame: target.entry.index }),
       ...(length === expected
         ? {}
         : {
             reason: 'the field did not keep the text it was given; check its type or its validation'
           })
+    }
+  }
+
+  /**
+   * Read the page, every document it is made of, in one call.
+   *
+   * A page renders its real content inside frames: a portal blade, a payment form,
+   * a chat widget. Reading only the top document reported a title and nothing to
+   * act on, which is exactly what left an agent clicking at invented coordinates.
+   * Every frame is read here with its own reference prefix, so a control inside a
+   * frame comes back with a handle that works on its own.
+   */
+  private async readSnapshot(
+    tab: BrowserTab,
+    input: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const contents = tab.view.webContents
+    const interactiveOnly = input['interactiveOnly'] !== false
+    const maxElements = this.host.agentBoundedNumber(input['maxElements'], 300, 1, 1000)
+    const maxText =
+      input['text'] === false ? 0 : this.host.agentBoundedNumber(input['maxText'], 20000, 0, 40000)
+    const entries = this.host.agentFrames(contents)
+    const elements: unknown[] = []
+    const frames: Record<string, unknown>[] = []
+    let remaining = maxElements
+    let combined: Record<string, unknown> | null = null
+    for (const entry of entries) {
+      if (remaining <= 0 && entry.index > 0) break
+      const budget = entry.index === 0 ? remaining : Math.min(remaining, MAX_FRAME_ELEMENTS)
+      let report: Record<string, unknown> | null
+      try {
+        report = asObject(
+          await this.host.runAgentScriptIn(
+            entry,
+            agentSnapshotScript({
+              interactiveOnly,
+              maxElements: Math.max(budget, 1),
+              maxText: entry.index === 0 ? maxText : Math.min(maxText, MAX_FRAME_TEXT),
+              refPrefix: entry.refPrefix
+            })
+          )
+        )
+      } catch (error) {
+        frames.push({
+          frame: entry.index,
+          url: entry.url,
+          name: entry.name,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        continue
+      }
+      if (!report) continue
+      const reported = Array.isArray(report['elements']) ? report['elements'] : []
+      for (const element of reported) {
+        if (remaining <= 0) break
+        remaining -= 1
+        elements.push(
+          entry.index === 0 || !asObject(element)
+            ? element
+            : { ...asObject(element), frame: entry.index }
+        )
+      }
+      if (entry.index === 0) {
+        combined = report
+        frames.push({
+          frame: 0,
+          url: entry.url,
+          name: entry.name,
+          elements: reported.length
+        })
+        continue
+      }
+      frames.push({
+        frame: entry.index,
+        url: String(report['url'] ?? entry.url),
+        name: entry.name,
+        title: report['title'] ?? '',
+        elements: reported.length,
+        ...(typeof report['text'] === 'string' && report['text'].length > 0
+          ? { text: report['text'] }
+          : {})
+      })
+    }
+    const snapshot = {
+      ...(combined ?? {}),
+      count: elements.length,
+      elements,
+      frames
+    }
+    return {
+      snapshot,
+      detail:
+        'Each element carries ref (pass it as ref to act on that element), its unique CSS selector, its live value, checked state and box, so an action targets exactly what was read. Elements inside a frame carry a ref prefixed with that frame (f2r7) and work the same way; the frames list names every document that was read, with the text of each embedded one.'
     }
   }
 
@@ -660,10 +767,10 @@ export class BrowserServiceAgentUtility {
     tab: BrowserTab
   ): Promise<BrowserActionTarget | null> {
     const contents = tab.view.webContents
-    const selector = this.host.optionalAgentSelector(input)
-    if (selector) {
+    const target = this.host.optionalAgentTarget(input, contents)
+    if (target) {
       return asBrowserActionTarget(
-        await contents.executeJavaScript(browserActionTargetScript(selector))
+        await this.host.runAgentScriptIn(target.entry, browserActionTargetScript(target.selector))
       )
     }
     if (operation === 'mouse' || operation === 'drag') {
@@ -671,11 +778,18 @@ export class BrowserServiceAgentUtility {
         .agentPointFrom(input, tab, operation === 'drag' ? 'to' : 'point')
         .catch(() => null)
       if (!point) return null
-      const hit = asObject(await contents.executeJavaScript(agentHitTestScript(point)))
+      // The point is asked for inside its own document (the coordinates a hit test
+      // understands), and the control it lands on is read there too.
+      const hit = asObject(
+        await this.host.runAgentScriptIn(
+          point.entry,
+          agentHitTestScript({ x: point.localX, y: point.localY })
+        )
+      )
       const hitSelector = typeof hit?.['selector'] === 'string' ? hit['selector'] : ''
       if (!hitSelector) return null
       return asBrowserActionTarget(
-        await contents.executeJavaScript(browserActionTargetScript(hitSelector))
+        await this.host.runAgentScriptIn(point.entry, browserActionTargetScript(hitSelector))
       )
     }
     return null

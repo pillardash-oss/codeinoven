@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   AGENT_OWNED_ATTRIBUTE,
@@ -9,10 +9,15 @@ import {
   agentDomClickScript,
   agentElementPointScript,
   agentFocusScript,
+  agentFrameRectsScript,
+  agentFrameRevealScript,
+  agentPageOffsetScript,
   agentScrollScript,
   agentSelectScript,
   agentSnapshotScript,
-  agentTypeScript
+  agentTypeScript,
+  agentViewportScript,
+  type AgentFrameRect
 } from '../../../src/main/browser/browser-service/browser-agent-page'
 import { agentCursorAppearance } from '../../../src/lib/browser/agent-cursor'
 import {
@@ -338,5 +343,67 @@ describe('agent key names', () => {
     expect(agentCount(3, 1, 20)).toBe(3)
     expect(agentCount(999, 1, 20)).toBe(20)
     expect(agentCount(undefined, 1, 20)).toBe(1)
+  })
+})
+
+describe('agent snapshot inside a frame', () => {
+  it('namespaces every reference with the document it came from', () => {
+    document.body.innerHTML = '<button>Save</button><input aria-label="Region" />'
+    const first = snapshot({ refPrefix: 'f2' })
+    expect(first.elements.map((element) => element.ref)).toEqual(['f2r1', 'f2r2'])
+    // Reading again keeps the same handles, so a reference taken from one read
+    // still names the same element on the next.
+    expect(snapshot({ refPrefix: 'f2' }).elements.map((element) => element.ref)).toEqual([
+      'f2r1',
+      'f2r2'
+    ])
+  })
+
+  it('leaves the page its own unprefixed references', () => {
+    document.body.innerHTML = '<button>Save</button>'
+    expect(snapshot().elements[0]?.ref).toBe('r1')
+  })
+})
+
+describe('agent frame geometry', () => {
+  it('measures every frame a document hosts, in document order', () => {
+    document.body.innerHTML = `
+      <iframe src="https://example.com/blade" title="Deploy blade"></iframe>
+      <iframe src="https://ads.example.com/slot"></iframe>
+    `
+    const rects = run<AgentFrameRect[]>(agentFrameRectsScript())
+    expect(rects.map((rect) => rect.src)).toEqual([
+      'https://example.com/blade',
+      'https://ads.example.com/slot'
+    ])
+    expect(rects.map((rect) => rect.index)).toEqual([0, 1])
+    expect(rects[0]?.title).toBe('Deploy blade')
+  })
+
+  it('reveals a frame before reporting where it landed', () => {
+    document.body.innerHTML = '<iframe src="https://example.com/blade"></iframe>'
+    const scrollIntoView = vi.fn()
+    Reflect.set(Element.prototype, 'scrollIntoView', scrollIntoView)
+    try {
+      const rect = run<AgentFrameRect | null>(agentFrameRevealScript(0))
+      expect(scrollIntoView).toHaveBeenCalledTimes(1)
+      expect(rect?.src).toBe('https://example.com/blade')
+      expect(rect?.index).toBe(0)
+    } finally {
+      Reflect.deleteProperty(Element.prototype, 'scrollIntoView')
+    }
+  })
+
+  it('reports a frame that is no longer there instead of a point', () => {
+    document.body.innerHTML = ''
+    expect(run<AgentFrameRect | null>(agentFrameRevealScript(3))).toBeNull()
+  })
+
+  it('reports the viewport and the page scroll offset it is measured in', () => {
+    const viewport = run<{ width: number; height: number }>(agentViewportScript())
+    const offset = run<{ x: number; y: number }>(agentPageOffsetScript())
+    expect(viewport.width).toBeGreaterThan(0)
+    expect(viewport.height).toBeGreaterThan(0)
+    expect(offset).toEqual({ x: window.scrollX, y: window.scrollY })
   })
 })
