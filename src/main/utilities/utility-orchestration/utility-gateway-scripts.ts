@@ -276,7 +276,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'select',
     description:
-      'Choose an option of a select element by value, by visible label, or several at once for a multiple select, and report the selection the page kept. On an unmatched value the answer lists the options, so pick from what is actually there.',
+      'Choose an option of a select element by value, by visible label, or several at once for a multiple select, and report the selection the page kept. On an unmatched value the answer lists the options, so pick from what is actually there. A picker that is not a select (a portal\u2019s resource or region field, an aria combobox owning a listbox) is chosen the way a person chooses it: the control is opened, the value is typed so its own filter runs, and the matching option is clicked. That is the only sequence such a control keeps, because the text typed into it is a query rather than a value.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -450,7 +450,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'upload',
     description:
-      'Choose files for a file input on the current browser page. This fills the input only; it does not submit the form. Auto Review always opens the native file chooser for the user to select the files. Full Access can supply absolute paths directly, or omit paths to open the chooser.',
+      'Choose files for a file input on the current browser page. This fills the input only; it does not submit the form. Auto Review always opens the native file chooser for the user to select the files. Full Access can supply absolute paths directly, or omit paths to open the chooser. An input inside a frame is filled in that frame, so a portal blade\u2019s upload works the same way; that path carries the bytes inside the frame and refuses more than 16 MB at once.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -459,6 +459,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           description:
             'CSS selector for an input[type="file"]. Defaults to the first file input on the page.'
         },
+        frame: FRAME_FIELD,
         paths: {
           type: 'array',
           items: { type: 'string' },

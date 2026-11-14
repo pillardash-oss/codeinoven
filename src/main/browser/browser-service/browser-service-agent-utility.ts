@@ -6,6 +6,7 @@ import {
 } from './browser-action-policy'
 import {
   agentCheckScript,
+  agentComboboxScript,
   agentEvaluateScript,
   agentFieldValueScript,
   agentFocusScript,
@@ -16,6 +17,7 @@ import {
   agentSnapshotScript,
   agentTypeScript,
   agentWaitScript,
+  AGENT_REF_ATTRIBUTE,
   BROWSER_WAIT_MAX_TIMEOUT_MS
 } from './browser-agent-page'
 import {
@@ -40,6 +42,7 @@ import {
 } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 import type { AgentTarget } from './browser-service-agent-script'
+import { comboboxOptions, pickComboboxOption } from './browser-agent-combobox'
 import { asObject, safeOrigin } from './browser-service-common'
 import { liveContents, liveWindowContents } from './browser-view-contents'
 import {
@@ -60,6 +63,14 @@ import {
 const MAX_FRAME_ELEMENTS = 120
 /** Characters of an embedded document's text a snapshot reports. */
 const MAX_FRAME_TEXT = 4000
+/** Times a combobox is read while its list fills, and the pause between reads. */
+const COMBOBOX_POLL_ATTEMPTS = 20
+const COMBOBOX_POLL_INTERVAL_MS = 100
+
+/** A pause in the main process, for a list a page fills in its own time. */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 /**
  * What `browser-service-agent-utility` reads off the browser service.
@@ -383,16 +394,30 @@ export class BrowserServiceAgentUtility {
             (value): value is string => typeof value === 'string'
           )
         : []
-      const result = await this.host.runAgentScriptIn(
-        target.entry,
-        agentSelectScript({
-          selector: target.selector,
-          ...(typeof input['value'] === 'string' ? { value: input['value'] } : {}),
-          ...(typeof input['label'] === 'string' ? { label: input['label'] } : {}),
-          ...(values.length > 0 ? { values } : {})
-        })
+      const result = asObject(
+        await this.host.runAgentScriptIn(
+          target.entry,
+          agentSelectScript({
+            selector: target.selector,
+            ...(typeof input['value'] === 'string' ? { value: input['value'] } : {}),
+            ...(typeof input['label'] === 'string' ? { label: input['label'] } : {}),
+            ...(values.length > 0 ? { values } : {})
+          })
+        )
       )
-      return { ...utilityContext, result }
+      if (result?.['selected'] === true || result?.['reason'] !== 'element is not a select') {
+        return { ...utilityContext, result }
+      }
+      // A portal's picker is an input that owns a listbox, not a `<select>`. Choosing
+      // there means opening it, typing the choice so its filter runs, and clicking the
+      // option, because the text alone is thrown away the moment the field blurs.
+      const query =
+        (typeof input['label'] === 'string' ? input['label'] : '') ||
+        (typeof input['value'] === 'string' ? input['value'] : '') ||
+        values[0] ||
+        ''
+      const combobox = await this.chooseCombobox(tab, target, query)
+      return { ...utilityContext, result: combobox ?? result }
     }
     if (operation === 'check') {
       const target = this.host.agentTarget(input, tab.view.webContents)
@@ -526,6 +551,74 @@ export class BrowserServiceAgentUtility {
   }
 
   /** Route a browser action through the ledger and confirm consequential effects. */
+  /**
+   * Choose an option from a combobox, the way a person does.
+   *
+   * Opening it, typing the choice so its own filter runs, and clicking the option is
+   * the only sequence such a control keeps: the text typed into it is a query, not a
+   * value, and a picker that filters a long list offers nothing until the query is
+   * there. The click goes through the ordinary element path, so a choice inside a
+   * frame, under an overlay, or in a portal blade is the same action. `null` means the
+   * element is not a combobox at all, and the caller reports what the select said.
+   */
+  private async chooseCombobox(
+    tab: BrowserTab,
+    target: AgentTarget,
+    query: string
+  ): Promise<Record<string, unknown> | null> {
+    const read = async (open: boolean): Promise<Record<string, unknown> | null> =>
+      asObject(
+        await this.host.runAgentScriptIn(
+          target.entry,
+          agentComboboxScript({
+            selector: target.selector,
+            open,
+            refPrefix: target.entry.index === 0 ? '' : `f${target.entry.index}`
+          })
+        )
+      )
+    const opened = await read(true)
+    if (opened?.['found'] === false) return { selected: false, reason: 'not found' }
+    if (opened?.['combobox'] !== true) return null
+    let state = opened
+    if (query) {
+      const typed = await this.typeWithKeys(tab, target, { text: query, append: false })
+      if (typed['typed'] === true) state = (await read(false)) ?? state
+    }
+    let options = comboboxOptions(state)
+    for (let attempt = 0; options.length === 0 && attempt < COMBOBOX_POLL_ATTEMPTS; attempt += 1) {
+      await delay(COMBOBOX_POLL_INTERVAL_MS)
+      state = (await read(false)) ?? state
+      options = comboboxOptions(state)
+    }
+    const choice = pickComboboxOption(options, query)
+    if (!choice) {
+      return {
+        selected: false,
+        reason:
+          options.length === 0
+            ? 'the combobox offered no options'
+            : 'no option matched what was asked for',
+        ...(options.length > 0
+          ? { options: options.slice(0, 20).map((option) => option.label) }
+          : {})
+      }
+    }
+    await this.host.clickAgentTarget(
+      tab,
+      { selector: `[${AGENT_REF_ATTRIBUTE}="${choice.ref}"]`, entry: target.entry },
+      {}
+    )
+    const after = (await read(false)) ?? state
+    return {
+      selected: true,
+      via: 'combobox',
+      label: choice.label,
+      value: String(after['value'] ?? choice.value ?? choice.label),
+      ...(after['expanded'] === true ? { stillOpen: true } : {})
+    }
+  }
+
   /**
    * Type the way a hand would: focus the field, then send the text as keystrokes.
    *

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   AGENT_OWNED_ATTRIBUTE,
@@ -8,6 +8,8 @@ import {
   agentCursorScript,
   agentDomClickScript,
   agentElementPointScript,
+  agentComboboxScript,
+  agentFileInputScript,
   agentFocusScript,
   agentFrameRectsScript,
   agentFrameRevealScript,
@@ -405,5 +407,140 @@ describe('agent frame geometry', () => {
     expect(viewport.width).toBeGreaterThan(0)
     expect(viewport.height).toBeGreaterThan(0)
     expect(offset).toEqual({ x: window.scrollX, y: window.scrollY })
+  })
+})
+
+interface ComboboxReport {
+  found: boolean
+  combobox?: boolean
+  expanded?: boolean
+  listbox?: boolean
+  value?: string
+  options?: Array<{
+    ref: string
+    label: string
+    value: string
+    selected: boolean
+    disabled: boolean
+  }>
+}
+
+describe('agent combobox', () => {
+  const originalRect = Element.prototype.getBoundingClientRect
+
+  beforeEach(() => {
+    // jsdom lays nothing out, so every control would report itself invisible.
+    Element.prototype.getBoundingClientRect = () =>
+      ({ x: 0, y: 0, width: 240, height: 32 }) as DOMRect
+  })
+
+  afterEach(() => {
+    Element.prototype.getBoundingClientRect = originalRect
+  })
+
+  it('reports the options an open listbox offers, with references for each', () => {
+    document.body.innerHTML = `
+      <div role="dialog">
+        <input id="region" role="combobox" aria-expanded="true" aria-controls="regions" />
+        <ul id="regions" role="listbox">
+          <li role="option" data-value="eastus">East US</li>
+          <li role="option" data-value="westus2">West US 2</li>
+          <li role="option" aria-disabled="true">North Europe</li>
+        </ul>
+      </div>
+    `
+    const report = run<ComboboxReport>(
+      agentComboboxScript({ selector: '#region', open: false, refPrefix: 'f2' })
+    )
+    expect(report.combobox).toBe(true)
+    expect(report.expanded).toBe(true)
+    expect(report.listbox).toBe(true)
+    expect(report.options?.map((option) => option.label)).toEqual([
+      'East US',
+      'West US 2',
+      'North Europe'
+    ])
+    expect(report.options?.map((option) => option.ref)).toEqual(['f2r1', 'f2r2', 'f2r3'])
+    expect(report.options?.[2]?.disabled).toBe(true)
+  })
+
+  it('opens the control by clicking it and its own combobox ancestor once', () => {
+    document.body.innerHTML = `
+      <div role="combobox" id="picker">
+        <input id="region" aria-expanded="false" />
+        <ul role="listbox"><li role="option">East US</li></ul>
+      </div>
+    `
+    let pickerClicks = 0
+    let fieldClicks = 0
+    const picker = document.querySelector('#picker')
+    picker?.addEventListener('click', (event) => {
+      // A click on the field bubbles through the wrapper; only a click aimed at the
+      // wrapper toggles the list a second time.
+      if (event.target === picker) pickerClicks += 1
+    })
+    const field = document.querySelector('#region')
+    field?.addEventListener('click', () => {
+      fieldClicks += 1
+      // The real control opens its list on its own click.
+      field.setAttribute('aria-expanded', 'true')
+    })
+    const report = run<ComboboxReport>(agentComboboxScript({ selector: '#region', open: true }))
+    expect(report.combobox).toBe(true)
+    expect(fieldClicks).toBe(1)
+    expect(pickerClicks).toBe(0)
+  })
+
+  it('does not call a plain text field a combobox', () => {
+    document.body.innerHTML = '<input id="name" type="text" />'
+    const report = run<ComboboxReport>(agentComboboxScript({ selector: '#name', open: false }))
+    expect(report.combobox).toBe(false)
+    expect(report.options).toEqual([])
+  })
+
+  it('reports a missing control rather than throwing', () => {
+    document.body.innerHTML = ''
+    expect(run<ComboboxReport>(agentComboboxScript({ selector: '#gone', open: true }))).toEqual({
+      found: false
+    })
+  })
+})
+
+describe('agent file input', () => {
+  it('reports what the input accepts before anything is attached', () => {
+    document.body.innerHTML = '<input id="doc" type="file" multiple accept=".pdf" />'
+    const state = run<{ available: boolean; multiple: boolean; accept: string }>(
+      agentFileInputScript({ selector: '#doc' })
+    )
+    expect(state).toEqual({ available: true, multiple: true, accept: '.pdf', disabled: false })
+  })
+
+  it('refuses an element that is not a file input', () => {
+    document.body.innerHTML = '<input id="name" type="text" />'
+    expect(run<{ available: boolean }>(agentFileInputScript({ selector: '#name' }))).toEqual({
+      available: false
+    })
+  })
+
+  it('attaches the files it was given as bytes and fires the events a choice does', () => {
+    if (typeof DataTransfer === 'undefined') return
+    document.body.innerHTML = '<input id="doc" type="file" multiple />'
+    const input = document.querySelector('#doc')
+    if (!(input instanceof HTMLInputElement)) throw new Error('fixture missing')
+    let changes = 0
+    input.addEventListener('change', () => {
+      changes += 1
+    })
+    const report = run<{ available: boolean; attached: number }>(
+      agentFileInputScript({
+        selector: '#doc',
+        files: [{ name: 'rules.pdf', type: 'application/pdf', base64: btoa('document') }]
+      })
+    )
+    expect(report.available).toBe(true)
+    expect(report.attached).toBe(1)
+    expect(changes).toBe(1)
+    expect(input.files?.[0]?.name).toBe('rules.pdf')
+    expect(input.files?.[0]?.type).toBe('application/pdf')
   })
 })

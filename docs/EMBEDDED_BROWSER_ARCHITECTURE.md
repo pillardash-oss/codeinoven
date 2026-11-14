@@ -121,6 +121,21 @@ material way, and the difference is deliberate.
     instead of guessing at a pixel. An element screenshot goes through the same
     translation, because a clip is expressed in the page's own coordinates rather than a
     frame's.
+  - A picker that is not a `<select>` is chosen the way a person chooses it, because
+    that is the only sequence such a control keeps. A portal's region or resource-group
+    field is an input owning a listbox: what is typed into it is a query its own filter
+    reads, and the text alone is thrown away the moment the field blurs, which is what
+    left an agent typing a value and watching the form ignore it. `select` therefore
+    opens the control, types the choice so the filter runs, clicks the matching option
+    through the ordinary element path (so a picker inside a frame is the same action),
+    and reports the value the page kept. `browser-agent-combobox.ts` decides which option
+    a query names, and it chooses nothing when the list does not contain it rather than
+    taking the first option offered.
+  - An upload into a file input inside a frame is filled in that frame. The debugger
+    session belongs to the page's own document and a cross-origin frame's input is not
+    in it, so the files are built in the frame from bytes the main process read, bounded
+    by `MAX_IN_FRAME_UPLOAD_BYTES`, with the events a person's own choice would fire. The
+    page never learns the local path.
   - A synthetic mark, marked `data-cio-agent` so no snapshot mistakes it for page
     content, is drawn at the point each action touched, so a screenshot shows where the
     agent worked. It is a game-style cursor rather than a selection pointer: a solid

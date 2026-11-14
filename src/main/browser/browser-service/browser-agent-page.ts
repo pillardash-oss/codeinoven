@@ -480,6 +480,136 @@ export function agentSelectScript(request: {
   })()`
 }
 
+/**
+ * Open a combobox and report the options it offers.
+ *
+ * A portal's picker is not a `<select>`: it is an input or a button that owns a
+ * listbox, filters it as you type, and keeps nothing you typed unless you choose an
+ * option. This reads that shape so the caller can choose like a person does, and it
+ * stamps each option with a reference, so the option is clicked through the same
+ * path as any other element.
+ */
+export function agentComboboxScript(request: {
+  selector: string
+  open: boolean
+  refPrefix?: string
+}): string {
+  return `(() => {
+    ${pageHelpers(request.refPrefix ?? '')}
+    const element = resolveElement(${JSON.stringify(request.selector)});
+    if (!element) return { found: false };
+    const role = (element.getAttribute('role') || '').toLowerCase();
+    const popup = (element.getAttribute('aria-haspopup') || '').toLowerCase();
+    const combobox =
+      role === 'combobox' ||
+      popup === 'listbox' || popup === 'tree' || popup === 'grid' || popup === 'dialog' ||
+      element.hasAttribute('aria-autocomplete') ||
+      element.closest('[role="combobox"]') !== null;
+    if (${request.open ? 'true' : 'false'}) {
+      element.focus();
+      element.click();
+      // A field's own click normally opens its list. The wrapper is only pressed when
+      // the control still reports itself closed, because pressing both would toggle the
+      // list twice and close what the first press opened.
+      if (element.getAttribute('aria-expanded') !== 'true') {
+        const control = element.closest('button, [role="combobox"]');
+        if (control && control !== element) control.click();
+      }
+    }
+    const owns = (element.getAttribute('aria-controls') || element.getAttribute('aria-owns') || '')
+      .split(/\\s+/).filter(Boolean)
+      .map((id) => document.getElementById(id))
+      .filter((node) => node instanceof HTMLElement && isVisible(node));
+    const scope = element.closest('[role="dialog"], dialog, form, [role="search"]') || document;
+    const candidates = [
+      ...owns,
+      ...Array.from(scope.querySelectorAll('[role="listbox"], [role="tree"], [role="grid"], datalist'))
+    ].filter((node) => node instanceof HTMLElement && isVisible(node));
+    const listbox = candidates[0] || null;
+    const options = [];
+    if (listbox) {
+      const found = Array.from(
+        listbox.querySelectorAll('[role="option"], [role="treeitem"], option, li')
+      ).filter((node) => node instanceof HTMLElement && isVisible(node));
+      for (const option of found.slice(0, ${MAX_OPTIONS})) {
+        const disabledOption =
+          option.getAttribute('aria-disabled') === 'true' ||
+          (option instanceof HTMLOptionElement && option.disabled);
+        options.push({
+          ref: referenceFor(option),
+          label: labelOf(option),
+          value: option.getAttribute('data-value') || option.getAttribute('value') || '',
+          selected:
+            option.getAttribute('aria-selected') === 'true' ||
+            option.getAttribute('aria-checked') === 'true',
+          disabled: disabledOption
+        });
+      }
+    }
+    const expandedAttribute = element.getAttribute('aria-expanded');
+    const text =
+      element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+        ? String(element.value || '').slice(0, ${MAX_VALUE_CHARS})
+        : textOf(element, ${MAX_VALUE_CHARS});
+    return {
+      found: true,
+      combobox,
+      expanded: expandedAttribute === 'true' || listbox !== null,
+      listbox: listbox !== null,
+      value: text,
+      options
+    };
+  })()`
+}
+
+/**
+ * Set the files of a file input from inside its own document.
+ *
+ * A file input in a cross-origin frame is not reachable from the page's debugger
+ * session, so its files are built in the frame itself from bytes the main process
+ * read. Nothing about the local path reaches the page, and the change travels as the
+ * events a person's own choice would fire.
+ */
+export function agentFileInputScript(request: {
+  selector: string
+  files?: Array<{ name: string; type: string; base64: string }>
+}): string {
+  const files = request.files ?? []
+  return `(() => {
+    ${pageHelpers()}
+    const element = resolveElement(${JSON.stringify(request.selector)});
+    if (!(element instanceof HTMLInputElement) || element.type !== 'file') {
+      return { available: false };
+    }
+    if (${files.length > 0 ? 'true' : 'false'}) {
+      if (element.disabled) return { available: true, disabled: true };
+      const transfer = new DataTransfer();
+      for (const file of ${JSON.stringify(files)}) {
+        const binary = atob(file.base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        transfer.items.add(new File([bytes], file.name, { type: file.type || 'application/octet-stream' }));
+      }
+      element.files = transfer.files;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      return {
+        available: true,
+        multiple: element.multiple,
+        accept: element.accept,
+        disabled: false,
+        attached: element.files ? element.files.length : 0
+      };
+    }
+    return {
+      available: true,
+      multiple: element.multiple,
+      accept: element.accept,
+      disabled: element.disabled
+    };
+  })()`
+}
+
 /** Tick, untick, or set a checkbox, radio or role switch. */
 export function agentCheckScript(request: { selector: string; checked: boolean }): string {
   return `(() => {
