@@ -3,7 +3,7 @@
   import type { Terminal } from 'ghostty-web'
   import { subscribe } from '$lib/ipc.svelte'
   import { registerTerminalHost } from '$lib/terminal/host-registry'
-  import { loadGhosttyWeb } from '$lib/terminal/runtime'
+  import { loadGhostty, loadGhosttyWeb } from '$lib/terminal/runtime'
   import { terminalThemeFromTokens } from '$lib/terminal/theme'
   import { localAiPtyId } from '$shared/llama-cpp'
   import type { Attachment } from 'svelte/attachments'
@@ -64,9 +64,9 @@
         })
       )
       try {
-        const ghosttyWeb = await loadGhosttyWeb()
+        const ghostty = await loadGhostty()
         if (disposed) return
-        const ghostty = await ghosttyWeb.Ghostty.load()
+        const ghosttyWeb = await loadGhosttyWeb()
         if (disposed) return
         const fontFamily = await loadTerminalFontFamily()
         if (disposed) return
