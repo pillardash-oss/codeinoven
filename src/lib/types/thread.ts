@@ -97,6 +97,20 @@ export interface ThreadParkReason {
  */
 export type ThreadScopeMoveResult = { ok: true; thread: Thread } | { ok: false; refusal: string }
 
+/**
+ * How a persisted thread row is announced to the app's surfaces.
+ *
+ * The row is always pushed to the windows and to the observers: a status the UI
+ * shows must arrive whatever the reason for the write. Only the notification is
+ * optional, because one user prompt can settle more than once (a harness that
+ * ends the turn, then continues it with its own internal instruction) and the
+ * reader must be interrupted for the first settle only.
+ */
+export interface ThreadAnnounceOptions {
+  /** False when this write must not raise a completion notification. */
+  notify?: boolean
+}
+
 export interface Thread {
   id: string
   projectId: string

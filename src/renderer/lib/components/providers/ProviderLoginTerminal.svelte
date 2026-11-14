@@ -5,7 +5,7 @@
   import { TerminalCursorController } from '$lib/terminal/cursor-visibility'
   import { patchSelectionCopy } from '$lib/terminal/selection-copy'
   import { registerTerminalHost } from '$lib/terminal/host-registry'
-  import { loadGhosttyWeb } from '$lib/terminal/runtime'
+  import { loadGhostty, loadGhosttyWeb } from '$lib/terminal/runtime'
   import { terminalThemeFromTokens } from '$lib/terminal/theme'
   import type { Attachment } from 'svelte/attachments'
 
@@ -46,8 +46,8 @@
 
   async function init(container: HTMLDivElement): Promise<void> {
     try {
+      const ghostty = await loadGhostty()
       const ghosttyWeb = await loadGhosttyWeb()
-      const ghostty = await ghosttyWeb.Ghostty.load()
       if (destroyed || cancelled) return
       await patchSelectionCopy()
       if (destroyed || cancelled) return

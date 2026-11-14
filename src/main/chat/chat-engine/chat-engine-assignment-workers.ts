@@ -907,6 +907,15 @@ export class ChatEngineAssignmentWorkers {
       ) {
         continue
       }
+      // A worker that already reported is finished, not missing. Its task stays
+      // `running` until the coordinator reviews that report, so recovering it
+      // here threw a valid report away, flipped the task to `attention` and
+      // re-dispatched work that had already passed review.
+      if (task.report && (!task.startedAt || task.report.reportedAt >= task.startedAt)) continue
+      // A retry-paused worker is waiting for its own scheduled resume, which is
+      // the app's clock and not a missing worker: recovering it discarded the
+      // backoff and restarted the turn the retry was about to continue.
+      if (worker?.status === 'working-paused') continue
       current = await this.host.state.assignmentEngine.stopWorker(current.id, workerThreadId)
       Logger.info('Recovered unavailable Assignment worker for automatic re-dispatch', {
         assignmentId: current.id,

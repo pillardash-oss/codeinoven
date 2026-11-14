@@ -495,6 +495,12 @@ export class LocalAiController {
   private appendOutput(entryId: string, chunk: string): void {
     const handle = this.handles.get(entryId)
     if (!handle) return
+    // The PTY paces its output and pauses the process until the renderer has
+    // parsed a chunk, so the row that owns the server acknowledges every one of
+    // them, expanded or folded away. Without this the engine's stdout blocks as
+    // soon as the window fills, and a model fetch then hangs mid-file: the log
+    // stops and the download looks like it started over.
+    window.api.send('pty:ack', localAiPtyId(entryId), chunk.length)
     let text = stripTerminalEscapes(chunk)
     let rewriteOpen = handle.afterCarriageReturn
     handle.afterCarriageReturn = false

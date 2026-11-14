@@ -215,6 +215,17 @@ export class ChatEngineState {
    */
   taskReconcileTurns = new Set<string>()
 
+  /**
+   * The user prompt whose answer the app already announced, per thread.
+   *
+   * A settle only interrupts the reader once per prompt: a harness that ends a
+   * turn and then continues it with its own internal instruction (pi's task-list
+   * reconcile) settles the same prompt twice, and the second settle is the same
+   * answer. Kept per thread rather than per session because a thread's prompt is
+   * what the user is waiting on. See `completionAnnouncement`.
+   */
+  announcedCompletionPrompts = new Map<string, string>()
+
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
   /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
   turnStreamCache = new Map<string, TurnStreamCacheEntry>()
@@ -475,8 +486,12 @@ export class ChatEngineState {
   /** Serializes durable child-to-coordinator queue reads and writes per Sr. Engineer thread. */
   readonly coordinatorHandoffQueueLocks = new Map<string, Promise<void>>()
 
-  /** Prevents concurrent idle signals from dispatching the same queued handoff twice. */
-  readonly coordinatorHandoffDrains = new Map<string, Promise<void>>()
+  /**
+   * Prevents concurrent idle signals from dispatching the same queued handoff
+   * twice. It resolves to whether that drain delivered a handoff, so the idle
+   * finalization can tell a delivered handoff from an empty queue.
+   */
+  readonly coordinatorHandoffDrains = new Map<string, Promise<boolean>>()
 
   /** Identifies the one queued handoff currently being delivered through sendPrompt. */
   readonly dispatchingCoordinatorHandoffIds = new Set<string>()

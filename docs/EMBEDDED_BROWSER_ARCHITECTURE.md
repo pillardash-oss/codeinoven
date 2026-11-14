@@ -107,6 +107,35 @@ material way, and the difference is deliberate.
     past the keystroke ceiling (`MAX_TYPED_KEYSTROKES`), and text containing a line
     break, since Enter submits the form it is typed into. Either way the result says
     which path ran and reports the value the page kept.
+  - A page is more than one document, so the capability reads and acts in all of
+    them. A portal renders each blade in its own frame, a payment flow hands the card
+    form to the processor's frame, and a chat widget lives in a frame of its own, which
+    is why a read of the top document alone reported "only the title" on a page an agent
+    was sent to operate. `browser-agent-frames.ts` enumerates the frames
+    (`framesInSubtree`, bounded, with the page's own document first), gives each frame's
+    references a prefix (`f2r7`), and runs a page script in the document that holds the
+    control. A point measured inside a frame is carried out through every parent's inset
+    into the page's viewport before an input event is sent, and the parent is asked to
+    reveal the frame first, so a pointer click lands where it means to; when the chain
+    cannot be measured the action says so and falls back to the element's own DOM click
+    instead of guessing at a pixel. An element screenshot goes through the same
+    translation, because a clip is expressed in the page's own coordinates rather than a
+    frame's.
+  - A picker that is not a `<select>` is chosen the way a person chooses it, because
+    that is the only sequence such a control keeps. A portal's region or resource-group
+    field is an input owning a listbox: what is typed into it is a query its own filter
+    reads, and the text alone is thrown away the moment the field blurs, which is what
+    left an agent typing a value and watching the form ignore it. `select` therefore
+    opens the control, types the choice so the filter runs, clicks the matching option
+    through the ordinary element path (so a picker inside a frame is the same action),
+    and reports the value the page kept. `browser-agent-combobox.ts` decides which option
+    a query names, and it chooses nothing when the list does not contain it rather than
+    taking the first option offered.
+  - An upload into a file input inside a frame is filled in that frame. The debugger
+    session belongs to the page's own document and a cross-origin frame's input is not
+    in it, so the files are built in the frame from bytes the main process read, bounded
+    by `MAX_IN_FRAME_UPLOAD_BYTES`, with the events a person's own choice would fire. The
+    page never learns the local path.
   - A synthetic mark, marked `data-cio-agent` so no snapshot mistakes it for page
     content, is drawn at the point each action touched, so a screenshot shows where the
     agent worked. It is a game-style cursor rather than a selection pointer: a solid

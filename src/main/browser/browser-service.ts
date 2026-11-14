@@ -118,7 +118,12 @@ import { BrowserServiceConfiguration } from './browser-service/browser-service-c
 import { BrowserServiceIpcSurface } from './browser-service/browser-service-ipc-surface'
 import { BrowserServiceAgentUtility } from './browser-service/browser-service-agent-utility'
 import { BrowserServiceAgentFiles } from './browser-service/browser-service-agent-files'
-import { BrowserServiceAgentScript } from './browser-service/browser-service-agent-script'
+import {
+  BrowserServiceAgentScript,
+  type AgentPoint,
+  type AgentTarget
+} from './browser-service/browser-service-agent-script'
+import { agentFrameEntries, type AgentFrameEntry } from './browser-service/browser-agent-frames'
 import type { BrowserAgentCursorAppearance } from './browser-service/browser-agent-cursor-appearance'
 import type { AgentCursorAppearance } from '../../lib/browser/agent-cursor'
 import { BrowserServiceSurfaces } from './browser-service/browser-service-surfaces'
@@ -881,6 +886,41 @@ export class BrowserService {
     return this.agentScriptUnit.runAgentScript(contents, script)
   }
 
+  async runAgentScriptIn(entry: AgentFrameEntry, script: string): Promise<unknown> {
+    return this.agentScriptUnit.runAgentScriptIn(entry, script)
+  }
+
+  /** Every document this page is made of, as a snapshot reports them. */
+  agentFrames(contents: WebContents): AgentFrameEntry[] {
+    return agentFrameEntries(contents)
+  }
+
+  agentEntry(input: Record<string, unknown>, contents: WebContents): AgentFrameEntry {
+    return this.agentScriptUnit.agentEntry(input, contents)
+  }
+
+  agentTarget(input: Record<string, unknown>, contents: WebContents): AgentTarget {
+    return this.agentScriptUnit.agentTarget(input, contents)
+  }
+
+  optionalAgentTarget(
+    input: Record<string, unknown>,
+    contents: WebContents
+  ): AgentTarget | undefined {
+    return this.agentScriptUnit.optionalAgentTarget(input, contents)
+  }
+
+  async pointFor(tab: BrowserTab, target: AgentTarget): Promise<AgentPoint> {
+    return this.agentScriptUnit.pointFor(tab, target)
+  }
+
+  async pageRectFor(
+    tab: BrowserTab,
+    target: AgentTarget
+  ): Promise<{ x: number; y: number; width: number; height: number } | null> {
+    return this.agentScriptUnit.pageRectFor(tab, target)
+  }
+
   agentSelector(input: Record<string, unknown>): string {
     return this.agentScriptUnit.agentSelector(input)
   }
@@ -901,24 +941,23 @@ export class BrowserService {
     input: Record<string, unknown>,
     tab: BrowserTab,
     label: 'point' | 'from' | 'to'
-  ): Promise<{ x: number; y: number }> {
+  ): Promise<AgentPoint> {
     return this.agentScriptUnit.agentPointFrom(input, tab, label)
   }
 
   async agentTargetChanged(
-    contents: WebContents,
-    selector: string,
+    target: AgentTarget,
     reviewedTarget: BrowserActionTarget | null
   ): Promise<boolean> {
-    return this.agentScriptUnit.agentTargetChanged(contents, selector, reviewedTarget)
+    return this.agentScriptUnit.agentTargetChanged(target, reviewedTarget)
   }
 
   async clickAgentTarget(
     tab: BrowserTab,
-    selector: string,
+    target: AgentTarget,
     input: Record<string, unknown>
   ): Promise<Record<string, unknown>> {
-    return this.agentScriptUnit.clickAgentTarget(tab, selector, input)
+    return this.agentScriptUnit.clickAgentTarget(tab, target, input)
   }
 
   /** How the agent's own cursor is drawn right now: the app's palette and scale,
@@ -931,8 +970,8 @@ export class BrowserService {
     return this.agentScriptUnit.paintAgentCursor(tab, point)
   }
 
-  async paintAgentCursorAtElement(tab: BrowserTab, selector: string): Promise<void> {
-    return this.agentScriptUnit.paintAgentCursorAtElement(tab, selector)
+  async paintAgentCursorAtElement(tab: BrowserTab, target: AgentTarget): Promise<void> {
+    return this.agentScriptUnit.paintAgentCursorAtElement(tab, target)
   }
 
   requiredInputString(input: Record<string, unknown>, field: string, allowEmpty = false): string {

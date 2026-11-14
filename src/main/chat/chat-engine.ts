@@ -306,8 +306,15 @@ export class ChatEngine {
   /** Settles a delegated teammate's question in the conversation that began the work. */
   private delegatedQuestionHandler: ((pending: PendingQuestionInfo) => void) | null = null
 
-  /** Max consecutive forced continuations before an Assignment stall surfaces. */
-  static readonly MAX_ASSIGNMENT_CONTINUATION_STALLS = 2
+  /**
+   * Max consecutive forced continuations before an Assignment stall surfaces.
+   *
+   * One repeat is a nudge for a coordinator that ended its turn early. A second
+   * no-op repeat always answered the same way (the thread log for one Assignment
+   * shows three identical turns in a row before the notice), so the app surfaces
+   * the stall to the user instead of spending another turn on it.
+   */
+  static readonly MAX_ASSIGNMENT_CONTINUATION_STALLS = 1
 
   public handledIdleSessions = new Set<string>()
 

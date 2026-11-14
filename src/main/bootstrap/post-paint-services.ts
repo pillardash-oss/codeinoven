@@ -1320,6 +1320,11 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // ABI mismatch) used to abort this entire block, so terminals took
     // providers, utilities, notifications and every other feature down with
     // them. Importing it on its own keeps that failure where it belongs.
+    // The parser bytes a packaged renderer cannot fetch for itself: registered
+    // either way, because a terminal that cannot reach it is a terminal that
+    // cannot start.
+    const { registerTerminalWasmIpc } = await import('../system/terminal-wasm')
+    registerTerminalWasmIpc()
     let ptyModule: typeof import('../system/pty-service') | null = null
     try {
       ptyModule = await import('../system/pty-service')

@@ -1,4 +1,4 @@
-import type { Thread, ThreadSettings, ThreadStatus } from '../types'
+import type { Thread, ThreadAnnounceOptions, ThreadSettings, ThreadStatus } from '../types'
 import { scopeSliceForStatus } from '../types'
 import { Logger } from '../../main/system/logger'
 import type { ThreadRepo } from '../../main/database/repositories/thread-repo'
@@ -27,7 +27,7 @@ export class ThreadStatusService {
   constructor(
     private readonly threadRepo: ThreadRepo,
     private readonly requireOwned: (projectId: string, threadId: string) => Thread,
-    private readonly announce: (thread: Thread) => Promise<void>,
+    private readonly announce: (thread: Thread, options?: ThreadAnnounceOptions) => Promise<void>,
     private readonly getThread: (projectId: string, threadId: string) => Promise<Thread | null>,
     private readonly onChange: (thread: Thread) => void
   ) {}
@@ -69,7 +69,13 @@ export class ThreadStatusService {
     projectId: string,
     threadId: string,
     status: ThreadStatus,
-    opts?: { read?: boolean; error?: string; errorDetail?: string }
+    opts?: {
+      read?: boolean
+      error?: string
+      errorDetail?: string
+      /** False when this settle repeats a completion already announced. */
+      notify?: boolean
+    }
   ): Promise<Thread> {
     const existing = this.requireOwned(projectId, threadId)
 
@@ -129,7 +135,7 @@ export class ThreadStatusService {
     }
 
     await this.threadRepo.upsertViaWorker(updated)
-    await this.announce(updated)
+    await this.announce(updated, { notify: opts?.notify })
     return updated
   }
 

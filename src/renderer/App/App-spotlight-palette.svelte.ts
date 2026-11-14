@@ -263,7 +263,9 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           initialQuery: this.allThreadSearch.initialQuery,
           emptyLabel: this.allThreadSearch.loading
             ? 'Searching every thread…'
-            : 'Type at least two characters to search every thread',
+            : this.allThreadSearch.queryReady
+              ? 'No matching threads'
+              : 'Type at least two characters to search every thread',
           statusNote: this.allThreadSearch.rankingByMeaning ? 'Ranking by meaning…' : '',
           // The app's own search mark: this screen is the whole corpus, not one
           // of the families that each carry their view's glyph.
@@ -285,7 +287,9 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           initialQuery: this.root.onKeydown.threadSearch.initialQuery,
           emptyLabel: this.root.onKeydown.threadSearch.loading
             ? 'Searching threads…'
-            : 'Type at least two characters to search all projects',
+            : this.root.onKeydown.threadSearch.queryReady
+              ? 'No matching threads across your projects'
+              : 'Type at least two characters to search all projects',
           statusNote: this.root.onKeydown.threadSearch.rankingByMeaning
             ? 'Ranking by meaning…'
             : '',
@@ -312,7 +316,9 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           initialQuery: this.chatSearch.initialQuery,
           emptyLabel: this.chatSearch.loading
             ? 'Searching chats…'
-            : 'Type at least two characters to search chats',
+            : this.chatSearch.queryReady
+              ? 'No matching chats'
+              : 'Type at least two characters to search chats',
           statusNote: this.chatSearch.rankingByMeaning ? 'Ranking by meaning…' : '',
           headerIcon: CONTENT_FAMILY_ICONS.chats,
           headerIconBadge: true,
@@ -332,7 +338,9 @@ export class AppSpotlightPalette extends BoardUnit<App> {
           initialQuery: this.root.onKeydown.assistantSearch.initialQuery,
           emptyLabel: this.root.onKeydown.assistantSearch.loading
             ? 'Searching assistant tasks…'
-            : 'Type at least two characters to search assistant tasks and assistants',
+            : this.root.onKeydown.assistantSearch.queryReady
+              ? 'No matching assistants or tasks'
+              : 'Type at least two characters to search assistant tasks and assistants',
           statusNote: this.root.onKeydown.assistantSearch.rankingByMeaning
             ? 'Ranking by meaning…'
             : '',

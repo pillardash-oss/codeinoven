@@ -172,7 +172,28 @@ export class ChatEngineAudit {
             threadId: assignment.coordinatorThreadId
           })
         ),
-        JSON.stringify({ assignmentId: assignment.id, task, report }, null, 2)
+        JSON.stringify(
+          {
+            assignmentId: assignment.id,
+            taskId,
+            // The task definition (prompt, description, audit checklist) is
+            // already in the coordinator's brief, so the wake carries only what
+            // the review decides on: which task, and what the worker reported.
+            task: task
+              ? {
+                  id: task.id,
+                  title: task.title,
+                  status: task.status,
+                  owner: task.owner,
+                  workerName: task.workerName ?? null,
+                  threadId: task.threadId ?? null
+                }
+              : null,
+            report
+          },
+          null,
+          2
+        )
       ].join('\n\n')
     )
   }

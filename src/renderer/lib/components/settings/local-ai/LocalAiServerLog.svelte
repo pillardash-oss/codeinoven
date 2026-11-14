@@ -3,7 +3,7 @@
   import type { Terminal } from 'ghostty-web'
   import { subscribe } from '$lib/ipc.svelte'
   import { registerTerminalHost } from '$lib/terminal/host-registry'
-  import { loadGhosttyWeb } from '$lib/terminal/runtime'
+  import { loadGhostty, loadGhosttyWeb } from '$lib/terminal/runtime'
   import { terminalThemeFromTokens } from '$lib/terminal/theme'
   import { localAiPtyId } from '$shared/llama-cpp'
   import type { Attachment } from 'svelte/attachments'
@@ -20,6 +20,7 @@
   let { entryId, history, emptyLabel }: Props = $props()
 
   let empty = $state(true)
+  let failure = $state('')
 
   /**
    * A real terminal, because a server's output is a terminal's job.
@@ -30,6 +31,12 @@
    * owns, and its log file is followed onto the same channel when the app did not
    * start it, so this surface only ever reads: it never writes to the process and
    * never forwards a resize the engine did not ask for.
+   *
+   * `history` and `emptyLabel` are read only after the first await. A server that
+   * is downloading redraws its bar many times a second, and this card's log lines
+   * change with it; reading that prop while the attachment runs would tie the
+   * attachment to it and rebuild the emulator on every redraw, which is what made
+   * the log flicker and then go blank.
    */
   function attachLog(node: HTMLDivElement): () => void {
     let disposed = false
@@ -38,7 +45,6 @@
     /** Output that arrives while the terminal runtime loads. */
     const buffered: string[] = []
     let streaming = false
-    empty = history.length === 0
 
     const write = (data: string): void => {
       if (data.length === 0) return
@@ -58,9 +64,9 @@
         })
       )
       try {
-        const ghosttyWeb = await loadGhosttyWeb()
+        const ghostty = await loadGhostty()
         if (disposed) return
-        const ghostty = await ghosttyWeb.Ghostty.load()
+        const ghosttyWeb = await loadGhosttyWeb()
         if (disposed) return
         const fontFamily = await loadTerminalFontFamily()
         if (disposed) return
@@ -87,11 +93,13 @@
           })
         )
         streaming = true
+        // Past the first await the props are read outside any reactive context,
+        // so the folded history only ever seeds the view.
         if (history.length > 0) write(`${history.join('\r\n')}\r\n`)
         for (const chunk of buffered.splice(0)) write(chunk)
-      } catch {
-        // A runtime that cannot load leaves the empty state in place; the row's
-        // own notice already says what the server did.
+      } catch (error) {
+        if (disposed) return
+        failure = error instanceof Error ? error.message : 'The log terminal could not start.'
       }
     }
 
@@ -109,11 +117,18 @@
 
 <div class="relative h-64 overflow-hidden border bg-raised">
   <div class="local-ai-log h-full w-full" {@attach terminalAttachment}></div>
-  {#if empty}
+  {#if empty && !failure}
     <p
       class="pointer-events-none absolute inset-0 flex items-center justify-center px-3 text-center text-[0.6875rem] text-dimmed"
     >
       {emptyLabel}
+    </p>
+  {/if}
+  {#if failure}
+    <p
+      class="absolute inset-0 flex items-center justify-center px-3 text-center text-[0.6875rem] text-danger"
+    >
+      {failure}
     </p>
   {/if}
 </div>

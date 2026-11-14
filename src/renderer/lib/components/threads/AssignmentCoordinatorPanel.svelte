@@ -109,11 +109,19 @@
     threads.some((worker) => worker.status === 'planning' || worker.status === 'executing')
   )
   const workersRetryPaused = $derived(threads.some((worker) => isThreadRetryPaused(worker)))
+  /** A task whose worker is actually busy, read from the task row rather than
+   *  the worker thread's own status, so a working run never reads as paused. */
+  const tasksRunning = $derived(
+    assignment.content.tasks.some((task) =>
+      ['running', 'reported', 'auditing'].includes(task.status)
+    )
+  )
   const stalled = $derived(
     assignment.status !== 'stopped' &&
       completed < assignment.content.tasks.length &&
       !coordinatorWorking &&
       !workersWorking &&
+      !tasksRunning &&
       !workersRetryPaused
   )
   const auditWorkAvailable = $derived(

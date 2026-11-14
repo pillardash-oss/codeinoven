@@ -352,24 +352,24 @@ export class ChatEngineAssignment {
     })
   }
 
-  async drainCoordinatorHandoffQueue(projectId: string, threadId: string): Promise<void> {
+  async drainCoordinatorHandoffQueue(projectId: string, threadId: string): Promise<boolean> {
     const key = coordinatorHandoffQueueKey(projectId, threadId)
     const active = this.host.state.coordinatorHandoffDrains.get(key)
     if (active) return active
-    const drain = (async () => {
+    const drain = (async (): Promise<boolean> => {
       const queue = await this.withCoordinatorHandoffQueueLock(projectId, threadId, () =>
         this.readCoordinatorHandoffQueue(projectId, threadId)
       )
       const next = queue.items[0]
-      if (!next) return
+      if (!next) return false
       const thread = await this.host.threadManager.getThread(projectId, threadId)
       if (!thread || !isCoordinatorThread(thread)) {
         await this.host.storage.remove(coordinatorHandoffQueuePath(projectId, threadId))
-        return
+        return false
       }
       const status = thread.sessionId ? this.host.sessionStatuses.get(thread.sessionId) : undefined
       if (status?.state === 'working' || status?.state === 'waiting' || status?.state === 'error') {
-        return
+        return false
       }
       this.host.state.dispatchingCoordinatorHandoffIds.add(next.id)
       try {
@@ -388,9 +388,25 @@ export class ChatEngineAssignment {
           next.presentation,
           next.taskReferences
         )
+        // A delivered handoff leaves the queue. Without this the same first
+        // item is re-dispatched by every later drain (a session idle signal, a
+        // new internal prompt), so the coordinator answers one handed-off
+        // message twice and the queue can never advance past its first entry.
+        await this.withCoordinatorHandoffQueueLock(projectId, threadId, async () => {
+          const latest = await this.readCoordinatorHandoffQueue(projectId, threadId)
+          const remaining = latest.items.filter((item) => item.id !== next.id)
+          if (remaining.length === latest.items.length) return
+          const path = coordinatorHandoffQueuePath(projectId, threadId)
+          if (remaining.length === 0) {
+            await this.host.storage.remove(path)
+            return
+          }
+          await this.host.storage.write(path, { ...latest, items: remaining })
+        })
       } finally {
         this.host.state.dispatchingCoordinatorHandoffIds.delete(next.id)
       }
+      return true
     })().finally(() => {
       if (this.host.state.coordinatorHandoffDrains.get(key) === drain) {
         this.host.state.coordinatorHandoffDrains.delete(key)
@@ -711,6 +727,28 @@ export class ChatEngineAssignment {
   }
 
   /**
+   * Whether the only work left for the coordinator is queued behind its workers.
+   *
+   * A `ready` task with every worker slot taken is work the coordinator cannot
+   * start, and the app wakes it the moment a worker reports or frees its slot.
+   * An idle turn in that state is a turn spent waiting, so it must never be read
+   * as a stall.
+   */
+  assignmentQueuedBehindRunningWorkers(assignment: AssignmentPlan): boolean {
+    const tasks = assignment.content.tasks
+    const runningWorker = tasks.some((task) => task.owner === 'worker' && task.status === 'running')
+    if (!runningWorker) return false
+    return !tasks.some(
+      (task) =>
+        task.status === 'reported' ||
+        task.status === 'attention' ||
+        task.status === 'failed' ||
+        task.status === 'rework' ||
+        (task.owner === 'senior' && task.status === 'running')
+    )
+  }
+
+  /**
    * The wake gate for an automatic coordinator turn.
    *
    * It used to fall through to "some task is not completed", so an Assignment
@@ -758,6 +796,8 @@ export class ChatEngineAssignment {
     return [
       "Waiting for a worker is the application's job, not yours.",
       'When every task you can act on is dispatched and the rest are workers still running, end your turn: the application starts a new coordinator turn the moment a worker reports, finishes without reporting, or leaves an attention task, and that turn carries the report.',
+      'Assignment workers are durable threads the application owns, not sub-agents of this turn: the four-sub-agent cap of the spawning tools does not apply, the application sets no limit on how many workers run at once, and no worker count is ever over a limit. Dispatch every ready task the dependencies allow.',
+      'A task that already carries a report is never dispatched again: the report is the evidence the review endpoint reads, so review it instead of assigning the task a second time.',
       'Never poll, sleep, or loop on /v1/assignments/get or any other endpoint to wait for a worker: a waiting loop keeps this thread busy, delays the report you are waiting for, and the report reaches you as a new turn anyway. Call get only to read state you are about to act on right now.'
     ].join(' ')
   }

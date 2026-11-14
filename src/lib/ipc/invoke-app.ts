@@ -171,6 +171,10 @@ export const invokeAppContract = {
     { id: string; pid: number }
   >,
   'pty:destroy': {} as Contract<[id: string], void>,
+  /** The terminal engine's WebAssembly parser, for a renderer that cannot fetch
+   *  it: a packaged app loads its document from `file://`, where fetch is
+   *  refused, so the main process reads the bytes out of the archive instead. */
+  'terminal:wasm': {} as Contract<[], Uint8Array>,
   /** A plain shell on one Oven's home directory, with no chat behind it. */
   'pty:createOven': {} as Contract<
     [id: string, ovenId: string, columns: number, rows: number],
