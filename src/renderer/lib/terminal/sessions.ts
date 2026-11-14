@@ -9,7 +9,7 @@ import { attachMouseTracking } from './mouse-tracking'
 import { createOutputScrollHold } from './output-scroll-hold'
 import { registerTerminalHost } from './host-registry'
 import { FileLinkProvider } from './path-links'
-import { loadGhosttyWeb } from './runtime'
+import { loadGhostty, loadGhosttyWeb } from './runtime'
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { composerOwnsKeyboardFocus } from '$lib/focus/composer-focus'
 import { appQuitState } from '$lib/stores/app-quit.svelte'
@@ -312,12 +312,10 @@ class TerminalSessionManager {
 
   private getRuntime(): Promise<Ghostty> {
     if (!this.runtime) {
-      this.runtime = loadGhosttyWeb()
-        .then(({ Ghostty }) => Ghostty.load())
-        .catch((error: unknown) => {
-          this.runtime = undefined
-          throw error
-        })
+      this.runtime = loadGhostty().catch((error: unknown) => {
+        this.runtime = undefined
+        throw error
+      })
     }
     return this.runtime
   }

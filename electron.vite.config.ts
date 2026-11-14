@@ -2,7 +2,7 @@ import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { createHash } from 'node:crypto'
-import { realpathSync, statSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'path'
 import { build, type Plugin, type PluginOption } from 'vite'
 import packageJson from './package.json'
@@ -210,6 +210,27 @@ const __filename = import.meta.filename;
 const __dirname = import.meta.dirname;
 const require = __cioCreateRequire(import.meta.url);`
 
+/**
+ * Ship the terminal's wasm beside the chunk that loads it.
+ *
+ * ghostty-web resolves `ghostty-vt.wasm` next to its own module, and Vite does
+ * not copy a wasm that an npm package ships, so a packaged build carried the
+ * parser's JavaScript and no parser: every terminal surface failed with
+ * `Failed to fetch`, while development kept working because the dev server
+ * answers that file straight out of `node_modules`. Emitting it as an asset is
+ * what makes the loader find it at `assets/ghostty-vt.wasm`.
+ */
+function terminalWasmPlugin(): Plugin {
+  return {
+    name: 'codeinoven-terminal-wasm',
+    apply: 'build',
+    generateBundle() {
+      const source = readFileSync(resolve(__dirname, 'node_modules/ghostty-web/ghostty-vt.wasm'))
+      this.emitFile({ type: 'asset', fileName: 'assets/ghostty-vt.wasm', source })
+    }
+  }
+}
+
 export function rendererPlugins(): PluginOption[] {
   // Each factory returns its own plugin array, so spread them into one flat
   // list. The assertion is exact rather than a widening: these are plugins, and
@@ -217,7 +238,8 @@ export function rendererPlugins(): PluginOption[] {
   // TypeScript's structural comparison past its stack depth on the newer types.
   return [
     ...svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
-    ...tailwindcss()
+    ...tailwindcss(),
+    terminalWasmPlugin()
   ] as PluginOption[]
 }
 

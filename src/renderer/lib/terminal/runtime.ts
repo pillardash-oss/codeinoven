@@ -14,6 +14,9 @@
  * separate `SelectionManager` prototype patching).
  */
 
+import { invoke } from '$lib/ipc.svelte'
+import type { Ghostty } from 'ghostty-web'
+
 /** The ghostty-web module namespace. */
 type GhosttyWebModule = typeof import('ghostty-web')
 
@@ -29,4 +32,32 @@ export function loadGhosttyWeb(): Promise<GhosttyWebModule> {
     throw error
   })
   return modulePromise
+}
+
+/**
+ * Load the terminal engine, parser included.
+ *
+ * The library fetches `ghostty-vt.wasm` from beside its own chunk, which works
+ * while the dev server answers the file and fails in a packaged app, where the
+ * renderer document comes from `file://` and Chromium refuses every fetch. When
+ * that fetch fails the main process reads the same file out of the app archive
+ * and the bytes become a blob URL, which every origin can fetch.
+ */
+export async function loadGhostty(): Promise<Ghostty> {
+  const module = await loadGhosttyWeb()
+  try {
+    return await module.Ghostty.load()
+  } catch {
+    const bytes = await invoke('terminal:wasm')
+    // Copied into a plain ArrayBuffer first: the blob's parts are typed against
+    // one, and an IPC byte array is not guaranteed to be.
+    const buffer = new ArrayBuffer(bytes.byteLength)
+    new Uint8Array(buffer).set(bytes)
+    const url = URL.createObjectURL(new Blob([buffer], { type: 'application/wasm' }))
+    try {
+      return await module.Ghostty.load(url)
+    } finally {
+      URL.revokeObjectURL(url)
+    }
+  }
 }
