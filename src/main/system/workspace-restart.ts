@@ -46,6 +46,27 @@ function liveWindow(target: WorkspaceRestartTarget): BrowserWindow | null {
   return window
 }
 
+/** End the renderer and let the window load a fresh one. */
+function replaceRenderer(target: WorkspaceRestartTarget): void {
+  const window = liveWindow(target)
+  if (!window) {
+    target.openWindow()
+    return
+  }
+  const contents = window.webContents
+  Logger.info('Restarting the workspace renderer on request')
+  if (contents.isCrashed()) {
+    contents.reload()
+  } else {
+    // A hung renderer cannot be reloaded: the navigation would reuse the same
+    // stuck process. Ending the process is what frees the window, and the
+    // window's own `render-process-gone` handler loads the page again.
+    requestedRestarts.add(contents)
+    contents.forcefullyCrashRenderer()
+  }
+  target.openWindow()
+}
+
 export async function requestWorkspaceRestart(target: WorkspaceRestartTarget): Promise<void> {
   if (restartPending) return
   // A parked app has no renderer to replace: opening the window builds a fresh one.
@@ -67,27 +88,50 @@ export async function requestWorkspaceRestart(target: WorkspaceRestartTarget): P
       cancelId: 0,
       noLink: true
     })
-    if (response !== 1) return
-    const window = liveWindow(target)
-    if (!window) {
-      target.openWindow()
-      return
-    }
-    const contents = window.webContents
-    Logger.info('Restarting the workspace renderer on request')
-    if (contents.isCrashed()) {
-      contents.reload()
-    } else {
-      // A hung renderer cannot be reloaded: the navigation would reuse the same
-      // stuck process. Ending the process is what frees the window, and the
-      // window's own `render-process-gone` handler loads the page again.
-      requestedRestarts.add(contents)
-      contents.forcefullyCrashRenderer()
-    }
-    target.openWindow()
+    if (response === 1) replaceRenderer(target)
   } catch (error) {
     Logger.error('Could not restart the workspace renderer', error)
   } finally {
     restartPending = false
   }
+}
+
+/** The open "not responding" dialog, so a page that recovers can close it. */
+let openOffer: AbortController | null = null
+
+/**
+ * The page stopped responding: offer the restart at once instead of leaving the
+ * user to find it. Waiting changes nothing, and the menu item stays available.
+ */
+export async function offerWorkspaceRestart(target: WorkspaceRestartTarget): Promise<void> {
+  if (restartPending || !liveWindow(target)) return
+  restartPending = true
+  const offer = new AbortController()
+  openOffer = offer
+  const icon = process.platform === 'darwin' ? 'menu bar icon' : 'tray icon'
+  try {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: 'Workspace not responding',
+      message: `The ${APP_NAME} workspace is not responding`,
+      detail: `Running tasks are not affected and keep going. You can wait for the window to recover, or restart it now. Restart workspace is also available from the ${APP_NAME} ${icon} at any time. Text you have not sent or saved in the window may be lost on restart.`,
+      buttons: ['Wait', 'Restart workspace'],
+      defaultId: 1,
+      cancelId: 0,
+      noLink: true,
+      signal: offer.signal
+    })
+    if (response === 1 && !offer.signal.aborted) replaceRenderer(target)
+  } catch (error) {
+    Logger.error('Could not offer a workspace restart', error)
+  } finally {
+    if (openOffer === offer) openOffer = null
+    restartPending = false
+  }
+}
+
+/** The page answered again, or its renderer is gone: the offer no longer applies. */
+export function withdrawWorkspaceRestartOffer(): void {
+  openOffer?.abort()
+  openOffer = null
 }

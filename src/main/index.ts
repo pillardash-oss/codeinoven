@@ -59,7 +59,12 @@ import { isShippedBuild } from './bootstrap/app-resources'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
-import { consumeWorkspaceRestartRequest, requestWorkspaceRestart } from './system/workspace-restart'
+import {
+  consumeWorkspaceRestartRequest,
+  offerWorkspaceRestart,
+  requestWorkspaceRestart,
+  withdrawWorkspaceRestartOffer
+} from './system/workspace-restart'
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
 import {
   computeAttention,
@@ -1004,11 +1009,15 @@ function createWindow(): BrowserWindow {
   // though the renderer's own JS can no longer run to log it.
   window.webContents.on('unresponsive', () => {
     Logger.error('Renderer became unresponsive (UI frozen; check renderer main-thread work)')
+    if (state.quitCleanupStarted) return
+    void offerWorkspaceRestart({ window: () => state.mainWindow, openWindow: openMainWindow })
   })
   window.webContents.on('responsive', () => {
     Logger.info('Renderer recovered after being unresponsive')
+    withdrawWorkspaceRestartOffer()
   })
   window.webContents.on('render-process-gone', (_event, details) => {
+    withdrawWorkspaceRestartOffer()
     Logger.error('Renderer process terminated', {
       reason: details.reason,
       exitCode: details.exitCode
