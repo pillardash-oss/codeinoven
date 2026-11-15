@@ -312,6 +312,12 @@
     --pele-font: var(--font-app);
     --pele-font-mono: var(--font-mono);
     --pele-radius: 0;
+    /* Contrast anchors for label text drawn on an author's own fill color, so
+       they follow the fill rather than the app theme: a light fill takes dark
+       text and a dark fill takes light text. Leaving them unset falls back to
+       --pele-fg, which is the theme foreground and can sit light-on-light. */
+    --pele-fg-on-light: #1f1f1f;
+    --pele-fg-on-dark: #ffffff;
   }
 
   .mermaid-svg :global(svg) {

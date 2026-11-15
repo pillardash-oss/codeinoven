@@ -24,6 +24,21 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **Dependencies were refreshed, and the three that cannot move yet are held
+  by evidence rather than inertia.** Every direct dependency was checked against
+  the registry: 23 were bumped, including jsdom 31, pele 1.13, sherpa-onnx-node
+  2.0.1, mammoth 1.13, the Claude Agent SDK, builder-util and vitest 5.1. Three
+  stay put: `typescript` at 6 because TS 7 removes the classic compiler API that
+  two tests and `typescript-eslint` depend on, and `@huggingface/transformers`
+  plus `mediabunny` at their exact versions because `@remotion/video-matting`
+  peer-pins both. `bits-ui` 2.21.0 was safe by its own release notes but pushed
+  the eager initial closure past the frozen budget by 382 bytes on its own, so
+  it stays at 2.20.2 until the first screen can pay for it. pele 1.12 keys label
+  contrast off two CSS variables the mermaid renderer never set, so
+  `MermaidDiagram.svelte` now supplies them instead of letting dark-mode labels
+  fall back to the theme foreground on a light fill, and the unused `chokidar`
+  dependency is gone.
+
 - **The runtime moved to Electron 45.3.2 (Chromium 156.0.8078.100), and the
   embedded browser's extension surface was re-measured rather than assumed.** The
   permission list that is stripped from an installed manifest was recorded on
