@@ -56,6 +56,15 @@ const FAILURE_TAIL_LINES = 6
  *  the app when it exits. */
 const ADOPTED_PROBE_MS = 5_000
 
+/**
+ * The line `mlx_lm.server` logs when its generation thread dies, with the reason.
+ *
+ * The engine never recovers from it: the thread that owns the model is gone, so
+ * `/health` answers 503 for as long as the process lives. Its own message is the
+ * only place the reason exists, because the load happens inside that thread.
+ */
+const MLX_GENERATION_FAILURE = /mlx_lm\.server generation thread died: (?<reason>.+)$/u
+
 const ANSI_PATTERN = new RegExp(
   [
     '\\u001b\\][^\\u0007\\u001b]*(?:\\u0007|\\u001b\\\\)',
@@ -68,6 +77,24 @@ const ANSI_PATTERN = new RegExp(
 /** Terminal output without the escape sequences, so the tail reads as text. */
 export function stripTerminalEscapes(value: string): string {
   return value.replace(ANSI_PATTERN, '')
+}
+
+/** The reason an MLX server's generation thread died, from its own log line. */
+function generationFailureReason(line: string): string | null {
+  const reason = MLX_GENERATION_FAILURE.exec(line)?.groups?.['reason']?.trim() ?? ''
+  return reason.length > 0 ? reason : null
+}
+
+/**
+ * A failed load, in words the card can show.
+ *
+ * `mlx_lm.server` reports an architecture it cannot build as a dead generation
+ * thread, so the reason alone reads like a crash. Naming what it means is what
+ * turns it into something the user can act on.
+ */
+function describeGenerationFailure(reason: string): string {
+  if (!/^Model type \S+ not supported\.?$/u.test(reason)) return reason
+  return `${reason} This mlx-lm build has no architecture for that model, so it cannot load these weights. Use the model's GGUF build with llama.cpp, or a model mlx-lm supports.`
 }
 
 interface RunningHandle {
@@ -522,6 +549,28 @@ export class LocalAiController {
       pending
     ].slice(-LOG_LINE_LIMIT)
     this.logs = { ...this.logs, [entryId]: next }
+    for (const line of lines) {
+      const reason = generationFailureReason(line)
+      if (reason !== null) this.failGenerationThread(entryId, reason)
+    }
+  }
+
+  /**
+   * A server whose model failed to load is not starting, and never will be: its
+   * readiness probe would answer 503 until the budget ran out hours later. Stop it,
+   * which frees the port, and report the reason the engine gave.
+   */
+  private failGenerationThread(entryId: string, reason: string): void {
+    const handle = this.handles.get(entryId)
+    // An adopted server has no PTY of ours to destroy, and stopping a process the
+    // app did not start is the user's call, not a side effect of reading its log.
+    if (!handle || handle.adopted) return
+    handle.stopping = true
+    void invoke('pty:destroy', localAiPtyId(entryId))
+    this.stopHandle(entryId)
+    this.setStatus(entryId, 'failed')
+    this.setLoadedModel(entryId, '')
+    this.notice = { ...this.notice, [entryId]: describeGenerationFailure(reason) }
   }
 
   private handleExit(entryId: string, code: unknown): void {
