@@ -24,6 +24,20 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
+- **The app no longer installs a GPU matting stack at runtime, or ships one.**
+  `remove-background` reached `@remotion/video-matting`,
+  `@huggingface/transformers`, `mediabunny` and `@mediabunny/server` through a
+  462 MB installer that ran a package manager into the app's own config folder
+  on demand, and the four packages were carried as devDependencies so the build
+  could leave their imports external. None of that is needed: the installer, the
+  utility-process matting worker, the `remove-background` operation (studio, agent
+  tool and utility operation list), the Design and video settings block and its
+  progress channel are all gone, along with the four packages, the `mediabunny`
+  override and the build externals. A film that needs a cut-out subject is now an
+  agent task: the video skill tells the agent to install whichever stack it wants
+  inside `.cio/tmp/pack-<slug>/`, keep the weights there, run it from that folder
+  and never install it into the app, its config folder or a user's repository.
+
 - **Dependencies were refreshed, and the three that cannot move yet are held
   by evidence rather than inertia.** Every direct dependency was checked against
   the registry: 23 were bumped, including jsdom 31, pele 1.13, sherpa-onnx-node

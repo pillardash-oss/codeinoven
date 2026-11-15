@@ -183,18 +183,6 @@ export function videoStudioTools(): McpTool[] {
         height: { type: 'number', minimum: 0.01, maximum: 1 }
       },
       ['source', 'x', 'y', 'width', 'height']
-    ),
-    tool(
-      'remove-background',
-      'Produce opaque base and transparent foreground WebM layers through local GPU matting. Processes a bounded 720p/30fps clip, up to 60 seconds. Needs the optional video pack, a one-time download from Settings > Design and video; the selected model downloads on first use into the app model cache, GPU support is checked, and failures are reported.' +
-        jobNote,
-      {
-        source,
-        start,
-        duration: { ...duration, maximum: 60 },
-        model: { type: 'string', enum: ['modnet', 'ben2-base'] }
-      },
-      ['source']
     )
   ]
   const tracking = tools.find((tool) => tool.name === 'track')!
