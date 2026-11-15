@@ -9,6 +9,7 @@
  */
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { describeGenerationFailure, generationFailureReason } from '$shared/local-ai-failure'
 import { terminalLines } from '$shared/terminal-lines'
 import {
   localAiModelAliases,
@@ -56,15 +57,6 @@ const FAILURE_TAIL_LINES = 6
  *  the app when it exits. */
 const ADOPTED_PROBE_MS = 5_000
 
-/**
- * The line `mlx_lm.server` logs when its generation thread dies, with the reason.
- *
- * The engine never recovers from it: the thread that owns the model is gone, so
- * `/health` answers 503 for as long as the process lives. Its own message is the
- * only place the reason exists, because the load happens inside that thread.
- */
-const MLX_GENERATION_FAILURE = /mlx_lm\.server generation thread died: (?<reason>.+)$/u
-
 const ANSI_PATTERN = new RegExp(
   [
     '\\u001b\\][^\\u0007\\u001b]*(?:\\u0007|\\u001b\\\\)',
@@ -77,24 +69,6 @@ const ANSI_PATTERN = new RegExp(
 /** Terminal output without the escape sequences, so the tail reads as text. */
 export function stripTerminalEscapes(value: string): string {
   return value.replace(ANSI_PATTERN, '')
-}
-
-/** The reason an MLX server's generation thread died, from its own log line. */
-function generationFailureReason(line: string): string | null {
-  const reason = MLX_GENERATION_FAILURE.exec(line)?.groups?.['reason']?.trim() ?? ''
-  return reason.length > 0 ? reason : null
-}
-
-/**
- * A failed load, in words the card can show.
- *
- * `mlx_lm.server` reports an architecture it cannot build as a dead generation
- * thread, so the reason alone reads like a crash. Naming what it means is what
- * turns it into something the user can act on.
- */
-function describeGenerationFailure(reason: string): string {
-  if (!/^Model type \S+ not supported\.?$/u.test(reason)) return reason
-  return `${reason} This mlx-lm build has no architecture for that model, so it cannot load these weights. Use the model's GGUF build with llama.cpp, or a model mlx-lm supports.`
 }
 
 interface RunningHandle {

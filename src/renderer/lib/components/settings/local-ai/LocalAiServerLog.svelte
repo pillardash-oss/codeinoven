@@ -81,6 +81,12 @@
         const fit = new ghosttyWeb.FitAddon()
         terminal.loadAddon(fit)
         terminal.open(node)
+        // The shared context menu resolves a terminal by the `.terminal-host`
+        // element it finds under the pointer, then looks that exact element up in
+        // the host registry. Without the class and that registration a right-click
+        // fell through to the browser's own selection, which is empty for text the
+        // terminal draws on its canvas, so Copy was never offered.
+        node.classList.add('terminal-host')
         fit.observeResize()
         fit.fit()
         term = terminal
@@ -134,7 +140,9 @@
 </div>
 
 <style>
-  .local-ai-log :global(.terminal-host) {
+  /* The terminal host is this element itself: the class is added at runtime, so
+     both names are global here. */
+  :global(.local-ai-log.terminal-host) {
     height: 100%;
     width: 100%;
     overflow: hidden;
@@ -142,7 +150,7 @@
     outline: none;
   }
 
-  .local-ai-log :global(.terminal-host textarea) {
+  :global(.local-ai-log.terminal-host textarea) {
     caret-color: transparent;
   }
 </style>
