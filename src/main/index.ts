@@ -59,6 +59,7 @@ import { isShippedBuild } from './bootstrap/app-resources'
 import { runShutdownPipeline } from './bootstrap/shutdown-pipeline'
 import { installPlatformAuthenticator } from './bootstrap/platform-authenticator'
 import { BackgroundLifecycleService } from './system/background-lifecycle-service'
+import { consumeWorkspaceRestartRequest, requestWorkspaceRestart } from './system/workspace-restart'
 import { consumeBackgroundRelaunchMarker } from './notifications/updater-relaunch'
 import {
   computeAttention,
@@ -556,6 +557,7 @@ const backgroundLifecycle = new BackgroundLifecycleService({
   openWindow: () => openMainWindow(),
   openSettings: () => revealWindowAndSend('window:openSettings'),
   newInstance: openNewInstance,
+  restartWorkspace: () => restartWorkspace(),
   destroyWindow: () => {
     const window = state.mainWindow
     if (window && !window.isDestroyed()) window.destroy()
@@ -631,6 +633,12 @@ function quitAppDirectly(): void {
 const RENDERER_RECOVERY_LIMIT = 2
 /** The window these rebuilds are counted in; a stop long after the last one is a new accident. */
 const RENDERER_RECOVERY_WINDOW_MS = 60_000
+
+/** Replace the workspace renderer and leave the main process and its work alone. */
+function restartWorkspace(): void {
+  if (state.quitCleanupStarted) return
+  void requestWorkspaceRestart({ window: () => state.mainWindow, openWindow: openMainWindow })
+}
 
 /** Create the window, or bring the existing one forward. */
 function openMainWindow(): void {
@@ -742,8 +750,22 @@ function createWindow(): BrowserWindow {
   // rebuilt itself, so a renderer that keeps dying reaches the recovery dialog
   // instead of reloading forever.
   const rendererRecoveries: number[] = []
+  const reloadRenderer = (): void => {
+    setTimeout(() => {
+      if (state.quitCleanupStarted || window.isDestroyed()) return
+      if (window.webContents.isDestroyed()) return
+      window.webContents.reload()
+    }, 0)
+  }
   window.webContents.on('render-process-gone', (_event, details) => {
     if (state.quitCleanupStarted) return
+    // The user asked for this stop from the menu to free a frozen page. It is
+    // neither a crash nor an accident, so it skips the recovery count and the
+    // recovery dialog and goes straight to a fresh renderer.
+    if (consumeWorkspaceRestartRequest(window.webContents)) {
+      reloadRenderer()
+      return
+    }
     // A renderer that left on its own, or one that was asked to stop, did not
     // fail to start. `clean-exit` is the renderer walking away (a window
     // teardown, a navigation that swapped processes), and `killed` with the
@@ -805,11 +827,7 @@ function createWindow(): BrowserWindow {
       exitCode: details.exitCode,
       attempt: rendererRecoveries.length
     })
-    setTimeout(() => {
-      if (state.quitCleanupStarted || window.isDestroyed()) return
-      if (window.webContents.isDestroyed()) return
-      window.webContents.reload()
-    }, 0)
+    reloadRenderer()
   })
   const floatingPanels = new NativeFloatingPanelWindow(window)
 
@@ -1246,7 +1264,8 @@ void app
       quitApp: quitAppDirectly,
       checkForUpdates: checkForUpdatesFromMenu,
       openSettings: () => revealWindowAndSend('window:openSettings'),
-      newInstance: openNewInstance
+      newInstance: openNewInstance,
+      restartWorkspace
     })
 
     // The window's persisted geometry is a plain file read that needs the config

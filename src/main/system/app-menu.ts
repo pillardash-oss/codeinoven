@@ -15,6 +15,7 @@
 
 import { Menu, MenuItem, type MenuItemConstructorOptions } from 'electron'
 import { forceRestartMenuItem } from './force-restart'
+import { restartWorkspaceMenuItem } from './workspace-restart'
 
 /** What the menu's items do. Implemented by the composition root. */
 export interface ApplicationMenuActions {
@@ -29,6 +30,8 @@ export interface ApplicationMenuActions {
   openSettings: () => void
   /** Open a second instance beside this one. */
   newInstance: () => void
+  /** Replace the window's renderer while the main process keeps working. */
+  restartWorkspace: () => void
 }
 
 /**
@@ -59,6 +62,7 @@ function applicationItems(actions: ApplicationMenuActions): MenuItemConstructorO
       label: 'New Instance',
       click: () => actions.newInstance()
     },
+    restartWorkspaceMenuItem(actions.restartWorkspace),
     forceRestartMenuItem(actions.quitApp)
   ]
 }
