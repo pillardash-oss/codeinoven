@@ -721,7 +721,7 @@
             favoriteModels={rendererRecovery.favoriteModels}
             recentModels={rendererRecovery.recentModels}
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
-            onRetry={board.contextUsage.generateDurableImplementationAudit}
+            onRetry={board.buildSpecActionPrompt.generateAudit}
             onModelChange={board.contextUsage.changeAuditModel}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}

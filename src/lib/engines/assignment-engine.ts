@@ -1085,10 +1085,11 @@ export class AssignmentEngine {
     report: AssignmentTaskReport,
     operationId: string
   ): Promise<AssignmentToolResult> {
-    const existingOperation = this.repo.getOperation(operationId, assignmentId, 'report_task')
-    if (existingOperation) return { ...existingOperation, idempotent: true }
     const active = this.requireById(assignmentId)
     const task = this.requireTask(active, taskId)
+    const operationKey = this.operationKey(operationId, task)
+    const existingOperation = this.repo.getOperation(operationKey, assignmentId, 'report_task')
+    if (existingOperation) return { ...existingOperation, idempotent: true }
     if (task.threadId !== workerThreadId) {
       throw new AssignmentEngineError('unauthorized', 'Worker thread does not own this task')
     }
@@ -1122,7 +1123,7 @@ export class AssignmentEngine {
     if (report.status === 'ready_for_audit') {
       await this.artifacts.requireWorkerTestEvidence(active, task)
     }
-    if (!this.repo.claimOperation(operationId, assignmentId, 'report_task')) {
+    if (!this.repo.claimOperation(operationKey, assignmentId, 'report_task')) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment operation is in progress')
     }
     const status = report.status === 'ready_for_audit' ? 'reported' : 'attention'
@@ -1137,7 +1138,7 @@ export class AssignmentEngine {
       task: reportedTask,
       idempotent: false
     }
-    this.repo.completeOperation(operationId, assignmentId, 'report_task', result)
+    this.repo.completeOperation(operationKey, assignmentId, 'report_task', result)
     return result
   }
 
@@ -1149,15 +1150,15 @@ export class AssignmentEngine {
     content: string,
     operationId: string
   ): Promise<AssignmentToolResult> {
+    const active = this.requireById(assignmentId)
+    const task = this.requireTask(active, taskId)
+    const operationKey = this.operationKey(operationId, task)
     const existingOperation = this.repo.getOperation(
-      operationId,
+      operationKey,
       assignmentId,
       'submit_test_evidence'
     )
     if (existingOperation) return { ...existingOperation, idempotent: true }
-
-    const active = this.requireById(assignmentId)
-    const task = this.requireTask(active, taskId)
     if (task.threadId !== workerThreadId) {
       throw new AssignmentEngineError('unauthorized', 'Worker thread does not own this task')
     }
@@ -1183,7 +1184,7 @@ export class AssignmentEngine {
         'Test evidence must contain between 1 and 750000 characters'
       )
     }
-    if (!this.repo.claimOperation(operationId, assignmentId, 'submit_test_evidence')) {
+    if (!this.repo.claimOperation(operationKey, assignmentId, 'submit_test_evidence')) {
       throw new AssignmentEngineError('invalid_transition', 'Evidence submission is in progress')
     }
 
@@ -1194,10 +1195,10 @@ export class AssignmentEngine {
         task,
         idempotent: false
       }
-      this.repo.completeOperation(operationId, assignmentId, 'submit_test_evidence', result)
+      this.repo.completeOperation(operationKey, assignmentId, 'submit_test_evidence', result)
       return result
     } catch (error) {
-      this.repo.releaseOperation(operationId, assignmentId, 'submit_test_evidence')
+      this.repo.releaseOperation(operationKey, assignmentId, 'submit_test_evidence')
       throw error
     }
   }
@@ -1209,17 +1210,18 @@ export class AssignmentEngine {
     review: AssignmentTaskReview,
     operationId: string
   ): Promise<AssignmentToolResult> {
-    const existingOperation = this.repo.getOperation(operationId, assignmentId, 'review_task')
-    if (existingOperation) return { ...existingOperation, idempotent: true }
     const active = this.requireById(assignmentId)
     if (active.coordinatorThreadId !== coordinatorThreadId) {
       throw new AssignmentEngineError('unauthorized', 'Only the Sr. Engineer can review tasks')
     }
     const task = this.requireTask(active, taskId)
+    const operationKey = this.operationKey(operationId, task)
+    const existingOperation = this.repo.getOperation(operationKey, assignmentId, 'review_task')
+    if (existingOperation) return { ...existingOperation, idempotent: true }
     if (!['reported', 'attention', 'failed'].includes(task.status)) {
       throw new AssignmentEngineError('invalid_transition', `Task ${taskId} has not reported`)
     }
-    if (!this.repo.claimOperation(operationId, assignmentId, 'review_task')) {
+    if (!this.repo.claimOperation(operationKey, assignmentId, 'review_task')) {
       throw new AssignmentEngineError('invalid_transition', 'Assignment operation is in progress')
     }
     const activeReworkCycle =
@@ -1267,7 +1269,7 @@ export class AssignmentEngine {
       task: reviewedTask,
       idempotent: false
     }
-    this.repo.completeOperation(operationId, assignmentId, 'review_task', result)
+    this.repo.completeOperation(operationKey, assignmentId, 'review_task', result)
     return result
   }
 
@@ -1373,6 +1375,20 @@ export class AssignmentEngine {
         : { existingBucketId: task.workerScopeBucketId })
     }
     return this.workerScopes.provisionWorkerScope(request)
+  }
+
+  /**
+   * Operation keys are scoped to the task run they belong to.
+   *
+   * A retried request inside one worker run must replay its stored result, but a
+   * task that was steered or re-dispatched starts a new run: `startedAt` moves
+   * and its report, review and evidence are cleared. Replaying the previous
+   * run's report or evidence for that new run reused stale test evidence and left
+   * the task `running` with no report, so the task identity and start belong in
+   * the key.
+   */
+  private operationKey(operationId: string, task: AssignmentTask): string {
+    return `${operationId}#${task.id}@${task.startedAt ?? 0}`
   }
 
   private requireActive(projectId: string, coordinatorThreadId: string): AssignmentPlan {
