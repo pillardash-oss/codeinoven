@@ -12,6 +12,7 @@
   import CompositionFrameAnnotator from './CompositionFrameAnnotator.svelte'
   import DesignElementCommentPopover from './DesignElementCommentPopover.svelte'
   import SeekBar from '$lib/components/ui/SeekBar.svelte'
+  import PlaybackRate from '$lib/components/ui/PlaybackRate.svelte'
   import { MARK_FRAME_TOLERANCE_SECONDS } from '$lib/annotation-marks'
   import { openAnnotationChat, videoMomentChatContext } from '$lib/annotation-chat'
   import { invoke } from '$lib/ipc.svelte'
@@ -188,6 +189,14 @@
    */
   const loop = $derived(playback?.loop ?? compositionPlaybackPrefs.loopFor(tabId))
   const error = $derived(playback?.error ?? null)
+  /**
+   * The speed the page is running at, which is one until the page says otherwise.
+   *
+   * A composition is a page rather than a media element, so the rate lives in its
+   * transport and is read back here like every other part of the state: the control
+   * states the speed the picture is actually running at, not the one last picked.
+   */
+  const rate = $derived(playback?.rate ?? 1)
   const shown = $derived(Math.min(scrubbing ? scrubValue : time, duration))
   /** A note needs a picture and a conversation, and a composition declares both. */
   const canNote = $derived(Boolean(projectId && threadId))
@@ -939,6 +948,12 @@
   >
     <CioRefresh size={13} />
   </button>
+  <PlaybackRate
+    {rate}
+    label="the composition"
+    onRate={(next) => playhead.setRate(next)}
+    class="text-dimmed hover:bg-elevated hover:text-foreground"
+  />
   <button
     type="button"
     class="flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:opacity-40"

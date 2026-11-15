@@ -17,6 +17,7 @@
     mediaPlayheadState,
     type MediaPlayheadCheckpoint
   } from '$lib/stores/media-playhead.svelte'
+  import { playbackRateState } from '$lib/stores/playback-rate.svelte'
   import { preloadNearViewport } from './preload-near-viewport'
   import { ARROW_FRAME_STEP } from '$shared/video/frame-grid'
 
@@ -217,8 +218,6 @@
    * land on.
    */
   let frameDuration = $state(1 / 30)
-  /** The rate this picture runs at. One until the reader asks for another. */
-  let rate = $state(1)
   /** The newest frame the element reported painting, in seconds. */
   let paintedAt = -1
   /**
@@ -271,6 +270,17 @@
 
   /** The recording this player is drawing, which both of its surfaces agree on. */
   const playheadKey = $derived(sourceKey ?? src)
+
+  /**
+   * The speed this recording runs at, read from the one record every player of it
+   * shares, so the full screen surface continues at the speed set inline and both
+   * of them move together when either one is changed.
+   *
+   * It is keyed by the source this element plays rather than by the handover key:
+   * the surface that opens full screen is handed a reveal path alongside the source,
+   * and the two players still play the same bytes.
+   */
+  const rate = $derived(playbackRateState.rateFor(src))
 
   /**
    * Leave this player's frame for the surface that draws the same recording.
@@ -872,7 +882,7 @@
       <PlaybackRate
         {label}
         {rate}
-        onRate={(next) => (rate = next)}
+        onRate={(next) => playbackRateState.setRate(src, next)}
         class="text-white/85 hover:bg-white/10 hover:text-white"
       />
 

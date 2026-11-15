@@ -7,6 +7,7 @@
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import SeekBar from './SeekBar.svelte'
   import PlaybackRate from './PlaybackRate.svelte'
+  import { playbackRateState } from '$lib/stores/playback-rate.svelte'
   import { preloadNearViewport } from './preload-near-viewport'
 
   /**
@@ -57,8 +58,12 @@
   let failed = $state(false)
   let scrubbing = $state(false)
   let scrubValue = $state(0)
-  /** The rate this track runs at. One until the reader asks for another. */
-  let rate = $state(1)
+  /**
+   * The speed this track runs at, read from the one record every player of this
+   * source shares, so the full screen surface continues at the speed set inline and
+   * both of them move together when either one is changed.
+   */
+  const rate = $derived(playbackRateState.rateFor(src))
 
   // The rate belongs to the element, and a source that is reloaded in place is a
   // new element, so it is written wherever there is one to write it to.
@@ -239,7 +244,7 @@
     <PlaybackRate
       {label}
       {rate}
-      onRate={(next) => (rate = next)}
+      onRate={(next) => playbackRateState.setRate(src, next)}
       disabled={duration === 0}
       class="text-dimmed hover:bg-elevated hover:text-foreground"
     />
