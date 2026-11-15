@@ -6,6 +6,7 @@
   import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
   import CioVolumeX from '@pdslng/cio-icon/CioVolumeX.svelte'
   import SeekBar from './SeekBar.svelte'
+  import PlaybackRate from './PlaybackRate.svelte'
   import { preloadNearViewport } from './preload-near-viewport'
 
   /**
@@ -56,6 +57,16 @@
   let failed = $state(false)
   let scrubbing = $state(false)
   let scrubValue = $state(0)
+  /** The rate this track runs at. One until the reader asks for another. */
+  let rate = $state(1)
+
+  // The rate belongs to the element, and a source that is reloaded in place is a
+  // new element, so it is written wherever there is one to write it to.
+  $effect(() => {
+    const element = audio
+    if (!element) return
+    element.playbackRate = rate
+  })
 
   /** `m:ss`, or `h:mm:ss` once a recording runs past an hour. */
   function clock(seconds: number): string {
@@ -224,6 +235,14 @@
     <span class="shrink-0 font-mono text-[0.6875rem] tabular-nums text-dimmed">
       {clock(duration)}
     </span>
+
+    <PlaybackRate
+      {label}
+      {rate}
+      onRate={(next) => (rate = next)}
+      disabled={duration === 0}
+      class="text-dimmed hover:bg-elevated hover:text-foreground"
+    />
 
     <button
       type="button"
