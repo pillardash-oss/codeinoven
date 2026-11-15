@@ -33,6 +33,7 @@ import { detectMlxRuntime } from './mlx-runtime'
 import { probeLocalAiServer, stopLocalAiServer } from './local-ai-process'
 import { followLocalAiLog, localAiLogPath, tailLocalAiLog } from './local-ai-log'
 import { measureModelPath, resolveModelLocation } from './local-ai-model-location'
+import { inspectLocalAiRepo } from './local-ai-repo-profile'
 import { sharedLocalAiRuntimeRegistry } from './local-ai-runtime-registry'
 
 /** The engines the page can launch, and the order a bad value falls back through. */
@@ -137,6 +138,18 @@ export function registerLocalAiIpc(
       })
     }
   )
+
+  /**
+   * Which engine of ours can serve a repository, read from the repository itself.
+   *
+   * The page asks this before it starts a row saved from a Hugging Face tag, so a
+   * repository the wrong engine cannot load is named before a multi-gigabyte
+   * download rather than after one.
+   */
+  ipcMain.handle('localAi:repoProfile', async (_, rawReference: unknown) => {
+    const reference = typeof rawReference === 'string' ? rawReference.slice(0, 512) : ''
+    return inspectLocalAiRepo(reference)
+  })
 
   ipcMain.handle('localAi:pickModel', async (_event, rawRuntime: unknown) => {
     const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
