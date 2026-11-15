@@ -141,16 +141,24 @@ export class DisplayStream implements StreamInput {
         this.latest = frame
         this.schedulePaint()
       },
-      error: (error) => this.fail(error.message)
+      error: (error) =>
+        this.fail(
+          `${error.name}: ${error.message} (${config.codec} ${config.width}x${config.height})`
+        )
     })
     try {
-      decoder.configure({
+      // The device's encoder writes Annex B, with the parameter sets in front of
+      // every key frame. WebCodecs reads length-prefixed H.264 unless it is told
+      // otherwise, so the format has to be named or every chunk is a decoding error.
+      const decoderConfig: VideoDecoderConfig & { avc: { format: 'annexb' } } = {
         codec: config.codec,
         codedWidth: config.width,
         codedHeight: config.height,
         optimizeForLatency: true,
-        hardwareAcceleration: 'prefer-hardware'
-      })
+        hardwareAcceleration: 'prefer-hardware',
+        avc: { format: 'annexb' }
+      }
+      decoder.configure(decoderConfig)
     } catch (error) {
       this.fail(error instanceof Error ? error.message : String(error))
       return

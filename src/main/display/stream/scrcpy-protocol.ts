@@ -80,7 +80,7 @@ export class ScrcpyVideoParser {
     }
     // A leftover that still points into the caller's chunk must not keep a stale
     // copy alive for the next push, so it is owned here.
-    if (this.pending.length > 0) this.pending = this.pending.slice()
+    if (this.pending.length > 0) this.pending = new Uint8Array(this.pending)
     return events
   }
 }

@@ -45,6 +45,17 @@ export interface AndroidStreamOptions {
   send: (message: StreamOutbound) => void
 }
 
+/**
+ * A copy that owns its whole `ArrayBuffer`.
+ *
+ * A socket read is a Node `Buffer`, and `Buffer.slice` is a view onto the same
+ * memory (often a shared pool), so its `.buffer` is far larger than the frame.
+ * A message carries the entire buffer, so a view here sends the decoder garbage.
+ */
+function ownedCopy(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  return new Uint8Array(bytes)
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
@@ -285,7 +296,7 @@ export class AndroidScrcpyStream {
         continue
       }
       if (event.config) {
-        this.configPacket = event.data.slice()
+        this.configPacket = ownedCopy(event.data)
         const codec = avcCodecString(this.configPacket)
         if (!codec) {
           this.end('The device encoder sent no usable H.264 parameters')
@@ -304,7 +315,7 @@ export class AndroidScrcpyStream {
         continue
       }
       if (!this.configPacket) continue
-      const payload = event.key ? concatBytes(this.configPacket, event.data) : event.data.slice()
+      const payload = event.key ? concatBytes(this.configPacket, event.data) : ownedCopy(event.data)
       this.options.send({
         type: 'chunk',
         key: event.key,
