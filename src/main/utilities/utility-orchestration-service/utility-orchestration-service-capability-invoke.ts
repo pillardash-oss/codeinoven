@@ -990,8 +990,7 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
           'runtime',
           'captions',
           'track',
-          'analyze-motion',
-          'remove-background'
+          'analyze-motion'
         ].map((name): [string, VideoCapabilityExecutor | null] => [
           name,
           this.host.videoPreviewExecutor

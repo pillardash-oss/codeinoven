@@ -65,6 +65,7 @@ import { isShippedBuild } from '../bootstrap/app-resources'
 import { APP_ID, APP_NAME } from '../../lib/brand'
 import { Logger } from './logger'
 import { forceRestartMenuItem } from './force-restart'
+import { restartWorkspaceMenuItem } from './workspace-restart'
 import { instanceRegistry } from './instance-registry'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -110,6 +111,8 @@ export interface BackgroundLifecycleDeps {
   openSettings: () => void
   /** Open a second instance beside this one, sharing the same data. */
   newInstance: () => void
+  /** Replace the window's renderer while the main process keeps working. */
+  restartWorkspace: () => void
   /** Destroy the current window. Its renderer process goes with it. */
   destroyWindow: () => void
   /** Run the real quit (sets `quitConfirmed` and calls `app.quit()`). */
@@ -708,6 +711,7 @@ export class BackgroundLifecycleService {
       this.updateMenuItem(),
       { type: 'separator' },
       { label: 'New Instance', click: () => this.deps.newInstance() },
+      restartWorkspaceMenuItem(() => this.deps.restartWorkspace()),
       forceRestartMenuItem(() => this.deps.quitApp()),
       { label: `Quit ${APP_NAME}`, click: () => this.deps.quitApp() }
     ])

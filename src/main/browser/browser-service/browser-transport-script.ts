@@ -40,6 +40,8 @@
  * a pure function of the manifest so it can be checked directly.
  */
 
+import { MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE } from './browser-validation'
+
 /** The global the transport is reachable at, for the app's own commands. */
 export const COMPOSITION_TRANSPORT_GLOBAL = '__cioTransport'
 
@@ -194,6 +196,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     time: 0,
     playing: false,
     loop: false,
+    rate: 1,
     error: null
   };
 
@@ -281,6 +284,14 @@ export function compositionTransportScript(options: CompositionTransportOptions)
         }
         return Promise.resolve();
       }
+      // An element the page starts later is re-timed here rather than left at its
+      // own pace: the clip's speed and the player's speed multiply, exactly as they
+      // do for the media the transport re-times itself.
+      const declared = this.dataset ? this.dataset.cioTrackSpeed : undefined;
+      if (declared !== undefined) {
+        const speed = Math.max(0.25, Number(declared || 1)) * transport.rate;
+        if (this.playbackRate !== speed) this.playbackRate = speed;
+      }
       return original.apply(this, arguments);
     };
     prototype.play = patched;
@@ -358,6 +369,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
       playing: transport.playing,
       duration: DURATION,
       loop: transport.loop,
+      rate: transport.rate,
       error: transport.error
     };
   }
@@ -425,6 +437,10 @@ export function compositionTransportScript(options: CompositionTransportOptions)
         const trackTrim = Number(element.dataset && element.dataset.cioTrackTrim || 0);
         const trackDuration = Number(element.dataset && element.dataset.cioTrackDuration || Infinity);
         const trackSpeed = Math.max(0.25, Number(element.dataset && element.dataset.cioTrackSpeed || 1));
+        // A clip's own speed and the player's speed compose rather than fight: a
+        // half-speed clip watched at double speed is one clip speed again.
+        const speed = transport.rate * trackSpeed;
+        if (element.playbackRate !== speed) element.playbackRate = speed;
         const local = transport.time - trackStart;
         if (playing && local >= 0 && local < trackDuration) {
           if (Math.abs(element.currentTime - (local * trackSpeed + trackTrim)) > RESYNC) {
@@ -459,7 +475,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
     if (lastAt < 0) lastAt = now;
     const elapsed = Math.min(Math.max((now - lastAt) / 1000, 0), MAX_TICK);
     lastAt = now;
-    let next = transport.time + elapsed;
+    let next = transport.time + elapsed * transport.rate;
     if (next >= DURATION) {
       if (!transport.loop) {
         transport.time = DURATION;
@@ -544,6 +560,25 @@ export function compositionTransportScript(options: CompositionTransportOptions)
 
   function setLoop(on) {
     transport.loop = on === true;
+    return state();
+  }
+
+  /**
+   * Run the picture faster or slower, without moving where it is.
+   *
+   * The rate is the playhead's own multiplier, so the media the transport re-times
+   * is re-timed here too: the soundtrack has to follow the picture it belongs to,
+   * which is what makes a half-speed viewing sound slow rather than drag behind.
+   * A value outside the range the app validates is ignored rather than applied,
+   * because an element's own playback rate cannot take every number.
+   */
+  function setRate(speed) {
+    const value = Number(speed);
+    if (!Number.isFinite(value) || value < ${JSON.stringify(MIN_PLAYBACK_RATE)} || value > ${JSON.stringify(MAX_PLAYBACK_RATE)}) {
+      return state();
+    }
+    transport.rate = value;
+    syncMedia(transport.playing);
     return state();
   }
 
@@ -641,6 +676,7 @@ export function compositionTransportScript(options: CompositionTransportOptions)
   transport.seek = seek;
   transport.stop = stop;
   transport.setLoop = setLoop;
+  transport.setRate = setRate;
   transport.setDuration = setDuration;
   transport.freezeAt = freezeAt;
   transport.settle = settle;
@@ -698,12 +734,12 @@ export function compositionTransportScript(options: CompositionTransportOptions)
 /**
  * A command the app sends to a composition's transport.
  *
- * `seek` carries seconds and `loop` carries a boolean; the rest take no value.
- * The command decides which function runs, so the app never evaluates a string a
- * caller supplied.
+ * `seek` and `freeze` carry seconds, `rate` carries the playback speed and `loop`
+ * carries a boolean; the rest take no value. The command decides which function
+ * runs, so the app never evaluates a string a caller supplied.
  */
 export type CompositionTransportCommand =
-  'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'loop' | 'freeze'
+  'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'loop' | 'freeze' | 'rate'
 
 /**
  * The script that runs one transport command and answers with the new state.
@@ -721,9 +757,11 @@ export function compositionTransportCommandScript(
       ? `seek(${JSON.stringify(typeof value === 'number' && Number.isFinite(value) ? value : 0)})`
       : command === 'loop'
         ? `setLoop(${value === true ? 'true' : 'false'})`
-        : command === 'freeze'
-          ? `freezeAt(${JSON.stringify(typeof value === 'number' && Number.isFinite(value) ? value : 0)})`
-          : `${command}()`
+        : command === 'rate'
+          ? `setRate(${JSON.stringify(typeof value === 'number' && Number.isFinite(value) ? value : 1)})`
+          : command === 'freeze'
+            ? `freezeAt(${JSON.stringify(typeof value === 'number' && Number.isFinite(value) ? value : 0)})`
+            : `${command}()`
   return `(() => {
   const transport = globalThis.${COMPOSITION_TRANSPORT_GLOBAL};
   if (!transport) return null;

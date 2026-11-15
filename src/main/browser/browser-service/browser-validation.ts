@@ -699,12 +699,26 @@ function remountableBrowserUrl(value: unknown): string {
  */
 export const FRAME_RENDER_TIMEOUT_MS = 4_000
 
+/** The slowest and fastest a composition may run, so the rate the renderer picks
+ *  and the one the runtime would enforce cannot disagree. */
+export const MIN_PLAYBACK_RATE = 0.1
+export const MAX_PLAYBACK_RATE = 4
+
 /**
  * Ceiling on the transport command set, so the shared contract and the runtime
  * that answers it cannot drift apart: a command the union declares but the page
  * does not define would be an eval of an unknown name.
  */
-const TRANSPORT_COMMANDS = ['play', 'pause', 'toggle', 'stop', 'seek', 'freeze', 'loop'] as const
+const TRANSPORT_COMMANDS = [
+  'play',
+  'pause',
+  'toggle',
+  'stop',
+  'seek',
+  'freeze',
+  'loop',
+  'rate'
+] as const
 
 /** Ceiling on a playback error, so a page that throws a novel on every frame
  *  cannot push an unbounded message into published tab state. */
@@ -726,9 +740,11 @@ export function validateTransportCommand(value: unknown): BrowserTransportComman
 /**
  * Validate the value one command carries.
  *
- * A seek names a non-negative second and a loop change names a boolean, checked
+ * A seek names a non-negative second, a rate names a playback speed inside the
+ * range the transport can run at and a loop change names a boolean, checked
  * rather than coerced: a seek silently read as zero would look like the scrubber
- * jumping to the start, which is a bug report about the wrong thing.
+ * jumping to the start, and a rate silently read as one would look like the speed
+ * control doing nothing, which are bug reports about the wrong thing.
  */
 export function validateTransportValue(
   command: BrowserTransportCommand,
@@ -737,6 +753,19 @@ export function validateTransportValue(
   if (command === 'seek' || command === 'freeze') {
     if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
       throw new TypeError('A browser seek must name a non-negative number of seconds')
+    }
+    return value
+  }
+  if (command === 'rate') {
+    if (
+      typeof value !== 'number' ||
+      !Number.isFinite(value) ||
+      value < MIN_PLAYBACK_RATE ||
+      value > MAX_PLAYBACK_RATE
+    ) {
+      throw new TypeError(
+        `A browser playback speed must be a number between ${MIN_PLAYBACK_RATE} and ${MAX_PLAYBACK_RATE}`
+      )
     }
     return value
   }

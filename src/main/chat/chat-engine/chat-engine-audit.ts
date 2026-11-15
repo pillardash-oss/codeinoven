@@ -274,8 +274,21 @@ export class ChatEngineAudit {
     if (!(await this.implementationAuditEligible(coordinator))) {
       throw new Error('An approved Engineering implementation is required before audit.')
     }
-    if (this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)) {
-      throw new Error('Assignment audits use their Assignment auditor thread.')
+    const activeAssignment = this.host.state.assignmentEngine.getActive(
+      projectId,
+      coordinatorThreadId
+    )
+    if (activeAssignment) {
+      // An Assignment owns its audit. Delegating here is what keeps a Retry on an
+      // Assignment's audit on its own auditor instead of answering with a
+      // routing error, and an unfinished plan is refused for the reason that
+      // actually applies.
+      if (activeAssignment.status === 'completed') {
+        return this.ensureAssignmentAuditorThread(projectId, coordinatorThreadId, settings)
+      }
+      throw new Error(
+        'The Assignment is still running. Finish and review its remaining tasks before auditing.'
+      )
     }
     if (coordinator.settings?.loopMode === true) {
       throw new Error('Achievement audits use their Achievement Auditor thread.')

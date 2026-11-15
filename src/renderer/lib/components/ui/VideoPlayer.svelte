@@ -11,11 +11,13 @@
   import { onDestroy } from 'svelte'
   import { on } from 'svelte/events'
   import SeekBar from './SeekBar.svelte'
+  import PlaybackRate from './PlaybackRate.svelte'
   import { SvelteMap } from 'svelte/reactivity'
   import {
     mediaPlayheadState,
     type MediaPlayheadCheckpoint
   } from '$lib/stores/media-playhead.svelte'
+  import { playbackRateState } from '$lib/stores/playback-rate.svelte'
   import { preloadNearViewport } from './preload-near-viewport'
   import { ARROW_FRAME_STEP } from '$shared/video/frame-grid'
 
@@ -270,6 +272,17 @@
   const playheadKey = $derived(sourceKey ?? src)
 
   /**
+   * The speed this recording runs at, read from the one record every player of it
+   * shares, so the full screen surface continues at the speed set inline and both
+   * of them move together when either one is changed.
+   *
+   * It is keyed by the source this element plays rather than by the handover key:
+   * the surface that opens full screen is handed a reveal path alongside the source,
+   * and the two players still play the same bytes.
+   */
+  const rate = $derived(playbackRateState.rateFor(src))
+
+  /**
    * Leave this player's frame for the surface that draws the same recording.
    *
    * Only the fullscreen surface publishes. It is the one the reader is looking at
@@ -368,6 +381,14 @@
     const element = video
     if (!element) return
     element.muted = muted || seekSilent
+  })
+
+  // The rate belongs to the element, and a source that is reloaded in place is a
+  // new element, so it is written wherever there is one to write it to.
+  $effect(() => {
+    const element = video
+    if (!element) return
+    element.playbackRate = rate
   })
 
   /** Hold the recording silent for the length of a seek. */
@@ -529,7 +550,10 @@
       if (stopped) return
       paintedAt = metadata.mediaTime
       if (previous >= 0 && !element.paused) {
-        const gap = metadata.mediaTime - previous
+        // A rate other than 1× runs more or less media time past each painted frame,
+        // and the grid a step lands on is the recording's, not the player's: the gap
+        // is read back at 1× before it is measured.
+        const gap = (metadata.mediaTime - previous) / (element.playbackRate || 1)
         if (gap > 0.008 && gap < 0.06) {
           const measured = snapFrameRate(gap)
           if (Math.abs(measured - frameDuration) > 1e-4) frameDuration = measured
@@ -852,6 +876,15 @@
       <span class="shrink-0 font-mono text-[0.6875rem] tabular-nums text-white/70">
         {clock(duration)}
       </span>
+
+      <!-- The speed sits beside the sound, which is the pair a reader reaches for
+           once the picture is already playing. -->
+      <PlaybackRate
+        {label}
+        {rate}
+        onRate={(next) => playbackRateState.setRate(src, next)}
+        class="text-white/85 hover:bg-white/10 hover:text-white"
+      />
 
       <button
         type="button"

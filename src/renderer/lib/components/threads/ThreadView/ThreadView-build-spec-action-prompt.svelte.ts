@@ -219,6 +219,11 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
         ? 'partial'
         : 'report_ready'
     }
+    // An Assignment's display state comes from the Assignment plan alone. The
+    // thread keeps a durable `auditState` of its own, and falling back to it put
+    // an "Implementation finished" offer over a plan whose reopened task was
+    // still running, where the only thing the Audit button could do was fail.
+    if (this.root.submitSpecDecision.assignment) return undefined
     return this.root.submitSpecDecision.auditState
   })
 
@@ -400,8 +405,20 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
   })
 
   async generateAudit(selected: ThreadSettings): Promise<void> {
-    if (this.root.submitSpecDecision.assignment?.status === 'completed') {
-      await this.generateDurableAssignmentAudit(selected)
+    const assignment = this.root.submitSpecDecision.assignment
+    if (assignment) {
+      // An Assignment owns its audit lifecycle. Falling through to the
+      // implementation audit for a plan that was still running asked the main
+      // process for an implementation auditor and answered a valid click with a
+      // routing error instead of acting on the plan.
+      if (assignment.status === 'completed') {
+        await this.generateDurableAssignmentAudit(selected)
+        return
+      }
+      this.auditError =
+        'The Assignment is still running. Finish and review its remaining tasks before auditing.'
+      this.root.handleAgentEvent.errorMessage = this.auditError
+      this.root.submitSpecDecision.auditState = 'offered'
       return
     }
     if (this.achievementOnly) {

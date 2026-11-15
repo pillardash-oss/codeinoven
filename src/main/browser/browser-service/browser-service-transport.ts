@@ -54,11 +54,15 @@ export function toCompositionPlayback(value: unknown): BrowserCompositionPlaybac
   if (typeof time !== 'number' || !Number.isFinite(time)) return null
   if (typeof duration !== 'number' || !Number.isFinite(duration)) return null
   const error = record['error']
+  // One unless the page named a speed, and only a finite positive one: a rate the
+  // runtime could not run at is reported as the rate a fresh transport starts on.
+  const rate = record['rate']
   return {
     time: Math.max(0, time),
     duration: Math.max(0, duration),
     playing: record['playing'] === true,
     loop: record['loop'] === true,
+    rate: typeof rate === 'number' && Number.isFinite(rate) && rate > 0 ? rate : 1,
     error:
       typeof error === 'string' && error.length > 0
         ? error.slice(0, MAX_TRANSPORT_ERROR_LENGTH)

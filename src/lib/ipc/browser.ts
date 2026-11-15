@@ -302,6 +302,15 @@ export interface BrowserCompositionPlayback {
   duration: number
   /** Whether the playhead returns to the start at the end. */
   loop: boolean
+  /**
+   * The speed the picture is running at, which is one unless the reader asked
+   * for another.
+   *
+   * A composition is a page rather than a media element, so nothing in the app's
+   * own DOM can hold this: the page's transport multiplies the playhead by it and
+   * re-times the media it drives to match, and this is the answer it reports back.
+   */
+  rate: number
   /** The message from a frame that threw, which is why playback stopped. */
   error: string | null
 }
@@ -343,12 +352,13 @@ export interface CompositionFrameSnapshot {
 /**
  * One playback action on a composition tab.
  *
- * `seek` and `loop` carry a value; the rest take none. The set is closed and a
+ * `seek` and `freeze` carry seconds, `rate` carries the speed the picture runs
+ * at and `loop` carries a boolean; the rest take none. The set is closed and a
  * command names a function the transport defines, so no part of a caller's input
  * is ever evaluated as code.
  */
 export type BrowserTransportCommand =
-  'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'freeze' | 'loop'
+  'play' | 'pause' | 'toggle' | 'stop' | 'seek' | 'freeze' | 'loop' | 'rate'
 
 /**
  * One element the user picked from a design, reported by the injected inspector.

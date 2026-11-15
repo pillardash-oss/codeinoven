@@ -157,8 +157,7 @@
     transcribe: 'Transcription',
     cut: 'Video cut',
     export: 'Video export',
-    track: 'Motion tracking',
-    'remove-background': 'Background removal'
+    track: 'Motion tracking'
   }
   /** A job still going, which an export would queue behind rather than replace. */
   let running = $derived(jobs.filter((job) => job.state === 'running'))
