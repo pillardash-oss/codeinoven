@@ -97,7 +97,7 @@ export async function listAndroidSources(): Promise<DisplaySourceListing> {
  * screen coordinate: pressing HOME goes home whatever the app is showing, which
  * is why the rail can offer a device's buttons over a channel this thin.
  */
-const ANDROID_KEY_CODES: Partial<Record<DisplayControlAction, number>> = {
+export const ANDROID_KEY_CODES: Partial<Record<DisplayControlAction, number>> = {
   home: 3,
   back: 4,
   recents: 187,
@@ -112,7 +112,7 @@ const ANDROID_KEY_CODES: Partial<Record<DisplayControlAction, number>> = {
  * These are what a soft keyboard's own keys are: enter, delete, tab, escape and
  * the four arrows, which is what typing into a device without a keyboard needs.
  */
-const ANDROID_INPUT_KEY_CODES: Record<DisplayInputKey, number> = {
+export const ANDROID_INPUT_KEY_CODES: Record<DisplayInputKey, number> = {
   enter: 66,
   backspace: 67,
   tab: 61,

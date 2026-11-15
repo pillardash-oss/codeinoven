@@ -1,4 +1,5 @@
 import type { DisplayInputGesture, DisplayInputKey } from '$shared/ipc/display'
+import type { StreamInput } from './display-stream.svelte'
 
 /**
  * Touch and typing on a mirrored screen.
@@ -11,12 +12,16 @@ import type { DisplayInputGesture, DisplayInputKey } from '$shared/ipc/display'
  * standing in front of, so the stage stays a view and the gesture rules are
  * testable on their own.
  *
- * One deliberate choice: a gesture is sent when the finger lifts, not while it
- * moves. Android's injector and a simulator both take a whole swipe with its
- * duration, so streaming intermediate moves would fire a dozen swipes where the
- * user made one.
+ * Two modes. Against a polled target a gesture is sent when the finger lifts, not
+ * while it moves: Android's injector and a simulator both take a whole swipe with
+ * its duration, so streaming intermediate moves would fire a dozen swipes where
+ * the user made one. Against a live stream the pointer is the device's own touch
+ * input, so down, move and up go out as they happen and the device recognises the
+ * tap, the long press and the fling itself.
  */
 
+/** How many wheel pixels make one notch of device scrolling. */
+const WHEEL_NOTCH_PX = 100
 /** A move further than this many pixels is a drag, not a tap. */
 const TAP_SLOP_PX = 8
 /** How long a still press must last to be a long press. */
@@ -69,7 +74,11 @@ export class StageTouch {
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private sequence = 0
 
-  constructor(private readonly send: (gesture: DisplayInputGesture) => void) {}
+  constructor(
+    private readonly send: (gesture: DisplayInputGesture) => void,
+    /** The live stream to drive directly, when the target has one. */
+    private readonly live: () => StreamInput | null = () => null
+  ) {}
 
   /** Begin tracking one pointer. Called only while the stage is in control mode. */
   down(event: PointerEvent, surface: HTMLElement): void {
@@ -89,14 +98,29 @@ export class StageTouch {
       clientY: event.clientY,
       at: performance.now()
     }
+    this.live()?.pointer('down', point.x, point.y)
   }
 
   /** Track how far the pointer has travelled, so lift knows a tap from a drag. */
-  move(event: PointerEvent): void {
+  move(event: PointerEvent, surface: HTMLElement): void {
     const origin = this.origin
     if (!origin) return
     const distance = Math.hypot(event.clientX - origin.clientX, event.clientY - origin.clientY)
     if (distance > TAP_SLOP_PX) this.dragged = true
+    const stream = this.live()
+    if (stream) {
+      const point = this.fraction(event, surface)
+      stream.movePointer(point.x, point.y)
+    }
+  }
+
+  /** Turn a wheel or trackpad scroll over the picture into device scrolling. */
+  wheel(event: WheelEvent, surface: HTMLElement): boolean {
+    const stream = this.live()
+    if (!stream) return false
+    const point = this.fraction(event, surface)
+    stream.scroll(point.x, point.y, event.deltaX / WHEEL_NOTCH_PX, -event.deltaY / WHEEL_NOTCH_PX)
+    return true
   }
 
   /** Resolve the gesture the pointer made. */
@@ -107,6 +131,11 @@ export class StageTouch {
     const point = this.fraction(event, surface)
     const held = performance.now() - origin.at
     this.mark = { x: point.x, y: point.y, id: (this.sequence += 1) }
+    const stream = this.live()
+    if (stream) {
+      stream.pointer('up', point.x, point.y)
+      return
+    }
     if (this.dragged) {
       this.send({
         type: 'swipe',
@@ -127,6 +156,7 @@ export class StageTouch {
 
   /** Drop a half-tracked pointer, keeping whatever was already typed. */
   cancel(): void {
+    if (this.origin) this.live()?.pointer('cancel', this.origin.x, this.origin.y)
     this.origin = null
     this.flush()
   }
@@ -140,6 +170,14 @@ export class StageTouch {
   key(event: KeyboardEvent): boolean {
     if (event.metaKey || event.ctrlKey || event.altKey) return false
     const named = KEY_NAMES[event.key]
+    const stream = this.live()
+    if (stream) {
+      // A live device has no round trip to save by batching: each key lands as typed.
+      if (named) stream.key(named)
+      else if (event.key.length === 1) stream.text(event.key)
+      else return false
+      return true
+    }
     if (named) {
       this.flush()
       this.send({ type: 'key', key: named })
@@ -183,7 +221,7 @@ export class StageTouch {
   }
 
   /** A pointer position as a fraction of the picture it landed on. */
-  private fraction(event: PointerEvent, surface: HTMLElement): { x: number; y: number } {
+  private fraction(event: MouseEvent, surface: HTMLElement): { x: number; y: number } {
     const rect = surface.getBoundingClientRect()
     if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 }
     return {
