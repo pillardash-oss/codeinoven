@@ -149,7 +149,7 @@
     "bits-ui": "^2.20.2",
     "builder-util": "26.15.3",
     "dompurify": "^3.4.17",
-    "electron": "^45.3.1",
+    "electron": "^45.3.2",
     "electron-builder": "^26.18.0",
     "electron-vite": "^6.0.0",
     "esbuild": "^0.28.2",
