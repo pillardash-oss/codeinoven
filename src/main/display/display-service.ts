@@ -19,6 +19,7 @@ import { resolveAdb } from './display-adb-paths'
 import { quantizeDemand, type DisplayCapture } from './display-capture'
 import { DesktopDisplayCapture, listDesktopSources } from './display-desktop'
 import { IosDisplayCapture, listIosSources } from './display-ios'
+import { startDisplayStream, type DisplayStreamHandle } from './stream/display-stream-process'
 
 /**
  * The display panel's main-process half.
@@ -61,6 +62,12 @@ const SLOW_CAPTURE_MS = 250
 const MAX_RETRY_MS = 8_000
 /** Failures before a session calls itself failed rather than retrying. */
 const FAILED_AFTER = 8
+/** How long a hidden stage keeps its device stream before it is shut down. */
+const STREAM_HIDE_GRACE_MS = 5_000
+/** How long a changed stage size settles before the stream is rebuilt at it. */
+const STREAM_RESIZE_DEBOUNCE_MS = 300
+/** Let the stage's first size arrive so the stream starts at it, not at the default. */
+const STREAM_START_DELAY_MS = 80
 
 interface DisplaySession {
   id: string
@@ -85,6 +92,14 @@ interface DisplaySession {
   input: boolean
   /** Why it cannot be, when it cannot. */
   inputProblem: string | null
+  /** The live video stream, while one is running. It replaces the capture tick. */
+  stream: DisplayStreamHandle | null
+  /** The size the running stream was asked to encode at. */
+  streamSize: number
+  /** True once a stream failed for this session: it stays on the polled capture. */
+  streamBroken: boolean
+  /** Pending stream start, hide or resize timers. */
+  streamTimer: ReturnType<typeof setTimeout> | null
 }
 
 export class DisplayService {
@@ -134,7 +149,11 @@ export class DisplayService {
       disposed: false,
       busy: false,
       input: Boolean(capture.input),
-      inputProblem: capture.input ? null : (capture.inputProblem ?? null)
+      inputProblem: capture.input ? null : (capture.inputProblem ?? null),
+      stream: null,
+      streamSize: 0,
+      streamBroken: false,
+      streamTimer: null
     }
     this.sessions.set(session.id, session)
     this.watchWindowReload()
@@ -147,6 +166,13 @@ export class DisplayService {
       stop: () => this.stop(session.id)
     })
     this.broadcastState(session)
+    if (this.canStream(session)) {
+      session.streamTimer = setTimeout(() => {
+        session.streamTimer = null
+        this.beginStream(session)
+      }, STREAM_START_DELAY_MS)
+      return
+    }
     this.schedule(session, 0)
   }
 
@@ -156,10 +182,92 @@ export class DisplayService {
     if (!session) return
     const maxDimension = quantizeDemand(demand.maxDimension)
     const wasPaused = !session.demand.visible
+    const resized = maxDimension !== session.demand.maxDimension
     session.demand = { maxDimension, visible: demand.visible }
+    if (this.canStream(session)) {
+      this.followStreamDemand(session, wasPaused, resized)
+      return
+    }
     // Coming back from a pause is the one case that should not wait for the idle
     // tick: the user just looked at the tab again.
     if (demand.visible && wasPaused) this.schedule(session, 0)
+  }
+
+  /** Only a device that speaks the scrcpy protocol streams; everything else polls. */
+  private canStream(session: DisplaySession): boolean {
+    return session.kind === 'android' && !session.streamBroken && resolveAdb() !== null
+  }
+
+  /**
+   * Keep a device stream matched to its stage: shut it down after the stage has
+   * been hidden for a while, bring it back when the stage returns, and rebuild it
+   * when the stage settles at a different size (an encoder cannot be resized).
+   */
+  private followStreamDemand(session: DisplaySession, wasPaused: boolean, resized: boolean): void {
+    if (!session.demand.visible) {
+      if (session.stream && !session.streamTimer) {
+        session.streamTimer = setTimeout(() => {
+          session.streamTimer = null
+          this.endStream(session)
+        }, STREAM_HIDE_GRACE_MS)
+      }
+      return
+    }
+    if (session.streamTimer && wasPaused) {
+      clearTimeout(session.streamTimer)
+      session.streamTimer = null
+    }
+    if (!session.stream && !session.streamTimer) {
+      this.beginStream(session)
+      return
+    }
+    if (session.stream && resized && session.demand.maxDimension !== session.streamSize) {
+      if (session.streamTimer) clearTimeout(session.streamTimer)
+      session.streamTimer = setTimeout(() => {
+        session.streamTimer = null
+        this.endStream(session)
+        this.beginStream(session)
+      }, STREAM_RESIZE_DEBOUNCE_MS)
+    }
+  }
+
+  /** Start the live video stream for a session, or fall back to the capture tick. */
+  private beginStream(session: DisplaySession): void {
+    if (session.disposed || session.stream) return
+    const window = this.deps.window()
+    const adb = resolveAdb()
+    if (!window || window.isDestroyed() || !adb) {
+      this.schedule(session, 0)
+      return
+    }
+    session.streamSize = session.demand.maxDimension
+    session.stream = startDisplayStream({
+      window,
+      sessionId: session.id,
+      adb,
+      serial: session.sourceId,
+      maxSize: session.streamSize,
+      onLive: () => {
+        if (session.disposed) return
+        session.failures = 0
+        session.detail = null
+        this.setPhase(session, 'live')
+      },
+      onEnded: (detail) => {
+        if (session.disposed || !session.stream) return
+        session.stream = null
+        session.streamBroken = true
+        Logger.dev(`Display stream for ${session.sourceId} ended, polling instead: ${detail ?? ''}`)
+        this.schedule(session, 0)
+      }
+    })
+  }
+
+  /** Stop the running stream without ending the session. */
+  private endStream(session: DisplaySession): void {
+    const stream = session.stream
+    session.stream = null
+    stream?.stop()
   }
 
   /**
@@ -207,6 +315,9 @@ export class DisplayService {
     session.disposed = true
     if (session.timer) clearTimeout(session.timer)
     session.timer = null
+    if (session.streamTimer) clearTimeout(session.streamTimer)
+    session.streamTimer = null
+    this.endStream(session)
     try {
       session.capture.dispose()
     } catch (error) {
@@ -272,6 +383,8 @@ export class DisplayService {
 
   private async tick(session: DisplaySession): Promise<void> {
     if (session.disposed) return
+    // A running stream is the picture; the capture loop only covers for it.
+    if (session.stream) return
     const window = this.deps.window()
     if (!window || window.isDestroyed()) {
       // No window means no stage: let go rather than capture for nobody.

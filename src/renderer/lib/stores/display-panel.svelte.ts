@@ -9,6 +9,11 @@ import type {
   DisplaySourceListing
 } from '$shared/ipc/display'
 import { DISPLAY_SOURCE_KINDS } from '$shared/ipc/display'
+import {
+  DISPLAY_STREAM_PORT_MESSAGE,
+  type StreamPortAnnouncement
+} from '$shared/display-stream-protocol'
+import { DisplayStream } from '$lib/components/display/display-stream.svelte'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
 
@@ -46,6 +51,11 @@ export interface DisplaySession {
   input: boolean
   /** Why it does not, when it does not. */
   inputProblem: string | null
+  /**
+   * The live video stream, while the target has one. The stage paints it instead
+   * of `url`, and a stream that ends leaves the polled frames to take over.
+   */
+  stream: DisplayStream | null
 }
 
 export interface DisplaySourceSection {
@@ -116,6 +126,9 @@ class DisplayPanelState {
         if (previous) URL.revokeObjectURL(previous)
       })
     )
+    const onPort = (event: MessageEvent<unknown>): void => this.acceptStreamPort(event)
+    window.addEventListener('message', onPort)
+    this.cleanups.push(() => window.removeEventListener('message', onPort))
     this.cleanups.push(
       subscribe('display:captureState', (state: DisplayCaptureState) => {
         for (const session of Object.values(this.sessions)) {
@@ -128,6 +141,26 @@ class DisplayPanelState {
         }
       })
     )
+  }
+
+  /** Take the message port the preload hands over for a session's live stream. */
+  private acceptStreamPort(event: MessageEvent<unknown>): void {
+    const data = event.data as { type?: unknown; announcement?: StreamPortAnnouncement } | null
+    if (event.source !== window || data?.type !== DISPLAY_STREAM_PORT_MESSAGE) return
+    const [port] = event.ports
+    if (!port) return
+    const sessionId = data.announcement?.sessionId
+    const session = Object.values(this.sessions).find((entry) => entry.sessionId === sessionId)
+    if (!session) {
+      // The tab closed before its port arrived: nothing will read it.
+      port.close()
+      return
+    }
+    session.stream?.dispose()
+    const stream = new DisplayStream(port, () => {
+      if (session.stream === stream) session.stream = null
+    })
+    session.stream = stream
   }
 
   destroy(): void {
@@ -157,7 +190,8 @@ class DisplayPanelState {
       phase: 'starting',
       detail: null,
       input: false,
-      inputProblem: null
+      inputProblem: null,
+      stream: null
     }
     this.demands.delete(tabId)
     this.sessions = { ...this.sessions, [tabId]: session }
@@ -187,6 +221,7 @@ class DisplayPanelState {
     if (!session) return
     if (sessionId !== undefined && session.sessionId !== sessionId) return
     if (session.url) URL.revokeObjectURL(session.url)
+    session.stream?.dispose()
     const next = { ...this.sessions }
     delete next[tabId]
     this.sessions = next

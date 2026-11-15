@@ -12,6 +12,10 @@ afterPack: scripts/native-splash/after-pack.js
 extraResources:
   - from: resources/speech/model-catalog.json
     to: speech/model-catalog.json
+  # The scrcpy server the device panel pushes to an Android device to stream its
+  # screen. Its version must match SCRCPY_VERSION in scrcpy-protocol.ts.
+  - from: resources/display
+    to: display
   # Films the video capability scaffolds into a project, with the type, the bed
   # and the README that carries each one's beat map.
   - from: resources/video-starters

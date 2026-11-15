@@ -15,6 +15,7 @@ import type {
 } from '../native-floating-panel'
 import type { RendererLogEntry } from './logging'
 import type { CustomIconImage } from '../custom-icon'
+import type { LocalAiRepoDecision } from '../local-ai-repo'
 import type { Contract } from './contract-helpers'
 import type {
   LlamaCppLogStream,
@@ -83,6 +84,11 @@ export const invokeAppContract = {
   >,
   /** Pick a local model: a `.gguf` file, or an MLX folder. */
   'localAi:pickModel': {} as Contract<[runtime?: LocalAiRuntimeId], string | null>,
+  /**
+   * Which engine of ours can serve a Hugging Face repository, read from the
+   * repository's own config and file listing before anything is downloaded.
+   */
+  'localAi:repoProfile': {} as Contract<[reference: string], LocalAiRepoDecision>,
   /** Bytes a saved model path occupies on disk, for the card's size column. */
   'localAi:modelSize': {} as Contract<[path: string], number | null>,
   /** Show a saved model path in the OS file manager: the folder, or the weights file. */

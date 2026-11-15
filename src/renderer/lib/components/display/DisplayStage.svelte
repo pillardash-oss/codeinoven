@@ -77,7 +77,13 @@
   const kind = $derived(tab.sourceKind)
   const sourceId = $derived(tab.sourceId)
   const session = $derived(displayPanel.sessionFor(tab.id))
-  const frame = $derived(session?.frame ?? null)
+  const stream = $derived(session?.stream ?? null)
+  /** The latest polled frame; a live stream paints itself and has none. */
+  const polled = $derived(session?.frame ?? null)
+  /** The picture's size, from the stream when one is running, else the last frame. */
+  const frame = $derived(
+    stream && stream.width > 0 ? { width: stream.width, height: stream.height } : polled
+  )
   /** The frame's own URL, painted straight from the target's PNG bytes. */
   const url = $derived(session?.url ?? null)
   const status = $derived(
@@ -99,14 +105,17 @@
   const permission = $derived(displayPanel.inputPermission)
   const permissionMissing = $derived(postsIntoWindow && permission !== null && !permission.granted)
 
-  const touch = new StageTouch((gesture) => {
-    // The mark on the picture is the receipt for a gesture that landed; one the
-    // target refuses is said in the strip, because a tap that vanishes looks
-    // exactly like a tap on a slow device.
-    displayPanel.sendInput(tab.id, gesture).catch((error: unknown) => {
-      notice = error instanceof Error ? error.message : String(error)
-    })
-  })
+  const touch = new StageTouch(
+    (gesture) => {
+      // The mark on the picture is the receipt for a gesture that landed; one the
+      // target refuses is said in the strip, because a tap that vanishes looks
+      // exactly like a tap on a slow device.
+      displayPanel.sendInput(tab.id, gesture).catch((error: unknown) => {
+        notice = error instanceof Error ? error.message : String(error)
+      })
+    },
+    () => stream
+  )
 
   /**
    * The picture's own box, fitted to the stage.
@@ -252,7 +261,7 @@
 
 <div class="relative flex h-full min-h-0 bg-app">
   <div class="relative flex min-w-0 flex-1 overflow-auto" bind:this={area}>
-    {#if frame && box && url}
+    {#if frame && box && (stream || url)}
       <button
         type="button"
         class="relative m-auto block shrink-0 select-none p-0 {controlling
@@ -273,23 +282,30 @@
           touch.down(event, event.currentTarget)
         }}
         onpointermove={(event) => {
-          if (controlling) touch.move(event)
+          if (controlling) touch.move(event, event.currentTarget)
         }}
         onpointerup={(event) => {
           if (controlling) touch.up(event, event.currentTarget)
         }}
         onpointercancel={() => touch.cancel()}
+        onwheel={(event) => {
+          if (controlling) touch.wheel(event, event.currentTarget)
+        }}
         onkeydown={(event) => {
           if (!controlling) return
           if (touch.key(event)) event.preventDefault()
         }}
       >
-        <img
-          src={url}
-          alt={`Live preview of ${tab.title}`}
-          class="block h-full w-full outline-none"
-          draggable="false"
-        />
+        {#if stream}
+          <canvas {@attach stream.attach} class="block h-full w-full outline-none"></canvas>
+        {:else}
+          <img
+            src={url}
+            alt={`Live preview of ${tab.title}`}
+            class="block h-full w-full outline-none"
+            draggable="false"
+          />
+        {/if}
         {#if touch.mark}
           {#key touch.mark.id}
             <span

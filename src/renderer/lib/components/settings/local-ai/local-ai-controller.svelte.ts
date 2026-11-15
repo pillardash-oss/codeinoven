@@ -9,12 +9,14 @@
  */
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { describeGenerationFailure, generationFailureReason } from '$shared/local-ai-failure'
 import { terminalLines } from '$shared/terminal-lines'
 import {
   localAiModelAliases,
   localAiModelSource,
   localAiPtyId,
   localAiServerArgs,
+  localAiServerCommandName,
   type LlamaCppBrewJobKind,
   type LlamaCppLogStream,
   type LlamaCppProbeResult,
@@ -164,16 +166,66 @@ export class LocalAiController {
    */
   async start(entry: LlamaCppServerEntry, executable: string): Promise<void> {
     if (this.handles.has(entry.id)) return
-    const ready = await this.probeOf(entry)
-    if (ready.ready && this.servesEntry(entry, ready.models)) {
-      await this.adopt(entry, ready.models[0] ?? '')
+    const launch = await this.prepareLaunch(entry, executable)
+    if (!launch) return
+    const ready = await this.probeOf(launch.entry)
+    if (ready.ready && this.servesEntry(launch.entry, ready.models)) {
+      await this.adopt(launch.entry, ready.models[0] ?? '')
       return
     }
     if (ready.ready) {
-      this.pendingTakeover = { entry, executable, otherModel: ready.models[0] ?? 'Another model' }
+      this.pendingTakeover = {
+        entry: launch.entry,
+        executable: launch.executable,
+        otherModel: ready.models[0] ?? 'Another model'
+      }
       return
     }
-    await this.spawn(entry, executable)
+    await this.spawn(launch.entry, launch.executable)
+    if (launch.note && this.handles.has(launch.entry.id)) {
+      // The repository decided the engine, so the row says which one it used
+      // instead of leaving the saved tab to imply the other.
+      this.logs = {
+        ...this.logs,
+        [launch.entry.id]: [`# ${launch.note}`, ...(this.logs[launch.entry.id] ?? [])]
+      }
+    }
+  }
+
+  /**
+   * The engine this row's repository actually runs on, read from the repository.
+   *
+   * A row saved from a Hugging Face tag names a repository, and the repository says
+   * whether its weights are MLX or GGUF. Reading that first does two things the tab
+   * cannot: a row saved under the wrong engine still runs, and a repository no
+   * engine here can load fails in a moment instead of after a multi-gigabyte
+   * download.
+   *
+   * Null means the start is over: the card already carries the reason.
+   */
+  private async prepareLaunch(
+    entry: LlamaCppServerEntry,
+    executable: string
+  ): Promise<{ entry: LlamaCppServerEntry; executable: string; note?: string } | null> {
+    const source = localAiModelSource(entry)
+    if (source?.kind !== 'huggingface') return { entry, executable }
+    const decision = await invoke('localAi:repoProfile', source.reference.repo).catch(() => null)
+    if (!decision || decision.kind === 'unknown') return { entry, executable }
+    if (decision.kind === 'unsupported') {
+      this.setStatus(entry.id, 'failed')
+      this.setLoadedModel(entry.id, '')
+      this.notice = { ...this.notice, [entry.id]: decision.message }
+      return null
+    }
+    if (decision.engine === entry.runtime) return { entry, executable }
+    // The other engine owns this format, so its own binary starts it and the row
+    // is launched under it for this run. The saved row is left as the user made it.
+    const status = await invoke('localAi:detect', decision.engine).catch(() => null)
+    return {
+      entry: { ...entry, runtime: decision.engine },
+      executable: status?.path || localAiServerCommandName(decision.engine),
+      note: decision.message
+    }
   }
 
   /** The user agreed: stop what holds the address, then start this row. */
@@ -522,6 +574,28 @@ export class LocalAiController {
       pending
     ].slice(-LOG_LINE_LIMIT)
     this.logs = { ...this.logs, [entryId]: next }
+    for (const line of lines) {
+      const reason = generationFailureReason(line)
+      if (reason !== null) this.failGenerationThread(entryId, reason)
+    }
+  }
+
+  /**
+   * A server whose model failed to load is not starting, and never will be: its
+   * readiness probe would answer 503 until the budget ran out hours later. Stop it,
+   * which frees the port, and report the reason the engine gave.
+   */
+  private failGenerationThread(entryId: string, reason: string): void {
+    const handle = this.handles.get(entryId)
+    // An adopted server has no PTY of ours to destroy, and stopping a process the
+    // app did not start is the user's call, not a side effect of reading its log.
+    if (!handle || handle.adopted) return
+    handle.stopping = true
+    void invoke('pty:destroy', localAiPtyId(entryId))
+    this.stopHandle(entryId)
+    this.setStatus(entryId, 'failed')
+    this.setLoadedModel(entryId, '')
+    this.notice = { ...this.notice, [entryId]: describeGenerationFailure(reason) }
   }
 
   private handleExit(entryId: string, code: unknown): void {
