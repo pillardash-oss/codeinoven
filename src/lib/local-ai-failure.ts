@@ -31,10 +31,11 @@ export function generationFailureReason(line: string): string | null {
  * A failed load, in words the card can show.
  *
  * The engine reports an architecture it cannot build as a dead thread, so the
- * bare reason reads like a crash. Saying what it means, and where the weights
- * still are, is what turns it into something the user can act on.
+ * bare reason reads like a crash. The weights are still MLX, and the runtime that
+ * implements this family is `mlx-vlm`, so that is what the card names: pointing at
+ * a GGUF conversion would be advice for a different checkpoint.
  */
 export function describeGenerationFailure(reason: string): string {
   if (!/^Model type \S+ not supported\.?$/u.test(reason)) return reason
-  return `${reason} This mlx-lm build has no architecture for that model, so it cannot load these weights. Use the model's GGUF build with llama.cpp, or a model mlx-lm supports.`
+  return `${reason} This mlx-lm build has no architecture for that model: omni and vision MLX models are served by mlx-vlm, not mlx-lm. Its weights are already on disk.`
 }

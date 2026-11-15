@@ -35,12 +35,13 @@ describe('generationFailureReason', () => {
 })
 
 describe('describeGenerationFailure', () => {
-  it('names the unsupported architecture as one this build cannot load', () => {
+  it('names the runtime that does serve these MLX weights', () => {
     const message = describeGenerationFailure('Model type lfm3_omni not supported.')
 
     expect(message).toContain('Model type lfm3_omni not supported.')
     expect(message).toContain('no architecture for that model')
-    expect(message).toContain('llama.cpp')
+    expect(message).toContain('mlx-vlm')
+    expect(message).not.toContain('GGUF')
   })
 
   it('passes any other failure through untouched', () => {
