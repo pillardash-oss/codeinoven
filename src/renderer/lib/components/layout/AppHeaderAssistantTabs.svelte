@@ -110,6 +110,17 @@
   let pinnedGroup = $derived(groupThreads.filter((thread) => thread.pinned))
   let openGroup = $derived(groupThreads.filter((thread) => !thread.pinned))
 
+  /**
+   * Whether the open assistant is working anywhere.
+   *
+   * The mark beside its name is the one thing that always stays on screen, so it
+   * is where its work has to be visible: walking to another view and back landed
+   * on a conversation with no trace, no spinner and nothing to say a run was
+   * still going. The same rule the rows and tabs use decides it, so the header
+   * can never disagree with a badge about whether this assistant is working.
+   */
+  let assistantWorking = $derived(groupThreads.some((thread) => isThreadLiveWorking(thread)))
+
   /** Whose arrangement the strip remembers, per group. */
   let orderKey = $derived(groupAssistant?.id ?? UNASSIGNED_ORDER_KEY)
 
@@ -450,6 +461,20 @@
           >
             <CioEllipsis size={11} class="text-muted" />
           </span>
+          <!-- Its work belongs on the mark itself: under the pointer the mark
+               turns into the menu ellipsis, so the dot sits at its foot and
+               stays visible either way. -->
+          {#if assistantWorking}
+            <span
+              class="pointer-events-none absolute -right-1 -bottom-1 flex size-2 items-center justify-center"
+              role="img"
+              aria-label="{groupLabel} is working"
+              title="{groupLabel} is working"
+            >
+              <span class="absolute size-2 animate-ping rounded-full bg-accent opacity-60"></span>
+              <span class="relative size-2 rounded-full bg-accent"></span>
+            </span>
+          {/if}
         </span>
       </AssistantOptionsMenu>
     {:else}
