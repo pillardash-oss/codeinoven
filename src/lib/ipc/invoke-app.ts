@@ -68,6 +68,8 @@ export const invokeAppContract = {
   >,
   /** End the server holding a port when no PTY of the app owns it. */
   'localAi:stopServer': {} as Contract<[port: number, runtime: LocalAiRuntimeId], boolean>,
+  /** Whether one of our engines still holds a port, whatever a row's status says. */
+  'localAi:serverRunning': {} as Contract<[port: number, runtime: LocalAiRuntimeId], boolean>,
   /** The file a row's server writes its log to, for llama.cpp rows only. */
   'localAi:logPath': {} as Contract<[entryId: string], string>,
   /** What a row's log file already holds, so an adopted server shows its history. */
@@ -89,6 +91,20 @@ export const invokeAppContract = {
    * repository's own config and file listing before anything is downloaded.
    */
   'localAi:repoProfile': {} as Contract<[reference: string], LocalAiRepoDecision>,
+  /**
+   * Move a finished download out of the engine's cache into the app's own models
+   * folder, and answer the path the saved row should name from then on.
+   */
+  'localAi:adoptModel': {} as Contract<[reference: string, path: string], string | null>,
+  /** Delete a model the app owns; refuses any path outside its models folder. */
+  'localAi:deleteModel': {} as Contract<[path: string], boolean>,
+  /**
+   * Move a model a saved row already names out of the engine cache it was
+   * downloaded to. Null when the path is already ours or was never in a cache.
+   */
+  'localAi:adoptPath': {} as Contract<[path: string], string | null>,
+  /** RAM this machine has, and the share of it a model's prompt cache may hold. */
+  'localAi:memoryBudget': {} as Contract<[], { totalBytes: number; promptCacheBytes: number }>,
   /** Bytes a saved model path occupies on disk, for the card's size column. */
   'localAi:modelSize': {} as Contract<[path: string], number | null>,
   /** Show a saved model path in the OS file manager: the folder, or the weights file. */

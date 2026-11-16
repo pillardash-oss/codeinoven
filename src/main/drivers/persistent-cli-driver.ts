@@ -960,6 +960,16 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     child.stdin.write(input)
   }
 
+  /**
+   * Whether the running turn still accepts streaming input. Stdin is closed
+   * once the final provider result arrives, but the process stays registered
+   * until it exits, so a live child alone does not prove input will land.
+   */
+  protected activeInputOpen(sessionId: string): boolean {
+    const stdin = this.activeProcesses.get(sessionId)?.stdin
+    return Boolean(stdin && !stdin.writableEnded && !stdin.destroyed)
+  }
+
   /** Stop a turn synchronously at a provider record boundary. */
   protected stopActiveProcess(sessionId: string): void {
     const child = this.activeProcesses.get(sessionId)

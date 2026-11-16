@@ -8,7 +8,7 @@ import {
   usableDesignAssignments
 } from '../../lib/design-assignments'
 import type { EffectiveExperts } from '../../lib/experts'
-import { authoredWorkRootSync } from './authored-work-root'
+import { authoredWorkRoot } from './authored-work-root'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
 import type {
   AgentModelSelection,
@@ -106,7 +106,7 @@ export function createDesignAssignmentExecutor(
           : `There is no expert named "${requested}". The user assigned ${catalogue}; delegate one of those, or ask them to add the work you need in Settings, Design.`
       )
     }
-    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
+    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
     const output = designAssignmentOutput(assignment)
     // A media craft is made, not written: its model is a generation model and the
     // app calls a provider for it. `delegate` is the completion lane, so it points

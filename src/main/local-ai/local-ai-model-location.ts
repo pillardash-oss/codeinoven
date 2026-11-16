@@ -28,7 +28,7 @@ const MAX_SNAPSHOT_FILES = 2_000
  * `huggingface_hub` itself applies. The server is launched with the environment the
  * app inherited, so these are the directories it would have written to.
  */
-function huggingFaceCacheRoots(): string[] {
+export function huggingFaceCacheRoots(): string[] {
   const roots: string[] = []
   const add = (candidate: string | undefined): void => {
     if (!candidate || !candidate.startsWith('/')) return

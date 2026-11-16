@@ -173,6 +173,11 @@ export class DatabaseMaintenance {
     return this.worker?.incrementalVacuum(pages) ?? { ok: false, error: 'no maintenance worker' }
   }
 
+  /** Truncating WAL checkpoint, so a compaction's freed space lands in the file. */
+  async truncateCheckpoint(): Promise<WorkerCheckpointResult> {
+    return this.worker?.truncateCheckpoint() ?? { ok: false, error: 'no maintenance worker' }
+  }
+
   /** Full VACUUM (heavy; off-main). */
   async fullVacuum(): Promise<WorkerVacuumResult> {
     return this.worker?.fullVacuum() ?? { ok: false, error: 'no maintenance worker' }

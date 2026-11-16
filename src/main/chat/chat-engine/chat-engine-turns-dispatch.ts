@@ -725,7 +725,8 @@ export class ChatEngineTurnsDispatch {
         accountId: account.id,
         accountEnvironment: this.host.state.accountRegistry.environment(account),
         driver,
-        projectPath: info.projectPath
+        projectPath: info.projectPath,
+        conversationSessionId: info.sessionId
       })
       const futureResets = (usage?.rateLimits ?? []).filter(
         (limit): limit is typeof limit & { resetsAt: number } =>

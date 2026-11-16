@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync, mount, unmount } from 'svelte'
 import CommandPalette from '$lib/components/actions/CommandPalette.svelte'
 import SpotlightHarness from './stubs/SpotlightHarness.svelte'
-import type { NativeDockRequest } from '$shared/native-dock'
+import type { ActionDefinition } from '$lib/actions'
+import type { NativeDockNode, NativeDockRequest } from '$shared/native-dock'
 
 /**
  * The Cmd+K spotlight is a `Modal` that the native projection draws above the
@@ -59,12 +60,69 @@ function renderPalette(screenKey = 'actions') {
   return instance
 }
 
+/** Every node in a published frame, children included. */
+function countNodes(nodes: readonly (NativeDockNode | string)[]): number {
+  return nodes.reduce(
+    (total, node) => total + (typeof node === 'string' ? 1 : countNodes(node.children) + 1),
+    0
+  )
+}
+
 function projection(): NativeDockRequest {
   const call = bridge.invoke.mock.calls.find(
     ([channel, , request]) => channel === 'browser:setDockOverlay' && request
   )
   if (!call) throw new Error('The spotlight published no native projection')
   return call[2] as NativeDockRequest
+}
+
+/**
+ * One row of a thread screen: everything a real result draws, including the
+ * vendor mark whose gradient lives in `<defs>`.
+ */
+function threadRow(index: number, providerName: string, providerId: string): ActionDefinition {
+  return {
+    id: `thread:${index}`,
+    title: `Thread number ${index} about a long piece of work`,
+    description: `Last message snippet for thread ${index}`,
+    category: 'thread',
+    source: { id: 'threads', label: 'Threads', kind: 'app', color: '#7c9aff' },
+    shortcut: ['⌘', '1'],
+    status: { label: 'Done', stage: 'done', variant: 'dot' },
+    threadMeta: {
+      working: false,
+      harnessIds: ['pi'],
+      providerName,
+      providerId,
+      modelId: 'claude-sonnet-5-5',
+      branch: 'feature/a-branch-name',
+      oven: null
+    }
+  }
+}
+
+function threadRows(count: number): ActionDefinition[] {
+  const vendors = [
+    { name: 'Google', id: 'gemini' },
+    { name: 'Qwen', id: 'qwen' },
+    { name: 'Anthropic', id: 'anthropic' }
+  ]
+  return Array.from({ length: count }, (_, index) => {
+    const vendor = vendors[index % vendors.length]
+    return threadRow(index, vendor.name, vendor.id)
+  })
+}
+
+function renderThreadScreen(actions: ActionDefinition[], maxResults: number, screenKey: string) {
+  const target = document.createElement('div')
+  document.body.append(target)
+  instances.push(
+    mount(CommandPalette, {
+      target,
+      props: { open: true, screenKey, actions, maxResults, onSelect: vi.fn(), onClose: vi.fn() }
+    })
+  )
+  flushSync()
 }
 
 beforeEach(() => {
@@ -79,6 +137,10 @@ beforeEach(() => {
       disconnect() {}
     }
   )
+  Object.defineProperty(Element.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: () => {}
+  })
   Object.defineProperty(Element.prototype, 'animate', {
     configurable: true,
     value: () => ({
@@ -151,5 +213,44 @@ describe('the Cmd+K spotlight keeps the browser up', () => {
     const after = document.querySelector<HTMLInputElement>('input[aria-label]')
     expect(after).toBe(before)
     expect(document.activeElement).toBe(before)
+  })
+
+  it('projects a full thread screen instead of falling back to the app window', async () => {
+    // The regression this pins: the home screen projects (it holds a dozen
+    // actions), so the browser stays up, and the moment a nested search screen
+    // draws its rows the palette was refused for content it could not carry
+    // (a vendor mark's `<defs>`) or for its size (a full screen of rows is
+    // ~5,700 nodes, past the 4,096 a passive surface gets), which dropped it
+    // into the app window and parked the page behind it.
+    renderThreadScreen(threadRows(60), 60, 'all-threads')
+    await vi.advanceTimersByTimeAsync(40)
+    const request = projection()
+    expect(request.modal).toBe(true)
+    expect(logger.logRendererError).not.toHaveBeenCalled()
+    expect(bridge.hideWhile.mock.calls.every((call) => call[2] === false)).toBe(true)
+  })
+
+  it('projects the relocation picker at its full window', async () => {
+    // A project's chats are drawn up to the picker's own window; the frame has
+    // to stay inside the dialog budget or the picker hides the page.
+    renderThreadScreen(threadRows(60), 60, 'relocation')
+    await vi.advanceTimersByTimeAsync(40)
+    const request = projection()
+    // Every row, not just the first screenful: a frame that drops rows is a
+    // picker the user cannot scroll.
+    expect(countNodes(request.nodes)).toBeGreaterThan(4000)
+    expect(logger.logRendererError).not.toHaveBeenCalled()
+    expect(bridge.hideWhile.mock.calls.every((call) => call[2] === false)).toBe(true)
+  })
+
+  it('never writes a frame the validator refuses', async () => {
+    // The controller validates every frame it publishes, so a published one is
+    // a frame the main process accepts; a refused frame would be logged.
+    renderThreadScreen(threadRows(60), 60, 'relocation')
+    await vi.advanceTimersByTimeAsync(40)
+    const rejected = bridge.invoke.mock.calls.filter(
+      ([channel, argument]) => channel === 'browser:setDockOverlay' && argument === null
+    )
+    expect(rejected).toHaveLength(0)
   })
 })

@@ -839,6 +839,17 @@
           />
         {/snippet}
 
+        <!-- Arrival only, deliberately: no `out:` on the closing sidebar.
+
+             An `out:` transition makes Svelte pause the whole region until the
+             transition reports done, and everything inside it stops updating
+             while it is paused. If the region is reopened before that outro
+             ends, Svelte resumes the very same subtree, and a resumed sidebar
+             could then paint the panel it was paused on instead of the tool the
+             rail had just selected, until the region was closed and opened
+             again. Destroying the region on the frame it closes removes that
+             state entirely; the column beside it still collapses over
+             `railTrackDuration`, so the shell keeps its motion. -->
         <div
           class="min-h-0 min-w-0 {board.appBackgroundPanelKinds.rightSidebarFlushes
             ? 'border-l border-border'
@@ -847,11 +858,6 @@
           style:grid-row="1"
           style:visibility={board.panelExitMs.guideHidesToolPanel ? 'hidden' : 'visible'}
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
-          out:fly={{
-            x: contextSidebarState.width,
-            duration: motionDuration(board.panelExitMs.PANEL_EXIT_MS),
-            easing: cubicOut
-          }}
         >
           <div
             class="h-full min-h-0"

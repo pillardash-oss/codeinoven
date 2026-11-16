@@ -26,6 +26,7 @@ import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
+import { installAuthoredWorkScopeRoots } from '../design/authored-work-root'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { recruitedAssistantKnowledge } from '../../lib/assistant-recruit'
 import { actionEnvironmentDirectories } from '../../lib/project-env'
@@ -322,6 +323,10 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     scopeManager,
     scopeWorktreeService
   )
+  // Authored work (a design's or a composition's folder) belongs under the
+  // checkout the thread's scope runs in, so the design and video services ask
+  // the same authority the session and the file tree ask.
+  installAuthoredWorkScopeRoots(scopeRootProvider(scopeRootResolver))
   const projectFilesService = new ProjectFilesService(
     projectManager,
     scopeRootProvider(scopeRootResolver),

@@ -2,17 +2,27 @@ import type { Database } from '../database/database'
 import { ProjectRepo } from '../database/repositories/project-repo'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import { threadAuthoredWorkRoot } from '../../lib/thread-storage-paths'
+import type { Thread } from '../../lib/types'
+import type { ThreadScopeRootProvider } from '../../lib/engines/thread-manager'
 
 /**
  * The folder a thread's designs and compositions are written under.
  *
  * Authored work belongs to a conversation, and a conversation runs in exactly one
- * directory: a project's checkout, or the app-owned workspace an assistant task,
- * chat or browser tab mounts. Every surface that lists, serves, moves or exports
- * that work has to agree about which directory that is, so they all ask here
- * rather than each restating the rule. Before this existed, each of them asked
- * only for a local project, which is why an assistant could be handed the design
- * playbook and then refused a preview of the design it had just written.
+ * directory: a project's checkout, the managed worktree its scope points at, or
+ * the app-owned workspace an assistant task, chat or browser tab mounts. Every
+ * surface that lists, serves, moves or exports that work has to agree about which
+ * directory that is, so they all ask here rather than each restating the rule.
+ * Before this existed, each of them asked only for a local project, which is why
+ * an assistant could be handed the design playbook and then refused a preview of
+ * the design it had just written.
+ *
+ * The root follows the thread's **scope**, not the project record: a thread in a
+ * managed worktree runs its session in that worktree, so the `.cio/designs` an
+ * agent writes there is the folder its board, its video studio and its previews
+ * have to read. Resolving the project checkout instead put the work the agent
+ * wrote in one tree and the board that lists it in another, which is why a design
+ * made in a new scope looked like it had left that scope.
  *
  * `appOwned` says which kind of root answered, because the board treats the two
  * differently in two places: an app-owned folder has no project record to store
@@ -40,25 +50,57 @@ export interface AuthoredWorkRoot {
   assistantId: string | null
 }
 
-/** Resolve one scope's root, from rows that are already in hand. */
-function resolveScope(
-  project: {
-    source: 'local' | 'ssh'
-    path: string
-    changeTrackingMode?: 'git' | 'manual'
-  } | null,
+/**
+ * The scope resolver this module asks which checkout a thread's scope runs in.
+ *
+ * Bound once at startup rather than threaded through every capability executor:
+ * authored work is read by the design service, the video studio, the preview
+ * executors and the browser's own composition frames, and a resolver argument on
+ * each of them is how one caller ends up resolving a different folder from the
+ * rest. Without a provider the module keeps the previous behaviour of answering
+ * with the project checkout, which is what a process that never wired scopes
+ * (a test, or an Oven root standing in for one) still expects.
+ */
+let scopeRoots: ThreadScopeRootProvider | null = null
+
+/** Wire the scope authority authored work resolves its checkout through. */
+export function installAuthoredWorkScopeRoots(provider: ThreadScopeRootProvider): void {
+  scopeRoots = provider
+}
+
+/**
+ * The checkout a thread's work belongs under, or null when the thread names no
+ * scope of its own.
+ *
+ * A task dispatched by an assistant into a project answers with its bound scope
+ * rather than its home container: the binding is what says which checkout the
+ * session actually runs in. The scope bucket is read as the session reads it, so
+ * a worktree's folder is the same one the agent wrote into.
+ */
+async function scopeCheckout(
   projectId: string,
-  threadId: string | undefined,
-  assistantId: string | undefined
+  thread: Thread | null
+): Promise<{ projectId: string; path: string } | null> {
+  if (!scopeRoots || !thread) return null
+  const bound = thread.boundScope
+  const scopeProjectId = bound?.projectId ?? projectId
+  const scopeBucketId = bound?.scopeBucketId ?? thread.scopeBucketId
+  if (!scopeBucketId) return null
+  const path = await scopeRoots.resolveCompatibilityRoot(scopeProjectId, scopeBucketId)
+  return path === null ? null : { projectId: scopeProjectId, path }
+}
+
+/** A checkout root, which is always version-controllable work rather than scratch. */
+function checkoutRoot(
+  path: string,
+  project: { changeTrackingMode?: 'git' | 'manual' },
+  assistantId: string | null
 ): AuthoredWorkRoot {
-  const path = threadAuthoredWorkRoot(project, { projectId, threadId, assistantId })
-  if (!path) throw new Error(`Project ${projectId} has no local filesystem root`)
-  const checkout = project?.source === 'local' && project.path !== ''
   return {
     path,
-    appOwned: !checkout,
-    gitMode: checkout && project?.changeTrackingMode === 'git',
-    assistantId: assistantId ?? null
+    appOwned: false,
+    gitMode: project.changeTrackingMode === 'git',
+    assistantId
   }
 }
 
@@ -73,30 +115,28 @@ export async function authoredWorkRoot(
   projectId: string,
   threadId?: string
 ): Promise<AuthoredWorkRoot> {
+  const thread = threadId ? await new ThreadRepo(database).getViaWorker(threadId) : null
+  const assistantId = thread?.assistantId ?? null
+  // A thread bound into a project answers with that project, not the container
+  // it appears in: the binding is what says which checkout the session runs in.
+  // A checkout is read before its scope is resolved, because a container id (a
+  // chat, the assistant space, a browser tab) has no checkout and no scope to
+  // resolve, and asking anyway would turn a working workspace into an error.
+  const bound = thread?.boundScope
+  const scopeProjectId = bound?.projectId ?? projectId
+  const checkout = await new ProjectRepo(database).getViaWorker(scopeProjectId)
+  if (checkout?.source === 'local' && checkout.path) {
+    const scoped = await scopeCheckout(scopeProjectId, thread)
+    return checkoutRoot(scoped?.path ?? checkout.path, checkout, assistantId)
+  }
   const project = await new ProjectRepo(database).getViaWorker(projectId)
-  // A checkout answers on its own. The thread read below exists only to name the
-  // workspace of a conversation, so a project thread never pays for it.
-  if (project?.source === 'local' && project.path)
-    return resolveScope(project, projectId, undefined, undefined)
-  const assistantId = threadId
-    ? (await new ThreadRepo(database).getViaWorker(threadId))?.assistantId
-    : undefined
-  return resolveScope(project, projectId, threadId, assistantId)
-}
-
-/**
- * The same answer for a caller that cannot await, matching the synchronous
- * `requireLocalProject` it replaces: two single-row reads, exactly as that helper
- * already did.
- */
-export function authoredWorkRootSync(
-  database: Database,
-  projectId: string,
-  threadId?: string
-): AuthoredWorkRoot {
-  const project = new ProjectRepo(database).get(projectId)
-  if (project?.source === 'local' && project.path)
-    return resolveScope(project, projectId, undefined, undefined)
-  const assistantId = threadId ? new ThreadRepo(database).get(threadId)?.assistantId : undefined
-  return resolveScope(project, projectId, threadId, assistantId)
+  if (project?.source === 'local' && project.path) {
+    return checkoutRoot(project.path, project, assistantId)
+  }
+  // A conversation container always names the thread it belongs to, because its
+  // workspace is that thread's (or its assistant's): the container id alone
+  // covers every assistant at once and cannot name one folder.
+  const path = threadAuthoredWorkRoot(project, { projectId, threadId, assistantId })
+  if (!path) throw new Error(`Project ${projectId} has no local filesystem root`)
+  return { path, appOwned: true, gitMode: false, assistantId }
 }

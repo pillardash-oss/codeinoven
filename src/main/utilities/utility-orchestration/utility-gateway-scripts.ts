@@ -173,10 +173,11 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the page: its title, URL, visible text, scroll position, and every element you could act on, in every document the page is made of. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state and its box on screen, so you can see a form exactly as it stands before you fill it. A page renders much of its real content inside frames (a portal blade, a payment form, a chat widget), so the snapshot reads those too: their elements carry a ref prefixed with the frame (f2r7) and work with every operation exactly as a page-level ref does, and the frames list names each document that was read, with the text of every embedded one. The page this conversation\u2019s thread browser resolved for you is readable with page "user", and page "strip" reads whatever that browser shows now; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
+      'Read the page: its title, URL, visible text, scroll position, and every element you could act on, in every document the page is made of. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state and its box on screen, so you can see a form exactly as it stands before you fill it. A page renders much of its real content inside frames (a portal blade, a payment form, a chat widget), so the snapshot reads those too: their elements carry a ref prefixed with the frame (f2r7) and work with every operation exactly as a page-level ref does, and the frames list names each document that was read, with the text of every embedded one. An answer too large to show whole drops page prose and hidden elements first and says what it left out; read one frame with frame to see that document in full. The page this conversation\u2019s thread browser resolved for you is readable with page "user", and page "strip" reads whatever that browser shows now; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
     inputSchema: {
       type: 'object',
       properties: {
+        frame: FRAME_FIELD,
         interactiveOnly: {
           type: 'boolean',
           description:
@@ -224,7 +225,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'type',
     description:
-      'Type into an input, textarea, or editable element, and report the value the page actually kept. The text arrives as real keystrokes, down, character and up through the browser\u2019s own input pipeline, so a page\u2019s keydown handlers, a search-as-you-type box and a rich editor all see it. Replaces the value unless append is true. Text longer than 200 characters, or text with a line break (Enter would submit the form), is inserted in one step instead, and the result says which happened. Pass submit true to press Enter afterwards.',
+      'Typing into a picker (an aria combobox, a portal\u2019s region or resource field) chooses the matching option it offers instead of leaving text it would discard, and reports what was chosen or the options it had. Type into an input, textarea, or editable element, and report the value the page actually kept. The text arrives as real keystrokes, down, character and up through the browser\u2019s own input pipeline, so a page\u2019s keydown handlers, a search-as-you-type box and a rich editor all see it. Replaces the value unless append is true. Text longer than 200 characters, or text with a line break (Enter would submit the form), is inserted in one step instead, and the result says which happened. Pass submit true to press Enter afterwards.',
     inputSchema: {
       type: 'object',
       properties: {

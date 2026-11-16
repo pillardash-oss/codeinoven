@@ -86,6 +86,7 @@ import { registerUpdaterHandlers } from './handlers/updater-handlers'
 import { ensureDonOrchestrator } from '../don/don-bootstrap'
 import { registerAssistantHandlers } from './handlers/assistant-handlers'
 import { registerCioCleanupHandlers } from './handlers/cio-cleanup-handlers'
+import { registerStorageManagerHandlers } from './handlers/storage-manager-handlers'
 import { registerOrchestrationHandlers } from './handlers/orchestration-handlers'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -553,5 +554,6 @@ export function registerIpcHandlers(
   registerUpdaterHandlers(ctx)
   registerAssistantHandlers(ctx)
   registerCioCleanupHandlers(ctx)
+  registerStorageManagerHandlers(ctx)
   registerOrchestrationHandlers(ctx)
 }

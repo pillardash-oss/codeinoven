@@ -105,6 +105,25 @@
   ] as const
 
   /**
+   * The route the chosen SDK will POST to, so a mismatch with what the server
+   * actually implements is visible here rather than as a 404 mid-conversation.
+   *
+   * A local server is the case worth naming, and the two engines differ: measured
+   * on this machine, `llama-server` answers `/v1/chat/completions`, `/v1/messages`
+   * and `/chat/completions`, while `mlx_lm.server` answers only
+   * `/v1/chat/completions` and `/v1/completions` and 404s every other POST path,
+   * even though model discovery (`/v1/models`) works on both.
+   */
+  let sdkRouteWarning = $derived.by(() => {
+    const baseURL = draft.baseURL.trim().toLowerCase()
+    if (!/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/u.test(baseURL)) return ''
+    if (draft.npm === '@ai-sdk/openai-compatible') return ''
+    return draft.npm === '@ai-sdk/openai'
+      ? 'The Responses SDK posts to /v1/responses, which mlx-lm answers with 404 and llama.cpp implements only partially. OpenAI-compatible is the safe choice for a local server.'
+      : 'The Anthropic SDK posts to /v1/messages, which mlx-lm answers with 404 (llama.cpp does answer it). OpenAI-compatible is the safe choice for mlx-lm.'
+  })
+
+  /**
    * Reasoning models from a custom base URL start at the lowest thinking level.
    * There is no per-model picker any more: a provider endpoint never tells us
    * which effort its models prefer, and starting low keeps the first turn fast
@@ -970,6 +989,9 @@
           <option value={option.value}>{option.label}</option>
         {/each}
       </select>
+      {#if sdkRouteWarning}
+        <p class="text-[0.6875rem] leading-relaxed text-warning">{sdkRouteWarning}</p>
+      {/if}
     </label>
 
     <label class="block space-y-1 text-xs font-medium">

@@ -151,9 +151,18 @@
     }
   }
 
-  /** Record the live screen's scroll offset and copy the screen when it leaves. */
-  function cacheOnLeave(threadId: string): Attachment<HTMLElement> {
+  /**
+   * Record the live screen's scroll offset and copy the screen when it leaves.
+   *
+   * Bound to the thread id alone, never the thread row: an attachment re-runs
+   * when anything it read changes, and its teardown is the "left" signal. A row
+   * refresh (the server confirming a new thread) would otherwise copy the screen
+   * the user is still on, and that copy then replaces the live view and its
+   * composer mid-keystroke.
+   */
+  function cacheOnLeave(threadId: string | null): Attachment<HTMLElement> {
     return (node) => {
+      if (!threadId) return
       let scrollTop = 0
       const onScroll = (event: Event): void => {
         if (event.target instanceof HTMLElement && isThreadScreenScroller(event.target)) {
@@ -198,7 +207,7 @@
         <div
           class="relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
           in:fly={cachedScreen ? NO_REVEAL : threadReveal()}
-          {@attach cacheOnLeave(selectedThread.id)}
+          {@attach cacheOnLeave(selectedThreadId)}
         >
           <svelte:boundary onerror={handleConversationRenderError}>
             <ThreadView

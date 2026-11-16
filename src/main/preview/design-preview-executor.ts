@@ -1,4 +1,4 @@
-import { authoredWorkRoot, authoredWorkRootSync } from '../design/authored-work-root'
+import { authoredWorkRoot } from '../design/authored-work-root'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
@@ -108,7 +108,7 @@ export function createDesignPreviewExecutor(
         `The design preview executor handles preview, checkpoint, history and restore, and no operation named "${operation}".`
       )
     }
-    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
+    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
     const attention = input['attention'] === 'focus' ? 'focus' : 'background'
     const result = await openDesignPreview(
       { previews: options.previews, browser: options.browser },

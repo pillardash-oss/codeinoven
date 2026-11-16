@@ -69,6 +69,13 @@
           "scenario": "Anywhere in the app."
         },
         {
+          "id": "nav-storage-manager",
+          "keys": [],
+          "label": "Storage manager",
+          "description": "Opens the Storage manager with how the app's data folder is spent, what can be reclaimed, and where to compact the database.",
+          "scenario": "Anywhere in the app."
+        },
+        {
           "id": "nav-command-palette",
           "keys": ["mod", "k"],
           "label": "Command palette",

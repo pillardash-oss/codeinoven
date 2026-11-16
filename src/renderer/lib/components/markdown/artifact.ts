@@ -238,7 +238,7 @@ export function buildArtifactSrcdoc(kind: ArtifactKind, code: string, themeStyle
   const themedSvg = sanitizedSvgArtifact(code).replace(
     /<svg\b[^>]*>/iu,
     (opening) =>
-      `${opening}<style>${themeStyles}svg{font-family:var(--font-app);color:var(--color-foreground);fill:currentColor;}</style>`
+      `${opening}<style>${themeStyles}svg{font-family:var(--font-app);color:var(--color-foreground);}svg:not([fill]){fill:currentColor;}</style>`
   )
   const dataUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(themedSvg)}`
   // The picture is never scaled past the frame's edges, and no padding is

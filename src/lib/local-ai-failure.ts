@@ -36,6 +36,13 @@ export function generationFailureReason(line: string): string | null {
  * a GGUF conversion would be advice for a different checkpoint.
  */
 export function describeGenerationFailure(reason: string): string {
+  // Metal reports a working-set overrun as a command buffer failure, which reads
+  // like a crash but is memory: the weights plus the prompt cache's KV tensors no
+  // longer fit in unified RAM. The cache is unbounded unless the server is told
+  // otherwise, so that is the lever to name.
+  if (/Insufficient Memory|OutOfMemory/iu.test(reason)) {
+    return `${reason} This is memory, not a crash: the model weights plus the server's prompt cache no longer fit this Mac's unified memory. Add --prompt-cache-bytes 1000000000 (or --kv-bits 4) to this server's extra flags, or stop another local model, then start it again.`
+  }
   if (!/^Model type \S+ not supported\.?$/u.test(reason)) return reason
   return `${reason} This mlx-lm build has no architecture for that model: omni and vision MLX models are served by mlx-vlm, not mlx-lm. Its weights are already on disk.`
 }

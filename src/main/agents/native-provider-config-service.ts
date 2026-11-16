@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../../lib/types'
 import { isBaseUrlProviderUsageFormat } from '../../lib/provider-usage-format'
+import { harnessBaseUrl, isLocalBaseUrl } from '../../lib/native-provider-url'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -261,7 +262,7 @@ export class NativeProviderConfigService {
     const existingOptions = record(existing?.['options']) ?? {}
     const options: Record<string, unknown> = {
       ...existingOptions,
-      baseURL: provider.baseURL,
+      baseURL: harnessBaseUrl(provider.baseURL, provider.npm),
       ...(provider.headers ? { headers: provider.headers } : {}),
       ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
       ...(provider.usageFormat ? { usageFormat: provider.usageFormat } : {}),
@@ -344,7 +345,7 @@ export class NativeProviderConfigService {
     const entry: Record<string, unknown> = {
       ...existing,
       name: provider.name,
-      baseUrl: provider.baseURL,
+      baseUrl: harnessBaseUrl(provider.baseURL, provider.npm),
       api:
         provider.npm === '@ai-sdk/openai'
           ? 'openai-responses'
@@ -355,7 +356,7 @@ export class NativeProviderConfigService {
       ...(provider.headers ? { headers: provider.headers } : {}),
       ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
       ...(provider.usageFormat ? { usageFormat: provider.usageFormat } : {}),
-      models: mergePiModels(existing['models'], provider.models)
+      models: mergePiModels(existing['models'], provider.models, isLocalBaseUrl(provider.baseURL))
     }
     if (!provider.usagePath) {
       delete entry['usagePath']
@@ -709,7 +710,7 @@ function serializeOpenCodeModel(model: BaseUrlProviderModel): Record<string, unk
   }
 }
 
-function serializePiModel(model: BaseUrlProviderModel): Record<string, unknown> {
+function serializePiModel(model: BaseUrlProviderModel, local: boolean): Record<string, unknown> {
   return {
     id: model.id,
     name: model.name,
@@ -719,6 +720,13 @@ function serializePiModel(model: BaseUrlProviderModel): Record<string, unknown> 
     ...(model.vision === undefined
       ? {}
       : { input: model.vision === false ? ['text'] : ['text', 'image'] }),
+    // A reasoning model normally puts its system prompt in the `developer`
+    // channel, which a local server does not have: mlx-lm hands the request to the
+    // model's own chat template, and a template that only knows system, user,
+    // assistant and tool raises "Unexpected message role." for it. Measured on
+    // this harness: without this flag the request carries `role: "developer"`, and
+    // with it `role: "system"`.
+    ...(local && model.reasoning ? { compat: { supportsDeveloperRole: false } } : {}),
     ...(model.defaultThinkingLevel ? { cioDefaultThinkingLevel: model.defaultThinkingLevel } : {})
   }
 }
@@ -733,6 +741,7 @@ const PI_MODEL_OWNED_KEYS = [
   'reasoning',
   'contextWindow',
   'maxTokens',
+  'compat',
   'cioDefaultThinkingLevel'
 ] as const
 
@@ -753,7 +762,8 @@ const PI_MODEL_OWNED_KEYS = [
  */
 function mergePiModels(
   existingModels: unknown,
-  providerModels: BaseUrlProviderModel[]
+  providerModels: BaseUrlProviderModel[],
+  local: boolean
 ): Array<Record<string, unknown>> {
   const byId = new Map<string, Record<string, unknown>>()
   for (const entry of Array.isArray(existingModels) ? existingModels : []) {
@@ -762,7 +772,7 @@ function mergePiModels(
     if (parsed && typeof id === 'string') byId.set(id, parsed)
   }
   return providerModels.map((model) => {
-    const serialized = serializePiModel(model)
+    const serialized = serializePiModel(model, local)
     const merged: Record<string, unknown> = { ...byId.get(model.id), ...serialized }
     for (const key of PI_MODEL_OWNED_KEYS) {
       if (!(key in serialized)) delete merged[key]

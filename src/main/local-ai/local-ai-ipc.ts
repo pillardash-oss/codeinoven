@@ -11,6 +11,7 @@
  * that stays llama.cpp-only.
  */
 import { BrowserWindow, shell } from 'electron'
+import os from 'node:os'
 import { isAbsolute } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -30,11 +31,16 @@ import {
 } from '../../lib/llama-cpp'
 import { detectLlamaCppRuntime } from './llama-cpp-runtime'
 import { detectMlxRuntime } from './mlx-runtime'
-import { probeLocalAiServer, stopLocalAiServer } from './local-ai-process'
+import { localAiServerRunning, probeLocalAiServer, stopLocalAiServer } from './local-ai-process'
 import { followLocalAiLog, localAiLogPath, tailLocalAiLog } from './local-ai-log'
 import { measureModelPath, resolveModelLocation } from './local-ai-model-location'
 import { inspectLocalAiRepo } from './local-ai-repo-profile'
+import { adoptCachedModelPath, adoptLocalAiModel, deleteLocalAiModel } from './local-ai-model-store'
 import { sharedLocalAiRuntimeRegistry } from './local-ai-runtime-registry'
+
+/** Bounds on the prompt cache a local model is allowed to keep, in bytes. */
+const PROMPT_CACHE_MIN_BYTES = 512 * 1024 * 1024
+const PROMPT_CACHE_MAX_BYTES = 3 * 1024 * 1024 * 1024
 
 /** The engines the page can launch, and the order a bad value falls back through. */
 function readRuntime(value: unknown): LocalAiRuntimeId {
@@ -51,6 +57,13 @@ export function registerLocalAiIpc(
   /** The engine's binary, its version, and the installer that manages it here. */
   ipcMain.handle('localAi:detect', (_, rawRuntime: unknown): Promise<LocalAiRuntimeStatus> => {
     return readRuntime(rawRuntime) === 'mlx' ? detectMlxRuntime() : detectLlamaCppRuntime()
+  })
+
+  /** Whether one of our engines still holds this row's port, whatever its status. */
+  ipcMain.handle('localAi:serverRunning', async (_, rawPort: unknown, rawRuntime: unknown) => {
+    const port = typeof rawPort === 'number' ? rawPort : Number.NaN
+    if (!isLlamaCppPortValid(port)) return false
+    return localAiServerRunning(port, readRuntime(rawRuntime))
   })
 
   /** Ends the process holding a row's port when no PTY of ours owns it. */
@@ -149,6 +162,54 @@ export function registerLocalAiIpc(
   ipcMain.handle('localAi:repoProfile', async (_, rawReference: unknown) => {
     const reference = typeof rawReference === 'string' ? rawReference.slice(0, 512) : ''
     return inspectLocalAiRepo(reference)
+  })
+
+  /**
+   * Move a finished download into the app's own model directory.
+   *
+   * The cache a model is fetched into is the engine's scratch area, so the row is
+   * rewritten to a path the app owns once the weights are all there.
+   */
+  ipcMain.handle(
+    'localAi:adoptModel',
+    async (_, rawReference: unknown, rawPath: unknown): Promise<string | null> => {
+      if (typeof rawReference !== 'string' || rawReference.length > 512) return null
+      if (typeof rawPath !== 'string' || rawPath.length > 4_096) return null
+      return await adoptLocalAiModel(rawReference, rawPath)
+    }
+  )
+
+  /**
+   * Move a model a saved row already points at out of the cache it landed in.
+   *
+   * Rows saved before models had their own folder still name the cache, and their
+   * commands still show that path. The page runs this once per row.
+   */
+  ipcMain.handle('localAi:adoptPath', async (_, rawPath: unknown): Promise<string | null> => {
+    if (typeof rawPath !== 'string' || rawPath.length > 4_096) return null
+    return await adoptCachedModelPath(rawPath)
+  })
+
+  /** Delete a model the app owns, and nothing else. */
+  ipcMain.handle('localAi:deleteModel', async (_, rawPath: unknown): Promise<boolean> => {
+    if (typeof rawPath !== 'string' || rawPath.length > 4_096) return false
+    return await deleteLocalAiModel(rawPath)
+  })
+
+  /**
+   * How much of this machine a local model's prompt cache may hold.
+   *
+   * `mlx_lm.server` bounds that cache only when it is told to, and an unbounded
+   * cache is what turns a loaded model into a Metal out-of-memory failure. The page
+   * caps a row that names no cap of its own at this share of RAM.
+   */
+  ipcMain.handle('localAi:memoryBudget', () => {
+    const totalBytes = os.totalmem()
+    const promptCacheBytes = Math.min(
+      PROMPT_CACHE_MAX_BYTES,
+      Math.max(PROMPT_CACHE_MIN_BYTES, Math.round(totalBytes * 0.1))
+    )
+    return { totalBytes, promptCacheBytes }
   })
 
   ipcMain.handle('localAi:pickModel', async (_event, rawRuntime: unknown) => {

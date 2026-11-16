@@ -44,6 +44,18 @@ describe('describeGenerationFailure', () => {
     expect(message).not.toContain('GGUF')
   })
 
+  it('names memory as the cause when Metal reports an overrun, with the lever that fixes it', () => {
+    // Copied from the server's own log after a 9B MLX model exhausted a 16 GB Mac.
+    const reason =
+      '[METAL] Command buffer execution failed: Insufficient Memory (00000008:kIOGPUCommandBufferCallbackErrorOutOfMemory).'
+
+    const message = describeGenerationFailure(reason)
+
+    expect(message).toContain('This is memory, not a crash')
+    expect(message).toContain('--prompt-cache-bytes')
+    expect(message).toContain('--kv-bits 4')
+  })
+
   it('passes any other failure through untouched', () => {
     expect(describeGenerationFailure('Out of memory.')).toBe('Out of memory.')
   })

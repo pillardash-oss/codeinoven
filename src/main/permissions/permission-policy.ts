@@ -568,21 +568,25 @@ export class PermissionPolicy {
     let workingDirectory: string | undefined = this.projectRoot
     let removesSomething = false
     for (const segment of segments) {
-      const name = basename(segment[0] ?? '').toLowerCase()
-      if (SHELL_INTERPRETERS.has(name) || name === 'bun') return false
-      if (name === 'cd' || name === 'pushd') {
-        const operands = segment.slice(1).filter((token) => !token.startsWith('-'))
-        if (operands.length !== 1 || !isReadableTarget(operands[0]!)) {
+      const references = segmentReferences(segment)
+      if (references === undefined) return false
+      const [name, ...operands] = references.tokens
+      if (name === undefined) return false
+      const commandName = basename(name).toLowerCase()
+      if (SHELL_INTERPRETERS.has(commandName) || commandName === 'bun') return false
+      if (commandName === 'cd' || commandName === 'pushd') {
+        const cdOperands = operands.filter((token) => !token.startsWith('-'))
+        if (cdOperands.length !== 1 || !isReadableTarget(cdOperands[0]!)) {
           workingDirectory = undefined
           continue
         }
-        const normalized = normalizeNativePath(operands[0]!)
+        const normalized = normalizeNativePath(cdOperands[0]!)
         workingDirectory = isAbsolute(normalized)
           ? resolve(normalized)
           : resolve(workingDirectory ?? this.projectRoot, normalized)
         continue
       }
-      const removal = destructiveSegmentRemovals(segment)
+      const removal = destructiveSegmentRemovals(references.tokens)
       if (removal === undefined) continue
       removesSomething = true
       if (workingDirectory === undefined) return false
@@ -622,22 +626,30 @@ export class PermissionPolicy {
    * Whether a shell command provably runs entirely inside scratch.
    *
    * Only a simple command (or a `&&`/`||`/`;`/`|` chain of them) whose every
-   * operand resolves inside a scratch root qualifies. The working directory
-   * starts at the project root, which is outside scratch, so a bare relative
-   * operand or a command with no path operand at all rejects until the chain
-   * `cd`s into scratch. Redirection, substitution, traversal, and anything that
-   * evaluates another command reject: those can reach outside without naming a
-   * path the policy can see.
+   * operand, and every file its redirections name, resolves inside a scratch
+   * root qualifies. The working directory starts at the project root, which is
+   * outside scratch, so a bare relative operand or a command with no path
+   * operand at all rejects until the chain `cd`s into scratch. Substitution,
+   * traversal, a heredoc, and anything that evaluates another command reject:
+   * those can reach outside without naming a path the policy can see. A
+   * redirect to `/dev/null` and a descriptor duplication name no file at all,
+   * so they never disqualify an otherwise confined command.
    */
   private isScratchCommand(command: string): boolean {
     if (!command.trim() || command.length > 8192) return false
-    if (/[`$<>]/u.test(command) || /\n|\r/u.test(command)) return false
+    if (/[`$]/u.test(command) || /\n|\r/u.test(command)) return false
     const segments = shellSegments(command)
     if (!segments) return false
     let workingDirectory = this.projectRoot
     for (const segment of segments) {
-      const [name, ...operands] = segment
+      const references = segmentReferences(segment)
+      if (references === undefined) return false
+      const [name, ...operands] = references.tokens
       if (name === undefined) return false
+      for (const target of references.redirectTargets) {
+        if (isTheVoid(target)) continue
+        if (!this.resolveScratchTarget(workingDirectory, target)) return false
+      }
       if (SHELL_INTERPRETERS.has(basename(name).toLowerCase()) || name === 'bun') {
         // A chat may run a script it created in its own cwd, just as it may
         // create the file. Keep inline evaluation and shell wrappers gated:
@@ -889,6 +901,38 @@ function shellSegments(command: string): string[][] | undefined {
 
 function isReadableTarget(operand: string): boolean {
   return operand.length > 0 && !/[*?[\]~]/u.test(operand)
+}
+
+/** Whether a redirection target discards its stream instead of naming a file. */
+function isTheVoid(target: string): boolean {
+  return target === '/dev/null' || target === 'NUL'
+}
+
+/** Split one chain segment into the tokens a command acts on and the paths its
+ *  redirections name. Descriptor duplication (`2>&1`, `>&2`) and a heredoc name
+ *  no file at all, so they are dropped. Returns undefined for a redirection this
+ *  module cannot read, which leaves the caller asking. */
+function segmentReferences(
+  segment: readonly string[]
+): { tokens: string[]; redirectTargets: string[] } | undefined {
+  const tokens: string[] = []
+  const redirectTargets: string[] = []
+  for (let index = 0; index < segment.length; index += 1) {
+    const token = segment[index]!
+    if (!/[<>]/u.test(token)) {
+      tokens.push(token)
+      continue
+    }
+    const match = /^(?:\d+|&)?(<<|>>|<|>)(.*)$/u.exec(token)
+    if (match === null || match[1] === '<<') return undefined
+    const inline = match[2]!
+    const target = inline === '' ? segment[index + 1] : inline
+    if (target === undefined || target === '' || /[<>]/u.test(target)) return undefined
+    if (inline === '') index += 1
+    if (target.startsWith('&') || /^\d+$/u.test(target)) continue
+    redirectTargets.push(target)
+  }
+  return { tokens, redirectTargets }
 }
 
 /** What one chain segment removes: the operands it names, or

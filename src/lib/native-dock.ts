@@ -85,6 +85,21 @@ export const NATIVE_DOCK_TAGS = new Set([
   'polygon',
   'ellipse',
   'g',
+  // SVG paint definitions. A bundled vendor mark carries its gradient in these
+  // elements (see `src/lib/vendor-icons/icons`), so refusing them refused the
+  // whole dialog that drew the mark   a palette row, a model list, a provider
+  // picker   and fell back to the app window, which hides the browser page
+  // behind it. They are inert: they paint, they never run anything.
+  'defs',
+  'linearGradient',
+  'radialGradient',
+  'stop',
+  'clipPath',
+  'mask',
+  'use',
+  'symbol',
+  'tspan',
+  'bdi',
   'title',
   // An inert `<style>` is copied rather than refused. The bundled vendor marks
   // carry their own theme rules inside the SVG (the CodeInOven mark switches its
@@ -151,6 +166,23 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'y2',
   'points',
   'transform',
+  'offset',
+  'stop-color',
+  'stop-opacity',
+  'dir',
+  'fill-rule',
+  'clip-rule',
+  'fill-opacity',
+  'stroke-opacity',
+  'opacity',
+  'gradientUnits',
+  'gradientTransform',
+  'fx',
+  'fy',
+  'clip-path',
+  'paint-order',
+  'stroke-dasharray',
+  'stroke-dashoffset',
   'xmlns',
   'src',
   'alt',
@@ -198,6 +230,22 @@ export const NATIVE_DOCK_ATTRIBUTES = new Set([
   'data-native-dock-keys'
 ])
 export const MAX_NATIVE_DOCK_NODES = 4096
+/**
+ * The node budget for a dialog.
+ *
+ * A dialog carries a whole canonical panel, and the panels that grow are lists:
+ * the spotlight's own search screens, and the relocation picker, which lists
+ * every chat in the project. One row of that palette costs roughly ninety nodes
+ * once its badges, icons and description line are counted, so a sixty-row
+ * screen measured 5,705 nodes   past the 4,096 a passive surface gets   and the
+ * whole dialog was refused for it, which hid the browser page behind it.
+ *
+ * Sixteen thousand carries a hundred and seventy of those rows, which is every
+ * palette the app draws with room to spare, and stays far below what the
+ * overlay document can hold. A dialog past it is still refused, because a frame
+ * that large is a list nobody scrolls.
+ */
+export const MAX_NATIVE_DOCK_MODAL_NODES = 16_384
 const MAX_TEXT = 48_000
 export const MAX_NATIVE_DOCK_IMAGE_CHARS = 4_000_000
 /**
@@ -454,12 +502,13 @@ export function validateNativeDockRequest(value: unknown): NativeDockRequest {
   // A modal or a bounded panel is a full surface of its own: both carry a whole
   // canonical panel's markup, so both get the modal-sized budgets.
   const fullSurface = input.modal === true || input.panel === true
+  const nodeLimit =
+    input.modal === true ? MAX_NATIVE_DOCK_MODAL_NODES : fullSurface ? MAX_NATIVE_DOCK_NODES : 512
   const textLimit = fullSurface ? 256_000 : MAX_TEXT
   const nodes = (value: unknown, depth = 0): Array<NativeDockNode | string> => {
     if (!Array.isArray(value) || depth > 24) throw new TypeError('Invalid native dock tree')
     return value.map((item: unknown) => {
-      if (++count > (fullSurface ? MAX_NATIVE_DOCK_NODES : 512))
-        throw new TypeError('Native dock tree is too large')
+      if (++count > nodeLimit) throw new TypeError('Native dock tree is too large')
       if (typeof item === 'string') {
         text += item.length
         if (text > textLimit) throw new TypeError('Native dock text is too large')

@@ -43,6 +43,7 @@ import {
 import type { BrowserService } from '../browser-service'
 import type { AgentTarget } from './browser-service-agent-script'
 import { comboboxOptions, pickComboboxOption } from './browser-agent-combobox'
+import { fitSnapshot } from './browser-agent-snapshot-fit'
 import { asObject, safeOrigin } from './browser-service-common'
 import { liveContents, liveWindowContents } from './browser-view-contents'
 import {
@@ -87,6 +88,7 @@ export interface AgentUtilityHost {
   readonly agentPointFrom: BrowserService['agentPointFrom']
   readonly agentSelector: BrowserService['agentSelector']
   readonly agentSignedNumber: BrowserService['agentSignedNumber']
+  readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabClaims: BrowserService['agentTabClaims']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentTarget: BrowserService['agentTarget']
@@ -194,6 +196,7 @@ export class BrowserServiceAgentUtility {
       }
       this.host.load(tabId, url)
       this.host.agentTabIds.set(contextKey, tabId)
+      this.host.agentTabClaimOwners.set(tabId, { projectId, threadId })
       this.publishAgentClaims()
       this.host.closeUnreferencedAgentTabs(contextKey)
       // An opportunistic reveal is skipped once the user has shown twice that
@@ -339,6 +342,30 @@ export class BrowserServiceAgentUtility {
         return {
           ...utilityContext,
           result: { typed: false, reason: 'target changed; inspect the page and retry' }
+        }
+      }
+      // A picker keeps only an option it offered, so text typed into one is a query
+      // the control throws away. Choosing the option is what the caller meant.
+      if (text && input['append'] !== true && input['submit'] !== true) {
+        const probe = asObject(
+          await this.host.runAgentScriptIn(
+            target.entry,
+            agentComboboxScript({
+              selector: target.selector,
+              open: false,
+              refPrefix: target.entry.index === 0 ? '' : `f${target.entry.index}`
+            })
+          )
+        )
+        if (probe?.['combobox'] === true) {
+          const chosen = await this.chooseCombobox(tab, target, text)
+          if (chosen) {
+            await this.host.paintAgentCursorAtElement(tab, target)
+            return {
+              ...utilityContext,
+              result: { typed: chosen['selected'] === true, picker: true, ...chosen }
+            }
+          }
         }
       }
       const result = await this.typeWithKeys(tab, target, {
@@ -705,7 +732,10 @@ export class BrowserServiceAgentUtility {
     const maxElements = this.host.agentBoundedNumber(input['maxElements'], 300, 1, 1000)
     const maxText =
       input['text'] === false ? 0 : this.host.agentBoundedNumber(input['maxText'], 20000, 0, 40000)
-    const entries = this.host.agentFrames(contents)
+    const onlyFrame = typeof input['frame'] === 'number' ? input['frame'] : null
+    const entries = this.host
+      .agentFrames(contents)
+      .filter((entry) => onlyFrame === null || entry.index === onlyFrame)
     const elements: unknown[] = []
     const frames: Record<string, unknown>[] = []
     let remaining = maxElements
@@ -767,14 +797,21 @@ export class BrowserServiceAgentUtility {
           : {})
       })
     }
-    const snapshot = {
+    const { snapshot, omitted } = fitSnapshot({
       ...(combined ?? {}),
       count: elements.length,
       elements,
       frames
-    }
+    })
     return {
       snapshot,
+      ...(omitted
+        ? {
+            omitted,
+            narrow:
+              'The page did not fit in one answer. Pass frame with a frame number from the frames list to read that document alone, or text: false to keep only the controls.'
+          }
+        : {}),
       detail:
         'Each element carries ref (pass it as ref to act on that element), its unique CSS selector, its live value, checked state and box, so an action targets exactly what was read. Elements inside a frame carry a ref prefixed with that frame (f2r7) and work the same way; the frames list names every document that was read, with the text of each embedded one.'
     }
