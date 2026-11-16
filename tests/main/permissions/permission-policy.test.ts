@@ -139,6 +139,40 @@ describe('permission policy', () => {
     expect(
       policy.evaluate({ permission: 'Bash', commands: ['cd .cio/tmp && npm pack --silent 2>&1'] })
     ).toMatchObject({ decision: 'auto_review', approved: true })
+    // A redirect to the void and a descriptor duplication name no file, so a
+    // command that only inspects its own scratch tree stays confined.
+    expect(
+      policy.evaluate({
+        permission: 'Bash',
+        commands: [
+          'cd .cio/tmp && ls node_modules/.bin 2>/dev/null | head; which rsvg-convert inkscape 2>/dev/null; echo "---done"'
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+  })
+
+  it('authorizes File-System-off shell work that stays inside the chat workspace', () => {
+    const workspace = resolve('/workspace/chats-cwd/abc')
+    const policy = new PermissionPolicy({
+      projectRoot: workspace,
+      mode: 'auto_review',
+      scratchPaths: [workspace],
+      restrictToAllowed: true
+    })
+
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          `cd ${workspace} && ls node_modules/.bin 2>/dev/null | head; which rsvg-convert inkscape 2>/dev/null; echo "---done"`
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
+    // Leaving the workspace still needs an attached input or a card.
+    expect(policy.evaluate({ permission: 'bash', commands: ['cat ~/.zshrc'] }).approved).toBe(false)
+    expect(policy.evaluate({ permission: 'bash', commands: ['cd /tmp && ls'] }).approved).toBe(
+      false
+    )
   })
 
   it('still asks when a scratch-rooted request can leave scratch', () => {
