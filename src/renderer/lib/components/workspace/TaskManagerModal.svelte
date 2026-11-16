@@ -10,6 +10,7 @@
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSearch from '@pdslng/cio-icon/CioSearch.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioTerminal from '@pdslng/cio-icon/CioTerminal.svelte'
   import CioThermometer from '@pdslng/cio-icon/CioThermometer.svelte'
@@ -959,12 +960,16 @@
         list exists, every later refresh is silent: the rows on screen keep
         answering clicks while the new snapshot lands. -->
         <div class="flex h-full flex-col items-center justify-center gap-3" aria-live="polite">
-          <span
-            class="task-manager-spinner h-5 w-5 shrink-0 rounded-full border-2 border-transparent"
-            style="border-top-color: var(--color-primary); border-right-color: var(--color-primary);"
+          <!-- The shared working mark, spun by the app's own `animate-spin`
+          utility. A component-scoped keyframe here would not animate at all:
+          the modal is projected into a native dialog window that receives the
+          compiled stylesheet but not Svelte's per-component style blocks. -->
+          <CioSpinner
+            size={20}
+            class="animate-spin text-primary"
             role="status"
             aria-label="Checking running processes"
-          ></span>
+          />
           <p class="text-xs text-dimmed">Checking running processes…</p>
         </div>
       {:else if searchedServices.length === 0 && searchedProcesses.length === 0}
@@ -1483,11 +1488,7 @@
           onclick={() => void load()}
         >
           {#if checking}
-            <span
-              class="task-manager-spinner h-3.5 w-3.5 shrink-0 rounded-full border-2 border-transparent"
-              style="border-top-color: currentColor; border-right-color: currentColor;"
-              aria-hidden="true"
-            ></span>
+            <CioSpinner size={13} class="animate-spin" />
             Refresh
           {:else}
             <CioRefresh size={13} />
@@ -1504,11 +1505,7 @@
             onclick={requestEnd}
           >
             {#if ending}
-              <span
-                class="task-manager-spinner h-3.5 w-3.5 shrink-0 rounded-full border-2 border-transparent"
-                style="border-top-color: currentColor; border-right-color: currentColor;"
-                aria-hidden="true"
-              ></span>
+              <CioSpinner size={13} class="animate-spin" />
             {:else}
               <CioClose size={14} />
             {/if}
@@ -1566,11 +1563,7 @@
       onclick={() => void confirmForceEnd()}
     >
       {#if forceEnding}
-        <span
-          class="task-manager-spinner h-3.5 w-3.5 shrink-0 rounded-full border-2 border-transparent"
-          style="border-top-color: currentColor; border-right-color: currentColor;"
-          aria-hidden="true"
-        ></span>
+        <CioSpinner size={13} class="animate-spin" />
       {:else}
         <CioTrash size={14} />
       {/if}
@@ -1623,15 +1616,3 @@
     <p>Anything using them loses this runtime until it starts again.</p>
   {/if}
 </ConfirmDialog>
-
-<style>
-  .task-manager-spinner {
-    animation: task-manager-spin 650ms linear infinite;
-  }
-
-  @keyframes task-manager-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-</style>

@@ -1,6 +1,8 @@
+import { getConfigRoot } from '../../../lib/utils'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
 import { requireString } from './shared'
-import type { StorageClearTarget } from '../../../lib/types'
+import type { StorageAreaId, StorageClearTarget } from '../../../lib/types'
+import type { StorageManagerService } from '../../storage-manager/storage-manager-service'
 import type { IpcHandlerContext } from './context'
 
 /** The areas the user is allowed to clear. `database` is compacted, never deleted. */
@@ -11,33 +13,61 @@ const CLEARABLE_TARGETS: ReadonlySet<StorageClearTarget> = new Set<StorageClearT
   'logs'
 ])
 
+/** Every area a reveal may name, plus the data root itself. */
+const REVEALABLE_AREAS: ReadonlySet<StorageAreaId | 'root'> = new Set<StorageAreaId | 'root'>([
+  'root',
+  'database',
+  'models',
+  'recordings',
+  'caches',
+  'logs',
+  'workspaces',
+  'projects',
+  'app-data'
+])
+
 /**
- * The Storage manager: one measurement, the destructive clears, and the
- * database compaction.
+ * The Storage manager: one measurement, the destructive clears, the folder
+ * reveal, and the database compaction.
  *
- * The service is absent only in a bare handler set (tests and tooling), so a
- * missing one reports an empty measurement instead of an error the user cannot
- * act on. A clear without the service is refused, because a clear that silently
- * did nothing would read as a successful one.
+ * Nothing here runs at startup. The service module is imported on the first
+ * request and the service itself is built then, so the feature costs nothing
+ * until a window actually opens the surface. Measuring and deleting happen on
+ * a worker thread the service owns, never on the main process.
+ *
+ * A clear is refused rather than reported as done when the service cannot be
+ * built, because a clear that silently removed nothing would read as a
+ * successful one.
  */
 export function registerStorageManagerHandlers(ctx: IpcHandlerContext): void {
-  const service = ctx.options.storageManager
+  let servicePromise: Promise<StorageManagerService> | null = null
+
+  const service = (): Promise<StorageManagerService> => {
+    servicePromise ??= import('../../storage-manager/storage-manager-service').then(
+      ({ StorageManagerService: Service }) =>
+        new Service({ configRoot: getConfigRoot, database: ctx.database })
+    )
+    return servicePromise
+  }
 
   ipcMain.handle('storageManager:usage', async (_, force: unknown) => {
-    if (!service) {
-      return { totalBytes: 0, reclaimableBytes: 0, areas: [], measuredAt: Date.now() }
-    }
-    return service.usage(force === true)
+    const manager = await service()
+    return manager.usage(force === true)
   })
 
   ipcMain.handle('storageManager:clear', async (_, target: unknown) => {
-    if (!service) throw new Error('The Storage manager is not available')
-    return service.clear(validateClearTarget(target))
+    const manager = await service()
+    return manager.clear(validateClearTarget(target))
   })
 
   ipcMain.handle('storageManager:vacuum', async () => {
-    if (!service) throw new Error('The Storage manager is not available')
-    return service.vacuum()
+    const manager = await service()
+    return manager.vacuum()
+  })
+
+  ipcMain.handle('storageManager:reveal', async (_, area: unknown) => {
+    const manager = await service()
+    return manager.reveal(validateRevealArea(area))
   })
 }
 
@@ -47,4 +77,12 @@ function validateClearTarget(value: unknown): StorageClearTarget {
     throw new TypeError(`Storage area cannot be cleared: ${target}`)
   }
   return target as StorageClearTarget
+}
+
+function validateRevealArea(value: unknown): StorageAreaId | 'root' {
+  const area = requireString(value, 'Storage area')
+  if (!REVEALABLE_AREAS.has(area as StorageAreaId | 'root')) {
+    throw new TypeError(`Unknown storage area: ${area}`)
+  }
+  return area as StorageAreaId | 'root'
 }

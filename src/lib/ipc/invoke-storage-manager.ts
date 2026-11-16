@@ -1,5 +1,6 @@
 import type { Contract } from './contract-helpers'
 import type {
+  StorageAreaId,
   StorageClearResult,
   StorageClearTarget,
   StorageUsage,
@@ -17,5 +18,7 @@ import type {
 export const invokeStorageManagerContract = {
   'storageManager:usage': {} as Contract<[force?: boolean], StorageUsage>,
   'storageManager:clear': {} as Contract<[target: StorageClearTarget], StorageClearResult>,
-  'storageManager:vacuum': {} as Contract<[], StorageVacuumResult>
+  'storageManager:vacuum': {} as Contract<[], StorageVacuumResult>,
+  /** Show one area's folder, or the whole data root, in the OS file manager. */
+  'storageManager:reveal': {} as Contract<[area: StorageAreaId | 'root'], boolean>
 }

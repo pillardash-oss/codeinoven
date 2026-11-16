@@ -4,10 +4,12 @@
   import CioDisk from '@pdslng/cio-icon/CioDisk.svelte'
   import CioFileText from '@pdslng/cio-icon/CioFileText.svelte'
   import CioFolder from '@pdslng/cio-icon/CioFolder.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioMic from '@pdslng/cio-icon/CioMic.svelte'
   import CioPackage from '@pdslng/cio-icon/CioPackage.svelte'
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
+  import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import type { Component } from 'svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -33,6 +35,8 @@
   let notice = $state('')
   /** The area whose delete is waiting for confirmation. */
   let clearTarget = $state<StorageClearTarget | null>(null)
+  /** True while the conversation-workspace cleanup is waiting for confirmation. */
+  let cleanupConfirm = $state(false)
   let clearing = $state(false)
   let compacting = $state(false)
 
@@ -100,11 +104,27 @@
   const reclaimable = $derived(usage?.reclaimableBytes ?? 0)
   const measuredAreas = $derived(areas.filter((area) => area.bytes > 0))
   const clearCopy = $derived(clearTarget ? CLEAR_COPY[clearTarget] : null)
+  /** The CIO Cleanup retention, which is the only thing a cleanup may remove under. */
+  const retentionDays = $derived(cioCleanupStore.state.retentionDays)
   const measuredAtLabel = $derived(
     usage && usage.measuredAt > 0
       ? new Date(usage.measuredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       : ''
   )
+
+  /**
+   * What a row says about itself.
+   *
+   * The workspaces row is the one that removes nothing on its own: it hands the
+   * folder to CIO Cleanup, so it states the retention that sweep runs under
+   * instead of implying a wipe.
+   */
+  function rowDetail(area: StorageArea): string {
+    if (area.id !== 'workspaces') return area.detail
+    return retentionDays > 0
+      ? `${area.detail} Only what is older than the ${retentionDays}-day retention you set is removed.`
+      : area.detail
+  }
 
   /** This area's slice of the whole, as a percentage with a sensible precision. */
   function sharePercent(area: StorageArea): number {
@@ -140,6 +160,9 @@
   // it.
   $effect(() => {
     if (!open) return
+    // Subscribing is what tells this surface the retention the cleanup runs
+    // under; it is the same store the settings page and the dock read.
+    cioCleanupStore.listen()
     queueMicrotask(() => {
       if (open) void load()
     })
@@ -161,10 +184,28 @@
       return
     }
     if (area.action === 'cleanup') {
-      // CIO Cleanup streams its progress into the app's dock, so the surface
-      // steps out of the way instead of showing a second, smaller copy of it.
-      void cioCleanupStore.runNow()
-      onClose()
+      // The sweep follows the user's own retention and stays out of scopes an
+      // agent is working in, so it gets its own explanation before it starts.
+      cleanupConfirm = true
+    }
+  }
+
+  /** Start the sweep, then step aside: its progress lives in the app's dock. */
+  function startCleanup(): void {
+    cleanupConfirm = false
+    void cioCleanupStore.runNow()
+    onClose()
+  }
+
+  /** Show one area's folder in the OS file manager, decided by main. */
+  async function reveal(area: StorageAreaId | 'root'): Promise<void> {
+    try {
+      const opened = await invoke('storageManager:reveal', area)
+      if (!opened) {
+        notice = 'That folder is not on disk yet, so there is nothing to show.'
+      }
+    } catch (revealError: unknown) {
+      reportError(revealError, 'The folder could not be shown.')
     }
   }
 
@@ -236,62 +277,77 @@
       </div>
     {/if}
 
-    <div class="min-h-0 flex-1 overflow-y-auto">
-      {#if checking && usage === null}
-        <div class="flex h-64 flex-col items-center justify-center gap-3" aria-live="polite">
-          <span
-            class="storage-spinner h-5 w-5 shrink-0 rounded-full border-2 border-transparent"
-            style="border-top-color: var(--color-primary); border-right-color: var(--color-primary);"
-            role="status"
-            aria-label="Measuring app data"
-          ></span>
-          <p class="text-xs text-dimmed">Measuring app data…</p>
+    {#if checking && usage === null}
+      <div class="flex h-64 flex-col items-center justify-center gap-3" aria-live="polite">
+        <!-- The shared working mark, spun by the app's own `animate-spin`
+          utility. A component-scoped keyframe here would not animate at all:
+          the modal is projected into a native dialog window that receives the
+          compiled stylesheet but not Svelte's per-component style blocks. -->
+        <CioSpinner
+          size={20}
+          class="animate-spin text-primary"
+          role="status"
+          aria-label="Measuring app data"
+        />
+        <p class="text-xs text-dimmed">Measuring app data…</p>
+      </div>
+    {:else if areas.length === 0}
+      <div class="flex h-64 items-center justify-center px-8 text-center">
+        <div class="max-w-64">
+          <CioDisk size={20} class="mx-auto text-muted" />
+          <p class="mt-3 text-sm font-semibold text-foreground">No measurement yet</p>
+          <p class="mt-1 text-xs leading-relaxed text-dimmed">
+            Refresh to measure how the app's data folder is being used.
+          </p>
         </div>
-      {:else if areas.length === 0}
-        <div class="flex h-64 items-center justify-center px-8 text-center">
-          <div class="max-w-64">
-            <CioDisk size={20} class="mx-auto text-muted" />
-            <p class="mt-3 text-sm font-semibold text-foreground">No measurement yet</p>
-            <p class="mt-1 text-xs leading-relaxed text-dimmed">
-              Refresh to measure how the app's data folder is being used.
+      </div>
+    {:else}
+      <div class="shrink-0 border-b border-border px-5 pt-4 pb-4">
+        <div class="flex items-end justify-between gap-4">
+          <div class="min-w-0">
+            <p class="text-[0.625rem] tracking-wide text-dimmed uppercase">App data</p>
+            <p class="mt-0.5 text-2xl font-semibold text-foreground tabular-nums">
+              {formatBytes(total)}
             </p>
           </div>
-        </div>
-      {:else}
-        <div class="px-5 pt-4 pb-4">
-          <div class="flex items-end justify-between gap-4">
-            <div class="min-w-0">
-              <p class="text-[0.625rem] tracking-wide text-dimmed uppercase">App data</p>
-              <p class="mt-0.5 text-2xl font-semibold text-foreground tabular-nums">
-                {formatBytes(total)}
-              </p>
-            </div>
-            <div class="shrink-0 text-right">
+          <div class="flex shrink-0 items-end gap-3">
+            <div class="text-right">
               <p class="text-[0.625rem] tracking-wide text-dimmed uppercase">Reclaimable</p>
               <p class="mt-0.5 text-sm font-semibold text-foreground tabular-nums">
                 {formatBytes(reclaimable)}
               </p>
             </div>
-          </div>
-          <!-- One bar for the whole folder, split by area. The rows below carry
-               the same colour, so the bar reads as a legend rather than as a
-               chart with its own separate key. -->
-          <div
-            class="mt-3 flex h-2 w-full gap-px overflow-hidden bg-raised"
-            role="img"
-            aria-label="Share of the app data folder by area"
-          >
-            {#each measuredAreas as area (area.id)}
-              <span
-                class="h-full"
-                style="width: {sharePercent(area)}%; background: {AREA_COLORS[area.id]}"
-                title={`${area.label}: ${formatBytes(area.bytes)}`}
-              ></span>
-            {/each}
+            <button
+              type="button"
+              class="flex h-7 w-7 items-center justify-center border border-border bg-elevated text-muted transition-colors hover:bg-overlay hover:text-foreground"
+              title="Open the app data folder in the file manager"
+              aria-label="Open the app data folder in the file manager"
+              onclick={() => void reveal('root')}
+            >
+              <CioFolderOpen size={14} />
+            </button>
           </div>
         </div>
+        <!-- One bar for the whole folder, split by area. The rows below carry
+               the same colour, so the bar reads as a legend rather than as a
+               chart with its own separate key. -->
+        <div
+          class="mt-3 flex h-2 w-full gap-px overflow-hidden bg-raised"
+          role="img"
+          aria-label="Share of the app data folder by area"
+        >
+          {#each measuredAreas as area (area.id)}
+            <span
+              class="h-full"
+              style="width: {sharePercent(area)}%; background: {AREA_COLORS[area.id]}"
+              title={`${area.label}: ${formatBytes(area.bytes)}`}
+            ></span>
+          {/each}
+        </div>
+      </div>
 
-        <ul class="border-t border-border">
+      <div class="min-h-0 flex-1 overflow-y-auto">
+        <ul>
           {#each areas as area (area.id)}
             {@const Icon = AREA_ICONS[area.id]}
             <li class="flex items-start gap-3 border-b border-border px-5 py-3 last:border-b-0">
@@ -308,7 +364,7 @@
                     {formatBytes(area.bytes)}
                   </p>
                 </div>
-                <p class="mt-1 text-xs leading-relaxed text-dimmed">{area.detail}</p>
+                <p class="mt-1 text-xs leading-relaxed text-dimmed">{rowDetail(area)}</p>
                 <div class="mt-1.5 flex items-center gap-2">
                   <span class="h-1 w-24 shrink-0 bg-raised" aria-hidden="true">
                     <span
@@ -321,33 +377,40 @@
                   </span>
                 </div>
               </div>
-              {#if area.action && area.actionLabel}
+              <div class="mt-0.5 flex shrink-0 items-center gap-1">
                 <button
                   type="button"
-                  class="mt-0.5 inline-flex h-7 shrink-0 items-center gap-1.5 border px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 {area.action ===
-                  'delete'
-                    ? 'border-border text-danger hover:bg-danger/10'
-                    : 'border-border bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                  disabled={clearing || compacting || checking}
-                  title={`${area.actionLabel}: ${area.detail}`}
-                  aria-label={`${area.actionLabel} for ${area.label}`}
-                  onclick={() => runAction(area)}
+                  class="flex h-7 w-7 items-center justify-center border border-transparent text-muted transition-colors hover:border-border hover:bg-overlay hover:text-foreground"
+                  title={`Show the ${area.label} folder in the file manager`}
+                  aria-label={`Show the ${area.label} folder in the file manager`}
+                  onclick={() => void reveal(area.id)}
                 >
-                  {#if (area.action === 'vacuum' && compacting) || (area.action === 'delete' && clearing && clearTarget === area.id)}
-                    <span
-                      class="storage-spinner h-3 w-3 shrink-0 rounded-full border-2 border-transparent"
-                      style="border-top-color: currentColor; border-right-color: currentColor;"
-                      aria-hidden="true"
-                    ></span>
-                  {/if}
-                  {area.actionLabel}
+                  <CioFolderOpen size={14} />
                 </button>
-              {/if}
+                {#if area.action && area.actionLabel}
+                  <button
+                    type="button"
+                    class="inline-flex h-7 shrink-0 items-center gap-1.5 border px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 {area.action ===
+                    'delete'
+                      ? 'border-border text-danger hover:bg-danger/10'
+                      : 'border-border bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
+                    disabled={clearing || compacting || checking}
+                    title={`${area.actionLabel}: ${area.detail}`}
+                    aria-label={`${area.actionLabel} for ${area.label}`}
+                    onclick={() => runAction(area)}
+                  >
+                    {#if (area.action === 'vacuum' && compacting) || (area.action === 'delete' && clearing && clearTarget === area.id)}
+                      <CioSpinner size={12} class="animate-spin" />
+                    {/if}
+                    {area.actionLabel}
+                  </button>
+                {/if}
+              </div>
             </li>
           {/each}
         </ul>
-      {/if}
-    </div>
+      </div>
+    {/if}
   </div>
 
   {#snippet footer()}
@@ -381,11 +444,7 @@
           onclick={() => void load(true)}
         >
           {#if checking}
-            <span
-              class="storage-spinner h-3.5 w-3.5 shrink-0 rounded-full border-2 border-transparent"
-              style="border-top-color: currentColor; border-right-color: currentColor;"
-              aria-hidden="true"
-            ></span>
+            <CioSpinner size={13} class="animate-spin" />
           {:else}
             <CioRefresh size={13} />
           {/if}
@@ -400,11 +459,7 @@
           onclick={() => void compact()}
         >
           {#if compacting}
-            <span
-              class="storage-spinner h-3.5 w-3.5 shrink-0 rounded-full border-2 border-transparent"
-              style="border-top-color: currentColor; border-right-color: currentColor;"
-              aria-hidden="true"
-            ></span>
+            <CioSpinner size={13} class="animate-spin" />
           {:else}
             <CioDisk size={13} />
           {/if}
@@ -414,6 +469,21 @@
     </div>
   {/snippet}
 </Modal>
+
+<ConfirmDialog
+  open={cleanupConfirm}
+  title="Clean up conversation workspaces?"
+  confirmLabel="Start cleanup"
+  note="Cleanup follows your retention and your folder exclusions, and never touches a scope an agent is working in. Its progress shows in the app while it runs."
+  onCancel={() => (cleanupConfirm = false)}
+  onConfirm={startCleanup}
+>
+  <p>
+    CIO Cleanup sweeps the scratch folders held for chats, assistants and browser tabs, and removes
+    only what is older than the retention set in Settings{#if retentionDays > 0}&nbsp;({retentionDays}
+      days){/if}.
+  </p>
+</ConfirmDialog>
 
 <ConfirmDialog
   open={clearTarget !== null}
@@ -435,21 +505,3 @@
     </p>
   {/if}
 </ConfirmDialog>
-
-<style>
-  .storage-spinner {
-    animation: storage-manager-spin 650ms linear infinite;
-  }
-
-  @keyframes storage-manager-spin {
-    to {
-      transform: rotate(360deg);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    .storage-spinner {
-      animation-duration: 1.8s;
-    }
-  }
-</style>

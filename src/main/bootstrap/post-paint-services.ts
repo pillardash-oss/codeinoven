@@ -15,7 +15,6 @@ import { app, BrowserWindow } from 'electron'
 import { join } from 'path'
 import { appfileProjectFilesGate, scopedPathResolverGate, settleAppfileGates } from './boot-gate'
 import { createThreadWorkspaceRoots } from '../editor/project-files/thread-workspace-roots'
-import { getConfigRoot } from '../../lib/utils'
 import { appResourcesRoot, isShippedBuild } from './app-resources'
 import {
   assistantPrimaryModel,
@@ -276,7 +275,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     { SecretsService },
     { GitHubAuthService },
     { CioCleanupService },
-    { StorageManagerService },
     { broadcastCioCleanupProgress, broadcastCioCleanupState },
     { FollowUpService },
     { FollowUpStore },
@@ -310,7 +308,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     import('../secrets/secrets-service'),
     import('../git/github-auth-service'),
     import('../cio-cleanup/cio-cleanup-service'),
-    import('../storage-manager/storage-manager-service'),
     import('../cio-cleanup/cio-cleanup-events'),
     import('../follow-ups/follow-up-service'),
     import('../follow-ups/follow-up-store'),
@@ -361,13 +358,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     onProgress: broadcastCioCleanupProgress,
     onStateChanged: broadcastCioCleanupState,
     onSweepComplete: () => state.designService?.reconcileHistory() ?? Promise.resolve()
-  })
-  // The Storage manager reads the same data root the app writes and compacts the
-  // database through the maintenance worker, so a measurement or a compaction
-  // never runs on the main thread.
-  state.storageManager = new StorageManagerService({
-    configRoot: getConfigRoot,
-    database
   })
   state.computerUsePipService = new ComputerUsePipService(storage)
   state.harnessManifestService = new HarnessManifestService(storage)
@@ -1233,7 +1223,6 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       state.followUpService?.cancelForThread(threadId)
     },
     cioCleanup: state.cioCleanup ?? undefined,
-    storageManager: state.storageManager ?? undefined,
     autoAnswerStore: state.autoAnswerStore ?? undefined,
     harnessManifestService: state.harnessManifestService,
     worktreeService: scopeWorktreeService,

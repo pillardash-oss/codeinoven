@@ -1,17 +1,15 @@
-import { mkdir, rm, stat } from 'node:fs/promises'
-import { resolve, sep } from 'node:path'
+import { shell } from 'electron'
 import { Logger } from '../system/logger'
 import type {
-  StorageArea,
+  StorageAreaId,
   StorageClearResult,
   StorageClearTarget,
   StorageUsage,
   StorageVacuumResult
 } from '../../lib/types'
-import { storageAreaSpecs, type StorageAreaSpec } from './storage-areas'
-import { measurePaths, measureStorageRoot } from './storage-measure'
+import { StorageUsageWorker } from './storage-usage-worker'
 
-/** How long a measurement is reused before the next open walks the root again. */
+/** How long a measurement is reused before the next open measures again. */
 const USAGE_CACHE_MS = 30_000
 
 /** Pages handed back per compaction step. */
@@ -48,14 +46,21 @@ export interface StorageManagerDeps {
 }
 
 /**
- * The Storage manager's service.
+ * The Storage manager.
  *
- * It owns three things and nothing else: one measurement of the data root, the
- * four destructive clears the surface offers, and the database's bounded
- * compaction. Every path it deletes is decided here from {@link storageAreaSpecs},
- * so the IPC surface can name an area but never a folder.
+ * This class is deliberately thin, because everything expensive about the
+ * feature happens elsewhere: measuring the data root and removing a cleared
+ * area both run on a worker thread ({@link StorageUsageWorker}), and compacting
+ * the database runs on the database's own maintenance worker. What is left here
+ * is the short-lived measurement cache, the compaction loop that only awaits
+ * that worker, and the one shell call that reveals a folder.
+ *
+ * It is also never built at startup. The IPC layer imports this module on the
+ * first request, so an installation that never opens the Storage manager pays
+ * nothing for it at launch.
  */
 export class StorageManagerService {
+  private readonly worker = new StorageUsageWorker()
   private cached: StorageUsage | null = null
   private cachedAt = 0
   private pending: { root: string; promise: Promise<StorageUsage> } | null = null
@@ -66,107 +71,54 @@ export class StorageManagerService {
   /**
    * The current measurement.
    *
-   * Concurrent opens share one walk, and a fresh walk is only paid when the
+   * Concurrent opens share one request, and a fresh one is only paid when the
    * cache has aged out or the surface asked for it explicitly. A refresh the
    * user pressed always measures again, because it comes right after a clear.
    */
   async usage(force = false): Promise<StorageUsage> {
-    const root = resolve(this.deps.configRoot())
-    if (!force && this.cached && this.cachedAt > 0 && Date.now() - this.cachedAt < USAGE_CACHE_MS) {
-      return this.cached
-    }
+    const root = this.deps.configRoot()
+    if (!force && this.cached && Date.now() - this.cachedAt < USAGE_CACHE_MS) return this.cached
     if (this.pending && this.pending.root === root) return this.pending.promise
-    const promise = this.measure(root)
+    const promise = this.worker.run<StorageUsage>({ kind: 'usage', root })
     this.pending = { root, promise }
     try {
-      return await promise
+      const usage = await promise
+      this.cached = usage
+      this.cachedAt = Date.now()
+      return usage
     } finally {
       if (this.pending?.promise === promise) this.pending = null
     }
   }
 
-  private async measure(root: string): Promise<StorageUsage> {
-    const specs = await storageAreaSpecs(root)
-    const measurement = await measureStorageRoot(root, specs)
-    const areas: StorageArea[] = specs.map((spec) => {
-      const tally = measurement.areas.get(spec.id)
-      return {
-        id: spec.id,
-        label: spec.label,
-        detail: spec.detail,
-        bytes: tally?.bytes ?? 0,
-        files: tally?.files ?? 0,
-        action: spec.action,
-        actionLabel: spec.actionLabel
-      }
-    })
-    const reclaimableBytes = areas.reduce(
-      (total, area) => (area.action === 'delete' ? total + area.bytes : total),
-      0
-    )
-    const usage: StorageUsage = {
-      totalBytes: measurement.totalBytes,
-      reclaimableBytes,
-      areas,
-      measuredAt: Date.now()
-    }
-    this.cached = usage
-    this.cachedAt = Date.now()
-    return usage
-  }
-
-  /**
-   * Remove exactly one spam-free area the user confirmed.
-   *
-   * The folders are recreated empty right after removal, so a running speech or
-   * logging writer finds the directory it expects instead of failing its next
-   * write. What was handed back is measured before anything is removed, which
-   * is the only moment the size is still readable.
-   */
+  /** Remove exactly one area the user confirmed, on the worker thread. */
   async clear(target: StorageClearTarget): Promise<StorageClearResult> {
-    const root = resolve(this.deps.configRoot())
-    const specs = await storageAreaSpecs(root)
-    const spec = specs.find((candidate) => candidate.id === target)
-    if (!spec) throw new Error(`Unknown storage area: ${target}`)
-    if (spec.action !== 'delete') throw new Error(`Storage area cannot be cleared: ${target}`)
-
-    const paths = this.clearablePaths(root, spec)
-    if (paths.length === 0) return { target, freedBytes: 0, removedFiles: 0 }
-
-    const directories: string[] = []
-    for (const path of paths) {
-      try {
-        const info = await stat(path)
-        if (info.isDirectory()) directories.push(path)
-      } catch {
-        // Already gone: removal is a no-op and there is nothing to recreate.
-      }
-    }
-
-    const before = await measurePaths(paths)
-    for (const path of paths) {
-      try {
-        await rm(path, { recursive: true, force: true, maxRetries: 2 })
-      } catch (error: unknown) {
-        Logger.error(`Clearing storage area ${target} could not remove ${path}:`, error)
-      }
-    }
-    for (const directory of directories) {
-      try {
-        await mkdir(directory, { recursive: true })
-      } catch (error: unknown) {
-        Logger.error(`Clearing storage area ${target} could not recreate ${directory}:`, error)
-      }
-    }
-
+    const root = this.deps.configRoot()
+    const result = await this.worker.run<StorageClearResult>({ kind: 'clear', root, target })
     this.cached = null
     this.cachedAt = 0
     Logger.info('Storage area cleared', {
       target,
-      freedBytes: before.bytes,
-      removedFiles: before.files
+      freedBytes: result.freedBytes,
+      removedFiles: result.removedFiles
     })
-    return { target, freedBytes: before.bytes, removedFiles: before.files }
+    return result
+  }
+
+  /** Show one area's folder, or the whole data root, in the OS file manager. */
+  async reveal(area: StorageAreaId | 'root'): Promise<boolean> {
+    const resolved = await this.worker.run<{ path: string | null }>({
+      kind: 'reveal',
+      root: this.deps.configRoot(),
+      area
+    })
+    if (!resolved.path) return false
+    const opened = await shell.openPath(resolved.path)
+    if (!opened) return true
+    // `openPath` reports a string failure rather than throwing, and a folder the
+    // OS refuses to open is still worth showing where it lives.
+    shell.showItemInFolder(resolved.path)
+    return true
   }
 
   /**
@@ -205,9 +157,9 @@ export class StorageManagerService {
         }
       }
       const after = await database.sizeTelemetry()
-      const gained = before.ok && after.ok ? before.dbBytes + before.walBytes + before.shmBytes : 0
-      const now = after.ok ? after.dbBytes + after.walBytes + after.shmBytes : 0
-      const freedBytes = Math.max(0, gained - now)
+      const wasBefore = before.ok ? before.dbBytes + before.walBytes + before.shmBytes : 0
+      const isNow = after.ok ? after.dbBytes + after.walBytes + after.shmBytes : 0
+      const freedBytes = Math.max(0, wasBefore - isNow)
       this.cached = null
       this.cachedAt = 0
       if (ok) Logger.info('Database compacted', { freedBytes })
@@ -221,22 +173,8 @@ export class StorageManagerService {
     }
   }
 
-  /**
-   * The paths one clear may touch, filtered to what is provably inside the root.
-   *
-   * The list already comes from main's own area table, so this is the second
-   * lock rather than the only one: no resolved path, and no path equal to the
-   * data root itself, ever reaches `rm`.
-   */
-  private clearablePaths(root: string, spec: StorageAreaSpec): string[] {
-    const accepted: string[] = []
-    for (const path of spec.clearance) {
-      const resolved = resolve(path)
-      if (resolved === root) continue
-      if (!resolved.startsWith(`${root}${sep}`)) continue
-      if (accepted.includes(resolved)) continue
-      accepted.push(resolved)
-    }
-    return accepted
+  /** Release the worker thread (app shutdown). */
+  stop(): void {
+    this.worker.stop()
   }
 }
