@@ -341,6 +341,30 @@ export class BrowserServiceAgentUtility {
           result: { typed: false, reason: 'target changed; inspect the page and retry' }
         }
       }
+      // A picker keeps only an option it offered, so text typed into one is a query
+      // the control throws away. Choosing the option is what the caller meant.
+      if (text && input['append'] !== true && input['submit'] !== true) {
+        const probe = asObject(
+          await this.host.runAgentScriptIn(
+            target.entry,
+            agentComboboxScript({
+              selector: target.selector,
+              open: false,
+              refPrefix: target.entry.index === 0 ? '' : `f${target.entry.index}`
+            })
+          )
+        )
+        if (probe?.['combobox'] === true) {
+          const chosen = await this.chooseCombobox(tab, target, text)
+          if (chosen) {
+            await this.host.paintAgentCursorAtElement(tab, target)
+            return {
+              ...utilityContext,
+              result: { typed: chosen['selected'] === true, picker: true, ...chosen }
+            }
+          }
+        }
+      }
       const result = await this.typeWithKeys(tab, target, {
         text,
         append: input['append'] === true
