@@ -181,6 +181,13 @@
   let overflow = $state<OverflowKind | null>(null)
   let overflowQuery = $state('')
   let overflowAnchor: HTMLElement | null = null
+  /**
+   * The open menu itself. It lives in the browser's top layer, so it is not a
+   * descendant of the count that opened it, and a press inside it has to be
+   * recognised as the menu's own or the outside-press handler below would tear
+   * the menu down on pointerdown and the click would land on nothing.
+   */
+  let overflowSurface = $state<HTMLDivElement | null>(null)
 
   let overflowThreads = $derived(
     overflow === 'pinned' ? hiddenPinned : overflow === 'open' ? hiddenOpen : []
@@ -224,6 +231,13 @@
     }
   }
 
+  function captureOverflowSurface(node: HTMLDivElement): () => void {
+    overflowSurface = node
+    return () => {
+      if (overflowSurface === node) overflowSurface = null
+    }
+  }
+
   /**
    * Lift the menu into the browser's top layer. The header is its own stacking
    * context, so a z-index alone loses to the panels below it; a manual popover
@@ -244,7 +258,12 @@
 
   function onWindowPointerDown(event: PointerEvent): void {
     if (!overflow) return
-    if (event.target instanceof Node && overflowAnchor?.contains(event.target)) return
+    if (
+      event.target instanceof Node &&
+      (overflowAnchor?.contains(event.target) || overflowSurface?.contains(event.target))
+    ) {
+      return
+    }
     closeOverflow()
   }
 
@@ -570,6 +589,7 @@
       <div
         popover="manual"
         class="fixed bottom-auto left-auto m-0 overflow-visible border-0 bg-transparent p-0"
+        {@attach captureOverflowSurface}
         {@attach topLayer}
       >
         <PickerMenuShell
