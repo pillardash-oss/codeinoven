@@ -11,6 +11,7 @@
  * that stays llama.cpp-only.
  */
 import { BrowserWindow, shell } from 'electron'
+import os from 'node:os'
 import { isAbsolute } from 'node:path'
 import { stat } from 'node:fs/promises'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
@@ -36,6 +37,10 @@ import { measureModelPath, resolveModelLocation } from './local-ai-model-locatio
 import { inspectLocalAiRepo } from './local-ai-repo-profile'
 import { adoptLocalAiModel, deleteLocalAiModel } from './local-ai-model-store'
 import { sharedLocalAiRuntimeRegistry } from './local-ai-runtime-registry'
+
+/** Bounds on the prompt cache a local model is allowed to keep, in bytes. */
+const PROMPT_CACHE_MIN_BYTES = 512 * 1024 * 1024
+const PROMPT_CACHE_MAX_BYTES = 3 * 1024 * 1024 * 1024
 
 /** The engines the page can launch, and the order a bad value falls back through. */
 function readRuntime(value: unknown): LocalAiRuntimeId {
@@ -171,6 +176,22 @@ export function registerLocalAiIpc(
   ipcMain.handle('localAi:deleteModel', async (_, rawPath: unknown): Promise<boolean> => {
     if (typeof rawPath !== 'string' || rawPath.length > 4_096) return false
     return await deleteLocalAiModel(rawPath)
+  })
+
+  /**
+   * How much of this machine a local model's prompt cache may hold.
+   *
+   * `mlx_lm.server` bounds that cache only when it is told to, and an unbounded
+   * cache is what turns a loaded model into a Metal out-of-memory failure. The page
+   * caps a row that names no cap of its own at this share of RAM.
+   */
+  ipcMain.handle('localAi:memoryBudget', () => {
+    const totalBytes = os.totalmem()
+    const promptCacheBytes = Math.min(
+      PROMPT_CACHE_MAX_BYTES,
+      Math.max(PROMPT_CACHE_MIN_BYTES, Math.round(totalBytes * 0.1))
+    )
+    return { totalBytes, promptCacheBytes }
   })
 
   ipcMain.handle('localAi:pickModel', async (_event, rawRuntime: unknown) => {
