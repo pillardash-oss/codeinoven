@@ -88,6 +88,7 @@ export interface AgentUtilityHost {
   readonly agentPointFrom: BrowserService['agentPointFrom']
   readonly agentSelector: BrowserService['agentSelector']
   readonly agentSignedNumber: BrowserService['agentSignedNumber']
+  readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabClaims: BrowserService['agentTabClaims']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentTarget: BrowserService['agentTarget']
@@ -195,6 +196,7 @@ export class BrowserServiceAgentUtility {
       }
       this.host.load(tabId, url)
       this.host.agentTabIds.set(contextKey, tabId)
+      this.host.agentTabClaimOwners.set(tabId, { projectId, threadId })
       this.publishAgentClaims()
       this.host.closeUnreferencedAgentTabs(contextKey)
       // An opportunistic reveal is skipped once the user has shown twice that

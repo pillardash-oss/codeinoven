@@ -35,6 +35,7 @@ import type { BrowserService } from '../browser-service'
  */
 export interface SurfacesHost {
   readonly activeTabId: BrowserService['activeTabId']
+  readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly boxOfExistingTab: BrowserService['boxOfExistingTab']
   readonly destroy: BrowserService['destroy']
@@ -225,6 +226,7 @@ export class BrowserServiceSurfaces {
       this.host.parkTab(tabId)
     }
     this.host.agentTabIds.set(contextKey, tabId)
+    this.host.agentTabClaimOwners.set(tabId, { projectId, threadId })
     this.host.load(tabId, url)
     const reveal =
       input.reveal || (!reused && input.attention === 'focus' && !this.host.isRelaxed(threadId))

@@ -44,6 +44,7 @@ export interface TabsHost {
   activeTabBounds: BrowserService['activeTabBounds']
   activeTabId: BrowserService['activeTabId']
   readonly agentReveals: BrowserService['agentReveals']
+  readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly allowSiteKeymapOverride: BrowserService['allowSiteKeymapOverride']
   readonly appendConsoleEntry: BrowserService['appendConsoleEntry']
@@ -880,6 +881,7 @@ export class BrowserServiceTabs {
     for (const [contextKey, agentTabId] of this.host.agentTabIds) {
       if (agentTabId === tabId) this.host.agentTabIds.delete(contextKey)
     }
+    this.host.agentTabClaimOwners.delete(tabId)
     for (const [threadId, pageTabId] of this.host.assistantPageTabIds) {
       if (pageTabId === tabId) this.host.assistantPageTabIds.delete(threadId)
     }

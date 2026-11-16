@@ -198,6 +198,16 @@ export class BrowserService {
    */
   public readonly agentUserPageTabIds = new Map<string, string>()
   /**
+   * The conversation whose agent last took each tab, by tab id.
+   *
+   * A tab belongs to the conversation that opened it, but a project's threads share
+   * one strip: the page thread A opened is regularly the page thread B's agent was
+   * handed. The mark a strip draws therefore names the conversation that worked on
+   * the tab, not the one that happened to create it, which is what keeps the badge
+   * and the cursor the user is watching on the same page saying the same thing.
+   */
+  public readonly agentTabClaimOwners = new Map<string, { projectId: string; threadId: string }>()
+  /**
    * The page the previous browser call for each context worked on, by context key.
    *
    * A conversation's page can legitimately change between two calls, because the user
