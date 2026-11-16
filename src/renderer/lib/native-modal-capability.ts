@@ -1,4 +1,24 @@
-import { MAX_NATIVE_DOCK_NODES, NATIVE_DOCK_TAGS } from '$shared/native-dock'
+import {
+  MAX_NATIVE_DOCK_MODAL_NODES,
+  MAX_NATIVE_DOCK_NODES,
+  NATIVE_DOCK_TAGS
+} from '$shared/native-dock'
+
+/**
+ * Tags the projection draws as an inert container instead.
+ *
+ * A `<form>` is a behaviour, not a drawing: a dialog that wraps its fields in
+ * one was refused for a wrapper that carries no pixels. The source window keeps
+ * the real form, and the projected controls hand every press and every key back
+ * to it, so the copy only ever needs the box.
+ */
+export const NATIVE_DOCK_TAG_ALIASES: ReadonlyMap<string, string> = new Map([['form', 'div']])
+
+/** Whether the projection can draw this element, as itself or as its alias. */
+export function nativeDockTag(tag: string): string | null {
+  if (NATIVE_DOCK_TAGS.has(tag)) return tag
+  return NATIVE_DOCK_TAG_ALIASES.get(tag) ?? null
+}
 
 /**
  * What the projection is being asked to draw.
@@ -33,6 +53,7 @@ export function nativeModalRefusal(
   root: HTMLElement,
   scope: NativeProjectionScope = {}
 ): string | null {
+  const nodeLimit = scope.panel ? MAX_NATIVE_DOCK_NODES : MAX_NATIVE_DOCK_MODAL_NODES
   let count = 0
   /** Name the node, so the durable log can tell a limitation from a bug. */
   function describe(node: Element): string {
@@ -41,12 +62,14 @@ export function nativeModalRefusal(
     return `<${node.localName}${role ? ` role="${role}"` : ''} class="${classes}">`
   }
   function visit(node: Node, depth: number): string | null {
-    if (++count > MAX_NATIVE_DOCK_NODES) return 'its content is larger than the projection budget'
+    if (++count > nodeLimit) return 'its content is larger than the projection budget'
     if (depth > 24) return 'its content is nested deeper than the projection can carry'
     if (!(node instanceof Element)) return null
     if (node.classList.contains('hidden') || node.hasAttribute('hidden')) return null
     const field = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement
-    if (!NATIVE_DOCK_TAGS.has(node.localName)) return `${describe(node)} has no inert equivalent`
+    // `<form>` is the one tag drawn as an inert container (see
+    // `NATIVE_DOCK_TAG_ALIASES`), so it is carried rather than refused.
+    if (nativeDockTag(node.localName) === null) return `${describe(node)} has no inert equivalent`
     if (field && node instanceof HTMLInputElement && !INPUT_TYPES.has(node.type))
       return `${describe(node)} keeps its own widget`
     // A floating panel does not own the keyboard: the overlay window it is drawn
