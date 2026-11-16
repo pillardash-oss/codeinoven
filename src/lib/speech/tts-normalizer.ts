@@ -18,10 +18,44 @@ function inlineText(value: string): string {
     .replace(/!\[([^\]]*)\]\([^)]*\)/gu, '$1')
     .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1 link')
     .replace(/`([^`]+)`/gu, '$1')
-    .replace(/[*_~]+/gu, '')
+    .replace(/[*~]+/gu, '')
+    .replace(/(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, '')
     .replace(/<[^>]+>/gu, ' ')
     .replace(/\s+/gu, ' ')
     .trim()
+}
+
+const ABBREVIATIONS: Array<[RegExp, string]> = [
+  [/\be\.g\.(?=\s|,|$)/giu, 'for example'],
+  [/\bi\.e\.(?=\s|,|$)/giu, 'that is'],
+  [/\betc\.(?=\s+\p{Ll})/gu, 'et cetera'],
+  [/\betc\./gu, 'et cetera.'],
+  [/\bvs\.?(?=\s)/giu, 'versus']
+]
+
+/**
+ * Rewrites written forms the engine mispronounces or reads through. Invisible
+ * break characters (soft hyphens, zero-width spaces) split a word's
+ * phonemization in two, word-internal hyphens and underscores are read as
+ * separate words, and spaced dashes become commas so the pause survives.
+ */
+function speakable(value: string): string {
+  let text = value.replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/gu, '')
+  for (const [pattern, replacement] of ABBREVIATIONS) text = text.replace(pattern, replacement)
+  return text
+    .replace(/(\d)\s*[-\u2013]\s*(\d)/gu, '$1 to $2')
+    .replace(/\s+[-\u2013\u2014]+\s+|\u2014/gu, ', ')
+    .replace(/(?<=\p{L})[-\u2010\u2011_](?=\p{L})/gu, ' ')
+    .replace(/\s+([,.;:!?])/gu, '$1')
+    .replace(/(?<=\p{L})([,;])(?=\p{L})/gu, '$1 ')
+    .replace(/,\s*([,.;:!?])/gu, '$1')
+    .replace(/\s+/gu, ' ')
+    .trim()
+}
+
+/** Headings and list items carry no stop of their own; give them one. */
+function terminated(value: string): string {
+  return /[.!?…:;,]$/u.test(value) ? value : `${value}.`
 }
 
 function charTokens(code: number): number {
@@ -108,8 +142,41 @@ function packUnits(units: string[]): string[] {
   return segments
 }
 
+const SENTENCE_END = /(?<=[.!?…。！？]["')\]]?)\s+(?=\S)/u
+const CLAUSE_END = /(?<=[,;:，；：])\s+/u
+
+function fits(current: string, next: string): boolean {
+  const joined = current ? `${current} ${next}` : next
+  return joined.length <= MAX_SEGMENT_CHARACTERS && estimatedTokens(joined) <= MAX_SEGMENT_TOKENS
+}
+
+/**
+ * Every segment is synthesized on its own, so a cut mid-sentence loses the
+ * intonation the punctuation ahead implies. Whole sentences are packed first,
+ * an oversized sentence breaks at its clauses, and only an oversized clause
+ * falls back to word packing.
+ */
+function packPieces(pieces: string[], split: (piece: string) => string[]): string[] {
+  const segments: string[] = []
+  let current = ''
+  for (const piece of pieces) {
+    if (fits(current, piece)) {
+      current = current ? `${current} ${piece}` : piece
+      continue
+    }
+    if (current) segments.push(current)
+    current = ''
+    if (fits('', piece)) current = piece
+    else segments.push(...split(piece))
+  }
+  if (current) segments.push(current)
+  return segments
+}
+
 function sentences(value: string): string[] {
-  return packUnits(splitUnits(value))
+  const words = (clause: string): string[] => packUnits(splitUnits(clause))
+  const clauses = (sentence: string): string[] => packPieces(sentence.split(CLAUSE_END), words)
+  return packPieces(value.split(SENTENCE_END), clauses)
 }
 
 /** Deterministic Markdown-to-speech normalization without rendering HTML. */
@@ -142,7 +209,9 @@ export function normalizeSpeechMarkdown(
     const heading = /^#{1,6}\s+(.+)$/u.exec(line)
     const list = /^(?:[-+*]|\d+[.)])\s+(.+)$/u.exec(line)
     const kind = heading ? 'heading' : list ? 'list-item' : 'prose'
-    const text = inlineText(heading?.[1] ?? list?.[1] ?? line.replace(/^>\s?/u, ''))
+    const raw = speakable(inlineText(heading?.[1] ?? list?.[1] ?? line.replace(/^>\s?/u, '')))
+    if (!raw) continue
+    const text = kind === 'prose' ? raw : terminated(raw)
     for (const segment of sentences(text)) output.push({ text: segment, kind })
   }
   if (inCode) flushCode()
