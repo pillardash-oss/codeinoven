@@ -1,5 +1,5 @@
 import { relative, sep } from 'node:path'
-import { authoredWorkRootSync } from './authored-work-root'
+import { authoredWorkRoot } from './authored-work-root'
 import {
   MAX_DESIGN_MEDIA_NAME_LENGTH,
   MAX_DESIGN_MEDIA_SOURCE_LENGTH
@@ -59,7 +59,7 @@ export function createDesignMediaExecutor(
     }
     const source = requiredString(input['source'], 'source', MAX_DESIGN_MEDIA_SOURCE_LENGTH)
     const name = optionalMediaName(input['name'])
-    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
+    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
     const directory = resolveServedFolder(
       scope.path,
       input['directory'],

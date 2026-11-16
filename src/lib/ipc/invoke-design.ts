@@ -172,6 +172,18 @@ export const invokeDesignContract = {
     DesignThumbnail
   >,
   /**
+   * Where one design folder actually is on disk, or an empty string when it is
+   * not there.
+   *
+   * The board asks this only when the file tree could not show the folder, so it
+   * can reveal the work in the OS file manager instead of reporting a reveal that
+   * went nowhere.
+   */
+  'design:folderPath': {} as Contract<
+    [projectId: string, threadId: string, directory: string],
+    string
+  >,
+  /**
    * Every screen of one design folder, each with a picture of it.
    *
    * A design holds a page per screen, so the board shows them together rather
