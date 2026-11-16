@@ -43,9 +43,11 @@ function speakable(value: string): string {
   let text = value.replace(/[\u00ad\u200b-\u200d\u2060\ufeff]/gu, '')
   for (const [pattern, replacement] of ABBREVIATIONS) text = text.replace(pattern, replacement)
   return text
-    .replace(/(\d)\s*[-\u2013]\s*(\d)/gu, '$1 to $2')
+    .replace(/(?<![\d./:-])(\d+)\s*[-–]\s*(\d+)(?![\d./:-])/gu, '$1 to $2')
     .replace(/\s+[-\u2013\u2014]+\s+|\u2014/gu, ', ')
-    .replace(/(?<=\p{L})[-\u2010\u2011_](?=\p{L})/gu, ' ')
+    .replace(/\S+/gu, (word) =>
+      /[/@]/u.test(word) ? word : word.replace(/(?<=\p{L})[-‐‑_](?=\p{L})/gu, ' ')
+    )
     .replace(/\s+([,.;:!?])/gu, '$1')
     .replace(/(?<=\p{L})([,;])(?=\p{L})/gu, '$1 ')
     .replace(/,\s*([,.;:!?])/gu, '$1')
