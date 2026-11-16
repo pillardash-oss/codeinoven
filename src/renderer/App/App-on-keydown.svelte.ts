@@ -17,7 +17,8 @@ import {
   contentViewForThread,
   viewShowsThread
 } from '$lib/content-view-threads'
-import { viewShowsScopedSidebar } from '$lib/content-view-projects'
+import { viewShowsScopedSidebar, viewShowsWorkspaceShell } from '$lib/content-view-projects'
+import { recentVisits } from '$lib/stores/recent-visits.svelte'
 import { boardProjectId } from '$lib/threads/thread-scope'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { openThreadBrowserFor } from '$lib/stores/thread-browser-open'
@@ -118,6 +119,11 @@ export class AppOnKeydown extends BoardUnit<App> {
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
+    // Coming back to the thread on screen is a visit to it, exactly as a browser
+    // tab counts when the browser view opens. Without this a return through the
+    // rail left the browser tabs ahead of the thread in the Ctrl+Tab order.
+    const shownThread = workspaceState.selectedThread
+    if (viewShowsWorkspaceShell(view) && shownThread) recentVisits.recordThread(shownThread)
     // A navigation that is only a step on the way to a specific thread skips the
     // reconcile: that step would open the family's remembered thread first, which
     // records a visit, persists it, docks its panels, and leaves it on screen
