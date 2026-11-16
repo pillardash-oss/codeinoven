@@ -241,7 +241,10 @@ export function mapAntigravityModelQuotas(value: unknown): AgentRateLimitWindow[
  * first: current builds name it after the Jetski credential, older builds after
  * Antigravity itself.
  */
-const TOKEN_FILE_NAMES = ['jetski-standalone-oauth-token', 'antigravity-oauth-token'] as const
+export const ANTIGRAVITY_TOKEN_FILE_NAMES = [
+  'jetski-standalone-oauth-token',
+  'antigravity-oauth-token'
+] as const
 
 /** Login-keychain item the CLI's Go keyring package stores its token under. */
 const KEYCHAIN_SERVICE = 'gemini'
@@ -255,9 +258,22 @@ function tokenHome(environment: NodeJS.ProcessEnv): string {
   return environment['HOME'] ?? environment['USERPROFILE'] ?? homedir()
 }
 
+/**
+ * The token exactly as the CLI's file store holds it, taken from the macOS login
+ * keychain, or null when the keychain has no item for it.
+ *
+ * A machine where the CLI's keyring writes succeed has no token file at all, so
+ * the keychain item is the only copy of the credential that can be carried to
+ * another machine (an Oven account, for example).
+ */
+export async function readAntigravityKeychainToken(): Promise<Buffer | null> {
+  const store = await readKeychainTokenStore()
+  return store === null ? null : Buffer.from(`${JSON.stringify(store)}\n`, 'utf8')
+}
+
 /** Location of the CLI's OAuth token, honoring a HOME override from the caller. */
 export function antigravityTokenPath(environment: NodeJS.ProcessEnv): string {
-  return join(tokenHome(environment), '.gemini', 'antigravity-cli', TOKEN_FILE_NAMES[0])
+  return join(tokenHome(environment), '.gemini', 'antigravity-cli', ANTIGRAVITY_TOKEN_FILE_NAMES[0])
 }
 
 type CloudCodeOutcome = { kind: 'ok'; value: unknown } | { kind: 'auth' } | { kind: 'unavailable' }
@@ -390,7 +406,7 @@ async function readTokenStore(
   environment: NodeJS.ProcessEnv
 ): Promise<AntigravityTokenStore | null> {
   const home = tokenHome(environment)
-  for (const name of TOKEN_FILE_NAMES) {
+  for (const name of ANTIGRAVITY_TOKEN_FILE_NAMES) {
     const store = await readTokenFile(join(home, '.gemini', 'antigravity-cli', name))
     if (store) return store
   }
