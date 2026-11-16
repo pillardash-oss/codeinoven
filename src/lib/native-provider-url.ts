@@ -35,3 +35,15 @@ export function harnessBaseUrl(baseURL: string, npm: string): string {
   if (npm !== ANTHROPIC_NPM) return trimmed
   return trimmed.replace(/\/v1$/iu, '')
 }
+
+/**
+ * Whether a provider points at this machine rather than a hosted API.
+ *
+ * A local server is a chat template and a HTTP route, nothing more: there is no
+ * separate developer channel, so a request that puts its system prompt in one is
+ * either rejected or read as user text. Everything here starts from this test.
+ */
+export function isLocalBaseUrl(baseURL: string): boolean {
+  const trimmed = trimmedBaseUrl(baseURL)
+  return /^https?:\/\/(?:127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])(?::|\/|$)/iu.test(trimmed)
+}
