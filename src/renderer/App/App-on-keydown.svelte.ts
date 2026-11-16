@@ -29,7 +29,7 @@ import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { findNavState } from '$lib/stores/find-nav.svelte'
 import { panelSearchRequest } from '$lib/stores/panel-search-request.svelte'
 import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
-import { browserFindState } from '$lib/stores/browser-find.svelte'
+import { openBrowserFind, stepBrowserFind } from './App-browser-find.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { isTerminalFocused } from '$lib/terminal/focus'
@@ -508,12 +508,12 @@ export class AppOnKeydown extends BoardUnit<App> {
   handleFind(): void {
     const browserTabId = browserKeyboardFocus.tabId
     if (browserTabId) {
-      browserFindState.open(browserTabId)
+      openBrowserFind(browserTabId)
       return
     }
     if (this.activeView === 'browser') {
       void withBrowser((store) => {
-        if (store.activeTab) browserFindState.open(store.activeTab.id)
+        if (store.activeTab) openBrowserFind(store.activeTab.id)
       })
       return
     }
@@ -633,11 +633,11 @@ export class AppOnKeydown extends BoardUnit<App> {
       if (previous || keymapState.matches('browser-find-next', e)) {
         e.preventDefault()
         if (!e.repeat) {
-          if (browserTabId) browserFindState.step(browserTabId, previous ? 'previous' : 'next')
+          if (browserTabId) stepBrowserFind(browserTabId, previous ? 'previous' : 'next')
           else
             void withBrowser((store) => {
               if (store.activeTab)
-                browserFindState.step(store.activeTab.id, previous ? 'previous' : 'next')
+                stepBrowserFind(store.activeTab.id, previous ? 'previous' : 'next')
             })
         }
         return
