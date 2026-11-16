@@ -33,6 +33,7 @@
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { formatCompactAge } from '$shared/date-time-format'
+  import type { ThreadStatusTone } from '$shared/thread-status-policy'
   import { DON_ASSISTANT_ID, isAssistantSetupThread, type Thread } from '$shared/types'
 
   /**
@@ -111,15 +112,38 @@
   let openGroup = $derived(groupThreads.filter((thread) => !thread.pinned))
 
   /**
-   * Whether the open assistant is working anywhere.
+   * The state the open assistant's mark reports, taken from its own threads.
    *
-   * The mark beside its name is the one thing that always stays on screen, so it
-   * is where its work has to be visible: walking to another view and back landed
-   * on a conversation with no trace, no spinner and nothing to say a run was
-   * still going. The same rule the rows and tabs use decides it, so the header
-   * can never disagree with a badge about whether this assistant is working.
+   * The assistant's colour is its identity; its state is not. The mark reads the
+   * same badge every row and tab reads and wears that badge's own tone: the
+   * thread working, parked on the user, holding a reviewable spec, or failed. The
+   * most urgent state wins, because the mark stands for the whole assistant.
    */
-  let assistantWorking = $derived(groupThreads.some((thread) => isThreadLiveWorking(thread)))
+  const ASSISTANT_STATE_PRIORITY: Record<ThreadStatusTone, number> = {
+    error: 6,
+    attention: 5,
+    missed: 5,
+    spec: 4,
+    'working-paused': 3,
+    working: 2,
+    done: 1,
+    todo: 0
+  }
+
+  let assistantState = $derived.by(
+    (): { tone: ThreadStatusTone; label: string; working: boolean } | null => {
+      let best: { tone: ThreadStatusTone; label: string; working: boolean } | null = null
+      for (const thread of groupThreads) {
+        const liveWorking = isThreadLiveWorking(thread)
+        const badge = statusBadgeForThread(thread, liveWorking)
+        const tone = badge.tone
+        if (!tone || tone === 'todo' || tone === 'done') continue
+        if (best && ASSISTANT_STATE_PRIORITY[tone] <= ASSISTANT_STATE_PRIORITY[best.tone]) continue
+        best = { tone, label: badge.label, working: tone === 'working' && liveWorking }
+      }
+      return best
+    }
+  )
 
   /** Whose arrangement the strip remembers, per group. */
   let orderKey = $derived(groupAssistant?.id ?? UNASSIGNED_ORDER_KEY)
@@ -480,18 +504,20 @@
           >
             <CioEllipsis size={11} class="text-muted" />
           </span>
-          <!-- Its work belongs on the mark itself: under the pointer the mark
-               turns into the menu ellipsis, so the dot sits at its foot and
+          <!-- Its state belongs on the mark itself: under the pointer the mark
+               turns into the menu ellipsis, so the badge sits at its foot and
                stays visible either way. -->
-          {#if assistantWorking}
+          {#if assistantState}
             <span
-              class="pointer-events-none absolute -right-1 -bottom-1 flex size-2 items-center justify-center"
-              role="img"
-              aria-label="{groupLabel} is working"
-              title="{groupLabel} is working"
+              class="pointer-events-none absolute -right-1.5 -bottom-1.5 flex items-center justify-center"
             >
-              <span class="absolute size-2 animate-ping rounded-full bg-accent opacity-60"></span>
-              <span class="relative size-2 rounded-full bg-accent"></span>
+              <StatusBadge
+                tone={assistantState.tone}
+                variant={assistantState.working ? 'spinner' : 'dot'}
+                size="sm"
+                title={assistantState.label}
+                class="rounded-full"
+              />
             </span>
           {/if}
         </span>
