@@ -521,9 +521,13 @@ export function agentComboboxScript(request: {
       .map((id) => document.getElementById(id))
       .filter((node) => node instanceof HTMLElement && isVisible(node));
     const scope = element.closest('[role="dialog"], dialog, form, [role="search"]') || document;
+    const query = '[role="listbox"], [role="tree"], [role="grid"], datalist';
+    // A portal draws its list in a layer it appends to the document, often outside
+    // the dialog the field belongs to, so a scoped search is only the first look.
     const candidates = [
       ...owns,
-      ...Array.from(scope.querySelectorAll('[role="listbox"], [role="tree"], [role="grid"], datalist'))
+      ...Array.from(scope.querySelectorAll(query)),
+      ...Array.from(document.querySelectorAll(query))
     ].filter((node) => node instanceof HTMLElement && isVisible(node));
     const listbox = candidates[0] || null;
     const options = [];
@@ -559,6 +563,44 @@ export function agentComboboxScript(request: {
       value: text,
       options
     };
+  })()`
+}
+
+/**
+ * Every open listbox this document shows, with the options it offers.
+ *
+ * A picker's list is not always in the document its field is in: a portal blade
+ * lives in a frame while the layer the list is drawn in belongs to the page around
+ * it. Reading listboxes document by document is what lets the caller find the list
+ * wherever it was drawn, and every option carries a reference its own frame names, so
+ * the one that matched can be clicked where it actually is.
+ */
+export function agentListboxOptionsScript(request: { refPrefix?: string }): string {
+  return `(() => {
+    ${pageHelpers(request.refPrefix ?? '')}
+    const boxes = Array.from(
+      document.querySelectorAll('[role="listbox"], [role="tree"], [role="menu"], datalist')
+    ).filter((node) => node instanceof HTMLElement && isVisible(node));
+    const options = [];
+    for (const box of boxes) {
+      const found = Array.from(
+        box.querySelectorAll('[role="option"], [role="treeitem"], [role="menuitem"], option, li')
+      ).filter((node) => node instanceof HTMLElement && isVisible(node));
+      for (const option of found.slice(0, ${MAX_OPTIONS})) {
+        options.push({
+          ref: referenceFor(option),
+          label: labelOf(option),
+          value: option.getAttribute('data-value') || option.getAttribute('value') || '',
+          selected:
+            option.getAttribute('aria-selected') === 'true' ||
+            option.getAttribute('aria-checked') === 'true',
+          disabled:
+            option.getAttribute('aria-disabled') === 'true' ||
+            (option instanceof HTMLOptionElement && option.disabled)
+        });
+      }
+    }
+    return { listboxes: boxes.length, options };
   })()`
 }
 
