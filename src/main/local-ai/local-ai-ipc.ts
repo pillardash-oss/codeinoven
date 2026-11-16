@@ -34,6 +34,7 @@ import { probeLocalAiServer, stopLocalAiServer } from './local-ai-process'
 import { followLocalAiLog, localAiLogPath, tailLocalAiLog } from './local-ai-log'
 import { measureModelPath, resolveModelLocation } from './local-ai-model-location'
 import { inspectLocalAiRepo } from './local-ai-repo-profile'
+import { adoptLocalAiModel, deleteLocalAiModel } from './local-ai-model-store'
 import { sharedLocalAiRuntimeRegistry } from './local-ai-runtime-registry'
 
 /** The engines the page can launch, and the order a bad value falls back through. */
@@ -149,6 +150,27 @@ export function registerLocalAiIpc(
   ipcMain.handle('localAi:repoProfile', async (_, rawReference: unknown) => {
     const reference = typeof rawReference === 'string' ? rawReference.slice(0, 512) : ''
     return inspectLocalAiRepo(reference)
+  })
+
+  /**
+   * Move a finished download into the app's own model directory.
+   *
+   * The cache a model is fetched into is the engine's scratch area, so the row is
+   * rewritten to a path the app owns once the weights are all there.
+   */
+  ipcMain.handle(
+    'localAi:adoptModel',
+    async (_, rawReference: unknown, rawPath: unknown): Promise<string | null> => {
+      if (typeof rawReference !== 'string' || rawReference.length > 512) return null
+      if (typeof rawPath !== 'string' || rawPath.length > 4_096) return null
+      return await adoptLocalAiModel(rawReference, rawPath)
+    }
+  )
+
+  /** Delete a model the app owns, and nothing else. */
+  ipcMain.handle('localAi:deleteModel', async (_, rawPath: unknown): Promise<boolean> => {
+    if (typeof rawPath !== 'string' || rawPath.length > 4_096) return false
+    return await deleteLocalAiModel(rawPath)
   })
 
   ipcMain.handle('localAi:pickModel', async (_event, rawRuntime: unknown) => {

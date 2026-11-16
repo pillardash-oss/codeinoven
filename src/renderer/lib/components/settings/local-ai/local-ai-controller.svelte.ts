@@ -148,6 +148,14 @@ export class LocalAiController {
     return await invoke('localAi:revealModel', path).catch(() => false)
   }
 
+  /** Forget a path's measurement, so a row whose model was deleted reads honestly. */
+  forgetSize(path: string): void {
+    if (path.length === 0) return
+    this.measured.delete(path)
+    const { [path]: _removed, ...sizes } = this.modelSizes
+    this.modelSizes = sizes
+  }
+
   /** A start waiting for the user to accept that the model already bound to
    *  that address is stopped first, since one port serves one model at a time. */
   pendingTakeover = $state<{
@@ -671,8 +679,13 @@ export class LocalAiController {
     // An MLX server answers its health endpoint from the moment its generator
     // loop is up, which is before a single weight has been read. Its weights on
     // disk are the honest ready line, and they are what the row is rewritten to.
-    const location = result.ready ? await this.modelLocationOf(entry) : null
+    const location = await this.modelLocationOf(entry)
     if (!this.handles.has(entry.id)) return
+    // The weights move out of the engine's cache the moment they are all there,
+    // whatever the load then does: a finished download belongs in the app's own
+    // folder, and a model that fails to load must not keep a row pointing into a
+    // cache a cleanup is free to empty.
+    if (!result.ready && location) this.localizeModel(entry, location)
     if (result.ready && (entry.runtime !== 'mlx' || !this.isReferenceRow(entry) || location)) {
       handle.timer = null
       this.setStatus(entry.id, 'running')

@@ -42,6 +42,8 @@
     onDelete: () => void
     /** Show the model's file or folder in the OS file manager. */
     onReveal: () => void
+    /** Delete the model the app owns, after the page asks the user to confirm. */
+    onDeleteModel: () => void
     /** False for a row the app only registers, never launches. */
     managed?: boolean
   }
@@ -61,6 +63,7 @@
     onEdit,
     onDelete,
     onReveal,
+    onDeleteModel,
     managed = true
   }: Props = $props()
 
@@ -120,6 +123,12 @@
       icon: CioFolderOpen,
       disabled: localPath.length === 0,
       onClick: onReveal
+    },
+    {
+      label: 'Remove downloaded model',
+      icon: CioTrash,
+      disabled: localPath.length === 0 || busy,
+      onClick: onDeleteModel
     },
     { label: 'Edit server', icon: CioPencil, disabled: busy, onClick: onEdit },
     { label: 'remove-divider', divider: true },

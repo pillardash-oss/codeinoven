@@ -2,6 +2,7 @@
   import CioPlug from '@pdslng/cio-icon/CioPlug.svelte'
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { baseUrlProviderFlow } from '$lib/stores/base-url-provider-flow.svelte'
+  import { invoke } from '$lib/ipc.svelte'
   import { uuidv7 } from '$shared/id'
   import {
     groupLlamaCppServers,
@@ -64,6 +65,9 @@
   let modalKey = $state(0)
   let editing = $state<LlamaCppServerEntry | null>(null)
   let pendingDelete = $state<LlamaCppServerEntry | null>(null)
+  /** The row whose downloaded model the user asked to delete from disk. */
+  let pendingModelDelete = $state<LlamaCppServerEntry | null>(null)
+  let deletingModel = $state(false)
   let expanded = $state<Record<string, boolean>>({})
   /** The server the row being removed belongs to, so the dialog can say whether
    *  it removes a whole server or one of its models. */
@@ -127,6 +131,43 @@
     toast.success('Server removed', { description: entry.name })
   }
 
+  /**
+   * Delete the model the app owns and clear the row's path.
+   *
+   * Only a model inside the app's own folder is deletable: a file the user picked
+   * from their disk is theirs, and main refuses anything else, which is why a
+   * refusal is reported instead of assumed away.
+   */
+  async function deleteModel(entry: LlamaCppServerEntry): Promise<void> {
+    if (deletingModel) return
+    const path = entry.modelPath.trim()
+    deletingModel = true
+    try {
+      const removed = await invoke('localAi:deleteModel', path).catch(() => false)
+      if (!removed) {
+        toast.error('The model was not removed', {
+          description: `${path} is not a model this app owns.`
+        })
+        return
+      }
+      // The row is a pointer to a model, so it goes with it: a row with neither a
+      // path nor a repository has nothing to load, and the config's own validation
+      // drops such a row on the next write anyway.
+      await localAi.stop(entry.id)
+      localAi.forgetSize(path)
+      localAi.forget(entry.id)
+      await updateConfig({
+        llamaCppServers: (config.llamaCppServers ?? []).filter(
+          (candidate) => candidate.id !== entry.id
+        )
+      })
+      toast.success('Model removed from disk', { description: path })
+    } finally {
+      deletingModel = false
+      pendingModelDelete = null
+    }
+  }
+
   function start(entry: LlamaCppServerEntry): void {
     expanded = { ...expanded, [entry.id]: true }
     void localAi.start(entry, executable)
@@ -178,14 +219,26 @@
     const saved = config.llamaCppServers ?? []
     const current = saved.find((candidate) => candidate.id === entry.id)
     if (!current || current.modelReference !== entry.modelReference) return
+    // The download landed in the engine's cache, which is scratch: the weights move
+    // into the app's own models folder and the row is written to that path, so the
+    // model is never left depending on a cache a cleanup may empty.
+    const adopted = await invoke('localAi:adoptModel', entry.modelReference, location.path).catch(
+      () => null
+    )
+    if (!adopted) {
+      toast.error('The model could not be moved out of the cache', {
+        description: `${location.path} is still where the server loads it from.`
+      })
+      return
+    }
     await updateConfig({
       llamaCppServers: saved.map((candidate) =>
         candidate.id === entry.id
-          ? { ...candidate, modelPath: location.path, modelReference: '' }
+          ? { ...candidate, modelPath: adopted, modelReference: '' }
           : candidate
       )
     })
-    toast.success('Model saved locally', { description: location.path })
+    toast.success('Model saved locally', { description: adopted })
   }
 
   onMount(() => {
@@ -265,6 +318,7 @@
                 onEdit={() => openEdit(entry)}
                 onDelete={() => (pendingDelete = entry)}
                 onReveal={() => void reveal(entry)}
+                onDeleteModel={() => (pendingModelDelete = entry)}
               />
             {/each}
           </section>
@@ -330,5 +384,22 @@
   <p class="mt-2 text-sm leading-relaxed text-muted">
     That server is stopped first, then {localAi.pendingTakeover?.entry.name ?? 'this model'} loads on
     the same address.
+  </p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={pendingModelDelete !== null}
+  title="Delete this model from disk?"
+  confirmLabel="Delete model"
+  variant="danger"
+  onCancel={() => (pendingModelDelete = null)}
+  onConfirm={() => (pendingModelDelete ? void deleteModel(pendingModelDelete) : undefined)}
+>
+  <p class="text-sm leading-relaxed text-muted">
+    {pendingModelDelete?.modelPath.trim() || 'This model'} is deleted from this computer, and its row
+    goes with it: a row is only a pointer at a model.
+  </p>
+  <p class="mt-2 text-sm leading-relaxed text-muted">
+    Nothing else is touched: other models, their rows, and the server's output stay as they are.
   </p>
 </ConfirmDialog>

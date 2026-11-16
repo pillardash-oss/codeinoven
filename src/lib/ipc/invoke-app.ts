@@ -89,6 +89,13 @@ export const invokeAppContract = {
    * repository's own config and file listing before anything is downloaded.
    */
   'localAi:repoProfile': {} as Contract<[reference: string], LocalAiRepoDecision>,
+  /**
+   * Move a finished download out of the engine's cache into the app's own models
+   * folder, and answer the path the saved row should name from then on.
+   */
+  'localAi:adoptModel': {} as Contract<[reference: string, path: string], string | null>,
+  /** Delete a model the app owns; refuses any path outside its models folder. */
+  'localAi:deleteModel': {} as Contract<[path: string], boolean>,
   /** Bytes a saved model path occupies on disk, for the card's size column. */
   'localAi:modelSize': {} as Contract<[path: string], number | null>,
   /** Show a saved model path in the OS file manager: the folder, or the weights file. */
