@@ -3,7 +3,11 @@ import { mkdir, mkdtemp, readdir, readFile, rm, stat, symlink, writeFile } from 
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { adoptLocalAiModel, moveModelInto } from '../../src/main/local-ai/local-ai-model-store'
+import {
+  adoptCachedModelPath,
+  adoptLocalAiModel,
+  moveModelInto
+} from '../../src/main/local-ai/local-ai-model-store'
 
 /**
  * A downloaded model is moved out of the engine's cache into the app's own folder.
@@ -39,11 +43,7 @@ describe('adoptLocalAiModel', () => {
       const snapshot = await cachedRepository(root)
       const models = join(root, 'local-models')
 
-      const adopted = await adoptLocalAiModel(
-        'LiquidAI/LFM3-Omni-2B-MLX-8bit',
-        snapshot,
-        models
-      )
+      const adopted = await adoptLocalAiModel('LiquidAI/LFM3-Omni-2B-MLX-8bit', snapshot, models)
 
       expect(adopted).toBe(join(models, 'LiquidAI--LFM3-Omni-2B-MLX-8bit'))
       const weights = join(adopted ?? '', 'model.safetensors')
@@ -96,6 +96,22 @@ describe('moveModelInto', () => {
       await moveModelInto(file, target)
 
       expect(await readFile(join(target, 'model.gguf'), 'utf8')).toBe('GGUF')
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('adoptCachedModelPath', () => {
+  it('leaves a user-picked model file alone', async () => {
+    const root = await scratchRoot()
+    try {
+      const file = join(root, 'models', 'mine.gguf')
+      await mkdir(join(root, 'models'), { recursive: true })
+      await writeFile(file, 'GGUF')
+      // A path outside every cache root is the user's own file: no move, no copy.
+      expect(await adoptCachedModelPath(file)).toBeNull()
+      expect(existsSync(file)).toBe(true)
     } finally {
       await rm(root, { recursive: true, force: true })
     }

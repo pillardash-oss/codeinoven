@@ -98,6 +98,11 @@ export const invokeAppContract = {
   'localAi:adoptModel': {} as Contract<[reference: string, path: string], string | null>,
   /** Delete a model the app owns; refuses any path outside its models folder. */
   'localAi:deleteModel': {} as Contract<[path: string], boolean>,
+  /**
+   * Move a model a saved row already names out of the engine cache it was
+   * downloaded to. Null when the path is already ours or was never in a cache.
+   */
+  'localAi:adoptPath': {} as Contract<[path: string], string | null>,
   /** RAM this machine has, and the share of it a model's prompt cache may hold. */
   'localAi:memoryBudget': {} as Contract<[], { totalBytes: number; promptCacheBytes: number }>,
   /** Bytes a saved model path occupies on disk, for the card's size column. */

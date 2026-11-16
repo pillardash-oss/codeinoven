@@ -35,7 +35,7 @@ import { localAiServerRunning, probeLocalAiServer, stopLocalAiServer } from './l
 import { followLocalAiLog, localAiLogPath, tailLocalAiLog } from './local-ai-log'
 import { measureModelPath, resolveModelLocation } from './local-ai-model-location'
 import { inspectLocalAiRepo } from './local-ai-repo-profile'
-import { adoptLocalAiModel, deleteLocalAiModel } from './local-ai-model-store'
+import { adoptCachedModelPath, adoptLocalAiModel, deleteLocalAiModel } from './local-ai-model-store'
 import { sharedLocalAiRuntimeRegistry } from './local-ai-runtime-registry'
 
 /** Bounds on the prompt cache a local model is allowed to keep, in bytes. */
@@ -178,6 +178,17 @@ export function registerLocalAiIpc(
       return await adoptLocalAiModel(rawReference, rawPath)
     }
   )
+
+  /**
+   * Move a model a saved row already points at out of the cache it landed in.
+   *
+   * Rows saved before models had their own folder still name the cache, and their
+   * commands still show that path. The page runs this once per row.
+   */
+  ipcMain.handle('localAi:adoptPath', async (_, rawPath: unknown): Promise<string | null> => {
+    if (typeof rawPath !== 'string' || rawPath.length > 4_096) return null
+    return await adoptCachedModelPath(rawPath)
+  })
 
   /** Delete a model the app owns, and nothing else. */
   ipcMain.handle('localAi:deleteModel', async (_, rawPath: unknown): Promise<boolean> => {

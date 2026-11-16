@@ -241,10 +241,44 @@
     toast.success('Model saved locally', { description: adopted })
   }
 
+  /**
+   * Move rows that still name an engine cache into the app's model folder.
+   *
+   * A row saved before models had a folder of their own points at
+   * `~/.cache/huggingface/...` (or llama.cpp's cache), and nothing else ever
+   * revisits it: the row keeps loading from scratch space and its command keeps
+   * showing that path. Running once per row on load is what retires those rows.
+   */
+  async function adoptCachedRows(): Promise<void> {
+    const saved = config.llamaCppServers ?? []
+    const moved: Array<{ id: string; from: string; to: string }> = []
+    for (const entry of entries) {
+      const path = entry.modelPath.trim()
+      if (path.length === 0) continue
+      const adopted = await invoke('localAi:adoptPath', path).catch(() => null)
+      if (!adopted || adopted === path) continue
+      moved.push({ id: entry.id, from: path, to: adopted })
+    }
+    if (moved.length === 0) return
+    await updateConfig({
+      llamaCppServers: saved.map((candidate) => {
+        const change = moved.find((item) => item.id === candidate.id)
+        return change ? { ...candidate, modelPath: change.to } : candidate
+      })
+    })
+    toast.success(
+      moved.length === 1
+        ? 'Model moved out of the cache'
+        : `${moved.length} models moved out of the cache`,
+      { description: moved[0].to }
+    )
+  }
+
   onMount(() => {
     // Only one engine tab is mounted at a time, so this is the handler for the
     // rows on screen.
     localAi.onModelLocalized = (entry, location) => void saveLocalizedModel(entry, location)
+    void adoptCachedRows()
     // A renderer reload leaves the main process's servers running; reattach to
     // the ones that answer instead of showing them as stopped.
     for (const entry of entries) void localAi.attach(entry)

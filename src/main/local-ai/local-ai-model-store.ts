@@ -14,9 +14,11 @@
  * would leave every weight pointing at a path that no longer means what it did.
  */
 import { copyFile, lstat, mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { getConfigRoot } from '../../lib/utils'
+import { huggingFaceCacheRoots } from './local-ai-model-location'
 
 /** The folder under the app's config root that holds models the app owns. */
 export function localModelsRoot(): string {
@@ -143,6 +145,103 @@ async function removeMovedSource(sourcePath: string, targetPath: string): Promis
   const repositoryDirectory = dirname(snapshotDirectory)
   if (!basename(repositoryDirectory).startsWith('models--')) return
   await rm(repositoryDirectory, { recursive: true, force: true })
+}
+
+/**
+ * The cache a model path lives in, when it lives in one.
+ *
+ * A model fetched by an engine is first written to that engine's cache, and older
+ * saved rows still name those paths: the row and its command then point into
+ * scratch space that a cleanup may empty. `huggingface_hub` keeps repositories as
+ * `models--owner--repo/snapshots/<commit>`, and llama.cpp keeps the GGUF files it
+ * downloaded in its own cache directory.
+ */
+function cacheLocation(path: string): { kind: 'hf' | 'llama'; name: string } | null {
+  const target = resolve(path)
+  for (const root of huggingFaceCacheRoots()) {
+    const prefix = `${resolve(root)}${sep}`
+    if (!target.startsWith(prefix)) continue
+    const segments = target.slice(prefix.length).split(sep)
+    const repository = segments[0] ?? ''
+    if (!repository.startsWith('models--')) continue
+    return { kind: 'hf', name: repository.slice('models--'.length) }
+  }
+  for (const root of llamaCppCacheRoots()) {
+    const prefix = `${resolve(root)}${sep}`
+    if (!target.startsWith(prefix)) continue
+    const segments = target.slice(prefix.length).split(sep)
+    const folder = segments.length > 1 ? segments[0] : 'llama-cpp'
+    return { kind: 'llama', name: `${folder}--llama-cpp`.replaceAll(/[^A-Za-z0-9._-]/gu, '-') }
+  }
+  return null
+}
+
+/** Cache directories a llama.cpp download can land in. */
+function llamaCppCacheRoots(): string[] {
+  const roots: string[] = []
+  const add = (candidate: string | undefined): void => {
+    if (!candidate || !candidate.startsWith('/')) return
+    const root = resolve(candidate)
+    if (!roots.includes(root)) roots.push(root)
+  }
+  add(process.env['LLAMA_CACHE'])
+  add(join(homedir(), '.cache', 'llama.cpp'))
+  add(join(homedir(), 'Library', 'Caches', 'llama.cpp'))
+  return roots
+}
+
+/** Whether a model folder holds a checkpoint, not just its config. */
+async function holdsWeights(directory: string): Promise<boolean> {
+  let entries: string[]
+  try {
+    entries = await readdir(directory)
+  } catch {
+    return false
+  }
+  for (const entry of entries) {
+    if (/\.(?:safetensors|npz|gguf|bin|pth)$/iu.test(entry)) return true
+    const nested = join(directory, entry)
+    try {
+      if ((await stat(nested)).isDirectory() && (await holdsWeights(nested))) return true
+    } catch {
+      continue
+    }
+  }
+  return false
+}
+
+/**
+ * Move a model a saved row already points at out of the cache it was downloaded to.
+ *
+ * A row saved before models had their own folder names the cache, and nothing ever
+ * revisits it: the row keeps loading from scratch space and its command keeps
+ * showing that path. This is that revisit, for the page to run once per row.
+ *
+ * Null means the path needs no move: it is already in the app's folder, or it is a
+ * file the user picked from their own disk.
+ */
+export async function adoptCachedModelPath(path: string): Promise<string | null> {
+  const source = path.trim()
+  if (source.length === 0 || !isAbsolute(source)) return null
+  if (isManagedModelPath(source)) return null
+  const location = cacheLocation(source)
+  if (!location) return null
+  const target = join(localModelsRoot(), location.name)
+  try {
+    const info = await stat(source)
+    if (!info.isFile() && !info.isDirectory()) return null
+    // Moving an interrupted download would only rename a folder that cannot load,
+    // so a directory has to hold weights before it is worth owning.
+    if (info.isDirectory() && !(await holdsWeights(source))) return null
+    await moveModelInto(source, target)
+    const adopted = info.isDirectory()
+      ? target
+      : join(target, source.split(/[\\/]/u).pop() ?? 'model')
+    await removeMovedSource(source, adopted)
+    return adopted
+  } catch {
+    return null
+  }
 }
 
 /**
