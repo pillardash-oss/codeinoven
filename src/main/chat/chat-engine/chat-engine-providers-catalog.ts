@@ -257,6 +257,7 @@ export class ChatEngineProvidersCatalog {
     const harnessId = overrides?.harnessId
     if (!harnessId) return []
     const providerId = overrides?.providerId ?? harnessId
+    const conversationSessionId = await this.conversationSessionId(overrides)
     const account = await this.host.state.accountRegistry.resolveForProvider(
       harnessId,
       providerId,
@@ -287,9 +288,34 @@ export class ChatEngineProvidersCatalog {
       accountId: isCodeInOvenCustomProviderId(providerId) ? providerId : account.id,
       accountEnvironment: this.host.state.accountRegistry.environment(account),
       driver,
-      projectPath
+      projectPath,
+      // The thread the hover belongs to, so a driver can state THAT thread's
+      // occupancy from its own session. Without it the read would answer for
+      // whichever session it reached, which is how a hover on an empty thread
+      // once showed another conversation's 17%.
+      ...(conversationSessionId ? { conversationSessionId } : {})
     })
     return entry ? [entry] : []
+  }
+
+  /**
+   * The harness session bound to the thread asking for usage, when that session
+   * belongs to the requested harness. A session never moves across harnesses,
+   * so a stamp that names another harness means there is no session to read.
+   */
+  private async conversationSessionId(
+    overrides: AgentAccountUsageOverrides | undefined
+  ): Promise<string | undefined> {
+    const { projectId, threadId, harnessId } = overrides ?? {}
+    if (!projectId || !threadId || !harnessId) return undefined
+    try {
+      const thread = await this.host.threadManager.getThread(projectId, threadId)
+      if (!thread?.sessionId) return undefined
+      const owner = thread.sessionHarnessId ?? thread.settings?.harnessId
+      return owner === harnessId ? thread.sessionId : undefined
+    } catch {
+      return undefined
+    }
   }
 
   /**

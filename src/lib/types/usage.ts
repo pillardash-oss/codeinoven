@@ -313,6 +313,14 @@ export interface AgentAccountUsageOverrides {
   harnessId?: string
   providerId?: string
   accountId?: string
+  /** Project of the surface asking for the reading. Together with `threadId`
+   *  it names the thread whose own harness session may state that thread's
+   *  context occupancy; account quota never needs it. */
+  projectId?: string
+  /** Thread the reading is shown on. Occupancy describes ONE conversation, so
+   *  only the session bound to this thread may report it   another session's
+   *  reading is a different conversation's context. */
+  threadId?: string
 }
 
 /** On-demand account quota snapshot for one harness used on a thread. */

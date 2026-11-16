@@ -863,10 +863,16 @@ export interface HarnessDriver {
    * prepaid credits). Used by the battery popover so old threads   whose turns
    * predate quota capture   can still show live quota. Returns null when the
    * harness cannot report quota without a turn.
+   *
+   * `conversationSessionId` names the thread's own session. Context occupancy
+   * belongs to ONE conversation, so a driver may report `contextUsed` only
+   * when that exact session answered: every other live session in the process
+   * holds somebody else's context and must never stand in for this thread.
    */
   readAccountUsage?(
     projectPath: string,
-    providerId?: string
+    providerId?: string,
+    conversationSessionId?: string
   ): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits

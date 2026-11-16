@@ -1079,14 +1079,27 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * turns predate capture. Returns null when the session has no plan limits
    * (API key, Bedrock, Vertex) or on any failure.
    */
-  async readAccountUsage(projectPath: string): Promise<ClaudeAccountUsage | null> {
-    // Only a session that holds a real conversation can state this thread's
-    // occupancy. Auxiliary sessions (title generation, probes) are somebody
-    // else's context and would report a nearly empty window under this thread.
-    const activeSessionId = this.activeSessionIds().find((id) => !this.isAuxiliarySession(id))
-    if (activeSessionId) {
-      return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId), {
-        sessionId: activeSessionId
+  async readAccountUsage(
+    projectPath: string,
+    _providerId?: string,
+    conversationSessionId?: string
+  ): Promise<ClaudeAccountUsage | null> {
+    // Context occupancy is a property of ONE conversation, so only the session
+    // bound to the thread asking for this reading may state it. Any other live
+    // process   another thread's session, a title run, a warmed wrapper that
+    // has not sent a prompt yet   holds somebody else's window (usually just a
+    // system prompt), and reading it as this thread's occupancy is what made a
+    // hover on an empty thread show 17%. Those sessions still cannot answer for
+    // this one, so the reading is simply not attributed.
+    const owningSessionId =
+      conversationSessionId &&
+      !this.isAuxiliarySession(conversationSessionId) &&
+      this.activeSessionIds().includes(conversationSessionId)
+        ? conversationSessionId
+        : undefined
+    if (owningSessionId) {
+      return this.mapAccountUsage(await this.readUsageFromActiveSession(owningSessionId), {
+        sessionId: owningSessionId
       })
     }
     try {

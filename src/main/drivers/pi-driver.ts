@@ -408,14 +408,15 @@ export class PiDriver extends PersistentCliDriver {
    */
   async readAccountUsage(
     projectPath: string,
-    providerId?: string
+    providerId?: string,
+    conversationSessionId?: string
   ): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     contextWindow?: number
     contextUsed?: number
   } | null> {
-    return this.usage.readAccountUsage(projectPath, providerId)
+    return this.usage.readAccountUsage(projectPath, providerId, conversationSessionId)
   }
 
   /** Narrow host surface for the extracted units; every call stays typed. */
