@@ -476,21 +476,6 @@
           {/if}
           Refresh
         </button>
-        <button
-          type="button"
-          class="inline-flex h-8 items-center gap-1.5 bg-primary px-2.5 text-xs font-semibold text-on-primary transition-colors hover:bg-primary-hover disabled:cursor-not-allowed disabled:opacity-40"
-          disabled={compacting || clearing}
-          title="Hand the database's free pages back to disk"
-          aria-label="Compact the database"
-          onclick={() => void compact()}
-        >
-          {#if compacting}
-            <CioSpinner size={13} class="animate-spin" />
-          {:else}
-            <CioDisk size={13} />
-          {/if}
-          Compact database
-        </button>
       </div>
     </div>
   {/snippet}
