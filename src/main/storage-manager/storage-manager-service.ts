@@ -74,6 +74,8 @@ export class StorageManagerService {
   private cachedAt = 0
   private pending: { root: string; promise: Promise<StorageUsage> } | null = null
   private vacuuming = false
+  /** The clears running right now, reported with every measurement. */
+  private readonly clearing = new Set<StorageClearTarget>()
 
   constructor(private readonly deps: StorageManagerDeps) {}
 
@@ -86,7 +88,9 @@ export class StorageManagerService {
    */
   async usage(force = false): Promise<StorageUsage> {
     const root = this.deps.configRoot()
-    if (!force && this.cached && Date.now() - this.cachedAt < USAGE_CACHE_MS) return this.cached
+    if (!force && this.cached && Date.now() - this.cachedAt < USAGE_CACHE_MS) {
+      return this.withLiveClears(this.cached)
+    }
     if (this.pending && this.pending.root === root) return this.pending.promise
     const promise = this.worker.run<StorageUsage>({ kind: 'usage', root })
     this.pending = { root, promise }
@@ -94,24 +98,34 @@ export class StorageManagerService {
       const usage = await promise
       this.cached = usage
       this.cachedAt = Date.now()
-      return usage
+      return this.withLiveClears(usage)
     } finally {
       if (this.pending?.promise === promise) this.pending = null
     }
   }
 
+  /** Attach the clears that are running now, which no measurement knows about. */
+  private withLiveClears(usage: StorageUsage): StorageUsage {
+    return { ...usage, clearing: [...this.clearing] }
+  }
+
   /** Remove exactly one area the user confirmed, on the worker thread. */
   async clear(target: StorageClearTarget): Promise<StorageClearResult> {
     const root = this.deps.configRoot()
-    const result = await this.worker.run<StorageClearResult>({ kind: 'clear', root, target })
-    this.cached = null
-    this.cachedAt = 0
-    Logger.info('Storage area cleared', {
-      target,
-      freedBytes: result.freedBytes,
-      removedFiles: result.removedFiles
-    })
-    return result
+    this.clearing.add(target)
+    try {
+      const result = await this.worker.run<StorageClearResult>({ kind: 'clear', root, target })
+      Logger.info('Storage area cleared', {
+        target,
+        freedBytes: result.freedBytes,
+        removedFiles: result.removedFiles
+      })
+      return result
+    } finally {
+      this.clearing.delete(target)
+      this.cached = null
+      this.cachedAt = 0
+    }
   }
 
   /** Show one area's folder, or the whole data root, in the OS file manager. */

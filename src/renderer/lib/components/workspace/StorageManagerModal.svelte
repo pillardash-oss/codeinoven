@@ -10,6 +10,7 @@
   import CioProjects from '@pdslng/cio-icon/CioProjects.svelte'
   import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import { toast } from 'svelte-sonner'
   import type { Component } from 'svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
@@ -31,8 +32,6 @@
   /** True only during the first measurement or an explicit refresh. */
   let checking = $state(false)
   let error = $state('')
-  /** The last outcome, so a clear or a compaction reports what it handed back. */
-  let notice = $state('')
   /**
    * How old a served measurement may be before reopening the surface measures
    * again in the background. The cache is shown immediately either way; this
@@ -45,7 +44,15 @@
   let clearTarget = $state<StorageClearTarget | null>(null)
   /** True while the conversation-workspace cleanup is waiting for confirmation. */
   let cleanupConfirm = $state(false)
-  let clearing = $state(false)
+  /**
+   * The clears this surface started, so they fade the instant they are
+   * confirmed instead of waiting for the next measurement to say so.
+   *
+   * Main is what actually tracks a clear (it survives this component), and its
+   * snapshot carries the areas it is removing; this list only bridges the
+   * moment between the click and that snapshot.
+   */
+  let startedClears = $state<StorageClearTarget[]>([])
   let compacting = $state(false)
 
   /** The mark each area wears, so a row is recognisable before it is read. */
@@ -228,27 +235,72 @@
     try {
       const opened = await invoke('storageManager:reveal', area)
       if (!opened) {
-        notice = 'That folder is not on disk yet, so there is nothing to show.'
+        toast.info('Nothing to show yet', {
+          description: 'That folder has not been created on disk.'
+        })
       }
     } catch (revealError: unknown) {
       reportError(revealError, 'The folder could not be shown.')
     }
   }
 
-  async function confirmClear(): Promise<void> {
+  /**
+   * Confirm a clear: close the prompt at once, then work in the background.
+   *
+   * The dialog is a decision, not a progress view. Once the decision is made it
+   * has no reason to hold the window, so it goes immediately, the row marks
+   * itself busy, and the removal runs in the main process's worker. The result
+   * lands as a toast, whether or not this surface is still on screen.
+   */
+  function confirmClear(): void {
     const target = clearTarget
-    if (!target) return
-    clearing = true
+    clearTarget = null
+    if (!target || isClearing(target)) return
+    startedClears = [...startedClears, target]
+    void runClear(target)
+  }
+
+  /** Write a cleared area back as empty, so the panel answers the action at once. */
+  function markAreaEmptied(target: StorageClearTarget): void {
+    const current = usage
+    if (!current) return
+    const areas = current.areas.map((area) =>
+      area.id === target ? { ...area, bytes: 0, files: 0 } : area
+    )
+    usage = {
+      ...current,
+      areas,
+      reclaimableBytes: areas.reduce(
+        (total, area) => (area.action === 'delete' ? total + area.bytes : total),
+        0
+      )
+    }
+  }
+
+  /** Whether an area's removal is in flight, here or in another open of this surface. */
+  function isClearing(target: StorageClearTarget): boolean {
+    if (startedClears.includes(target)) return true
+    return usage?.clearing.includes(target) ?? false
+  }
+
+  async function runClear(target: StorageClearTarget): Promise<void> {
     try {
       const result = await invoke('storageManager:clear', target)
-      notice = `Freed ${formatBytes(result.freedBytes)} by removing ${result.removedFiles.toLocaleString()} files.`
-      clearTarget = null
-      await load(true)
+      if (result.removedFiles === 0) {
+        toast.info(`Nothing to remove from ${areaLabel(target)}`)
+      } else {
+        toast.success(`Freed ${formatBytes(result.freedBytes)}`, {
+          description: `${result.removedFiles.toLocaleString()} files removed from ${areaLabel(target)}.`
+        })
+      }
+      // The row that was cleared is empty now, so it says so immediately
+      // instead of offering its button again until the new measurement lands.
+      markAreaEmptied(target)
+      void load(true)
     } catch (clearError: unknown) {
       reportError(clearError, 'The storage could not be cleared.')
-      error = clearError instanceof Error ? clearError.message : 'The storage could not be cleared.'
     } finally {
-      clearing = false
+      startedClears = startedClears.filter((entry) => entry !== target)
     }
   }
 
@@ -260,25 +312,25 @@
    */
   async function compact(): Promise<void> {
     compacting = true
-    error = ''
-    notice = ''
     try {
       const result = await invoke('storageManager:vacuum')
       if (!result.ok) {
-        error = result.error ?? 'The database could not be compacted.'
+        reportError(
+          new Error(result.error ?? 'The database could not be compacted.'),
+          'The database could not be compacted.'
+        )
         return
       }
-      notice =
-        result.freedBytes > 0
-          ? `Compacted the database and handed back ${formatBytes(result.freedBytes)}.`
-          : 'The database is already compact. Nothing was handed back.'
-      await load(true)
+      if (result.freedBytes > 0) {
+        toast.success(`Handed back ${formatBytes(result.freedBytes)}`, {
+          description: 'The database was compacted.'
+        })
+      } else {
+        toast.info('The database is already compact')
+      }
+      void load(true)
     } catch (compactError: unknown) {
       reportError(compactError, 'The database could not be compacted.')
-      error =
-        compactError instanceof Error
-          ? compactError.message
-          : 'The database could not be compacted.'
     } finally {
       compacting = false
     }
@@ -295,11 +347,6 @@
     {#if error}
       <div class="shrink-0 border-b border-border px-5 py-2" role="alert">
         <p class="truncate text-xs text-danger" title={error}>{error}</p>
-      </div>
-    {/if}
-    {#if notice}
-      <div class="shrink-0 border-b border-border px-5 py-2" role="status">
-        <p class="truncate text-xs text-success" title={notice}>{notice}</p>
       </div>
     {/if}
 
@@ -376,7 +423,18 @@
         <ul>
           {#each areas as area (area.id)}
             {@const Icon = AREA_ICONS[area.id]}
-            <li class="flex items-start gap-3 border-b border-border px-5 py-3 last:border-b-0">
+            <!-- A row with nothing in it offers nothing to clear: a delete
+                 button on an empty area would only ever report zero. A row
+                 whose removal is running keeps its place but goes quiet: no
+                 button, faded, until the toast says what was handed back. -->
+            {@const busy =
+              area.action === 'delete' && isClearTarget(area.id) && isClearing(area.id)}
+            {@const clearable = area.bytes > 0 && !busy}
+            <li
+              class="flex items-start gap-3 border-b border-border px-5 py-3 transition-opacity last:border-b-0 {busy
+                ? 'opacity-40'
+                : ''}"
+            >
               <span
                 class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center bg-raised"
                 style="color: {AREA_COLORS[area.id]}"
@@ -413,19 +471,19 @@
                 >
                   <CioFolderOpen size={14} />
                 </button>
-                {#if area.action && area.actionLabel}
+                {#if area.action && area.actionLabel && clearable}
                   <button
                     type="button"
                     class="inline-flex h-7 shrink-0 items-center gap-1.5 border px-2 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 {area.action ===
                     'delete'
                       ? 'border-border text-danger hover:bg-danger/10'
                       : 'border-border bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                    disabled={clearing || compacting}
+                    disabled={compacting}
                     title={`${area.actionLabel}: ${area.detail}`}
                     aria-label={`${area.actionLabel} for ${area.label}`}
                     onclick={() => runAction(area)}
                   >
-                    {#if (area.action === 'vacuum' && compacting) || (area.action === 'delete' && clearing && clearTarget === area.id)}
+                    {#if area.action === 'vacuum' && compacting}
                       <CioSpinner size={12} class="animate-spin" />
                     {/if}
                     {area.actionLabel}
@@ -501,10 +559,7 @@
   title={clearCopy?.title ?? 'Delete this data?'}
   confirmLabel={clearCopy?.confirmLabel ?? 'Delete'}
   note={clearCopy?.note}
-  busy={clearing}
-  onCancel={() => {
-    if (!clearing) clearTarget = null
-  }}
+  onCancel={() => (clearTarget = null)}
   onConfirm={confirmClear}
 >
   {#if clearCopy && clearTarget}

@@ -46,6 +46,14 @@ export interface StorageUsage {
   areas: StorageArea[]
   /** When this measurement was taken, so the surface can say how old it is. */
   measuredAt: number
+  /**
+   * The areas being removed right now.
+   *
+   * This is main's own record, not a surface's, so a clear that was confirmed
+   * and then closed out of still reports itself as in flight when the surface
+   * is opened again: the row stays quiet until the result arrives.
+   */
+  clearing: StorageClearTarget[]
 }
 
 /** One destructive clear the user confirmed. Only these ids may be cleared. */

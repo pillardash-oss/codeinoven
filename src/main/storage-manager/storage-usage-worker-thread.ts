@@ -94,7 +94,10 @@ async function measureUsage(configRoot: string): Promise<StorageUsage> {
     totalBytes: measurement.totalBytes,
     reclaimableBytes,
     areas,
-    measuredAt: Date.now()
+    measuredAt: Date.now(),
+    // Main attaches the clears it is running to every snapshot it hands out;
+    // the worker only knows what is on disk.
+    clearing: []
   }
 }
 
