@@ -33,6 +33,14 @@
   let error = $state('')
   /** The last outcome, so a clear or a compaction reports what it handed back. */
   let notice = $state('')
+  /**
+   * How old a served measurement may be before reopening the surface measures
+   * again in the background. The cache is shown immediately either way; this
+   * only stops a quick close-and-reopen from walking a multi-gigabyte root for
+   * a number that is seconds old.
+   */
+  const STALE_AFTER_MS = 30_000
+
   /** The area whose delete is waiting for confirmation. */
   let clearTarget = $state<StorageClearTarget | null>(null)
   /** True while the conversation-workspace cleanup is waiting for confirmation. */
@@ -164,9 +172,27 @@
     // under; it is the same store the settings page and the dock read.
     cioCleanupStore.listen()
     queueMicrotask(() => {
-      if (open) void load()
+      if (open) void openSurface()
     })
   })
+
+  /**
+   * What an open does: the cached measurement now, a fresh one behind it.
+   *
+   * The first call is answered from main's cache whenever one exists, so
+   * reopening the surface paints the previous numbers instead of an empty
+   * panel. The second call is a real measurement, and it is what puts the
+   * Refresh control in its loading state while the latest sizes come in. A
+   * measurement that was interrupted by closing the surface still finished in
+   * main and filled that cache, which is exactly what the next open serves.
+   */
+  async function openSurface(): Promise<void> {
+    await load()
+    const served = usage
+    if (!served || !open) return
+    if (Date.now() - served.measuredAt < STALE_AFTER_MS) return
+    void load(true)
+  }
 
   /** Whether an area is one main allows clearing, which narrows its id. */
   function isClearTarget(id: StorageAreaId): id is StorageClearTarget {
@@ -394,7 +420,7 @@
                     'delete'
                       ? 'border-border text-danger hover:bg-danger/10'
                       : 'border-border bg-elevated text-muted hover:bg-overlay hover:text-foreground'}"
-                    disabled={clearing || compacting || checking}
+                    disabled={clearing || compacting}
                     title={`${area.actionLabel}: ${area.detail}`}
                     aria-label={`${area.actionLabel} for ${area.label}`}
                     onclick={() => runAction(area)}

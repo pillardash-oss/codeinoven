@@ -9,8 +9,17 @@ import type {
 } from '../../lib/types'
 import { StorageUsageWorker } from './storage-usage-worker'
 
-/** How long a measurement is reused before the next open measures again. */
-const USAGE_CACHE_MS = 30_000
+/**
+ * How long a measurement stays valid.
+ *
+ * A walk of the data root is the expensive part of this feature, so the answer
+ * is kept for a while: five minutes is long enough that reopening the surface,
+ * or switching away and back, never pays for a second walk, and short enough
+ * that the number on screen is never meaningfully out of date. A measurement
+ * that finishes after its window closed still lands in this cache, which is
+ * what makes a closed-mid-measure open instant the next time.
+ */
+const USAGE_CACHE_MS = 5 * 60_000
 
 /** Pages handed back per compaction step. */
 const VACUUM_PAGES_PER_CHUNK = 512
