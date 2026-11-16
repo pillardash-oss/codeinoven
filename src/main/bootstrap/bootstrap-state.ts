@@ -24,6 +24,7 @@ import type { RetrySchedulerService } from '../system/retry-scheduler-service'
 import type { ConnectivityService } from '../system/connectivity-service'
 import type { HeartbeatSchedulerService } from '../system/heartbeat-scheduler-service'
 import type { CioCleanupService } from '../cio-cleanup/cio-cleanup-service'
+import type { StorageManagerService } from '../storage-manager/storage-manager-service'
 import type { AssistantSchedulerService } from '../scheduler/assistant-scheduler-service'
 import type { FollowUpService } from '../follow-ups/follow-up-service'
 import type { BackgroundRunLedger } from '../scheduler/background-run-ledger'
@@ -112,6 +113,8 @@ export interface BootstrapState {
   heartbeatScheduler: HeartbeatSchedulerService | null
   /** Daily sweep of stale `.cio` scratch folders, plus its manual run. */
   cioCleanup: CioCleanupService | null
+  /** How the app's data root is spent, the clears, and the database compaction. */
+  storageManager: StorageManagerService | null
   /** Authored-work service, so a sweep can reconcile the histories it orphaned. */
   designService: DesignService | null
   assistantManager: AssistantManager | null
@@ -215,6 +218,7 @@ export function createBootstrapState(): BootstrapState {
     connectivity: null,
     heartbeatScheduler: null,
     cioCleanup: null,
+    storageManager: null,
     designService: null,
     assistantManager: null,
     assistantScheduler: null,

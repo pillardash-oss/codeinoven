@@ -56,6 +56,7 @@ import type { PrivilegedIpcValidator } from '../ipc-validation'
 import type { BrowserService } from '../../browser/browser-service'
 import type { AttachmentStorageScope } from '../../../lib/types'
 import type { CioCleanupService } from '../../cio-cleanup/cio-cleanup-service'
+import type { StorageManagerService } from '../../storage-manager/storage-manager-service'
 import type { UtilityScopeFootprintService } from '../../utilities/utility-scope-footprint'
 import type { SearchService } from '../../search/search-service'
 
@@ -136,6 +137,12 @@ export interface RegisterIpcHandlersOptions {
    * the dock tracks. Absent only in a bare handler set.
    */
   cioCleanup?: CioCleanupService
+  /**
+   * The Storage manager: the one measurement of the data root, the clears the
+   * user confirmed, and the database's bounded compaction. Absent only in a
+   * bare handler set.
+   */
+  storageManager?: StorageManagerService
   /**
    * Installs a project- or thread-scoped skill or MCP server on disk, and keeps
    * that install in step with the registry entry that owns it.

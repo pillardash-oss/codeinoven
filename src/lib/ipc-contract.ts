@@ -23,6 +23,7 @@ import { invokeSearchContract } from './ipc/invoke-search'
 import { invokeOrchestrationContract } from './ipc/invoke-orchestration'
 import { invokeReceiptContract } from './ipc/invoke-receipt'
 import { invokeSecretsContract } from './ipc/invoke-secrets'
+import { invokeStorageManagerContract } from './ipc/invoke-storage-manager'
 import { IPC_EVENT_CONTRACT } from './ipc/events'
 import type { GitInvocation, GitRefusedOperation, GitRemoteUnavailable } from './types'
 
@@ -40,6 +41,7 @@ export * from './ipc/invoke-search'
 export * from './ipc/invoke-orchestration'
 export * from './ipc/invoke-receipt'
 export * from './ipc/invoke-secrets'
+export * from './ipc/invoke-storage-manager'
 
 export const IPC_INVOKE_CONTRACT = {
   ...invokeAccountContract,
@@ -66,7 +68,8 @@ export const IPC_INVOKE_CONTRACT = {
   ...invokeSearchContract,
   ...invokeOrchestrationContract,
   ...invokeReceiptContract,
-  ...invokeSecretsContract
+  ...invokeSecretsContract,
+  ...invokeStorageManagerContract
 }
 
 export type IpcInvokeContract = typeof IPC_INVOKE_CONTRACT

@@ -10,6 +10,7 @@
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     preloadSettingsChunk,
+    preloadStorageManagerChunk,
     preloadTaskManagerChunk,
     preloadUpdateBlockersChunk
   } from '$lib/page-preload'
@@ -31,6 +32,7 @@
   let { navigate, activeView }: Props = $props()
 
   let taskManagerOpen = $state(false)
+  let storageManagerOpen = $state(false)
   let blockersModalOpen = $state(false)
 
   /** One shape for the update control's icon, label, tone and enabled state. */
@@ -45,6 +47,7 @@
 
   const settingsShortcut = $derived(keymapState.keysFor('nav-settings'))
   const taskManagerShortcut = $derived(keymapState.keysFor('nav-task-manager'))
+  const storageManagerShortcut = $derived(keymapState.keysFor('nav-storage-manager'))
 
   const updateControl = $derived.by((): UpdateControl => {
     const status = updaterState.status
@@ -175,18 +178,25 @@
   }
 
   /**
-   * The Task Manager's chord. The rail owns the surface and its open flag, so
-   * its shortcut lives here with them instead of in the header's view table;
-   * the trigger itself still comes from the keymap registry. Reopening an open
-   * surface is a no-op, and the chunk is warmed first so a cold open does not
-   * pay the module fetch on the chord.
+   * The chords for the two surfaces the rail owns itself. The rail owns their
+   * open flags, so their shortcuts live here with them instead of in the
+   * header's view table; the trigger itself still comes from the keymap
+   * registry. Reopening an open surface is a no-op, and the chunk is warmed
+   * first so a cold open does not pay the module fetch on the chord.
    */
   function handleWindowKeydown(event: KeyboardEvent): void {
     if (event.repeat || event.isComposing) return
-    if (!keymapState.matches('nav-task-manager', event)) return
-    event.preventDefault()
-    preloadTaskManagerChunk()
-    taskManagerOpen = true
+    if (keymapState.matches('nav-task-manager', event)) {
+      event.preventDefault()
+      preloadTaskManagerChunk()
+      taskManagerOpen = true
+      return
+    }
+    if (keymapState.matches('nav-storage-manager', event)) {
+      event.preventDefault()
+      preloadStorageManagerChunk()
+      storageManagerOpen = true
+    }
   }
 </script>
 
@@ -220,6 +230,15 @@
   />
 
   <AppRailButton
+    label={`${feature('storage-manager').name}: app data usage and reclamation`}
+    icon={feature('storage-manager').icon}
+    active={storageManagerOpen}
+    shortcut={storageManagerShortcut}
+    onHover={preloadStorageManagerChunk}
+    onSelect={() => (storageManagerOpen = true)}
+  />
+
+  <AppRailButton
     label={`${feature('utilities').name}: Skills, MCP, Plugins`}
     icon={feature('utilities').icon}
     active={activeView === 'settings-utilities'}
@@ -248,6 +267,15 @@
 {#if taskManagerOpen}
   {#await loadCachedPanelModule('module:lib/components/workspace/TaskManagerModal.svelte', () => import('$lib/components/workspace/TaskManagerModal.svelte')) then { default: TaskManagerModal }}
     <TaskManagerModal open={taskManagerOpen} onClose={() => (taskManagerOpen = false)} />
+  {/await}
+{/if}
+
+<!-- The Storage manager is one rail button's surface, so it stays out of the
+     first-paint chunk exactly like the task manager: hover warms it and the
+     mount only happens once it is open. -->
+{#if storageManagerOpen}
+  {#await loadCachedPanelModule('module:lib/components/workspace/StorageManagerModal.svelte', () => import('$lib/components/workspace/StorageManagerModal.svelte')) then { default: StorageManagerModal }}
+    <StorageManagerModal open={storageManagerOpen} onClose={() => (storageManagerOpen = false)} />
   {/await}
 {/if}
 
