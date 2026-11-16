@@ -108,18 +108,19 @@
    * The route the chosen SDK will POST to, so a mismatch with what the server
    * actually implements is visible here rather than as a 404 mid-conversation.
    *
-   * A local server is the case worth naming: `mlx_lm.server` and `llama-server`
-   * implement `/v1/chat/completions` and `/v1/completions` and answer every other
-   * POST path with 404, so the Responses and Anthropic SDKs cannot talk to them
-   * even though model discovery (`/v1/models`) works.
+   * A local server is the case worth naming, and the two engines differ: measured
+   * on this machine, `llama-server` answers `/v1/chat/completions`, `/v1/messages`
+   * and `/chat/completions`, while `mlx_lm.server` answers only
+   * `/v1/chat/completions` and `/v1/completions` and 404s every other POST path,
+   * even though model discovery (`/v1/models`) works on both.
    */
   let sdkRouteWarning = $derived.by(() => {
     const baseURL = draft.baseURL.trim().toLowerCase()
     if (!/^https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\])(?::|\/|$)/u.test(baseURL)) return ''
     if (draft.npm === '@ai-sdk/openai-compatible') return ''
     return draft.npm === '@ai-sdk/openai'
-      ? 'A local server answers /v1/chat/completions only, so the Responses SDK will get a 404 from /v1/responses. Pick OpenAI-compatible for mlx-lm, llama.cpp, LM Studio or Ollama.'
-      : 'A local server answers /v1/chat/completions only, so the Anthropic SDK will get a 404 from /v1/messages. Pick OpenAI-compatible for mlx-lm, llama.cpp, LM Studio or Ollama.'
+      ? 'The Responses SDK posts to /v1/responses, which mlx-lm answers with 404 and llama.cpp implements only partially. OpenAI-compatible is the safe choice for a local server.'
+      : 'The Anthropic SDK posts to /v1/messages, which mlx-lm answers with 404 (llama.cpp does answer it). OpenAI-compatible is the safe choice for mlx-lm.'
   })
 
   /**

@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path'
 import { applyEdits, modify, parse, type ParseError } from 'jsonc-parser'
 import type { BaseUrlProvider, BaseUrlProviderModel, ThinkingLevel } from '../../lib/types'
 import { isBaseUrlProviderUsageFormat } from '../../lib/provider-usage-format'
+import { harnessBaseUrl } from '../../lib/native-provider-url'
 import { PI_THINKING_PRESETS } from '../../lib/pi-thinking-presets'
 import { Logger } from '../system/logger'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -261,7 +262,7 @@ export class NativeProviderConfigService {
     const existingOptions = record(existing?.['options']) ?? {}
     const options: Record<string, unknown> = {
       ...existingOptions,
-      baseURL: provider.baseURL,
+      baseURL: harnessBaseUrl(provider.baseURL, provider.npm),
       ...(provider.headers ? { headers: provider.headers } : {}),
       ...(provider.usagePath ? { usagePath: provider.usagePath } : {}),
       ...(provider.usageFormat ? { usageFormat: provider.usageFormat } : {}),
@@ -344,7 +345,7 @@ export class NativeProviderConfigService {
     const entry: Record<string, unknown> = {
       ...existing,
       name: provider.name,
-      baseUrl: provider.baseURL,
+      baseUrl: harnessBaseUrl(provider.baseURL, provider.npm),
       api:
         provider.npm === '@ai-sdk/openai'
           ? 'openai-responses'
