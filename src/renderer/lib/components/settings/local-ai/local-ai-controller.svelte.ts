@@ -9,11 +9,14 @@
  */
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { invoke, subscribe } from '$lib/ipc.svelte'
+import { describeGenerationFailure, generationFailureReason } from '$shared/local-ai-failure'
+import { terminalLines } from '$shared/terminal-lines'
 import {
   localAiModelAliases,
   localAiModelSource,
   localAiPtyId,
   localAiServerArgs,
+  localAiServerCommandName,
   type LlamaCppBrewJobKind,
   type LlamaCppLogStream,
   type LlamaCppProbeResult,
@@ -39,11 +42,30 @@ const LOG_LINE_LIMIT = 400
 const PROBE_INTERVAL_MS = 2_000
 /** A first start downloads its model, so readiness can be many minutes out. */
 const PROBE_LIMIT = 900
+/**
+ * The same budget for a row whose weights are not on disk yet.
+ *
+ * Nothing in the app resumes a fetch that was cut short: the downloader the
+ * engines ship starts every file from zero. So a multi-gigabyte model over a home
+ * connection needs hours, and the 30-minute budget above would abort it just as it
+ * finished, which is exactly what made a start look like it began again every
+ * time. A row that names a local path keeps the short budget.
+ */
+const REFERENCE_PROBE_LIMIT = 7_200
 /** A card keeps the last lines of a failure, never the whole log, in its notice. */
 const FAILURE_TAIL_LINES = 6
 /** An adopted server is watched for as long as it runs, since nothing else tells
  *  the app when it exits. */
 const ADOPTED_PROBE_MS = 5_000
+/**
+ * How long an adopted server may answer `/health` with 503 before it is treated as
+ * a failed load rather than a slow one.
+ *
+ * A 9B model reads its weights in well under a minute; five minutes of silence
+ * means its generation thread is gone, which the page cannot see in a log file
+ * because MLX writes none. Waiting longer only holds those gigabytes hostage.
+ */
+const ADOPTED_UNHEALTHY_LIMIT_MS = 5 * 60_000
 
 const ANSI_PATTERN = new RegExp(
   [
@@ -71,8 +93,11 @@ interface RunningHandle {
   adopted: boolean
   /** True when the row's log is read from its own file rather than a live PTY. */
   following: boolean
-  /** Partial last line, kept so a chunk boundary never splits a log line. */
-  partial: string
+  /** True when the last chunk ended on a carriage return, so the next one either
+   *  finishes the same line or rewrites it from its first column. */
+  afterCarriageReturn: boolean
+  /** When an adopted server first stopped answering, 0 while it is healthy. */
+  unhealthySince?: number
 }
 
 export class LocalAiController {
@@ -80,6 +105,14 @@ export class LocalAiController {
   logs = $state<Record<string, string[]>>({})
   loadedModel = $state<Record<string, string>>({})
   notice = $state<Record<string, string>>({})
+  /** Bytes each saved model path occupies, keyed by path, filled on demand. */
+  modelSizes = $state<Record<string, number>>({})
+  /** Paths already asked about, so a card re-render never walks a model twice. */
+  private measured = new SvelteSet<string>()
+  /** Rows whose port one of our engines still holds, whatever the status says. */
+  serverOnPort = $state<Record<string, boolean>>({})
+  /** The prompt cache cap main computed for this machine, read once. */
+  private promptCacheBudget: number | null = null
   private handles = new SvelteMap<string, RunningHandle>()
 
   statusOf(entryId: string): LlamaCppServerStatus {
@@ -93,6 +126,75 @@ export class LocalAiController {
   isBusy(entryId: string): boolean {
     const status = this.statusOf(entryId)
     return status === 'starting' || status === 'running'
+  }
+
+  /** Whether a row's own engine process is still holding its port. */
+  holdsPort(entryId: string): boolean {
+    return this.serverOnPort[entryId] === true
+  }
+
+  /**
+   * Ask main whether this row's port is still held by one of our engines.
+   *
+   * The row's status is what the page managed to do, not what the machine runs, so
+   * a failed load can leave a process holding the weights. This is what lets the
+   * card show the stop that frees them.
+   */
+  async refreshPortHolder(entry: LlamaCppServerEntry): Promise<void> {
+    const held = await invoke('localAi:serverRunning', entry.port, entry.runtime).catch(() => false)
+    this.serverOnPort = { ...this.serverOnPort, [entry.id]: held }
+  }
+
+  /** Stop whatever engine process holds this row's port, and say it is gone. */
+  async stopPortHolder(entry: LlamaCppServerEntry): Promise<void> {
+    await invoke('localAi:stopServer', entry.port, entry.runtime).catch(() => false)
+    this.serverOnPort = { ...this.serverOnPort, [entry.id]: false }
+    this.setLoadedModel(entry.id, '')
+    if (!this.handles.has(entry.id)) this.setStatus(entry.id, 'stopped')
+    this.notice = { ...this.notice, [entry.id]: '' }
+  }
+
+  /**
+   * Bytes the model at this path occupies on disk, or undefined until the main
+   * process has answered. 0 stands for a path it could not measure, so a card
+   * can tell "still reading" from "unavailable".
+   */
+  sizeOf(path: string): number | undefined {
+    return this.modelSizes[path]
+  }
+
+  /**
+   * Ask the main process how large a saved model is.
+   *
+   * A multi-gigabyte snapshot is walked there, never here, and each path is asked
+   * once per session: a card that re-renders or a tab that is reopened reuses the
+   * answer instead of re-reading the disk.
+   */
+  async loadModelSize(path: string): Promise<void> {
+    if (path.length === 0 || this.measured.has(path)) return
+    this.measured.add(path)
+    let bytes: number
+    try {
+      bytes = (await invoke('localAi:modelSize', path)) ?? 0
+    } catch {
+      bytes = 0
+    }
+    this.modelSizes = { ...this.modelSizes, [path]: bytes }
+  }
+
+  /** Show a saved model in the OS file manager, reporting a refusal honestly. */
+  async revealModel(entry: LlamaCppServerEntry): Promise<boolean> {
+    const path = entry.modelPath.trim()
+    if (path.length === 0) return false
+    return await invoke('localAi:revealModel', path).catch(() => false)
+  }
+
+  /** Forget a path's measurement, so a row whose model was deleted reads honestly. */
+  forgetSize(path: string): void {
+    if (path.length === 0) return
+    this.measured.delete(path)
+    const { [path]: _removed, ...sizes } = this.modelSizes
+    this.modelSizes = sizes
   }
 
   /** A start waiting for the user to accept that the model already bound to
@@ -113,16 +215,106 @@ export class LocalAiController {
    */
   async start(entry: LlamaCppServerEntry, executable: string): Promise<void> {
     if (this.handles.has(entry.id)) return
-    const ready = await this.probeOf(entry)
-    if (ready.ready && this.servesEntry(entry, ready.models)) {
-      await this.adopt(entry, ready.models[0] ?? '')
+    const launch = await this.prepareLaunch(entry, executable)
+    if (!launch) return
+    const ready = await this.probeOf(launch.entry)
+    if (ready.ready && this.servesEntry(launch.entry, ready.models)) {
+      await this.adopt(launch.entry, ready.models[0] ?? '')
       return
     }
     if (ready.ready) {
-      this.pendingTakeover = { entry, executable, otherModel: ready.models[0] ?? 'Another model' }
+      this.pendingTakeover = {
+        entry: launch.entry,
+        executable: launch.executable,
+        otherModel: ready.models[0] ?? 'Another model'
+      }
       return
     }
-    await this.spawn(entry, executable)
+    await this.spawn(launch.entry, launch.executable)
+    if (launch.note && this.handles.has(launch.entry.id)) {
+      // The repository decided the engine, so the row says which one it used
+      // instead of leaving the saved tab to imply the other.
+      this.logs = {
+        ...this.logs,
+        [launch.entry.id]: [`# ${launch.note}`, ...(this.logs[launch.entry.id] ?? [])]
+      }
+    }
+  }
+
+  /**
+   * The engine this row's repository actually runs on, read from the repository.
+   *
+   * A row saved from a Hugging Face tag names a repository, and the repository says
+   * whether its weights are MLX or GGUF. Reading that first does two things the tab
+   * cannot: a row saved under the wrong engine still runs, and a repository no
+   * engine here can load fails in a moment instead of after a multi-gigabyte
+   * download.
+   *
+   * Null means the start is over: the card already carries the reason.
+   */
+  private async prepareLaunch(
+    entry: LlamaCppServerEntry,
+    executable: string
+  ): Promise<{ entry: LlamaCppServerEntry; executable: string; note?: string } | null> {
+    // Read the machine's budget before the first ramp-up, so even the first start of
+    // an MLX row runs with a bounded prompt cache.
+    if (
+      this.promptCacheBudget === null &&
+      (entry.runtime === 'mlx' || this.isReferenceRow(entry))
+    ) {
+      await this.loadMemoryBudget()
+    }
+    const source = localAiModelSource(entry)
+    if (source?.kind !== 'huggingface') return this.withMemoryBound(entry, executable)
+    const decision = await invoke('localAi:repoProfile', source.reference.repo).catch(() => null)
+    if (!decision || decision.kind === 'unknown') return { entry, executable }
+    if (decision.kind === 'unsupported') {
+      this.setStatus(entry.id, 'failed')
+      this.setLoadedModel(entry.id, '')
+      this.notice = { ...this.notice, [entry.id]: decision.message }
+      return null
+    }
+    if (decision.engine === entry.runtime) return this.withMemoryBound(entry, executable)
+    // The other engine owns this format, so its own binary starts it and the row
+    // is launched under it for this run. The saved row is left as the user made it.
+    const status = await invoke('localAi:detect', decision.engine).catch(() => null)
+    const switched = this.withMemoryBound(
+      { ...entry, runtime: decision.engine },
+      status?.path || localAiServerCommandName(decision.engine)
+    )
+    return switched ? { ...switched, note: decision.message } : null
+  }
+
+  /**
+   * The row to launch, with a prompt cache cap when the user named none.
+   *
+   * `mlx_lm.server` keeps the key/value tensors of every prompt it served and only
+   * stops when told a byte limit, which is how a loaded model ends up failing with
+   * "Insufficient Memory" and holding the machine's RAM afterwards. A cap derived
+   * from this Mac's RAM keeps that growth bounded without changing what the model
+   * can do, and the card's log says the cap is in force.
+   */
+  private withMemoryBound(
+    entry: LlamaCppServerEntry,
+    executable: string
+  ): { entry: LlamaCppServerEntry; executable: string; note?: string } {
+    if (entry.runtime !== 'mlx') return { entry, executable }
+    if (/--prompt-cache-bytes|--kv-bits/iu.test(entry.extraFlags)) return { entry, executable }
+    const cap = this.promptCacheBudget ?? 0
+    // A failed read is not a reason to refuse the start; it only means no cap.
+    if (cap <= 0) return { entry, executable }
+    const gb = (cap / 1024 ** 3).toFixed(1)
+    return {
+      entry: { ...entry, extraFlags: `${entry.extraFlags} --prompt-cache-bytes ${cap}`.trim() },
+      executable,
+      note: `Prompt cache capped at ${gb} GB so the model cannot exhaust this machine's memory.`
+    }
+  }
+
+  /** Read this machine's prompt cache budget once, then retry the launch. */
+  private async loadMemoryBudget(): Promise<void> {
+    const budget = await invoke('localAi:memoryBudget').catch(() => null)
+    this.promptCacheBudget = budget?.promptCacheBytes ?? 0
   }
 
   /** The user agreed: stop what holds the address, then start this row. */
@@ -234,7 +426,7 @@ export class LocalAiController {
       stopping: false,
       adopted: false,
       following: false,
-      partial: ''
+      afterCarriageReturn: false
     }
     this.handles.set(entry.id, handle)
     this.setStatus(entry.id, 'starting')
@@ -281,7 +473,10 @@ export class LocalAiController {
     }
     // Nothing of this row is answering, so show what the last run left in its
     // log file instead of an empty terminal.
+    // A failed load leaves a process holding the port while the row reads as
+    // stopped, so the card is told whether one is there to stop.
     await this.seedLog(entry)
+    await this.refreshPortHolder(entry)
   }
 
   /** Take over a server that is already answering this row's model. */
@@ -296,7 +491,7 @@ export class LocalAiController {
       stopping: false,
       adopted: true,
       following: false,
-      partial: ''
+      afterCarriageReturn: false
     }
     this.handles.set(entry.id, handle)
     handle.unsubscribe.push(
@@ -324,7 +519,8 @@ export class LocalAiController {
   }
 
   private async probeAdopted(entry: LlamaCppServerEntry): Promise<void> {
-    if (!this.handles.has(entry.id)) return
+    const handle = this.handles.get(entry.id)
+    if (!handle) return
     let ready: boolean
     try {
       ready = (await invoke('localAi:probe', entry.host, entry.port, entry.runtime)).ready
@@ -333,13 +529,28 @@ export class LocalAiController {
     }
     if (!this.handles.has(entry.id)) return
     if (ready) {
+      handle.unhealthySince = 0
       this.scheduleAdoptedProbe(entry)
       return
     }
-    this.stopHandle(entry.id)
-    this.setStatus(entry.id, 'failed')
-    this.setLoadedModel(entry.id, '')
-    this.notice = { ...this.notice, [entry.id]: 'The server stopped answering on its port' }
+    // A server this page did not start keeps its weights and its prompt cache in
+    // unified memory, and a model that cannot finish loading never gives them
+    // back: on a small machine that is what pushes the whole system into swap.
+    // Weights on disk plus five minutes of silence is a stuck load, not a slow
+    // one, so the process is stopped instead of being left to hold that memory.
+    handle.unhealthySince ||= Date.now()
+    if (Date.now() - handle.unhealthySince >= ADOPTED_UNHEALTHY_LIMIT_MS) {
+      await invoke('localAi:stopServer', entry.port, entry.runtime).catch(() => false)
+      this.stopHandle(entry.id)
+      this.setStatus(entry.id, 'failed')
+      this.setLoadedModel(entry.id, '')
+      this.notice = {
+        ...this.notice,
+        [entry.id]: 'The server stopped answering, so it was stopped to release its memory'
+      }
+      return
+    }
+    this.scheduleAdoptedProbe(entry)
   }
 
   /** The log file a row's server writes, empty when main refuses the id. */
@@ -432,16 +643,68 @@ export class LocalAiController {
     }
   }
 
+  /**
+   * Fold one chunk of a server's output into the card's log.
+   *
+   * A download progress bar redraws its own line with a carriage return, so the
+   * log is read the way a terminal draws it: the last entry of `logs` is the line
+   * still being written, and a carriage return replaces it instead of pushing a
+   * new line. A model fetch therefore reads as one line whose bar grows, not as a
+   * wall of near-identical lines.
+   */
   private appendOutput(entryId: string, chunk: string): void {
     const handle = this.handles.get(entryId)
     if (!handle) return
-    const text = (handle.partial + stripTerminalEscapes(chunk)).replaceAll('\r\n', '\n')
-    const lines = text.split(/\n|\r/u)
-    handle.partial = lines.pop() ?? ''
-    if (lines.length === 0) return
+    // The PTY paces its output and pauses the process until the renderer has
+    // parsed a chunk, so the row that owns the server acknowledges every one of
+    // them, expanded or folded away. Without this the engine's stdout blocks as
+    // soon as the window fills, and a model fetch then hangs mid-file: the log
+    // stops and the download looks like it started over.
+    window.api.send('pty:ack', localAiPtyId(entryId), chunk.length)
+    let text = stripTerminalEscapes(chunk)
+    let rewriteOpen = handle.afterCarriageReturn
+    handle.afterCarriageReturn = false
+    // A CRLF split by the chunk boundary is one line ending, not a redraw, so it
+    // is left in the chunk for `terminalLines` to read as the newline it is.
+    if (rewriteOpen && text.startsWith('\n')) rewriteOpen = false
+    if (text.endsWith('\r')) {
+      // The redraw itself arrives in the next chunk; nothing to show yet.
+      handle.afterCarriageReturn = true
+      text = text.slice(0, -1)
+    }
     const current = this.logs[entryId] ?? []
-    const next = [...current, ...lines].slice(-LOG_LINE_LIMIT)
+    const open = rewriteOpen || current.length === 0 ? '' : (current.at(-1) ?? '')
+    const { lines, pending } = terminalLines(text.replaceAll('\r\n', '\n'), open)
+    // The last entry was the line still being written, and `pending` is it now.
+    const next = [
+      ...(current.length > 0 ? current.slice(0, -1) : current),
+      ...lines,
+      pending
+    ].slice(-LOG_LINE_LIMIT)
     this.logs = { ...this.logs, [entryId]: next }
+    for (const line of lines) {
+      const reason = generationFailureReason(line)
+      if (reason !== null) this.failGenerationThread(entryId, reason)
+    }
+  }
+
+  /**
+   * A server whose model failed to load is not starting, and never will be: its
+   * readiness probe would answer 503 until the budget ran out hours later. Stop it,
+   * which frees the port, and report the reason the engine gave.
+   */
+  private failGenerationThread(entryId: string, reason: string): void {
+    const handle = this.handles.get(entryId)
+    // An adopted server has no PTY of ours to destroy, and stopping a process the
+    // app did not start is the user's call, not a side effect of reading its log.
+    if (!handle || handle.adopted) return
+    handle.stopping = true
+    void invoke('pty:destroy', localAiPtyId(entryId))
+    this.stopHandle(entryId)
+    this.setStatus(entryId, 'failed')
+    this.setLoadedModel(entryId, '')
+    this.notice = { ...this.notice, [entryId]: describeGenerationFailure(reason) }
+    void this.refreshPortHolder(handle.entry)
   }
 
   private handleExit(entryId: string, code: unknown): void {
@@ -457,6 +720,7 @@ export class LocalAiController {
     }
     this.setStatus(entryId, 'failed')
     this.setLoadedModel(entryId, '')
+    void this.refreshPortHolder(handle.entry)
     const exitCode = typeof code === 'number' ? code : 0
     this.notice = {
       ...this.notice,
@@ -486,13 +750,18 @@ export class LocalAiController {
   private scheduleProbe(entry: LlamaCppServerEntry): void {
     const handle = this.handles.get(entry.id)
     if (!handle) return
-    if (handle.probes >= PROBE_LIMIT) {
+    const limit = this.isReferenceRow(entry) ? REFERENCE_PROBE_LIMIT : PROBE_LIMIT
+    if (handle.probes >= limit) {
       this.stopHandle(entry.id)
       void invoke('pty:destroy', localAiPtyId(entry.id))
       this.setStatus(entry.id, 'failed')
       this.notice = {
         ...this.notice,
-        [entry.id]: this.failureTail(entry.id) || 'The server never answered on its port'
+        [entry.id]:
+          this.failureTail(entry.id) ||
+          (this.isReferenceRow(entry)
+            ? 'The model was still being downloaded when the server was stopped'
+            : 'The server never answered on its port')
       }
       return
     }
@@ -512,8 +781,13 @@ export class LocalAiController {
     // An MLX server answers its health endpoint from the moment its generator
     // loop is up, which is before a single weight has been read. Its weights on
     // disk are the honest ready line, and they are what the row is rewritten to.
-    const location = result.ready ? await this.modelLocationOf(entry) : null
+    const location = await this.modelLocationOf(entry)
     if (!this.handles.has(entry.id)) return
+    // The weights move out of the engine's cache the moment they are all there,
+    // whatever the load then does: a finished download belongs in the app's own
+    // folder, and a model that fails to load must not keep a row pointing into a
+    // cache a cleanup is free to empty.
+    if (!result.ready && location) this.localizeModel(entry, location)
     if (result.ready && (entry.runtime !== 'mlx' || !this.isReferenceRow(entry) || location)) {
       handle.timer = null
       this.setStatus(entry.id, 'running')

@@ -423,7 +423,8 @@
       projectThreads,
       workflow,
       activeBrainstorm,
-      activePrd
+      activePrd,
+      lifecycle
     ] = await Promise.all([
       invoke('spec:getActive', projectId, workflowThreadId),
       invoke('thread:get', projectId, workflowThreadId),
@@ -431,9 +432,11 @@
       invoke('thread:list', projectId),
       invoke('brainstorm:getWorkflow', projectId, workflowThreadId),
       invoke('brainstorm:getActive', projectId, workflowThreadId),
-      invoke('prd:getActive', projectId, workflowThreadId)
+      invoke('prd:getActive', projectId, workflowThreadId),
+      invoke('engineeringLifecycle:get', projectId, workflowThreadId)
     ])
     if (!board.loadOlderMessages.alive) return
+    board.handleAgentEvent.engineeringLifecycle = lifecycle
     board.currentWorkingTraceAttribution.coordinatorParentThread = board
       .currentWorkingTraceAttribution.coordinatorParentId
       ? (projectThreads.find(
@@ -560,6 +563,13 @@
     // The Spec/Assignment state above is now authoritative for this mount, so the
     // composer may show its ready card without a stale flash.
     board.composerScope.workflowReady = true
+    // A draft the app is still formulating owns the thread row as `planning`. It is
+    // reconstructible from durable state, which is what keeps the status honest
+    // after a reload or a view that mounted while the model was still working.
+    board.composerScope.assignmentFormulatingDurable =
+      activeAssignment === null &&
+      workflowThread?.status === 'planning' &&
+      lifecycle?.activeStage === 'assignment'
     board.submitSpecDecision.auditState = workflowThread?.auditState
     const activeAudit = await invoke('audit:getActive', projectId, workflowThreadId)
     if (!board.loadOlderMessages.alive) return

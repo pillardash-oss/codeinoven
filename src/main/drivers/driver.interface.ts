@@ -380,19 +380,6 @@ export interface GenerateTitleOptions extends AuxiliaryCandidateOverride {
   parentSessionId?: string
 }
 
-/** Captured conversation payload judged 0–10 by a disposable cheap-model completion. */
-export interface GradeTurnOptions extends AuxiliaryCandidateOverride {
-  settings: ThreadSettings
-  /** The initiating visible user message of the closed conversation window. */
-  userMessage: string
-  /** The agent's final output text for the conversation window. */
-  assistantOutput: string
-  /** The conversation's follow-up exchange, when one exists. */
-  followUp?: string | null
-  /** Parent turn whose authenticated transport permits a safe auxiliary grading process. */
-  parentSessionId?: string
-}
-
 /**
  * One self-contained auxiliary completion run against the harness's cheapest
  * available model, shared by every disposable cheap-model scenario (title
@@ -494,12 +481,6 @@ export interface HarnessDriver {
    * their cheapest available model, then fall back to the active thread model.
    */
   generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null>
-
-  /**
-   * Judge a completed turn 1–5 in an isolated disposable session using the
-   * same cheapest-candidate strategy as title generation.
-   */
-  gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null>
 
   /**
    * Run one self-contained completion in a disposable session, cheapest
@@ -882,10 +863,16 @@ export interface HarnessDriver {
    * prepaid credits). Used by the battery popover so old threads   whose turns
    * predate quota capture   can still show live quota. Returns null when the
    * harness cannot report quota without a turn.
+   *
+   * `conversationSessionId` names the thread's own session. Context occupancy
+   * belongs to ONE conversation, so a driver may report `contextUsed` only
+   * when that exact session answered: every other live session in the process
+   * holds somebody else's context and must never stand in for this thread.
    */
   readAccountUsage?(
     projectPath: string,
-    providerId?: string
+    providerId?: string,
+    conversationSessionId?: string
   ): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits

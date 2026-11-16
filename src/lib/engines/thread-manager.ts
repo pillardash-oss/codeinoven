@@ -24,6 +24,7 @@ import {
   DEFAULT_SCOPE_BUCKET_ID,
   type ScopeSlice,
   type Thread,
+  type ThreadAnnounceOptions,
   type CreateThreadInput,
   type ThreadStatus,
   type ThreadSettings,
@@ -117,7 +118,7 @@ export class ThreadManager {
    */
   constructor(
     private db: Database,
-    private onChange?: (thread: Thread) => void,
+    private onChange?: (thread: Thread, options?: ThreadAnnounceOptions) => void,
     private onDelete?: (thread: Thread) => void | Promise<void>,
     private onDeleted?: (threads: Pick<Thread, 'projectId' | 'id'>[]) => void | Promise<void>,
     scopeRoots?: ThreadScopeRootProvider
@@ -161,8 +162,7 @@ export class ThreadManager {
       this.projectRepo,
       this.transcripts,
       (thread) => this.onDelete?.(thread),
-      (threads) => this.onDeleted?.(threads),
-      (projectId, threadIds) => this.onThreadsDeletedForRanking?.(projectId, threadIds)
+      (threads) => this.onDeleted?.(threads)
     )
     this.scopeThreads = new ThreadScopeThreadsService(
       this.threadRepo,
@@ -184,8 +184,8 @@ export class ThreadManager {
    * database column current on its own, but a renderer only re-sorts a row it
    * has been told about, so the refreshed coordinator is announced here.
    */
-  private async announce(thread: Thread): Promise<void> {
-    this.onChange?.(thread)
+  private async announce(thread: Thread, options?: ThreadAnnounceOptions): Promise<void> {
+    this.onChange?.(thread, options)
     if (!thread.coordinatorThreadId) return
     try {
       const coordinator = await this.threadRepo.getViaWorker(thread.coordinatorThreadId)
@@ -202,13 +202,6 @@ export class ThreadManager {
 
   /** Reads scope boards to keep pinned scopes outside the thread bucket. */
   private readonly scopeManager: ScopeManager
-
-  /**
-   * Set by the ChatEngine so deleting a thread closes its open ranking
-   * snapshot conversation for immediate grading before the thread foreign
-   * key is detached   deletion is the conversation close signal.
-   */
-  onThreadsDeletedForRanking?: (projectId: string, threadIds: string[]) => void
 
   /** Distinct harness ids used across a thread's session, newest first. */
   /** Distinct harness ids used across a thread's session, newest first. */
@@ -734,7 +727,17 @@ export class ThreadManager {
     projectId: string,
     threadId: string,
     status: ThreadStatus,
-    opts?: { read?: boolean; error?: string; errorDetail?: string }
+    opts?: {
+      read?: boolean
+      error?: string
+      errorDetail?: string
+      /**
+       * False when this settle only ends an internal continuation of a turn the
+       * reader was already told about, so the row still reaches every window
+       * while no second notification interrupts them for it.
+       */
+      notify?: boolean
+    }
   ): Promise<Thread> {
     return this.status.setStatus(projectId, threadId, status, opts)
   }

@@ -8,6 +8,7 @@
   import { questionWalkthrough } from '$lib/stores/question-walkthrough.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import DockRow from '../ui/DockRow.svelte'
+  import { splitWalkthroughLinks } from './question-walkthrough-links'
 
   /**
    * The step-by-step text attached to a question or to one of its options.
@@ -41,6 +42,15 @@
   let copyResetTimer: ReturnType<typeof setTimeout> | undefined
 
   const copied = $derived(copiedText === questionWalkthrough.text)
+
+  /**
+   * The walkthrough with its addresses as anchors.
+   *
+   * A walkthrough routinely says "open this link", and rendering it as one text
+   * node left that address unclickable. The copy control still copies the whole
+   * block as written, so selectability and copying are unchanged.
+   */
+  const segments = $derived(splitWalkthroughLinks(questionWalkthrough.text))
 
   $effect(() => () => clearTimeout(copyResetTimer))
 
@@ -115,7 +125,13 @@
       Follow this to produce the answer. Select any part you need, or copy the whole walkthrough.
     </p>
     <pre
-      class="border bg-elevated px-3 py-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground select-text">{questionWalkthrough.text}</pre>
+      class="border bg-elevated px-3 py-2.5 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-foreground select-text">{#each segments as segment, index (index)}{#if segment.href}<a
+            href={segment.href}
+            target="_blank"
+            rel="noreferrer noopener"
+            class="text-primary underline underline-offset-2 break-all hover:opacity-80"
+            >{segment.text}</a
+          >{:else}{segment.text}{/if}{/each}</pre>
   </div>
 
   {#snippet footer()}

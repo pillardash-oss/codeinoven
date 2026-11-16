@@ -55,6 +55,7 @@
     const unsubscribe = subscribe('app:toast', (event) => {
       const payload = event as
         | {
+            id?: string
             message?: string
             type?: 'error' | 'info'
             action?: ToastAction
@@ -76,7 +77,13 @@
           }
         })
       } else if (payload?.type === 'info') {
-        toast.info(message, { closeButton: true })
+        // An info notice describes a condition, so it never outlives it: it is
+        // bounded, and a raiser that resolves the condition withdraws it by id.
+        toast.info(message, {
+          closeButton: true,
+          duration: 8_000,
+          ...(payload.id ? { id: payload.id } : {})
+        })
       } else {
         reportErrorWithDetails(message, {
           details: payload.details,
@@ -87,8 +94,12 @@
         })
       }
     })
+    const offDismiss = subscribe('app:toast:dismiss', (id) => {
+      if (typeof id === 'string' && id) toast.dismiss(id)
+    })
     return () => {
       unsubscribe()
+      offDismiss()
       offInteractions()
       observer.disconnect()
       void invoke('browser:setToastOverlay', null).catch(() => {})

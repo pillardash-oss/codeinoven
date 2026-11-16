@@ -62,6 +62,12 @@
   let visibleDownloads = $derived(downloads.slice(0, VISIBLE_DOWNLOADS))
   let remainingDownloadCount = $derived(Math.max(0, downloads.length - VISIBLE_DOWNLOADS))
   let hasDownloads = $derived(downloads.length > 0)
+  let localAiDownloads = $derived(payload?.localAiDownloads ?? [])
+  let visibleLocalAiDownloads = $derived(localAiDownloads.slice(0, VISIBLE_DOWNLOADS))
+  let remainingLocalAiCount = $derived(Math.max(0, localAiDownloads.length - VISIBLE_DOWNLOADS))
+  let hasLocalAiDownloads = $derived(localAiDownloads.length > 0)
+  /** The fetches a close throws away, as opposed to the ones that carry on. */
+  let lostLocalAiDownloads = $derived(localAiDownloads.filter((entry) => !entry.resumable))
   /** This close parks the window in the menu bar instead of quitting. */
   let isPark = $derived(payload?.park === true)
 
@@ -82,6 +88,15 @@
           : 'running downloads will pause'
       )
     }
+    if (lostLocalAiDownloads.length > 0) {
+      costs.push(
+        `the ${lostLocalAiDownloads.length === 1 ? 'download' : 'downloads'} of local models will start over`
+      )
+    } else if (hasLocalAiDownloads) {
+      costs.push(
+        `the ${localAiDownloads.length === 1 ? 'local model download' : 'local model downloads'} will pause`
+      )
+    }
     return sentenceCase(costs.join(' and '))
   })
 
@@ -93,9 +108,7 @@
    *  spacing never depends on where the markup happens to wrap. */
   let closeSentence = $derived.by(() => {
     if (isPark) {
-      return closeCosts.length === 0
-        ? ''
-        : closeCosts
+      return closeCosts.length === 0 ? '' : closeCosts
     }
     return closeCosts.length === 0
       ? 'Are you sure you want to close?'
@@ -111,6 +124,29 @@
   let downloadsNote = $derived.by(() => {
     const many = downloads.length > 1
     return `Closing ${many ? 'pauses them' : 'pauses it'} and keeps the bytes already downloaded. On a server that supports resuming, ${many ? 'they continue' : 'it continues'} where ${many ? 'they left' : 'it left'} off the next time you open the app.`
+  })
+
+  /**
+   * What closing does to a Local AI model that is still being fetched. Unlike the
+   * line above, the answer depends on the engine, because only one of them can
+   * pick the file up again: llama.cpp keeps its partial file and asks the server
+   * for the rest, while the MLX engine's downloader always starts from zero.
+   */
+  let localAiDownloadsNote = $derived.by(() => {
+    const lost = lostLocalAiDownloads.length
+    const kept = localAiDownloads.length - lost
+    const parts: string[] = []
+    if (lost > 0) {
+      parts.push(
+        `${lost === 1 ? 'One of them is' : `${lost} of them are`} fetched by the MLX engine, which always downloads a model file from the beginning, so ${lost === 1 ? 'it starts' : 'they start'} over when that server next starts.`
+      )
+    }
+    if (kept > 0) {
+      parts.push(
+        `${kept === 1 ? 'The other one keeps' : `The other ${kept} keep`} the bytes already fetched and carr${kept === 1 ? 'ies' : 'y'} on where ${kept === 1 ? 'it left' : 'they left'} off.`
+      )
+    }
+    return parts.join(' ')
   })
 
   /**
@@ -171,6 +207,34 @@
               </li>
             {/if}
           </ul>
+        </div>
+      {/if}
+
+      {#if hasLocalAiDownloads}
+        <div class="space-y-2">
+          <p class="text-sm text-muted">These models are still downloading:</p>
+          <ul class="space-y-2">
+            {#each visibleLocalAiDownloads as download (download.entryId)}
+              <li class="flex min-w-0 items-center gap-2 text-xs">
+                <span
+                  class="min-w-0 flex-1 truncate font-mono text-foreground"
+                  title={download.reference}
+                >
+                  {download.reference}
+                </span>
+                <StatusPill tone={download.resumable ? 'info' : 'danger'} dot>
+                  {download.resumable ? 'Resumes' : 'Starts over'}
+                </StatusPill>
+              </li>
+            {/each}
+            {#if remainingLocalAiCount > 0}
+              <li class="text-xs text-dimmed">
+                +{remainingLocalAiCount} more
+                {remainingLocalAiCount === 1 ? 'model' : 'models'}
+              </li>
+            {/if}
+          </ul>
+          <p class="text-xs leading-relaxed text-dimmed">{localAiDownloadsNote}</p>
         </div>
       {/if}
 

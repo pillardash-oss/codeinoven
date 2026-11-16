@@ -172,7 +172,28 @@ export class ChatEngineAudit {
             threadId: assignment.coordinatorThreadId
           })
         ),
-        JSON.stringify({ assignmentId: assignment.id, task, report }, null, 2)
+        JSON.stringify(
+          {
+            assignmentId: assignment.id,
+            taskId,
+            // The task definition (prompt, description, audit checklist) is
+            // already in the coordinator's brief, so the wake carries only what
+            // the review decides on: which task, and what the worker reported.
+            task: task
+              ? {
+                  id: task.id,
+                  title: task.title,
+                  status: task.status,
+                  owner: task.owner,
+                  workerName: task.workerName ?? null,
+                  threadId: task.threadId ?? null
+                }
+              : null,
+            report
+          },
+          null,
+          2
+        )
       ].join('\n\n')
     )
   }
@@ -253,8 +274,21 @@ export class ChatEngineAudit {
     if (!(await this.implementationAuditEligible(coordinator))) {
       throw new Error('An approved Engineering implementation is required before audit.')
     }
-    if (this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)) {
-      throw new Error('Assignment audits use their Assignment auditor thread.')
+    const activeAssignment = this.host.state.assignmentEngine.getActive(
+      projectId,
+      coordinatorThreadId
+    )
+    if (activeAssignment) {
+      // An Assignment owns its audit. Delegating here is what keeps a Retry on an
+      // Assignment's audit on its own auditor instead of answering with a
+      // routing error, and an unfinished plan is refused for the reason that
+      // actually applies.
+      if (activeAssignment.status === 'completed') {
+        return this.ensureAssignmentAuditorThread(projectId, coordinatorThreadId, settings)
+      }
+      throw new Error(
+        'The Assignment is still running. Finish and review its remaining tasks before auditing.'
+      )
     }
     if (coordinator.settings?.loopMode === true) {
       throw new Error('Achievement audits use their Achievement Auditor thread.')

@@ -404,7 +404,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
   async generateAssignmentDraft(instructions?: string): Promise<void> {
     if (this.assignmentBusy) return
     this.assignmentBusy = true
-    this.root.composerScope.assignmentFormulating = true
+    this.root.composerScope.assignmentFormulatingLocal = true
     this.assignmentError = ''
     try {
       let signingSpec = this.root.submitBrainstormDecision.spec
@@ -430,13 +430,21 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
           await this.root.harnessUsage.setActiveSpec(signingSpec)
         }
       }
-      this.assignment = await invoke(
+      const started = await invoke(
         'agent:generateAssignmentDraft',
         this.root.handleAgentEvent.thread.projectId,
         this.root.handleAgentEvent.thread.id,
         this.root.loadOlderMessages.settings,
         instructions && instructions.trim() ? instructions : undefined
       )
+      if (started.state === 'formulating') {
+        // The draft is being built in the background: the thread row already owns
+        // the in-progress state and `assignment.ready` opens the board. Nothing
+        // here may wait for the model.
+        this.root.composerScope.assignmentFormulatingDurable = true
+        return
+      }
+      this.assignment = started.assignment
       this.assignmentVersions = await invoke(
         'assignment:listVersions',
         this.assignment.projectId,
@@ -458,7 +466,7 @@ export class ThreadViewSubmitSpecDecision extends BoardUnit<ThreadView> {
       this.root.handleAgentEvent.errorMessage = this.assignmentError
     } finally {
       this.assignmentBusy = false
-      this.root.composerScope.assignmentFormulating = false
+      this.root.composerScope.assignmentFormulatingLocal = false
     }
   }
 

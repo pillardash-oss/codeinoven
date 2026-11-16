@@ -110,7 +110,7 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
   cio_create_spec:
     'Create an engineering specification draft for review, only when the user explicitly asks for a spec or a specification. A plan is not a spec. Does not approve or implement it.',
   cio_create_assignment:
-    'Draft independently promptable worker tasks, only when the user explicitly asks to split work across workers, tasks or agents. Nothing runs until sign-off. If preference is unknown, ask whether the user wants promptable Assignment workers or inline sub-agents.',
+    'Draft independently promptable worker tasks, only when the user explicitly asks to split work across workers, tasks or agents. Answers at once: an existing draft is returned, otherwise the graph is formulated in the background and the thread shows it in progress, so never wait or re-request. Pass plan to author the graph yourself (mode "append" adds more across calls) and the app then generates none. Nothing runs until sign-off. If preference is unknown, ask whether the user wants promptable Assignment workers or inline sub-agents.',
   cio_util_find:
     'Find app-managed capabilities by task or name. Evaluate candidates semantically. Only notFound:true proves absence. Known eligible ids may be activated directly.',
   cio_util_init:

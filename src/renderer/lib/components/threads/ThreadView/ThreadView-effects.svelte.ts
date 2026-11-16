@@ -1167,12 +1167,25 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       })
     })
 
+    /**
+     * Focus the composer that is already on screen, without rebuilding it.
+     *
+     * A focus request arrives when a thread is opened onto a conversation that
+     * is already mounted (a New thread that reuses the blank thread being typed
+     * into, a scope board's new-thread action). Rebuilding the composer there
+     * threw the field away and re-filled it from the stored draft, so the input
+     * the user was writing in blinked empty before their own words came back.
+     * The editor is the one surface that must never be re-hydrated under the
+     * user's cursor: focusing it in place gives the caret back and nothing else.
+     * A request issued before this conversation mounted is already satisfied by
+     * the composer's own autofocus, which is why the baseline is captured at
+     * mount instead of starting from zero.
+     */
     $effect(() => {
       const current = workspaceState.focusComposerCount
-      if (current !== this.root.state.prevFocusComposerCount) {
-        this.root.state.prevFocusComposerCount = current
-        this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
-      }
+      if (current === this.root.state.prevFocusComposerCount) return
+      this.root.state.prevFocusComposerCount = current
+      this.root.state.composer?.focusComposerAtSavedCaret()
     })
 
     $effect(() => {

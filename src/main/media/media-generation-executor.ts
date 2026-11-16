@@ -1,6 +1,6 @@
 import { relative, sep } from 'node:path'
 import { EXPERT_FALLBACK_GUIDANCE } from '../../lib/experts'
-import { authoredWorkRootSync } from '../design/authored-work-root'
+import { authoredWorkRoot } from '../design/authored-work-root'
 import { resolveServedFolder } from '../preview/served-folder'
 import { currentWorkRoot } from '../design/work-roots-state'
 import { saveDesignMedia } from '../design/design-media-service'
@@ -137,7 +137,7 @@ export function createMediaGenerationExecutor(
       )
     }
 
-    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
+    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
     const sessionKind = (await options.sessionKind(context.projectId, context.threadId)) ?? 'design'
     const directory = resolveServedFolder(
       scope.path,

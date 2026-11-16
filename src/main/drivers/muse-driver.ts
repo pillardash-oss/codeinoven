@@ -59,7 +59,6 @@ import type {
 import { PersistentCliDriver } from './persistent-cli-driver'
 import type {
   GenerateTitleOptions,
-  GradeTurnOptions,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions
@@ -273,14 +272,6 @@ export class MuseDriver extends PersistentCliDriver {
 
   async generateTitle(projectPath: string, options: GenerateTitleOptions): Promise<string | null> {
     return this.generateTitleWithCandidates(
-      projectPath,
-      options,
-      options.candidates ?? (await this.cheapestCandidate())
-    )
-  }
-
-  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    return this.gradeTurnWithCandidates(
       projectPath,
       options,
       options.candidates ?? (await this.cheapestCandidate())

@@ -24,8 +24,37 @@ All notable changes to CodeInOven are documented here. This project follows
 
 ### Changed
 
-- **The runtime moved to Electron 45.3.1 (Chromium 156), and the embedded
-  browser's extension surface was re-measured rather than assumed.** The
+- **The app no longer installs a GPU matting stack at runtime, or ships one.**
+  `remove-background` reached `@remotion/video-matting`,
+  `@huggingface/transformers`, `mediabunny` and `@mediabunny/server` through a
+  462 MB installer that ran a package manager into the app's own config folder
+  on demand, and the four packages were carried as devDependencies so the build
+  could leave their imports external. None of that is needed: the installer, the
+  utility-process matting worker, the `remove-background` operation (studio, agent
+  tool and utility operation list), the Design and video settings block and its
+  progress channel are all gone, along with the four packages, the `mediabunny`
+  override and the build externals. A film that needs a cut-out subject is now an
+  agent task: the video skill tells the agent to install whichever stack it wants
+  inside `.cio/tmp/pack-<slug>/`, keep the weights there, run it from that folder
+  and never install it into the app, its config folder or a user's repository.
+
+- **Dependencies were refreshed, and the three that cannot move yet are held
+  by evidence rather than inertia.** Every direct dependency was checked against
+  the registry: 23 were bumped, including jsdom 31, pele 1.13, sherpa-onnx-node
+  2.0.1, mammoth 1.13, the Claude Agent SDK, builder-util and vitest 5.1. Three
+  stay put: `typescript` at 6 because TS 7 removes the classic compiler API that
+  two tests and `typescript-eslint` depend on, and `@huggingface/transformers`
+  plus `mediabunny` at their exact versions because `@remotion/video-matting`
+  peer-pins both. `bits-ui` 2.21.0 was safe by its own release notes but pushed
+  the eager initial closure past the frozen budget by 382 bytes on its own, so
+  it stays at 2.20.2 until the first screen can pay for it. pele 1.12 keys label
+  contrast off two CSS variables the mermaid renderer never set, so
+  `MermaidDiagram.svelte` now supplies them instead of letting dark-mode labels
+  fall back to the theme foreground on a light fill, and the unused `chokidar`
+  dependency is gone.
+
+- **The runtime moved to Electron 45.3.2 (Chromium 156.0.8078.100), and the
+  embedded browser's extension surface was re-measured rather than assumed.** The
   permission list that is stripped from an installed manifest was recorded on
   Chromium 152, so it was re-taken against the shipped runtime: all 103 names
   are still unknown to the loader, and no name warned on the new runtime that
@@ -37,13 +66,17 @@ All notable changes to CodeInOven are documented here. This project follows
   already `sandbox: true`, so the new `window.open` child sandbox rule changes
   nothing; screen capture already answers the new `display-capture` permission
   (`src/lib/browser/site-permissions.ts`), and no code reads an ASAR file
-  descriptor across a process boundary. The 45.3.1 patch keeps the same
-  Chromium and Node builds, so none of that had to be taken again; its two
-  fixes both land on code this app runs, a macOS notification observer leak
+  descriptor across a process boundary. The two 45.3.x patches changed no API
+  this app uses, so none of that had to be taken again. Their fixes arrive where
+  this app would have felt them: 45.3.1 stops a macOS notification observer leak
   when a notification is unsubscribed before it is closed (the detach-then-close
-  path in `src/main/notifications/notification-service.ts`) and the rejection of
-  certificates issued by eMudhra's revoked RSA intermediates, which the embedded
-  browser inherits from Chromium's root store without a code change.
+  path in `src/main/notifications/notification-service.ts`) and rejects
+  certificates from eMudhra's revoked RSA intermediates, which the embedded
+  browser inherits from Chromium's root store without a code change; 45.3.2
+  saves cookies set shortly before quitting, which is the same race the
+  embedded browser's own flush closes (`src/main/browser/browser-service/
+  browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
+  the Chromium patch above.
 
 ### Fixed
 

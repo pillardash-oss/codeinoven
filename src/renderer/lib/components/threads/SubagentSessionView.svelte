@@ -91,10 +91,16 @@
   }
 
   const sessionId = $derived(tab.activity.childSessionId)
+  /**
+   * The live work of an app-owned run (the Assignment draft), forwarded by the
+   * parent thread. Its session has no provider-native transcript to load, so the
+   * forwarded trace is the transcript the panel shows.
+   */
+  const draftTrace = $derived(tab.draftTrace ?? [])
   /** A harness that names no child session (Claude Code forwards a sub-agent's
    *  messages into the parent stream instead) has no transcript to load: the
    *  panel renders the text it is handed, and builds the run itself. */
-  const parentForwarded = $derived(!sessionId)
+  const parentForwarded = $derived(!sessionId || tab.activity.assignmentDraft === true)
   /** The run this panel has watched arrive. Nothing accumulates for a worker
    *  nobody is looking at, so an unopened panel costs the main process one
    *  bounded record per message instead of an ever-growing transcript.
@@ -197,7 +203,7 @@
   }
 
   async function loadStatus(): Promise<void> {
-    if (!sessionId) return
+    if (!sessionId || parentForwarded) return
     try {
       const status = await invoke(
         'agent:getChildSessionStatus',
@@ -239,7 +245,7 @@
   // the transcript read goes through the database, which the main process
   // closes while the window is still open.
   $effect(() => {
-    if (!sessionId || appQuitState.quitting) return
+    if (!sessionId || parentForwarded || appQuitState.quitting) return
     if (busy && !liveStreamed) {
       workerWasBusy = true
       const poll = setInterval(() => {
@@ -260,7 +266,7 @@
   })
 
   async function loadMessages(): Promise<void> {
-    if (!sessionId) return
+    if (!sessionId || parentForwarded) return
     loading = true
     loadError = ''
     const mergeWithStream = liveStreamed
@@ -353,6 +359,26 @@
     if (!sessionId || retrying) return
     retrying = true
     actionError = ''
+    if (tab.activity.assignmentDraft) {
+      // The draft retry continues the session the failed run preserved, so the
+      // model keeps the context it already built. It answers immediately and the
+      // settled run reports through the card and this panel's notices.
+      void invoke('agent:retryAssignmentDraft', tab.projectId, tab.threadId)
+        .then(() => {
+          liveStatus = { state: 'working' }
+          recoveryNotice = {
+            message: 'A manual retry continued the existing draft session.',
+            recoveredAt: Date.now()
+          }
+        })
+        .catch((error: unknown) => {
+          actionError = error instanceof Error ? error.message : 'The draft retry could not start.'
+        })
+        .finally(() => {
+          retrying = false
+        })
+      return
+    }
     void invoke('agent:retryChildSession', tab.projectId, tab.threadId, sessionId)
       .then(() => {
         liveStatus = { state: 'working' }
@@ -455,9 +481,9 @@
         </div>
       {/each}
 
-      {#if showWorkingTrace}
+      {#if draftTrace.length > 0 || showWorkingTrace}
         <WorkingTrace
-          parts={runParts}
+          parts={draftTrace.length > 0 ? draftTrace : runParts}
           open={busy}
           {busy}
           done={!busy}

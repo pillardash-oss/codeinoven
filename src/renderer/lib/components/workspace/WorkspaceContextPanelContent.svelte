@@ -267,15 +267,6 @@
 
   let activePanelIsBrowser = $derived(activeContextTab?.kind === 'browser')
 
-  function leavePanel(node: HTMLElement) {
-    // An outro keeps the outgoing browser mounted and its native-view claim
-    // alive. Switching back can revive that old block ahead of the newer claim,
-    // leaving the selected tab hidden behind the page it replaced. Release a
-    // browser synchronously; other tools can keep their ordinary cross-fade.
-    if (node.dataset.panelKind === 'browser') return { duration: 0 }
-    return fly(node, panelReveal(true))
-  }
-
   /** The thread whose own workspace the file tree mounts. Only a chat or an
    *  assistant task has one; a real project always reads the project root. */
   let filesThreadId = $derived(
@@ -398,22 +389,27 @@
   </div>
 {/if}
 {#if activeContextTab && !filesVisible}
-  <!-- Browser panels leave immediately to release their native-view claims.
-       Other tools cross-fade when the active tool changes. Both the
-       out-going and the in-coming panel are absolutely placed in the same cell,
-       so they overlap for the length of the switch instead of one blinking off
-       before the other appears. Only the incoming panel rises: the outgoing one
-       is always positioned with no translate, because a transition's params are
-       re-read when the block is destroyed   by then the active tab is already
-       the new one, so a rising outgoing browser panel would slide the native
-       `WebContentsView` it reports the bounds of. -->
+  <!-- Arrival only, deliberately: no `out:` on the panel being replaced.
+
+       Every panel here is absolutely placed in one cell, so the arriving tool
+       is drawn UNDER the one it replaces. A Svelte `out:` transition pauses the
+       outgoing block until its transition reports done, which is what lets one
+       panel cover the next   and the reason the sidebar could sit showing the
+       previous tool (the project tree, say) with the rail's active mark already
+       moved, until the whole region was closed and reopened to remount it. The
+       outgoing tool is now destroyed in the same frame, so no panel can outlive
+       its turn as the active tab. It also releases a browser panel's native
+       `WebContentsView` claim on that frame.
+
+       Only the arriving panel moves, and a browser-backed one fades without the
+       rise: its native view floats above the DOM and a translate would move the
+       box it reports as the view's bounds. -->
   <div class="relative h-full">
     {#key `${activePanelKey}:${panelReloadNonce}`}
       <div
         class="absolute inset-0"
         data-panel-kind={activeContextTab.kind}
         in:fly={panelReveal(activePanelIsBrowser)}
-        out:leavePanel
       >
         {#if activeContextTab.kind === 'oven'}
           {#await loadCachedPanelModule(PANEL_KEYS.oven, () => import('../threads/OvenSidebarPanel.svelte'))}

@@ -1,5 +1,4 @@
 import type { AgentEvent, AgentMessage, AgentProviderIssue } from '../../../lib/types'
-import { parseRankingGrade } from '../../chat/turn-grader-prompt'
 import type {
   TitleAttemptAccounting,
   TitleAttemptUsage,
@@ -19,12 +18,6 @@ export class TitleTurnProviderIssueError extends Error {
     super(issue.message)
     this.name = 'TitleTurnProviderIssueError'
   }
-}
-
-/** Validate a one-shot grading response; returns the score digits for accounting. */
-export function parseRankingGradeForAttempt(raw: string): string | null {
-  const score = parseRankingGrade(raw)
-  return score === null ? null : String(score)
 }
 
 /** Accept any non-empty auxiliary response, trimmed and length-bounded. */

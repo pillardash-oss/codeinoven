@@ -1,15 +1,16 @@
 import { agentDialog } from '../../system/file-dialogs'
-import { nativeImage, type NativeImage } from 'electron'
+import { nativeImage, type NativeImage, type WebContents } from 'electron'
 import { createHash } from 'node:crypto'
-import { realpath, stat } from 'node:fs/promises'
+import { readFile, realpath, stat } from 'node:fs/promises'
 import { basename, isAbsolute } from 'node:path'
 import type { PermissionLevel } from '../../../lib/types'
 import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../../lib/image-payload'
-import { agentElementRectScript } from './browser-agent-page'
+import { agentFileInputScript } from './browser-agent-page'
 import { Logger } from '../../system/logger'
 import { type BrowserTab } from './browser-types'
 import { SCREENSHOT_JPEG_QUALITY, SCREENSHOT_MAX_BYTES } from './browser-validation'
 import type { BrowserService } from '../browser-service'
+import type { AgentFrameEntry } from './browser-agent-frames'
 import { asObject, safeOrigin } from './browser-service-common'
 
 /**
@@ -28,10 +29,40 @@ import { asObject, safeOrigin } from './browser-service-common'
  * root cannot drift apart: a changed signature is a compile error here.
  */
 export interface AgentFilesHost {
+  readonly agentTarget: BrowserService['agentTarget']
+  readonly pageRectFor: BrowserService['pageRectFor']
   readonly lastScreenshot: BrowserService['lastScreenshot']
   readonly optionalAgentSelector: BrowserService['optionalAgentSelector']
+  readonly optionalAgentTarget: BrowserService['optionalAgentTarget']
   readonly runAgentScript: BrowserService['runAgentScript']
+  readonly runAgentScriptIn: BrowserService['runAgentScriptIn']
   readonly window: BrowserService['window']
+}
+
+/** Bytes one upload into a frame may carry, since it travels as script text. */
+export const MAX_IN_FRAME_UPLOAD_BYTES = 16 * 1024 * 1024
+
+/** The content type a file's extension implies, for the File the page receives. */
+export function uploadMimeType(path: string): string {
+  const extension = path.slice(path.lastIndexOf('.') + 1).toLowerCase()
+  const known: Record<string, string> = {
+    png: 'image/png',
+    jpg: 'image/jpeg',
+    jpeg: 'image/jpeg',
+    webp: 'image/webp',
+    gif: 'image/gif',
+    svg: 'image/svg+xml',
+    pdf: 'application/pdf',
+    txt: 'text/plain',
+    csv: 'text/csv',
+    json: 'application/json',
+    zip: 'application/zip',
+    doc: 'application/msword',
+    docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    xls: 'application/vnd.ms-excel',
+    xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  }
+  return known[extension] ?? 'application/octet-stream'
 }
 
 export function fileChooserFilters(accept: string): Array<{ name: string; extensions: string[] }> {
@@ -67,29 +98,17 @@ export class BrowserServiceAgentFiles {
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
 
     const selector = this.host.optionalAgentSelector(input) ?? 'input[type="file"]'
+    const target = this.host.agentTarget({ ...input, selector }, contents)
     const beforeUrl = contents.getURL()
     const beforeGeneration = tab.navigationGeneration
-    const inputState: unknown = await contents.executeJavaScript(`(() => {
-      const element = document.querySelector(${JSON.stringify(selector)});
-      if (!(element instanceof HTMLInputElement) || element.type !== 'file') {
-        return { available: false };
-      }
-      return {
-        available: true,
-        multiple: element.multiple,
-        accept: element.accept,
-        disabled: element.disabled
-      };
-    })()`)
-    if (typeof inputState !== 'object' || inputState === null) {
-      throw new Error('The selected browser element is not a file input')
-    }
-    const inputRecord = inputState as Record<string, unknown>
-    if (inputRecord['available'] !== true || inputRecord['disabled'] === true) {
+    const inputState = asObject(
+      await this.host.runAgentScriptIn(target.entry, agentFileInputScript({ selector }))
+    )
+    if (!inputState || inputState['available'] !== true || inputState['disabled'] === true) {
       throw new Error('The selected browser element is not an enabled file input')
     }
-    const multiple = inputRecord['multiple'] === true
-    const accept = typeof inputRecord['accept'] === 'string' ? inputRecord['accept'] : ''
+    const multiple = inputState['multiple'] === true
+    const accept = typeof inputState['accept'] === 'string' ? inputState['accept'] : ''
     const requestedPaths = this.uploadPathInputs(input)
     const suppliedPaths = permissionLevel === 'full_access' ? requestedPaths : []
     let paths: string[]
@@ -123,6 +142,10 @@ export class BrowserServiceAgentFiles {
       )
     }
 
+    if (target.entry.index !== 0) {
+      return this.attachInsideFrame(target.entry, selector, paths)
+    }
+
     const debuggerSession = contents.debugger
     const attachedHere = !debuggerSession.isAttached()
     try {
@@ -147,6 +170,52 @@ export class BrowserServiceAgentFiles {
       return { uploaded: true, files: paths.map((path) => basename(path)), submitted: false }
     } finally {
       if (attachedHere && debuggerSession.isAttached()) debuggerSession.detach()
+    }
+  }
+
+  /**
+   * Fill a file input that lives in an embedded document.
+   *
+   * The debugger session belongs to the page's own document, and a cross-origin
+   * frame's input is not in it, so the files are built inside the frame itself from
+   * bytes read here. The page never learns the local path, and the cap keeps one
+   * upload from turning a frame's script into a multi-megabyte expression.
+   */
+  private async attachInsideFrame(
+    entry: AgentFrameEntry,
+    selector: string,
+    paths: string[]
+  ): Promise<Record<string, unknown>> {
+    const sizes = await Promise.all(paths.map((path) => stat(path)))
+    const total = sizes.reduce((sum, details) => sum + details.size, 0)
+    if (total > MAX_IN_FRAME_UPLOAD_BYTES) {
+      throw new Error(
+        `A file input inside a frame can take at most ${Math.round(MAX_IN_FRAME_UPLOAD_BYTES / (1024 * 1024))} MB in one upload, and these files total ${(total / (1024 * 1024)).toFixed(1)} MB`
+      )
+    }
+    const files = await Promise.all(
+      paths.map(async (path) => ({
+        name: basename(path),
+        type: uploadMimeType(path),
+        base64: (await readFile(path)).toString('base64')
+      }))
+    )
+    const attached = asObject(
+      await this.host.runAgentScriptIn(entry, agentFileInputScript({ selector, files }))
+    )
+    if (attached?.['available'] !== true) throw new Error('The file input is no longer present')
+    if (attached['disabled'] === true) throw new Error('The file input is disabled')
+    const count = Number(attached['attached'] ?? 0)
+    if (count !== paths.length) {
+      throw new Error(
+        `The frame's file input kept ${count} of ${paths.length} files; retry on the current page`
+      )
+    }
+    return {
+      uploaded: true,
+      files: paths.map((path) => basename(path)),
+      submitted: false,
+      frame: entry.index
     }
   }
 
@@ -201,9 +270,7 @@ export class BrowserServiceAgentFiles {
     const lossless = png.byteLength <= SCREENSHOT_MAX_BYTES
     const encoded = lossless ? png : resized.toJPEG(SCREENSHOT_JPEG_QUALITY)
     const hash = createHash('sha256').update(encoded).digest('hex')
-    // One capture record per target: a full-page capture must not be reported as
-    // unchanged because the viewport happened to look the same a moment ago.
-    const captureKey = `${tabId}:${this.host.optionalAgentSelector(input) ?? (input['fullPage'] === true ? 'page' : 'viewport')}`
+    const captureKey = `${tabId}:${this.captureKeyFor(input, tab.view.webContents)}`
     if (input['force'] !== true && this.host.lastScreenshot.get(captureKey)?.hash === hash) {
       return {
         unchanged: true,
@@ -225,6 +292,28 @@ export class BrowserServiceAgentFiles {
   }
 
   /**
+   * Which picture one screenshot asks for, for the unchanged-capture check.
+   *
+   * One record per target, so a full-page capture is never reported as unchanged
+   * because the viewport happened to look the same a moment ago, and the same
+   * selector inside two different frames is two different targets. Talking to a
+   * page, not reading it: this never fails, and a target it cannot resolve falls
+   * back to the selector it names.
+   */
+  captureKeyFor(input: Record<string, unknown>, contents: WebContents): string {
+    const selector = this.host.optionalAgentSelector(input)
+    if (!selector) return input['fullPage'] === true ? 'page' : 'viewport'
+    const frame = (() => {
+      try {
+        return this.host.optionalAgentTarget(input, contents)?.entry.index ?? 0
+      } catch {
+        return 0
+      }
+    })()
+    return `${selector}|${frame}`
+  }
+
+  /**
    * The pixels one screenshot asks for: the viewport, the whole page, or one
    * element.
    *
@@ -237,27 +326,19 @@ export class BrowserServiceAgentFiles {
   async captureAgentImage(tab: BrowserTab, input: Record<string, unknown>): Promise<NativeImage> {
     const contents = tab.view.webContents
     if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
-    const selector = this.host.optionalAgentSelector(input)
+    const target = this.host.optionalAgentTarget(input, contents)
     const fullPage = input['fullPage'] === true
-    if (!selector && !fullPage) return contents.capturePage()
+    if (!target && !fullPage) return contents.capturePage()
     const debuggerSession = contents.debugger
     const attachedHere = !debuggerSession.isAttached()
     try {
       if (attachedHere) debuggerSession.attach('1.3')
       await debuggerSession.sendCommand('Page.enable').catch(() => undefined)
       let clip: { x: number; y: number; width: number; height: number; scale: number }
-      if (selector) {
-        const rect = asObject(
-          await this.host.runAgentScript(contents, agentElementRectScript(selector))
-        )
+      if (target) {
+        const rect = await this.host.pageRectFor(tab, target)
         if (!rect) throw new Error('the element could not be measured')
-        clip = {
-          x: Number(rect['x']),
-          y: Number(rect['y']),
-          width: Number(rect['width']),
-          height: Number(rect['height']),
-          scale: 1
-        }
+        clip = { ...rect, scale: 1 }
       } else {
         const metrics = asObject(await debuggerSession.sendCommand('Page.getLayoutMetrics'))
         const size = asObject(metrics?.['cssContentSize']) ?? asObject(metrics?.['contentSize'])

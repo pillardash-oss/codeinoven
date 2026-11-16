@@ -52,7 +52,6 @@ import type {
   Thread,
   ThreadTransferResult,
   ThinkingLevel,
-  LocalRankingGradeProgress,
   AssistantAgents
 } from '../../../lib/types'
 import { OpenUsageClient } from '../../usage/openusage-client'
@@ -216,6 +215,17 @@ export class ChatEngineState {
    */
   taskReconcileTurns = new Set<string>()
 
+  /**
+   * The user prompt whose answer the app already announced, per thread.
+   *
+   * A settle only interrupts the reader once per prompt: a harness that ends a
+   * turn and then continues it with its own internal instruction (pi's task-list
+   * reconcile) settles the same prompt twice, and the second settle is the same
+   * answer. Kept per thread rather than per session because a thread's prompt is
+   * what the user is waiting on. See `completionAnnouncement`.
+   */
+  announcedCompletionPrompts = new Map<string, string>()
+
   /** Latest high-frequency stream mutations waiting for the next renderer frame. */
   /** Parsed stream-log state per thread so a reopen only parses appended bytes. */
   turnStreamCache = new Map<string, TurnStreamCacheEntry>()
@@ -307,8 +317,32 @@ export class ChatEngineState {
   /** Concurrent late-Assignment requests for one coordinator share one model run. */
   activeAssignmentDraftRuns = new Map<string, Promise<AssignmentPlan>>()
 
+  /**
+   * Bumped whenever an Assignment draft's authority changes hands: an agent
+   * authored the content, the user stopped the run, or a newer formulation
+   * started. A background run compares the value it captured when it began, so a
+   * result that arrives after its authority was revoked is discarded instead of
+   * overwriting the draft the thread actually shows.
+   */
+  assignmentDraftRevisions = new Map<string, number>()
+
   /** The killable driver session currently drafting an Assignment, so Stop/Esc can reach it. */
   activeAssignmentDraftSessions = new Map<string, ActiveAssignmentDraftSession>()
+
+  /**
+   * The live session of a draft run that failed terminally.
+   *
+   * A retry continues this exact session instead of starting a fresh model run,
+   * so the agent keeps the context it already built. The entry is disposed on
+   * retry, on success, on a harness change, on Stop and at shutdown.
+   */
+  preservedAssignmentDraftSessions = new Map<string, ActiveAssignmentDraftSession>()
+
+  /** Parent-thread session a draft run reports its card into, so it stays live. */
+  assignmentDraftParentSessions = new Map<string, string>()
+
+  /** When the current draft run started, so its card keeps one honest start time. */
+  assignmentDraftStartedAt = new Map<string, number>()
 
   userAbortedAssignmentDraftOperations = new Set<string>()
 
@@ -452,8 +486,12 @@ export class ChatEngineState {
   /** Serializes durable child-to-coordinator queue reads and writes per Sr. Engineer thread. */
   readonly coordinatorHandoffQueueLocks = new Map<string, Promise<void>>()
 
-  /** Prevents concurrent idle signals from dispatching the same queued handoff twice. */
-  readonly coordinatorHandoffDrains = new Map<string, Promise<void>>()
+  /**
+   * Prevents concurrent idle signals from dispatching the same queued handoff
+   * twice. It resolves to whether that drain delivered a handoff, so the idle
+   * finalization can tell a delivered handoff from an empty queue.
+   */
+  readonly coordinatorHandoffDrains = new Map<string, Promise<boolean>>()
 
   /** Identifies the one queued handoff currently being delivered through sendPrompt. */
   readonly dispatchingCoordinatorHandoffIds = new Set<string>()
@@ -719,59 +757,8 @@ export class ChatEngineState {
    */
   typesafeDecision: TypesafeDecisionService | null = null
 
-  /**
-   * Fall-through outcomes already reported, so a standing one logs once.
-   *
-   * An unconfigured capability falls through on every single grade, and the log
-   * line that describes it is identical every time. Recording the outcome once
-   * is what keeps a configuration fact out of the per-turn noise.
-   */
-  readonly reportedTypesafeFallthroughs = new Set<string>()
-
   /** Last reading of whether the capability is currently in a state that answers. */
   typesafeAnswerable: { value: boolean; checkedAt: number } | null = null
-
-  gradeDrainRunning = false
-
-  /**
-   * The user-requested run in flight, or null when the queue is idle. Held here
-   * (not only in the IPC layer) so the panel can read live progress from
-   * anywhere and a second request joins the run instead of starting a rival one.
-   */
-  rankingManualRun: LocalRankingGradeProgress | null = null
-
-  /**
-   * The run in flight, so a second request awaits the same result instead of
-   * reading a half-filled snapshot of it. Cleared by whichever caller started
-   * the run, once that run settles.
-   */
-  rankingManualRunPromise: Promise<LocalRankingGradeProgress> | null = null
-
-  /**
-   * Earliest moment the next ranking pass may run, set while rows a pass could
-   * not re-date are still due in the queue. Read by every `scheduleRankingDrain`
-   * call, so no external trigger can bypass it; cleared as soon as it passes.
-   */
-  rankingHeldRetryAtMs: number | null = null
-
-  /**
-   * Consecutive judge failures per harness. Deliberately in-memory: a restart
-   * gives a blocked judge one fresh attempt, which is cheap, and a single
-   * scored row clears the record.
-   */
-  rankingJudgeFailures = new Map<string, number>()
-
-  /**
-   * Native graded-harness judge strikes. Set once a harness's own grading
-   * route failed one row, cleared only when that route scores again. While a
-   * harness carries a strike, its queue stops spending harness processes on
-   * its own candidates and judges through the harness-agnostic fallback lane
-   * (see `resolveFallbackRankingJudge`). Deliberately in-memory like
-   * `rankingJudgeFailures`: a restart gives the native route one fresh
-   * attempt, which is cheap, and the fallback lane keeps that attempt from
-   * ever duplicating the held-back herd of a permanently unusable account.
-   */
-  rankingNativeJudgeStrikes = new Map<string, number>()
 
   utilityTurns = new Map<
     string,

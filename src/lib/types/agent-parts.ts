@@ -152,6 +152,12 @@ export interface AgentSubagentActivity {
    *  level, which is what a nested worker inherits. */
   thinkingLevel?: ThinkingLevel
   background: boolean
+  /**
+   * True when the worker is the app's own Assignment draft run. It wears the
+   * same card, body and session view as any other worker because the user
+   * watches it the same way: it is one job, not a second conversation.
+   */
+  assignmentDraft?: boolean
   output?: string
   error?: string
   /** Project-relative paths the sub-agent's file tools edited or wrote. */

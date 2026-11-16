@@ -2,10 +2,9 @@ import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import {
-  NATIVE_DOCK_TAGS,
   NATIVE_DOCK_ATTRIBUTES,
+  MAX_NATIVE_DOCK_MODAL_NODES,
   NATIVE_DOCK_STYLE_PROPERTIES,
-  MAX_NATIVE_DOCK_NODES,
   MAX_NATIVE_DOCK_IMAGE_SOURCE_CHARS,
   MAX_NATIVE_DOCK_IMAGES,
   nativeDockColor,
@@ -17,7 +16,7 @@ import {
 } from '$shared/native-dock'
 import type { BrowserViewBounds } from '$shared/ipc-contract'
 import { OVERLAY_ACK_TIMEOUT_MS } from '$shared/browser-overlay'
-import { nativeModalRefusal } from '$lib/native-modal-capability'
+import { nativeDockTag, nativeModalRefusal } from '$lib/native-modal-capability'
 
 /**
  * Everything that answers a pointer.
@@ -507,10 +506,14 @@ export class NativeDockController {
     )
   }
   private project(node: Node, depth = 0): NativeDockNode | string | null {
-    if (++this.nodeCount > (this.modalOptions ? MAX_NATIVE_DOCK_NODES : 512) || depth > 24)
+    if (++this.nodeCount > (this.modalOptions ? MAX_NATIVE_DOCK_MODAL_NODES : 512) || depth > 24)
       throw new TypeError('Native dock tree is too large')
     if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? ''
-    if (!(node instanceof Element) || !NATIVE_DOCK_TAGS.has(node.localName)) return null
+    if (!(node instanceof Element)) return null
+    // A `<form>` is drawn as its inert container: the projection carries the
+    // box and the app window keeps the behaviour (see `nativeDockTag`).
+    const tag = nativeDockTag(node.localName)
+    if (tag === null) return null
     // Picker rows also mount their regular sidebar markup, hidden. It is not
     // part of the palette and must not spend its projection budget.
     if (this.modalOptions && node instanceof HTMLElement && node.classList.contains('hidden'))
@@ -645,7 +648,7 @@ export class NativeDockController {
         attributes['data-native-dock-select'] = ''
     }
     return {
-      tag: node.localName,
+      tag,
       attributes,
       children: [...node.childNodes]
         .map((child) => this.project(child, depth + 1))

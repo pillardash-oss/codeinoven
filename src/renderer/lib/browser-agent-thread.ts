@@ -3,9 +3,12 @@
  *
  * A browser tab is an agent's work when main says so (`browser:agentTabClaims`),
  * which covers both the tab an agent opened for itself and the page a conversation
- * was assigned. The tab's own owner is the fallback for a page an agent opened
- * before its claim arrived, so a strip never shows an agent's tab as if the user had
- * opened it.
+ * was assigned. That claim names the conversation that worked on the tab, not the one
+ * that opened it, because a project's threads share one strip: the page thread A
+ * opened is regularly the page thread B's agent was handed, and the mark has to agree
+ * with the cursor the user is watching. The tab's own owner is the fallback for a page
+ * an agent opened before its claim arrived, so a strip never shows an agent's tab as if
+ * the user had opened it.
  *
  * The name and mark are the thread's own, resolved from the thread list rather than
  * from the tab, so a strip says which conversation holds the page. Both thread
@@ -34,11 +37,25 @@ export function agentTabThread(tabId: string, ownerThreadId: string): AgentTabTh
   const threadId = claim?.threadId ?? (tabId.startsWith('browser:agent:') ? ownerThreadId : null)
   if (!threadId) return null
   const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
+  if (!thread) {
+    // A claim can name a conversation this window cannot place: a worker thread,
+    // or a thread of a project it has not hydrated. The tab's own conversation is
+    // then the honest answer while that one is working.
+    return threadId === ownerThreadId ? null : agentTabThreadFor(ownerThreadId, null)
+  }
+  if (!agentRuns.isBusy(thread.projectId, thread.id)) return null
+  return agentTabThreadFor(thread.id, claim?.projectId ?? thread.projectId)
+}
+
+/** One thread's mark for a strip, when that thread is the one working. */
+function agentTabThreadFor(threadId: string, projectId: string | null): AgentTabThread | null {
+  const thread = scopeState.allScopeThreads.find((candidate) => candidate.id === threadId)
   if (!thread) return null
   if (!agentRuns.isBusy(thread.projectId, thread.id)) return null
-  const projectId = claim?.projectId ?? thread.projectId
+  const iconProjectId = projectId ?? thread.projectId
   return {
     title: thread.title,
-    iconUrl: scopeState.projects.find((candidate) => candidate.id === projectId)?.iconUrl ?? null
+    iconUrl:
+      scopeState.projects.find((candidate) => candidate.id === iconProjectId)?.iconUrl ?? null
   }
 }

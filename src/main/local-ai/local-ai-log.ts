@@ -10,6 +10,7 @@ import { createReadStream, watch, type FSWatcher } from 'fs'
 import { mkdir, open, stat } from 'fs/promises'
 import { basename, dirname, join } from 'path'
 import { getConfigRoot } from '../../lib/utils'
+import { terminalLines } from '../../lib/terminal-lines'
 
 /** Row ids come from the saved config, so a log file name is never path-shaped. */
 const SAFE_LOG_ID = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,79}$/u
@@ -43,8 +44,11 @@ export async function tailLocalAiLog(entryId: string): Promise<string[]> {
     stream.on('end', resolve)
   })
   const text = Buffer.concat(chunks).toString('utf8')
+  // A progress bar redraws one line with carriage returns, so the tail is folded
+  // the way a terminal drew it instead of returned as hundreds of redraws.
+  const folded = terminalLines(text)
+  const lines = folded.pending.length > 0 ? [...folded.lines, folded.pending] : folded.lines
   // A tail that starts mid-line drops that first partial line.
-  const lines = text.split('\n')
   if (start > 0) lines.shift()
   return lines.slice(-MAX_TAIL_LINES)
 }

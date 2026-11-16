@@ -10,6 +10,7 @@
   import ProviderLoginTerminal from './ProviderLoginTerminal.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { APP_SLUG } from '$shared/brand'
+  import { harnessRunIdleTimeoutMs } from '$shared/harness-run-timeout'
   import {
     harnessLifecycleStore,
     type HarnessRun,
@@ -252,11 +253,7 @@
               startingLabel={`Starting ${run.harnessName} ${verb(run.kind)}…`}
               command={run.handoff.command}
               args={run.handoff.args}
-              idleTimeoutMs={run.kind === 'install'
-                ? 300_000
-                : run.kind === 'update'
-                  ? 60_000
-                  : undefined}
+              idleTimeoutMs={harnessRunIdleTimeoutMs(run.kind, run.harnessId)}
               onExit={(exitCode) => void store.handleRunExit(run.harnessId, exitCode)}
             />
           </div>

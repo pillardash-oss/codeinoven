@@ -276,9 +276,13 @@ class AgentRunsStore {
     }
 
     // Auto-open the trace when a new turn starts; auto-close when it ends
-    // unless the user explicitly opened it.
+    // unless the user explicitly opened it. A fold is the reader's: a trace they
+    // folded is never force-opened again inside the same turn, so a run that
+    // goes quiet and resumes (a retry, a steer) cannot reopen work they closed.
+    // The line under the trace reports the work in progress while it stays
+    // folded, which is exactly the state this keeps.
     if (busy && (!wasBusy || isNewTurn)) {
-      if (openTrace) entry.traceOpen = true
+      if (openTrace && !entry.traceUserFolded) entry.traceOpen = true
     } else if (!busy && !entry.traceUserOpened) {
       entry.traceOpen = false
     }
@@ -336,7 +340,20 @@ class AgentRunsStore {
     userOpened: boolean,
     userFolded: boolean
   ): void {
+    const existed = this.runs.has(threadKey(projectId, threadId))
     const entry = this.entry(projectId, threadId)
+    // A trace that reports the fold it already has is not a change. Notifying
+    // anyway re-runs every reader of this store, which a trace that re-reports
+    // its state on each render (a controlled fold the owner keeps answering)
+    // turns into an endless render loop.
+    if (
+      existed &&
+      entry.traceOpen === open &&
+      entry.traceUserOpened === userOpened &&
+      entry.traceUserFolded === userFolded
+    ) {
+      return
+    }
     entry.traceOpen = open
     entry.traceUserOpened = userOpened
     entry.traceUserFolded = userFolded

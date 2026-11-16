@@ -1364,11 +1364,14 @@
     void loadAncestorDirectories([...conflictPaths])
   })
 
+  // `openFilter` reads the filter's own state, so an effect calling it would
+  // re-run on every close and reopen the bar. Only a new trigger value opens it.
+  let handledFilterTrigger = findNavState.focusFileTreeFilter
   $effect(() => {
     const trigger = findNavState.focusFileTreeFilter
-    if (trigger > 0) {
-      void openFilter()
-    }
+    if (trigger === handledFilterTrigger) return
+    handledFilterTrigger = trigger
+    if (trigger > 0) void openFilter()
   })
 </script>
 

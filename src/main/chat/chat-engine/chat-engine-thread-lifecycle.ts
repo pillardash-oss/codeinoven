@@ -48,6 +48,16 @@ import {
 import { turnStreamPath } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
 
+/**
+ * What a fallback resume did, so the caller can tell the three apart.
+ *
+ * `busy` means the failed session is still running a live turn (a native
+ * harness retry, for instance): the chain must stop there rather than arm a
+ * second model under a turn that is already in flight. `refused` means nothing
+ * was dispatched and the caller should advance to its next candidate.
+ */
+export type AssistantFallbackResumeOutcome = 'dispatched' | 'busy' | 'refused'
+
 /** ChatEngine thread-lifecycle: one concern, moved verbatim from the composition root. */
 export class ChatEngineThreadLifecycle {
   constructor(private readonly host: ChatEngine) {}
@@ -891,6 +901,58 @@ export class ChatEngineThreadLifecycle {
   }
 
   /**
+   * Re-run an assistant task on the model its assistant just fell back to.
+   *
+   * A fallback is not a provider window: no retry ledger entry is written and
+   * the thread is never parked `working-paused`, which is exactly why routing
+   * the fallback through the scheduler's resume did nothing. That resume admits
+   * only a thread paused on a tracked wait and silently drops everything else,
+   * so the model was written onto the thread while the run stayed failed on the
+   * dead one. This sends the continuation the way a manual retry does, through
+   * the settings the fallback just persisted, so a fallback that also changes
+   * harness cold-starts on the new runtime deliberately instead of vanishing.
+   */
+  async resumeAssistantFallback(input: {
+    projectId: string
+    threadId: string
+    sessionId: string
+  }): Promise<AssistantFallbackResumeOutcome> {
+    const thread = await this.host.threadManager.getThread(input.projectId, input.threadId)
+    if (!thread || thread.archived || !thread.settings) return 'refused'
+    // A thread bound to another session has already moved on to a newer turn,
+    // and that turn owns what happens next.
+    if (thread.sessionId !== input.sessionId) return 'refused'
+    if (this.host.sessionStatuses.get(input.sessionId)?.state === 'working') return 'busy'
+    if (await this.host.threadManager.wasStoppedByUser(thread.projectId, thread.id)) {
+      Logger.info('Assistant model fallback suppressed: the user stopped this thread', {
+        projectId: thread.projectId,
+        threadId: thread.id
+      })
+      return 'refused'
+    }
+    // The failed session's wait is over. A ledger record, a watchdog or a live
+    // error status left behind by the failure would veto the fresh turn exactly
+    // as the scheduler's own resume is vetoed, leaving the fallback with
+    // nothing to do.
+    this.host.state.retryScheduler?.clear(input.sessionId)
+    this.host.units['turns-sessions'].clearSessionWatchdog(input.sessionId)
+    const current = this.host.sessionStatuses.get(input.sessionId)
+    if (current?.state === 'error' || current?.state === 'waiting') {
+      this.host.sessionStatuses.delete(input.sessionId)
+    }
+    Logger.info('Assistant task resuming on its fallback model', {
+      projectId: thread.projectId,
+      threadId: thread.id,
+      harnessId: thread.settings.harnessId,
+      providerId: thread.settings.providerId,
+      modelId: thread.settings.modelId,
+      previousHarnessId: thread.sessionHarnessId ?? null
+    })
+    const dispatched = await this.resumeThreadFromPersistedSession(thread)
+    return dispatched ? 'dispatched' : 'refused'
+  }
+
+  /**
    * Resume a thread whose usage window reset. Sends an internal "Continue"
    * through the normal sendPrompt pipeline (mirroring the manual Retry action)
    * so the agent picks up from its existing session and context. Skipped when
@@ -977,6 +1039,63 @@ export class ChatEngineThreadLifecycle {
         fileSystemMode: false
       }
     )
+    // A scheduled resume continues the turn that already failed, so it must
+    // land on the exact harness and session that produced it. Any other
+    // runtime retires that session and starts a cold conversation from the
+    // engine's mirror: it changes the thing running underneath the thread and
+    // pays for the whole history again, which is never what a retry means.
+    // Nothing below may do that silently, so a resume that can no longer
+    // continue its own session is refused and surfaced instead of dispatched.
+    const registryInfo = this.host.sessionRegistry.get(sessionId)
+    const ownerHarnessId = registryInfo?.driverId ?? thread.sessionHarnessId ?? driverId
+    if (settings.harnessId !== ownerHarnessId) {
+      await this.refuseScheduledResume(
+        projectId,
+        threadId,
+        sessionId,
+        ownerHarnessId,
+        `The turn this retry continues was running on ${ownerHarnessId}, but the thread is now set to ${settings.harnessId}. Resuming it automatically would leave the ${ownerHarnessId} session behind and start a new conversation with none of its context, so the retry was stopped. Retry the thread yourself to switch harness deliberately.`
+      )
+      return
+    }
+    const ownerAccountId = thread.sessionAccountId ?? registryInfo?.accountId
+    if (settings.accountId && ownerAccountId && settings.accountId !== ownerAccountId) {
+      const ownerAccountResolvable =
+        await this.host.state.accountRegistry.isResolvableAccountId(ownerAccountId)
+      if (ownerAccountResolvable) {
+        await this.refuseScheduledResume(
+          projectId,
+          threadId,
+          sessionId,
+          ownerHarnessId,
+          `The session this retry continues belongs to another ${ownerHarnessId} account. Resuming it automatically would replace that account's session and start a new conversation, so the retry was stopped. Retry the thread yourself to move it to the other account.`
+        )
+        return
+      }
+    }
+    // The harness store is the only proof the session can be resumed. A record
+    // that is gone (deleted elsewhere, pruned, or never written) would make the
+    // resume cold-start a replacement and bill the whole history again, so the
+    // wait ends here with a visible reason instead.
+    const { driver: resumeDriver, projectPath } = await this.host.resolve(
+      projectId,
+      ownerHarnessId,
+      threadId,
+      settings.accountId
+    )
+    const sessionStorePresent = resumeDriver.hasSessionRecord
+      ? await resumeDriver.hasSessionRecord(projectPath, sessionId).catch(() => true)
+      : true
+    if (!sessionStorePresent) {
+      await this.refuseScheduledResume(
+        projectId,
+        threadId,
+        sessionId,
+        ownerHarnessId,
+        `The ${ownerHarnessId} session this retry was waiting on is no longer available, so resuming it would start a new conversation with none of this thread's context. The retry was stopped; send a new message when you want to continue.`
+      )
+      return
+    }
     const continuation = await this.host.units['turns'].continuationTurnRequest(
       projectId,
       threadId,
@@ -995,6 +1114,43 @@ export class ChatEngineThreadLifecycle {
       continuation.projectReferences,
       'internal'
     )
+  }
+
+  /**
+   * End a scheduled resume that can no longer continue its own session.
+   *
+   * The wait is dropped so no later tick retries it, and the thread is parked
+   * on a visible failure that names the reason. Dispatching anyway is the one
+   * outcome this must never produce: a different harness or a session the
+   * store no longer holds would dispose of the failed turn's runtime and bill
+   * the user for a conversation it rebuilt from a mirror.
+   */
+  private async refuseScheduledResume(
+    projectId: string,
+    threadId: string,
+    sessionId: string,
+    harnessId: string,
+    message: string
+  ): Promise<void> {
+    this.host.state.retryScheduler?.clear(sessionId)
+    this.host.units['turns-sessions'].clearSessionWatchdog(sessionId)
+    Logger.info('Scheduled resume stopped: it can no longer continue its own session', {
+      projectId,
+      threadId,
+      sessionId,
+      harnessId
+    })
+    await this.broadcastThreadSessionError(projectId, threadId, sessionId, {
+      kind: 'unknown',
+      message,
+      harnessId,
+      retryable: false
+    })
+    const updated = await this.host.threadManager.setStatus(projectId, threadId, 'failed', {
+      read: false,
+      error: message
+    })
+    broadcastThreadUpdate(updated)
   }
 
   /**

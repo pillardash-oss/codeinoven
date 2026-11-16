@@ -30,9 +30,24 @@ import {
  */
 export type NotificationSubFilter = 'all' | 'attention' | 'done' | 'spec' | 'exceptions'
 
+/**
+ * Which family of notice the panel lists.
+ *
+ * Every family shares one list now, so `all` is the default and the three
+ * narrowings exist only for when the user wants one family alone.
+ */
+export type NotificationSourceFilter = 'all' | 'projects' | 'chats' | 'assistants'
+
 export interface InAppNotification {
   id: string
-  kind: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error'
+  /**
+   * What the entry reports.
+   *
+   * `working` is the state of an unattended run that is still executing: it is on
+   * the panel because the user asked to see background work, but nothing is
+   * waiting on them, so it must never count as attention.
+   */
+  kind: 'completed' | 'chat-completed' | 'attention' | 'spec' | 'error' | 'working'
   title: string
   body: string
   projectId: string
@@ -109,14 +124,22 @@ export function notificationMatchesSubFilter(
 
 /**
  * Which sub-filter an unattended (background) run answers to: a finished run is
- * Done, and anything failed, still running or parked on the user is Attention.
+ * Done, a failure is an Attention entry, a run parked on a gate is Attention
+ * too, and a run still executing is working.
+ *
+ * A running run is deliberately not attention: nothing is waiting on the user
+ * while it executes, and classifying it as attention painted the rail amber for
+ * an assistant that was simply working (the run thread itself is the one that
+ * reports working). The panel row already labels that state "Running" with the
+ * working tone, so the filter matches the row it renders.
  */
 export function backgroundRunNotificationKind(
   outcome: BackgroundRunOutcome | undefined
 ): InAppNotification['kind'] {
   if (outcome === 'completed') return 'completed'
   if (outcome === 'failed') return 'error'
-  return 'attention'
+  if (outcome === 'parked') return 'attention'
+  return 'working'
 }
 
 /**
@@ -143,7 +166,8 @@ export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string>
   'chat-completed': 'var(--color-chat-success)',
   attention: 'var(--color-warning)',
   spec: 'var(--color-thread-spec)',
-  error: 'var(--color-danger)'
+  error: 'var(--color-danger)',
+  working: 'var(--color-thread-working)'
 }
 
 /**
@@ -156,7 +180,12 @@ export const NOTIFICATION_KIND_COLORS: Record<InAppNotification['kind'], string>
  * could not see. Only activity a source owns (a completion) is branded by the
  * space it came from.
  */
-const STATUS_KINDS: ReadonlySet<InAppNotification['kind']> = new Set(['attention', 'spec', 'error'])
+const STATUS_KINDS: ReadonlySet<InAppNotification['kind']> = new Set([
+  'attention',
+  'spec',
+  'error',
+  'working'
+])
 
 /** Newest first: a fresh notification leads its tab and older ones follow it. */
 function newestFirst(items: readonly InAppNotification[]): InAppNotification[] {
@@ -187,8 +216,11 @@ class NotificationPanelState {
    * next restore, and what seeds that restore.
    */
   private _dismissed = new SvelteSet<string>()
-  /** Opens on what is waiting on the user; every other kind is one chip away. */
-  subFilter: NotificationSubFilter = $state('attention')
+  /** Opens on everything, because one list holds every kind now. */
+  subFilter: NotificationSubFilter = $state('all')
+
+  /** The family the list is narrowed to; `all` until the user picks one. */
+  sourceFilter: NotificationSourceFilter = $state('all')
 
   /**
    * Chats live in the Inbox project or arrive through a chat source.
@@ -222,9 +254,35 @@ class NotificationPanelState {
     return NOTIFICATION_KIND_COLORS[n.kind]
   }
 
-  private byKind(items: InAppNotification[], sub: NotificationSubFilter): InAppNotification[] {
-    if (sub === 'all') return items
-    return items.filter((n) => notificationMatchesSubFilter(n.kind, sub))
+  /** Whether one notice belongs to the family the list is narrowed to. */
+  private matchesSource(n: InAppNotification, source: NotificationSourceFilter): boolean {
+    switch (source) {
+      case 'projects':
+        return !this.isChat(n) && !this.isAssistant(n)
+      case 'chats':
+        return this.isChat(n)
+      case 'assistants':
+        return this.isAssistant(n)
+      case 'all':
+        return true
+    }
+  }
+
+  /**
+   * Whether the assistant ledger's own rows belong to the active family.
+   *
+   * A missed scheduled fire and an unattended run never arrive as a notice, so
+   * they have no source to read: they belong to the assistant space.
+   */
+  private showsAssistantRuns(source: NotificationSourceFilter): boolean {
+    return source === 'all' || source === 'assistants'
+  }
+
+  /** Notices the active source and sub-filter admit, newest first per caller. */
+  private noticesFor(sub: NotificationSubFilter): InAppNotification[] {
+    return this._notifications.filter(
+      (n) => this.matchesSource(n, this.sourceFilter) && notificationMatchesSubFilter(n.kind, sub)
+    )
   }
 
   get projectNotifications(): InAppNotification[] {
@@ -291,6 +349,7 @@ class NotificationPanelState {
   }
 
   private missedRunsFor(sub: NotificationSubFilter): MissedRun[] {
+    if (!this.showsAssistantRuns(this.sourceFilter)) return []
     return notificationMatchesSubFilter('attention', sub) ? assistants.missedRuns : []
   }
 
@@ -301,6 +360,7 @@ class NotificationPanelState {
    * rendering both would show the same failure twice.
    */
   private backgroundRunsFor(sub: NotificationSubFilter): BackgroundRun[] {
+    if (!this.showsAssistantRuns(this.sourceFilter)) return []
     const noticedRunThreads = new Set(this.assistantNotifications.map((n) => n.threadId))
     return assistants.recentBackgroundRuns.filter(
       (run) =>
@@ -328,7 +388,7 @@ class NotificationPanelState {
    *  rendered by the panel straight from `appErrorState`, so `exceptions` is
    *  empty here. */
   get visible(): InAppNotification[] {
-    return newestFirst(this.byKind(this._notifications, this.subFilter))
+    return newestFirst(this.noticesFor(this.subFilter))
   }
 
   /**
@@ -338,7 +398,7 @@ class NotificationPanelState {
    */
   count(sub: NotificationSubFilter): number {
     return (
-      this.byKind(this._notifications, sub).length +
+      this.noticesFor(sub).length +
       this.missedRunsFor(sub).length +
       this.backgroundRunsFor(sub).length
     )
@@ -634,6 +694,20 @@ class NotificationPanelState {
 
   setSubFilter(sub: NotificationSubFilter): void {
     this.subFilter = sub
+  }
+
+  setSourceFilter(source: NotificationSourceFilter): void {
+    this.sourceFilter = source
+  }
+
+  /**
+   * Return the panel to what it opens on: one list, every kind, every family.
+   * Called when a panel left closed long enough no longer owes the user the tab
+   * they were last on (see `NOTIFICATION_PANEL_TAB_GRACE_MS`).
+   */
+  resetFilters(): void {
+    this.subFilter = 'all'
+    this.sourceFilter = 'all'
   }
 
   /**

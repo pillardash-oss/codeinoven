@@ -1,13 +1,17 @@
 <script lang="ts">
   import CioCheckCircle from '@pdslng/cio-icon/CioCheckCircle.svelte'
   import CioCopy from '@pdslng/cio-icon/CioCopy.svelte'
+  import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioPlay from '@pdslng/cio-icon/CioPlay.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioStop from '@pdslng/cio-icon/CioStop.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { invoke } from '$lib/ipc.svelte'
+  import { formatBytes } from '$lib/format/bytes'
+  import { osFileManagerLabel } from '$lib/os-file-manager'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
+  import LocalAiServerLog from './LocalAiServerLog.svelte'
   import SettingsDisclosure from '../../shared/SettingsDisclosure.svelte'
   import SettingsEntry from '../../shared/SettingsEntry.svelte'
   import SettingsStatusBadge from '../../shared/SettingsStatusBadge.svelte'
@@ -27,6 +31,8 @@
     status: LlamaCppServerStatus
     logLines: string[]
     loadedModel: string
+    /** Bytes the model occupies on disk, undefined until it has been measured. */
+    modelSize?: number | undefined
     notice: string
     expanded: boolean
     onToggle: () => void
@@ -34,6 +40,14 @@
     onStop: () => void
     onEdit: () => void
     onDelete: () => void
+    /** Show the model's file or folder in the OS file manager. */
+    onReveal: () => void
+    /** Delete the model the app owns, after the page asks the user to confirm. */
+    onDeleteModel: () => void
+    /** True while one of our engines still holds this row's port. */
+    portHeld: boolean
+    /** Stop that process, which is the only thing that frees its memory. */
+    onStopPortHolder: () => void
     /** False for a row the app only registers, never launches. */
     managed?: boolean
   }
@@ -44,6 +58,7 @@
     status,
     logLines,
     loadedModel,
+    modelSize,
     notice,
     expanded,
     onToggle,
@@ -51,18 +66,29 @@
     onStop,
     onEdit,
     onDelete,
+    onReveal,
+    onDeleteModel,
+    portHeld,
+    onStopPortHolder,
     managed = true
   }: Props = $props()
 
   let copied = $state(false)
 
   const command = $derived(describeLocalAiServerCommand(entry, executable))
-  const logText = $derived(
-    logLines.length > 0
-      ? logLines.join('\n')
-      : 'No output yet. Start the server to see its log here.'
-  )
   const busy = $derived(status === 'starting' || status === 'running')
+  /** A row saved from a Hugging Face tag names nothing on disk yet, so there is
+   *  no file to reveal and no size to measure until its download lands. */
+  const localPath = $derived(entry.modelPath.trim())
+  const sizeLabel = $derived(
+    localPath.length === 0
+      ? 'Not downloaded'
+      : modelSize === undefined
+        ? 'Measuring…'
+        : modelSize > 0
+          ? formatBytes(modelSize)
+          : 'Unavailable'
+  )
 
   const badge = $derived.by(() => {
     if (status === 'running') {
@@ -98,6 +124,18 @@
   })
 
   const menuItems = $derived.by<MenuItem[]>(() => [
+    {
+      label: osFileManagerLabel(),
+      icon: CioFolderOpen,
+      disabled: localPath.length === 0,
+      onClick: onReveal
+    },
+    {
+      label: 'Remove downloaded model',
+      icon: CioTrash,
+      disabled: localPath.length === 0 || busy,
+      onClick: onDeleteModel
+    },
     { label: 'Edit server', icon: CioPencil, disabled: busy, onClick: onEdit },
     { label: 'remove-divider', divider: true },
     { label: 'Remove server', icon: CioTrash, danger: true, onClick: onDelete }
@@ -107,23 +145,6 @@
     await invoke('clipboard:writeText', `${entry.host}:${entry.port}`)
     copied = true
     setTimeout(() => (copied = false), 1_500)
-  }
-
-  /**
-   * Keep the newest line in view while output streams in, without pinning the
-   * scroll position when the user has scrolled back to read something. An
-   * attachment watches the tail's own text, so no state is assigned here.
-   */
-  function followLog(node: HTMLPreElement): () => void {
-    const sync = (): void => {
-      if (node.scrollHeight - node.scrollTop - node.clientHeight < 40) {
-        node.scrollTop = node.scrollHeight
-      }
-    }
-    const observer = new MutationObserver(sync)
-    observer.observe(node, { childList: true, characterData: true, subtree: true })
-    sync()
-    return () => observer.disconnect()
   }
 </script>
 
@@ -169,6 +190,18 @@
           <CioStop size={13} />
           Stop
         </button>
+      {:else if portHeld}
+        <!-- The row failed, but its process still holds the weights and the port:
+             stopping it is the only thing that gives the memory back, and a start
+             would have to take the port from it first. -->
+        <button
+          class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/20"
+          title="Stop the server that is still holding port {entry.port} and release its memory"
+          onclick={onStopPortHolder}
+        >
+          <CioStop size={13} />
+          Stop server
+        </button>
       {:else}
         <button
           class="flex shrink-0 items-center gap-1.5 whitespace-nowrap bg-primary px-2.5 py-1.5 text-xs font-medium text-on-primary transition-colors hover:bg-primary-hover"
@@ -196,7 +229,7 @@
     </div>
   </div>
 
-  <div class="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 @2xl:grid-cols-2">
+  <div class="mt-3 grid grid-cols-1 gap-x-4 gap-y-2 @2xl:grid-cols-3">
     <div class="min-w-0">
       <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
         Address
@@ -232,6 +265,20 @@
         {loadedModel || (status === 'running' ? 'No model reported' : 'Not loaded')}
       </p>
     </div>
+
+    <div class="min-w-0">
+      <p class="truncate text-[0.625rem] font-medium uppercase tracking-wide text-dimmed">
+        Model size
+      </p>
+      <p
+        class="mt-0.5 truncate text-xs {modelSize ? 'text-muted' : 'text-dimmed'}"
+        title={localPath.length > 0
+          ? localPath
+          : 'Measured once a Hugging Face model is downloaded'}
+      >
+        {sizeLabel}
+      </p>
+    </div>
   </div>
 
   {#if expanded}
@@ -251,13 +298,13 @@
             class="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[0.6875rem] leading-relaxed text-danger/90">{notice}</pre>
         </div>
       {/if}
-      <div class="border bg-raised">
-        <p class="px-3 pt-2 text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">
-          Log
-        </p>
-        <pre
-          {@attach followLog}
-          class="max-h-64 min-h-24 overflow-auto whitespace-pre-wrap break-words px-3 pb-2 font-mono text-[0.6875rem] leading-relaxed text-muted">{logText}</pre>
+      <div class="space-y-1.5">
+        <p class="px-3 text-[0.6875rem] font-medium uppercase tracking-wide text-dimmed">Log</p>
+        <LocalAiServerLog
+          entryId={entry.id}
+          history={logLines}
+          emptyLabel="No output yet. Start the server to see its log here."
+        />
       </div>
     </div>
   {/if}

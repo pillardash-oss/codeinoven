@@ -18,6 +18,18 @@
   } from './composer-relocation'
   import { orderRelocationDestinations } from './relocation-destinations'
 
+  /**
+   * How many destinations one open draws.
+   *
+   * The list is the whole project, and the palette draws every row it is given:
+   * a project with a few hundred chats built a panel past the dialog
+   * projection's budget, which refused the whole picker and hid the browser page
+   * behind it. This is the same window every other palette draws, and the search
+   * field filters the entire list before it is cut, so an older chat is reached
+   * by typing rather than by scrolling to it.
+   */
+  const RELOCATION_LIST_LIMIT = 60
+
   interface Props {
     projectId: string
     /** Names the project on every row, so the destination is never in doubt. */
@@ -223,7 +235,7 @@
     open
     {title}
     {actions}
-    maxResults={Math.max(actions.length, 1)}
+    maxResults={Math.min(Math.max(actions.length, 1), RELOCATION_LIST_LIMIT)}
     placeholder={`Search threads to ${mode} into…`}
     emptyLabel={loading
       ? 'Loading threads…'

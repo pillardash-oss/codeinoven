@@ -25,11 +25,6 @@ export interface ProjectDeletionDeps {
     forgetProject(projectId: string): void
   }
   projectFilesService: { disposeProject(projectId: string): void }
-  rankingSnapshotRepo: {
-    clearProjectViaWorker(
-      projectId: string
-    ): Promise<{ ok: boolean; deleted: number; error?: string }>
-  }
   /** The live browser, or null before a window exists. */
   browser: () => { forgetProject(projectId: string): Promise<string[]> } | null
   designService?: () => { forgetProject: (projectId: string) => void } | null
@@ -194,15 +189,6 @@ export async function deleteProjectCascade(
   phase('cleanup')
   deps.scopeManager.forgetProject(projectId)
   deps.designService?.()?.forgetProject(projectId)
-  void deps.rankingSnapshotRepo.clearProjectViaWorker(projectId).then((purged) => {
-    if (!purged.ok) {
-      Logger.dev('Project ranking snapshots were not fully purged', {
-        projectId,
-        deleted: purged.deleted,
-        error: purged.error ?? ''
-      })
-    }
-  })
   deps.projectFilesService.disposeProject(projectId)
   // App-owned scratch data keyed by this project id (spec-context attachments,
   // any leftover per-thread directories) that isn't tied to an individual

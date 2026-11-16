@@ -94,7 +94,7 @@ const SNAPSHOT_SELECTOR = [
  * constant strings interpolated into it (attribute names, caps) stay in one place
  * and the tests can evaluate the same text the page receives.
  */
-function pageHelpers(): string {
+function pageHelpers(refPrefix = ''): string {
   return `
   const REF_ATTR = ${JSON.stringify(AGENT_REF_ATTRIBUTE)};
   const MARK_ATTR = ${JSON.stringify(AGENT_OWNED_ATTRIBUTE)};
@@ -134,7 +134,7 @@ function pageHelpers(): string {
     const existing = element.getAttribute(REF_ATTR);
     if (existing) return existing;
     globalThis.__cioAgentRefSeq = (globalThis.__cioAgentRefSeq || 0) + 1;
-    const reference = 'r' + globalThis.__cioAgentRefSeq;
+    const reference = ${JSON.stringify(refPrefix)} + 'r' + globalThis.__cioAgentRefSeq;
     if (globalThis.__cioAgentRefSeq <= ${MAX_REFS}) element.setAttribute(REF_ATTR, reference);
     return reference;
   };
@@ -242,6 +242,17 @@ export interface AgentSnapshotOptions {
   maxElements: number
   /** Characters of visible page text the snapshot reports, 0 for none. */
   maxText: number
+  /**
+   * Namespace every reference this document hands out, so a reference reports the
+   * frame it belongs to as well as the element.
+   *
+   * A page's own references are `r1`, `r2`, and so on, which collide the moment a
+   * page is read through more than one document: a portal renders each blade in
+   * its own frame, and `r7` in a blade is not `r7` in the shell. A child frame
+   * prefixes its references with `f<index>`, so one reference is unambiguous on
+   * its own and an action needs nothing but the reference it was given.
+   */
+  refPrefix?: string
 }
 
 /**
@@ -255,7 +266,7 @@ export function agentSnapshotScript(options: AgentSnapshotOptions): string {
         .join(', ')
     : SNAPSHOT_SELECTOR
   return `(() => {
-    ${pageHelpers()}
+    ${pageHelpers(options.refPrefix ?? '')}
     const matches = Array.from(document.querySelectorAll(${JSON.stringify(selector)}))
       .filter((element) => element instanceof HTMLElement && !ownerNode(element));
     const elements = matches.slice(0, ${Math.max(1, options.maxElements)}).map(describe);
@@ -465,6 +476,136 @@ export function agentSelectScript(request: {
       selected: true,
       value: element.value,
       selectedLabels: Array.from(element.selectedOptions || []).map((option) => (option.text || '').trim())
+    };
+  })()`
+}
+
+/**
+ * Open a combobox and report the options it offers.
+ *
+ * A portal's picker is not a `<select>`: it is an input or a button that owns a
+ * listbox, filters it as you type, and keeps nothing you typed unless you choose an
+ * option. This reads that shape so the caller can choose like a person does, and it
+ * stamps each option with a reference, so the option is clicked through the same
+ * path as any other element.
+ */
+export function agentComboboxScript(request: {
+  selector: string
+  open: boolean
+  refPrefix?: string
+}): string {
+  return `(() => {
+    ${pageHelpers(request.refPrefix ?? '')}
+    const element = resolveElement(${JSON.stringify(request.selector)});
+    if (!element) return { found: false };
+    const role = (element.getAttribute('role') || '').toLowerCase();
+    const popup = (element.getAttribute('aria-haspopup') || '').toLowerCase();
+    const combobox =
+      role === 'combobox' ||
+      popup === 'listbox' || popup === 'tree' || popup === 'grid' || popup === 'dialog' ||
+      element.hasAttribute('aria-autocomplete') ||
+      element.closest('[role="combobox"]') !== null;
+    if (${request.open ? 'true' : 'false'}) {
+      element.focus();
+      element.click();
+      // A field's own click normally opens its list. The wrapper is only pressed when
+      // the control still reports itself closed, because pressing both would toggle the
+      // list twice and close what the first press opened.
+      if (element.getAttribute('aria-expanded') !== 'true') {
+        const control = element.closest('button, [role="combobox"]');
+        if (control && control !== element) control.click();
+      }
+    }
+    const owns = (element.getAttribute('aria-controls') || element.getAttribute('aria-owns') || '')
+      .split(/\\s+/).filter(Boolean)
+      .map((id) => document.getElementById(id))
+      .filter((node) => node instanceof HTMLElement && isVisible(node));
+    const scope = element.closest('[role="dialog"], dialog, form, [role="search"]') || document;
+    const candidates = [
+      ...owns,
+      ...Array.from(scope.querySelectorAll('[role="listbox"], [role="tree"], [role="grid"], datalist'))
+    ].filter((node) => node instanceof HTMLElement && isVisible(node));
+    const listbox = candidates[0] || null;
+    const options = [];
+    if (listbox) {
+      const found = Array.from(
+        listbox.querySelectorAll('[role="option"], [role="treeitem"], option, li')
+      ).filter((node) => node instanceof HTMLElement && isVisible(node));
+      for (const option of found.slice(0, ${MAX_OPTIONS})) {
+        const disabledOption =
+          option.getAttribute('aria-disabled') === 'true' ||
+          (option instanceof HTMLOptionElement && option.disabled);
+        options.push({
+          ref: referenceFor(option),
+          label: labelOf(option),
+          value: option.getAttribute('data-value') || option.getAttribute('value') || '',
+          selected:
+            option.getAttribute('aria-selected') === 'true' ||
+            option.getAttribute('aria-checked') === 'true',
+          disabled: disabledOption
+        });
+      }
+    }
+    const expandedAttribute = element.getAttribute('aria-expanded');
+    const text =
+      element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+        ? String(element.value || '').slice(0, ${MAX_VALUE_CHARS})
+        : textOf(element, ${MAX_VALUE_CHARS});
+    return {
+      found: true,
+      combobox,
+      expanded: expandedAttribute === 'true' || listbox !== null,
+      listbox: listbox !== null,
+      value: text,
+      options
+    };
+  })()`
+}
+
+/**
+ * Set the files of a file input from inside its own document.
+ *
+ * A file input in a cross-origin frame is not reachable from the page's debugger
+ * session, so its files are built in the frame itself from bytes the main process
+ * read. Nothing about the local path reaches the page, and the change travels as the
+ * events a person's own choice would fire.
+ */
+export function agentFileInputScript(request: {
+  selector: string
+  files?: Array<{ name: string; type: string; base64: string }>
+}): string {
+  const files = request.files ?? []
+  return `(() => {
+    ${pageHelpers()}
+    const element = resolveElement(${JSON.stringify(request.selector)});
+    if (!(element instanceof HTMLInputElement) || element.type !== 'file') {
+      return { available: false };
+    }
+    if (${files.length > 0 ? 'true' : 'false'}) {
+      if (element.disabled) return { available: true, disabled: true };
+      const transfer = new DataTransfer();
+      for (const file of ${JSON.stringify(files)}) {
+        const binary = atob(file.base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+        transfer.items.add(new File([bytes], file.name, { type: file.type || 'application/octet-stream' }));
+      }
+      element.files = transfer.files;
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+      element.dispatchEvent(new Event('change', { bubbles: true }));
+      return {
+        available: true,
+        multiple: element.multiple,
+        accept: element.accept,
+        disabled: false,
+        attached: element.files ? element.files.length : 0
+      };
+    }
+    return {
+      available: true,
+      multiple: element.multiple,
+      accept: element.accept,
+      disabled: element.disabled
     };
   })()`
 }
@@ -811,4 +952,83 @@ export function agentElementRectScript(selector: string): string {
       box: boxOf(element)
     };
   })()`
+}
+
+/**
+ * One `<iframe>` or `<frame>` a document hosts, measured in that document.
+ *
+ * Read by the parent, never by the frame itself: a cross-origin frame cannot ask
+ * its own `frameElement` where it sits, and it cannot see the inset it is drawn
+ * at. The parent can, and that is what turns a point inside a frame into a point
+ * the browser's input pipeline can deliver.
+ */
+export interface AgentFrameRect {
+  index: number
+  x: number
+  y: number
+  width: number
+  height: number
+  src: string
+  title: string
+}
+
+/** Measure every frame element a document hosts, in document order. */
+export function agentFrameRectsScript(): string {
+  return `(() => {
+    const frames = Array.from(document.querySelectorAll('iframe, frame'));
+    return frames.map((element, index) => {
+      const rect = element.getBoundingClientRect();
+      return {
+        index,
+        x: Math.round(rect.x),
+        y: Math.round(rect.y),
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        src: element.src || element.getAttribute('src') || '',
+        title: element.getAttribute('title') || element.getAttribute('aria-label') || ''
+      };
+    });
+  })()`
+}
+
+/**
+ * Bring one frame element into view in its parent, then report where it landed.
+ *
+ * A frame the caller cannot see is a frame whose point the pointer cannot reach,
+ * so the parent is scrolled first and the rectangle is read after it moved.
+ */
+export function agentFrameRevealScript(index: number): string {
+  return `(() => {
+    const frames = Array.from(document.querySelectorAll('iframe, frame'));
+    const element = frames[${JSON.stringify(index)}];
+    if (!element) return null;
+    element.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
+    const rect = element.getBoundingClientRect();
+    return {
+      index: ${JSON.stringify(index)},
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      src: element.src || element.getAttribute('src') || '',
+      title: element.getAttribute('title') || element.getAttribute('aria-label') || ''
+    };
+  })()`
+}
+
+/** The size of the area the page is actually shown in, in page pixels. */
+export function agentViewportScript(): string {
+  return `({ width: window.innerWidth, height: window.innerHeight })`
+}
+
+/**
+ * How far the page's own document is scrolled.
+ *
+ * A frame element is measured in the viewport, while an element screenshot is
+ * clipped in the document's own coordinates, so the difference between the two is
+ * the page's scroll offset. Without it a capture of an element inside a frame on a
+ * scrolled page would show whatever happened to sit at those numbers.
+ */
+export function agentPageOffsetScript(): string {
+  return `({ x: window.scrollX, y: window.scrollY })`
 }

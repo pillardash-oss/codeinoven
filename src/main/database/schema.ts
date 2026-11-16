@@ -37,7 +37,7 @@ const USAGE_EVENT_FEATURE_LIST_SQL = USAGE_EVENT_FEATURES.map((feature) => `'${f
  * already on disk. A data repair that has to run exactly once per install earns
  * a version the same way, with no DDL in it.
  */
-export const DATABASE_SCHEMA_VERSION = 11
+export const DATABASE_SCHEMA_VERSION = 12
 
 export const SCHEMA_SQL = `
 -- ─── Metadata ────────────────────────────────────────────────────────────
@@ -343,123 +343,6 @@ export const HARNESS_USAGE_MODELS_COLUMNS_SQL = `
   first_used_at        INTEGER NOT NULL,
   last_used_at         INTEGER NOT NULL,
   PRIMARY KEY (thread_id, harness_id, provider_id, model_id, thinking_level)`
-
-/**
- * Column definitions for the canonical `model_rankings` table   the permanent
- * "best model" aggregate. One row per harness + provider + model + thinking
- * level + rubric version combination; distinct attribution values never merge.
- *
- * Scores live as running sums and sample counts per shot category so averages
- * are always recomputed as sum ÷ count (never averages of averages), and a
- * future rubric change opens a fresh row under the new `rubric_version`
- * instead of silently reinterpreting old sums. Processed snapshots are
- * hard-deleted by design, so these aggregates are the only surviving record.
- */
-export const MODEL_RANKINGS_COLUMNS_SQL = `
-  id             TEXT PRIMARY KEY NOT NULL,
-  harness_id     TEXT NOT NULL,
-  provider_id    TEXT NOT NULL DEFAULT '',
-  model_id       TEXT NOT NULL,
-  thinking_level TEXT NOT NULL DEFAULT '',
-  one_shot_score_sum       REAL    NOT NULL DEFAULT 0 CHECK(one_shot_score_sum >= 0),
-  one_shot_samples         INTEGER NOT NULL DEFAULT 0 CHECK(one_shot_samples >= 0),
-  one_shot_duration_sum_ms INTEGER NOT NULL DEFAULT 0 CHECK(one_shot_duration_sum_ms >= 0),
-  one_shot_cost_usd        REAL    NOT NULL DEFAULT 0 CHECK(one_shot_cost_usd >= 0),
-  multi_shot_score_sum       REAL    NOT NULL DEFAULT 0 CHECK(multi_shot_score_sum >= 0),
-  multi_shot_samples         INTEGER NOT NULL DEFAULT 0 CHECK(multi_shot_samples >= 0),
-  multi_shot_duration_sum_ms INTEGER NOT NULL DEFAULT 0 CHECK(multi_shot_duration_sum_ms >= 0),
-  multi_shot_cost_usd        REAL    NOT NULL DEFAULT 0 CHECK(multi_shot_cost_usd >= 0),
-  rubric_version  TEXT NOT NULL,
-  calc_version    TEXT NOT NULL,
-  updated_at      INTEGER NOT NULL,
-  UNIQUE (harness_id, provider_id, model_id, thinking_level, rubric_version)`
-
-/** Rubric version stamped on aggregates folded in from the legacy 1–5 ledger. */
-export const LEGACY_RUBRIC_VERSION = 'legacy-1to5-map-v1'
-
-/**
- * Version tag of the aggregation arithmetic itself (running sum ÷ count).
- * Bump when the incremental-math semantics change so mixed-version rows stay
- * distinguishable in analytics.
- */
-export const MODEL_RANKING_CALC_VERSION = 'sum-count-v1'
-
-/**
- * Most a single ranked conversation may plausibly cost, in USD.
- *
- * The aggregate's cost columns are running sums that can never be decomposed:
- * a snapshot is hard-deleted the moment its score lands, so one absurd addend
- * poisons the "spent across ranked conversations" headline permanently. A live
- * pi session once folded its own cumulative session spend back into
- * per-response cost and doubled it on every usage refresh (fixed 2026-10-10),
- * which landed a single $11.97 conversation at $3.4e46. Priced conversations in
- * this app run from cents to tens of dollars, so one exchange above this
- * ceiling is arithmetic corruption rather than spend.
- */
-export const MAX_PLAUSIBLE_SHOT_COST_USD = 1_000
-
-export const MODEL_RANKING_INDEXES_SQL = `
-CREATE INDEX IF NOT EXISTS idx_model_rankings_updated
-  ON model_rankings(updated_at DESC);`
-
-export const MODEL_RANKING_SNAPSHOT_INDEXES_SQL = `
-CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_due
-  ON model_ranking_snapshots(status, due_at_ms);
-
-CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_thread
-  ON model_ranking_snapshots(thread_id, closed_at_ms);
-
-CREATE INDEX IF NOT EXISTS idx_model_ranking_snapshots_attribution
-  ON model_ranking_snapshots(harness_id, provider_id, model_id, thinking_level);`
-
-/**
- * Column definitions for the canonical `model_ranking_snapshots` table   the
- * transient grading queue. At most one open snapshot per conversation window
- * (first user message + response, upgraded by one substantive follow-up).
- *
- * One snapshot records one shot, not one provider turn: `anchor_message_id`
- * names the visible user message the window currently answers, so the later
- * turns that re-answer that same message   an invisible continuation (search
- * nudge, Mermaid repair, incomplete-turn recovery, specification
- * continuation) or a resumed retry   refresh the window in place instead of
- * registering as a follow-up.
- *
- * thread_id deliberately does NOT cascade-delete: thread deletion is the close
- * signal, and the raw prompt/response payload must survive deletion long
- * enough for the judge to score it. Once scored, the row is hard-deleted and
- * only its contribution to `model_rankings` remains (agreed product decision,
- * not data loss). Timing is captured as started_at/ended_at timestamps; no
- * pre-rounded duration column is persisted.
- *
- * `undone_at_ms` records the user undoing the window's file changes: the turn
- * was rejected, so the drain records a 0 without spending a judge call. A redo
- * clears it, restoring a normal grade   see `markTurnRankingUndone`.
- */
-export const MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL = `
-  id             TEXT PRIMARY KEY NOT NULL,
-  thread_id      TEXT REFERENCES threads(id) ON DELETE SET NULL,
-  project_id     TEXT NOT NULL,
-  shot_category  TEXT NOT NULL CHECK(shot_category IN ('first_shot','multi_shot')),
-  status         TEXT NOT NULL CHECK(status IN ('pending','processing','scored','failed')),
-  harness_id     TEXT NOT NULL,
-  provider_id    TEXT NOT NULL DEFAULT '',
-  model_id       TEXT NOT NULL,
-  thinking_level TEXT NOT NULL DEFAULT '',
-  started_at     INTEGER NOT NULL,
-  ended_at       INTEGER NOT NULL,
-  closed_at_ms   INTEGER,
-  due_at_ms      INTEGER NOT NULL,
-  user_message_text     TEXT NOT NULL DEFAULT '',
-  assistant_output_text TEXT NOT NULL DEFAULT '',
-  follow_up_text        TEXT,
-  anchor_message_id     TEXT,
-  cost_usd       REAL,
-  cost_status    TEXT CHECK(cost_status IN ('known','estimated','unavailable')),
-  attempt_count       INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count >= 0),
-  last_attempt_at_ms  INTEGER,
-  claim_token         TEXT,
-  undone_at_ms        INTEGER,
-  created_at     INTEGER NOT NULL`
 
 export const ATTACHMENT_GRANTS_SQL = `
 -- ─── Durable attachment grants ──────────────────────────────────────────
@@ -1010,32 +893,7 @@ CREATE INDEX IF NOT EXISTS idx_harness_usage_models_harness
 -- deletion must never alter historical usage totals.
 CREATE TABLE IF NOT EXISTS usage_events (${USAGE_EVENTS_COLUMNS_SQL});
 
-${USAGE_EVENTS_INDEXES_SQL}
-
--- ─── Model ranking aggregates (LLM-judged 0–10 scoring) ────────────────
--- Permanent "best model" analytics, keyed by harness/provider/model/
--- thinking level + rubric version. Snapshot grading (below) adds exact
--- score/duration/cost sums per shot category in one statement; averages are
--- always sum ÷ count. Snapshots are transient and hard-deleted after scoring,
--- so this table is the single surviving record of every graded conversation.
-CREATE TABLE IF NOT EXISTS model_rankings (${MODEL_RANKINGS_COLUMNS_SQL});
-
-${MODEL_RANKING_INDEXES_SQL}
-
--- ─── Model ranking snapshot queue (transient grading queue) ─────────────
--- One row per bounded conversation window (first user message + response,
--- upgraded to multi_shot by one substantive follow-up). Captured when the
--- agent answers a visible substantive user message; closed for grading by
--- thread deletion or the inactivity deadline. Greeting-only prompts never
--- insert a row. The cheap-model judge scores the closed conversation 0–10,
--- the aggregate is updated exactly once, and the row is hard-deleted.
--- Judge failures retry with bounded backoff and remain as status='failed'
--- for recovery   never deleted unscored. Each claim is tagged with a unique
--- claim_token; score/delete/defer apply only to the current claim generation,
--- so a stale in-flight judge result can never land on a re-claimed row.
-CREATE TABLE IF NOT EXISTS model_ranking_snapshots (${MODEL_RANKING_SNAPSHOTS_COLUMNS_SQL});
-
-${MODEL_RANKING_SNAPSHOT_INDEXES_SQL}`
+${USAGE_EVENTS_INDEXES_SQL}`
 
 /**
  * Private user-only notes attached to threads. The row cascade-deletes with

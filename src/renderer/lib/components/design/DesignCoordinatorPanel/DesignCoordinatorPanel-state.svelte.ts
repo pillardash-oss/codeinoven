@@ -1,8 +1,10 @@
 import type { Attachment } from 'svelte/attachments'
 import { browserAudio } from '$lib/stores/browser-audio.svelte'
 import { toast } from 'svelte-sonner'
+import { invoke } from '$lib/ipc.svelte'
 import { copyText } from '$lib/copy-text'
 import { designCopyFor } from '$lib/design-copy-context'
+import { revealInOsFileManager } from '$lib/os-file-manager'
 import { logRendererError } from '$lib/system/renderer-logger'
 import type { ScreenOrder } from './DesignCoordinatorPanel-types'
 import type { DesignBoard } from './DesignCoordinatorPanel-board.svelte'
@@ -77,23 +79,32 @@ export class DesignBoardState extends BoardUnit<DesignBoard> {
    * same tree every other path citation uses instead of a folder the user has
    * to find again.
    *
-   * The folder is relative to the board's own scope, which for a chat, an
-   * assistant task or a browser tab is that conversation's workspace and not
-   * the project root, so the board's thread has to name the tree to mount.
+   * The folder is relative to the scope of the thread whose work the board is
+   * showing, which for a chat, an assistant task or a browser tab is that
+   * conversation's workspace and not the project root. The tree mounts one scope
+   * at a time, so a design recorded in a scope the user has since left (a thread
+   * that moved to another worktree, a folder that was moved) cannot be shown
+   * there. That is not a dead end: the folder still exists, so the app opens it
+   * in the OS file manager and says why the tree did not take it.
    */
   async revealDesignPath(directory: string): Promise<void> {
     if (directory === '') return
+    const { projectId } = this.root.props
+    const threadId = this.root.gallery.selectionThreadId
     try {
       const { revealScopeRelativePath } = await import('$lib/reveal-file')
-      const revealed = await revealScopeRelativePath(
-        this.root.props.projectId,
-        this.root.props.threadId,
-        directory
-      )
-      if (!revealed) toast.error('The design could not be revealed in the file tree.')
+      if (await revealScopeRelativePath(projectId, threadId, directory)) return
+      const absolutePath = await invoke('design:folderPath', projectId, threadId, directory)
+      if (absolutePath !== '' && (await revealInOsFileManager(absolutePath))) {
+        toast.info(
+          'The current thread is not in the same scope as the design, revealing it in your OS file manager.'
+        )
+        return
+      }
+      toast.error('The design could not be revealed. It may have been moved or deleted.')
     } catch (failure) {
-      logRendererError('The design could not be revealed in the file tree.', failure)
-      toast.error('The design could not be revealed in the file tree.')
+      logRendererError('The design could not be revealed.', failure)
+      toast.error('The design could not be revealed. It may have been moved or deleted.')
     }
   }
 

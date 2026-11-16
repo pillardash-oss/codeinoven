@@ -554,6 +554,8 @@ interface MessageMatchRow {
   match_role: string
   snippet_text: string
   snippet_timestamp: number
+  /** How many of the thread's messages matched the query at all. */
+  match_count: number
 }
 
 // Draft state (`drafting`, `draft_json`) is intentionally absent from the
@@ -1612,11 +1614,10 @@ export class ThreadRepo {
   /**
    * Full-text thread search across titles and conversation content.
    *
-   * Search across titles and conversation content. Results are deduped by
-   * thread and ranked by threaded recency (most recently active thread
-   * first); for title matches the title kind wins the snippet metadata.
-   * Message matches surface user messages and the agent's final output
-   * from conversation-scoped records.
+   * Results are deduped by thread: title matches lead, then the threads with
+   * the most matching messages, most recently active first. Message matches
+   * surface user messages and the agent's final output from
+   * conversation-scoped records.
    */
   search(
     query: string,
@@ -1689,12 +1690,18 @@ export function buildThreadSearchSql(
   const messageLimit = threadSearchMessageLimit(limit)
   const metaScope = threadSearchScopeClause('st', options)
   const legacyScope = threadSearchScopeClause('t', options)
+  // bm25() cannot be combined with a window function in one query, so each
+  // thread's matching-message count comes from its own grouped FTS pass over the
+  // same MATCH set. The join is cheap because both halves are already narrowed
+  // by MATCH, and `counts` only carries one row per matched thread.
+  const countScope = threadSearchScopeClause('sc', options)
   const fts = ftsQuery
     ? useSearchMeta
       ? {
           sql: `SELECT t.*, meta.role AS match_role,
               meta.snippet_text AS snippet_text,
-              meta.created_at AS snippet_timestamp, meta.fts_rank AS fts_rank
+              meta.created_at AS snippet_timestamp, meta.fts_rank AS fts_rank,
+              counts.match_count AS match_count
         FROM (
           SELECT m.rowid AS msg_rowid, m.thread_id AS msg_thread_id, m.role AS role,
                  m.created_at AS created_at, bm25(agent_messages_fts) AS fts_rank,
@@ -1710,22 +1717,52 @@ export function buildThreadSearchSql(
           LIMIT ?
         ) meta
         JOIN threads t ON t.id = meta.msg_thread_id
+        JOIN (
+          SELECT m.thread_id AS count_thread_id, COUNT(*) AS match_count
+          FROM agent_messages_fts
+          JOIN agent_message_search_meta m ON m.rowid = agent_messages_fts.rowid
+          JOIN threads sc ON sc.id = m.thread_id
+          WHERE agent_messages_fts MATCH ?
+            AND m.session_id IS NULL
+            AND m.visibility = 'conversation'
+            AND ${countScope.sql}
+          GROUP BY m.thread_id
+        ) counts ON counts.count_thread_id = meta.msg_thread_id
         ORDER BY meta.fts_rank, meta.created_at DESC`,
-          params: [snippetTokens, ftsQuery, ...metaScope.params, messageLimit]
+          params: [
+            snippetTokens,
+            ftsQuery,
+            ...metaScope.params,
+            messageLimit,
+            ftsQuery,
+            ...countScope.params
+          ]
         }
       : {
           sql: `SELECT t.*, am.role AS match_role,
               snippet(agent_messages_fts, 0, '', '', ' … ', ?) AS snippet_text,
-              am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank
+              am.created_at AS snippet_timestamp, bm25(agent_messages_fts) AS fts_rank,
+              counts.match_count AS match_count
         FROM agent_messages_fts
         JOIN agent_messages am ON am.rowid = agent_messages_fts.rowid
         JOIN threads t ON t.id = am.thread_id
+        JOIN (
+          SELECT matched.thread_id AS count_thread_id, COUNT(*) AS match_count
+          FROM agent_messages_fts
+          JOIN agent_messages matched ON matched.rowid = agent_messages_fts.rowid
+          JOIN threads sc ON sc.id = matched.thread_id
+          WHERE agent_messages_fts MATCH ?
+            AND matched.session_id IS NULL
+            AND matched.visibility = 'conversation'
+            AND ${countScope.sql}
+          GROUP BY matched.thread_id
+        ) counts ON counts.count_thread_id = am.thread_id
         WHERE agent_messages_fts MATCH ?
           AND am.session_id IS NULL
           AND am.visibility = 'conversation'
           AND ${legacyScope.sql}
         ORDER BY bm25(agent_messages_fts), am.created_at DESC`,
-          params: [snippetTokens, ftsQuery, ...legacyScope.params]
+          params: [snippetTokens, ftsQuery, ...countScope.params, ftsQuery, ...legacyScope.params]
         }
     : null
   return { title, fts, limit }
@@ -1842,11 +1879,12 @@ function titleMatchScore(title: string, raw: string): number {
  * Match quality always outranks recency:
  * 1. Title matches come before message-only matches. Within title matches,
  *    closer titles (exact > prefix > contains) rank first.
- * 2. Message matches keep bm25 relevance order (rows arrive pre-sorted, so the
- *    first row seen per thread is its best-scoring message and supplies the
- *    snippet).
- * 3. `last_activity` is only a tiebreaker inside the same quality tier so
- *    equally relevant threads surface the most recent one first.
+ * 2. Message-only matches rank by how many of the thread's messages matched,
+ *    then by `last_activity`, then by bm25. Full-text rank grades a single
+ *    message, so on its own it put a thread whose one-line notification repeats
+ *    the word above the conversation that actually discusses it.
+ * 3. The first row seen per thread is its best bm25 match and supplies the
+ *    snippet, because rows arrive pre-sorted.
  */
 export function mergeThreadSearchResults(
   titleRows: unknown[],
@@ -1858,6 +1896,8 @@ export function mergeThreadSearchResults(
     result: ThreadSearchResult
     titleKind: boolean
     titleScore: number
+    /** How many of the thread's messages matched; the body of its evidence. */
+    matchCount: number
     /** Lower bm25 is better; only meaningful for message matches. */
     bm25: number
     activity: number
@@ -1884,6 +1924,7 @@ export function mergeThreadSearchResults(
         result: { thread, kind: 'title' },
         titleKind: true,
         titleScore: titleMatchScore(threadRow.title, raw),
+        matchCount: 0,
         bm25: 0,
         activity: thread.lastActivity
       })
@@ -1894,6 +1935,7 @@ export function mergeThreadSearchResults(
       snippet_text?: unknown
       snippet_timestamp?: unknown
       fts_rank?: unknown
+      match_count?: unknown
     }
     byThread.set(threadRow.id, {
       result: {
@@ -1906,6 +1948,7 @@ export function mergeThreadSearchResults(
       titleKind: false,
       titleScore: 0,
       // Rows arrive bm25-ordered, so the first row per thread is its best.
+      matchCount: Number(meta.match_count ?? 1),
       bm25: Number(meta.fts_rank ?? 0),
       activity: thread.lastActivity
     })
@@ -1916,6 +1959,13 @@ export function mergeThreadSearchResults(
     .sort((a, b) => {
       if (a.titleKind !== b.titleKind) return a.titleKind ? -1 : 1
       if (a.titleKind && a.titleScore !== b.titleScore) return b.titleScore - a.titleScore
+      // bm25 grades one message, which says almost nothing about a thread: a
+      // single short message that repeats the word beats a conversation that
+      // discusses it twenty times. How many of the thread's messages matched is
+      // the thread-level signal, so it leads; recency settles the ties and bm25
+      // only ranks the best excerpt of otherwise equal threads.
+      if (!a.titleKind && a.matchCount !== b.matchCount) return b.matchCount - a.matchCount
+      if (!a.titleKind && a.activity !== b.activity) return b.activity - a.activity
       if (!a.titleKind && a.bm25 !== b.bm25) return a.bm25 - b.bm25
       return b.activity - a.activity
     })

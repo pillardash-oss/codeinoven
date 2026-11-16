@@ -86,6 +86,14 @@ export class ThreadSearchPaletteController {
   actions = $state<ActionDefinition[]>([])
   loading = $state(false)
   /**
+   * The query on screen is long enough to search.
+   *
+   * The panel only asks for more typing while it is true, so an empty result set
+   * for a real query reads as "no matches" instead of telling the reader to keep
+   * typing what they already typed.
+   */
+  queryReady = $state(false)
+  /**
    * The rows on screen are keyword matches and the meaning-based ranking that
    * replaces them has not landed yet.
    *
@@ -142,6 +150,7 @@ export class ThreadSearchPaletteController {
     this.clearWatchdog()
     this.request++
     this.loading = false
+    this.queryReady = false
     this.actions = []
     this.targets.clear()
     this.scopeIds = []
@@ -222,6 +231,7 @@ export class ThreadSearchPaletteController {
     if (this.timer !== null) window.clearTimeout(this.timer)
     const request = ++this.request
     const normalized = query.trim()
+    this.queryReady = normalized.length >= MIN_QUERY_LENGTH
     if (normalized.length < MIN_QUERY_LENGTH) {
       this.loading = false
       this.actions = []

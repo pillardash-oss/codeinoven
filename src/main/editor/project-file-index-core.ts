@@ -600,9 +600,9 @@ export class ProjectFileIndexService {
    *
    *  Uses the platform's native recursive watcher (FSEvents on macOS,
    *  ReadDirectoryChangesW on Windows, inotify on Linux) instead of a
-   *  per-path watcher library: chokidar 5 opens one `fs.watch` handle per
-   *  path, which exhausted the process file-descriptor table on large
-   *  projects (ENFILE) and made every later `spawn` fail with EBADF. */
+   *  per-path watcher library: a chokidar-style watcher opens one `fs.watch`
+   *  handle per path, which exhausted the process file-descriptor table on
+   *  large projects (ENFILE) and made every later `spawn` fail with EBADF. */
   private ensureWatcher(projectId: string, root: string): void {
     const existing = this.watchers.get(projectId)
     if (existing && existing.root === root && !existing.closed) return

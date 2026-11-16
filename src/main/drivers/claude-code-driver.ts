@@ -18,7 +18,6 @@ import type {
   CheapModelRequest,
   CheapModelResult,
   GenerateTitleOptions,
-  GradeTurnOptions,
   HarnessAuthStatus,
   HarnessCapabilities,
   SendPromptOptions,
@@ -71,7 +70,7 @@ import {
 import { CLAUDE_USAGE_TIMEOUT_MS, rateLimitWindows } from './claude-code/claude-usage'
 import type { ClaudeAccountUsage } from './claude-code/claude-usage'
 import { claudeStreamInput } from './claude-code/claude-attachments'
-import { activeClaudeSubagentParts, latestAssistant } from './claude-code/claude-parts'
+import { latestAssistant } from './claude-code/claude-parts'
 import { mapClaudeCodeRecord } from './claude-code/claude-stream-fold'
 import { numberProperty, record, string } from './claude-code/claude-values'
 
@@ -120,6 +119,15 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   private readonly asyncAgentCloseTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Absolute stdin-close deadlines, immune to stdout-driven grace resets. */
   private readonly asyncAgentHoldDeadlines = new Map<string, ReturnType<typeof setTimeout>>()
+  /**
+   * Background sub-agents launched by the CURRENT turn process, keyed by
+   * session and call id. The transcript keeps every sub-agent part it ever
+   * wrote, so a part left "running" by an earlier process would otherwise make
+   * every later turn wait for a notification that can never arrive   the turn
+   * process is held open for those agents, so the thread kept showing working
+   * for the full grace window (and up to the hold deadline) after it finished.
+   */
+  private readonly liveBackgroundAgents = new Map<string, Set<string>>()
   /** Held while a first-party session spawn may be refreshing the credential. */
   private authSlotHeld = false
   /** Resolved when the current credential-refresh window closes. */
@@ -260,15 +268,6 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     )
   }
 
-  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    if (!(await this.auxiliaryTransportReady(options))) return null
-    return this.gradeTurnWithCandidates(
-      projectPath,
-      options,
-      options.candidates ?? (await this.cheapAnthropicCandidates(projectPath))
-    )
-  }
-
   async provideCheapModel(
     projectPath: string,
     request: CheapModelRequest
@@ -292,7 +291,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * authenticated transport.
    */
   private async auxiliaryTransportReady(
-    options: GenerateTitleOptions | GradeTurnOptions | CheapModelRequest
+    options: GenerateTitleOptions | CheapModelRequest
   ): Promise<boolean> {
     const firstParty = !options.settings.providerId || options.settings.providerId === 'anthropic'
     if (
@@ -310,6 +309,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** Append user input to Claude's realtime stream while its turn is active. */
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
+    // A steer that lands after the final result finds stdin already closed:
+    // writing there drops it silently and the turn settles without it. Resume
+    // the session with the steer as its own turn instead.
+    if (!this.activeInputOpen(session.id)) return super.steerPrompt(projectPath, options)
     this.writeActiveInput(
       session.id,
       await claudeStreamInput(options.text, options.attachments, 'now')
@@ -581,8 +584,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     options: SendPromptOptions
   ): Promise<CliTurnCommand> {
     // A new turn spawns a fresh CLI process; any stdin-close grace timer left
-    // by the previous turn belongs to a process this turn just replaced.
+    // by the previous turn belongs to a process this turn just replaced, and
+    // every background agent launched by that process died with it.
     this.cancelAsyncAgentInputClose(session.id)
+    this.liveBackgroundAgents.delete(session.id)
     // Pre-flight auth gate at message-send time (buildTurnCommand runs per turn,
     // never on thread open). For first-party Anthropic turns, probe the CLI's
     // stored credential so the CLI's own silent OAuth refresh is triggered up
@@ -662,10 +667,13 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
             onJsonRecord: (value: unknown) => {
               const result = claudeAuthenticationResult(value)
               if (result !== undefined) this.settleAuthenticationReadiness(session.id, result)
-            },
-            onProcessExit: () => this.settleAuthenticationReadiness(session.id, false)
+            }
           }
-        : {})
+        : {}),
+      onProcessExit: () => {
+        this.settleSubagentPartsOnProcessExit(session)
+        if (trackAuthentication) this.settleAuthenticationReadiness(session.id, false)
+      }
     }
   }
 
@@ -1071,14 +1079,27 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
    * turns predate capture. Returns null when the session has no plan limits
    * (API key, Bedrock, Vertex) or on any failure.
    */
-  async readAccountUsage(projectPath: string): Promise<ClaudeAccountUsage | null> {
-    // Only a session that holds a real conversation can state this thread's
-    // occupancy. Auxiliary sessions (title generation, probes) are somebody
-    // else's context and would report a nearly empty window under this thread.
-    const activeSessionId = this.activeSessionIds().find((id) => !this.isAuxiliarySession(id))
-    if (activeSessionId) {
-      return this.mapAccountUsage(await this.readUsageFromActiveSession(activeSessionId), {
-        sessionId: activeSessionId
+  async readAccountUsage(
+    projectPath: string,
+    _providerId?: string,
+    conversationSessionId?: string
+  ): Promise<ClaudeAccountUsage | null> {
+    // Context occupancy is a property of ONE conversation, so only the session
+    // bound to the thread asking for this reading may state it. Any other live
+    // process   another thread's session, a title run, a warmed wrapper that
+    // has not sent a prompt yet   holds somebody else's window (usually just a
+    // system prompt), and reading it as this thread's occupancy is what made a
+    // hover on an empty thread show 17%. Those sessions still cannot answer for
+    // this one, so the reading is simply not attributed.
+    const owningSessionId =
+      conversationSessionId &&
+      !this.isAuxiliarySession(conversationSessionId) &&
+      this.activeSessionIds().includes(conversationSessionId)
+        ? conversationSessionId
+        : undefined
+    if (owningSessionId) {
+      return this.mapAccountUsage(await this.readUsageFromActiveSession(owningSessionId), {
+        sessionId: owningSessionId
       })
     }
     try {
@@ -1218,6 +1239,60 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     super.dispose()
   }
 
+  /**
+   * Follow the background sub-agents this process launched, from the part
+   * updates the stream fold emits. A part leaves the set the moment its status
+   * settles, so the set is exactly "agents this process is still holding the
+   * CLI open for".
+   */
+  private trackLiveBackgroundAgents(
+    sessionId: string,
+    events: SessionAgentEvent[] | undefined
+  ): void {
+    if (!events?.length) return
+    let live = this.liveBackgroundAgents.get(sessionId)
+    for (const event of events) {
+      if (event.type !== 'message.part.updated') continue
+      const part = event.part
+      if (part.type !== 'subagent') continue
+      const active = part.activity.status === 'pending' || part.activity.status === 'running'
+      const agentKey = part.callID ?? part.id
+      if (active && part.activity.background) {
+        live ??= new Set<string>()
+        live.add(agentKey)
+        this.liveBackgroundAgents.set(sessionId, live)
+        continue
+      }
+      if (!live) continue
+      live.delete(agentKey)
+      if (live.size === 0) this.liveBackgroundAgents.delete(sessionId)
+    }
+  }
+
+  /**
+   * Close every sub-agent part the exiting process can no longer report on.
+   *
+   * A background agent's completion arrives as a task notification on the same
+   * CLI process, so once that process exits the notification can never come
+   * and the part would stay "running" in the durable transcript for the rest of
+   * the thread's life. Marking it settled at exit keeps the sub-agent panels
+   * and the turn-completion logic from inheriting a ghost.
+   */
+  private settleSubagentPartsOnProcessExit(session: PersistentCliSession): void {
+    this.liveBackgroundAgents.delete(session.id)
+    for (const message of session.messages) {
+      for (const part of message.parts) {
+        if (part.type !== 'subagent') continue
+        if (part.activity.status !== 'pending' && part.activity.status !== 'running') continue
+        this.emit({
+          type: 'message.part.updated',
+          sessionId: session.id,
+          part: { ...part, activity: { ...part.activity, status: 'completed' } }
+        })
+      }
+    }
+  }
+
   protected parseJsonLine(value: unknown, context: CliLineParseContext): CliLineParseResult | null {
     const entry = record(value)
     if (claudeAuthenticationResult(entry) === true) {
@@ -1231,6 +1306,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
 
     const result = mapClaudeCodeRecord(value, context)
+    if (result) this.trackLiveBackgroundAgents(context.sessionId, result.events)
     // Background-agent bookkeeping: any stdout record proves the turn process
     // is still doing work, so the scheduled stdin close (armed at result time
     // while background agents run) must be pushed back out   both the
@@ -1245,7 +1321,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     }
     if (type === 'result') {
       this.finishActiveUsageProbe(context.sessionId, null)
-      const backgroundAgents = activeClaudeSubagentParts(context, true).length > 0
+      // Only agents this process launched still count. Parts carried over from
+      // an earlier process are stale   their notification can never arrive, so
+      // waiting for them held every later turn open until the stdin-close cap.
+      const backgroundAgents = (this.liveBackgroundAgents.get(context.sessionId)?.size ?? 0) > 0
       if (backgroundAgents) {
         // Background agents keep the CLI process alive after the result: it
         // will inject their task-notifications as new prompts in this same

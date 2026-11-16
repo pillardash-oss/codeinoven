@@ -1,4 +1,4 @@
-import type { AgentDefaultsConfig, AuxiliaryAgentConfig, RankingJudgeConfig } from './agent'
+import type { AgentDefaultsConfig, AuxiliaryAgentConfig } from './agent'
 import type { CioCleanupCategoryId } from './cio-cleanup'
 import type { AgentModelSelection, InferenceMode, PermissionLevel, ThinkingLevel } from './common'
 import type { GitPullPreference, PrMergeMethod } from './git'
@@ -435,8 +435,6 @@ export interface AppConfig {
   modelProfiles: ModelProfile[]
   /** Backend that generates images, clips and sound for a design or a composition. */
   mediaGeneration: MediaGenerationConfig
-  /** Model that judges ranking conversations, and whether it is pinned at all. */
-  rankingJudge: RankingJudgeConfig
   /** Editable default behavior prompt for project Engineering implementation turns. */
   agentBehaviorPrompt: string
   /** Automatically download available updates in the background. */
@@ -613,7 +611,6 @@ export type AppConfigPatch = Partial<
     | 'design'
     | 'modelProfiles'
     | 'mediaGeneration'
-    | 'rankingJudge'
     | 'agentBehaviorPrompt'
     | 'autoDownloadUpdates'
     | 'autoInstallUpdates'

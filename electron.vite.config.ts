@@ -2,7 +2,7 @@ import { defineConfig, loadEnv } from 'electron-vite'
 import { svelte } from '@sveltejs/vite-plugin-svelte'
 import tailwindcss from '@tailwindcss/vite'
 import { createHash } from 'node:crypto'
-import { realpathSync, statSync } from 'node:fs'
+import { readFileSync, realpathSync, statSync } from 'node:fs'
 import { join, resolve } from 'path'
 import { build, type Plugin, type PluginOption } from 'vite'
 import packageJson from './package.json'
@@ -210,6 +210,27 @@ const __filename = import.meta.filename;
 const __dirname = import.meta.dirname;
 const require = __cioCreateRequire(import.meta.url);`
 
+/**
+ * Ship the terminal's wasm beside the chunk that loads it.
+ *
+ * ghostty-web resolves `ghostty-vt.wasm` next to its own module, and Vite does
+ * not copy a wasm that an npm package ships, so a packaged build carried the
+ * parser's JavaScript and no parser: every terminal surface failed with
+ * `Failed to fetch`, while development kept working because the dev server
+ * answers that file straight out of `node_modules`. Emitting it as an asset is
+ * what makes the loader find it at `assets/ghostty-vt.wasm`.
+ */
+function terminalWasmPlugin(): Plugin {
+  return {
+    name: 'codeinoven-terminal-wasm',
+    apply: 'build',
+    generateBundle() {
+      const source = readFileSync(resolve(__dirname, 'node_modules/ghostty-web/ghostty-vt.wasm'))
+      this.emitFile({ type: 'asset', fileName: 'assets/ghostty-vt.wasm', source })
+    }
+  }
+}
+
 export function rendererPlugins(): PluginOption[] {
   // Each factory returns its own plugin array, so spread them into one flat
   // list. The assertion is exact rather than a widening: these are plugins, and
@@ -217,7 +238,8 @@ export function rendererPlugins(): PluginOption[] {
   // TypeScript's structural comparison past its stack depth on the newer types.
   return [
     ...svelte({ configFile: resolve(__dirname, 'svelte.config.js') }),
-    ...tailwindcss()
+    ...tailwindcss(),
+    terminalWasmPlugin()
   ] as PluginOption[]
 }
 
@@ -265,32 +287,16 @@ export default defineConfig(({ mode }) => {
           // live in devDependencies: it's a pure-JS control-protocol client
           // with no native bindings, so inlining it avoids shipping the whole
           // package inside node_modules in the packaged app.
-          // The video studio's inference stack is external for two reasons. It
-          // loads native binaries (onnxruntime-node's NAPI binding, sharp) whose
-          // `require('../bin/<platform>/<arch>/...node')` only resolves from the
-          // package's own directory, never from a bundled chunk under out/main;
-          // and mediabunny keeps a module-level decoder registry, so a bundled
-          // copy would be a second instance and the NodeAV decoders that
-          // registerMediabunnyServer() installs would never reach the copy
-          // @remotion/video-matting decodes with (background removal then fails
-          // with `The primary video track cannot be decoded.`). Resolving them at
-          // runtime also keeps one copy of each of these six.
-          //
-          // They are devDependencies, not runtime ones: the installer no longer
-          // carries them, and the matting operation installs them on demand into
-          // the app config folder (see src/main/video/video-packages.ts). They
-          // stay listed here because the matting utility process still imports
-          // them by name, from wherever they are installed, so the build must
-          // leave those imports alone.
+          // The video studio's inference stack used to be external here because
+          // it loaded native binaries from a runtime-installed pack. That stack
+          // (and the pack) is gone: an agent provisions whatever it needs in
+          // project scratch at task time, so nothing under src/main imports these
+          // packages any more.
           external: [
             'electron',
             'node-pty',
             'better-sqlite3',
             'electron-updater',
-            '@huggingface/transformers',
-            '@mediabunny/server',
-            '@remotion/video-matting',
-            'mediabunny',
             'onnxruntime-node',
             'sharp'
           ],

@@ -13,7 +13,6 @@ import type {
   ComputerUsePipFrame,
   ComputerUsePipState,
   CuaUpdateProgress,
-  LocalRankingGradeProgress,
   ProviderConnectionInfo,
   Thread,
   TypesafeStatus
@@ -246,9 +245,11 @@ export const IPC_EVENT_CONTRACT = {
   'notification:show': [] as unknown as [payload: AgentNotificationPayload, appFocused: boolean],
   /** Transient in-app toast (error/info, optional navigation action). An error
    *  toast keeps `details` behind its Copy action and is also filed in the App
-   *  Errors panel. */
+   *  Errors panel. `id` lets the process that raised a condition withdraw the
+   *  notice when the condition no longer holds. */
   'app:toast': [] as unknown as [
     payload: {
+      id?: string
       message: string
       type: 'error' | 'info'
       details?: string
@@ -257,6 +258,8 @@ export const IPC_EVENT_CONTRACT = {
       action?: { label: string; projectId: string; threadId: string }
     }
   ],
+  /** Withdraw one still-visible toast, because what it warned about was resolved. */
+  'app:toast:dismiss': [] as unknown as [id: string],
   'notification:threadClicked': [] as unknown as [payload: ThreadClickedPayload],
   /** macOS notification authorization changed (delivery outcome or re-verification). */
   'notification:permissionStatus': [] as unknown as [status: SystemNotificationPermissionStatus],
@@ -349,13 +352,6 @@ export const IPC_EVENT_CONTRACT = {
    * showing the same utility never reports a stale grant.
    */
   'utilities:mcpOAuthEvent': [] as unknown as [payload: import('../types').McpOAuthEventPayload],
-  /**
-   * Progress of a manual ranking grade run, pushed after every pass so a queue
-   * of conversations graded three at a time never looks like a hang. The run
-   * itself answers over `account:gradeRankingQueue`; this stream carries only
-   * the counters, so a pass never triggers a second read of the queue.
-   */
-  'account:rankingGradeProgress': [] as unknown as [progress: LocalRankingGradeProgress | null],
   /**
    * A language server's own work-done progress for IDE Mode.
    *
@@ -562,13 +558,6 @@ export const IPC_EVENT_CONTRACT = {
       requestId: number
       results: import('../types').ThreadSearchResult[]
     }
-  ],
-  /**
-   * The optional video pack's install state. The Design and video settings
-   * block mirrors this so a long package install reports live progress.
-   */
-  'video:packages:progress': [] as unknown as [
-    state: import('./video-packages').VideoPackagesProgressEvent
   ],
   /**
    * One live stage of a managed-worktree creation/adoption job. The renderer

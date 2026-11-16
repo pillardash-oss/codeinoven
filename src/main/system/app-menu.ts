@@ -2,11 +2,11 @@
  * The application menu: the one under the app's own name on macOS.
  *
  * A production build owns its whole menu, because Electron's default one carries
- * a reload item and a DevTools item that a shipped app must not offer
- * (`lockDownProductionWindow` closes the keyboard half of that same hole). A
- * development launch keeps Electron's default menu, since reload and DevTools are
- * exactly what development needs, and only has the app-specific items inserted
- * into it.
+ * a reload item and a DevTools item that a shipped app must not offer (neither
+ * exists for the app's own window there: `devTools: !isProduction` refuses the
+ * inspector and `lockDownProductionWindow` swallows both chords). A development
+ * launch keeps Electron's default menu, since reload and DevTools are exactly
+ * what development needs, and only has the app-specific items inserted into it.
  *
  * Windows and Linux ship without an application menu at all, so the equivalent
  * surface there is the menu bar icon's context menu
@@ -15,6 +15,7 @@
 
 import { Menu, MenuItem, type MenuItemConstructorOptions } from 'electron'
 import { forceRestartMenuItem } from './force-restart'
+import { restartWorkspaceMenuItem } from './workspace-restart'
 
 /** What the menu's items do. Implemented by the composition root. */
 export interface ApplicationMenuActions {
@@ -29,6 +30,8 @@ export interface ApplicationMenuActions {
   openSettings: () => void
   /** Open a second instance beside this one. */
   newInstance: () => void
+  /** Replace the window's renderer while the main process keeps working. */
+  restartWorkspace: () => void
 }
 
 /**
@@ -59,6 +62,7 @@ function applicationItems(actions: ApplicationMenuActions): MenuItemConstructorO
       label: 'New Instance',
       click: () => actions.newInstance()
     },
+    restartWorkspaceMenuItem(actions.restartWorkspace),
     forceRestartMenuItem(actions.quitApp)
   ]
 }

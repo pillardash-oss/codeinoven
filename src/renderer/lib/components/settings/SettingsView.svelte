@@ -92,7 +92,6 @@
   import IdeModeSettingsTab from './IdeModeSettingsTab.svelte'
   import KeymapSettingsTab from './KeymapSettingsTab.svelte'
   import MediaGenerationSettings from './MediaGenerationSettings.svelte'
-  import VideoPackagesSettings from './VideoPackagesSettings.svelte'
   import OvensSettings from './OvensSettings.svelte'
   import LocalAiSettings from './LocalAiSettings.svelte'
   import ProfileSettingsTab from './ProfileSettingsTab.svelte'
@@ -1412,9 +1411,6 @@
         </div>
         <div class="mb-6">
           <MediaGenerationSettings {config} {settingsReady} {updateConfig} />
-        </div>
-        <div class="mb-6">
-          <VideoPackagesSettings />
         </div>
         <DesignAssignmentsSettings {config} {settingsReady} {updateConfig} />
       </div>

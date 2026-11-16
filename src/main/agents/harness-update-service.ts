@@ -15,6 +15,7 @@ import {
 } from '../drivers/acp/acp-agents-store'
 import { acpCommandName, acpUpdateCommandFor } from '../drivers/acp/acp-update-recipes'
 import { resolvedOpenCodeCommand } from './opencode-installation'
+import { npmGlobalInstallFor } from './npm-global-install'
 import { homebrewPackageFor, homebrewUpgradeArgs, homebrewVersions } from './harness-homebrew'
 import { parseMajorVersion, compareVersions } from '../../lib/version-compare'
 import type { ProviderConnectionService } from '../providers/provider-connection'
@@ -456,6 +457,31 @@ export class HarnessUpdateService {
         command: prepared.command,
         args: prepared.args,
         title: `Update ${definition.name} with Homebrew`
+      }
+    }
+    // Cline's own updater spawns npm through PATH, and a global npm bin is an
+    // `#!/usr/bin/env node` shim, so the update lands in whichever Node version
+    // PATH resolves rather than the install the app drives (see
+    // npm-global-install.ts). There npm answers "up to date", exits 0 and Cline
+    // reports the new version while nothing moved. An npm-owned Cline therefore
+    // updates through its own npm with the prefix it actually lives under.
+    const npmInstall =
+      harnessId === 'cline' && provider?.executionTarget?.kind !== 'wsl' && provider?.resolvedPath
+        ? npmGlobalInstallFor(provider.resolvedPath)
+        : undefined
+    if (npmInstall) {
+      const prepared = await prepareHarnessTerminalHandoff(npmInstall.npm, [
+        'install',
+        '-g',
+        'cline@latest',
+        '--prefix',
+        npmInstall.prefix
+      ])
+      return {
+        kind: 'terminal',
+        command: prepared.command,
+        args: prepared.args,
+        title: `Update ${definition.name}`
       }
     }
     // OpenCode is the one harness whose current release is a different version

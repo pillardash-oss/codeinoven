@@ -4,6 +4,8 @@ import { reconcilesPendingAttention } from '$lib/session-attention'
 import { normalizeComposerMessage } from '../../chats/composer-mentions'
 import { invoke } from '$lib/ipc.svelte'
 import { messageId } from '$shared/id'
+import { assignmentDraftPartId } from '$shared/assignment/assignment-draft'
+import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import {
   rendererRecovery,
   type StartAfterThreadReference
@@ -100,6 +102,14 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     ) {
       this.root.unmirroredTraceStartTime.knownEphemeralSessionIds.add(event.sessionId)
       this.root.sources.applyAssignmentGenerationTrace(event.update)
+      // The offshoot is one worker, not a second conversation: its live work
+      // belongs to the sub-agent panel its card opens, not to a trace of its own.
+      contextSidebarState.updateSubagentDraftTrace(
+        event.projectId,
+        event.threadId,
+        assignmentDraftPartId(event.projectId, event.threadId),
+        this.root.sources.assignmentGenerationTraceParts
+      )
       return
     }
     if (
@@ -131,17 +141,47 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     ) {
       if (event.type === 'spec.ready') this.root.sources.clearSpecGenerationTrace()
       this.root.sources.clearAssignmentGenerationTrace()
-      this.root.abortRun.clearLocalTurn()
-      agentRuns.setIdle(this.thread.projectId, this.thread.id)
-      if (this.providerStatus?.state !== 'error') this.providerStatus = null
-      void this.root.submitBrainstormDecision.reconcileReadySpec().catch((error) => {
-        this.errorMessage =
-          error instanceof Error ? error.message : 'The specification could not be loaded.'
-      })
+      // A draft can land while the turn that asked for it is still working. The
+      // artifact is ready, but the turn is not: leaving its run state alone keeps
+      // the live turn from being shown as finished.
+      const backgroundDraft =
+        event.type === 'assignment.ready' && this.providerStatus?.state === 'working'
+      if (!backgroundDraft) {
+        this.root.abortRun.clearLocalTurn()
+        agentRuns.setIdle(this.thread.projectId, this.thread.id)
+        if (this.providerStatus?.state !== 'error') this.providerStatus = null
+      }
+      void this.root.submitBrainstormDecision
+        .reconcileReadySpec()
+        .then(() => {
+          if (event.type !== 'assignment.ready') return
+          // The draft landed in the background: clear the formulation state and
+          // reveal the board the user just spent minutes waiting for.
+          this.root.composerScope.assignmentFormulatingDurable = false
+          this.root.sources.assignmentDraftError = ''
+          this.root.harnessUsage.studioDocument = 'assignment'
+          this.root.submitSpecDecision.showSpecStudio = true
+        })
+        .catch((error) => {
+          this.errorMessage =
+            error instanceof Error ? error.message : 'The specification could not be loaded.'
+        })
+      return
+    }
+    if (
+      event.type === 'assignment.failed' &&
+      event.projectId === this.thread.projectId &&
+      event.threadId === this.thread.id
+    ) {
+      this.root.composerScope.assignmentFormulatingDurable = false
+      this.root.sources.clearAssignmentGenerationTrace()
+      this.root.sources.assignmentDraftError = event.error
+      this.errorMessage = event.error
       return
     }
     if (event.type === 'thread.error') {
       if (event.projectId !== this.thread.projectId || event.threadId !== this.thread.id) return
+      this.root.composerScope.assignmentFormulatingDurable = false
       this.root.sources.clearSpecGenerationTrace()
       this.root.sources.clearAssignmentGenerationTrace()
       this.root.buildSpecActionPrompt.restoredBusy = false

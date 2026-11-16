@@ -13,6 +13,7 @@ import type { SendPromptOptions } from '../../drivers/driver.interface'
 import type {
   AgentEvent,
   AgentMessage,
+  AssignmentDraftStart,
   AssignmentPlan,
   AssignmentPlanContent,
   AssignmentProvenance,
@@ -27,6 +28,7 @@ import type {
 import { isWorkflowCoordinatorThread } from '../../../lib/types'
 import { resolveWorkflowCoordinatorThreadId } from '../../../lib/engines/thread-manager-lineage'
 import { ASSIGNMENT_PLAN_SCHEMA } from '../../../lib/agent-tools'
+import { ChatEngineAssignmentDraftRun } from './chat-engine-assignment-draft-run'
 import { ensureFeatureSlug, featureArtifactDirectory } from '../../../lib/project-artifacts'
 import { parseGeneratedAssignmentContent } from '../../../lib/assignment/assignment-validation'
 import type {
@@ -48,16 +50,22 @@ import {
 } from './chat-engine-prompts'
 import { isRecord, parseGeneratedJson } from './chat-engine-generated-artifacts'
 import {
+  assignmentStallNoticeId,
   coordinatorHandoffQueueKey,
   coordinatorHandoffQueuePath,
   isCoordinatorThread,
-  pendingAssignmentTurnPath
+  pendingAssignmentTurnPath,
+  withdrawToast
 } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
 
 /** ChatEngine assignment: one concern, moved verbatim from the composition root. */
 export class ChatEngineAssignment {
-  constructor(private readonly host: ChatEngine) {}
+  private readonly draftRun: ChatEngineAssignmentDraftRun
+
+  constructor(private readonly host: ChatEngine) {
+    this.draftRun = new ChatEngineAssignmentDraftRun(host)
+  }
 
   /** Retry every failed worker first, then wake the coordinator only if work remains actionable. */
   async resumeAssignmentAttention(
@@ -344,24 +352,24 @@ export class ChatEngineAssignment {
     })
   }
 
-  async drainCoordinatorHandoffQueue(projectId: string, threadId: string): Promise<void> {
+  async drainCoordinatorHandoffQueue(projectId: string, threadId: string): Promise<boolean> {
     const key = coordinatorHandoffQueueKey(projectId, threadId)
     const active = this.host.state.coordinatorHandoffDrains.get(key)
     if (active) return active
-    const drain = (async () => {
+    const drain = (async (): Promise<boolean> => {
       const queue = await this.withCoordinatorHandoffQueueLock(projectId, threadId, () =>
         this.readCoordinatorHandoffQueue(projectId, threadId)
       )
       const next = queue.items[0]
-      if (!next) return
+      if (!next) return false
       const thread = await this.host.threadManager.getThread(projectId, threadId)
       if (!thread || !isCoordinatorThread(thread)) {
         await this.host.storage.remove(coordinatorHandoffQueuePath(projectId, threadId))
-        return
+        return false
       }
       const status = thread.sessionId ? this.host.sessionStatuses.get(thread.sessionId) : undefined
       if (status?.state === 'working' || status?.state === 'waiting' || status?.state === 'error') {
-        return
+        return false
       }
       this.host.state.dispatchingCoordinatorHandoffIds.add(next.id)
       try {
@@ -380,9 +388,25 @@ export class ChatEngineAssignment {
           next.presentation,
           next.taskReferences
         )
+        // A delivered handoff leaves the queue. Without this the same first
+        // item is re-dispatched by every later drain (a session idle signal, a
+        // new internal prompt), so the coordinator answers one handed-off
+        // message twice and the queue can never advance past its first entry.
+        await this.withCoordinatorHandoffQueueLock(projectId, threadId, async () => {
+          const latest = await this.readCoordinatorHandoffQueue(projectId, threadId)
+          const remaining = latest.items.filter((item) => item.id !== next.id)
+          if (remaining.length === latest.items.length) return
+          const path = coordinatorHandoffQueuePath(projectId, threadId)
+          if (remaining.length === 0) {
+            await this.host.storage.remove(path)
+            return
+          }
+          await this.host.storage.write(path, { ...latest, items: remaining })
+        })
       } finally {
         this.host.state.dispatchingCoordinatorHandoffIds.delete(next.id)
       }
+      return true
     })().finally(() => {
       if (this.host.state.coordinatorHandoffDrains.get(key) === drain) {
         this.host.state.coordinatorHandoffDrains.delete(key)
@@ -666,6 +690,9 @@ export class ChatEngineAssignment {
         'internal',
         presentation
       )
+      // The stall notice asked for exactly this turn. It is withdrawn the moment
+      // coordination resumes, so it can never describe a state the app left.
+      withdrawToast(assignmentStallNoticeId(assignment.id))
       return true
     } catch (error) {
       if (snapshotHash)
@@ -674,8 +701,21 @@ export class ChatEngineAssignment {
     }
   }
 
-  async assignmentNeedsCoordinatorTurn(assignment: AssignmentPlan): Promise<boolean> {
-    const immediatelyActionable = assignment.content.tasks.some(
+  /**
+   * Whether any task genuinely needs the coordinator to act on this turn: a
+   * task waiting to be assigned, a report or an attention state to review, a
+   * failed task to re-dispatch, or a Sr. Engineer task the coordinator runs
+   * itself.
+   *
+   * Every other status is either app-owned or waiting on something the app will
+   * announce, so it is not a reason to spend a coordinator turn. `blocked`
+   * becomes `ready` through `unblockDependentTasks` when its dependencies
+   * complete, `auditing` belongs to the audit cycle, and a worker task that is
+   * `running` is handed over by the report, unreported-completion and
+   * recovered-worker paths the moment it stops running.
+   */
+  assignmentHasActionableTask(assignment: AssignmentPlan): boolean {
+    return assignment.content.tasks.some(
       (task) =>
         task.status === 'ready' ||
         task.status === 'rework' ||
@@ -684,29 +724,60 @@ export class ChatEngineAssignment {
         task.status === 'failed' ||
         (task.owner === 'senior' && task.status === 'running')
     )
-    if (immediatelyActionable) return true
+  }
 
+  /**
+   * Whether the only work left for the coordinator is queued behind its workers.
+   *
+   * A `ready` task with every worker slot taken is work the coordinator cannot
+   * start, and the app wakes it the moment a worker reports or frees its slot.
+   * An idle turn in that state is a turn spent waiting, so it must never be read
+   * as a stall.
+   */
+  assignmentQueuedBehindRunningWorkers(assignment: AssignmentPlan): boolean {
+    const tasks = assignment.content.tasks
+    const runningWorker = tasks.some((task) => task.owner === 'worker' && task.status === 'running')
+    if (!runningWorker) return false
+    return !tasks.some(
+      (task) =>
+        task.status === 'reported' ||
+        task.status === 'attention' ||
+        task.status === 'failed' ||
+        task.status === 'rework' ||
+        (task.owner === 'senior' && task.status === 'running')
+    )
+  }
+
+  /**
+   * The wake gate for an automatic coordinator turn.
+   *
+   * It used to fall through to "some task is not completed", so an Assignment
+   * whose only remaining work was workers still running woke the coordinator
+   * after every turn, and each wake re-read the whole thread to conclude that
+   * nothing had changed. Only an actionable task, or a worker that stopped
+   * running without reporting, is a reason to wake coordination; the app
+   * announces both.
+   */
+  async assignmentNeedsCoordinatorTurn(assignment: AssignmentPlan): Promise<boolean> {
+    if (this.assignmentHasActionableTask(assignment)) return true
     const runningWorkers = assignment.content.tasks.filter(
       (task) => task.owner === 'worker' && task.status === 'running'
     )
-    if (runningWorkers.length > 0) {
-      const workers = await Promise.all(
-        runningWorkers.map((task) =>
-          task.threadId
-            ? this.host.threadManager.getThread(assignment.projectId, task.threadId)
-            : Promise.resolve(null)
-        )
+    if (runningWorkers.length === 0) return false
+    const workers = await Promise.all(
+      runningWorkers.map((task) =>
+        task.threadId
+          ? this.host.threadManager.getThread(assignment.projectId, task.threadId)
+          : Promise.resolve(null)
       )
-      return workers.some(
-        (worker) =>
-          !worker ||
-          (worker.status !== 'created' &&
-            worker.status !== 'planning' &&
-            worker.status !== 'executing')
-      )
-    }
-
-    return assignment.content.tasks.some((task) => task.status !== 'completed')
+    )
+    return workers.some(
+      (worker) =>
+        !worker ||
+        (worker.status !== 'created' &&
+          worker.status !== 'planning' &&
+          worker.status !== 'executing')
+    )
   }
 
   /**
@@ -725,6 +796,8 @@ export class ChatEngineAssignment {
     return [
       "Waiting for a worker is the application's job, not yours.",
       'When every task you can act on is dispatched and the rest are workers still running, end your turn: the application starts a new coordinator turn the moment a worker reports, finishes without reporting, or leaves an attention task, and that turn carries the report.',
+      'Assignment workers are durable threads the application owns, not sub-agents of this turn: the four-sub-agent cap of the spawning tools does not apply, the application sets no limit on how many workers run at once, and no worker count is ever over a limit. Dispatch every ready task the dependencies allow.',
+      'A task that already carries a report is never dispatched again: the report is the evidence the review endpoint reads, so review it instead of assigning the task a second time.',
       'Never poll, sleep, or loop on /v1/assignments/get or any other endpoint to wait for a worker: a waiting loop keeps this thread busy, delays the report you are waiting for, and the report reaches you as a new turn anyway. Call get only to read state you are about to act on right now.'
     ].join(' ')
   }
@@ -798,14 +871,41 @@ export class ChatEngineAssignment {
    * must never break as a reminder, then the one thing that is new: the
    * actionable task state.
    */
-  coordinatorContinuationPrompt(assignment: AssignmentPlan): string {
-    const actionableTasks = assignment.content.tasks.filter(
-      (task) => task.status !== 'completed' && task.status !== 'blocked'
-    )
+  async coordinatorContinuationPrompt(assignment: AssignmentPlan): Promise<string> {
+    // The state line carries what the coordinator decides on, not what it
+    // already read: task definitions (prompt, description, checklist) live in
+    // the brief in its own conversation, and repeating them here made every
+    // wake a 44k-character message that was re-cached on each call.
+    const actionableTasks = assignment.content.tasks
+      .filter((task) => task.status !== 'completed' && task.status !== 'blocked')
+      .map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        owner: task.owner,
+        workerName: task.workerName ?? null,
+        threadId: task.threadId ?? null,
+        report: task.report
+          ? {
+              status: task.report.status,
+              summary: task.report.summary,
+              commitHash: task.report.commitHash ?? null
+            }
+          : null,
+        review: task.review ? { decision: task.review.decision, notes: task.review.notes } : null
+      }))
+    await this.host.units['assignment-run'].ensureAssignmentApi()
     return [
       'Continue coordinating the approved Assignment. Your coordinator brief, the Assignment API contract and the full task list are already in this thread, so do not reopen the work from them.',
       `Waiting is the application's job: end this turn instead of polling when every remaining task is a running worker. ${this.coordinatorSteeringInstruction()}`,
       'Act on the current state below. Assign ready tasks, review reported or attention tasks, and perform any Sr. Engineer task that is yours.',
+      this.host.units['assignment-run'].assignmentApiReconnectInstructions(
+        this.host.units['assignment-run'].assignmentApiCapability({
+          role: 'coordinator',
+          assignmentId: assignment.id,
+          threadId: assignment.coordinatorThreadId
+        })
+      ),
       'Actionable Assignment state:',
       JSON.stringify(
         {
@@ -836,7 +936,7 @@ export class ChatEngineAssignment {
       assignment.coordinatorThreadId
     )
     return coordinator?.sessionId
-      ? this.coordinatorContinuationPrompt(assignment)
+      ? await this.coordinatorContinuationPrompt(assignment)
       : this.coordinatorAssignmentPrompt(assignment)
   }
 
@@ -893,6 +993,181 @@ export class ChatEngineAssignment {
         this.host.state.assignmentApiCapabilities.delete(token)
     }
     this.host.state.assignmentEngine.removeApiCapabilitiesForAssignment(assignmentId)
+  }
+
+  /** The identity a coordinator's draft run and its revision counter share. */
+  private assignmentDraftKey(projectId: string, coordinatorThreadId: string): string {
+    return this.draftRun.draftKey(projectId, coordinatorThreadId)
+  }
+
+  private assignmentDraftRevision(key: string): number {
+    return this.host.state.assignmentDraftRevisions.get(key) ?? 0
+  }
+
+  /**
+   * Revoke the authority of the draft run in flight for this thread and abort its
+   * model session.
+   *
+   * Every later result of that run is discarded: the run compares the revision it
+   * started with, so a draft the agent authored or a Stop the user pressed can
+   * never be overwritten by a generation that was already on its way.
+   */
+  cancelAssignmentDraftRun(projectId: string, coordinatorThreadId: string): void {
+    this.draftRun.cancel(projectId, coordinatorThreadId)
+  }
+
+  /** A user Stop ends the draft run and leaves its card honest about it. */
+  stopAssignmentDraftRun(projectId: string, coordinatorThreadId: string): void {
+    this.draftRun.cancel(projectId, coordinatorThreadId, 'stopped')
+  }
+
+  /**
+   * Ask for the thread's Assignment draft without waiting for it.
+   *
+   * The contract is deliberately one-way and idempotent:
+   * - a draft that already exists is returned as-is and nothing regenerates;
+   * - a formulation already in flight is joined, never duplicated;
+   * - otherwise the model run starts in the background and the caller is answered
+   *   with `formulating`, so no harness request is ever held open for minutes.
+   *
+   * The settled run owns exactly one terminal transition, and it also owns the
+   * worker card the parent thread shows, so the draft reads as one delegated job
+   * rather than a second conversation.
+   */
+  async requestAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+    settings: ThreadSettings
+    instructions?: string
+    sessionId: string
+  }): Promise<AssignmentDraftStart> {
+    const instructions =
+      input.instructions === undefined
+        ? undefined
+        : validateBoundedString(input.instructions, 'Assignment instructions', 1, 20_000)
+    return this.draftRun.request({
+      ...input,
+      ...(instructions === undefined ? {} : { instructions }),
+      generate: (projectId, coordinatorThreadId, settings, request) =>
+        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request)
+    })
+  }
+
+  /**
+   * Retry a failed Assignment draft by continuing its own session.
+   *
+   * The thread's current settings decide the model, so a user who changed the
+   * model retries on the new one; a changed harness cannot resume the session and
+   * starts a fresh run instead.
+   */
+  async retryAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+  }): Promise<AssignmentDraftStart> {
+    return this.draftRun.retry({
+      ...input,
+      generate: (projectId, coordinatorThreadId, settings, request) =>
+        this.generateAssignmentDraft(projectId, coordinatorThreadId, settings, request),
+      persist: (content) => {
+        const threadId = input.coordinatorThreadId
+        return this.host.threadManager.getThread(input.projectId, threadId).then((thread) => {
+          const settings = thread?.settings
+          return this.persistAssignmentDraft({
+            projectId: input.projectId,
+            coordinatorThreadId: threadId,
+            content,
+            replaceDraft: true,
+            provenance: {
+              source: 'agent',
+              actor: 'Sr. Engineer',
+              harnessId: settings?.harnessId ?? '',
+              providerId: settings?.providerId ?? '',
+              modelId: settings?.modelId ?? ''
+            }
+          })
+        })
+      }
+    })
+  }
+
+  /**
+   * Persist a task graph the agent authored itself and cancel any generation that
+   * is still working on the same thread.
+   *
+   * `content` must already be validated by the caller; the engine validates it
+   * again before it is stored, so a malformed graph is refused rather than shown.
+   */
+  async submitAgentAssignmentDraft(input: {
+    projectId: string
+    coordinatorThreadId: string
+    content: AssignmentPlanContent
+    sessionId: string
+    harnessId: string
+    providerId: string
+    modelId: string
+  }): Promise<AssignmentPlan> {
+    const projectId = validateEntityId(input.projectId, 'Project ID')
+    const coordinatorThreadId = validateEntityId(input.coordinatorThreadId, 'Coordinator thread ID')
+    const key = this.assignmentDraftKey(projectId, coordinatorThreadId)
+    const hadRun =
+      this.host.state.activeAssignmentDraftRuns.has(key) ||
+      this.host.state.preservedAssignmentDraftSessions.has(key)
+    this.cancelAssignmentDraftRun(projectId, coordinatorThreadId)
+    const assignment = await this.persistAssignmentDraft({
+      projectId,
+      coordinatorThreadId,
+      content: input.content,
+      replaceDraft: true,
+      provenance: {
+        source: 'agent',
+        actor: 'Agent',
+        harnessId: input.harnessId,
+        providerId: input.providerId,
+        modelId: input.modelId
+      }
+    })
+    await this.settleAssignmentDraftStatus(projectId, coordinatorThreadId, 'spec')
+    if (hadRun) {
+      void this.draftRun.publish({
+        projectId,
+        coordinatorThreadId,
+        activity: {
+          status: 'completed',
+          agent: 'Sr. Engineer',
+          description: 'Assignment draft',
+          assignmentDraft: true,
+          background: true,
+          output: `Assignment draft v${assignment.version} was authored by the agent.`,
+          time: { start: Date.now(), end: Date.now() }
+        }
+      })
+    }
+    this.host.broadcast({
+      type: 'assignment.ready',
+      sessionId: input.sessionId,
+      projectId,
+      threadId: coordinatorThreadId,
+      assignmentId: assignment.id,
+      version: assignment.version
+    })
+    return assignment
+  }
+
+  /** Announce the one terminal state a settled draft run leaves behind. */
+  private async settleAssignmentDraftStatus(
+    projectId: string,
+    coordinatorThreadId: string,
+    status: 'spec' | 'failed',
+    error?: string
+  ): Promise<void> {
+    try {
+      await this.host.threadManager.setStatus(projectId, coordinatorThreadId, status, {
+        read: false,
+        ...(error ? { error } : {})
+      })
+    } catch {
+      // A thread deleted while its draft was settling has no status left to own.
+    }
   }
 
   /**
@@ -970,6 +1245,10 @@ export class ChatEngineAssignment {
       ? { kind: 'spec', spec }
       : { kind: 'conversation' }
 
+    const draftKey = this.assignmentDraftKey(projectId, coordinatorThreadId)
+    // A Stop pressed for a previous run must never silence this one's fallback.
+    this.host.state.userAbortedAssignmentDraftOperations.delete(draftKey)
+    const revision = this.assignmentDraftRevision(draftKey)
     await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'planning', {
       read: false
     })
@@ -981,16 +1260,16 @@ export class ChatEngineAssignment {
         source,
         instructions
       )
+      // The agent authored the draft while this run was generating, or the run was
+      // cancelled: its content is the thread's draft and this result is thrown away
+      // instead of being persisted over it.
+      if (this.assignmentDraftRevision(draftKey) !== revision)
+        return this.requireDraft(projectId, coordinatorThreadId)
       const concurrentlyCreated = this.host.state.assignmentEngine.getActive(
         projectId,
         coordinatorThreadId
       )
-      if (concurrentlyCreated) {
-        await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
-          read: false
-        })
-        return concurrentlyCreated
-      }
+      if (concurrentlyCreated) return concurrentlyCreated
 
       if (source.kind === 'spec') {
         const currentSpec = await this.host.units['spec'].getActiveSpec(
@@ -1008,7 +1287,7 @@ export class ChatEngineAssignment {
         }
       }
 
-      const assignment = await this.persistAssignmentDraft({
+      return await this.persistAssignmentDraft({
         projectId,
         coordinatorThreadId,
         content,
@@ -1023,14 +1302,7 @@ export class ChatEngineAssignment {
           modelId: settings.modelId
         }
       })
-      await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
-        read: false
-      })
-      return assignment
     } catch (error) {
-      await this.host.threadManager.setStatus(projectId, coordinatorThreadId, 'spec', {
-        read: false
-      })
       this.host.units['turns'].markEngineeringLifecycleFailure(
         projectId,
         coordinatorThreadId,
@@ -1038,6 +1310,20 @@ export class ChatEngineAssignment {
       )
       throw error
     }
+  }
+
+  /**
+   * The draft a superseded run hands back instead of its own result.
+   *
+   * A superseded run never persisted anything, so the thread either holds the
+   * draft that superseded it or holds nothing at all.
+   */
+  private requireDraft(projectId: string, coordinatorThreadId: string): AssignmentPlan {
+    const active = this.host.state.assignmentEngine.getActive(projectId, coordinatorThreadId)
+    if (active) return active
+    throw new Error(
+      'The Assignment draft was replaced by another request while it was being generated.'
+    )
   }
 
   /**
@@ -1159,8 +1445,9 @@ export class ChatEngineAssignment {
       !this.host.state.unsupportedStructuredOutputModels.has(structuredOutputKey)
     let lastError: Error | null = null
     const draftKey = `${projectId}:${coordinatorThreadId}`
+    const attempts = structured ? [true, false] : [false]
 
-    for (const useStructuredOutput of structured ? [true, false] : [false]) {
+    for (const [attemptIndex, useStructuredOutput] of attempts.entries()) {
       const isolated = supportsIsolatedSessions(driver)
         ? await driver.createIsolatedSession(
             projectPath,
@@ -1187,6 +1474,30 @@ export class ChatEngineAssignment {
         projectPath,
         ...(isolated ? { isolated } : {})
       })
+      // The card now knows the session the user can open while the draft is
+      // being written, so the work is watchable from the moment it exists.
+      void this.draftRun.publish({
+        projectId,
+        coordinatorThreadId,
+        activity: {
+          status: 'running',
+          agent: 'Sr. Engineer',
+          description: 'Assignment draft',
+          assignmentDraft: true,
+          background: true,
+          childSessionId: sessionId,
+          harnessId: driverId,
+          providerId: settings.providerId,
+          modelId: settings.modelId,
+          time: {
+            start: this.host.state.assignmentDraftStartedAt.get(draftKey) ?? Date.now()
+          }
+        }
+      })
+      // A failed attempt only keeps its session when it was the last one: that
+      // session is what a retry continues, so the next try resumes the work
+      // instead of paying for the same analysis again.
+      let preserveSession = false
       const completion = this.host.units['turns-sessions'].waitForSessionCompletion(
         sessionId,
         180_000,
@@ -1249,6 +1560,15 @@ export class ChatEngineAssignment {
             modelId: settings.modelId,
             error: lastError.message
           })
+        } else if (attemptIndex === attempts.length - 1) {
+          preserveSession = true
+          this.draftRun.preserve(draftKey, {
+            sessionId,
+            driver,
+            driverId,
+            projectPath,
+            ...(isolated ? { isolated } : {})
+          })
         }
       } finally {
         await this.host.units['messages-write'].recordEphemeralSessionUsage({
@@ -1259,11 +1579,13 @@ export class ChatEngineAssignment {
           driver,
           isolated
         })
-        this.host.units['runtime-connectivity'].clearCompletionWaiter(sessionId)
-        this.host.sessionRegistry.delete(sessionId)
-        this.host.state.reasoningTimes.delete(sessionId)
-        this.host.state.toolTimes.delete(sessionId)
-        if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
+        if (!preserveSession) {
+          this.host.units['runtime-connectivity'].clearCompletionWaiter(sessionId)
+          this.host.sessionRegistry.delete(sessionId)
+          this.host.state.reasoningTimes.delete(sessionId)
+          this.host.state.toolTimes.delete(sessionId)
+          if (isolated && supportsIsolatedSessions(driver)) driver.disposeIsolatedSession(isolated)
+        }
         if (this.host.state.activeAssignmentDraftSessions.get(draftKey)?.sessionId === sessionId) {
           this.host.state.activeAssignmentDraftSessions.delete(draftKey)
         }

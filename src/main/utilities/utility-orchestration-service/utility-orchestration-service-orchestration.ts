@@ -305,7 +305,8 @@ export class UtilityOrchestrationServiceOrchestration {
     return displayRequests.request({
       platform,
       ...(device.length > 0 ? { device } : {}),
-      threadId: state.request.threadId
+      threadId: state.request.threadId,
+      projectId: state.request.projectId
     })
   }
 

@@ -1,32 +1,29 @@
 /// <reference types="electron-vite/node" />
 import { relative } from 'node:path'
 import { rm } from 'node:fs/promises'
-import type { Worker } from 'node:worker_threads'
-import { utilityProcess, type UtilityProcess } from 'electron'
-import { buildProcessEnvironment } from '../drivers/cli-environment'
 import createTrackingWorker from './video-tracking-worker.ts?nodeWorker'
-import mattingProcessPath from './video-matting-process.ts?modulePath'
 import { trackQuitWorker } from '../system/quit-worker-sweep'
 import type { VideoJobContext } from './video-jobs'
 
+/**
+ * Run one isolated video worker as a cancellable job.
+ *
+ * Tracking is the only worker the app ships. Background removal used to fork a
+ * second process that imported a GPU matting stack from a runtime-installed
+ * package; that stack is not shipped any more and an agent provisions whatever
+ * it needs in project scratch at task time, so nothing here can resolve it.
+ */
 export async function videoWorkerJob(
-  kind: 'track' | 'remove-background',
+  kind: 'track',
   root: string,
   workerData: Record<string, unknown>,
   context: VideoJobContext
 ): Promise<{ files: string[]; result?: unknown }> {
   context.signal.throwIfAborted()
-  const worker: Worker | UtilityProcess =
-    kind === 'track'
-      ? trackQuitWorker(createTrackingWorker({ workerData }))
-      : utilityProcess.fork(mattingProcessPath, [], {
-          env: buildProcessEnvironment(),
-          serviceName: 'Video background removal',
-          stdio: 'pipe'
-        })
+  if (kind !== 'track') throw new Error(`Unsupported video worker: ${String(kind)}`)
+  const worker = trackQuitWorker(createTrackingWorker({ workerData }))
   const terminate = async (): Promise<void> => {
-    if ('terminate' in worker) await worker.terminate()
-    else worker.kill()
+    await worker.terminate()
   }
   let result: { files: string[]; result?: unknown } | undefined
   try {
@@ -70,24 +67,10 @@ export async function videoWorkerJob(
             result: message.result
           })
       })
-      if ('terminate' in worker) {
-        worker.on('error', (error) =>
-          finish(error instanceof Error ? error : new Error(String(error)))
-        )
-        worker.on('exit', () =>
-          finish(new Error('Tracking worker stopped before returning a result'))
-        )
-      } else {
-        worker.stdout?.resume()
-        worker.stderr?.resume()
-        worker.on('error', (type) =>
-          finish(new Error(`Background removal process failed: ${type}`))
-        )
-        worker.on('exit', () =>
-          finish(new Error('Background removal process stopped before returning a result'))
-        )
-        worker.postMessage(workerData)
-      }
+      worker.on('error', (error) =>
+        finish(error instanceof Error ? error : new Error(String(error)))
+      )
+      worker.on('exit', () => finish(new Error('Tracking worker stopped before returning a result')))
     })
     context.signal.throwIfAborted()
     return result

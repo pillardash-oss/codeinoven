@@ -22,6 +22,7 @@ import type { BrowserService } from '../browser-service'
  */
 export interface ConversationPagesHost {
   readonly agentPageTargets: BrowserService['agentPageTargets']
+  readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentUserPageTabIds: BrowserService['agentUserPageTabIds']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
@@ -95,6 +96,13 @@ export class BrowserServiceConversationPages {
       if (input.page !== 'agent' && this.host.agentTabIds.get(input.contextKey) !== target.tabId) {
         this.host.agentUserPageTabIds.set(input.contextKey, target.tabId)
       }
+      // The tab says which conversation is on it, not which one opened it: a
+      // project's threads share one strip, so the page one thread opened is
+      // regularly the page another thread's agent was handed.
+      this.host.agentTabClaimOwners.set(target.tabId, {
+        projectId: input.projectId,
+        threadId: input.threadId
+      })
     }
     return target
   }
@@ -193,24 +201,36 @@ export class BrowserServiceConversationPages {
   }
 
   /**
-   * Every tab an agent is working on, and the thread it belongs to.
+   * Every tab an agent is working on, and the conversation that took it.
    *
    * Both kinds of claim are here: the tab an agent opened for itself and the page a
    * conversation was assigned. A tab the user opened and handed to a thread's agent
    * is claimed the moment that agent works on it, which is what the strip's badge
-   * reports. A closed tab drops out because its entry is gone.
+   * reports. The owner ledger says which conversation that was, because a project's
+   * threads share one strip and the tab's own thread is only the one that opened it.
+   * A closed tab drops out because its entry is gone.
    */
   agentTabClaims(): BrowserAgentTabClaim[] {
     const claims: BrowserAgentTabClaim[] = []
-    const seen = new Set<string>()
+    for (const [tabId, owner] of this.host.agentTabClaimOwners) {
+      if (!this.host.tabs.has(tabId)) {
+        this.host.agentTabClaimOwners.delete(tabId)
+        continue
+      }
+      claims.push({ tabId, projectId: owner.projectId, threadId: owner.threadId })
+    }
+    const claimed = new Set(claims.map((claim) => claim.tabId))
     for (const tabId of [
       ...this.host.agentTabIds.values(),
       ...this.host.agentUserPageTabIds.values()
     ]) {
-      if (seen.has(tabId)) continue
+      // The owner ledger above is the live answer. These two hold what a
+      // conversation may reach, which survives a tab that no operation of this
+      // process has touched yet, so they only fill in what it does not know.
+      if (claimed.has(tabId)) continue
       const tab = this.host.tabs.get(tabId)
       if (!tab) continue
-      seen.add(tabId)
+      claimed.add(tabId)
       claims.push({ tabId, projectId: tab.projectId, threadId: tab.threadId })
     }
     return claims

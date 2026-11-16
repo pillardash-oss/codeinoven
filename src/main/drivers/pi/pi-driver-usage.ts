@@ -83,14 +83,18 @@ export class PiUsageTracker {
    */
   async readAccountUsage(
     projectPath: string,
-    providerId?: string
+    providerId?: string,
+    conversationSessionId?: string
   ): Promise<{
     rateLimits: AgentRateLimitWindow[]
     credits?: AgentUsageCredits
     contextWindow?: number
     contextUsed?: number
   } | null> {
-    const sessionId = this.host.projectSessionId(projectPath)
+    // Occupancy describes one conversation, so the thread's own session answers
+    // it. The project lookup is only a fallback for a read that names no
+    // conversation (an account-level hover from a surface with no thread yet).
+    const sessionId = conversationSessionId ?? this.host.projectSessionId(projectPath)
     const client = sessionId ? this.host.rpcClient(sessionId) : undefined
     const persisted = await this.loadPersistedRateLimits()
     const sessionCache = sessionId !== undefined ? this.latestRateLimits.get(sessionId) : undefined

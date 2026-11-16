@@ -712,10 +712,15 @@ export class WorkspaceMarkThreadReadAndApply extends BoardUnit<Workspace> {
 
   /** Open the knowledge panel for an assistant, creating a first task if it has none. */
   async openAssistantKnowledgeFor(assistant: Assistant): Promise<void> {
+    const selected = workspaceState.selectedThread
     let anchor =
       this.assistantTasks.find((task) => task.assistantId === assistant.id) ??
-      (workspaceState.selectedThread?.projectId === ASSISTANT_SPACE_ID
-        ? workspaceState.selectedThread
+      // Only this assistant's own thread may anchor its panel. Any
+      // assistant-space thread used to qualify, so opening one assistant while
+      // another's conversation was on screen anchored the panel on that other
+      // conversation and showed its behaviour under the new assistant's name.
+      (selected?.projectId === ASSISTANT_SPACE_ID && selected.assistantId === assistant.id
+        ? selected
         : undefined)
     if (!anchor) {
       // An assistant whose only task is a hidden knowledge thread still has an anchor:

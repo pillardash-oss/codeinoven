@@ -230,6 +230,24 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
     return temporaryChatContext(this.root.loadOlderMessages.messages, messageText)
   }
 
+  /**
+   * The model a side chat must open on: the one the conversation on screen
+   * actually runs on.
+   *
+   * The editor copy is seeded from the conversation family's last-used settings
+   * (`initialThreadSettings`) and only reconciled with the thread's own row once
+   * the background load lands. A side chat opened inside that window inherited
+   * the last-used model of the family, so an explain chat on an assistant tab
+   * could start on a different harness and model than the tab it was explaining.
+   * The open thread's persisted settings own the identity a side chat can never
+   * change afterwards, so they win; the editor copy only fills what they lack.
+   */
+  sideChatSettings(): ThreadSettings {
+    const live = this.root.loadOlderMessages.settings
+    const persisted = this.root.handleAgentEvent.thread.settings
+    return persisted ? { ...live, ...persisted } : live
+  }
+
   openTemporarySelectionChat(mode: 'elaborate' | 'quick'): void {
     const selection = this.responseSelection
     if (!selection) return
@@ -239,7 +257,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       mode,
       selection.text,
       this.temporaryConversationContext(),
-      this.root.loadOlderMessages.settings,
+      this.sideChatSettings(),
       true,
       mode === 'elaborate' ? EXPLAIN_SELECTION_PROMPT : undefined
     )
@@ -256,7 +274,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       'quick',
       '',
       this.temporaryConversationContext(),
-      this.root.loadOlderMessages.settings,
+      this.sideChatSettings(),
       false
     )
   }
@@ -286,6 +304,41 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
   assignmentGenerationTraceActive = $state(false)
 
   assignmentGenerationTraceStartedAt = $state<number | undefined>()
+
+  /**
+   * The message a failed Assignment draft left behind, shown as a card on the
+   * parent thread so the user can retry it there and change its model.
+   */
+  assignmentDraftError = $state('')
+
+  /** True while the retry of a failed draft is being started. */
+  assignmentDraftRetrying = $state(false)
+
+  /**
+   * Retry the failed draft by continuing its own session.
+   *
+   * The main process keeps the failed run's session, so this continues the work
+   * the user watched instead of paying for the same analysis again. The model is
+   * whatever the thread now says, so a model the user just picked is the one the
+   * retry runs on.
+   */
+  async retryAssignmentDraft(): Promise<void> {
+    if (this.assignmentDraftRetrying) return
+    this.assignmentDraftRetrying = true
+    try {
+      await invoke(
+        'agent:retryAssignmentDraft',
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )
+      this.assignmentDraftError = ''
+    } catch (error) {
+      this.assignmentDraftError =
+        error instanceof Error ? error.message : 'The Assignment draft could not be retried.'
+    } finally {
+      this.assignmentDraftRetrying = false
+    }
+  }
 
   /**
    * The Engineering artifact a tool started that is still being generated, or
@@ -724,7 +777,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       'elaborate',
       this.formatQuestionForTemporaryChat(question),
       this.temporaryConversationContext(),
-      this.root.loadOlderMessages.settings,
+      this.sideChatSettings(),
       true,
       question.secretRequest ? this.EXPLAIN_SECRET_PROMPT : this.EXPLAIN_QUESTION_PROMPT,
       requestId
@@ -740,7 +793,7 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
       'quick',
       this.formatQuestionForTemporaryChat(question),
       this.temporaryConversationContext(),
-      this.root.loadOlderMessages.settings,
+      this.sideChatSettings(),
       true,
       undefined,
       requestId

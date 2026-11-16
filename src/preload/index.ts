@@ -5,6 +5,7 @@ import {
   parseBuildEnvironment,
   type BuildEnvironment
 } from '../lib/build-environment'
+import { DISPLAY_STREAM_PORT_MESSAGE } from '../lib/display-stream-protocol'
 import type { AppConfig, AppConfigPatch, AttachmentStorageScope } from '../lib/types'
 import {
   NO_TRAFFIC_LIGHT,
@@ -235,6 +236,13 @@ const bridge: AppBridge = {
       threadId
     )
 }
+
+// A device stream's message port cannot cross the context bridge, so the page
+// receives it as a window message with the port transferred. The port carries
+// only that session's video and input, and it is announced to this window alone.
+ipcRenderer.on('display:streamPort', (event, announcement: unknown) => {
+  window.postMessage({ type: DISPLAY_STREAM_PORT_MESSAGE, announcement }, '*', [...event.ports])
+})
 
 contextBridge.exposeInMainWorld('api', bridge)
 

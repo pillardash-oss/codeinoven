@@ -1,4 +1,4 @@
-import { authoredWorkRootSync } from '../design/authored-work-root'
+import { authoredWorkRoot } from '../design/authored-work-root'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
@@ -75,7 +75,7 @@ export function createVideoPreviewExecutor(
         `The video capability's "preview" executor received the operation "${operation}".`
       )
     }
-    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
+    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
     const attention = input['attention'] === 'focus' ? 'focus' : 'background'
     const result = await openVideoPreview(
       { previews: options.previews, browser: options.browser },

@@ -77,33 +77,17 @@ import type {
   HeartbeatConfig,
   InferenceMode,
   LocalProfileAnalyticsRange,
-  LocalRankingGradeScope,
   LocalUsageClearInput,
   LocalUsageRecordStore,
   MediaGenerationConfig,
   ModelProfile,
   PermissionLevel,
-  RankingJudgeConfig,
-  RankingJudgeKind,
   ThinkingLevel
 } from '../../../lib/types'
 
 const THEMES = new Set(['light', 'dark', 'system'])
 const GIT_PULL_PREFERENCES = new Set(['ask', 'merge', 'rebase', 'ff-only'])
-const LOCAL_USAGE_RECORD_STORES = new Set<LocalUsageRecordStore>([
-  'agentResponses',
-  'utilities',
-  'modelRankings'
-])
-const RANKING_GRADE_SCOPES = new Set<LocalRankingGradeScope>(['due', 'all'])
-
-/** Which conversations a user-requested ranking grade run covers. */
-export function validateRankingGradeScope(value: unknown): LocalRankingGradeScope {
-  if (typeof value !== 'string' || !RANKING_GRADE_SCOPES.has(value as LocalRankingGradeScope)) {
-    throw new TypeError('Ranking grade scope is invalid')
-  }
-  return value as LocalRankingGradeScope
-}
+const LOCAL_USAGE_RECORD_STORES = new Set<LocalUsageRecordStore>(['agentResponses', 'utilities'])
 
 const EDITOR_IDS = new Set<EditorId>([
   'system',
@@ -200,7 +184,6 @@ const CONFIG_PATCH_FIELDS = new Set([
   'design',
   'modelProfiles',
   'mediaGeneration',
-  'rankingJudge',
   'agentBehaviorPrompt',
   'autoDownloadUpdates',
   'autoInstallUpdates',
@@ -571,51 +554,6 @@ function validateMediaGenerationConfig(value: unknown): MediaGenerationConfig {
     throw new TypeError(`Generation provider must be one of ${MEDIA_PROVIDER_IDS.join(', ')}`)
   }
   return { providerId }
-}
-
-const RANKING_JUDGE_KINDS = new Set<RankingJudgeKind>(['automatic', 'typesafe', 'model'])
-const RANKING_JUDGE_MODEL_FIELDS = [
-  'harnessId',
-  'providerId',
-  'modelId',
-  'accountId',
-  'thinkingLevel',
-  'inferenceMode',
-  'contextWindow'
-] as const
-
-/**
- * The ranking-judge preference.
- *
- * A `model` pin must name a complete selection, because a half-written pin would
- * silently grade with the automatic chain while the settings page claimed
- * otherwise. The other kinds must carry no model fields at all: a stale pin that
- * survives a switch back to the automatic chain is exactly the quiet
- * contradiction this boundary exists to refuse.
- */
-export function validateRankingJudge(value: unknown): RankingJudgeConfig {
-  if (!isRecord(value)) throw new TypeError('Ranking judge must be an object')
-  const fields = new Set<string>(['kind', ...RANKING_JUDGE_MODEL_FIELDS])
-  for (const field of Object.keys(value)) {
-    if (!fields.has(field)) throw new TypeError(`Unsupported ranking judge field: ${field}`)
-  }
-  const kind = value.kind
-  if (typeof kind !== 'string' || !RANKING_JUDGE_KINDS.has(kind as RankingJudgeKind)) {
-    throw new TypeError('Ranking judge kind is invalid')
-  }
-  if (kind !== 'model') {
-    for (const field of RANKING_JUDGE_MODEL_FIELDS) {
-      if (field in value) {
-        throw new TypeError(`Ranking judge ${field} is only valid for a model pin`)
-      }
-    }
-    return { kind: kind as RankingJudgeKind }
-  }
-  // The kind is this preference's own discriminator, so it is removed before
-  // the rest is validated as a model selection, which rejects unknown fields.
-  const selection: Record<string, unknown> = { ...value }
-  delete selection['kind']
-  return { kind: 'model', ...validateAgentModelSelection(selection, 'Ranking judge') }
 }
 
 const FONT_FAMILIES = new Set(APP_FONT_OPTIONS.map((font) => font.id))
@@ -1109,10 +1047,6 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
 
   if ('mediaGeneration' in value) {
     patch.mediaGeneration = validateMediaGenerationConfig(value.mediaGeneration)
-  }
-
-  if ('rankingJudge' in value) {
-    patch.rankingJudge = validateRankingJudge(value.rankingJudge)
   }
 
   if ('agentBehaviorPrompt' in value) {

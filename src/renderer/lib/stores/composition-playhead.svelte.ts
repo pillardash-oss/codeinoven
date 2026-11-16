@@ -179,6 +179,19 @@ class CompositionPlayhead {
     this.request('freeze', seconds)
   }
 
+  /**
+   * Run the picture faster or slower, where it already is.
+   *
+   * A composition is a page rather than a media element, so the speed is the
+   * transport's to keep: this only names the rate the reader picked, and the page
+   * multiplies its own playhead by it. Nothing is re-armed here, so a change of
+   * speed neither moves the second on screen nor starts a stopped picture.
+   */
+  setRate(rate: number): void {
+    if (!Number.isFinite(rate) || rate <= 0) return
+    void this.command('rate', rate)
+  }
+
   private start(): void {
     if (this.timer !== undefined) return
     this.handingOver = this.remembered !== null
@@ -281,9 +294,10 @@ class CompositionPlayhead {
   /**
    * The state a command is about to produce, from the state it was given.
    *
-   * Play, pause and stop move the run flag; a seek moves the second. This is what the
-   * bar shows while the page is answering, so the controls follow the user's press
-   * rather than waiting on a document that may not answer at all.
+   * Play, pause and stop move the run flag; a seek moves the second and a rate
+   * change moves the speed. This is what the bar shows while the page is
+   * answering, so the controls follow the user's press rather than waiting on a
+   * document that may not answer at all.
    */
   private expected(
     before: BrowserCompositionPlayback | null,
@@ -303,6 +317,8 @@ class CompositionPlayhead {
         return playing || before.time !== 0 ? { ...before, playing: false, time: 0 } : null
       case 'seek':
         return typeof value === 'number' ? { ...before, time: Math.max(0, value) } : null
+      case 'rate':
+        return typeof value === 'number' && value > 0 ? { ...before, rate: value } : null
       default:
         return null
     }

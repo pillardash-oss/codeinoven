@@ -7,6 +7,7 @@ import { cleanUpdaterCache } from '../notifications/updater-cache-cleanup'
 import { getAppCacheDir, resolveUpdaterCacheLocation } from '../notifications/updater-download'
 import { purgeAbandonedInstallStaging } from '../notifications/updater-install-recovery'
 import { isExtraInstanceLaunch } from '../system/instance-slots'
+import { localAiDownloadsInFlight } from '../local-ai/local-ai-downloads'
 
 const starting = new WeakMap<BootstrapState, Promise<void>>()
 
@@ -50,6 +51,13 @@ export function startStartupUpdater(state: BootstrapState, storage: StorageEngin
       // keeps an unattended install from quitting through a running download.
       state.updaterService.setDownloadActivitySource({
         inFlightDownloads: () => state.browserDownloads?.inFlight() ?? []
+      })
+      // A Local AI row fetching its weights is the same kind of gate, read the
+      // same way: the PTY service is built after paint, so the source reports
+      // nothing until it exists instead of capturing a null at startup time.
+      state.updaterService.setLocalAiDownloadActivitySource({
+        inFlightDownloads: () =>
+          state.ptyService ? localAiDownloadsInFlight(state.ptyService.runningCommands()) : []
       })
     }
     // Sweep before checks/downloads can acquire a cache file. Newer pending

@@ -5,6 +5,22 @@ import type {
   ThreadContextUsage
 } from '$shared/types'
 
+/**
+ * Drop everything that describes context occupancy, keeping the account facts
+ * (cost, credits, quota) that do not belong to a conversation.
+ *
+ * An empty thread has no conversation, so a snapshot seeded onto it by a live
+ * probe's system-prompt baseline must never be shown or persisted as its usage.
+ */
+export function withoutContextOccupancy(usage: AgentContextUsage): AgentContextUsage {
+  const accountFacts: AgentContextUsage = { ...usage }
+  delete accountFacts.contextUsed
+  delete accountFacts.contextWindow
+  delete accountFacts.contextPercent
+  delete accountFacts.contextEstimated
+  return accountFacts
+}
+
 /** Project conversation occupancy without transferring another provider's accounting. */
 export function composerContextUsage(
   displayed: AgentContextUsage | undefined,
@@ -12,6 +28,14 @@ export function composerContextUsage(
   snapshot: ThreadContextUsage | undefined,
   selection: { harnessId: string; providerId: string; contextWindow?: number }
 ): AgentContextUsage | undefined {
+  // Occupancy belongs to a conversation. A thread with no assistant turn has
+  // none, so nothing can state its context: not a live reading and not a
+  // snapshot persisted while one was seeded onto it. An empty thread's meter
+  // stays empty instead of adopting a session's system-prompt baseline, while
+  // its cost, credits, and quota (which are account facts) still read normally.
+  if (!messages.some((message) => message.role === 'assistant')) {
+    return displayed ? withoutContextOccupancy(displayed) : undefined
+  }
   let source: AgentMessage | ThreadContextUsage | undefined
   let contextUsed: number | undefined
   for (let index = messages.length - 1; index >= 0; index--) {

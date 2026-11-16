@@ -45,6 +45,8 @@ export interface DisplayRequestInput {
   platform: DisplaySourceKind
   device?: string | undefined
   threadId: string
+  /** The project the asking thread lives in, so its mark can be cleared per project. */
+  projectId?: string | undefined
 }
 
 /** One device the caller could have meant, as the tool result lists it. */
@@ -101,8 +103,15 @@ export function chooseDisplaySource(
 class DisplayRequests {
   /** When the panel first had something to show, for `display:presence`. */
   private availableSince: number | null = null
-  /** Threads that asked to mirror something, so their row wears the mark. */
-  private readonly threads = new Map<string, number>()
+  /**
+   * Threads that asked to mirror something, so their row wears the mark.
+   *
+   * The project travels with each one: closing the panel of a project ends the
+   * mirror for the threads driving devices in that project, and nothing else. A
+   * thread in another project keeps its mark, which is the whole point of the
+   * mark being about the work rather than about the panel being open.
+   */
+  private readonly threads = new Map<string, { at: number; projectId: string }>()
   /**
    * The thread whose own display tab is on screen, when no agent asked for it.
    *
@@ -110,7 +119,7 @@ class DisplayRequests {
    * standing in is what that mirror belongs to. It is held apart from the asking
    * threads so closing the panel never erases a mark an agent put there.
    */
-  private panelThread: string | null = null
+  private panelThread: { threadId: string; projectId: string } | null = null
   /** The target on screen, as `kind:sourceId`, so a repeat is not a reopen. */
   private mirrored: string | null = null
 
@@ -119,7 +128,10 @@ class DisplayRequests {
       available: this.availableSince !== null,
       ...(this.availableSince === null ? {} : { since: this.availableSince }),
       threads: [
-        ...new Set([...this.threads.keys(), ...(this.panelThread ? [this.panelThread] : [])])
+        ...new Set([
+          ...this.threads.keys(),
+          ...(this.panelThread ? [this.panelThread.threadId] : [])
+        ])
       ]
     }
   }
@@ -166,7 +178,7 @@ class DisplayRequests {
     this.availableSince ??= Date.now()
     if (!this.threads.has(input.threadId)) {
       const at = Date.now()
-      this.threads.set(input.threadId, at)
+      this.threads.set(input.threadId, { at, projectId: input.projectId ?? '' })
       sink?.activity({ threadId: input.threadId, active: true, at })
     }
     if (first) sink?.available()
@@ -177,6 +189,7 @@ class DisplayRequests {
       sink?.target({
         target: chosen,
         threadId: input.threadId,
+        ...(input.projectId ? { projectId: input.projectId } : {}),
         at: Date.now()
       })
     }
@@ -192,24 +205,39 @@ class DisplayRequests {
   /**
    * Report what the panel is showing, so a repeat call does not reopen it and a
    * closed panel clears the marks that claimed a thread was driving something.
+   *
+   * `projectId` narrows that clearing to the project whose dock lost its tab: the
+   * panel is per project, so a mirror that ends in one project says nothing about
+   * a device another project's thread is still driving. Without it the app would
+   * wipe every mark whenever the person looked at another project.
    */
-  noteMirrored(key: string | null, threadId: string | null): void {
+  noteMirrored(key: string | null, threadId: string | null, projectId?: string): void {
     this.mirrored = key
     if (key === null) {
-      if (this.panelThread !== null) {
-        const previous = this.panelThread
+      const previous = this.panelThread
+      if (previous !== null && (projectId === undefined || previous.projectId === projectId)) {
         this.panelThread = null
-        if (!this.threads.has(previous))
-          sink?.activity({ threadId: previous, active: false, at: Date.now() })
+        if (!this.threads.has(previous.threadId)) {
+          sink?.activity({ threadId: previous.threadId, active: false, at: Date.now() })
+        }
       }
-      for (const threadId of [...this.threads.keys()]) this.clearThread(threadId)
+      for (const [asking, record] of [...this.threads.entries()]) {
+        if (projectId === undefined || record.projectId === projectId) this.clearThread(asking)
+      }
       return
     }
-    if (threadId === null || this.threads.has(threadId) || this.panelThread === threadId) return
-    if (this.panelThread !== null && !this.threads.has(this.panelThread)) {
-      sink?.activity({ threadId: this.panelThread, active: false, at: Date.now() })
+    if (
+      threadId === null ||
+      this.threads.has(threadId) ||
+      this.panelThread?.threadId === threadId
+    ) {
+      return
     }
-    this.panelThread = threadId
+    const previous = this.panelThread
+    if (previous !== null && !this.threads.has(previous.threadId)) {
+      sink?.activity({ threadId: previous.threadId, active: false, at: Date.now() })
+    }
+    this.panelThread = { threadId, projectId: projectId ?? '' }
     this.availableSince ??= Date.now()
     sink?.activity({ threadId, active: true, at: Date.now() })
   }

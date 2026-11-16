@@ -49,3 +49,35 @@ export function conversationProseText(scope: ConversationTextScope, raw: string)
     return stripAssistantEnvelope(assistantResultText(raw, true))
   return stripAssistantEnvelope(raw)
 }
+
+/** Longest preview a reply quote keeps of the message it answers. */
+const QUOTE_EXCERPT_LIMIT = 180
+
+/**
+ * The one-line preview a reply quote shows of the message it answers.
+ *
+ * A quote has no renderer of its own: it is a line of prose cut out of a
+ * message, so it must read as words and never as source. The recorded excerpt
+ * was taken from the message's raw text, which put the run's own transport
+ * boundary in front of every quote of an assistant answer (`<assistant_result>`
+ * showed up as the first thing the reader saw), and left markdown decorators,
+ * code fences and line breaks inside a span that cannot render them. Both sides
+ * of the quote go through here: the excerpt is built with it, and a snapshot
+ * written before that rule is read back with it.
+ */
+export function conversationQuoteExcerpt(raw: string, limit = QUOTE_EXCERPT_LIMIT): string {
+  const prose = stripAssistantEnvelope(raw)
+    .replace(/```[^\n]*\n?/gu, ' ')
+    .replace(/`([^`]*)`/gu, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/gu, '$1')
+    .replace(/^\s{0,3}(?:#{1,6}|>|[-*+]|\d{1,9}[.)])\s+/gmu, '')
+    .replace(/\*\*|__|~~|\*/gu, '')
+    .replace(/\s+/gu, ' ')
+    .trim()
+  if (prose.length <= limit) return prose
+  const cut = prose.slice(0, limit)
+  const boundary = cut.lastIndexOf(' ')
+  const kept = boundary > limit * 0.6 ? cut.slice(0, boundary) : cut
+  return `${kept.trimEnd()}\u2026`
+}

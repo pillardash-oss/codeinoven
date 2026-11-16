@@ -593,39 +593,49 @@
   })
 
   /**
-   * Open the device the agent asked to mirror, on the thread the person is
-   * standing in.
+   * Open the device an agent asked to mirror, on the thread that owns it.
    *
-   * The offer comes from `ext_simulation`, which the agent calls with the device it
-   * is working on, so the panel appears on that device rather than on the last one
-   * opened. Focusing a tab already mirroring it is what makes an agent that moves
-   * between devices follow it here.
+   * The offer names the thread whose work started the device, so the panel is
+   * docked in that thread's project rather than in whichever thread the person
+   * happens to be reading: the mirror, and the row that wears its mark, belong to
+   * the thread driving the device. Focusing it is only right when that thread is
+   * the one on screen; a device opened by work elsewhere is docked silently so it
+   * never pulls the surface the person is looking at out from under them.
    */
   $effect(() => {
     const offer = displayAvailability.pendingTarget
     const thread = selectedThread
-    if (!offer || !thread) return
-    contextSidebarState.openDisplayTarget(thread.projectId, thread.id, offer.target)
+    if (!offer) return
+    const ownerThreadId = offer.threadId ?? thread?.id
+    const ownerProjectId = offer.projectId ?? thread?.projectId
+    if (!ownerThreadId || !ownerProjectId) return
     displayAvailability.clearPendingTarget(offer.at)
+    // A device another project is already mirroring stays in that project's dock:
+    // this thread's row wears its own mark from the request, and a second capture
+    // of the same device would cost the machine another stream for one picture.
+    const mirroringProject = contextSidebarState.displayTabProjectFor(
+      offer.target.kind,
+      offer.target.sourceId
+    )
+    if (mirroringProject !== null && mirroringProject !== ownerProjectId) return
+    contextSidebarState.openDisplayTarget(ownerProjectId, ownerThreadId, offer.target, {
+      focus: ownerThreadId === thread?.id
+    })
   })
 
   /**
-   * Report what the panel is mirroring, and on which thread, so the watch stops
-   * looking for a device and that thread's row says its screen is on display.
+   * Report every mirrored device and the thread that owns it, so the watch stops
+   * looking for a device and each driving thread's row says its screen is on
+   * display.
+   *
+   * Every dock is reported, not just the one on screen: a display tab belongs to
+   * the project that owns the mirror, and closing it is what ends that project's
+   * mirror. Reading only the active dock reported `null` whenever the person
+   * switched project, and main then cleared the marks of every thread that was
+   * driving a device even though those tabs were still mirroring them elsewhere.
    */
   $effect(() => {
-    const mirrored = contextSidebarState.tabs.find(
-      (candidate) => candidate.kind === 'display' && candidate.sourceKind && candidate.sourceId
-    )
-    displayAvailability.notePanelTarget(
-      mirrored?.kind === 'display' && mirrored.sourceKind && mirrored.sourceId
-        ? {
-            kind: mirrored.sourceKind,
-            sourceId: mirrored.sourceId,
-            threadId: mirrored.threadId
-          }
-        : null
-    )
+    displayAvailability.notePanelTargets(contextSidebarState.mirroredDisplayTabs())
   })
 
   /**
@@ -829,6 +839,17 @@
           />
         {/snippet}
 
+        <!-- Arrival only, deliberately: no `out:` on the closing sidebar.
+
+             An `out:` transition makes Svelte pause the whole region until the
+             transition reports done, and everything inside it stops updating
+             while it is paused. If the region is reopened before that outro
+             ends, Svelte resumes the very same subtree, and a resumed sidebar
+             could then paint the panel it was paused on instead of the tool the
+             rail had just selected, until the region was closed and opened
+             again. Destroying the region on the frame it closes removes that
+             state entirely; the column beside it still collapses over
+             `railTrackDuration`, so the shell keeps its motion. -->
         <div
           class="min-h-0 min-w-0 {board.appBackgroundPanelKinds.rightSidebarFlushes
             ? 'border-l border-border'
@@ -837,11 +858,6 @@
           style:grid-row="1"
           style:visibility={board.panelExitMs.guideHidesToolPanel ? 'hidden' : 'visible'}
           in:fly={{ x: contextSidebarState.width, duration: motionDuration(200), easing: cubicOut }}
-          out:fly={{
-            x: contextSidebarState.width,
-            duration: motionDuration(board.panelExitMs.PANEL_EXIT_MS),
-            easing: cubicOut
-          }}
         >
           <div
             class="h-full min-h-0"

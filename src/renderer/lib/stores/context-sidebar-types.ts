@@ -1,4 +1,4 @@
-import type { AgentSubagentActivity, ThreadSettings } from '$shared/types'
+import type { AgentSubagentActivity, AgentPart, ThreadSettings } from '$shared/types'
 import type { DisplaySourceKind } from '$shared/ipc/display'
 
 export type TerminalPlacement = 'right' | 'bottom'
@@ -55,6 +55,13 @@ export interface SubagentContextTab {
   threadId: string
   sourcePartId: string
   activity: AgentSubagentActivity
+  /**
+   * The live work of a run the app owns itself (the Assignment draft), already
+   * forwards from the offshoot session. A run with this set renders its work in
+   * the panel instead of loading a provider-native transcript, which does not
+   * exist for it.
+   */
+  draftTrace?: AgentPart[]
 }
 
 export interface DebuggerContextTab {

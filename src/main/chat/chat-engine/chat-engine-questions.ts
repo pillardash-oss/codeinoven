@@ -2,11 +2,10 @@ import { Logger } from '../../system/logger'
 import { isBrainstormDocumentQuestion } from '../../../lib/brainstorm/brainstorm-alignment'
 import { InactiveQuestionTurnError, QuestionRequestGoneError } from '../../drivers/driver.interface'
 import type { TypesafeDecisionService } from '../../typesafe/typesafe-decision-service'
-import type { TypesafeDecisionStatus } from '../../../lib/types/typesafe'
 import { isUtilitySuggestionQuestion } from '../../../lib/utility-suggestion'
 import { isMcpSignInQuestion } from '../../../lib/mcp-sign-in'
 import type { AgentQuestionRequest, AgentQuestionResolution } from '../../../lib/types'
-import type { PendingQuestionInfo, RankingGradeCandidate } from './chat-engine-types'
+import type { PendingQuestionInfo } from './chat-engine-types'
 import {
   inactiveQuestionDecision,
   recommendedQuestionAnswer,
@@ -481,30 +480,5 @@ export class ChatEngineQuestions {
    */
   attachTypesafeDecisionService(service: TypesafeDecisionService): void {
     this.host.state.typesafeDecision = service
-  }
-
-  /**
-   * Report a TypeSafe fall-through once per distinct outcome.
-   *
-   * The first occurrence carries the information; every later one only proves
-   * the first was not a blip, and a durable log that repeats a standing
-   * `not-configured` on each graded turn is noise an operator learns to skip.
-   * It is logged at `info` because the fall-through is a supported behaviour
-   * (the harness lanes below take over), not a failure.
-   */
-  reportTypesafeFallthrough(
-    status: Exclude<TypesafeDecisionStatus, 'answered'>,
-    detail: string | undefined,
-    candidate: RankingGradeCandidate
-  ): void {
-    const key = `${status}:${detail ?? ''}`
-    if (this.host.state.reportedTypesafeFallthroughs.has(key)) return
-    this.host.state.reportedTypesafeFallthroughs.add(key)
-    Logger.info('Ranking grading falls through from TypeSafe', {
-      harnessId: candidate.harnessId,
-      modelId: candidate.modelId,
-      status,
-      detail
-    })
   }
 }

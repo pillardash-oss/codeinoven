@@ -20,7 +20,6 @@ import type {
   CheapModelRequest,
   CheapModelResult,
   GenerateTitleOptions,
-  GradeTurnOptions,
   HarnessCapabilities,
   HarnessDriver,
   HarnessToolDefinition,
@@ -39,7 +38,6 @@ import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { opencodeNativeProviderIds } from '../agents/native-provider-config-service'
 import { SecretsService } from '../secrets/secrets-service'
 import { buildTitlePrompt, HEARTBEAT_PROMPT, sanitizeGeneratedTitle } from '../chat/title-generator'
-import { buildRankingGradePrompt, parseRankingGrade } from '../chat/turn-grader-prompt'
 import { readOpenCodeAccountUsage } from './opencode-account-usage'
 import { prepareHarnessInvocation, runHarnessCommand } from './harness-runtime'
 import { mapOpenCodeEvent } from './opencode/opencode-events'
@@ -508,22 +506,6 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       request.validateResponse
     )
     return { text, attempts }
-  }
-
-  async gradeTurn(projectPath: string, options: GradeTurnOptions): Promise<number | null> {
-    const candidates = options.candidates ?? (await this.cheapCandidates(projectPath))
-    const result = await this.isolatedOneShot(
-      projectPath,
-      options.settings,
-      'Turn grade',
-      candidates,
-      buildRankingGradePrompt({
-        userMessage: options.userMessage,
-        assistantOutput: options.assistantOutput,
-        followUp: options.followUp ?? null
-      })
-    )
-    return result === null ? null : parseRankingGrade(result)
   }
 
   /**

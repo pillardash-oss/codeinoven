@@ -17,7 +17,8 @@ import {
   contentViewForThread,
   viewShowsThread
 } from '$lib/content-view-threads'
-import { viewShowsScopedSidebar } from '$lib/content-view-projects'
+import { viewShowsScopedSidebar, viewShowsWorkspaceShell } from '$lib/content-view-projects'
+import { recentVisits } from '$lib/stores/recent-visits.svelte'
 import { boardProjectId } from '$lib/threads/thread-scope'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
 import { openThreadBrowserFor } from '$lib/stores/thread-browser-open'
@@ -28,7 +29,7 @@ import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
 import { findNavState } from '$lib/stores/find-nav.svelte'
 import { panelSearchRequest } from '$lib/stores/panel-search-request.svelte'
 import { browserKeyboardFocus } from '$lib/stores/browser-keyboard-focus'
-import { browserFindState } from '$lib/stores/browser-find.svelte'
+import { openBrowserFind, stepBrowserFind } from './App-browser-find.svelte'
 import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { isTerminalFocused } from '$lib/terminal/focus'
@@ -118,6 +119,11 @@ export class AppOnKeydown extends BoardUnit<App> {
     // returning from Settings (even across a restart) lands back where the user
     // was instead of resetting to Projects.
     rendererRecovery.setActiveView(view)
+    // Coming back to the thread on screen is a visit to it, exactly as a browser
+    // tab counts when the browser view opens. Without this a return through the
+    // rail left the browser tabs ahead of the thread in the Ctrl+Tab order.
+    const shownThread = workspaceState.selectedThread
+    if (viewShowsWorkspaceShell(view) && shownThread) recentVisits.recordThread(shownThread)
     // A navigation that is only a step on the way to a specific thread skips the
     // reconcile: that step would open the family's remembered thread first, which
     // records a visit, persists it, docks its panels, and leaves it on screen
@@ -502,12 +508,12 @@ export class AppOnKeydown extends BoardUnit<App> {
   handleFind(): void {
     const browserTabId = browserKeyboardFocus.tabId
     if (browserTabId) {
-      browserFindState.open(browserTabId)
+      openBrowserFind(browserTabId)
       return
     }
     if (this.activeView === 'browser') {
       void withBrowser((store) => {
-        if (store.activeTab) browserFindState.open(store.activeTab.id)
+        if (store.activeTab) openBrowserFind(store.activeTab.id)
       })
       return
     }
@@ -627,11 +633,11 @@ export class AppOnKeydown extends BoardUnit<App> {
       if (previous || keymapState.matches('browser-find-next', e)) {
         e.preventDefault()
         if (!e.repeat) {
-          if (browserTabId) browserFindState.step(browserTabId, previous ? 'previous' : 'next')
+          if (browserTabId) stepBrowserFind(browserTabId, previous ? 'previous' : 'next')
           else
             void withBrowser((store) => {
               if (store.activeTab)
-                browserFindState.step(store.activeTab.id, previous ? 'previous' : 'next')
+                stepBrowserFind(store.activeTab.id, previous ? 'previous' : 'next')
             })
         }
         return

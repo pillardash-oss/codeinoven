@@ -5,7 +5,7 @@ import { createHash } from 'crypto'
 import { homedir } from 'node:os'
 import type { IncomingMessage, Server, ServerResponse } from 'http'
 import { sendToRenderer } from '../../ipc/renderer-delivery'
-import { broadcastAppToast } from '../../ipc/app-toast'
+import { broadcastAppToast, dismissAppToast } from '../../ipc/app-toast'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { listHarnesses } from '../../agents/harness-registry'
@@ -54,9 +54,7 @@ import type {
   UserMessagePresentation,
   ScopedHarnessCommand,
   Thread,
-  ThreadSettings,
-  ThinkingLevel,
-  ModelRankingSnapshotRow
+  ThreadSettings
 } from '../../../lib/types'
 import { isWorkflowCoordinatorThread } from '../../../lib/types'
 import { instanceEventBus } from '../../system/instance-event-bus'
@@ -78,7 +76,6 @@ import type {
   AssignmentWorkerRoutingResult,
   PendingInitialSpecGeneration,
   QueuedCoordinatorHandoff,
-  RankingGradeCandidate,
   SessionInfo,
   SpecGenerationLesson
 } from './chat-engine-types'
@@ -1091,8 +1088,33 @@ export function deliverBroadcast(event: AgentEvent): void {
   instanceEventBus.publishAgentEvent(event)
 }
 
-export function broadcastToast(message: string, type: 'error' | 'info' = 'error'): void {
-  broadcastAppToast({ message, type })
+/**
+ * The one notice that asks the user to resume a stalled Assignment coordinator.
+ *
+ * It carries a stable id so the app can withdraw it the moment coordination
+ * actually resumes, instead of leaving a warning on screen that describes a state
+ * the thread already left.
+ */
+export function assignmentStallNoticeId(assignmentId: string): string {
+  return `assignment-stall:${assignmentId}`
+}
+
+export function broadcastToast(
+  message: string,
+  type: 'error' | 'info' = 'error',
+  id?: string
+): void {
+  broadcastAppToast({ message, type, ...(id ? { id } : {}) })
+}
+
+/**
+ * Withdraw a toast whose condition the app has since resolved.
+ *
+ * The id is the one the notice was raised with, so a resolved condition can never
+ * leave its warning on screen, and an unrelated notice is never touched.
+ */
+export function withdrawToast(id: string): void {
+  dismissAppToast(id)
 }
 
 export function chatSkillPaths(driverId: string): string[] {
@@ -1236,44 +1258,6 @@ export function aggregateTurnUsage(messages: readonly UsageBearingMessage[]): Tu
     startedAt: startedAt || Date.now(),
     completedAt: completedAt || startedAt || Date.now()
   }
-}
-
-export function toRankingCandidate(row: ModelRankingSnapshotRow): RankingGradeCandidate {
-  return {
-    id: row.id,
-    harnessId: row.harness_id,
-    providerId: row.provider_id,
-    modelId: row.model_id,
-    thinkingLevel: (row.thinking_level || 'minimal') as ThinkingLevel,
-    userMessage: row.user_message_text,
-    assistantOutput: row.assistant_output_text,
-    followUp: row.follow_up_text
-  }
-}
-
-/**
- * The visible instruction text of one persisted user record, for ranking.
- *
- * A user dispatch carries either typed text (with attachments) or a workflow
- * card: `persistOutboundMessage` stores the card in place of the text it
- * displayed, exactly as the transcript renders it, so the card's action and
- * body ARE the instruction the user gave ("Implement spec" plus the notes they
- * added). Without this, a card-bearing implementation turn would be queued for
- * grading with an empty prompt.
- */
-export function userInstructionText(message: AgentMessage): string {
-  const text = message.parts
-    .filter((part): part is Extract<AgentPart, { type: 'text' }> => part.type === 'text')
-    .map((part) => part.text)
-    .join('\n')
-    .trim()
-  if (text) return text
-  const presentation = message.parts.find(
-    (part): part is Extract<AgentPart, { type: 'user-presentation' }> =>
-      part.type === 'user-presentation'
-  )?.presentation
-  if (!presentation) return ''
-  return [presentation.action, presentation.body].filter(Boolean).join('\n\n').trim()
 }
 
 export function preserveMirrorReasoningStamps(

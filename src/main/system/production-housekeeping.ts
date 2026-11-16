@@ -11,6 +11,21 @@ interface KeyboardShortcutInput {
   isAutoRepeat: boolean
 }
 
+function isDevToolsShortcut(input: KeyboardShortcutInput): boolean {
+  if (input.type !== 'keyDown') return false
+
+  const key = input.key.toLowerCase()
+  const code = input.code.toLowerCase()
+  const isInspectKey = key === 'i' || code === 'keyi'
+
+  return (
+    key === 'f12' ||
+    code === 'f12' ||
+    (input.control && input.shift && isInspectKey) ||
+    (input.meta && input.alt && isInspectKey)
+  )
+}
+
 function isProductionReloadShortcut(input: KeyboardShortcutInput): boolean {
   if (input.type !== 'keyDown') return false
 
@@ -26,31 +41,17 @@ function isProductionReloadShortcut(input: KeyboardShortcutInput): boolean {
   )
 }
 
-function isToggleDevToolsShortcut(input: KeyboardShortcutInput): boolean {
-  if (input.type !== 'keyDown' || input.isAutoRepeat) return false
-
-  const key = input.key.toLowerCase()
-  const code = input.code.toLowerCase()
-  const isInspectKey = key === 'i' || code === 'keyi'
-
-  return (
-    key === 'f12' ||
-    code === 'f12' ||
-    (input.control && input.shift && isInspectKey) ||
-    (input.meta && input.alt && isInspectKey)
-  )
-}
-
-/** Keep reload disabled while exposing a menu-independent DevTools shortcut. */
+/**
+ * Keep reload and DevTools out of a shipped build.
+ *
+ * The window's own `devTools: false` already refuses to open the inspector; the
+ * chord is intercepted here as well so a shipped build never even reaches the
+ * toggle. Development keeps both, since reload and the inspector are the tools
+ * that work is done with.
+ */
 export function lockDownProductionWindow(window: BrowserWindow): void {
   window.webContents.on('before-input-event', (event, input) => {
-    if (isToggleDevToolsShortcut(input)) {
-      event.preventDefault()
-      window.webContents.toggleDevTools()
-      return
-    }
-
-    if (isProductionReloadShortcut(input)) {
+    if (isDevToolsShortcut(input) || isProductionReloadShortcut(input)) {
       event.preventDefault()
     }
   })

@@ -711,13 +711,27 @@ export class ChatEngineLifecycleBoot {
     )
     ipcMain.handle(
       'agent:generateAssignmentDraft',
-      (
+      async (
         _,
         projectId: string,
         coordinatorThreadId: string,
         settings: ThreadSettings,
         instructions?: string
-      ) => this.host.generateAssignmentDraft(projectId, coordinatorThreadId, settings, instructions)
+      ) => {
+        const thread = await this.host.threadManager.getThread(projectId, coordinatorThreadId)
+        return this.host.requestAssignmentDraft({
+          projectId,
+          coordinatorThreadId,
+          settings,
+          instructions,
+          sessionId: thread?.sessionId ?? ''
+        })
+      }
+    )
+    ipcMain.handle(
+      'agent:retryAssignmentDraft',
+      async (_, projectId: string, coordinatorThreadId: string) =>
+        this.host.retryAssignmentDraft({ projectId, coordinatorThreadId })
     )
     ipcMain.handle(
       'agent:ensureAchievementScope',

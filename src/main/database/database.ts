@@ -284,6 +284,11 @@ export class Database {
     return this.maintenance.incrementalVacuum(pages)
   }
 
+  /** Truncating WAL checkpoint, so a compaction's freed space lands in the file. */
+  async truncateCheckpoint(): Promise<WorkerCheckpointResult> {
+    return this.maintenance.truncateCheckpoint()
+  }
+
   /** Full VACUUM (heavy; off-main). */
   async fullVacuum(): Promise<WorkerVacuumResult> {
     return this.maintenance.fullVacuum()

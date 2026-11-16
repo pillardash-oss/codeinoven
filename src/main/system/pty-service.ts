@@ -59,11 +59,20 @@ interface PtySession {
   ovenId?: string
   createdAt: number
   process: pty.IPty
+  /** The argv a single-command session was started with, for the close gate;
+   *  a shell session has none. */
+  argv?: string[]
   /** When set, the session is killed after this long with zero output or input. */
   idleTimeoutMs?: number
   lastActivityAt: number
   /** A watchdog stop is a failure even if the shell reports a clean exit. */
   exitCodeOverride?: number
+}
+
+/** A single-command session still running, with the argv it was started with. */
+export interface RunningPtyCommand {
+  id: string
+  argv: string[]
 }
 
 /** How often the watchdog sweeps for idle sessions. */
@@ -917,6 +926,7 @@ export class PtyService {
           projectId: '',
           cwd,
           shell: command,
+          argv: [command, ...args],
           createdAt,
           idleTimeoutMs: idleTimeoutMs && idleTimeoutMs > 0 ? idleTimeoutMs : undefined,
           lastActivityAt: createdAt
@@ -1186,6 +1196,23 @@ export class PtyService {
   /** Whether a PTY under this id is still alive, i.e. its output still streams. */
   hasSession(id: string): boolean {
     return this.sessions.has(id)
+  }
+
+  /**
+   * Single-command sessions still running, with the argv they were started with.
+   *
+   * The close gate reads this to see what the app is executing right now: a Local
+   * AI row that is still fetching its weights from Hugging Face is that kind of
+   * session, and only its argv says whether the weights are on disk or still
+   * arriving.
+   */
+  runningCommands(): RunningPtyCommand[] {
+    const commands: RunningPtyCommand[] = []
+    for (const session of this.sessions.values()) {
+      if (!session.argv) continue
+      commands.push({ id: session.id, argv: session.argv })
+    }
+    return commands
   }
 
   /**

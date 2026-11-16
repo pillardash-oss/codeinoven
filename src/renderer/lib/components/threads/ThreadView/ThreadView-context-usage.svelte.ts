@@ -27,7 +27,7 @@ import type {
   Project,
   AuditReport
 } from '$shared/types'
-import { mergeContextUsage } from '../thread-usage-merge'
+import { mergeContextUsage, withoutContextOccupancy } from '../thread-usage-merge'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
@@ -273,10 +273,15 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
   contextUsageDisplay = $state<AgentContextUsage | undefined>(undefined)
 
   commitContextUsage(usage: AgentContextUsage): void {
-    this.contextUsageDisplay = usage
+    // A thread with no assistant turn holds no conversation, so it has nothing
+    // to persist about occupancy. Persisting one (a probe's system-prompt
+    // baseline, or a snapshot written before this rule existed) is what let an
+    // empty thread restore a 17% meter on the next mount.
+    const committed = this.describesConversation() ? usage : withoutContextOccupancy(usage)
+    this.contextUsageDisplay = committed
     this.root.unmirroredTraceStartTime.contextUsageCommittedAt = Date.now()
     const snapshot: ThreadContextUsage = {
-      ...usage,
+      ...committed,
       harnessId: this.root.loadOlderMessages.settings.harnessId,
       providerId: this.root.loadOlderMessages.settings.providerId,
       modelId: this.root.loadOlderMessages.settings.modelId
@@ -306,6 +311,17 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
     if (this.accountUsageCache.isStale()) void this.refreshAccountUsageOnDemand()
   }
 
+  /**
+   * Whether the thread holds a conversation a usage reading could describe.
+   *
+   * Occupancy belongs to a conversation, so a thread with no assistant turn has
+   * nothing to report and nothing to seed: an empty thread's meter must stay
+   * empty rather than adopt a live session's system-prompt baseline.
+   */
+  private describesConversation(): boolean {
+    return this.root.loadOlderMessages.messages.some((message) => message.role === 'assistant')
+  }
+
   async refreshAccountUsageOnDemand(): Promise<void> {
     // Drop a response for a harness selection the user already moved away
     // from   an out-of-order resolve must not clobber the current selection.
@@ -314,7 +330,12 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       {
         harnessId: this.root.loadOlderMessages.settings.harnessId,
         providerId: this.root.loadOlderMessages.settings.providerId,
-        accountId: this.root.loadOlderMessages.settings.accountId
+        accountId: this.root.loadOlderMessages.settings.accountId,
+        // Name the thread so the reading can only be answered by this thread's
+        // own session. Account quota ignores it; context occupancy must never
+        // come from another conversation's live process.
+        projectId: this.root.handleAgentEvent.thread.projectId,
+        threadId: this.root.handleAgentEvent.thread.id
       },
       () =>
         refreshKey !==
@@ -353,7 +374,12 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         // occupancy always wins: a probe answers for whichever session it
         // reached, and letting it overwrite a real reading is what made the
         // meter drop from 33% to 1% the moment the indicator was hovered.
-        ...(currentUsage.contextUsed !== undefined && this.contextUsage?.contextUsed === undefined
+        // A thread with no assistant turn holds no conversation at all, so
+        // nothing may state its occupancy: a hover on an empty thread used to
+        // paint another session's system prompt as 17% of the window.
+        ...(currentUsage.contextUsed !== undefined &&
+        this.contextUsage?.contextUsed === undefined &&
+        this.describesConversation()
           ? { contextUsed: currentUsage.contextUsed }
           : {}),
         ...(currentUsage.credits ? { credits: currentUsage.credits } : {})

@@ -4,7 +4,6 @@ import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
 import CioCloud from '@pdslng/cio-icon/CioCloud.svelte'
 import CioCode from '@pdslng/cio-icon/CioCode.svelte'
 import CioDisplay from '@pdslng/cio-icon/CioDisplay.svelte'
-import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
 import CioHeartPulse from '@pdslng/cio-icon/CioHeartPulse.svelte'
 import CioKey from '@pdslng/cio-icon/CioKey.svelte'
 import CioKeyboard from '@pdslng/cio-icon/CioKeyboard.svelte'
@@ -170,30 +169,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     icon: CioSparkles
   },
   {
-    id: 'design-video-packages',
-    section: 'design',
-    blockId: 'design-video-packages',
-    title: 'Video pack',
-    description: 'The optional download that enables GPU background removal.',
-    keywords: [
-      'video pack',
-      'background removal',
-      'matting',
-      'gpu',
-      'onnxruntime',
-      'mediabunny',
-      'transformers',
-      'install'
-    ],
-    icon: CioDownload
-  },
-  {
     id: 'design',
     section: 'design',
     group: 'agents',
     title: 'Design and video',
     description:
-      'Where design and video work is saved, who does each kind of it, and the optional video pack.',
+      'Where design and video work is saved, and who does each kind of it.',
     keywords: [
       'design',
       'video',
@@ -207,9 +188,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
       'script',
       'storyboard',
       'delegate',
-      'image generation',
-      'background removal',
-      'video pack'
+      'image generation'
     ],
     icon: CioPalette
   },
@@ -350,7 +329,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'profile',
     group: 'data',
     title: 'Usage',
-    description: 'Local usage, cost, and model rankings.',
+    description: 'Local usage and cost by model, project, and period.',
     keywords: ['quota', 'usage', 'spend', 'activity'],
     icon: CioMessage
   },

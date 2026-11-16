@@ -304,6 +304,10 @@ export class ChatEngineTurnsDispatch {
     const activeAssignmentDraft = this.host.state.activeAssignmentDraftSessions.get(brainstormKey)
     if (activeAssignmentDraft) {
       markNotificationAborting(projectId, threadId)
+      // A Stop revokes the run's authority, so its late result can never settle
+      // the thread status back over the `interrupted` written below, and its card
+      // reports that the user stopped it instead of claiming to keep working.
+      this.host.stopAssignmentDraftRun(projectId, threadId)
       this.host.state.userAbortedAssignmentDraftOperations.add(brainstormKey)
       this.host.state.userAbortedSessions.add(activeAssignmentDraft.sessionId)
       if (
@@ -721,7 +725,8 @@ export class ChatEngineTurnsDispatch {
         accountId: account.id,
         accountEnvironment: this.host.state.accountRegistry.environment(account),
         driver,
-        projectPath: info.projectPath
+        projectPath: info.projectPath,
+        conversationSessionId: info.sessionId
       })
       const futureResets = (usage?.rateLimits ?? []).filter(
         (limit): limit is typeof limit & { resetsAt: number } =>

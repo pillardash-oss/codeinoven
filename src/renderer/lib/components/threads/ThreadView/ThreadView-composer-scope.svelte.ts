@@ -279,8 +279,18 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   /** Session-local dismissal of the spec-less Assignment entry card. */
   conversationAssignmentDismissed = $state(false)
 
-  /** True while the Sr. Engineer composes an Assignment draft from the approved Spec. */
-  assignmentFormulating = $state(false)
+  /** True while this view itself asked for an Assignment draft and is waiting for
+   *  the call that started it. */
+  assignmentFormulatingLocal = $state(false)
+
+  /** True when the thread row says a draft is being formulated, so the state
+   *  survives a reload and any view that mounts mid-formulation. */
+  assignmentFormulatingDurable = $state(false)
+
+  /** True while the Sr. Engineer composes an Assignment draft for this thread. */
+  assignmentFormulating = $derived(
+    this.assignmentFormulatingLocal || this.assignmentFormulatingDurable
+  )
 
   /** Spec-less Assignment entry: the Assignment stage is selected, this thread
    *  has no Spec, and no Assignment draft exists yet. */

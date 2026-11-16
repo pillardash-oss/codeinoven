@@ -32,6 +32,26 @@ export interface CloseConfirmationFile {
   path: string
 }
 
+/**
+ * A Local AI model the app is still fetching from Hugging Face.
+ *
+ * Unlike a browser download, nothing here continues later: the downloader the
+ * engines ship starts every file from zero, so closing the app costs every byte
+ * already fetched. That is why the prompt names these separately.
+ */
+export interface CloseConfirmationLocalAiDownload {
+  /** Saved row id, so the prompt can say which server the fetch belongs to. */
+  entryId: string
+  /** The repository being fetched, with its quant for a GGUF file. */
+  reference: string
+  /**
+   * Whether the fetch continues after a quit. llama.cpp keeps its partial file
+   * and asks the server for the rest; the MLX engine's downloader starts a file
+   * from zero, so a close there costs every byte already fetched.
+   */
+  resumable: boolean
+}
+
 /** Sent when the user tries to close the app while threads are still working,
  *  browser downloads are running, or files have unsaved edits. `files` is
  *  populated by the renderer, which owns the unsaved-editor state. */
@@ -48,6 +68,15 @@ export interface CloseConfirmationPayload {
    * continues it where the server allows a range request.
    */
   downloads: BrowserDownload[]
+  /**
+   * Local AI models still being fetched from Hugging Face, as the PTY service
+   * sees them: a renderer reload leaves the fetch running with no card to show
+   * it, and only the running argv says whether a row is fetching or loading.
+   *
+   * A close stops these. Whether their bytes come back depends on the engine, so
+   * each entry says so instead of the prompt assuming one answer for both.
+   */
+  localAiDownloads: CloseConfirmationLocalAiDownload[]
   /**
    * The close is a park, not a quit: the window is torn down but the backend
    * keeps running so scheduled work still fires. The renderer answers with

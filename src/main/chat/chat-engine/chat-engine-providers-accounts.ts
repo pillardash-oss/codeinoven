@@ -240,7 +240,10 @@ export class ChatEngineProvidersAccounts {
 
   /** One harness's on-demand account quota   the single telemetry chain
    *  (harness-native capture, then OpenUsage, then a custom provider's usage
-   *  route) shared by thread, temporary-chat, and threadless reads. */
+   *  route) shared by thread, temporary-chat, and threadless reads.
+   *
+   * `conversationSessionId`, when given, names the thread's own session: the
+   * only session a driver may read context occupancy from. */
   async readHarnessAccountUsage(target: {
     harnessId: string
     providerId: string
@@ -248,8 +251,10 @@ export class ChatEngineProvidersAccounts {
     accountEnvironment: NodeJS.ProcessEnv
     driver: HarnessDriver
     projectPath: string
+    conversationSessionId?: string
   }): Promise<AgentAccountUsage | null> {
     const { harnessId, providerId, accountId, accountEnvironment, driver, projectPath } = target
+    const conversationSessionId = target.conversationSessionId
     try {
       const isCustomProvider = isCodeInOvenCustomProviderId(providerId)
       // The driver remains useful for custom providers. Pi's native usage
@@ -270,7 +275,7 @@ export class ChatEngineProvidersAccounts {
       ].filter((candidate): candidate is string => Boolean(candidate))
       const [nativeAttempt, openUsageAttempt, customAttempt] = await Promise.allSettled([
         driver.readAccountUsage
-          ? driver.readAccountUsage(projectPath, providerId)
+          ? driver.readAccountUsage(projectPath, providerId, conversationSessionId)
           : Promise.resolve(null),
         this.host.state.openUsage.readProviderUsage(
           openUsageProviderIds,

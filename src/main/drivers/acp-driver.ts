@@ -846,10 +846,6 @@ export class AcpDriver extends PersistentCliDriver implements HarnessDriver {
     return answer ? sanitizeGeneratedTitle(answer) : null
   }
 
-  async gradeTurn(): Promise<number | null> {
-    return null
-  }
-
   async provideCheapModel(
     _projectPath: string,
     _request: CheapModelRequest

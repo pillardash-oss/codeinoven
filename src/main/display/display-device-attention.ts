@@ -42,7 +42,7 @@ class DisplayDeviceAttention {
    * whose input is already being asked about is skipped rather than queued, so a
    * harness that republishes the same running call cannot ask twice.
    */
-  noteToolCall(threadId: string, input: Record<string, unknown>): void {
+  noteToolCall(threadId: string, input: Record<string, unknown>, projectId?: string): void {
     if (threadId.length === 0) return
     const command = displayDeviceCommand(input)
     if (!command) return
@@ -58,7 +58,8 @@ class DisplayDeviceAttention {
       .request({
         platform: command.platform,
         ...(command.device ? { device: command.device } : {}),
-        threadId
+        threadId,
+        ...(projectId ? { projectId } : {})
       })
       .then((result) => {
         this.remember(key, result.ok)

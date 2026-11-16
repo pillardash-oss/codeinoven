@@ -20,7 +20,10 @@ vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
 vi.mock('$lib/stores/assistants.svelte', () => ({ assistants: assistantStore }))
 
 import { APP_SLUG } from '$shared/brand'
-import { notificationMatchesSubFilter } from '$lib/stores/notification-panel.svelte'
+import {
+  backgroundRunNotificationKind,
+  notificationMatchesSubFilter
+} from '$lib/stores/notification-panel.svelte'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
 import type { AgentNotificationPayload } from '$shared/ipc-contract'
 import type { Thread } from '$shared/types'
@@ -139,8 +142,46 @@ describe('bulk dismissal', () => {
 })
 
 describe('the filters', () => {
-  it('open on Attention, which is what waits on the user', () => {
-    expect(panel.subFilter).toBe('attention')
+  it('open on All, because one list holds every kind and family now', () => {
+    expect(panel.subFilter).toBe('all')
+    expect(panel.sourceFilter).toBe('all')
+  })
+
+  it('narrow the list to one family without losing its kind filter', () => {
+    panel.add(payload('project', { kind: 'completed' }))
+    panel.add(payload('chat', { projectId: INBOX_PROJECT_ID, source: 'chat' }))
+    panel.add(payload('assistant', { projectId: ASSISTANT_SPACE_ID, source: 'assistant' }))
+
+    panel.setSourceFilter('projects')
+    expect(panel.visible.map((n) => n.id)).toEqual(['project'])
+    expect(panel.count('done')).toBe(1)
+
+    panel.setSourceFilter('assistants')
+    expect(panel.visible.map((n) => n.id)).toEqual(['assistant'])
+
+    // Every family answers to All again, and resetting returns both narrowings.
+    panel.setSubFilter('attention')
+    panel.resetFilters()
+    expect(panel.visible).toHaveLength(3)
+    expect(panel.subFilter).toBe('all')
+    expect(panel.sourceFilter).toBe('all')
+  })
+
+  it('leave the assistant ledger rows out of the project and chat families', async () => {
+    const { assistants } = await import('$lib/stores/assistants.svelte')
+    const mocked = assistants as unknown as {
+      missedRuns: Array<{ id: string; dueAt: number }>
+    }
+    mocked.missedRuns = [{ id: 'missed-1', dueAt: 50 }]
+
+    expect(panel.count('attention')).toBe(1)
+
+    panel.setSourceFilter('projects')
+    expect(panel.visibleMissedRuns).toEqual([])
+    expect(panel.count('attention')).toBe(0)
+
+    panel.setSourceFilter('assistants')
+    expect(panel.visibleMissedRuns).toHaveLength(1)
   })
 
   it('count a failure under Attention, so there is no separate Issues filter', () => {
@@ -198,6 +239,19 @@ describe('the filters', () => {
 
     expect(panel.attentionBackgroundRuns.map((run) => run.runThreadId)).toEqual(['parked'])
     expect(panel.attentionCount).toBe(2)
+  })
+
+  it('never counts a still-running unattended run as attention', async () => {
+    const { assistants } = await import('$lib/stores/assistants.svelte')
+    const mocked = assistants as unknown as {
+      recentBackgroundRuns: Array<{ runThreadId: string; outcome?: string }>
+    }
+    mocked.recentBackgroundRuns = [{ runThreadId: 'running' }]
+
+    expect(backgroundRunNotificationKind(undefined)).toBe('working')
+    expect(panel.attentionBackgroundRuns).toEqual([])
+    expect(panel.attentionCount).toBe(0)
+    expect(panel.visibleBackgroundRuns.map((run) => run.runThreadId)).toEqual(['running'])
   })
 })
 
@@ -511,7 +565,7 @@ describe('attention summary for the view rail', () => {
   it('counts a missed scheduled fire and a parked unattended run as assistant attention', () => {
     assistantStore.missedRuns = [{ threadId: 'missed-1', assistantId: 'a1', dueAt: 10 }]
     assistantStore.recentBackgroundRuns = [
-      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: undefined }
+      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: 'parked' }
     ]
     expect(panel.attentionRailSummary('assistant')).toEqual({
       count: 2,
@@ -522,7 +576,7 @@ describe('attention summary for the view rail', () => {
 
   it('never counts the same parked run twice: its own notice already stands for it', () => {
     assistantStore.recentBackgroundRuns = [
-      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: undefined }
+      { runThreadId: 'run-1', taskId: 'task-1', assistantId: 'a1', outcome: 'parked' }
     ]
     panel.add(
       payload('run-gate', {

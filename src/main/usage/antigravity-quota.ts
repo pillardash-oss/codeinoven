@@ -1,6 +1,8 @@
+import { execFile } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { promisify } from 'node:util'
 import type { AgentRateLimitWindow } from '../../lib/types'
 import { buildProcessEnvironment } from '../drivers/cli-environment'
 import { Logger } from '../system/logger'
@@ -18,6 +20,12 @@ import { Logger } from '../system/logger'
  * The read authenticates with the account's own Antigravity OAuth token and
  * refreshes it in memory when it has expired. CodeInOven never writes back to
  * the harness credential store: the CLI refreshes its own token on its next run.
+ *
+ * The token lives in one of two places depending on whether the CLI could store
+ * it in the OS keyring: the file store under the harness directory, or, when
+ * keyring writes succeed, the login keychain alone (the CLI writes no file in
+ * that case). Both are read here, because an account that only has a keychain
+ * item would otherwise report no quota at all.
  */
 
 /** Cloud Code base URLs, tried in this order (the daily one serves first). */
@@ -228,10 +236,44 @@ export function mapAntigravityModelQuotas(value: unknown): AgentRateLimitWindow[
   })
 }
 
+/**
+ * Token file names the CLI has written for its keyring-fallback store, newest
+ * first: current builds name it after the Jetski credential, older builds after
+ * Antigravity itself.
+ */
+export const ANTIGRAVITY_TOKEN_FILE_NAMES = [
+  'jetski-standalone-oauth-token',
+  'antigravity-oauth-token'
+] as const
+
+/** Login-keychain item the CLI's Go keyring package stores its token under. */
+const KEYCHAIN_SERVICE = 'gemini'
+const KEYCHAIN_ACCOUNT = 'antigravity'
+/** Prefix the Go keyring package puts on a value it base64-encodes into an item. */
+const KEYCHAIN_BASE64_PREFIX = 'go-keyring-base64:'
+const MACOS_SECURITY_BINARY = '/usr/bin/security'
+
+/** Home directory the CLI's token lookup is redirected to, when it is. */
+function tokenHome(environment: NodeJS.ProcessEnv): string {
+  return environment['HOME'] ?? environment['USERPROFILE'] ?? homedir()
+}
+
+/**
+ * The token exactly as the CLI's file store holds it, taken from the macOS login
+ * keychain, or null when the keychain has no item for it.
+ *
+ * A machine where the CLI's keyring writes succeed has no token file at all, so
+ * the keychain item is the only copy of the credential that can be carried to
+ * another machine (an Oven account, for example).
+ */
+export async function readAntigravityKeychainToken(): Promise<Buffer | null> {
+  const store = await readKeychainTokenStore()
+  return store === null ? null : Buffer.from(`${JSON.stringify(store)}\n`, 'utf8')
+}
+
 /** Location of the CLI's OAuth token, honoring a HOME override from the caller. */
 export function antigravityTokenPath(environment: NodeJS.ProcessEnv): string {
-  const home = environment['HOME'] ?? environment['USERPROFILE'] ?? homedir()
-  return join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token')
+  return join(tokenHome(environment), '.gemini', 'antigravity-cli', ANTIGRAVITY_TOKEN_FILE_NAMES[0])
 }
 
 type CloudCodeOutcome = { kind: 'ok'; value: unknown } | { kind: 'auth' } | { kind: 'unavailable' }
@@ -314,13 +356,62 @@ function usableStoredToken(store: AntigravityTokenStore): string | undefined {
   return accessToken
 }
 
-async function readTokenStore(path: string): Promise<AntigravityTokenStore | null> {
+async function readTokenFile(path: string): Promise<AntigravityTokenStore | null> {
   try {
     return JSON.parse(await readFile(path, 'utf8')) as AntigravityTokenStore
   } catch (error) {
-    Logger.dev('Antigravity token store unavailable:', error)
+    Logger.dev('Antigravity token file unavailable:', error)
     return null
   }
+}
+
+const execFileAsync = promisify(execFile)
+
+/**
+ * The CLI's token as the macOS login keychain holds it.
+ *
+ * `agy` prefers the keyring and writes no file once a keyring write succeeds, so
+ * the keychain is the only store left on a machine where it worked. The value
+ * is the same JSON object the file store holds, wrapped by the Go keyring
+ * package in a `go-keyring-base64:` envelope.
+ */
+async function readKeychainTokenStore(): Promise<AntigravityTokenStore | null> {
+  if (process.platform !== 'darwin') return null
+  try {
+    const { stdout } = await execFileAsync(
+      MACOS_SECURITY_BINARY,
+      ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-a', KEYCHAIN_ACCOUNT, '-w'],
+      { timeout: REQUEST_TIMEOUT_MS, maxBuffer: 64 * 1024 }
+    )
+    const stored = stdout.trim()
+    if (stored.length === 0) return null
+    const payload = stored.startsWith(KEYCHAIN_BASE64_PREFIX)
+      ? Buffer.from(stored.slice(KEYCHAIN_BASE64_PREFIX.length), 'base64').toString('utf8')
+      : stored
+    return JSON.parse(payload) as AntigravityTokenStore
+  } catch (error) {
+    Logger.dev('Antigravity keychain token unavailable:', error)
+    return null
+  }
+}
+
+/**
+ * The CLI's token store for this account: its file first, then the keychain.
+ *
+ * macOS keeps one login keychain for every HOME, so the keychain item always
+ * belongs to the default account. A HOME-isolated account container must not
+ * read it, or it would report the primary account's quota as its own.
+ */
+async function readTokenStore(
+  environment: NodeJS.ProcessEnv
+): Promise<AntigravityTokenStore | null> {
+  const home = tokenHome(environment)
+  for (const name of ANTIGRAVITY_TOKEN_FILE_NAMES) {
+    const store = await readTokenFile(join(home, '.gemini', 'antigravity-cli', name))
+    if (store) return store
+  }
+  if (home !== homedir()) return null
+  return readKeychainTokenStore()
 }
 
 /**
@@ -331,7 +422,7 @@ export async function readAntigravityAccountUsage(
   environment: NodeJS.ProcessEnv = {}
 ): Promise<{ rateLimits: AgentRateLimitWindow[] } | null> {
   const env = buildProcessEnvironment({ ...process.env, ...environment })
-  const store = await readTokenStore(antigravityTokenPath(env))
+  const store = await readTokenStore(env)
   if (!store) return null
   const refreshToken = stringValue(store.token?.refresh_token)
   let refreshed = false

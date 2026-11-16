@@ -227,6 +227,16 @@ export interface AssignmentFollowUpTaskInput {
   model?: AssignmentModelSelection
 }
 
+/**
+ * What a request to formulate an Assignment draft settled on at call time.
+ *
+ * `formulating` means the model run is building the draft in the background: the
+ * caller must not wait for it, and reads the outcome when the thread's
+ * `assignment.ready` or `assignment.failed` event lands.
+ */
+export type AssignmentDraftStart =
+  { state: 'draft'; assignment: AssignmentPlan } | { state: 'formulating' }
+
 export interface AssignmentProvenance {
   source: 'agent' | 'manual'
   actor: string

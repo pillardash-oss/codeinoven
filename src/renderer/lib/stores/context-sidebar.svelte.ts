@@ -22,8 +22,14 @@ import {
   type TerminalPlacement,
   type ThreadNoteContextTab
 } from './context-sidebar-types'
-import { conversationScopeId, type AgentSubagentActivity, type ThreadSettings } from '$shared/types'
-import type { DisplayTarget } from './context-sidebar-tabs.svelte'
+import {
+  conversationScopeId,
+  type AgentPart,
+  type AgentSubagentActivity,
+  type ThreadSettings
+} from '$shared/types'
+import type { DisplaySourceKind } from '$shared/ipc/display'
+import type { DisplayTarget, MirroredDisplay } from './context-sidebar-tabs.svelte'
 import { notificationPanelState } from './notification-panel.svelte'
 
 export type {
@@ -62,10 +68,10 @@ export { EXPLAIN_SELECTION_PROMPT, STICKY_NOTES_TAB } from './context-sidebar-ty
 const CONTEXT_SIDEBAR_MIN_WIDTH = 340
 const CONTEXT_SIDEBAR_MAX_WIDTH = 1600
 /**
- * How long a closed notification panel keeps the tab it was last on. Reopening
- * inside this window shows the same section again, because the user stepped
- * away from the panel rather than away from what it was showing; past it the
- * panel opens on Attention, the one list of what is waiting right now.
+ * How long a closed notification panel keeps the tab and family it was last on.
+ * Reopening inside this window shows the same section again, because the user
+ * stepped away from the panel rather than away from what it was showing; past it
+ * the panel opens on All, the single list every kind and family shares.
  */
 const NOTIFICATION_PANEL_TAB_GRACE_MS = 5 * 60 * 1000
 /**
@@ -117,7 +123,7 @@ class ContextSidebarState {
   /**
    * When the notification panel was last closed, so reopening it can tell a user
    * who stepped away for a moment from one coming back to it much later.
-   * `0` means this session never closed it, which always starts on Attention.
+   * `0` means this session never closed it, which opens on All.
    */
   private notificationsHiddenAt = 0
 
@@ -907,8 +913,23 @@ class ContextSidebarState {
     return this.tabContexts.openDisplayChooser(projectId, threadId)
   }
 
-  openDisplayTarget(projectId: string, threadId: string, target: DisplayTarget): void {
-    this.tabContexts.openDisplayTarget(projectId, threadId, target)
+  openDisplayTarget(
+    projectId: string,
+    threadId: string,
+    target: DisplayTarget,
+    options: { focus?: boolean } = {}
+  ): void {
+    this.tabContexts.openDisplayTarget(projectId, threadId, target, options)
+  }
+
+  /** Every display tab mirroring a device, in whichever project's dock it sits. */
+  mirroredDisplayTabs(): MirroredDisplay[] {
+    return this.tabContexts.mirroredDisplayTabs()
+  }
+
+  /** The project that already mirrors this target, when one does. */
+  displayTabProjectFor(kind: DisplaySourceKind, sourceId: string): string | null {
+    return this.tabContexts.displayTabProjectFor(kind, sourceId)
   }
 
   applyDisplayTarget(
@@ -966,11 +987,11 @@ class ContextSidebarState {
       // A panel the user closed a moment ago reopens on the same filter, so
       // switching to Done and coming straight back stays on Done. Only a panel
       // left closed for longer than the grace window, or one this session never
-      // closed at all, opens on Attention: it is the one list that says what is
-      // waiting on the user right now.
+      // closed at all, opens on All: one list holding every kind and family is
+      // the panel's home now.
       const hiddenFor = Date.now() - this.notificationsHiddenAt
       if (this.notificationsHiddenAt === 0 || hiddenFor > NOTIFICATION_PANEL_TAB_GRACE_MS) {
-        notificationPanelState.setSubFilter('attention')
+        notificationPanelState.resetFilters()
       }
       this.stickyNotesVisible = false
       if (this.browser.visible) this.browser.detachView()
@@ -1118,6 +1139,16 @@ class ContextSidebarState {
     activity: AgentSubagentActivity
   ): void {
     this.tabContexts.updateSubagent(projectId, threadId, partId, activity)
+  }
+
+  /** Keep the app-owned draft run's live work on its already-open tab. */
+  updateSubagentDraftTrace(
+    projectId: string,
+    threadId: string,
+    partId: string,
+    trace: AgentPart[]
+  ): void {
+    this.tabContexts.updateSubagentDraftTrace(projectId, threadId, partId, trace)
   }
 
   focus(id: string): void {

@@ -47,7 +47,23 @@
     /** What the app is doing before the harness streams, e.g. preparing a remote
      *  checkout or cloning a repository. */
     note?: string | null
+    /** What this trace is, in the header. Defaults to "Working Trace". A trace
+     *  that belongs to another session   an Assignment draft offshoot bubbled
+     *  up into its coordinator thread   names itself here, so it never reads as
+     *  a second copy of the turn's own trace above it. */
+    headerLabel?: string
     initialOpen?: boolean
+    /**
+     * This trace's fold state, when the caller already keeps it.
+     *
+     * The conversation keeps the fold for the live turn so the line underneath
+     * can say what is happening while the trace is closed, and it is the only
+     * way those two can never disagree: passing it makes the trace draw exactly
+     * this value, and every change goes back through `onToggle` instead of being
+     * applied here. Leave it undefined for a trace that owns its own fold, which
+     * is every other trace.
+     */
+    folded?: boolean
     initialUserOpened?: boolean
     /** True when the user explicitly folded this turn's trace. A folded trace
      *  stays folded   it is never force-opened by the busy state or a remount
@@ -153,7 +169,9 @@
     rehydrated = false,
     foreignRun = false,
     note = null,
+    headerLabel = 'Working Trace',
     initialOpen = false,
+    folded,
     initialUserOpened = false,
     initiallyFolded = false,
     startTime,
@@ -196,13 +214,18 @@
   // restart mid-turn leaves `done` false for a turn that is no longer working)
   //   mounts folded instead of staying expanded forever.
   // svelte-ignore state_referenced_locally
-  let isOpen = $state(
+  let localOpen = $state(
     initialUserOpened || (busy && !done && !initiallyFolded && (open || initialOpen))
   )
   // svelte-ignore state_referenced_locally
-  let userOpened = $state(initialUserOpened)
+  let localUserOpened = $state(initialUserOpened)
   // svelte-ignore state_referenced_locally
-  let userFolded = $state(initiallyFolded)
+  let localUserFolded = $state(initiallyFolded)
+  /** True when the caller owns the fold, so this trace only reflects it. */
+  const controlled = $derived(folded !== undefined)
+  const isOpen = $derived(controlled ? !folded : localOpen)
+  const userOpened = $derived(controlled ? initialUserOpened : localUserOpened)
+  const userFolded = $derived(controlled ? initiallyFolded : localUserFolded)
   /** True once this mount has carried live work. A trace that was live and is
    *  not any more has settled, whether or not the turn reported its completion.
    *  Plain, not reactive: only the run-state effect below reads it. */
@@ -219,6 +242,20 @@
    *  it has not been captured yet. Plain not reactive: the run-state effect owns
    *  it. */
   let openedAtActivity = -1
+  /**
+   * The fold this effect last asked the owner for, and the activity it asked at.
+   *
+   * A controlled trace reports a fold to its owner and reads the answer back as
+   * `folded`. When the owner does not hand that answer back (the run store keeps
+   * its own idea of whether a trace is open, and a run whose stream and run state
+   * disagree clears it again), asking on every flush is an update-depth loop:
+   * the trace opens, the owner closes it, the effect opens it again, and Svelte
+   * aborts after a thousand passes with `effect_update_depth_exceeded`. One
+   * request per activity value is enough: either the owner honours it, or it has
+   * a reason this component cannot see, and repeating cannot change either.
+   * Plain not reactive: only this effect writes it.
+   */
+  let foldRequest: { open: boolean; activity: number } | null = null
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
   /** The trace's root. It exists only to find the transcript scroller the trace
@@ -229,9 +266,18 @@
   let traceBodyEl = $state<HTMLDivElement>()
   /** The transcript scroller that now drives the trace's own scrolling. */
   const scrollRoot = $derived(traceRootEl?.closest('.conversation-scroll') ?? null)
+  /** The element whose scrolling reaches this trace's older pages.
+   *
+   * A full-width trace has no scroller of its own, so the transcript arriving at
+   * its top is the reader reaching its oldest work. A group reply is height
+   * bounded and scrolls inside its own body, and a scroll never leaves that box,
+   * so the body is what paging has to listen to there. */
+  const pagingRoot = $derived(bodyMaxHeightRem === undefined ? scrollRoot : (traceBodyEl ?? null))
   /** The sticky header's measured height, published as a custom property so a
    *  chain's fold header pins directly beneath it instead of under it. */
   let traceHeaderHeight = $state(0)
+  /** How far below the scroller's top the oldest mounted work counts as the top. */
+  const pagingTopInset = $derived(bodyMaxHeightRem === undefined ? traceHeaderHeight : 0)
   /** The turn's trace as chains of thought, grouped from the mounted steps.
    *  A chain that produced an output is keyed by that output, which is the
    *  boundary that defines it, so paging older steps in above never remounts a
@@ -262,7 +308,7 @@
    *  moved down by exactly the height they added. The transcript turns native
    *  scroll anchoring off, so this is the only correction applied. */
   async function pullOlderPage(): Promise<void> {
-    const root = scrollRoot
+    const root = pagingRoot
     if (!root || loadingOlderParts || !olderPartsAvailable || !onLoadOlderParts) return
     loadingOlderParts = true
     const previousHeight = root.scrollHeight
@@ -275,7 +321,7 @@
       loadingOlderParts = false
     }
     await tick()
-    const scroller = scrollRoot
+    const scroller = pagingRoot
     if (!scroller) return
     scroller.scrollTop += scroller.scrollHeight - previousHeight
   }
@@ -285,7 +331,7 @@
    *  child is the sentinel: once a page lands above it the sentinel is pushed
    *  out of the zone, which is what stops one arrival loading page after page. */
   function traceTopReached(): boolean {
-    const root = scrollRoot
+    const root = pagingRoot
     const body = traceBodyEl
     if (!root || !body) return false
     const oldest = body.firstElementChild
@@ -293,7 +339,7 @@
     // has to pull its first page before it has a sentinel to measure.
     if (!oldest) return isOpen
     const offset = oldest.getBoundingClientRect().top - root.getBoundingClientRect().top
-    return offset >= traceHeaderHeight - 4 && offset <= traceHeaderHeight + TRACE_TOP_REACH
+    return offset >= pagingTopInset - 4 && offset <= pagingTopInset + TRACE_TOP_REACH
   }
 
   /** Fold the trace so its header keeps the screen position it already had.
@@ -319,12 +365,13 @@
     root.scrollTop = headerOffset
   }
 
-  // The transcript scroller drives this trace now. Reaching the top of the
-  // mounted work on a scroll-up loads one older page; following the live tail
-  // and keeping the reader's place across content growth stay the transcript's
-  // job, so nothing scrolls this trace by hand any more.
+  // The transcript scroller drives a full-width trace, and a height-bounded
+  // reply body drives its own. Reaching the top of the mounted work on a
+  // scroll-up loads one older page; following the live tail and keeping the
+  // reader's place across content growth stay the transcript's job, so nothing
+  // scrolls this trace by hand any more.
   $effect(() => {
-    const root = scrollRoot
+    const root = pagingRoot
     if (!root || !isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
     let previousTop = root.scrollTop
     const onScroll = (): void => {
@@ -354,7 +401,7 @@
     void isOpen
     void olderPartsAvailable
     if (!isOpen || !active || !olderPartsAvailable || !onLoadOlderParts) return
-    const root = scrollRoot
+    const root = pagingRoot
     const body = traceBodyEl
     if (!root || !body) return
     // Only a trace that already shows something waits for the transcript to
@@ -421,8 +468,39 @@
 
   onDestroy(() => imageUrls.destroy())
 
-  function notify(): void {
-    onToggle?.(isOpen, userOpened, userFolded)
+  /** Request a fold-state change.
+   *
+   * A controlled trace reports it to the owner, which stores it and hands it
+   * straight back as `folded`; an uncontrolled trace keeps it here. Either way
+   * nothing else in this component writes the fold, so the state the reader sees
+   * and the state the owner knows about are one value. */
+  function setFold(
+    nextOpen: boolean,
+    nextUserOpened = userOpened,
+    nextUserFolded = userFolded
+  ): void {
+    if (controlled) {
+      onToggle?.(nextOpen, nextUserOpened, nextUserFolded)
+      return
+    }
+    if (
+      localOpen === nextOpen &&
+      localUserOpened === nextUserOpened &&
+      localUserFolded === nextUserFolded
+    ) {
+      return
+    }
+    localOpen = nextOpen
+    localUserOpened = nextUserOpened
+    localUserFolded = nextUserFolded
+    onToggle?.(nextOpen, nextUserOpened, nextUserFolded)
+  }
+
+  /** Ask the owner for a fold, once per distinct request. */
+  function requestFold(open: boolean, activity: number): void {
+    if (foldRequest && foldRequest.open === open && foldRequest.activity === activity) return
+    foldRequest = { open, activity }
+    setFold(open)
   }
 
   $effect(() => {
@@ -430,13 +508,17 @@
     // this value stands still until the attempt really produces work.
     const activity = traceSpan?.end ?? traceSpan?.start ?? 0
     if (openedAtActivity < 0) openedAtActivity = isOpen ? 0 : activity
+    // The owner's answer arrived, so a later change may ask again.
+    if (foldRequest && foldRequest.open === isOpen) foldRequest = null
     // A live turn keeps its work on screen; a trace the user explicitly folded
     // stays folded while it works, so a harness busy blip never re-opens it.
     if (busy) {
       sawLiveWork = true
       if (visibleParts.length > 0 && !isOpen && !userFolded && activity > openedAtActivity) {
-        isOpen = true
-        notify()
+        requestFold(true, activity)
+        // This activity has now been opened for; asking again at the same mark
+        // is what turned a disagreeing owner into a loop.
+        openedAtActivity = activity
       }
       return
     }
@@ -449,19 +531,16 @@
     // opened is left exactly as they left it.
     if ((done || sawLiveWork) && isOpen && !userOpened) {
       foldToHeader()
-      isOpen = false
+      requestFold(false, activity)
       openedAtActivity = activity
-      notify()
     }
   })
 
   function onSummaryClick(event: MouseEvent): void {
     event.preventDefault()
     if (isOpen) foldToHeader()
-    isOpen = !isOpen
-    userOpened = isOpen
-    userFolded = !isOpen
-    notify()
+    const nextOpen = !isOpen
+    setFold(nextOpen, nextOpen, !nextOpen)
   }
 
   let lastReasoningId = $derived.by((): string | null => {
@@ -549,6 +628,7 @@
       {activeSubagentCount}
       {subagentParts}
       {coarsePointer}
+      {headerLabel}
       title={subagentBadgeTitleText}
       label={subagentBadgeLabelText}
       elapsedFor={subagentElapsed}

@@ -4,7 +4,7 @@ import {
   withWorkRegistryLock
 } from './work-folder-registry'
 import { updateWorkDetails } from './work-details-service'
-import { rename } from 'node:fs/promises'
+import { lstat, rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { DESIGN_EXPORT_FORMATS } from '../../lib/design/design-export'
 import { DESIGN_REVIEW_RUBRIC } from '../../lib/design/design-review'
@@ -386,6 +386,20 @@ export class DesignService {
           rawReveal === true,
           optionalKind(rawKind)
         )
+    )
+    // Where one design folder actually is on disk.
+    //
+    // The board can only reveal a folder in the file tree that is mounted on the
+    // scope the work belongs to. When it is not (the thread moved to another
+    // scope, the tree shows another project, the folder was moved), the honest
+    // answer is the real path, so the board can show the user where the work is
+    // instead of leaving the click with an error and nothing else.
+    ipcMain.handle('design:folderPath', async (_event, rawProjectId, rawThreadId, rawDirectory) =>
+      this.folderPath(
+        requireId(rawProjectId, 'project id'),
+        requireId(rawThreadId, 'thread id'),
+        rawDirectory
+      )
     )
     // The board's own organisation of the work: named groups, which design sits
     // in which, and how the board draws them. Every mutation answers with the
@@ -1325,6 +1339,35 @@ export class DesignService {
    * to re-read its screens whenever a turn settles, which is how a screen the
    * agent has just written appears on its own.
    */
+  /**
+   * The absolute folder of one design, or an empty string when it is not there.
+   *
+   * Read through the same scope root every other authored-work call resolves, so
+   * a folder the board lists is the folder this answers with. Existence is
+   * checked and nothing is written: this exists so a reveal that cannot land in
+   * the file tree can still put the user in front of the work in their own file
+   * manager.
+   */
+  async folderPath(projectId: string, threadId: string, directory: unknown): Promise<string> {
+    const scope = await authoredWorkRoot(this.options.database, projectId, threadId).catch(
+      () => null
+    )
+    if (!scope) return ''
+    try {
+      const folder = resolveServedFolder(
+        scope.path,
+        directory,
+        currentWorkRoot('design', projectId)
+      )
+      const metadata = await lstat(folder.absolute)
+      return metadata.isDirectory() ? folder.absolute : ''
+    } catch {
+      // An unresolvable or missing folder is not an error the caller can act on:
+      // it is the answer "there is nothing here to reveal".
+      return ''
+    }
+  }
+
   async screens(
     projectId: string,
     threadId: string,

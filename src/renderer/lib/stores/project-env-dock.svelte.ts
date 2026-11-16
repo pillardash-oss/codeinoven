@@ -41,6 +41,19 @@ class ProjectEnvDockState {
     this.minimized = false
   }
 
+  /**
+   * Point the open panel at another stored file.
+   *
+   * The dock stays mounted while a project is open, so the file picker writes the
+   * target here and the panel re-reads it through its sequence effect.
+   */
+  select(target: { group: string; fileName: string }): void {
+    this.group = target.group
+    this.fileName = target.fileName
+    this.focusName = null
+    this.sequence += 1
+  }
+
   /** Read the pending key once, so a later render does not move focus again. */
   takeFocusName(): string | null {
     const name = this.focusName

@@ -308,11 +308,28 @@ export interface DisplayTargetOffer {
   target: DisplaySourceDescriptor
   /** The thread whose work started it, when an agent started it. */
   threadId?: string
+  /**
+   * The project that thread belongs to.
+   *
+   * A device an agent started belongs to the thread that drove it, not to
+   * whichever thread the person happened to be reading, so the panel is opened
+   * where the owning thread lives. The project travels with the offer because
+   * the renderer cannot resolve a thread it is not standing in.
+   */
+  projectId?: string
   at: number
 }
 
 /** The device one display tab is mirroring, as the watch needs to know it. */
 export interface DisplayPanelTarget {
+  /**
+   * The docked tab doing the mirroring.
+   *
+   * The renderer reports every display tab it holds, one entry per tab, so the
+   * watcher can tell which project's mirror ended instead of learning only that
+   * one of them did. Two tabs in the same project may mirror two devices.
+   */
+  tabId: string
   kind: DisplaySourceKind
   sourceId: string
   /**
@@ -324,6 +341,14 @@ export interface DisplayPanelTarget {
    * as idle as every other row.
    */
   threadId: string | null
+  /**
+   * The project whose dock holds the tab doing the mirroring.
+   *
+   * Closing that tab stops the mirror for the threads that were driving a device
+   * in the same project. Without it a project switch, which simply shows another
+   * project's dock, would look like every mirror in the app ending at once.
+   */
+  projectId?: string
 }
 
 export const invokeDisplayContract = {
@@ -379,5 +404,8 @@ export const invokeDisplayContract = {
    * This is what stops the watch: while a device is on screen there is nothing to
    * find, and the offer that put it there must never be repeated.
    */
-  'display:notePanel': {} as Contract<[mirrored: DisplayPanelTarget | null], void>
+  'display:notePanel': {} as Contract<
+    [mirrored: DisplayPanelTarget | null, projectId?: string],
+    void
+  >
 }

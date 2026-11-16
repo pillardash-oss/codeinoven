@@ -16,6 +16,8 @@ import type { Database } from '../database/database'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { instanceRegistry } from '../system/instance-registry'
 import { Logger } from '../system/logger'
+import type { PtyService } from '../system/pty-service'
+import { localAiDownloadsInFlight } from '../local-ai/local-ai-downloads'
 import type { CleanShutdownStore } from '../system/clean-shutdown-store'
 
 /** The subset of bootstrap state the quit gate owns and mutates. */
@@ -31,6 +33,8 @@ export interface QuitLifecycleState {
   /** The process-wide download owner, or null when no window ever attached the
    *  browser. Read for the close prompt's downloads section. */
   browserDownloads: BrowserDownloadManager | null
+  /** The terminal owner, read for the Local AI rows still fetching their weights. */
+  ptyService: PtyService | null
   /** Proof of a deliberate exit, written by the forced-exit path. */
   cleanShutdownStore: CleanShutdownStore | null
 }
@@ -226,10 +230,17 @@ export function requestCloseConfirmation(deps: CloseConfirmationDeps): void {
   // holds open, whichever instance is quitting, because the manager and the
   // Chromium sessions it downloads through belong to this process.
   const downloads = install || park ? [] : (state.browserDownloads?.inFlight() ?? [])
+  // A model still arriving is the same shape as a download: a park keeps the
+  // backend and its PTYs alive, so it costs nothing and stays out of the prompt.
+  const localAiDownloads =
+    install || park || !state.ptyService
+      ? []
+      : localAiDownloadsInFlight(state.ptyService.runningCommands())
   sendToRenderer(window.webContents, 'window:confirmClose', {
     projects: working,
     files: [],
     downloads,
+    localAiDownloads,
     ...(park ? { park: true } : {})
   })
 }

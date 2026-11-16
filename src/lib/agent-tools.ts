@@ -3,6 +3,10 @@ import { APP_NAME } from './brand'
 import { BRAINSTORM_DOCUMENT_JSON_SCHEMA } from './brainstorm/brainstorm-validation'
 import { PRD_DOCUMENT_JSON_SCHEMA } from './prd/prd-validation'
 import { GATEWAY_TOOLS } from './gateway-tools'
+import { ASSIGNMENT_PLAN_SCHEMA } from './assignment/assignment-plan-schema'
+
+/** Re-exported so every tool catalog imports the graph from one owner. */
+export { ASSIGNMENT_PLAN_SCHEMA }
 
 /** Stable application-facing name for the canonical specification contract. */
 export const ENGINEERING_SPEC_TOOL_NAME = 'engineering_spec'
@@ -17,70 +21,6 @@ export const PROPOSE_MEMORY_TOOL_NAME = 'propose_memory'
 export const ENGINEERING_SPEC_REQUEST_PROMPT =
   `YOU MUST USE THE ${ENGINEERING_SPEC_TOOL_NAME} TOOL TO DEFINE THE SPEC, ` +
   'NOT A GENERIC TEXT RESPONSE. ENSURE YOU FOLLOW THE INSTRUCTIONS TO THE LETTER.'
-
-export const ASSIGNMENT_PLAN_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    title: { type: 'string', minLength: 1 },
-    summary: {
-      type: 'string',
-      minLength: 1,
-      description: 'Concise TL;DR of the Assignment execution plan.'
-    },
-    phases: {
-      type: 'array',
-      minItems: 1,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          id: { type: 'string', minLength: 1 },
-          title: { type: 'string', minLength: 1 },
-          description: { type: 'string', minLength: 1 },
-          info: { type: 'string' }
-        },
-        required: ['id', 'title', 'description']
-      }
-    },
-    tasks: {
-      type: 'array',
-      minItems: 1,
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          id: { type: 'string', minLength: 1 },
-          phaseId: { type: 'string', minLength: 1 },
-          title: { type: 'string', minLength: 1 },
-          description: { type: 'string', minLength: 1 },
-          info: { type: 'string' },
-          prompt: { type: 'string', minLength: 1 },
-          owner: { type: 'string', enum: ['senior', 'worker'] },
-          dependsOn: { type: 'array', items: { type: 'string', minLength: 1 } },
-          expectedFiles: { type: 'array', items: { type: 'string', minLength: 1 } },
-          auditChecklist: {
-            type: 'array',
-            minItems: 1,
-            items: { type: 'string', minLength: 1 }
-          }
-        },
-        required: [
-          'id',
-          'phaseId',
-          'title',
-          'description',
-          'prompt',
-          'owner',
-          'dependsOn',
-          'expectedFiles',
-          'auditChecklist'
-        ]
-      }
-    }
-  },
-  required: ['title', 'summary', 'phases', 'tasks']
-}
 
 /** Exact response schema supplied to the harness for specification generation. */
 export const SPEC_GENERATION_SCHEMA: Record<string, unknown> = {

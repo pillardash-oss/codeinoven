@@ -56,7 +56,7 @@ function generatedModel(value: unknown): AssignmentModelSelection | undefined {
   }
 }
 
-export function parseGeneratedAssignmentContent(value: unknown): AssignmentPlanContent {
+function mapGeneratedAssignmentContent(value: unknown): AssignmentPlanContent {
   if (!isRecord(value) || !Array.isArray(value.phases) || !Array.isArray(value.tasks)) {
     throw new Error('Generated assignment is invalid')
   }
@@ -93,17 +93,62 @@ export function parseGeneratedAssignmentContent(value: unknown): AssignmentPlanC
       status: 'planned'
     }
   })
-  const content: AssignmentPlanContent = {
+  return {
     title: requiredString(value.title, 'title'),
     summary: requiredString(value.summary, 'summary'),
     phases,
     tasks
   }
+}
+
+/** Validate and return a complete submitted graph. */
+export function parseGeneratedAssignmentContent(value: unknown): AssignmentPlanContent {
+  return requireValidAssignment(mapGeneratedAssignmentContent(value))
+}
+
+/**
+ * Parse one progressive part of a draft without judging it on its own: a part may
+ * add only tasks to phases the draft already holds, so the merged graph is what
+ * gets validated.
+ */
+export function parseAssignmentPlanPart(value: unknown): AssignmentPlanContent {
+  return mapGeneratedAssignmentContent(value)
+}
+
+/** Validate a whole graph, refusing it with every issue the validator found. */
+export function requireValidAssignment(content: AssignmentPlanContent): AssignmentPlanContent {
   const validation = validateAssignment(content)
   if (!validation.valid) {
     throw new Error(validation.issues.map((issue) => issue.message).join('; '))
   }
   return content
+}
+
+/**
+ * Extend a draft with a further validated part.
+ *
+ * Identity decides the outcome: a phase or task whose id the draft already holds
+ * keeps the draft's copy, so re-sending the same part is idempotent and a part can
+ * only add what the draft does not have yet. Title, summary and worker scope come
+ * from the part when it sets them, which is how a progressive author renames the
+ * plan it is building.
+ */
+export function mergeAssignmentPlanContent(
+  base: AssignmentPlanContent,
+  part: AssignmentPlanContent
+): AssignmentPlanContent {
+  const phases = new Map(base.phases.map((phase) => [phase.id, phase]))
+  for (const phase of part.phases) if (!phases.has(phase.id)) phases.set(phase.id, phase)
+  const tasks = new Map(base.tasks.map((task) => [task.id, task]))
+  for (const task of part.tasks) if (!tasks.has(task.id)) tasks.set(task.id, task)
+  const workerScope = part.workerScope ?? base.workerScope
+  return {
+    title: part.title.trim() ? part.title : base.title,
+    summary: part.summary.trim() ? part.summary : base.summary,
+    phases: [...phases.values()],
+    tasks: [...tasks.values()],
+    ...(workerScope ? { workerScope } : {})
+  }
 }
 
 function pathsOverlap(left: string, right: string): boolean {

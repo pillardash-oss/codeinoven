@@ -13,6 +13,7 @@ let settingsChunkPromise: Promise<unknown> | null = null
 let scopeChunkPromise: Promise<unknown> | null = null
 let browserChunkPromise: Promise<unknown> | null = null
 let taskManagerChunkPromise: Promise<unknown> | null = null
+let storageManagerChunkPromise: Promise<unknown> | null = null
 let updateBlockersChunkPromise: Promise<unknown> | null = null
 let spotlightChunkPromise: Promise<unknown> | null = null
 
@@ -60,6 +61,15 @@ export function preloadTaskManagerChunk(): void {
       throw error
     }
   )
+}
+
+/** Warm the Storage manager module chunk so opening the data-root view is instant. */
+export function preloadStorageManagerChunk(): void {
+  storageManagerChunkPromise ??=
+    import('$lib/components/workspace/StorageManagerModal.svelte').catch((error) => {
+      storageManagerChunkPromise = null
+      throw error
+    })
 }
 
 /**

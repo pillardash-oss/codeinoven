@@ -663,32 +663,53 @@ export class ChatEngineAssistantAuthoring {
       issueKind: issue.kind
     })
     this.host.state.assistantFallbackResumes.add(fallbackKey)
+    // Release the claim, then advance: the next candidate is read from the
+    // model that just failed to dispatch. The chain ends when the assistant has
+    // nothing left to try.
+    const advance = async (): Promise<void> => {
+      this.host.state.assistantFallbackResumes.delete(fallbackKey)
+      try {
+        await this.tryAssistantModelFallback(info, sessionId, issue)
+      } catch (error) {
+        Logger.error('Assistant model fallback recovery failed:', error)
+      }
+    }
     // Fire-and-forget: the resume re-enters this engine's own send pipeline,
     // and its first statement awaits, so the failing turn unwinds first.
-    void this.host
-      .continueScheduledThread({
-        sessionId,
+    void this.host.units['thread-lifecycle']
+      .resumeAssistantFallback({
         projectId: info.projectId,
         threadId: info.threadId,
-        harnessId: next.harnessId,
-        issueKind: issue.kind,
-        issueMessage: issue.message,
-        ...(issue.rawError === undefined ? {} : { rawError: issue.rawError })
+        sessionId
       })
-      .then(() => {
-        this.host.state.assistantFallbackResumes.delete(fallbackKey)
+      .then(async (outcome) => {
+        if (outcome === 'dispatched') {
+          this.host.state.assistantFallbackResumes.delete(fallbackKey)
+          return
+        }
+        if (outcome === 'busy') {
+          // A live turn already owns the session, so arming another model under
+          // it would race it. The claim is released and the chain stops here.
+          this.host.state.assistantFallbackResumes.delete(fallbackKey)
+          Logger.info('Assistant model fallback left a live turn alone', {
+            projectId: info.projectId,
+            threadId: info.threadId,
+            modelId: next.modelId
+          })
+          return
+        }
+        Logger.error('Assistant model fallback could not resume the task:', {
+          projectId: info.projectId,
+          threadId: info.threadId,
+          harnessId: next.harnessId,
+          providerId: next.providerId,
+          modelId: next.modelId
+        })
+        await advance()
       })
       .catch(async (error) => {
         Logger.error('Assistant model fallback resume failed:', error)
-        // Release the claim first, then advance: the next candidate is read
-        // from the model that just failed to dispatch. The chain ends when the
-        // assistant has nothing left to try.
-        this.host.state.assistantFallbackResumes.delete(fallbackKey)
-        try {
-          await this.tryAssistantModelFallback(info, sessionId, issue)
-        } catch (recoveryError) {
-          Logger.error('Assistant model fallback recovery failed:', recoveryError)
-        }
+        await advance()
       })
     return true
   }

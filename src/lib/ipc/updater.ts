@@ -3,7 +3,7 @@
  * Runtime handlers still validate untrusted values at the IPC boundary.
  */
 import type { BrowserDownload } from './browser'
-import type { CloseConfirmationProject } from './notifications'
+import type { CloseConfirmationLocalAiDownload, CloseConfirmationProject } from './notifications'
 
 export interface UpdaterStatus {
   canAutoUpdate: boolean
@@ -84,6 +84,14 @@ export interface UpdateBlockers {
    * they stopped.
    */
   downloads: BrowserDownload[]
+  /**
+   * Local AI models whose weights are still arriving, one per row fetching.
+   *
+   * Listed separately from the browser transfers because installing costs them
+   * different things: a browser download keeps its bytes, while an MLX model
+   * fetch starts over, since only llama.cpp resumes a partial file.
+   */
+  localAiDownloads: CloseConfirmationLocalAiDownload[]
 }
 
 /**

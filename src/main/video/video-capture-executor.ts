@@ -1,4 +1,4 @@
-import { authoredWorkRootSync } from '../design/authored-work-root'
+import { authoredWorkRoot } from '../design/authored-work-root'
 import { videoClampTime } from '../../lib/video/project'
 import { resolveServedFolder } from '../preview/served-folder'
 import { currentWorkRoot } from '../design/work-roots-state'
@@ -59,7 +59,7 @@ export function createVideoCaptureExecutor(
     if (!browser) {
       throw new Error('A frame cannot be captured while the app has no window to render it in.')
     }
-    const scope = authoredWorkRootSync(options.database, context.projectId, context.threadId)
+    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
     const directory = resolveServedFolder(
       scope.path,
       input['directory'],

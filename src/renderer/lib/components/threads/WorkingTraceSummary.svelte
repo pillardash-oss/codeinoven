@@ -26,6 +26,10 @@
     subagentParts: SubagentPart[]
     /** Touch devices get the bottom sheet instead of the hover dropdown. */
     coarsePointer: boolean
+    /** What this trace is, in the header. A trace of another session (an
+     *  Assignment draft offshoot) names itself so it cannot be read as a repeat
+     *  of the turn's own trace. */
+    headerLabel: string
     /** Sub-agent badge wording, owned by the parent's derivations. */
     title: string
     label: string
@@ -65,6 +69,7 @@
     activeSubagentCount,
     subagentParts,
     coarsePointer,
+    headerLabel,
     title,
     label,
     elapsedFor,
@@ -94,6 +99,13 @@
   const measureLabel = $derived(
     [stepLabel, durationLabel].filter((part): part is string => part !== null).join(' · ')
   )
+  // A trace of another session is not "behind this answer": the same fold control
+  // says what it actually folds, so the two traces never read as one another.
+  const foldSubject = $derived(
+    headerLabel === 'Working Trace'
+      ? 'the work behind this answer'
+      : `the ${headerLabel.toLowerCase()}`
+  )
 </script>
 
 <div
@@ -108,8 +120,8 @@
     type="button"
     class="absolute inset-0 cursor-pointer"
     aria-expanded={open}
-    aria-label={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
-    title={open ? 'Hide the work behind this answer' : 'Show the work behind this answer'}
+    aria-label={open ? `Hide ${foldSubject}` : `Show ${foldSubject}`}
+    title={open ? `Hide ${foldSubject}` : `Show ${foldSubject}`}
     onclick={onToggle}
   ></button>
   <div
@@ -124,7 +136,7 @@
         <CioTools size={12} />
       {/if}
     </span>
-    <span class="whitespace-nowrap">Working Trace</span>
+    <span class="whitespace-nowrap">{headerLabel}</span>
     {#if measureLabel}
       <span
         class="whitespace-nowrap text-[0.625rem] tabular-nums text-dimmed transition-colors group-hover/trace:text-foreground"

@@ -907,6 +907,15 @@ export class ChatEngineAssignmentWorkers {
       ) {
         continue
       }
+      // A worker that already reported is finished, not missing. Its task stays
+      // `running` until the coordinator reviews that report, so recovering it
+      // here threw a valid report away, flipped the task to `attention` and
+      // re-dispatched work that had already passed review.
+      if (task.report && (!task.startedAt || task.report.reportedAt >= task.startedAt)) continue
+      // A retry-paused worker is waiting for its own scheduled resume, which is
+      // the app's clock and not a missing worker: recovering it discarded the
+      // backoff and restarted the turn the retry was about to continue.
+      if (worker?.status === 'working-paused') continue
       current = await this.host.state.assignmentEngine.stopWorker(current.id, workerThreadId)
       Logger.info('Recovered unavailable Assignment worker for automatic re-dispatch', {
         assignmentId: current.id,
@@ -1001,10 +1010,28 @@ export class ChatEngineAssignmentWorkers {
     // whole contract. Turning reporting off still replaces both with the explicit
     // disabled instruction.
     const workerReporting = workerReportsToCoordinator(result.thread.settings)
-    const reportingPrompt =
+    let reportingPrompt =
       resumingWorker && workerReporting
         ? `Reporting is unchanged: submit fresh baseline evidence before the correction and check evidence after verifying it, each with its own operationId, then POST report-task with assignmentId ${result.assignment.id}, taskId ${result.task.id}, and workerThreadId ${result.thread.id}.`
         : reportInstruction
+    if (resumingWorker && workerReporting) {
+      // A resumed worker keeps its old context, and that context holds the API
+      // address and key from whenever it was briefed. After a restart those are
+      // stale, so the current pair travels with the reminder that tells it to
+      // report.
+      await this.host.units['assignment-run'].ensureAssignmentApi()
+      reportingPrompt = [
+        reportingPrompt,
+        this.host.units['assignment-run'].assignmentApiReconnectInstructions(
+          this.host.units['assignment-run'].assignmentApiCapability({
+            role: 'worker',
+            assignmentId: result.assignment.id,
+            threadId: result.thread.id,
+            taskId: result.task.id
+          })
+        )
+      ].join('\n\n')
+    }
     const taskPrompt = resumingWorker
       ? [
           `Continue Assignment task “${result.task.title}” in this thread. Its full brief, scope and the work already done are in your existing context, so do not start the task over from the beginning.`,

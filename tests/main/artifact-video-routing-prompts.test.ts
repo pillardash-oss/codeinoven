@@ -62,7 +62,11 @@ describe('video request routing', () => {
     expect(docs).toContain('## Work with what is installed')
     expect(docs).toContain('needs nothing installed')
     expect(docs).toContain('ask for it in the same turn')
-    expect(docs).toContain('Never install a pack')
+    expect(docs).toContain('Never download a model')
+    expect(docs).toContain('only in project scratch')
+    // The app ships no matting stack and no runtime installer for one any more.
+    expect(docs).not.toContain('optional video pack')
+    expect(docs).not.toContain('Settings > Design and video')
   })
 
   it('routes the turn instruction through the video capability and still delivers inline', () => {

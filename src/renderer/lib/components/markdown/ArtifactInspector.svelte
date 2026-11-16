@@ -570,7 +570,11 @@ ${appInteractiveElementRules()}`
     kind === 'svg'
       ? `:host([data-fill]) .${ARTIFACT_STAGE_CLASS} { padding: 1.25rem; }
 .${ARTIFACT_STAGE_CLASS} { display: flex; align-items: center; justify-content: center; }
-.${ARTIFACT_STAGE_CLASS} > svg { max-width: 100%; width: 100%; height: auto; fill: currentColor; }
+.${ARTIFACT_STAGE_CLASS} > svg { max-width: 100%; width: 100%; height: auto; }
+/* Only a picture that states no fill of its own takes the text colour. An
+   authored \`fill="none"\` is line art, and a stage rule would override the
+   attribute and draw its strokes back as solid shapes. */
+.${ARTIFACT_STAGE_CLASS} > svg:not([fill]) { fill: currentColor; }
 :host([data-fill]) .${ARTIFACT_STAGE_CLASS} > svg { width: auto; max-height: 100%; }`
       : `:host([data-fill]) .${ARTIFACT_STAGE_CLASS} { overflow: auto; }`
   )

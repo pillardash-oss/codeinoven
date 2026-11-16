@@ -1,5 +1,5 @@
-import { chmod, readFile, writeFile } from 'fs/promises'
-import { basename, isAbsolute, relative, resolve, sep } from 'path'
+import { chmod, mkdir, readFile, writeFile } from 'fs/promises'
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'path'
 import {
   compareEnvFileNames,
   parseProjectEnvFile,
@@ -27,6 +27,10 @@ import type { SecretsService } from './secrets-service'
 const VALUE_LIMIT = 16_384
 /** File mode for a written ENV file or its backup: owner-only. */
 const SECRET_FILE_MODE = 0o600
+/** Directory mode for the backup store: owner-only, like the files inside it. */
+const SECRET_DIRECTORY_MODE = 0o700
+/** The ignored project folder backups live in, never the repository working tree. */
+const SECRETS_BACKUP_ROOT = '.cio/secrets'
 
 /** The vault operations a project env needs; the secret service satisfies it. */
 export type ProjectEnvSecretsPort = Pick<SecretsService, 'save' | 'resolve' | 'exists' | 'remove'>
@@ -264,13 +268,14 @@ export class ProjectEnvService {
       return { path: relativePath, changed: false }
     }
 
-    if (existing !== null) await writePrivateFile(`${absolute}.cio-backup`, existing)
+    const backupPath =
+      existing !== null ? await writeSecretsBackup(projectRoot, relativePath, existing) : null
     await writePrivateFile(absolute, content)
     await this.recordWrittenTo(input, files, file, relativePath)
     return {
       path: relativePath,
       changed: true,
-      ...(existing !== null ? { backupPath: `${relativePath}.cio-backup` } : {})
+      ...(backupPath === null ? {} : { backupPath })
     }
   }
 
@@ -455,8 +460,11 @@ export class ProjectEnvService {
     file.updatedAt = Date.now()
     await this.dependencies.store.writeProject(input.projectId, files)
 
-    const backupAbsolute = `${absolute}.cio-backup`
-    await writePrivateFile(backupAbsolute, contents)
+    const backupPath = await writeSecretsBackup(
+      projectRoot,
+      input.path.trim().replace(/^\.\//u, ''),
+      contents
+    )
     const rewritten = buildRewrittenFile(lines, references)
     await writePrivateFile(absolute, rewritten)
 
@@ -470,7 +478,7 @@ export class ProjectEnvService {
         skipped
       },
       files: await this.listProjectEnv(input.projectId),
-      backupPath: `${input.path}.cio-backup`
+      backupPath
     }
   }
 
@@ -708,7 +716,31 @@ function resolveProjectFile(projectRoot: string, projectRelativePath: string): s
     throw new Error('That env file is outside the project')
   }
   if (basename(absolute).startsWith('.cio-backup')) throw new Error('Import the env file itself')
+  // `.cio` is the app's own ignored folder, so an env file there is a backup copy
+  // rather than the project's file.
+  if (cleaned.replace(/^\.\//u, '').split('/')[0] === '.cio') {
+    throw new Error('Import the env file from the project, not from .cio')
+  }
   return absolute
+}
+
+/**
+ * Keep the previous contents of one env file.
+ *
+ * The copy holds plaintext, so it can never sit beside the managed file where a
+ * commit could pick it up by mistake. It lives inside the project's own ignored
+ * `.cio`, mirrored at the same relative location, owner-only.
+ */
+async function writeSecretsBackup(
+  projectRoot: string,
+  relativePath: string,
+  contents: string
+): Promise<string> {
+  const relativeBackup = `${SECRETS_BACKUP_ROOT}/${relativePath}`
+  const absolute = resolve(projectRoot, ...relativeBackup.split('/'))
+  await mkdir(dirname(absolute), { recursive: true, mode: SECRET_DIRECTORY_MODE })
+  await writePrivateFile(absolute, contents)
+  return relativeBackup
 }
 
 async function writePrivateFile(path: string, contents: string): Promise<void> {
