@@ -309,6 +309,10 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
   /** Append user input to Claude's realtime stream while its turn is active. */
   async steerPrompt(projectPath: string, options: SteerPromptOptions): Promise<void> {
     const session = await this.requireSession(projectPath, options.sessionId)
+    // A steer that lands after the final result finds stdin already closed:
+    // writing there drops it silently and the turn settles without it. Resume
+    // the session with the steer as its own turn instead.
+    if (!this.activeInputOpen(session.id)) return super.steerPrompt(projectPath, options)
     this.writeActiveInput(
       session.id,
       await claudeStreamInput(options.text, options.attachments, 'now')
