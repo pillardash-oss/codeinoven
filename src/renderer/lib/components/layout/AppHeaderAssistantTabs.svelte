@@ -5,6 +5,7 @@
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { tick } from 'svelte'
+  import type { Attachment } from 'svelte/attachments'
   import { Portal } from 'bits-ui'
   import PickerMenuShell from '$lib/components/shared/PickerMenuShell.svelte'
   import ThreadDropdown from '$lib/components/shared/ThreadDropdown.svelte'
@@ -26,6 +27,7 @@
     getAssistantIcon
   } from '$lib/assistant-icons'
   import { assistantHeaderTabs } from '$lib/stores/assistant-header-tabs.svelte'
+  import { assistantTabOrder, type AssistantTabGroup } from '$lib/stores/assistant-tab-order.svelte'
   import { assistants as assistantStore } from '$lib/stores/assistants.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -43,10 +45,17 @@
    *
    * Pinned threads keep their own group nearest the name, divided from the rest by
    * a rule: the two groups never mix, and each holds its newest few tabs with the
-   * remainder behind a count. Hovering a tab opens the same thread popover a row
-   * does, the assistant's mark becomes an ellipsis under the pointer to say a menu
-   * is there, right-clicking a tab opens that thread's actions, and right-clicking
-   * the name opens the assistant's own menu.
+   * remainder behind a count. The thread on screen always keeps a tab of its own,
+   * taking the free slot after its group's window when it is not among them, so a
+   * thread picked from the count appears without pushing one of the few tabs the
+   * group is allowed out of sight.
+   *
+   * Hovering a tab opens the same thread popover a row does, the assistant's mark
+   * becomes an ellipsis under the pointer to say a menu is there, right-clicking a
+   * tab opens that thread's actions, and right-clicking the name opens the
+   * assistant's own menu. A tab is also the handle that rearranges the strip:
+   * dragging one lands it beside another inside its own group, and the chosen
+   * arrangement is remembered instead of falling back to recency.
    */
 
   /** Unpinned tabs shown before the rest fold behind the count. */
@@ -56,6 +65,9 @@
   /** Threads with no assistant still need a strip when one of them is open, so
    *  they gather under this name instead of vanishing with the sidebar rows. */
   const UNASSIGNED_LABEL = 'Tasks'
+  /** The order key the assistant-less tasks use: they have no assistant id, but
+   *  they are still one strip the user can arrange. */
+  const UNASSIGNED_ORDER_KEY = 'unassigned'
 
   let selectedThread = $derived(workspaceState.selectedThread)
   let groupAssistant = $derived(
@@ -98,18 +110,46 @@
   let pinnedGroup = $derived(groupThreads.filter((thread) => thread.pinned))
   let openGroup = $derived(groupThreads.filter((thread) => !thread.pinned))
 
+  /** Whose arrangement the strip remembers, per group. */
+  let orderKey = $derived(groupAssistant?.id ?? UNASSIGNED_ORDER_KEY)
+
   /**
-   * The newest few of one group keep a tab, and the open thread always does,
-   * taking the last slot when it is not among them.
+   * One group in the order the user dragged it into, with any thread that
+   * arrangement has never seen ahead of the rest in recency order: a task just
+   * created, or a thread just pinned, belongs at the head where it is found.
    */
-  function withActive(list: readonly Thread[], limit: number): Thread[] {
-    const latest = list.slice(0, limit)
-    const active = selectedThread
-    if (active && !latest.some((thread) => thread.id === active.id)) {
-      const open = list.find((thread) => thread.id === active.id)
-      if (open) latest.splice(Math.max(0, limit - 1), latest.length, open)
+  function arranged(list: readonly Thread[], stored: readonly string[]): Thread[] {
+    if (stored.length === 0) return [...list]
+    const known = new SvelteSet(stored)
+    const placed: Thread[] = []
+    for (const id of stored) {
+      const thread = list.find((candidate) => candidate.id === id)
+      if (thread) placed.push(thread)
     }
-    return latest
+    return [...list.filter((thread) => !known.has(thread.id)), ...placed]
+  }
+
+  let orderedPinned = $derived(
+    arranged(pinnedGroup, assistantTabOrder.orderFor(orderKey, 'pinned'))
+  )
+  let orderedOpen = $derived(arranged(openGroup, assistantTabOrder.orderFor(orderKey, 'open')))
+
+  /** The few tabs one group may hold before the rest fold behind the count. */
+  let windowPinned = $derived(orderedPinned.slice(0, PINNED_TABS))
+  let windowOpen = $derived(orderedOpen.slice(0, OPEN_TABS))
+
+  /**
+   * The thread on screen always keeps a tab, taking the free slot after its
+   * group's window when it is not among them. Picking another thread from the
+   * count therefore replaces that one extra slot instead of evicting a tab the
+   * user did not touch.
+   */
+  function withActiveSlot(all: readonly Thread[], base: readonly Thread[]): Thread[] {
+    const active = selectedThread
+    if (!active) return [...base]
+    if (base.some((thread) => thread.id === active.id)) return [...base]
+    const open = all.find((thread) => thread.id === active.id)
+    return open ? [...base, open] : [...base]
   }
 
   function withoutShown(list: readonly Thread[], shown: readonly Thread[]): Thread[] {
@@ -117,10 +157,10 @@
     return list.filter((thread) => !ids.has(thread.id))
   }
 
-  let visiblePinned = $derived(withActive(pinnedGroup, PINNED_TABS))
-  let visibleOpen = $derived(withActive(openGroup, OPEN_TABS))
-  let hiddenPinned = $derived(withoutShown(pinnedGroup, visiblePinned))
-  let hiddenOpen = $derived(withoutShown(openGroup, visibleOpen))
+  let visiblePinned = $derived(withActiveSlot(orderedPinned, windowPinned))
+  let visibleOpen = $derived(withActiveSlot(orderedOpen, windowOpen))
+  let hiddenPinned = $derived(withoutShown(orderedPinned, visiblePinned))
+  let hiddenOpen = $derived(withoutShown(orderedOpen, visibleOpen))
 
   let activeId = $derived(selectedThread?.id ?? null)
 
@@ -276,6 +316,105 @@
     contextAnchor = null
   }
 
+  // ─── Arranging the tabs ───────────────────────────────────────────────────
+  /**
+   * A tab is the strip's drag handle and its drop target. A drag only ever lands
+   * inside the group it started in: pinning is the way a thread crosses the rule
+   * between the two, so a drop can never silently pin or unpin anything.
+   */
+  let dragId = $state<string | null>(null)
+  let dragGroup = $state<AssistantTabGroup | null>(null)
+  let dropTarget = $state<{ id: string; edge: 'before' | 'after' } | null>(null)
+
+  function setDragGhost(event: DragEvent, label: string): void {
+    const ghost = document.createElement('div')
+    ghost.textContent = label
+    ghost.style.cssText =
+      'position:absolute;top:-1000px;left:-1000px;padding:3px 8px;background:var(--color-surface);border:1px solid var(--color-border);font-size:13px;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.15)'
+    document.body.appendChild(ghost)
+    event.dataTransfer?.setDragImage(ghost, 0, 0)
+    requestAnimationFrame(() => document.body.removeChild(ghost))
+  }
+
+  function startDrag(event: DragEvent, thread: Thread, group: AssistantTabGroup): void {
+    hover.hide()
+    dragId = thread.id
+    dragGroup = group
+    dropTarget = null
+    if (!event.dataTransfer) return
+    event.dataTransfer.effectAllowed = 'move'
+    // A private type keeps a tab reorder out of every text and file drop handler
+    // that watches the document; the id itself is read from component state.
+    event.dataTransfer.setData('application/x-cio-assistant-tab', thread.id)
+    setDragGhost(event, thread.title)
+  }
+
+  function overTab(event: DragEvent, thread: Thread, group: AssistantTabGroup): void {
+    if (!dragId || dragId === thread.id || group !== dragGroup) return
+    event.preventDefault()
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
+    const box = (event.currentTarget as HTMLElement).getBoundingClientRect()
+    dropTarget = {
+      id: thread.id,
+      edge: event.clientX < box.left + box.width / 2 ? 'before' : 'after'
+    }
+  }
+
+  function endDrag(): void {
+    dragId = null
+    dragGroup = null
+    dropTarget = null
+  }
+
+  /**
+   * Land the dragged tab beside the one it was dropped on, then remember the
+   * whole group's arrangement, hidden tabs included, so nothing behind the count
+   * changes place behind the user's back.
+   */
+  function dropTab(event: DragEvent, thread: Thread, group: AssistantTabGroup): void {
+    const draggedId = dragId
+    // A file or text drag the tab never accepted must keep falling through to the
+    // handlers that do accept it.
+    if (!draggedId) return
+    event.preventDefault()
+    const from = dragGroup
+    const edge = dropTarget?.id === thread.id ? dropTarget.edge : 'after'
+    endDrag()
+    if (draggedId === thread.id || from !== group) return
+
+    const shown = group === 'pinned' ? visiblePinned : visibleOpen
+    const ids = shown.map((entry) => entry.id)
+    const start = ids.indexOf(draggedId)
+    const landing = ids.indexOf(thread.id)
+    if (start === -1 || landing === -1 || start === landing) return
+    ids.splice(start, 1)
+    const target = ids.indexOf(thread.id)
+    ids.splice(edge === 'before' ? target : target + 1, 0, draggedId)
+
+    const hidden = group === 'pinned' ? hiddenPinned : hiddenOpen
+    assistantTabOrder.place(orderKey, group, [...ids, ...hidden.map((entry) => entry.id)])
+  }
+
+  /**
+   * Bring the open thread's tab into the strip's own viewport.
+   *
+   * The strip scrolls sideways and the open group sits at its right edge, so a
+   * tab picked from the count can land outside the visible slice. The reveal
+   * follows the tab, never the pointer, and only moves the strip when that tab
+   * is not already fully in view.
+   */
+  function revealWhenActive(isActive: boolean): Attachment<HTMLElement> {
+    return (node) => {
+      if (!isActive) return
+      const strip = node.closest<HTMLElement>('[data-tab-scroll]')
+      if (!strip) return
+      const box = node.getBoundingClientRect()
+      const frame = strip.getBoundingClientRect()
+      if (box.right > frame.right) strip.scrollLeft += box.right - frame.right
+      else if (box.left < frame.left) strip.scrollLeft -= frame.left - box.left
+    }
+  }
+
   $effect(() => relativeTimeClock.hold())
 </script>
 
@@ -338,6 +477,7 @@
 
   {#if !isDon}
     <div
+      data-tab-scroll
       class="min-w-0 flex-1 overflow-x-auto overscroll-x-contain"
       aria-label="{groupLabel} threads"
     >
@@ -473,15 +613,27 @@
 
 {#snippet threadTab(thread: Thread, pinned: boolean)}
   {@const active = thread.id === activeId}
+  {@const group: AssistantTabGroup = pinned ? 'pinned' : 'open'}
   {@const status = statusBadgeForThread(thread, isThreadLiveWorking(thread))}
+  {@const edge = dropTarget?.id === thread.id ? dropTarget.edge : null}
+  {@const dragging = dragId === thread.id}
   <div
     role="group"
     aria-label={thread.title}
+    draggable="true"
+    ondragstart={(event: DragEvent) => startDrag(event, thread, group)}
+    ondragover={(event: DragEvent) => overTab(event, thread, group)}
+    ondragleave={() => {
+      if (dropTarget?.id === thread.id) dropTarget = null
+    }}
+    ondrop={(event: DragEvent) => dropTab(event, thread, group)}
+    ondragend={endDrag}
+    {@attach revealWhenActive(active)}
     class="relative flex min-h-8 min-w-[3rem] items-center gap-1 overflow-hidden pl-1 pr-0.5 text-[0.6875rem] transition-colors {pinned
       ? 'max-w-28'
       : 'max-w-44'} {active
       ? 'bg-selected text-foreground'
-      : 'text-muted hover:bg-elevated hover:text-foreground'}"
+      : 'text-muted hover:bg-elevated hover:text-foreground'} {dragging ? 'opacity-50' : ''}"
     onpointerenter={(event: PointerEvent) => tabEnter(event, thread)}
     onpointerleave={tabLeave}
     oncontextmenu={(event: MouseEvent) => {
@@ -489,6 +641,13 @@
       void openThreadMenu(thread, event.currentTarget as HTMLElement)
     }}
   >
+    {#if edge === 'before'}
+      <!-- Where the dragged tab would land: the tab's own leading edge. -->
+      <span
+        class="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-primary"
+        aria-hidden="true"
+      ></span>
+    {/if}
     {#if pinned}
       <!-- A pinned tab says so at its left edge, and the pin is the way back:
            clicking it unpins the thread and the tab leaves this group. -->
@@ -536,6 +695,12 @@
     >
       <CioClose size={10} />
     </button>
+    {#if edge === 'after'}
+      <span
+        class="pointer-events-none absolute inset-y-0 right-0 w-0.5 bg-primary"
+        aria-hidden="true"
+      ></span>
+    {/if}
     {#if active}
       <span
         class="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-foreground"
