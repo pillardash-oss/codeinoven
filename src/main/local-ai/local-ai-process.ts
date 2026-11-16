@@ -79,6 +79,25 @@ export async function stopLocalAiServer(port: number, runtime: LocalAiRuntimeId)
 }
 
 /**
+ * Whether one of our engines is still holding this port.
+ *
+ * A row's status is what the *page* did, not what the machine is running: a model
+ * whose generation thread died reads as failed while its process keeps the port and
+ * keeps the weights in memory. The card asks this so it can offer the stop that
+ * actually releases them, instead of only a start that would need to take the port
+ * over first.
+ */
+export async function localAiServerRunning(
+  port: number,
+  runtime: LocalAiRuntimeId
+): Promise<boolean> {
+  for (const pid of await listeningPids(port)) {
+    if (isEngineProcess(await processCommand(pid), runtime)) return true
+  }
+  return false
+}
+
+/**
  * Ask a running server whether it answers, and which model it holds.
  *
  * This is the only thing that flips a card to "running": a process that is alive

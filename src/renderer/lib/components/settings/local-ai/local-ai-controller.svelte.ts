@@ -109,6 +109,8 @@ export class LocalAiController {
   modelSizes = $state<Record<string, number>>({})
   /** Paths already asked about, so a card re-render never walks a model twice. */
   private measured = new SvelteSet<string>()
+  /** Rows whose port one of our engines still holds, whatever the status says. */
+  serverOnPort = $state<Record<string, boolean>>({})
   /** The prompt cache cap main computed for this machine, read once. */
   private promptCacheBudget: number | null = null
   private handles = new SvelteMap<string, RunningHandle>()
@@ -124,6 +126,32 @@ export class LocalAiController {
   isBusy(entryId: string): boolean {
     const status = this.statusOf(entryId)
     return status === 'starting' || status === 'running'
+  }
+
+  /** Whether a row's own engine process is still holding its port. */
+  holdsPort(entryId: string): boolean {
+    return this.serverOnPort[entryId] === true
+  }
+
+  /**
+   * Ask main whether this row's port is still held by one of our engines.
+   *
+   * The row's status is what the page managed to do, not what the machine runs, so
+   * a failed load can leave a process holding the weights. This is what lets the
+   * card show the stop that frees them.
+   */
+  async refreshPortHolder(entry: LlamaCppServerEntry): Promise<void> {
+    const held = await invoke('localAi:serverRunning', entry.port, entry.runtime).catch(() => false)
+    this.serverOnPort = { ...this.serverOnPort, [entry.id]: held }
+  }
+
+  /** Stop whatever engine process holds this row's port, and say it is gone. */
+  async stopPortHolder(entry: LlamaCppServerEntry): Promise<void> {
+    await invoke('localAi:stopServer', entry.port, entry.runtime).catch(() => false)
+    this.serverOnPort = { ...this.serverOnPort, [entry.id]: false }
+    this.setLoadedModel(entry.id, '')
+    if (!this.handles.has(entry.id)) this.setStatus(entry.id, 'stopped')
+    this.notice = { ...this.notice, [entry.id]: '' }
   }
 
   /**
@@ -445,7 +473,10 @@ export class LocalAiController {
     }
     // Nothing of this row is answering, so show what the last run left in its
     // log file instead of an empty terminal.
+    // A failed load leaves a process holding the port while the row reads as
+    // stopped, so the card is told whether one is there to stop.
     await this.seedLog(entry)
+    await this.refreshPortHolder(entry)
   }
 
   /** Take over a server that is already answering this row's model. */
@@ -673,6 +704,7 @@ export class LocalAiController {
     this.setStatus(entryId, 'failed')
     this.setLoadedModel(entryId, '')
     this.notice = { ...this.notice, [entryId]: describeGenerationFailure(reason) }
+    void this.refreshPortHolder(handle.entry)
   }
 
   private handleExit(entryId: string, code: unknown): void {
@@ -688,6 +720,7 @@ export class LocalAiController {
     }
     this.setStatus(entryId, 'failed')
     this.setLoadedModel(entryId, '')
+    void this.refreshPortHolder(handle.entry)
     const exitCode = typeof code === 'number' ? code : 0
     this.notice = {
       ...this.notice,

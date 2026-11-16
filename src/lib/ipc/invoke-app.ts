@@ -68,6 +68,8 @@ export const invokeAppContract = {
   >,
   /** End the server holding a port when no PTY of the app owns it. */
   'localAi:stopServer': {} as Contract<[port: number, runtime: LocalAiRuntimeId], boolean>,
+  /** Whether one of our engines still holds a port, whatever a row's status says. */
+  'localAi:serverRunning': {} as Contract<[port: number, runtime: LocalAiRuntimeId], boolean>,
   /** The file a row's server writes its log to, for llama.cpp rows only. */
   'localAi:logPath': {} as Contract<[entryId: string], string>,
   /** What a row's log file already holds, so an adopted server shows its history. */

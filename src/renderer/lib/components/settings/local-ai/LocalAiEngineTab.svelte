@@ -319,6 +319,8 @@
                 onDelete={() => (pendingDelete = entry)}
                 onReveal={() => void reveal(entry)}
                 onDeleteModel={() => (pendingModelDelete = entry)}
+                portHeld={localAi.holdsPort(entry.id)}
+                onStopPortHolder={() => void localAi.stopPortHolder(entry)}
               />
             {/each}
           </section>

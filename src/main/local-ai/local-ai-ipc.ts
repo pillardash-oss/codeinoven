@@ -31,7 +31,7 @@ import {
 } from '../../lib/llama-cpp'
 import { detectLlamaCppRuntime } from './llama-cpp-runtime'
 import { detectMlxRuntime } from './mlx-runtime'
-import { probeLocalAiServer, stopLocalAiServer } from './local-ai-process'
+import { localAiServerRunning, probeLocalAiServer, stopLocalAiServer } from './local-ai-process'
 import { followLocalAiLog, localAiLogPath, tailLocalAiLog } from './local-ai-log'
 import { measureModelPath, resolveModelLocation } from './local-ai-model-location'
 import { inspectLocalAiRepo } from './local-ai-repo-profile'
@@ -57,6 +57,13 @@ export function registerLocalAiIpc(
   /** The engine's binary, its version, and the installer that manages it here. */
   ipcMain.handle('localAi:detect', (_, rawRuntime: unknown): Promise<LocalAiRuntimeStatus> => {
     return readRuntime(rawRuntime) === 'mlx' ? detectMlxRuntime() : detectLlamaCppRuntime()
+  })
+
+  /** Whether one of our engines still holds this row's port, whatever its status. */
+  ipcMain.handle('localAi:serverRunning', async (_, rawPort: unknown, rawRuntime: unknown) => {
+    const port = typeof rawPort === 'number' ? rawPort : Number.NaN
+    if (!isLlamaCppPortValid(port)) return false
+    return localAiServerRunning(port, readRuntime(rawRuntime))
   })
 
   /** Ends the process holding a row's port when no PTY of ours owns it. */

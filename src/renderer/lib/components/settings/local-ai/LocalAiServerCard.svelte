@@ -44,6 +44,10 @@
     onReveal: () => void
     /** Delete the model the app owns, after the page asks the user to confirm. */
     onDeleteModel: () => void
+    /** True while one of our engines still holds this row's port. */
+    portHeld: boolean
+    /** Stop that process, which is the only thing that frees its memory. */
+    onStopPortHolder: () => void
     /** False for a row the app only registers, never launches. */
     managed?: boolean
   }
@@ -64,6 +68,8 @@
     onDelete,
     onReveal,
     onDeleteModel,
+    portHeld,
+    onStopPortHolder,
     managed = true
   }: Props = $props()
 
@@ -183,6 +189,18 @@
         >
           <CioStop size={13} />
           Stop
+        </button>
+      {:else if portHeld}
+        <!-- The row failed, but its process still holds the weights and the port:
+             stopping it is the only thing that gives the memory back, and a start
+             would have to take the port from it first. -->
+        <button
+          class="flex shrink-0 items-center gap-1.5 whitespace-nowrap border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs font-medium text-danger transition-colors hover:bg-danger/20"
+          title="Stop the server that is still holding port {entry.port} and release its memory"
+          onclick={onStopPortHolder}
+        >
+          <CioStop size={13} />
+          Stop server
         </button>
       {:else}
         <button
