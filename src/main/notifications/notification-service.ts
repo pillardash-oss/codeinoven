@@ -97,7 +97,14 @@ function compactNotificationId(id: string): string {
 }
 
 function isPermissionRefusal(error: unknown): boolean {
-  return typeof error === 'string' && /not allowed/i.test(error)
+  if (typeof error !== 'string') return false
+  // macOS reports a refused delivery as UNErrorCodeNotificationsNotAllowed. Its
+  // payload is either the localized description ("Notifications are not allowed
+  // for this application") or, depending on Electron's version and the OS
+  // locale, the bare "UNErrorDomain error 1" form. Both are that same refusal:
+  // matching only the English sentence is what let the state stay 'granted'
+  // while every card macOS was asked to draw came back refused.
+  return /not allowed/i.test(error) || /UNErrorDomain error 1\b/i.test(error)
 }
 
 /** One operating-system notification that did not come from a chat thread (a
@@ -318,7 +325,18 @@ export class NotificationService {
     setCurrentNotificationService(this)
     void this.inboxReady()
     void this.hydrateBadge()
-    void this.hydratePermissionStatus()
+    void this.hydratePermissionStatus().then(() => {
+      // Ask the OS for authorization at launch, before anything needs a card.
+      // macOS has no authorization query, so a delivery attempt is the only way
+      // to ask: a 'prompt' state gets the OS permission prompt while the user is
+      // looking at a freshly opened app, a 'denied' or 'granted' state is
+      // confirmed against the OS itself (a rebuilt bundle can lose its
+      // authorization record while the persisted state still says 'granted'),
+      // and the whole check rides one fixed notification id, so it replaces its
+      // own Notification Center entry instead of stacking one per launch.
+      if (process.platform !== 'darwin') return
+      this.requestPermissionDelivery()
+    })
   }
 
   stop(): void {
@@ -356,7 +374,11 @@ export class NotificationService {
     const previous = this.macosNotificationPermission
     if (outcome === 'shown') {
       this.macosNotificationPermission = 'granted'
-    } else if (this.macosNotificationPermission !== 'granted' && isPermissionRefusal(error)) {
+    } else if (isPermissionRefusal(error)) {
+      // A refusal is authoritative whatever the previous outcome was: macOS just
+      // said this app may not present cards, so a stale 'granted' (a build that
+      // lost its authorization record, or a setting switched off since) must not
+      // keep the panel claiming notifications work.
       this.macosNotificationPermission = 'denied'
     }
     if (this.macosNotificationPermission !== previous) {
@@ -404,15 +426,18 @@ export class NotificationService {
   }
 
   /**
-   * Re-verify a previously observed `denied` state against the OS by silently
-   * delivering one verification notification. A successful delivery flips the
-   * state back to `granted` (the user re-enabled notifications in System
-   * Settings); a refusal keeps it `denied`. If the OS actually still has the
-   * permission prompt pending (fresh install), the request re-prompts   which
-   * is exactly what the notification settings panel is for. Deduped so
-   * repeated settings queries only re-check every few seconds.
+   * Ask the OS for notification authorization and read its answer, by
+   * delivering one silent notification.
+   *
+   * Electron exposes no authorization query and no separate request on macOS:
+   * the only thing that makes macOS present its one prompt is a delivery
+   * attempt. So this is both the first-run request (state 'prompt': nothing has
+   * been decided yet, and the user gets the OS prompt at launch) and the
+   * re-verification of an observed `denied` state (a successful delivery means
+   * the user re-enabled notifications in System Settings). Deduped so repeated
+   * calls only ask every few seconds.
    */
-  private verifyPermissionDelivery(): void {
+  private requestPermissionDelivery(): void {
     if (this.permissionVerifyInFlight) return
     const now = Date.now()
     if (now - this.lastPermissionVerifyAt < PERMISSION_VERIFY_DEDUP_MS) return
@@ -471,14 +496,15 @@ export class NotificationService {
 
   /**
    * The permission status used by the Settings panel: returns the current
-   * state and, when it is 'denied', kicks a deduped background verification so
-   * the OS itself confirms or clears the block. The result arrives over the
-   * `notification:permissionStatus` event.
+   * state and always asks the OS to confirm it with one silent delivery, so a
+   * stale 'granted' left behind by a rebuilt bundle or a switched-off setting
+   * cannot make the panel claim notifications work while they do not. Deduped,
+   * and the answer arrives over the `notification:permissionStatus` event.
    */
   async getVerifiedPermissionStatus(): Promise<SystemNotificationPermissionStatus> {
     const status = this.getPermissionStatus()
-    if (status.platform === 'darwin' && status.status === 'denied') {
-      this.verifyPermissionDelivery()
+    if (status.platform === 'darwin') {
+      this.requestPermissionDelivery()
     }
     return status
   }
@@ -1056,8 +1082,7 @@ export class NotificationService {
       const timeout = setTimeout(() => {
         finish({
           status: 'failed',
-          message:
-            'macOS did not confirm delivery. Notifications are likely blocked   allow them in System Settings > Notifications (unsigned builds also require app signing).'
+          message: 'macOS did not confirm the test notification.'
         })
       }, 8_000)
 
@@ -1073,8 +1098,10 @@ export class NotificationService {
         Logger.error('System notification test failed:', error)
         finish({
           status: 'failed',
-          message:
-            'macOS rejected the notification. Allow notifications in System Settings > Notifications.'
+          // The panel renders the blocked banner (and its Open settings button)
+          // as soon as the refusal lands in the permission state, so this line
+          // only has to say what happened.
+          message: 'macOS blocked the test notification.'
         })
       })
 

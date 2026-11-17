@@ -41,11 +41,13 @@ import {
   type Thread,
   type ThreadSearchResult
 } from '$shared/types'
+import { APP_NAME } from '$shared/brand'
 import { notificationSoundKind } from '$shared/ipc-contract'
 import type {
   AgentNotificationPayload,
   AuthoredWorkKind,
   CloseConfirmationPayload,
+  SystemNotificationPermissionStatus,
   ThreadClickedPayload
 } from '$shared/ipc-contract'
 
@@ -232,6 +234,43 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   const unsubscribeShow = subscribeGuarded('notification:show', (payload, appFocused) =>
     showAgentNotification(payload, appFocused, deps)
   )
+  // A refused OS delivery is the only thing macOS tells the app about its
+  // notification authorization. Surface it when it happens, with the one action
+  // that resolves it, instead of leaving it buried in Settings where nobody
+  // looks until they have already missed a card.
+  let notificationPermissionWarned = false
+  const handleNotificationPermission = (status: SystemNotificationPermissionStatus): void => {
+    if (status.platform !== 'darwin') return
+    if (status.status !== 'denied') {
+      notificationPermissionWarned = false
+      return
+    }
+    if (notificationPermissionWarned) return
+    notificationPermissionWarned = true
+    showToastWarning(`${APP_NAME} notifications are blocked`, {
+      id: 'notification-permission-blocked',
+      description:
+        'macOS is not showing notification cards. Allow notifications so they reach you again.',
+      duration: 12_000,
+      action: {
+        label: 'Open settings',
+        onClick: (): void => {
+          void invoke('notification:openSettings')
+        }
+      }
+    })
+  }
+  const unsubscribeNotificationPermission = subscribeGuarded(
+    'notification:permissionStatus',
+    handleNotificationPermission
+  )
+  // A block recorded in an earlier session has no push to announce it, so read
+  // the state once at startup. On macOS the main process answers by re-checking
+  // the OS, which clears the state again as soon as the user allows
+  // notifications back.
+  void invoke('notification:getPermissionStatus')
+    .then(handleNotificationPermission)
+    .catch(() => undefined)
   const unsubscribeConfirmClose = subscribeGuarded('window:confirmClose', (payload) => {
     // The renderer owns the unsaved-file editor state, so it computes the
     // pending files here. Downloads arrive with the payload: main is the one
@@ -477,6 +516,7 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
   return () => {
     unsubscribeClick()
     unsubscribeShow()
+    unsubscribeNotificationPermission()
     unsubscribeConfirmClose()
     unsubscribeInstanceRole()
     unsubscribeStartAtLoginOffer()
