@@ -154,7 +154,7 @@ export class DisplayService {
       sourceId: request.sourceId,
       label: capture.label,
       capture,
-      demand: { maxDimension: 640, visible: true },
+      demand: { maxDimension: 640, streamMaxDimension: 640, visible: true },
       timer: null,
       failures: 0,
       phase: 'starting',
@@ -196,9 +196,12 @@ export class DisplayService {
     const session = this.sessions.get(sessionId)
     if (!session) return
     const maxDimension = quantizeDemand(demand.maxDimension)
+    const streamMaxDimension = quantizeDemand(demand.streamMaxDimension)
     const wasPaused = !session.demand.visible
-    const resized = maxDimension !== session.demand.maxDimension
-    session.demand = { maxDimension, visible: demand.visible }
+    // Only the stream has to be rebuilt for a new size: the polled capture takes the
+    // size it is handed on every grab.
+    const resized = streamMaxDimension !== session.demand.streamMaxDimension
+    session.demand = { maxDimension, streamMaxDimension, visible: demand.visible }
     if (this.canStream(session)) {
       this.followStreamDemand(session, wasPaused, resized)
       return
@@ -236,7 +239,7 @@ export class DisplayService {
       this.beginStream(session)
       return
     }
-    if (session.stream && resized && session.demand.maxDimension !== session.streamSize) {
+    if (session.stream && resized && session.demand.streamMaxDimension !== session.streamSize) {
       if (session.streamTimer) clearTimeout(session.streamTimer)
       session.streamTimer = setTimeout(() => {
         session.streamTimer = null
@@ -255,7 +258,7 @@ export class DisplayService {
       this.schedule(session, 0)
       return
     }
-    session.streamSize = session.demand.maxDimension
+    session.streamSize = session.demand.streamMaxDimension
     let wentLive = false
     session.stream = startDisplayStream({
       window,
