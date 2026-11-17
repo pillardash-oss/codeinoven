@@ -9,7 +9,7 @@ import {
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
-import type { AdmissionDecision } from '$shared/resource-admission'
+import { holdsAdmission, type AdmissionDecision } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import {
   isResponseSelection,
@@ -460,7 +460,7 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     } catch {
       return false
     }
-    if (decision.action !== 'queue') {
+    if (!holdsAdmission(decision)) {
       queuedResourceWait.clear(projectId, threadId)
       return false
     }

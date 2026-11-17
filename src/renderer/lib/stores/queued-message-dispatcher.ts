@@ -21,7 +21,7 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
-import type { AdmissionDecision } from '$shared/resource-admission'
+import { holdsAdmission, type AdmissionDecision } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
@@ -71,6 +71,11 @@ class QueuedMessageDispatcher {
   /** Unregister a ThreadView that is being destroyed. */
   markUnmounted(projectId: string, threadId: string): void {
     this.#mounted.delete(threadKey(projectId, threadId))
+  }
+
+  /** Deliver the queue now instead of waiting for the next idle event. */
+  sweepNow(): void {
+    this.#sweep()
   }
 
   /**
@@ -174,7 +179,7 @@ class QueuedMessageDispatcher {
     } catch {
       return false
     }
-    if (decision.action !== 'queue') {
+    if (!holdsAdmission(decision)) {
       queuedResourceWait.clear(projectId, threadId)
       return false
     }

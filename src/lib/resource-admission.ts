@@ -55,6 +55,17 @@ export function memoryFloorBytes(totalMemoryBytes: number): number {
  */
 export type AdmissionAction = 'proceed' | 'offload' | 'queue'
 
+/**
+ * Whether a reading holds new work back.
+ *
+ * Every gate asks this one predicate instead of comparing the action itself, so
+ * the dispatcher, the mounted thread and the composer cannot drift apart on what
+ * "the device is short" means.
+ */
+export function holdsAdmission(decision: AdmissionDecision): boolean {
+  return decision.action === 'queue'
+}
+
 export type AdmissionReason = 'enough' | 'cpu-short' | 'cpu-and-memory-short'
 
 export interface AdmissionDecision {
