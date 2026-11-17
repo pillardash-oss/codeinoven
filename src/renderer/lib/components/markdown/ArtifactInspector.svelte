@@ -638,10 +638,21 @@ ${appInteractiveElementRules()}`
   // artifact's canvas overrides it, and are already rewritten for the stage box
   // because a shadow tree is what they now style.
   let appliedSource: string | null = null
-  /** Bumped when the artifact's own DOM is rebuilt, so the flush pass re-runs. */
+  /** Bumped when the artifact's own DOM is rebuilt, so the layout passes re-run. */
   let mountToken = $state(0)
   /** The canvas the artifact declared, kept so the viewer can restore it. */
   let svgSourceViewBox: string | null = null
+  /**
+   * Which sides of the viewer's own inset the artifact's page leaves bare.
+   *
+   * The conversation drops a document's page margin and padding because the
+   * message column already owns the gutter, so a page authored for it declares
+   * none at all. The viewer has no column around it: without an inset of its own
+   * that same page would be drawn edge to edge against the window. A side the
+   * page does state is left exactly as authored, and the sides are measured one
+   * by one because an artifact may inset one axis and not the other.
+   */
+  let pageGutter = $state({ top: false, right: false, bottom: false, left: false })
   $effect(() => {
     const stage = stageEl
     const sourceSheet = sourceSheetEl
@@ -658,6 +669,27 @@ ${appInteractiveElementRules()}`
     const artifact = sanitizedHtmlArtifactDocument(code)
     sourceSheet.textContent = artifact.styles
     stage.innerHTML = artifact.markup
+    mountToken += 1
+  })
+
+  // The inset the viewer supplies, on every side the artifact's page leaves at
+  // zero. The gutter is drawn on the host element, outside the artifact's own
+  // document, so it can never be read back as the page's own padding and the
+  // measurement stays stable however often the viewer reopens.
+  $effect(() => {
+    const stage = stageEl
+    const mounted = mountToken
+    const filling = fill
+    if (!stage || kind !== 'html' || !filling) return
+    void mounted
+    const style = getComputedStyle(stage)
+    const side = (value: string) => (Number.parseFloat(value) || 0) === 0
+    pageGutter = {
+      top: side(style.paddingTop),
+      right: side(style.paddingRight),
+      bottom: side(style.paddingBottom),
+      left: side(style.paddingLeft)
+    }
   })
 
   // In the conversation the picture is flushed to its drawing. The message
@@ -717,7 +749,14 @@ ${appInteractiveElementRules()}`
          pointer is on, so the interaction is not pointer-only. -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
-      class={['w-full', fill ? 'h-full overflow-hidden' : 'overflow-visible']}
+      class={[
+        'w-full',
+        fill ? 'h-full overflow-hidden' : 'overflow-visible',
+        fill && pageGutter.top && 'pt-6',
+        fill && pageGutter.right && 'pr-6',
+        fill && pageGutter.bottom && 'pb-6',
+        fill && pageGutter.left && 'pl-6'
+      ]}
       data-artifact-inspector
       data-inspecting={enabled ? '' : undefined}
       data-fill={fill ? '' : undefined}
