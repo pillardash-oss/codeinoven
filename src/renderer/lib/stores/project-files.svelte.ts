@@ -359,7 +359,7 @@ class ProjectFilesWorkspace {
     preferredView?: ProjectFileView,
     focusLine?: number
   ): Promise<void> {
-    if (this.focusOpenFileTab(projectId, path, focusLine)) {
+    if (await this.focusOpenFileTab(projectId, path, focusLine)) {
       // Double-clicking (or otherwise opening in normal mode) a file that is
       // already open as a preview tab pins it. focusOpenFileTab only focuses,
       // so without this the preview flag survived and the next single-click
@@ -384,7 +384,7 @@ class ProjectFilesWorkspace {
    *  falling back to the default view. */
   async openFilePreview(projectId: string, path: string): Promise<void> {
     const state = this.ensureState(projectId)
-    if (this.focusOpenFileTab(projectId, path)) return
+    if (await this.focusOpenFileTab(projectId, path)) return
     const previewTab = state.tabs.find(
       (candidate) => candidate.origin === 'working' && candidate.preview
     )
@@ -404,7 +404,11 @@ class ProjectFilesWorkspace {
   /** Focus an existing sidebar file tab by path before any caller creates a
    *  working-file tab. This also reuses checkpoint tabs, while preferring the
    *  currently active match and then the ordinary working-file tab. */
-  private focusOpenFileTab(projectId: string, path: string, focusLine?: number): boolean {
+  private async focusOpenFileTab(
+    projectId: string,
+    path: string,
+    focusLine?: number
+  ): Promise<boolean> {
     const matchingTabs = contextSidebarState.tabs.filter(
       (tab): tab is FilesContextTab =>
         tab.kind === 'files' &&
@@ -424,7 +428,6 @@ class ProjectFilesWorkspace {
     const state = this.ensureState(projectId)
     const fileTab = state.tabs.find((tab) => tab.id === target.fileTabId)
     if (!fileTab) return false
-    const wasActive = state.activeTabId === fileTab.id
     state.activeTabId = fileTab.id
     if (focusLine !== undefined && fileTab.origin === 'working') {
       fileTab.view = 'source'
@@ -432,19 +435,15 @@ class ProjectFilesWorkspace {
       fileTab.focusLine = Math.max(1, Math.floor(focusLine))
       fileTab.focusLineRequest += 1
     }
-    // Re-selecting a previewable file re-reads it: the file may have changed
-    // on disk since it was last previewed (agent writes, git operations,
-    // external editors), and a stable `appfile://` URL would keep showing the
-    // stale version. Only non-active tabs re-read; an explicit Reload is
-    // always available for the already-active one.
-    if (!wasActive && supportsFilePreview(path)) {
-      this.reloadPreview(projectId, path)
-    }
-    // Navigating to an already-open text file re-reads it from disk (unless
-    // dirty, see reconcileFile), so switching tabs never shows stale text.
-    if (!wasActive && state.sessions[path]) {
-      void this.reconcileFile(projectId, path)
-    }
+    // Opening a file re-reads the disk version even when its tab is already
+    // the active one: an agent write, a git operation or an external editor
+    // changes files while the viewer holds them, so re-opening a re-announced
+    // report has to show the new content instead of the cached copy. A
+    // previewable file has no editable session, so it re-reads its blob (a
+    // stable `appfile://` URL would otherwise stay stale); a text session
+    // reconciles on mtime/size and keeps unsaved changes (see reconcileFile).
+    if (supportsFilePreview(path)) this.reloadPreview(projectId, path)
+    if (state.sessions[path]) await this.reconcileFile(projectId, path)
     contextSidebarState.focus(target.id)
     return true
   }
