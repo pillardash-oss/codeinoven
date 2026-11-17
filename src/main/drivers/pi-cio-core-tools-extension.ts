@@ -84,6 +84,11 @@ export interface CioCoreToolsExtensionOptions {
    *  nested worker sessions and for disarming the wake-up paths that would
    *  otherwise start a fresh turn right after the stop. */
   stopFlagPath: string
+  /** Absolute path of the per-session handed-off worker roster. The adopting
+   *  instance writes the workers a thread move carried over, and the extension
+   *  resumes each one from its own session file on the resumed thread's first
+   *  agent start, then clears the roster so nothing starts twice. */
+  handoffWorkersPath: string
   /** Absolute path of the per-session sub-agent watch file. The driver writes
    *  the child session ids the app is displaying right now; the extension
    *  forwards token deltas for those children only, so a worker nobody is
@@ -248,6 +253,10 @@ __CIO_STRIP_BUILTINS__  })
       .replace('__CIO_ALLOWED_TOOLS_PATH__', singleQuotedStringContent(options.allowedToolsPath))
       .replace('__CIO_OVERSIZED_FLAG_PATH__', singleQuotedStringContent(options.oversizedFlagPath))
       .replace('__CIO_STOP_FLAG_PATH__', singleQuotedStringContent(options.stopFlagPath))
+      .replace(
+        '__CIO_HANDOFF_WORKERS_PATH__',
+        singleQuotedStringContent(options.handoffWorkersPath)
+      )
       .replace(
         '__CIO_COMPACTION_CONTEXT_PATH__',
         singleQuotedStringContent(options.compactionContextPath)

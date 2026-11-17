@@ -17,6 +17,7 @@ import { DevStepClock } from '../system/dev-timing'
 import type {
   CompactionFallbackContext,
   GenerateTitleOptions,
+  HandoffWorkerSession,
   HarnessCapabilities,
   SendPromptOptions,
   SteerPromptOptions
@@ -854,8 +855,19 @@ export class PiDriver extends PersistentCliDriver {
    *  3. disarm pi's automatic retry of the aborted run;
    *  4. after the graceful abort, verify the run actually ended (bounded) and
    *     kill the process if it did not.
+   *
+   * `reason: 'transfer'` is the same teardown for a thread that is moving to
+   * another instance. The workers are not ending there, so the stop request
+   * carries that reason (the extension hands them over with their session files
+   * intact) and nothing close the cards here: they are still in flight, only in
+   * the process that is about to adopt them.
    */
-  override async abort(projectPath: string, sessionId: string): Promise<void> {
+  override async abort(
+    projectPath: string,
+    sessionId: string,
+    options: { reason?: 'user' | 'transfer' } = {}
+  ): Promise<void> {
+    const transfer = options.reason === 'transfer'
     // An owed silent continue belongs to the turn the user is stopping: pi
     // settles the aborted run with `agent_settled`, and the continuation would
     // then start a fresh run seconds after the stop.
@@ -868,7 +880,7 @@ export class PiDriver extends PersistentCliDriver {
     this.uiRequests.cancelPendingDialogs(sessionId)
     // Published before the abort so the extension already sees it when the
     // run's own settle hook fires.
-    await this.cioFiles.publishStopRequest(sessionId)
+    await this.cioFiles.publishStopRequest(sessionId, undefined, transfer ? 'transfer' : 'user')
     const session = await this.requireSession(projectPath, sessionId).catch(() => null)
     const client = this.rpcSessions.client(sessionId)
     if (!session || !client) {
@@ -876,7 +888,7 @@ export class PiDriver extends PersistentCliDriver {
       // registration left behind is stale and must not keep the engine
       // ignoring this session's idles as if a turn were still live.
       this.turns.removeActiveTurn(sessionId)
-      this.subagentStreams.settleChildStreams(sessionId, 'aborted')
+      if (!transfer) this.subagentStreams.settleChildStreams(sessionId, 'aborted')
       return
     }
     // Disarm pi's automatic retry before the abort, and wait for the answer. A
@@ -918,9 +930,38 @@ export class PiDriver extends PersistentCliDriver {
     }
     // The workers report their own settle a poll window later at worst;
     // settling them here is what makes the cards and child statuses stop with
-    // the stop instead of spinning until the last transcript lands.
-    this.subagentStreams.settleChildStreams(sessionId, 'aborted')
+    // the stop instead of spinning until the last transcript lands. A move is
+    // the exception: those cards belong to work that continues elsewhere, and
+    // stamping them here would make every later update from the adopting
+    // instance land on a card the app already treats as closed.
+    if (!transfer) this.subagentStreams.settleChildStreams(sessionId, 'aborted')
     void this.enforceStoppedSession(projectPath, sessionId)
+  }
+
+  /** The transfer half of {@link abort}: the same teardown, without ending work. */
+  async abortForTransfer(projectPath: string, sessionId: string): Promise<void> {
+    await this.abort(projectPath, sessionId, { reason: 'transfer' })
+  }
+
+  /**
+   * Hand a thread's workers to this instance, which is adopting the thread.
+   *
+   * The departing process stopped its run, but a worker is only a session, and
+   * its session file is on disk in this instance's own store. Publishing the
+   * roster is what turns "the move stopped them" into "they are still working
+   * here": the extension opens each file on the resumed thread's first agent
+   * start and prompts the worker to continue under the id its primary agent
+   * already knows.
+   */
+  async resumeHandedOffWorkers(
+    _projectPath: string,
+    sessionId: string,
+    workers: readonly HandoffWorkerSession[]
+  ): Promise<void> {
+    if (workers.length === 0) return
+    // The roster is addressed by session only: the adopting process reads it
+    // from the app's own runtime directory, not from the project.
+    await this.cioFiles.publishHandoffWorkers(sessionId, workers)
   }
 
   /**

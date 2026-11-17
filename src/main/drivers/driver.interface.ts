@@ -428,6 +428,29 @@ export interface SteerPromptOptions {
 }
 
 /**
+ * One nested worker whose work continues on the instance adopting a thread.
+ *
+ * A thread move stops the departing process, so a worker that runs inside it
+ * only survives as its own persisted session. This is the roster entry that
+ * lets the adopting instance open that session and keep the worker running
+ * under the same id the primary agent already knows.
+ */
+export interface HandoffWorkerSession {
+  /** Id the primary agent used for this worker in its own tool calls. */
+  agentId: string
+  /** Task label, i.e. what the worker was asked to do. */
+  purpose: string
+  /** Persisted session file the worker continues from. */
+  sessionFile: string
+  /** `provider/model-id` the worker ran on, when the card recorded it. */
+  modelId?: string
+  /** Reasoning effort the worker ran with. */
+  thinkingLevel?: string
+  /** The instructions the worker was spawned with, replayed on resume. */
+  prompt?: string
+}
+
+/**
  * HarnessDriver   the contract every AI harness must fulfill to participate
  * in CodeInOven's chat engine. Each driver encapsulates the harness's headless
  * communication strategy (HTTP+SSE, subprocess JSONL, WebSocket, etc.) and
@@ -709,6 +732,36 @@ export interface HarnessDriver {
 
   /** Abort the running turn in a session. */
   abort(projectPath: string, sessionId: string): Promise<void>
+
+  /**
+   * Abort the run of a thread that is moving to another instance.
+   *
+   * A move is not a user stop: the work continues elsewhere, so a harness that
+   * can carry it (pi persists every nested worker as its own session) must stop
+   * the run without ending the workers, and must leave their transcripts where
+   * the adopting instance can reopen them. Drivers without this surface fall
+   * back to `abort`.
+   */
+  abortForTransfer?(projectPath: string, sessionId: string): Promise<void>
+
+  /**
+   * Hand a thread's nested workers to the instance that is taking the thread
+   * over, so they continue there instead of being abandoned.
+   *
+   * A move stops the run in the departing process, and for harnesses whose
+   * workers are sessions inside that process (pi) the stop alone would end the
+   * work. A driver that persists each worker as its own resumable session
+   * implements this to publish the roster the adopting instance resumes from.
+   *
+   * Called on the adopting side before the thread's continuation is prompted,
+   * so the workers are already running when the agent resumes. Best-effort:
+   * a worker that cannot be published must never block the move.
+   */
+  resumeHandedOffWorkers?(
+    projectPath: string,
+    sessionId: string,
+    workers: readonly HandoffWorkerSession[]
+  ): Promise<void>
 
   /**
    * Stop one delegated child (sub-agent) session without touching its parent.

@@ -125,6 +125,7 @@ function subagentActivityFromPayload(
   const output = stringValue(payload['output'])
   const error = stringValue(payload['error'])
   const sessionFile = stringValue(payload['sessionFile'])
+  const agentId = stringValue(payload['agentId'])
   const files = Array.isArray(payload['files'])
     ? payload['files'].filter((file): file is string => typeof file === 'string')
     : undefined
@@ -138,6 +139,8 @@ function subagentActivityFromPayload(
     ...(files && files.length > 0 ? { files } : {}),
     ...(output ? { output } : {}),
     ...(error ? { error } : {}),
+    ...(sessionFile ? { sessionFile } : {}),
+    ...(agentId ? { agentId } : {}),
     ...(sessionFile ? { metadata: { sessionFile } } : {})
   }
 }

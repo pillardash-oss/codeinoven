@@ -29,7 +29,7 @@ export function piCoreToolsHeaderSource(
   sensitiveSecretRoot?: string
 ): string {
   return `import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { open, readdir, rm, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'

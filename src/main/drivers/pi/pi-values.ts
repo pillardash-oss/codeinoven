@@ -1,8 +1,14 @@
 /** Small shared value helpers and process utilities used across the Pi driver modules. */
 
-/** The seed/reset shape of the per-session stop-flag file (no request pending). */
-function emptyStopRequest(): { token: string; childSessionIds: string[] } {
-  return { token: '', childSessionIds: [] }
+/**
+ * The seed/reset shape of the per-session stop-flag file (no request pending).
+ *
+ * `reason` is what tells the extension apart a user Stop from the stop a thread
+ * move performs: a move must hand its workers to the adopting instance instead
+ * of ending them, so it is never allowed to look like a user stop downstream.
+ */
+function emptyStopRequest(): { token: string; childSessionIds: string[]; reason: string } {
+  return { token: '', childSessionIds: [], reason: '' }
 }
 
 /** Race one RPC probe against a deadline so a wedged process cannot block it. */

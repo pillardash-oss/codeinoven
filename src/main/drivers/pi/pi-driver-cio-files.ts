@@ -3,7 +3,7 @@ import type { UtilityGatewayEndpoint } from '../../../lib/gateway-timeout'
 import { WORKER_AGENT_BEHAVIOR_PROMPT } from '../../../lib/agent-behavior'
 import { BUNDLED_PI_FILE_POLICY } from '../../../lib/bundled-pi-file-protection'
 import { AGENT_SECRET_ROOT } from '../../../lib/secret-request'
-import type { CompactionFallbackContext } from '../driver.interface'
+import type { CompactionFallbackContext, HandoffWorkerSession } from '../driver.interface'
 import { piCioCoreToolsExtension } from '../pi-cio-core-tools-extension'
 import type { StorageEngine } from '../../storage/storage-engine'
 import { Logger } from '../../system/logger'
@@ -94,6 +94,7 @@ export class PiCioRuntimeFiles {
       const allowedToolsRelative = join(directory, 'allowed-tools.json')
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
+      const handoffWorkersRelative = join(directory, 'handoff-workers.json')
       const watchFlagRelative = join(directory, 'watched-subagents.json')
       const compactionContextRelative = join(directory, 'compaction-context.json')
       const extensionRelative = join(directory, 'cio-core-tools.ts')
@@ -106,6 +107,7 @@ export class PiCioRuntimeFiles {
         await this.host.storage.writeRaw(allowedToolsRelative, '[]')
         await this.host.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
         await this.host.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
+        await this.host.storage.writeRaw(handoffWorkersRelative, JSON.stringify({ workers: [] }))
         await this.host.storage.writeRaw(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
       }
       await this.host.storage.writeRaw(
@@ -129,6 +131,7 @@ export class PiCioRuntimeFiles {
           allowedToolsPath: this.host.storage.resolve(allowedToolsRelative),
           oversizedFlagPath: this.host.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.host.storage.resolve(stopFlagRelative),
+          handoffWorkersPath: this.host.storage.resolve(handoffWorkersRelative),
           subagentWatchPath: this.host.storage.resolve(watchFlagRelative),
           // Never seeded by this materialization: the engine publishes the
           // thread's plan and progress before the module exists on the first
@@ -227,8 +230,15 @@ export class PiCioRuntimeFiles {
     }
   }
 
-  /** Publish the user's stop into the session's stop-flag file. */
-  async publishStopRequest(sessionId: string, childSessionIds?: string[]): Promise<void> {
+  /** Publish the user's stop, or the stop a thread move performs, into the
+   *  session's stop-flag file. `reason` is the only thing that tells the
+   *  extension whether the workers it owns must end (a user stop) or be handed
+   *  to the adopting instance with their session files intact (a move). */
+  async publishStopRequest(
+    sessionId: string,
+    childSessionIds?: string[],
+    reason?: 'user' | 'transfer'
+  ): Promise<void> {
     const path = this.cioStopFlagPaths.get(sessionId)
     if (!path) return
     this.stopRequestSeq += 1
@@ -238,11 +248,32 @@ export class PiCioRuntimeFiles {
         JSON.stringify({
           token: `${Date.now()}-${this.stopRequestSeq}`,
           requestedAt: Date.now(),
-          childSessionIds: childSessionIds ?? []
+          childSessionIds: childSessionIds ?? [],
+          reason: reason ?? 'user'
         })
       )
     } catch (error) {
       Logger.dev('Pi stop-request publication failed:', error)
+    }
+  }
+
+  /**
+   * Publish the workers a thread move must continue on the adopting instance.
+   *
+   * The path is derived from the session id, so this works before the session's
+   * extension is materialized in this process: the extension reads the roster
+   * on the resumed thread's first agent start and clears it in the same step,
+   * which is what keeps a later turn from starting the same worker twice.
+   */
+  async publishHandoffWorkers(
+    sessionId: string,
+    workers: readonly HandoffWorkerSession[]
+  ): Promise<void> {
+    const relative = join(cioCoreToolsDirectory(sessionId), 'handoff-workers.json')
+    try {
+      await this.host.storage.writeRaw(relative, JSON.stringify({ workers }))
+    } catch (error) {
+      Logger.dev('Pi handed-off worker publication failed:', error)
     }
   }
 

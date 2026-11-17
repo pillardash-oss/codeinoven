@@ -162,6 +162,24 @@ export interface AgentSubagentActivity {
   error?: string
   /** Project-relative paths the sub-agent's file tools edited or wrote. */
   files?: string[]
+  /**
+   * File the worker's session is persisted in, when the harness names one.
+   *
+   * It is the only handle a nested worker can be continued from: the session
+   * file holds the transcript a harness re-opens, so another app instance that
+   * cannot speak this process's protocol can resume the worker from it instead
+   * of losing the work.
+   */
+  sessionFile?: string
+  /**
+   * Worker id the primary agent addresses this worker by in its own tool calls
+   * (`cio-subagent-N`).
+   *
+   * It is not the tool call id: a worker that is resumed on another instance
+   * has to keep this id, or every `cio_agent_status` and `cio_agent_output` the
+   * primary agent already made would name a worker that no longer exists.
+   */
+  agentId?: string
   time?: { start: number; end?: number }
   /**
    * True when the delegated worker is a pawn agent: an independent thread the
