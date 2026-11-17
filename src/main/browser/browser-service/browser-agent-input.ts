@@ -97,6 +97,9 @@ function delay(ms: number): Promise<void> {
  * is refused, because pressing an unknown key would report success and do nothing.
  */
 export function agentKeyCode(key: string): string {
+  // One character is itself, and a space is a character: trimming it away turned
+  // every multi-word text into a failure before the first word was finished.
+  if (key.length === 1) return key
   const trimmed = key.trim()
   if (trimmed.length === 0) throw new TypeError('key must name a key to press')
   if (trimmed.length > 12) throw new TypeError(`"${key}" is not a key name`)

@@ -16,6 +16,7 @@ import {
   agentPrepareTypingScript,
   agentSnapshotScript,
   agentTypeScript,
+  agentListboxOptionsScript,
   agentWaitScript,
   AGENT_REF_ATTRIBUTE,
   BROWSER_WAIT_MAX_TIMEOUT_MS
@@ -42,7 +43,8 @@ import {
 } from './browser-validation'
 import type { BrowserService } from '../browser-service'
 import type { AgentTarget } from './browser-service-agent-script'
-import { comboboxOptions, pickComboboxOption } from './browser-agent-combobox'
+import type { AgentFrameEntry } from './browser-agent-frames'
+import { comboboxOptions, pickComboboxOption, type ComboboxOption } from './browser-agent-combobox'
 import { fitSnapshot } from './browser-agent-snapshot-fit'
 import { asObject, safeOrigin } from './browser-service-common'
 import { liveContents, liveWindowContents } from './browser-view-contents'
@@ -65,8 +67,14 @@ const MAX_FRAME_ELEMENTS = 120
 /** Characters of an embedded document's text a snapshot reports. */
 const MAX_FRAME_TEXT = 4000
 /** Times a combobox is read while its list fills, and the pause between reads. */
-const COMBOBOX_POLL_ATTEMPTS = 20
-const COMBOBOX_POLL_INTERVAL_MS = 100
+const COMBOBOX_POLL_ATTEMPTS = 12
+const COMBOBOX_POLL_INTERVAL_MS = 250
+
+/** One option, and the document that drew it, so it is clicked where it lives. */
+interface ComboboxChoice {
+  option: ComboboxOption
+  entry: AgentFrameEntry
+}
 
 /** A pause in the main process, for a list a page fills in its own time. */
 function delay(ms: number): Promise<void> {
@@ -593,6 +601,7 @@ export class BrowserServiceAgentUtility {
     target: AgentTarget,
     query: string
   ): Promise<Record<string, unknown> | null> {
+    const contents = tab.view.webContents
     const read = async (open: boolean): Promise<Record<string, unknown> | null> =>
       asObject(
         await this.host.runAgentScriptIn(
@@ -600,50 +609,80 @@ export class BrowserServiceAgentUtility {
           agentComboboxScript({
             selector: target.selector,
             open,
-            refPrefix: target.entry.index === 0 ? '' : `f${target.entry.index}`
+            refPrefix: target.entry.refPrefix
           })
         )
       )
     const opened = await read(true)
     if (opened?.['found'] === false) return { selected: false, reason: 'not found' }
     if (opened?.['combobox'] !== true) return null
-    let state = opened
     if (query) {
       const typed = await this.typeWithKeys(tab, target, { text: query, append: false })
-      if (typed['typed'] === true) state = (await read(false)) ?? state
+      if (typed['typed'] !== true) {
+        return {
+          selected: false,
+          reason: `the picker could not be typed into: ${String(typed['reason'] ?? 'unknown reason')}`
+        }
+      }
     }
-    let options = comboboxOptions(state)
-    for (let attempt = 0; options.length === 0 && attempt < COMBOBOX_POLL_ATTEMPTS; attempt += 1) {
+    // The list is read in every document, because a portal draws it in a layer that
+    // does not belong to the frame the field lives in.
+    const frames = this.host.agentFrames(contents)
+    let found: ComboboxChoice[] = []
+    let searched = frames
+    for (let attempt = 0; attempt < COMBOBOX_POLL_ATTEMPTS; attempt += 1) {
+      found = await this.comboboxChoicesAcrossFrames(searched)
+      if (found.length > 0) break
+      const withList = new Set(found.map((choice) => choice.entry.index))
+      if (withList.size > 0) searched = frames.filter((entry) => withList.has(entry.index))
       await delay(COMBOBOX_POLL_INTERVAL_MS)
-      state = (await read(false)) ?? state
-      options = comboboxOptions(state)
     }
-    const choice = pickComboboxOption(options, query)
+    const choice = pickComboboxOption(
+      found.map((entry) => entry.option),
+      query
+    )
     if (!choice) {
       return {
         selected: false,
         reason:
-          options.length === 0
-            ? 'the combobox offered no options'
+          found.length === 0
+            ? 'the picker offered no options: its list was not found in any document of the page'
             : 'no option matched what was asked for',
-        ...(options.length > 0
-          ? { options: options.slice(0, 20).map((option) => option.label) }
+        ...(found.length > 0
+          ? { options: found.slice(0, 20).map((entry) => entry.option.label) }
           : {})
       }
     }
+    const chosen = found.find((entry) => entry.option.ref === choice.ref)
+    if (!chosen) return { selected: false, reason: 'the option went away before it was clicked' }
     await this.host.clickAgentTarget(
       tab,
-      { selector: `[${AGENT_REF_ATTRIBUTE}="${choice.ref}"]`, entry: target.entry },
+      { selector: `[${AGENT_REF_ATTRIBUTE}="${choice.ref}"]`, entry: chosen.entry },
       {}
     )
-    const after = (await read(false)) ?? state
+    const after = (await read(false)) ?? {}
     return {
       selected: true,
       via: 'combobox',
       label: choice.label,
       value: String(after['value'] ?? choice.value ?? choice.label),
+      ...(chosen.entry.index === 0 ? {} : { frame: chosen.entry.index }),
       ...(after['expanded'] === true ? { stillOpen: true } : {})
     }
+  }
+
+  /** The options every document of the page offers right now, each with its frame. */
+  private async comboboxChoicesAcrossFrames(frames: AgentFrameEntry[]): Promise<ComboboxChoice[]> {
+    const choices: ComboboxChoice[] = []
+    for (const entry of frames) {
+      const report = asObject(
+        await this.host
+          .runAgentScriptIn(entry, agentListboxOptionsScript({ refPrefix: entry.refPrefix }))
+          .catch(() => null)
+      )
+      for (const option of comboboxOptions(report)) choices.push({ option, entry })
+    }
+    return choices
   }
 
   /**
