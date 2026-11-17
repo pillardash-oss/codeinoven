@@ -13,6 +13,7 @@ import { estimateTokens } from '../memory-service'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import type { HarnessDriver, HandoffWorkerSession } from '../../drivers/driver.interface'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
+import { cioCoreToolsDirectory } from '../../drivers/pi/pi-driver-cio-files'
 import { instanceRegistry } from '../../system/instance-registry'
 import type {
   Thread,
@@ -383,6 +384,12 @@ export class ChatEngineThreadsTitle {
         ...(worker.prompt ? { prompt: worker.prompt } : {})
       })
     }
+    if (resumable.length === 0) {
+      // A running worker has no persisted card yet, so the departed release may
+      // have had no roster to hand over. The harness writes one as it runs, into
+      // the shared storage root both instances read.
+      resumable.push(...(await this.liveWorkerRoster(thread.sessionId)))
+    }
     if (resumable.length === 0) return
     try {
       const driverId =
@@ -404,6 +411,44 @@ export class ChatEngineThreadsTitle {
         threadId: thread.id,
         error: rawErrorMessage(error)
       })
+    }
+  }
+
+  /** The workers a session's harness last reported as in flight. */
+  private async liveWorkerRoster(sessionId: string): Promise<HandoffWorkerSession[]> {
+    try {
+      const raw = await this.host.storage.readRaw(
+        join(cioCoreToolsDirectory(sessionId), 'live-subagents.json')
+      )
+      if (!raw) return []
+      const parsed: unknown = JSON.parse(raw)
+      const record = parsed as { workers?: unknown }
+      if (!Array.isArray(record.workers)) return []
+      const workers: HandoffWorkerSession[] = []
+      for (const entry of record.workers) {
+        if (typeof entry !== 'object' || entry === null) continue
+        const item = entry as Record<string, unknown>
+        const agentId = typeof item['agentId'] === 'string' ? item['agentId'] : ''
+        const sessionFile = typeof item['sessionFile'] === 'string' ? item['sessionFile'] : ''
+        if (agentId === '' || sessionFile === '') continue
+        workers.push({
+          agentId,
+          purpose: typeof item['purpose'] === 'string' ? item['purpose'] : 'sub-agent',
+          sessionFile,
+          ...(typeof item['modelId'] === 'string' ? { modelId: item['modelId'] } : {}),
+          ...(typeof item['thinkingLevel'] === 'string'
+            ? { thinkingLevel: item['thinkingLevel'] }
+            : {}),
+          ...(typeof item['prompt'] === 'string' ? { prompt: item['prompt'] } : {})
+        })
+      }
+      return workers
+    } catch (error) {
+      Logger.dev('Live worker roster read failed:', {
+        sessionId,
+        error: rawErrorMessage(error)
+      })
+      return []
     }
   }
 

@@ -53,6 +53,11 @@ export function piCoreToolsSubagentSource(): string {
   // writes the roster before the resumed thread's first turn; this session
   // starts each worker from its own session file and empties the file again.
   const CIO_HANDOFF_WORKERS_PATH = '__CIO_HANDOFF_WORKERS_PATH__'
+  // The workers this session is running right now. A background worker has no
+  // persisted card until its turn is flushed, so a thread that is moving has no
+  // roster anywhere else: this file is what the adopting instance reads while
+  // the departure is still settling.
+  const CIO_LIVE_SUBAGENTS_PATH = '__CIO_LIVE_SUBAGENTS_PATH__'
   // Poll window while workers are live: two orders of magnitude below a
   // worker's own turn latency, and armed only while a worker runs, so an idle
   // session never polls.
@@ -153,6 +158,34 @@ export function piCoreToolsSubagentSource(): string {
     record.handedOff = true
     try {
       void record.session.abort()
+    } catch {}
+    publishLiveSubAgents()
+  }
+
+  /**
+   * Rewrite this session's live worker roster.
+   *
+   * Only workers still in flight (or handed to another instance) belong in it:
+   * a finished worker is either on its card or reported to the primary, and a
+   * stale entry would make a later resume start work that already happened.
+   */
+  function publishLiveSubAgents() {
+    const workers = []
+    for (const record of subAgents.values()) {
+      if (record.status !== 'running' && record.handedOff !== true) continue
+      if (!record.sessionFile) continue
+      workers.push({
+        agentId: record.agentId,
+        purpose: record.purpose,
+        sessionFile: record.sessionFile,
+        childSessionId: record.childSessionId,
+        ...(record.modelId ? { modelId: record.modelId } : {}),
+        ...(record.thinkingLevel ? { thinkingLevel: record.thinkingLevel } : {}),
+        ...(record.instructions ? { prompt: record.instructions } : {})
+      })
+    }
+    try {
+      writeFileSync(CIO_LIVE_SUBAGENTS_PATH, JSON.stringify({ workers }))
     } catch {}
   }
 
@@ -1116,9 +1149,11 @@ export function piCoreToolsSubagentSource(): string {
       // Set when a thread move stopped the run this worker belonged to. The
       // worker is not finished: its session continues on the adopting instance.
       handedOff: false,
+      instructions: spec.instructions,
       session
     }
     subAgents.set(agentId, record)
+    publishLiveSubAgents()
     // The child's transcript streams to the app from the moment the session
     // exists: no waiting for pi to flush the child's session file, and no
     // polling on the renderer side.
@@ -1219,6 +1254,7 @@ export function piCoreToolsSubagentSource(): string {
           if (spec.background && !record.stopRequested) notifySubAgentDone(record)
         }
         sendSubAgentUpdate(onUpdate, record)
+        publishLiveSubAgents()
       }
     })()
     return { record }

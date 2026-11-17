@@ -13,6 +13,7 @@ describe('piCioCoreToolsExtension', () => {
       oversizedFlagPath: '/project/oversized-recovery.json',
       stopFlagPath: '/project/stop.json',
       handoffWorkersPath: "/project/user's files/handoff-workers.json",
+      liveSubagentsPath: '/project/live-subagents.json',
       subagentWatchPath: '/project/subagents.json',
       compactionContextPath: '/project/compaction-context.json',
       sessionCwd: "/project/user's files",

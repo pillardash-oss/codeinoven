@@ -89,6 +89,11 @@ export interface CioCoreToolsExtensionOptions {
    *  resumes each one from its own session file on the resumed thread's first
    *  agent start, then clears the roster so nothing starts twice. */
   handoffWorkersPath: string
+  /** Absolute path of the per-session live worker roster. The extension rewrites
+   *  it whenever a nested worker starts or settles, so the roster of a thread
+   *  that is moving is on disk even though a running worker has no persisted
+   *  card yet. The adopting instance reads it while the move is in flight. */
+  liveSubagentsPath: string
   /** Absolute path of the per-session sub-agent watch file. The driver writes
    *  the child session ids the app is displaying right now; the extension
    *  forwards token deltas for those children only, so a worker nobody is
@@ -257,6 +262,7 @@ __CIO_STRIP_BUILTINS__  })
         '__CIO_HANDOFF_WORKERS_PATH__',
         singleQuotedStringContent(options.handoffWorkersPath)
       )
+      .replace('__CIO_LIVE_SUBAGENTS_PATH__', singleQuotedStringContent(options.liveSubagentsPath))
       .replace(
         '__CIO_COMPACTION_CONTEXT_PATH__',
         singleQuotedStringContent(options.compactionContextPath)

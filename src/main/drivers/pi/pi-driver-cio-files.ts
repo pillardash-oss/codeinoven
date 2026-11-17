@@ -95,6 +95,7 @@ export class PiCioRuntimeFiles {
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
       const handoffWorkersRelative = join(directory, 'handoff-workers.json')
+      const liveSubagentsRelative = join(directory, 'live-subagents.json')
       // Never seeded: the adopting instance publishes the roster before this
       // module exists, and a seed written here would erase the workers the move
       // carried over. A missing file simply reads as an empty roster.
@@ -134,6 +135,7 @@ export class PiCioRuntimeFiles {
           oversizedFlagPath: this.host.storage.resolve(oversizedFlagRelative),
           stopFlagPath: this.host.storage.resolve(stopFlagRelative),
           handoffWorkersPath: this.host.storage.resolve(handoffWorkersRelative),
+          liveSubagentsPath: this.host.storage.resolve(liveSubagentsRelative),
           subagentWatchPath: this.host.storage.resolve(watchFlagRelative),
           // Never seeded by this materialization: the engine publishes the
           // thread's plan and progress before the module exists on the first
