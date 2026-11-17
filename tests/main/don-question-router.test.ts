@@ -14,6 +14,7 @@ import type { Database } from '../../src/main/database/database'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
 import { ChatEngine } from '../../src/main/chat/chat-engine'
 import { DON_THREAD_ID } from '../../src/main/don/don-bootstrap'
+import { DON_ASSISTANT_ID } from '../../src/lib/types/assistant'
 import {
   answerTeammateQuestion,
   routeTeammateQuestion
@@ -103,12 +104,17 @@ async function setup(options: { dispatchFromDon?: boolean } = {}): Promise<Fixtu
   temporaryDatabases.push(db)
   await seedProject(db, ASSISTANT_SPACE_ID)
   const engine = new ChatEngine(new StorageEngine(temporaryConfigRoot), db)
+  // A real Don conversation: the router recognises one by the assistant space and
+  // Don's assistant id, not by a reserved thread id, so the fixture must carry both.
   const donThread = await internals(engine).threadManager.createThread({
     id: DON_THREAD_ID,
     projectId: ASSISTANT_SPACE_ID,
     providerId: 'pi',
     title: 'Don',
     titleSource: 'manual',
+    assistantId: DON_ASSISTANT_ID,
+    groupParticipants: [DON_ASSISTANT_ID],
+    groupTitle: 'Don',
     settings,
     workingDirectory: ''
   })

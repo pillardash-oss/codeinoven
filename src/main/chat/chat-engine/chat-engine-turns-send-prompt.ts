@@ -14,7 +14,6 @@ import {
 import type { SendPromptOptions } from '../../drivers/driver.interface'
 import { isAssistantNextStepsPrompt } from '../../../lib/assistant-next-steps'
 import { DON_ASSISTANT_ID } from '../../../lib/types/assistant'
-import { DON_THREAD_ID } from '../../don/don-bootstrap'
 import { isContinuationRelayPrompt } from '../../../lib/pending-request'
 import { composeAssistantInstruction } from '../../../lib/assistant-run'
 import { isCioUtilityRequest } from '../../utilities/cio-utility-prompt'
@@ -1079,8 +1078,9 @@ export class ChatEngineTurnsSendPrompt {
       // The conversation a group chat started can speak back into it while it
       // works, so a delegated run offers the group reply tool. The group's own
       // thread does not: it is the host, and a message there mid-turn is exactly
-      // the insertion that confused its closing answer.
-      Boolean(targetThread?.dispatchOrigin?.initiatorThreadId === DON_THREAD_ID),
+      // the insertion that confused its closing answer. Don holds one conversation
+      // per topic, so a run reports into whichever of them started it.
+      targetThread?.dispatchOrigin?.initiatorProjectId === ASSISTANT_SPACE_ID,
       // A real project thread may create its engineering artifacts through the
       // artifact tools. A chat, an assistant task, the inbox and an Assignment
       // worker are offered none of those routes.

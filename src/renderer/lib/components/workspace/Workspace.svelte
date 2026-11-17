@@ -104,6 +104,9 @@
     createTask: (assistant: Assistant) => {
       void board.mergeThreadsInList.createTaskInAssistant(assistant)
     },
+    createDonConversation: (assistant: Assistant) => {
+      void board.mergeThreadsInList.createDonConversation(assistant)
+    },
     deleteAssistant: board.mergeThreadsInList.deleteAssistant
   })
   $effect(() => {

@@ -48,6 +48,8 @@ import { sanitizeCustomSvg } from '../../../lib/custom-svg'
 import { validateCustomIconImage } from '../../../lib/custom-icon'
 import { ASSISTANT_SPACE_ID } from '../../../lib/types'
 import { DON_THREAD_ID } from '../../don/don-bootstrap'
+import { createDonConversation, newestDonConversation } from '../../don/don-conversations'
+import { DON_ASSISTANT_ID } from '../../../lib/types/assistant'
 import { DON_FIRST_RUN_ACTION, DON_FIRST_RUN_PROMPT } from '../../../lib/don-assistant'
 
 const CADENCES = new Set(['once', 'hourly', 'daily', 'weekdays', 'weekly'])
@@ -404,15 +406,37 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   )
 
   /**
-   * Don's one thread, or null while it has not been seeded yet.
+   * The Don conversation a surface with only a "Don" door should open.
    *
-   * Every surface that hands the orchestrator a message without opening the
-   * assistant view resolves it here instead of searching the assistant space, so
-   * there is exactly one answer to "which thread is Don's".
+   * Don holds one conversation per topic, so there is no single thread to name
+   * any more: this answers with the one that last moved, which is the place a
+   * voice request, a dispatch report resolver or a wake would carry on from. It
+   * falls back to the reserved first conversation while the assistant space has
+   * not been read back yet.
    */
   ipcMain.handle('assistant:donThread', async () => {
+    const newest = await newestDonConversation(ctx.threadManager).catch(() => null)
+    if (newest) return { threadId: newest.id }
     const thread = await ctx.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
     return { threadId: thread?.id ?? null }
+  })
+
+  /**
+   * Open one more Don conversation.
+   *
+   * Don's conversations are ordinary assistant-space group threads, so their shape
+   * is owned here rather than assembled at a call site: the assistant id, the group
+   * membership, the settings each new conversation inherits and the pin that keeps
+   * the automatic capacity sweep away from it all belong to this one place.
+   */
+  ipcMain.handle('assistant:createDonConversation', async () => {
+    const config = await ctx.storage.getConfig().catch(() => null)
+    const don = assistantManager.getAssistant(DON_ASSISTANT_ID)
+    const fallback =
+      assistantPrimaryModel(don?.agents) ?? config?.agentDefaults?.seniorEngineer ?? null
+    const thread = await createDonConversation({ threadManager: ctx.threadManager, fallback })
+    broadcastThreadUpdate(thread)
+    return thread
   })
 
   /**

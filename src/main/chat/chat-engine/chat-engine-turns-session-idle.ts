@@ -1,6 +1,5 @@
 import { stripAbortedRunErrors } from '../stopped-run-errors'
 import { delegationFromThread } from '../chat-engine-don'
-import { DON_THREAD_ID } from '../../don/don-bootstrap'
 import { Logger } from '../../system/logger'
 import { latestAgentTodo } from '../../../lib/agent-todos'
 import type {
@@ -1202,7 +1201,7 @@ export class ChatEngineTurnsSessionIdle {
       const settledDelegation = finishedThread
         ? (this.host.don?.delegations.settle(finishedThread.id) ??
           (finishedThread.projectId === ASSISTANT_SPACE_ID
-            ? (delegationFromThread(finishedThread, DON_THREAD_ID) ?? undefined)
+            ? (delegationFromThread(finishedThread) ?? undefined)
             : undefined))
         : undefined
       // A turn the user started by answering that thread directly is read where
