@@ -68,6 +68,18 @@ const STREAM_HIDE_GRACE_MS = 5_000
 const STREAM_RESIZE_DEBOUNCE_MS = 300
 /** Let the stage's first size arrive so the stream starts at it, not at the default. */
 const STREAM_START_DELAY_MS = 80
+/** A stream that never went live is retried this many times before the session polls. */
+const STREAM_START_ATTEMPTS = 3
+/** A stream that went live and then died is re-armed this many times, so a device
+ * that comes back (an emulator rebooting, a cable replugged) restores the mirror by
+ * itself instead of leaving the tab on the polled capture for the rest of its life. */
+const STREAM_REARM_ATTEMPTS = 20
+/** How long to wait before retrying a stream that could not start. */
+const STREAM_RETRY_MS = 400
+/** The first re-arm gap, and its ceiling: a device that takes a minute to come back
+ * is still picked up, while a stream that keeps dying settles at one try per 8s. */
+const STREAM_REARM_MS = 2_000
+const STREAM_REARM_MAX_MS = 8_000
 
 interface DisplaySession {
   id: string
@@ -98,6 +110,8 @@ interface DisplaySession {
   streamSize: number
   /** True once a stream failed for this session: it stays on the polled capture. */
   streamBroken: boolean
+  /** Stream starts since one last went live, so a flaky start is retried then given up. */
+  streamStarts: number
   /** Pending stream start, hide or resize timers. */
   streamTimer: ReturnType<typeof setTimeout> | null
 }
@@ -153,6 +167,7 @@ export class DisplayService {
       stream: null,
       streamSize: 0,
       streamBroken: false,
+      streamStarts: 0,
       streamTimer: null
     }
     this.sessions.set(session.id, session)
@@ -208,7 +223,7 @@ export class DisplayService {
       if (session.stream && !session.streamTimer) {
         session.streamTimer = setTimeout(() => {
           session.streamTimer = null
-          this.endStream(session)
+          this.endStream(session, 'hidden')
         }, STREAM_HIDE_GRACE_MS)
       }
       return
@@ -225,7 +240,7 @@ export class DisplayService {
       if (session.streamTimer) clearTimeout(session.streamTimer)
       session.streamTimer = setTimeout(() => {
         session.streamTimer = null
-        this.endStream(session)
+        this.endStream(session, 'resized')
         this.beginStream(session)
       }, STREAM_RESIZE_DEBOUNCE_MS)
     }
@@ -241,6 +256,7 @@ export class DisplayService {
       return
     }
     session.streamSize = session.demand.maxDimension
+    let wentLive = false
     session.stream = startDisplayStream({
       window,
       sessionId: session.id,
@@ -249,6 +265,8 @@ export class DisplayService {
       maxSize: session.streamSize,
       onLive: () => {
         if (session.disposed) return
+        wentLive = true
+        session.streamStarts = 0
         session.failures = 0
         session.detail = null
         this.setPhase(session, 'live')
@@ -256,17 +274,38 @@ export class DisplayService {
       onEnded: (detail) => {
         if (session.disposed || !session.stream) return
         session.stream = null
-        session.streamBroken = true
-        Logger.dev(`Display stream for ${session.sourceId} ended, polling instead: ${detail ?? ''}`)
+        // A stream that never painted is usually a start that lost a race on the
+        // device, not a target that cannot stream, and one that painted and then
+        // died is a device that went away. Either way the panel retries before it
+        // settles for the much slower polled capture.
+        session.streamStarts += 1
+        const attempts = wentLive ? STREAM_REARM_ATTEMPTS : STREAM_START_ATTEMPTS
+        const retry = session.streamStarts < attempts
+        if (!retry) session.streamBroken = true
+        Logger.dev(
+          retry
+            ? `Display stream for ${session.sourceId} ended, retrying: ${detail ?? ''}`
+            : `Display stream for ${session.sourceId} ended, polling instead: ${detail ?? ''}`
+        )
+        if (retry) {
+          const wait = wentLive
+            ? Math.min(STREAM_REARM_MAX_MS, STREAM_REARM_MS * session.streamStarts)
+            : STREAM_RETRY_MS
+          session.streamTimer = setTimeout(() => {
+            session.streamTimer = null
+            if (!session.disposed && session.demand.visible) this.beginStream(session)
+          }, wait)
+        }
         this.schedule(session, 0)
       }
     })
   }
 
   /** Stop the running stream without ending the session. */
-  private endStream(session: DisplaySession): void {
+  private endStream(session: DisplaySession, reason: 'hidden' | 'resized' | 'stopped'): void {
     const stream = session.stream
     session.stream = null
+    if (stream) Logger.dev(`Display stream for ${session.sourceId} stopping: ${reason}`)
     stream?.stop()
   }
 
@@ -317,7 +356,7 @@ export class DisplayService {
     session.timer = null
     if (session.streamTimer) clearTimeout(session.streamTimer)
     session.streamTimer = null
-    this.endStream(session)
+    this.endStream(session, 'stopped')
     try {
       session.capture.dispose()
     } catch (error) {

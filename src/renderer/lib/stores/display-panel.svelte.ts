@@ -15,7 +15,7 @@ import {
 } from '$shared/display-stream-protocol'
 import { DisplayStream } from '$lib/components/display/display-stream.svelte'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { logRendererError } from '$lib/system/renderer-logger'
+import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 
 /**
  * State for the display panel: one capture session per open mirror tab, and what
@@ -157,8 +157,10 @@ class DisplayPanelState {
       return
     }
     session.stream?.dispose()
-    const stream = new DisplayStream(port, () => {
-      if (session.stream === stream) session.stream = null
+    const stream = new DisplayStream(port, (detail) => {
+      if (session.stream !== stream) return
+      session.stream = null
+      if (detail) logRendererDev(`The device stream ended: ${detail}`)
     })
     session.stream = stream
   }

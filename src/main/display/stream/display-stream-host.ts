@@ -50,8 +50,11 @@ function route(stream: AndroidScrcpyStream, message: StreamInbound): void {
       return
     case 'abort':
       stream.stop()
+      // The renderer already knows why it aborted, but the main process is what puts
+      // the panel back on the polled capture, so this message must be delivered
+      // before the process that would send it goes away.
       parent?.postMessage({ type: 'ended', detail: message.reason })
-      process.exit(0)
+      setTimeout(() => process.exit(0), 50)
   }
 }
 
