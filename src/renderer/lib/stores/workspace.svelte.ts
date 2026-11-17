@@ -61,7 +61,7 @@ export interface SpecAgentResponse {
 export interface ProjectFileOpenRequest {
   projectId: string
   path: string
-  kind: 'file' | 'directory'
+  kind: 'file' | 'directory' | 'reveal'
 }
 
 export type StudioDocument = 'brainstorm' | 'spec' | 'assignment' | 'audit'
@@ -501,7 +501,11 @@ class WorkspaceState {
   requestProjectFileOpenCount = $state(0)
   private consumedProjectFileOpenCount = 0
 
-  requestProjectFileOpen(projectId: string, path: string, kind: 'file' | 'directory'): void {
+  requestProjectFileOpen(
+    projectId: string,
+    path: string,
+    kind: 'file' | 'directory' | 'reveal'
+  ): void {
     this.pendingProjectFileOpen = { projectId, path, kind }
     this.requestProjectFileOpenCount++
   }

@@ -71,6 +71,17 @@
      * surface on top.
      */
     recordingTargets?: () => readonly string[]
+    /**
+     * Whether a navigation the user asked for elsewhere (a notification, a
+     * spotlight thread or file result) steps this panel aside.
+     *
+     * A sheet answers a question about the thing it covers, so going somewhere
+     * else closes it. A dockable editor is work in progress that the user keeps
+     * while they move around the app, so it opts out: the panel still answers
+     * Escape and the close-surface shortcut, it simply stops counting as a
+     * surface a navigation must close.
+     */
+    closesOnNavigation?: boolean
     /** Initial panel height before viewport clamping. */
     defaultHeight?: number
     /** Tooltip/aria label shown on the draggable header. */
@@ -132,6 +143,7 @@
     storageKey = `${APP_SLUG}.harnessTasksPanel.v1`,
     layer = 'surface',
     recordingTargets,
+    closesOnNavigation = true,
     defaultHeight = 560,
     dragLabel = 'Drag to move the task panel',
     headerActions,
@@ -412,7 +424,7 @@
           onMinimize()
         }
       },
-      true,
+      closesOnNavigation,
       // A recording in this panel keeps Escape for itself (see the prop).
       () => recordingTargets?.() ?? []
     )

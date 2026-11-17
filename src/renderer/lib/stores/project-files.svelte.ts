@@ -723,6 +723,11 @@ class ProjectFilesWorkspace {
     return this.explorer.revealFile(projectId, path)
   }
 
+  /** Reveal a file in the tree and bring the tree itself on screen. */
+  revealFileInTree(projectId: string, path: string): Promise<void> {
+    return this.explorer.revealFileInTree(projectId, path)
+  }
+
   /** Keep a mounted explorer aligned with the active file tab without opening
    *  an explorer that the user chose to hide. */
   focusFileInExplorer(projectId: string, path: string): Promise<void> {
