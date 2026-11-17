@@ -1326,6 +1326,16 @@
             : msg.ovenLabel === undefined || msg.ovenLabel === 'Local'}
           {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
           {@const isLatest = absIndex === board.loadOlderMessages.messages.length - 1}
+          <!-- A group reply whose turn has only produced tool calls so far has
+               no closing text yet. The reply still has to be drawn, or the
+               speaker and its whole working trace vanish from the conversation
+               until the agent writes words, even though the run never stopped. -->
+          {@const liveGroupReply =
+            groupThread &&
+            isLatest &&
+            msg.completedAt === undefined &&
+            !msg.error &&
+            board.pollStreamParts.conversationBusy}
           {@const questionParts = msg.parts.filter(
             (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
           )}
@@ -1342,7 +1352,7 @@
                 )
               : null}
 
-          {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || closesReply}
+          {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || closesReply || liveGroupReply}
             <div class="group mb-6 flex min-w-0 flex-col">
               {#if !groupThread}
                 {#each traceSegmentsAbove as segment (segment.segmentIndex)}
@@ -1350,7 +1360,7 @@
                 {/each}
               {/if}
 
-              {#if closesReply}
+              {#if closesReply || liveGroupReply}
                 <!-- Final text output + footer   hide only on the active in-progress turn -->
                 {#if board.unmirroredTraceStartTime.isAssignmentAuditorThread}
                   {#if !board.pollStreamParts.conversationBusy || !isLatest || turnAuditReport}
@@ -1400,7 +1410,7 @@
                        waiting for the turn to hand the floor back: hiding the
                        bubble withheld the whole answer while the agent was still
                        writing it, so the message simply vanished mid-stream. -->
-                  {#if (turnClosingText && (groupThread || turnClosingVisible)) || pinnedAboveHeldSteer}
+                  {#if (turnClosingText && (groupThread || turnClosingVisible)) || pinnedAboveHeldSteer || liveGroupReply}
                     {@const isReadingThisTurn =
                       'messageId' in speechController.playback &&
                       speechController.playback.messageId === msg.id &&
@@ -1504,19 +1514,24 @@
                               }
                             : undefined
                         )}
-                        <DeferredMarkdownView
-                          text={deliveredClosingText}
-                          citationThread={board.unmirroredTraceStartTime.citationThreadContext}
-                          annotationScope={{
-                            projectId: board.handleAgentEvent.thread.projectId,
-                            threadId: board.handleAgentEvent.thread.id
-                          }}
-                          inlineFileTags={assistantInlineTags}
-                          onOpenAssistantTag={board.state.openAssistantTag}
-                          onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
-                          onOpenLocalFile={(url) =>
-                            void board.unmirroredTraceStartTime.openFilePart(url)}
-                        />
+                        <!-- A live reply drawn before its turn has written
+                             anything has no text to show: the speaker and the
+                             trace inside the bubble are its whole content. -->
+                        {#if turnClosingText}
+                          <DeferredMarkdownView
+                            text={deliveredClosingText}
+                            citationThread={board.unmirroredTraceStartTime.citationThreadContext}
+                            annotationScope={{
+                              projectId: board.handleAgentEvent.thread.projectId,
+                              threadId: board.handleAgentEvent.thread.id
+                            }}
+                            inlineFileTags={assistantInlineTags}
+                            onOpenAssistantTag={board.state.openAssistantTag}
+                            onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
+                            onOpenLocalFile={(url) =>
+                              void board.unmirroredTraceStartTime.openFilePart(url)}
+                          />
+                        {/if}
                       {/if}
                     </div>
                   {/if}
