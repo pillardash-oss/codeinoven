@@ -25,6 +25,7 @@ import { rememberLocalDownloadName } from '../../system/local-download-names'
 import type { SaveCopyInput, SaveFileInput } from '../../../lib/ipc/invoke-app'
 import type { ProjectFilesService } from '../../editor/project-files-service'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
+import { resourcePressure } from '../../system/resource-pressure'
 import type { IpcHandlerContext } from './context'
 
 export function registerSystemHandlers(ctx: IpcHandlerContext): void {
@@ -36,6 +37,10 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     privileged,
     attachmentStorageDirectory
   } = ctx
+
+  // The device reading behind every admission decision. The sampler only runs
+  // while the renderer is asking, so a quiet app holds no timer.
+  ipcMain.handle('system:resourceAdmission', () => resourcePressure.read())
 
   ipcMain.handle('community:getIssueUrl', () => {
     const platform =

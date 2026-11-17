@@ -8,6 +8,8 @@ import {
 } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
+import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
+import type { AdmissionDecision } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import {
   isResponseSelection,
@@ -415,6 +417,13 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
         return
       }
     }
+    // The device can hold a turn the thread is otherwise ready to start. The
+    // message stays queued, its card says why, and the shared watch re-runs this
+    // idle attention once the machine has room again.
+    if (await this.#holdForResources(projectId, id)) {
+      this.idleAttentionHandled = false
+      return
+    }
     // Claim synchronously before sending so the background dispatcher (or any
     // concurrent path) cannot also deliver this same queued message. If we lose
     // the race, whoever claimed it will send it   never send here.
@@ -438,6 +447,25 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     } finally {
       releaseQueuedMessage(projectId, id)
     }
+  }
+
+  /**
+   * Ask the device whether this turn may start now. True means the message stays
+   * queued on the machine, not on the thread, and the watch owns the retry.
+   */
+  async #holdForResources(projectId: string, threadId: string): Promise<boolean> {
+    let decision: AdmissionDecision
+    try {
+      decision = await invoke('system:resourceAdmission')
+    } catch {
+      return false
+    }
+    if (decision.action !== 'queue') {
+      queuedResourceWait.clear(projectId, threadId)
+      return false
+    }
+    queuedResourceWait.hold(projectId, threadId, decision, () => this.scheduleIdleAttention())
+    return true
   }
 
   scheduleIdleAttention(): void {

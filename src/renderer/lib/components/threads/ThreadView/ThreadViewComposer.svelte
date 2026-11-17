@@ -16,6 +16,7 @@
   import { cardArrive, dismissSlide } from '../../shared/card-motion'
   import AgentTodoCard from '../AgentTodoCard.svelte'
   import ComposerQueuedCard from '../ComposerQueuedCard.svelte'
+  import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
   import AgentQuestionCard from '../AgentQuestionCard.svelte'
   import AgentSecretCard from '../AgentSecretCard.svelte'
   import AgentMcpSignInCard from '../AgentMcpSignInCard.svelte'
@@ -346,6 +347,10 @@
             promptReferences={board.steerQueuedMessage.queuedPromptReferences}
             presentation={board.steerQueuedMessage.queuedPresentation}
             startAfterThreads={board.steerQueuedMessage.queuedStartAfterThreads}
+            resourceWait={queuedResourceWait.for(
+              board.handleAgentEvent.thread.projectId,
+              board.handleAgentEvent.thread.id
+            )}
             steerModifierLabel={board.state.steerModifierLabel}
             threadId={board.handleAgentEvent.thread.id}
             stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}
