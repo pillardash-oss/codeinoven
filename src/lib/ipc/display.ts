@@ -90,16 +90,23 @@ export interface DisplaySessionRequest {
 /**
  * How big and how active the stage is.
  *
- * Both fields exist to keep an idle panel free: `visible` pauses capture
+ * All three fields exist to keep an idle panel free: `visible` pauses capture
  * without tearing the session down (switching tabs, collapsing the dock, or
  * hiding the window all send false), and `maxDimension` is the size a source that
  * *can* capture small is asked for (the desktop one), quantized by the renderer so
  * a pixel of layout jitter does not ask for a new size every frame. A device is
  * never re-encoded to fit it: its PNG is painted at whatever the browser scales it
  * to.
+ *
+ * `streamMaxDimension` is the same size in layout pixels rather than device pixels,
+ * and it sizes the live video a device encodes. That encoder runs on the device, so
+ * asking it for twice the pixels the panel can show costs frames on a slow emulator
+ * where asking for the layout size looks identical on screen. A still frame keeps
+ * the sharper size, because it costs the device nothing while it sits there.
  */
 export interface DisplayFrameDemand {
   maxDimension: number
+  streamMaxDimension: number
   visible: boolean
 }
 

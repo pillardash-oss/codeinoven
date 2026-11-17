@@ -99,22 +99,27 @@ export async function ensureDonOrchestrator(deps: {
         threadSettingsRepaired = true
       }
       // An earlier build let the first opening prompt auto-title this thread,
-      // which put the app's instruction text in the sidebar. The orchestrator's
-      // conversation is named for the orchestrator and never titled by a turn.
-      // The group participants were also never persisted by that build, which is
-      // what made the conversation render as a project transcript instead of the
-      // group chat it is.
-      const needsRepair =
-        existing.title !== DON_THREAD_TITLE ||
-        existing.titleSource !== 'manual' ||
+      // which put the app's instruction text in the sidebar. The group
+      // participants were also never persisted by that build, which is what made
+      // the conversation render as a project transcript instead of the group chat
+      // it is.
+      //
+      // A name the user gave this conversation is theirs: Don now holds one
+      // conversation per topic, and the seeded name is only ever restored while
+      // the title is still one the app wrote. A manual title is left exactly as it
+      // is, and the group shape is repaired without touching the row's identity.
+      const userNamed = existing.titleSource === 'manual'
+      const needsTitleRepair = !userNamed && existing.title !== DON_THREAD_TITLE
+      const needsGroupRepair =
+        existing.assistantId !== DON_ASSISTANT_ID ||
         existing.groupParticipants?.[0] !== DON_ASSISTANT_ID ||
-        existing.groupTitle !== DON_THREAD_TITLE
-      if (needsRepair) {
+        existing.groupTitle === undefined
+      if (needsTitleRepair || needsGroupRepair) {
         await threadManager.updateThread(ASSISTANT_SPACE_ID, DON_THREAD_ID, {
-          title: DON_THREAD_TITLE,
-          titleSource: 'manual',
+          ...(needsTitleRepair ? { title: DON_THREAD_TITLE, titleSource: 'manual' as const } : {}),
+          assistantId: DON_ASSISTANT_ID,
           groupParticipants: [DON_ASSISTANT_ID],
-          groupTitle: DON_THREAD_TITLE
+          groupTitle: existing.groupTitle ?? existing.title
         })
       }
       const thread = await threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)

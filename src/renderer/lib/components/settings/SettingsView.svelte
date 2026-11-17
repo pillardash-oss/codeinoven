@@ -835,7 +835,7 @@
                 <p class="text-xs leading-relaxed text-dimmed">
                   Send a test to check that notifications reach you
                 </p>
-                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted'}
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'granted' && !notificationTestFailed}
                   <p class="mt-2 flex items-center gap-1.5 text-xs text-primary">
                     <CioCheckCircle size={13} />
                     Notifications are allowed
@@ -881,7 +881,7 @@
               <button
                 class="flex shrink-0 items-center gap-1.5 border bg-elevated px-3 py-1.5 text-xs font-medium hover:bg-overlay disabled:opacity-50"
                 disabled={notificationTestBusy}
-                title="Request permission and send a test system notification"
+                title="Send a test system notification"
                 onclick={() => void testSystemNotification()}
               >
                 {#if notificationTestBusy}

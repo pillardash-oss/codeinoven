@@ -43,7 +43,9 @@ import type { SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import {
   SPEC_CONTRACT_CONTINUATION_PROMPT,
-  USAGE_RESET_FALLBACK_RETRY_MS
+  USAGE_RESET_FALLBACK_RETRY_MS,
+  WORKING_STATUS_RECONCILE_INTERVAL_MS,
+  WORKING_STATUS_RECONCILE_MAX_SESSIONS
 } from './chat-engine-constants'
 import { turnStreamPath } from './chat-engine-pure'
 import type { ChatEngine } from '../chat-engine'
@@ -191,10 +193,28 @@ export class ChatEngineThreadLifecycle {
   /**
    * Live provider activity is authoritative evidence that its task is still
    * running. Repair stale terminal state so header, sidebar, and trace agree.
+   *
+   * Gated per session: a live turn streams tens of deltas a second, and every
+   * repair reads the thread through the single-flight DB worker the whole UI
+   * reads from, so a session that already reconciled inside the interval is
+   * skipped instead of spending that worker's capacity again. A turn's first
+   * delta finds no stamp and reconciles immediately, and the in-flight map is
+   * still checked first, so an interval that expires during a slow repair never
+   * queues a second one behind it.
    */
   reconcileWorkingThreadStatus(sessionId: string): Promise<void> {
     const existing = this.host.state.workingStatusReconciliations.get(sessionId)
     if (existing) return existing
+    const reconciledAt = this.host.state.workingStatusReconciledAt.get(sessionId)
+    if (
+      reconciledAt !== undefined &&
+      Date.now() - reconciledAt < WORKING_STATUS_RECONCILE_INTERVAL_MS
+    ) {
+      return Promise.resolve()
+    }
+    // Stamped on start, not on settle: a repair that outlives its own interval
+    // must not be re-queued by the next delta while it is still running.
+    this.stampWorkingStatusReconciliation(sessionId)
     const reconciliation = (async (): Promise<void> => {
       const info = this.host.sessionRegistry.get(sessionId)
       if (!info || info.ephemeral) return
@@ -228,6 +248,24 @@ export class ChatEngineThreadLifecycle {
     })
     this.host.state.workingStatusReconciliations.set(sessionId, reconciliation)
     return reconciliation
+  }
+
+  /**
+   * Stamp this session's reconciliation start and keep the gate map bounded.
+   *
+   * `retireSessionState` drops the stamp with the rest of the session's state,
+   * but a session removed by one of the narrower registry deletes would leave
+   * its stamp behind for the life of the process, so the oldest entry gives way
+   * once a few hundred sessions have been stamped. Losing a stamp only costs one
+   * extra reconcile.
+   */
+  private stampWorkingStatusReconciliation(sessionId: string): void {
+    const stamps = this.host.state.workingStatusReconciledAt
+    if (stamps.size >= WORKING_STATUS_RECONCILE_MAX_SESSIONS && !stamps.has(sessionId)) {
+      const oldest = stamps.keys().next().value
+      if (oldest !== undefined) stamps.delete(oldest)
+    }
+    stamps.set(sessionId, Date.now())
   }
 
   /**

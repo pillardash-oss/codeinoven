@@ -36,11 +36,17 @@ export interface VideoPreviewRequest {
   projectId: string
   threadId: string
   /**
-   * Project-relative folder, as the caller spelled it. Validated here rather
+   * Folder inside `projectPath`, as the caller spelled it. Validated here rather
    * than at each call site, so a model-written argument and any other caller go
    * through one check.
    */
   directory: unknown
+  /**
+   * The spelling the caller's board knows the folder by, when the folder is kept in
+   * another checkout of the project. The served folder is named by that spelling so
+   * every record and tab mark keeps the root it really lives in.
+   */
+  display?: string
   /** Project-relative entry inside the folder, or null/undefined for the default. */
   entry: unknown
   /**
@@ -83,7 +89,7 @@ export interface VideoPreviewRequest {
 }
 
 export interface VideoPreviewResult {
-  /** Project-relative folder, with forward slashes. */
+  /** The spelling the caller's board knows the folder by, with forward slashes. */
   directory: string
   /** Entry file shown, or null for the folder listing. */
   entry: string | null
@@ -114,7 +120,11 @@ export async function openVideoPreview(
   deps: VideoPreviewDeps,
   request: VideoPreviewRequest
 ): Promise<VideoPreviewResult> {
-  const directory = resolveServedFolder(request.projectPath, request.directory, request.defaultRoot)
+  const resolved = resolveServedFolder(request.projectPath, request.directory, request.defaultRoot)
+  const directory: typeof resolved = {
+    absolute: resolved.absolute,
+    display: request.display ?? resolved.display
+  }
   const registration = await deps.previews.open(directory.absolute).catch((error: unknown) => {
     throw new Error(
       `The composition folder "${directory.display}" is not there yet. Write the composition into it first, or name a folder that exists. Underlying error: ${error instanceof Error ? error.message : String(error)}`

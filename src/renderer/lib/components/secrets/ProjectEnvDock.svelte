@@ -6,9 +6,11 @@
   import CioPlus from '@pdslng/cio-icon/CioPlus.svelte'
   import CioRedo from '@pdslng/cio-icon/CioRedo.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import CioTarget from '@pdslng/cio-icon/CioTarget.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
@@ -631,6 +633,32 @@
     }
   }
 
+  /**
+   * Show the file this panel is editing in the project tree.
+   *
+   * The dock outlives the thread and the project it was opened from, so the
+   * reveal finds that project's own tree: the one already on screen when the
+   * project is still open, otherwise the project's view, which the workspace
+   * navigates to before it reveals the path.
+   */
+  async function revealFileInProjectTree(): Promise<void> {
+    const projectId = projectEnvDock.projectId
+    if (!projectId || !loadedFileName) return
+    const path = loadedGroup ? `${loadedGroup}/${loadedFileName}` : loadedFileName
+    const thread = workspaceState.selectedThread
+    if (workspaceState.activeProject?.id === projectId && thread?.projectId === projectId) {
+      try {
+        await projectFilesWorkspace.loadDirectory(projectId, '')
+        contextSidebarState.openFiles(projectId, thread.id)
+        await projectFilesWorkspace.revealFileInTree(projectId, path)
+      } catch (cause) {
+        error = cause instanceof Error ? cause.message : 'Could not reveal this env file'
+      }
+      return
+    }
+    workspaceState.requestProjectFileOpen(projectId, path, 'reveal')
+  }
+
   /** Add a blank key, then put the caret in it and bring it on screen. */
   async function addRow(): Promise<void> {
     const row: KeyRow = { id: nextRowId++, name: '', value: '' }
@@ -815,6 +843,7 @@
   onMinimize={() => projectEnvDock.minimize()}
   onClose={requestClose}
   {storageKey}
+  closesOnNavigation={false}
   dragLabel="Drag to move the env file panel"
   defaultHeight={640}
   flushBody
@@ -902,26 +931,36 @@
     onkeydown={handleDockKeydown}
   >
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
-      <label class="flex min-w-0 items-center gap-2" for="env-file-picker">
-        <span class="text-[0.6875rem] font-medium text-muted">Stored</span>
-        <select
-          id="env-file-picker"
-          class="h-7 max-w-64 min-w-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none transition-colors hover:bg-overlay focus:border-primary disabled:opacity-50"
-          value={selectedTarget}
-          disabled={loading || pickerTargets.length === 0}
-          title="Show the secrets stored for another file in this project"
-          aria-label="Secrets stored for this project"
-          onchange={(event) => selectStoredTarget(event.currentTarget.value)}
+      <div class="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          class="flex h-7 w-7 shrink-0 items-center justify-center border bg-elevated text-dimmed transition-colors hover:bg-overlay hover:text-foreground"
+          title="Reveal this env file in the project tree"
+          aria-label="Reveal this env file in the project tree"
+          onclick={() => void revealFileInProjectTree()}
         >
-          {#each pickerTargets as target (target.value)}
-            <option value={target.value}
-              >{target.label}{isTargetDirty(target.group, target.fileName)
-                ? ' (unsaved)'
-                : ''}</option
-            >
-          {/each}
-        </select>
-      </label>
+          <CioTarget size={12} />
+        </button>
+        <label class="min-w-0" for="env-file-picker">
+          <select
+            id="env-file-picker"
+            class="h-7 max-w-64 min-w-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none transition-colors hover:bg-overlay focus:border-primary disabled:opacity-50"
+            value={selectedTarget}
+            disabled={loading || pickerTargets.length === 0}
+            title="Show the secrets stored for another file in this project"
+            aria-label="Secrets stored for this project"
+            onchange={(event) => selectStoredTarget(event.currentTarget.value)}
+          >
+            {#each pickerTargets as target (target.value)}
+              <option value={target.value}
+                >{target.label}{isTargetDirty(target.group, target.fileName)
+                  ? ' (unsaved)'
+                  : ''}</option
+              >
+            {/each}
+          </select>
+        </label>
+      </div>
 
       <div
         class="flex items-center gap-0.5 border bg-elevated p-0.5"

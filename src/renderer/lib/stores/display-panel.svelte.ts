@@ -15,7 +15,7 @@ import {
 } from '$shared/display-stream-protocol'
 import { DisplayStream } from '$lib/components/display/display-stream.svelte'
 import { invoke, subscribe } from '$lib/ipc.svelte'
-import { logRendererError } from '$lib/system/renderer-logger'
+import { logRendererDev, logRendererError } from '$lib/system/renderer-logger'
 
 /**
  * State for the display panel: one capture session per open mirror tab, and what
@@ -100,7 +100,10 @@ class DisplayPanelState {
    * and a reactive field written by an effect that also reads state is a loop
    * with a nicer name.
    */
-  private readonly demands = new Map<string, { maxDimension: number; visible: boolean }>()
+  private readonly demands = new Map<
+    string,
+    { maxDimension: number; streamMaxDimension: number; visible: boolean }
+  >()
 
   /** Every kind, in picker order, with whatever has been discovered so far. */
   sections = $derived(
@@ -157,8 +160,10 @@ class DisplayPanelState {
       return
     }
     session.stream?.dispose()
-    const stream = new DisplayStream(port, () => {
-      if (session.stream === stream) session.stream = null
+    const stream = new DisplayStream(port, (detail) => {
+      if (session.stream !== stream) return
+      session.stream = null
+      if (detail) logRendererDev(`The device stream ended: ${detail}`)
     })
     session.stream = stream
   }
@@ -249,9 +254,13 @@ class DisplayPanelState {
   /**
    * Report the size the stage paints at. Deduped against the last value sent, so
    * dragging the dock's edge sends a handful of updates rather than one per pixel.
+   *
+   * `streamMaxDimension` is the same area in layout pixels: the live video is encoded
+   * on the device, so asking it for the device-pixel size only buys frames the panel
+   * cannot show and spends the ones it can.
    */
-  reportStageSize(tabId: string, maxDimension: number): void {
-    this.pushDemand(tabId, this.visibleTabId === tabId, maxDimension)
+  reportStageSize(tabId: string, maxDimension: number, streamMaxDimension: number): void {
+    this.pushDemand(tabId, this.visibleTabId === tabId, maxDimension, streamMaxDimension)
   }
 
   /**
@@ -354,17 +363,32 @@ class DisplayPanelState {
     for (const kind of DISPLAY_SOURCE_KINDS) void this.refresh(kind)
   }
 
-  private pushDemand(tabId: string, visible: boolean, reported?: number): void {
+  private pushDemand(
+    tabId: string,
+    visible: boolean,
+    reported?: number,
+    reportedStream?: number
+  ): void {
     const session = this.sessions[tabId]
     if (!session) return
+    const round = (value: number): number =>
+      Math.max(DEMAND_STEP, Math.round(value / DEMAND_STEP) * DEMAND_STEP)
     const previous = this.demands.get(tabId)
-    const requested = reported ?? previous?.maxDimension ?? DEMAND_STEP
-    const maxDimension = Math.max(DEMAND_STEP, Math.round(requested / DEMAND_STEP) * DEMAND_STEP)
-    if (previous?.maxDimension === maxDimension && previous.visible === visible) return
-    this.demands.set(tabId, { maxDimension, visible })
-    void invoke('display:demand', session.sessionId, { maxDimension, visible }).catch(
-      (error: unknown) => logRendererError('A display demand could not be reported', error)
-    )
+    const maxDimension = round(reported ?? previous?.maxDimension ?? DEMAND_STEP)
+    const streamMaxDimension = round(reportedStream ?? previous?.streamMaxDimension ?? maxDimension)
+    if (
+      previous?.maxDimension === maxDimension &&
+      previous.streamMaxDimension === streamMaxDimension &&
+      previous.visible === visible
+    ) {
+      return
+    }
+    this.demands.set(tabId, { maxDimension, streamMaxDimension, visible })
+    void invoke('display:demand', session.sessionId, {
+      maxDimension,
+      streamMaxDimension,
+      visible
+    }).catch((error: unknown) => logRendererError('A display demand could not be reported', error))
   }
 }
 

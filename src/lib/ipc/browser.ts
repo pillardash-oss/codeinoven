@@ -259,7 +259,12 @@ export interface BrowserPageState {
  * design without offering it for every page.
  */
 export interface BrowserDesignTab {
-  /** Project-relative folder being served, e.g. `.cio/designs/hero`. */
+  /**
+   * The folder being served, e.g. `.cio/designs/hero`.
+   *
+   * A design kept in another checkout of the project (a scope worktree) is spelled
+   * by its absolute path, like every entry the design board lists.
+   */
   directory: string
   /** Loopback origin the folder is served on, e.g. `http://127.0.0.1:51234`. */
   origin: string

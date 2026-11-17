@@ -1,4 +1,4 @@
-import { authoredWorkRoot } from '../design/authored-work-root'
+import { authoredWorkRoot, findAuthoredWork } from '../design/authored-work'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
@@ -108,21 +108,25 @@ export function createDesignPreviewExecutor(
         `The design preview executor handles preview, checkpoint, history and restore, and no operation named "${operation}".`
       )
     }
-    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
+    // The folder is resolved against every checkout this project writes work into,
+    // so a design the agent wrote while its session ran in a scope worktree opens
+    // from the spelling it used rather than being looked for in the project root.
+    const placement = await findAuthoredWork(
+      options.database,
+      { projectId: context.projectId, threadId: context.threadId, kind: 'design' },
+      typeof input['directory'] === 'string'
+        ? new DesignRepo(options.database).resolveDirectory(context.projectId, input['directory'])
+        : input['directory']
+    )
     const attention = input['attention'] === 'focus' ? 'focus' : 'background'
     const result = await openDesignPreview(
       { previews: options.previews, browser: options.browser },
       {
-        projectPath: scope.path,
+        projectPath: placement.root.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory:
-          typeof input['directory'] === 'string'
-            ? new DesignRepo(options.database).resolveDirectory(
-                context.projectId,
-                input['directory']
-              )
-            : input['directory'],
+        directory: placement.relative,
+        display: placement.display,
         entry: input['entry'],
         defaultRoot: currentWorkRoot('design', context.projectId),
         attention,

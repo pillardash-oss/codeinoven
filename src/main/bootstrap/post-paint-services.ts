@@ -26,7 +26,7 @@ import { settingsWithAssistantTarget } from '../../lib/assistant-execution'
 import { findBrowserSearchEngine } from '../../lib/browser-search-engines'
 import { prototypeCdnPolicyFromConfig } from '../../lib/prototypes/prototype-cdn'
 import { loadProjectWorkRoots } from '../design/work-roots-state'
-import { installAuthoredWorkScopeRoots } from '../design/authored-work-root'
+import { installAuthoredWorkScopeRoots } from '../design/authored-work'
 import { assistantRunTitle, assistantRunPrompt } from '../../lib/assistant-run'
 import { recruitedAssistantKnowledge } from '../../lib/assistant-recruit'
 import { actionEnvironmentDirectories } from '../../lib/project-env'
@@ -323,9 +323,9 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     scopeManager,
     scopeWorktreeService
   )
-  // Authored work (a design's or a composition's folder) belongs under the
-  // checkout the thread's scope runs in, so the design and video services ask
-  // the same authority the session and the file tree ask.
+  // Authored work is listed from every checkout a project writes it into, so a
+  // design kept in a scope's worktree is reachable from every thread instead of
+  // disappearing with the scope that happened to be on screen.
   installAuthoredWorkScopeRoots(scopeRootProvider(scopeRootResolver))
   const projectFilesService = new ProjectFilesService(
     projectManager,

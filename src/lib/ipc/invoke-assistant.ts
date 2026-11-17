@@ -36,11 +36,15 @@ export const invokeAssistantContract = {
    */
   'assistant:previews': {} as Contract<[], AssistantPreview[]>,
   /**
-   * Don's one thread, seeded on first launch. Read by the surfaces that talk to the
-   * orchestrator without opening the assistant view, such as the listening panel,
-   * so none of them has to search the assistant space for it.
+   * The Don conversation to open when a surface only has a "Don" door. Don holds
+   * one conversation per topic, so this answers with the one that last moved.
    */
   'assistant:donThread': {} as Contract<[], { threadId: string | null }>,
+  /**
+   * Open one more Don conversation: its own thread, its own context, its own tab.
+   * The conversation it inherits from is the newest one that already has settings.
+   */
+  'assistant:createDonConversation': {} as Contract<[], Thread>,
   /**
    * Open Don's first conversation, once. The orchestrator introduces itself with
    * a real turn the first time it is opened, exactly like every other assistant,

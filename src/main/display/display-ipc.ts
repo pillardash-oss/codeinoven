@@ -129,18 +129,35 @@ function requireSessionId(value: unknown): string {
   return value
 }
 
-function requireDemand(value: unknown): { maxDimension: number; visible: boolean } {
+function requireDemand(value: unknown): {
+  maxDimension: number
+  streamMaxDimension: number
+  visible: boolean
+} {
   if (typeof value !== 'object' || value === null) {
     throw new TypeError('A display demand must be an object')
   }
-  const demand = value as { maxDimension?: unknown; visible?: unknown }
+  const demand = value as {
+    maxDimension?: unknown
+    streamMaxDimension?: unknown
+    visible?: unknown
+  }
   if (typeof demand.maxDimension !== 'number' || !Number.isFinite(demand.maxDimension)) {
     throw new TypeError('A display demand must carry a finite maxDimension')
   }
   if (typeof demand.visible !== 'boolean') {
     throw new TypeError('A display demand must carry a visible flag')
   }
-  return { maxDimension: demand.maxDimension, visible: demand.visible }
+  const stream = demand.streamMaxDimension
+  return {
+    maxDimension: demand.maxDimension,
+    // An older renderer sends only the capture size, which is a fine stream size too.
+    streamMaxDimension:
+      typeof stream === 'number' && Number.isFinite(stream) && stream > 0
+        ? stream
+        : demand.maxDimension,
+    visible: demand.visible
+  }
 }
 
 function requireControl(value: unknown) {

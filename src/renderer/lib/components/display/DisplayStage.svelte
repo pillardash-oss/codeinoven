@@ -142,12 +142,17 @@
   // upscaled into a blur and, if the demand followed the painted size, would stay
   // small forever. Asking for the area's own longest edge means the next frame is
   // already sharp at the size the panel has. The store dedupes, so an unchanged
-  // size costs no IPC.
+  // size costs no IPC. The stream gets the layout size instead: the device encodes
+  // that video, so its pixels are what the frame rate is paid in.
   $effect(() => {
     const area = areaSize
     if (area.width <= 0 || area.height <= 0) return
     const longest = Math.max(area.width - RAIL_WIDTH, area.height)
-    displayPanel.reportStageSize(tab.id, Math.round(longest * (window.devicePixelRatio || 1)))
+    displayPanel.reportStageSize(
+      tab.id,
+      Math.round(longest * (window.devicePixelRatio || 1)),
+      Math.round(longest)
+    )
   })
 
   /**

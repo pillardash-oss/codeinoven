@@ -1,4 +1,4 @@
-import { authoredWorkRoot } from '../design/authored-work-root'
+import { findAuthoredWork } from '../design/authored-work'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
@@ -75,21 +75,26 @@ export function createVideoPreviewExecutor(
         `The video capability's "preview" executor received the operation "${operation}".`
       )
     }
-    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
+    // The folder is resolved against every checkout this project writes work into,
+    // so a composition the agent wrote while its session ran in a scope worktree
+    // plays from the spelling it used rather than being looked for in the project
+    // root, and a board that knows the folder by its absolute spelling keeps it.
+    const placement = await findAuthoredWork(
+      options.database,
+      { projectId: context.projectId, threadId: context.threadId, kind: 'video' },
+      typeof input['directory'] === 'string'
+        ? new DesignRepo(options.database).resolveDirectory(context.projectId, input['directory'])
+        : input['directory']
+    )
     const attention = input['attention'] === 'focus' ? 'focus' : 'background'
     const result = await openVideoPreview(
       { previews: options.previews, browser: options.browser },
       {
-        projectPath: scope.path,
+        projectPath: placement.root.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory:
-          typeof input['directory'] === 'string'
-            ? new DesignRepo(options.database).resolveDirectory(
-                context.projectId,
-                input['directory']
-              )
-            : input['directory'],
+        directory: placement.relative,
+        display: placement.display,
         entry: input['entry'],
         defaultRoot: currentWorkRoot('video', context.projectId),
         attention,

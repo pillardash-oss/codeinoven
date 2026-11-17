@@ -5,7 +5,7 @@ import {
 } from '../../lib/utility-suggestion'
 import type { PendingQuestionInfo } from './chat-engine/chat-engine-types'
 import type { ChatEngine } from './chat-engine'
-import { DON_THREAD_ID } from '../don/don-bootstrap'
+import { isDonConversation } from '../don/don-conversations'
 import { teammateAuthor, writeTeammateLine } from './delegation-lines'
 import { Logger } from '../system/logger'
 
@@ -49,13 +49,24 @@ function needsTheUser(pending: PendingQuestionInfo): boolean {
   )
 }
 
-/** Whether this thread is one Don started, and the router may speak about it. */
-function donInitiator(thread: Thread | null): string | null {
+/** Whether this thread is one Don started, and the conversation to speak into. */
+async function donInitiator(
+  engine: ChatEngine,
+  thread: Thread | null
+): Promise<{ projectId: string; threadId: string } | null> {
   const origin = thread?.dispatchOrigin
   if (!origin) return null
   if (origin.initiatorProjectId !== ASSISTANT_SPACE_ID) return null
-  if (origin.initiatorThreadId !== DON_THREAD_ID) return null
-  return origin.initiatorThreadId
+  // Don holds one conversation per topic, so the initiator is whichever of them
+  // started this run: the question is answered in that conversation, never in a
+  // reserved one, or the person reading a topic would be asked about work in it
+  // from somewhere else.
+  const initiator = await engine.threadManager.getThread(
+    origin.initiatorProjectId,
+    origin.initiatorThreadId
+  )
+  if (!isDonConversation(initiator)) return null
+  return { projectId: origin.initiatorProjectId, threadId: origin.initiatorThreadId }
 }
 
 /** Remember a request id without letting the set grow for the process lifetime. */
@@ -158,8 +169,9 @@ export async function routeTeammateQuestion(
   if (routed.has(requestId)) return
   try {
     const thread = await engine.threadManager.getThread(projectId, threadId)
-    if (!donInitiator(thread) || !thread) return
-    const don = await engine.threadManager.getThread(ASSISTANT_SPACE_ID, DON_THREAD_ID)
+    const initiator = await donInitiator(engine, thread)
+    if (!initiator || !thread) return
+    const don = await engine.threadManager.getThread(initiator.projectId, initiator.threadId)
     if (!don?.settings) return
     if (!thread.dispatchOrigin) return
     remember(requestId)
@@ -172,8 +184,8 @@ export async function routeTeammateQuestion(
       text: questionLine(thread, pending)
     })
     await engine.sendPrompt(
-      ASSISTANT_SPACE_ID,
-      DON_THREAD_ID,
+      initiator.projectId,
+      initiator.threadId,
       don.settings,
       donInstruction(thread, pending),
       [],

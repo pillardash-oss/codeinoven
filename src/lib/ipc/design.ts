@@ -22,7 +22,17 @@ export type AuthoredWorkKind = 'design' | 'video'
 
 /** One folder of a thread's authored work: a design, or a video composition. */
 export interface DesignEntry {
-  /** Project-relative folder with forward slashes, e.g. `.cio/videos/title`. */
+  /**
+   * The folder, with forward slashes.
+   *
+   * Project-relative for work inside the project's own folder (`.cio/videos/title`).
+   * A folder the project keeps in another checkout of its own - a design written
+   * from a thread running in a managed scope worktree - is spelled by its absolute
+   * path, because that is the only spelling that names it: it is not below the
+   * project's root, and a relative path would point at nothing. Every design of a
+   * project is listed from every thread, so the spelling is what keeps two designs
+   * of the same name in two scopes apart.
+   */
   directory: string
   /** Folder name, for a label, e.g. `hero`. */
   name: string
@@ -55,7 +65,7 @@ export interface DesignEntry {
 
 /** The folder a thread last previewed, if it has one. */
 export interface ThreadDesignCurrent {
-  /** Project-relative folder with forward slashes. */
+  /** The folder, in the spelling {@link DesignEntry.directory} documents. */
   directory: string
   /** Entry file inside the folder, or null to show the folder listing. */
   entry: string | null

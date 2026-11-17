@@ -776,7 +776,7 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
   async openProjectFileFromCommand(
     projectId: string,
     path: string,
-    kind: 'file' | 'directory'
+    kind: 'file' | 'directory' | 'reveal'
   ): Promise<void> {
     const project = this.projects.find((candidate) => candidate.id === projectId)
     if (!project || project.source !== 'local' || !project.path) return
@@ -823,6 +823,10 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
       await projectFilesWorkspace.revealFile(project.id, path)
       projectFilesWorkspace.markDirectoryExpanded(project.id, path)
       await projectFilesWorkspace.loadDirectory(project.id, path, true)
+    } else if (kind === 'reveal') {
+      // A reveal only points the tree at the file: opening a viewer is the
+      // command palette's own promise for a file result, not this caller's.
+      await projectFilesWorkspace.revealFileInTree(project.id, path)
     } else {
       await projectFilesWorkspace.openFile(project.id, path)
       await projectFilesWorkspace.revealFile(project.id, path)

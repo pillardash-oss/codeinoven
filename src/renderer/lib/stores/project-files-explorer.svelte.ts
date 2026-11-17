@@ -823,6 +823,18 @@ export class ProjectFilesExplorer {
     this.persistExplorer(projectId)
   }
 
+  /**
+   * Reveal one file in the tree and make sure the tree is on screen.
+   *
+   * An explicit "show me this file in the project tree" outranks a tree the
+   * reader folded, unlike a citation or an attachment link, which only record
+   * where the entry sits and leave the reader's own fold alone.
+   */
+  async revealFileInTree(projectId: string, path: string): Promise<void> {
+    this.host.stateFor(projectId).explorerVisible = true
+    await this.revealFile(projectId, path)
+  }
+
   /** Keep a mounted explorer aligned with the active file tab without opening
    *  an explorer that the user chose to hide. */
   async focusFileInExplorer(projectId: string, path: string): Promise<void> {

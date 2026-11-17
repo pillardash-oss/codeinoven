@@ -31,7 +31,7 @@ import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { sectionNavigationState } from '$lib/stores/section-navigation.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { WORKING_TRACE_PAGE_SIZE, isGroupThread } from '$shared/types'
-import type { Thread, AgentEvent, RemoteAgentEventPayload } from '$shared/types'
+import type { Thread, AgentEvent, RemoteAgentEventPayload, AgentMessage } from '$shared/types'
 import { releaseAnnotationHighlights } from '$lib/selection-anchors'
 import { registerSelectionAnnotationClaim, trackLiveSelection } from '$lib/selection-menu'
 import { captureResponseSelection, RESPONSE_HIGHLIGHT_NAME } from '../thread-response-ranges'
@@ -57,6 +57,13 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
    * so every effect here is owned by the component.
    */
   init(): void {
+    // Hold this thread's transcript as read for exactly as long as its view is
+    // mounted, so the store knows which streaming threads a reader is watching and
+    // which ones it may publish more slowly.
+    const releaseMessages = threadMessages.retain(
+      this.root.handleAgentEvent.thread.projectId,
+      this.root.handleAgentEvent.thread.id
+    )
     // A trace the reader expanded on a settled turn belongs to the visit that
     // expanded it: opening this thread again starts from the fold each turn asks
     // for, so a settled thread never returns with an old turn's work expanded.
@@ -518,9 +525,12 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
 
     // Controller-driven views (temporary chats) never feed the spec-conversation
     // sidebar: their responses belong to the side chat, not the studio thread.
-    $effect(() => {
-      if (this.root.loadOlderMessages.hasController) return
-      workspaceState.specAgentResponses = this.root.loadOlderMessages.messages
+    const SPEC_RESPONSES_REFRESH_MS = 500
+    let specResponsesPublishedAt = 0
+    let specResponsesTimer: ReturnType<typeof setTimeout> | null = null
+    const publishSpecResponses = (messages: readonly AgentMessage[]): void => {
+      specResponsesPublishedAt = Date.now()
+      workspaceState.specAgentResponses = messages
         .filter((message) => message.role === 'assistant')
         .map((message) => ({
           id: message.id,
@@ -528,6 +538,26 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           createdAt: message.createdAt
         }))
         .filter((message) => message.content.trim().length > 0)
+    }
+    $effect(() => {
+      if (this.root.loadOlderMessages.hasController) return
+      const messages = this.root.loadOlderMessages.messages
+      const elapsed = Date.now() - specResponsesPublishedAt
+      if (elapsed >= SPEC_RESPONSES_REFRESH_MS) {
+        publishSpecResponses(messages)
+        return
+      }
+      // Re-running clears this first, so the tail of a stream is published once
+      // the updates stop arriving rather than never.
+      specResponsesTimer = setTimeout(() => {
+        specResponsesTimer = null
+        publishSpecResponses(messages)
+      }, SPEC_RESPONSES_REFRESH_MS - elapsed)
+      return () => {
+        if (specResponsesTimer === null) return
+        clearTimeout(specResponsesTimer)
+        specResponsesTimer = null
+      }
     })
 
     // A persisted studio document remains available from the header. A missing
@@ -1320,6 +1350,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     onDestroy(() => {
+      releaseMessages()
       this.root.handleAgentEvent.liveTokenRate.clear()
       if (this.root.steerQueuedMessage.responseRangeRetryFrame)
         cancelAnimationFrame(this.root.steerQueuedMessage.responseRangeRetryFrame)

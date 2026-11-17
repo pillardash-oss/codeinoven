@@ -156,7 +156,17 @@
   const orderedAssistants = $derived(sortAssistants(assistants))
   /** Don, the app's orchestrator: a fixed slot above the list, never a row. */
   const donAssistant = $derived(assistants.find((row) => row.id === DON_ASSISTANT_ID) ?? null)
-  const donThread = $derived(tasks.find((task) => task.assistantId === DON_ASSISTANT_ID) ?? null)
+  /**
+   * Don's open door, and the conversations behind it.
+   *
+   * Don holds one conversation per topic now, so the tile opens the one that last
+   * moved and reads as the current place whenever any of Don's conversations is
+   * the open thread. The conversations themselves are the assistant view's tabs,
+   * not sidebar rows: the orchestrator stays one door, exactly as before.
+   */
+  const donThreads = $derived(tasksByAssistant.get(DON_ASSISTANT_ID) ?? EMPTY_TASKS)
+  const donThread = $derived(donThreads[0] ?? null)
+  const donSelected = $derived(donThreads.some((thread) => thread.id === selectedThreadId))
   /** Every assistant the user owns, in sidebar order. Built-ins hold their own slot. */
   const listedAssistants = $derived(orderedAssistants.filter((row) => !assistantIsBuiltin(row)))
 
@@ -292,7 +302,7 @@
             <DonTile
               assistant={donAssistant}
               threadId={donThread?.id ?? null}
-              selected={donThread !== null && selectedThreadId === donThread.id}
+              selected={donSelected}
               iconUrl={assistantStore.iconUrls.get(donAssistant.id) ?? null}
               ready={assistantReady(donAssistant)}
               lastWorkedAt={assistantStore.previews.get(donAssistant.id)?.at ?? null}

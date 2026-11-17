@@ -1,8 +1,4 @@
-import {
-  WorkFolderRegistry,
-  listConversationWorkFolders,
-  withWorkRegistryLock
-} from './work-folder-registry'
+import { WorkFolderRegistry, withWorkRegistryLock } from './work-folder-registry'
 import { updateWorkDetails } from './work-details-service'
 import { lstat, rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -36,7 +32,12 @@ import type {
   WorkGroupView
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
-import { authoredWorkRoot, type AuthoredWorkRoot } from './authored-work-root'
+import {
+  authoredWorkRoot,
+  findAuthoredWork,
+  listAuthoredWork,
+  type AuthoredWorkFolder
+} from './authored-work'
 import type { BrowserService } from '../browser/browser-service'
 import { NO_TAB_MARK, type BrowserTabMark } from '../browser/browser-service/browser-tab-mark'
 import type { Database } from '../database/database'
@@ -344,15 +345,14 @@ export class DesignService {
         if (!DESIGN_EXPORT_FORMATS.some((value) => value === format))
           throw new Error('Unsupported design export format')
         const projectId = requireId(rawProjectId, 'project id')
-        const scope = await authoredWorkRoot(
-          this.options.database,
-          projectId,
-          requireId(rawThreadId, 'thread id')
-        )
+        const threadId = requireId(rawThreadId, 'thread id')
+        // The folder is resolved against every root the project writes work into,
+        // so exporting a design found in another checkout exports that design.
+        const placement = await this.placeFolder(projectId, threadId, directory, 'design')
         const { exportDesign } = await import('./design-export-service')
         return exportDesign(
-          scope.path,
-          directory,
+          placement.root.path,
+          placement.relative,
           entry,
           format,
           this.options.previews,
@@ -511,19 +511,17 @@ export class DesignService {
       'design:removeMissing',
       async (_event, rawProjectId, rawThreadId, rawDirectory) => {
         const projectId = requireId(rawProjectId, 'project id')
+        const threadId = requireId(rawThreadId, 'thread id')
         const directory = requirePath(rawDirectory)
-        const scope = await authoredWorkRoot(
-          this.options.database,
-          projectId,
-          requireId(rawThreadId, 'thread id')
-        )
-        // Only the registry can remember a folder that is no longer on disk, and
-        // a conversation workspace is never in it.
-        if (scope.appOwned) return
+        const placement = await this.placeFolder(projectId, threadId, directory, 'design')
+        // Only the registry can remember a folder that is no longer on disk, and it
+        // is keyed by project-relative folder. A folder in another checkout is
+        // listed from disk, so a missing one was never listed and nothing holds it.
+        if (placement.root.appOwned || isAbsolute(placement.display)) return
         await new WorkFolderRegistry(this.options.database).removeMissing(
           projectId,
-          scope.path,
-          directory
+          placement.root.path,
+          placement.display
         )
       }
     )
@@ -533,11 +531,23 @@ export class DesignService {
         const projectId = requireId(rawProjectId, 'project id')
         const threadId = requireId(rawThreadId, 'thread id')
         const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
-        return updateWorkDetails({
+        // A folder kept in another checkout of the project is renamed inside that
+        // checkout, and answered with the spelling the board knows it by.
+        const placement = await this.placeFolder(
+          projectId,
+          threadId,
+          details.directory,
+          details.kind
+        )
+        const absoluteSpelling = isAbsolute(placement.display)
+        const result = await updateWorkDetails({
           database: this.options.database,
           projectId,
-          projectPath: scope.path,
-          details,
+          projectPath: placement.root.path,
+          details: {
+            ...details,
+            directory: placement.relative
+          },
           // A project's save folder is one stored setting: where its next design or
           // composition is written, and never where the existing ones are moved to.
           // A conversation workspace has no such setting: its root is the workspace
@@ -545,11 +555,16 @@ export class DesignService {
           // it would repoint every other assistant's designs at once.
           projectScope: !scope.appOwned,
           onRelocated: (moves) => {
-            this.followRelocatedFolders(projectId, details.kind, moves)
+            // A folder in another checkout is not this project's registry entry:
+            // its moves are recorded by the checkout it lives in, and listing it
+            // from disk already follows them.
+            if (!absoluteSpelling) {
+              this.followRelocatedFolders(projectId, details.kind, moves)
+              this.options.onWorkRelocated?.(projectId, moves)
+            }
             // A moved folder is a new directory, so the tab and port remembered
             // for every screen under the old name are stale by definition.
             for (const move of moves) void this.previewTargets.forgetFolder(projectId, move.from)
-            this.options.onWorkRelocated?.(projectId, moves)
           },
           list: async () => (await this.projectWork(projectId, threadId))[details.kind],
           relocate: async (from, to) => {
@@ -557,21 +572,21 @@ export class DesignService {
               projectId,
               from,
               to,
-              () => rename(resolve(scope.path, from), resolve(scope.path, to)),
-              () => rename(resolve(scope.path, to), resolve(scope.path, from))
+              () => rename(resolve(placement.root.path, from), resolve(placement.root.path, to)),
+              () => rename(resolve(placement.root.path, to), resolve(placement.root.path, from))
             )
             try {
               await this.options.previews.relocate(
-                resolve(scope.path, from),
-                resolve(scope.path, to)
+                resolve(placement.root.path, from),
+                resolve(placement.root.path, to)
               )
             } catch (error) {
               await this.history.relocateFolder(
                 projectId,
                 to,
                 from,
-                () => rename(resolve(scope.path, to), resolve(scope.path, from)),
-                () => rename(resolve(scope.path, from), resolve(scope.path, to))
+                () => rename(resolve(placement.root.path, to), resolve(placement.root.path, from)),
+                () => rename(resolve(placement.root.path, from), resolve(placement.root.path, to))
               )
               throw error
             }
@@ -581,11 +596,14 @@ export class DesignService {
                 projectId,
                 from,
                 to,
-                scope.appOwned ? scope.assistantId : undefined
+                placement.root.appOwned ? placement.root.assistantId : undefined
               )
             this.screenShots.clear()
           }
         })
+        return absoluteSpelling
+          ? { ...result, directory: resolve(placement.root.path, result.directory) }
+          : result
       }
     )
     // The history behind Undo and Redo. Reading captures the present first, so a
@@ -840,33 +858,39 @@ export class DesignService {
     threadId: string,
     directory: unknown
   ): Promise<DesignHistoryTarget> {
-    const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
     const kind = await this.resolveKind(threadId)
-    const requested = resolveServedFolder(scope.path, directory, currentWorkRoot(kind, projectId))
+    const placement = await this.placeFolder(projectId, threadId, directory, kind)
+    const requested = placement
     // A relocated folder is a project's own record: it exists so a project keeps
     // finding work the user moved inside its checkout. A conversation workspace
-    // lists what is on disk, so there is no record to follow.
-    const relocated = scope.appOwned
-      ? undefined
-      : await this.options.database.queryViaWorker(
-          'SELECT destination FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
-          [projectId, requested.display],
-          1
-        )
+    // lists what is on disk, so there is no record to follow, and neither is there
+    // for a folder another checkout holds: the user moved it, not this project.
+    const relocated =
+      placement.root.appOwned || isAbsolute(requested.display)
+        ? undefined
+        : await this.options.database.queryViaWorker(
+            'SELECT destination FROM work_folder_relocations WHERE project_id = ? AND directory = ?',
+            [projectId, requested.display],
+            1
+          )
     if (relocated && !relocated.ok) throw new Error('Could not resolve the current work folder')
     const destination = relocated?.rows[0] as { destination: string } | undefined
     const folder = destination
-      ? resolveServedFolder(scope.path, destination.destination, currentWorkRoot(kind, projectId))
+      ? resolveServedFolder(
+          placement.root.path,
+          destination.destination,
+          currentWorkRoot(kind, projectId)
+        )
       : requested
     return {
       projectId,
-      projectPath: scope.path,
+      projectPath: placement.root.path,
       directory: folder.display,
       absolute: folder.absolute,
       // Only a project whose change tracking is Git can have the folder tracked by
       // a repository; a manual-tracking project, and a conversation's own
       // workspace, are the app's to version, always.
-      gitMode: scope.gitMode
+      gitMode: placement.root.gitMode
     }
   }
 
@@ -940,6 +964,24 @@ export class DesignService {
    * the tag at turn start, the capability's own preview and checkpoint, and the
    * board's own open of a thread's work.
    */
+  /**
+   * One folder resolved through the authored-work pipeline both boards share.
+   *
+   * `root` is where the folder really is, so a preview, a history read or an export
+   * runs in the checkout holding the files, and `display` is the caller's spelling:
+   * project-relative for the project's own folder, absolute for a folder found in
+   * another checkout, which is what keeps two designs of the same name in two scopes
+   * apart in every record the app keeps.
+   */
+  private placeFolder(
+    projectId: string,
+    threadId: string,
+    directory: unknown,
+    kind: AuthoredWorkKind
+  ): Promise<AuthoredWorkFolder> {
+    return findAuthoredWork(this.options.database, { projectId, threadId, kind }, directory)
+  }
+
   async observeShownFolder(
     projectId: string,
     threadId: string,
@@ -1127,7 +1169,13 @@ export class DesignService {
     const origins = scope.appOwned
       ? new Map<string, string>()
       : await this.designs.originsViaWorker(projectId)
-    const items = (await this.listProjectFolders(projectId, threadId, scope, kind)).map((item) => ({
+    // Both boards list their work through the same pipeline, from every checkout
+    // the project writes into, so a design or a composition made in a scope's
+    // worktree is reachable from every thread instead of only the one that happened
+    // to be on screen when it was written.
+    const items = (
+      await listAuthoredWork(this.options.database, { projectId, threadId, kind })
+    ).map((item) => ({
       ...item,
       creatorThreadId: origins.get(item.directory) ?? null
     }))
@@ -1168,16 +1216,18 @@ export class DesignService {
      */
     forcedKind?: AuthoredWorkKind
   ): Promise<DesignOpenResult> {
-    const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
     const kind = forcedKind ?? (await this.resolveKind(threadId))
-    const requested = resolveServedFolder(scope.path, directory, currentWorkRoot(kind, projectId))
-    directory = this.designs.resolveDirectory(projectId, requested.display)
+    const placement = await this.placeFolder(projectId, threadId, directory, kind)
+    const display = this.designs.resolveDirectory(projectId, placement.display)
     const result = await this.serveWork({
       kind,
-      projectPath: scope.path,
+      projectPath: placement.root.path,
+      display,
       projectId,
       threadId,
-      directory,
+      // A preview is served from the root the folder really lives in, so a design
+      // kept in another checkout of the project opens exactly like the project's own.
+      directory: placement.relative,
       entry,
       attention: 'background',
       reveal,
@@ -1229,16 +1279,18 @@ export class DesignService {
     const origins = scope.appOwned
       ? new Map<string, string>()
       : await this.designs.originsViaWorker(projectId)
+    // One listing, from every checkout the project writes into, for both kinds: a
+    // composition found in another scope is reachable from the project's rail
+    // exactly like a design is.
     const list = async (kind: AuthoredWorkKind): Promise<DesignEntry[]> =>
       (
-        await this.listProjectFolders(
+        await listAuthoredWork(this.options.database, {
           projectId,
           // A conversation scope always names a thread: its workspace is the thread's
           // (or its assistant's), so `authoredWorkRoot` refused above without one.
-          threadId ?? '',
-          scope,
+          threadId: threadId ?? '',
           kind
-        )
+        })
       ).map((item) => ({
         ...item,
         creatorThreadId: origins.get(item.directory) ?? null
@@ -1268,15 +1320,16 @@ export class DesignService {
     /** The project board's kind override; see `open`. */
     forcedKind?: AuthoredWorkKind
   ): Promise<DesignThumbnail> {
-    const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
     const browser = this.options.browser()
     const kind = forcedKind ?? (await this.resolveKind(threadId))
+    const placement = await this.placeFolder(projectId, threadId, directory, kind)
     const result = await this.serveWork({
       kind,
-      projectPath: scope.path,
+      projectPath: placement.root.path,
+      display: placement.display,
       projectId,
       threadId,
-      directory,
+      directory: placement.relative,
       // The entry is passed through so the picture is the page the user is actually
       // looking at, not always the folder's index file.
       entry,
@@ -1349,18 +1402,10 @@ export class DesignService {
    * manager.
    */
   async folderPath(projectId: string, threadId: string, directory: unknown): Promise<string> {
-    const scope = await authoredWorkRoot(this.options.database, projectId, threadId).catch(
-      () => null
-    )
-    if (!scope) return ''
     try {
-      const folder = resolveServedFolder(
-        scope.path,
-        directory,
-        currentWorkRoot('design', projectId)
-      )
-      const metadata = await lstat(folder.absolute)
-      return metadata.isDirectory() ? folder.absolute : ''
+      const placement = await this.placeFolder(projectId, threadId, directory, 'design')
+      const metadata = await lstat(placement.absolute)
+      return metadata.isDirectory() ? placement.absolute : ''
     } catch {
       // An unresolvable or missing folder is not an error the caller can act on:
       // it is the answer "there is nothing here to reveal".
@@ -1375,8 +1420,8 @@ export class DesignService {
     width: number,
     force: boolean
   ): Promise<DesignScreenShot[]> {
-    const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
-    const folder = resolveServedFolder(scope.path, directory, currentWorkRoot('design', projectId))
+    const folder = await this.placeFolder(projectId, threadId, directory, 'design')
+    const placement = folder
     // The Screen Canvas is pictured with the screens, because the board shows it
     // as the canvas itself rather than as a screen inside it. It is generated
     // from the folder, so it is listed as one more entry stamped with the newest
@@ -1442,8 +1487,9 @@ export class DesignService {
         const shot = await this.captureScreen({
           projectId,
           threadId,
-          projectPath: scope.path,
-          directory: folder.display,
+          projectPath: placement.root.path,
+          display: folder.display,
+          directory: folder.relative,
           screen,
           width: shotWidth
         })
@@ -1463,7 +1509,7 @@ export class DesignService {
         await this.restoreTab({
           projectId,
           threadId,
-          projectPath: scope.path,
+          projectPath: placement.root.path,
           before,
           url: urlBefore
         })
@@ -1485,8 +1531,7 @@ export class DesignService {
     threadId: string,
     directory: unknown
   ): Promise<ScreenCanvasState | null> {
-    const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
-    const folder = resolveServedFolder(scope.path, directory, currentWorkRoot('design', projectId))
+    const folder = await this.placeFolder(projectId, threadId, directory, 'design')
     const screens = await listDesignScreens(folder.absolute)
     // Reading the canvas is what starts discovery of the states its screens
     // declare: the board asks for a canvas before the user opens one, so by the
@@ -1503,44 +1548,6 @@ export class DesignService {
       directory: folder.display,
       metadataError: read.metadataError
     })
-  }
-
-  /**
-   * The folders one scope's board lists.
-   *
-   * A checkout answers from the registry, which discovers the canonical default
-   * directories and remembers every exact folder the project was pointed at. A
-   * conversation's workspace answers from itself instead: its threads' records
-   * stand in for the registry, because the registry is keyed by project id and
-   * every assistant task shares one container id.
-   */
-  private async listProjectFolders(
-    projectId: string,
-    threadId: string,
-    /**
-     * The scope the board is listing: a project checkout, or a conversation's own
-     * workspace. The workspace is what a conversation's records are scoped to,
-     * because the workspace is the only thing that separates one assistant's work
-     * from another's under the shared container id.
-     */
-    scope: AuthoredWorkRoot,
-    kind: AuthoredWorkKind
-  ): Promise<DesignEntry[]> {
-    // A conversation workspace has no registry it can trust: the registry is keyed
-    // by project id, and every assistant task shares one container id, so a
-    // registry read there would answer for whichever assistant happened to write
-    // a folder of that name first. Its threads' own records are scoped to the
-    // workspace, so those stand in for the registry (see `listConversationWorkFolders`).
-    if (scope.appOwned)
-      return listConversationWorkFolders({
-        database: this.options.database,
-        projectId,
-        threadId,
-        assistantId: scope.assistantId,
-        workspacePath: scope.path,
-        kind
-      })
-    return new WorkFolderRegistry(this.options.database).list(projectId, scope.path, kind)
   }
 
   async listWorkFolders(
@@ -1617,6 +1624,13 @@ export class DesignService {
   private async serveWork(input: {
     kind: AuthoredWorkKind
     projectPath: string
+    /**
+     * The spelling the caller's board knows the folder by, when it is not the one
+     * the serving root produces. A folder kept in another checkout of the project
+     * is spelled by its absolute path, which is what keeps it apart from a
+     * same-named folder in the project's own root.
+     */
+    display?: string
     projectId: string
     threadId: string
     directory: unknown
@@ -1640,6 +1654,7 @@ export class DesignService {
   }): Promise<ServedWork> {
     const target = {
       projectPath: input.projectPath,
+      display: input.display,
       projectId: input.projectId,
       threadId: input.threadId,
       directory: input.directory,
@@ -1670,7 +1685,7 @@ export class DesignService {
             }
           )
     return {
-      directory: result.directory,
+      directory: input.display ?? result.directory,
       entry: result.entry,
       url: result.url,
       tabId: result.tabId
@@ -1688,6 +1703,8 @@ export class DesignService {
     projectId: string
     threadId: string
     projectPath: string
+    /** The spelling the board knows the folder by, which a cached shot is keyed by. */
+    display: string
     directory: string
     screen: DesignScreen
     width: number
@@ -1696,6 +1713,7 @@ export class DesignService {
       const result = await this.serveWork({
         kind: 'design',
         projectPath: input.projectPath,
+        display: input.display,
         projectId: input.projectId,
         threadId: input.threadId,
         directory: input.directory,
@@ -1755,12 +1773,21 @@ export class DesignService {
         await browser.waitForTabLoad(shown.tabId, SCREEN_LOAD_TIMEOUT_MS)
         return
       }
+      // The recorded folder is resolved against every root the project writes
+      // work into, so a design kept in another checkout is put back too.
+      const placement = await this.placeFolder(
+        input.projectId,
+        input.threadId,
+        input.before.directory,
+        input.before.kind
+      )
       const restored = await this.serveWork({
         kind: input.before.kind,
-        projectPath: input.projectPath,
+        projectPath: placement.root.path,
+        display: placement.display,
         projectId: input.projectId,
         threadId: input.threadId,
-        directory: input.before.directory,
+        directory: placement.relative,
         entry: input.before.entry,
         attention: 'background',
         reveal: false,

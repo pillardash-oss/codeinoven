@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto'
 import { atomicWrite } from '../../lib/utils'
 import { recordVideoEditChange, validateVideoEditorSelection } from '../../lib/video/edit'
 import { VideoEditorService } from './video-editor-service'
-import { authoredWorkRoot } from '../design/authored-work-root'
+import { findAuthoredWork, findAuthoredWorkFile, authoredWorkRoot } from '../design/authored-work'
+import type { AuthoredWorkFolder, AuthoredWorkQuery } from '../design/authored-work'
 import {
   validateVideoStudio,
   videoText,
@@ -15,7 +16,6 @@ import {
   parseVideoSrt,
   type VideoStudioDocument
 } from '../../lib/video/studio'
-import { currentWorkRoot } from '../design/work-roots-state'
 import { videoBoundedSeconds } from '../../lib/video/timeline'
 import { snapVideoFrame } from '../../lib/video/frame-grid'
 import { VideoFramePreview } from './video-frame-preview'
@@ -102,27 +102,40 @@ export class VideoStudioService {
     })
   }
   /**
-   * The absolute root of one composition's scope, and the composition folder
-   * inside it.
+   * One composition folder, resolved to the checkout that really holds it.
    *
    * The thread is part of the question rather than optional: a project thread's
    * work sits in its checkout, while an assistant task's, a chat's and a browser
    * tab's work sits in the workspace that conversation runs in, and only the
-   * thread can say which of those workspaces that is.
+   * thread can say which of those workspaces that is. A composition written into
+   * one of the project's scope worktrees is found there from the spelling the agent
+   * used, and `placement.display` is the spelling every record keeps, so two
+   * compositions of the same name in two checkouts stay apart.
+   *
+   * The folder is then read back through the containment check against the root
+   * that holds it, exactly as a project-relative spelling used to be, so a `.cio`
+   * linked out of a checkout is still refused.
    */
   private async folder(
     projectId: string,
     threadId: string,
     directory: unknown
-  ): Promise<{ root: string; folder: string }> {
-    const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
+  ): Promise<{ placement: AuthoredWorkFolder; folder: string }> {
+    const placement = await findAuthoredWork(
+      this.options.database,
+      { projectId, threadId, kind: 'video' },
+      // A caller that names no folder means the user's configured composition root,
+      // which the pipeline resolves for it.
+      directory
+    )
     return {
-      root: scope.path,
-      folder: await videoFolder(scope.path, directory ?? currentWorkRoot('video', projectId))
+      placement,
+      folder: await videoFolder(placement.root.path, placement.relative)
     }
   }
   /**
-   * The export one composition already has, as a project-relative path.
+   * The export one composition already has, as a path relative to the checkout that
+   * holds it.
    *
    * The board asks this for the folder in front rather than remembering an answer,
    * because the answer has to outlive a job record: an export made in another
@@ -135,9 +148,11 @@ export class VideoStudioService {
     threadId: string,
     directory: unknown
   ): Promise<string | null> {
-    const { root, folder } = await this.folder(projectId, threadId, directory)
-    const file = await videoExportFile(root, relative(root, folder))
-    return file === null ? null : relative(root, file)
+    // The folder is validated by the helper even though only its placement is read:
+    // an export is answered for a composition that is really there.
+    const { placement } = await this.folder(projectId, threadId, directory)
+    const file = await videoExportFile(placement.root.path, placement.relative)
+    return file === null ? null : relative(placement.root.path, file)
   }
   async read(
     projectId: string,
@@ -172,7 +187,7 @@ export class VideoStudioService {
     revision: string
     manifest: VideoProjectManifest | null
   }> {
-    const { root, folder } = await this.folder(projectId, threadId, directory)
+    const { placement, folder } = await this.folder(projectId, threadId, directory)
     const previous = this.writes.get(folder) ?? Promise.resolve()
     const task = previous
       .catch(() => undefined)
@@ -194,7 +209,7 @@ export class VideoStudioService {
             captionChanged ? [...current.captions, ...document.captions] : []
           )
         }
-        const savedDirectory = relative(root, folder).replaceAll('\\', '/')
+        const savedDirectory = placement.display
         // Save both sides even when no history panel is mounted.
         await this.options.captureHistory?.(projectId, threadId, savedDirectory, cause)
         await writeVideoStudio(folder, document)
@@ -219,12 +234,12 @@ export class VideoStudioService {
               2
             )
           )
-          await installVideoRuntime(root, folder)
+          await installVideoRuntime(placement.root.path, folder)
         }
         await this.options.captureHistory?.(projectId, threadId, savedDirectory, cause)
         // A saved control edit is a step in the folder's history, so the pane that
         // shows that history is told, exactly as a design restore tells it.
-        this.options.onChanged?.(projectId, relative(root, folder).replaceAll('\\', '/'))
+        this.options.onChanged?.(projectId, savedDirectory)
         return {
           document,
           revision: revision(document),
@@ -254,19 +269,30 @@ export class VideoStudioService {
     offset: unknown,
     duration: unknown
   ): Promise<string | null> {
-    const { root, folder } = await this.folder(projectId, threadId, directory)
+    const { placement, folder } = await this.folder(projectId, threadId, directory)
     const file = await videoFile(folder, source)
     // Clamped rather than validated: a track's `duration` may legally be as long
     // as the document allows, and a lane that cannot be pictured is a plain band
     // rather than a hard error the timeline would have to swallow.
     const from = videoBoundedSeconds(offset, 0, 0, 3600)
     const length = videoBoundedSeconds(duration, 10, 0.01, 3600)
-    return videoWaveformDataUrl(root, file, from, length, new AbortController().signal)
+    return videoWaveformDataUrl(
+      placement.root.path,
+      file,
+      from,
+      length,
+      new AbortController().signal
+    )
   }
 
   readonly execute: VideoCapabilityExecutor = async (operation, input, context) => {
-    const scope = await authoredWorkRoot(this.options.database, context.projectId, context.threadId)
-    const root = scope.path
+    // Every lookup below names what it is about, so a composition written into any
+    // of the project's checkouts is worked on where it really lives.
+    const query: AuthoredWorkQuery = {
+      projectId: context.projectId,
+      threadId: context.threadId,
+      kind: 'video'
+    }
     if (operation === 'editor') {
       const directory = videoText(input.directory, 'directory')
       if (input.action === 'apply')
@@ -313,6 +339,11 @@ export class VideoStudioService {
       )
     }
     if (operation === 'scaffold') {
+      // A scaffold writes a new composition rather than editing one that exists, so
+      // it goes into the checkout new work belongs in, exactly as before.
+      const root = (
+        await authoredWorkRoot(this.options.database, context.projectId, context.threadId)
+      ).path
       const target = await videoTargetFolder(root, input.directory)
       const copied = await copyVideoStarter({
         startersRoot: videoStartersRoot(),
@@ -332,14 +363,29 @@ export class VideoStudioService {
     }
     // The install itself lives in one module, because a scaffold and an explicit
     // runtime install must produce the same file.
-    if (operation === 'runtime')
-      return installVideoRuntime(root, await videoFolder(root, input.directory))
+    if (operation === 'runtime') {
+      const directory = videoText(input.directory, 'directory')
+      const { placement, folder } = await this.folder(
+        context.projectId,
+        context.threadId,
+        directory
+      )
+      return installVideoRuntime(placement.root.path, folder)
+    }
     if (operation === 'captions') {
-      const folder = await videoFolder(root, input.directory)
-      const state = await this.read(context.projectId, context.threadId, input.directory)
+      const directory = videoText(input.directory, 'directory')
+      const { placement } = await this.folder(context.projectId, context.threadId, directory)
+      const state = await this.read(context.projectId, context.threadId, directory)
       let captions = state.document.captions
       if (input.source !== undefined) {
-        const file = await videoFile(root, input.source)
+        // The caption file is named the way its own checkout spells it, so a file
+        // written beside a composition in a scope worktree is found there.
+        const source = await findAuthoredWorkFile(
+          this.options.database,
+          query,
+          videoText(input.source, 'source')
+        )
+        const file = await videoFile(source.root.path, source.relative)
         if ((await stat(file)).size > 2 * 1024 * 1024)
           throw new Error('Caption input exceeds 2 MiB')
         const text = await readFile(file, 'utf8')
@@ -363,24 +409,48 @@ export class VideoStudioService {
       const saved = await this.save(
         context.projectId,
         context.threadId,
-        input.directory,
+        directory,
         { ...state.document, captions, captionStyle: input.style ?? state.document.captionStyle },
         state.revision,
         'agent'
       )
-      return { ...saved, directory: relative(root, folder) }
+      return { ...saved, directory: placement.display }
     }
-    if (operation === 'probe')
-      return probeVideo(root, videoText(input.source, 'source'), AbortSignal.timeout(30000))
+    if (operation === 'probe') {
+      const source = await findAuthoredWorkFile(
+        this.options.database,
+        query,
+        videoText(input.source, 'source')
+      )
+      return probeVideo(source.root.path, source.relative, AbortSignal.timeout(30000))
+    }
     if (!VIDEO_STUDIO_OPERATIONS.some((name) => name === operation))
       throw new Error('Unsupported video operation')
-    const folder = operation === 'export' ? await videoFolder(root, input.directory) : null
-    const source = folder ? null : await videoFile(root, input.source)
+    if (operation === 'export') {
+      const { placement, folder } = await this.folder(
+        context.projectId,
+        context.threadId,
+        videoText(input.directory, 'directory')
+      )
+      const root = placement.root.path
+      return this.jobs.start(context.projectId, context.threadId, operation, root, (job) =>
+        exportVideo(root, folder, this.options.previews, job)
+      )
+    }
+
+    // Every remaining operation works on one media file, and the file itself decides
+    // which checkout the command is about.
+    const placement = await findAuthoredWorkFile(
+      this.options.database,
+      query,
+      videoText(input.source, 'source')
+    )
+    const root = placement.root.path
+    const source = await videoFile(root, placement.relative)
     const config = operation === 'transcribe' ? await this.options.config() : null
     return this.jobs.start(context.projectId, context.threadId, operation, root, async (job) => {
-      if (folder) return exportVideo(root, folder, this.options.previews, job)
       if (operation === 'track' || operation === 'analyze-motion' || operation === 'cut') {
-        const info = await probeVideo(root, relative(root, source!), job.signal)
+        const info = await probeVideo(root, placement.relative, job.signal)
         const start = videoNumber(input.start ?? 0, 'start', 0, 3600)
         const requested = videoNumber(
           input.duration ?? Math.min(info.duration ?? 10, 60),
@@ -402,7 +472,7 @@ export class VideoStudioService {
                 '-t',
                 String(duration),
                 '-i',
-                source!,
+                source,
                 '-c:v',
                 'libx264',
                 '-threads',

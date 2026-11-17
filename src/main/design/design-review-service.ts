@@ -4,10 +4,9 @@ import { realpath, stat } from 'node:fs/promises'
 import { relative, isAbsolute, join } from 'node:path'
 import createReviewWorker from './design-review-worker.ts?nodeWorker'
 import { trackQuitWorker } from '../system/quit-worker-sweep'
-import { currentWorkRoot } from './work-roots-state'
 import type { Database } from '../database/database'
-import { authoredWorkRoot } from './authored-work-root'
-import { resolveServedFolder, resolveServedEntry } from '../preview/served-folder'
+import { findAuthoredWork } from './authored-work'
+import { resolveServedEntry } from '../preview/served-folder'
 import {
   DESIGN_REVIEW_DIMENSIONS,
   DESIGN_REVIEW_RUBRIC,
@@ -26,14 +25,13 @@ export async function runDesignReview(
   critique: boolean,
   kind: 'design' | 'video' = 'design'
 ): Promise<unknown> {
-  const scope = await authoredWorkRoot(database, context.projectId, context.threadId)
-  const folder = resolveServedFolder(
-    scope.path,
-    input['directory'],
-    currentWorkRoot(kind, context.projectId)
+  const folder = await findAuthoredWork(
+    database,
+    { projectId: context.projectId, threadId: context.threadId, kind },
+    input['directory']
   )
   const canonicalFolder = await realpath(folder.absolute)
-  const canonicalProject = await realpath(scope.path)
+  const canonicalProject = await realpath(folder.root.path)
   const within = relative(canonicalProject, canonicalFolder)
   if (within.startsWith('..') || isAbsolute(within))
     throw new Error('Review folder escapes the project')
