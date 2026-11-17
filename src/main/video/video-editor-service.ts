@@ -16,7 +16,7 @@ import {
 import type { VideoProjectManifest } from '../../lib/video/project'
 import type { Database } from '../database/database'
 import type { DirectoryPreviewService } from '../preview/directory-preview-service'
-import { authoredWorkRoot } from '../design/authored-work-root'
+import { findAuthoredWork, type AuthoredWorkFolder } from '../design/authored-work'
 import { videoFile, videoFolder } from './video-paths'
 import { probeVideo } from './video-inspection'
 import { requireCompositionManifest } from './video-manifest'
@@ -51,19 +51,41 @@ export class VideoEditorService {
   private importTail: Promise<unknown> = Promise.resolve()
   constructor(private readonly options: Options) {}
 
-  private async folder(projectId: string, threadId: string, directory: unknown): Promise<string> {
-    const scope = await authoredWorkRoot(this.options.database, projectId, threadId)
-    return videoFolder(scope.path, directory)
+  /**
+   * One composition folder, resolved to the checkout that really holds it.
+   *
+   * A composition is the user's work rather than one thread's, so the folder is
+   * found in whichever of the project's checkouts holds it: the spelling an agent
+   * used is the same in a scope worktree and in the project root, and only one of
+   * them has the folder. The folder itself is then read back through the
+   * containment check against the root that holds it, exactly as a
+   * project-relative spelling used to be, so a `.cio` linked out of a checkout is
+   * still refused. `placement.display` is the spelling records and tab marks keep.
+   */
+  private async folder(
+    projectId: string,
+    threadId: string,
+    directory: unknown
+  ): Promise<{ placement: AuthoredWorkFolder; folder: string }> {
+    const placement = await findAuthoredWork(
+      this.options.database,
+      { projectId, threadId, kind: 'video' },
+      directory
+    )
+    return {
+      placement,
+      folder: await videoFolder(placement.root.path, placement.relative)
+    }
   }
 
   async enable(projectId: string, threadId: string, directory: string): Promise<VideoEditorRead> {
     const state = await this.options.read(projectId, threadId, directory)
-    const folder = await this.folder(projectId, threadId, directory)
+    const { placement, folder } = await this.folder(projectId, threadId, directory)
     // Reading the manifest here rather than trusting the first answer is what
     // separates a delivery from a manifest that is merely being rewritten: a
     // folder the author is saving must open, and a folder whose manifest is wrong
     // must say which field is wrong instead of claiming there is no manifest.
-    const manifest = await requireCompositionManifest(folder, directory, state.manifest)
+    const manifest = await requireCompositionManifest(folder, placement.display, state.manifest)
     await installVideoRuntime(folder, folder)
     if (state.document.edit) return state
     const edit = await migrateVideoEdit(
@@ -124,7 +146,7 @@ export class VideoEditorService {
     const task = previous
       .catch(() => undefined)
       .then(async () => {
-        const folder = await this.folder(projectId, threadId, directory)
+        const { folder } = await this.folder(projectId, threadId, directory)
         await mkdir(join(folder, 'assets'), { recursive: true })
         const destination = await videoFolder(folder, 'assets')
         const result: VideoEditAsset[] = []
@@ -194,7 +216,7 @@ export class VideoEditorService {
     selection: VideoEditorSelection
   ): Promise<void> {
     const document = validateVideoStudio(raw)
-    const folder = await this.folder(projectId, threadId, directory)
+    const { folder } = await this.folder(projectId, threadId, directory)
     const registration = await this.options.previews.open(folder)
     const origin = new URL(registration.url).origin
     const payload = JSON.stringify(document),
@@ -312,7 +334,7 @@ export class VideoEditorService {
   }
 
   async stop(projectId: string, threadId: string, directory: string): Promise<void> {
-    const folder = await this.folder(projectId, threadId, directory)
+    const { folder } = await this.folder(projectId, threadId, directory)
     const registration = await this.options.previews.open(folder)
     const origin = new URL(registration.url).origin
     for (const contents of webContents.getAllWebContents()) {

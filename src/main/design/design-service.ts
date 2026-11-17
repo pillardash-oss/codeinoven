@@ -1,8 +1,4 @@
-import {
-  WorkFolderRegistry,
-  listConversationWorkFolders,
-  withWorkRegistryLock
-} from './work-folder-registry'
+import { WorkFolderRegistry, withWorkRegistryLock } from './work-folder-registry'
 import { updateWorkDetails } from './work-details-service'
 import { lstat, rename } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
@@ -36,14 +32,12 @@ import type {
   WorkGroupView
 } from '../../lib/ipc/design'
 import { originOf } from '../../lib/local-development-url'
-import { authoredWorkRoot, type AuthoredWorkRoot } from './authored-work-root'
 import {
-  authoredWorkRoots,
-  findAuthoredFolder,
-  insideRootPath,
-  listAuthoredWorkFromExtraRoots,
-  type AuthoredWorkPlacement
-} from './authored-work-roots'
+  authoredWorkRoot,
+  findAuthoredWork,
+  listAuthoredWork,
+  type AuthoredWorkFolder
+} from './authored-work'
 import type { BrowserService } from '../browser/browser-service'
 import { NO_TAB_MARK, type BrowserTabMark } from '../browser/browser-service/browser-tab-mark'
 import type { Database } from '../database/database'
@@ -358,7 +352,7 @@ export class DesignService {
         const { exportDesign } = await import('./design-export-service')
         return exportDesign(
           placement.root.path,
-          insideRootPath(placement.root.path, placement.folder.absolute),
+          placement.relative,
           entry,
           format,
           this.options.previews,
@@ -523,11 +517,11 @@ export class DesignService {
         // Only the registry can remember a folder that is no longer on disk, and it
         // is keyed by project-relative folder. A folder in another checkout is
         // listed from disk, so a missing one was never listed and nothing holds it.
-        if (placement.root.appOwned || isAbsolute(placement.folder.display)) return
+        if (placement.root.appOwned || isAbsolute(placement.display)) return
         await new WorkFolderRegistry(this.options.database).removeMissing(
           projectId,
           placement.root.path,
-          placement.folder.display
+          placement.display
         )
       }
     )
@@ -545,14 +539,14 @@ export class DesignService {
           details.directory,
           details.kind
         )
-        const absoluteSpelling = isAbsolute(placement.folder.display)
+        const absoluteSpelling = isAbsolute(placement.display)
         const result = await updateWorkDetails({
           database: this.options.database,
           projectId,
           projectPath: placement.root.path,
           details: {
             ...details,
-            directory: insideRootPath(placement.root.path, placement.folder.absolute)
+            directory: placement.relative
           },
           // A project's save folder is one stored setting: where its next design or
           // composition is written, and never where the existing ones are moved to.
@@ -866,7 +860,7 @@ export class DesignService {
   ): Promise<DesignHistoryTarget> {
     const kind = await this.resolveKind(threadId)
     const placement = await this.placeFolder(projectId, threadId, directory, kind)
-    const requested = placement.folder
+    const requested = placement
     // A relocated folder is a project's own record: it exists so a project keeps
     // finding work the user moved inside its checkout. A conversation workspace
     // lists what is on disk, so there is no record to follow, and neither is there
@@ -971,22 +965,21 @@ export class DesignService {
    * board's own open of a thread's work.
    */
   /**
-   * One folder resolved against every root this project's work can live in.
+   * One folder resolved through the authored-work pipeline both boards share.
    *
-   * `root` is where the folder really is, so a preview, a history read or an
-   * export runs in the checkout holding the files, and `folder.display` is the
-   * caller's spelling: project-relative for the project's own folder, absolute for
-   * a folder found in another checkout. The absolute spelling is what keeps two
-   * designs of the same name in two scopes apart in every record the app keeps.
+   * `root` is where the folder really is, so a preview, a history read or an export
+   * runs in the checkout holding the files, and `display` is the caller's spelling:
+   * project-relative for the project's own folder, absolute for a folder found in
+   * another checkout, which is what keeps two designs of the same name in two scopes
+   * apart in every record the app keeps.
    */
-  private async placeFolder(
+  private placeFolder(
     projectId: string,
     threadId: string,
     directory: unknown,
     kind: AuthoredWorkKind
-  ): Promise<AuthoredWorkPlacement> {
-    const roots = await authoredWorkRoots(this.options.database, projectId, threadId)
-    return findAuthoredFolder(roots, directory, currentWorkRoot(kind, projectId))
+  ): Promise<AuthoredWorkFolder> {
+    return findAuthoredWork(this.options.database, { projectId, threadId, kind }, directory)
   }
 
   async observeShownFolder(
@@ -1176,24 +1169,16 @@ export class DesignService {
     const origins = scope.appOwned
       ? new Map<string, string>()
       : await this.designs.originsViaWorker(projectId)
-    // The project's own folder is listed first and always, and every other
-    // checkout the project writes work into is listed beside it, so a design made
-    // in a scope's worktree is reachable from every thread instead of only the one
-    // that happened to be on screen when it was written. A composition keeps its
-    // single root until the video board carries the same identity.
-    const extra =
-      kind === 'design'
-        ? await listAuthoredWorkFromExtraRoots(
-            await authoredWorkRoots(this.options.database, projectId, threadId),
-            root
-          )
-        : []
-    const items = [...(await this.listProjectFolders(projectId, threadId, scope, kind)), ...extra]
-      .map((item) => ({
-        ...item,
-        creatorThreadId: origins.get(item.directory) ?? null
-      }))
-      .sort((left, right) => right.updatedAt - left.updatedAt)
+    // Both boards list their work through the same pipeline, from every checkout
+    // the project writes into, so a design or a composition made in a scope's
+    // worktree is reachable from every thread instead of only the one that happened
+    // to be on screen when it was written.
+    const items = (
+      await listAuthoredWork(this.options.database, { projectId, threadId, kind })
+    ).map((item) => ({
+      ...item,
+      creatorThreadId: origins.get(item.directory) ?? null
+    }))
     return {
       projectId,
       threadId,
@@ -1233,7 +1218,7 @@ export class DesignService {
   ): Promise<DesignOpenResult> {
     const kind = forcedKind ?? (await this.resolveKind(threadId))
     const placement = await this.placeFolder(projectId, threadId, directory, kind)
-    const display = this.designs.resolveDirectory(projectId, placement.folder.display)
+    const display = this.designs.resolveDirectory(projectId, placement.display)
     const result = await this.serveWork({
       kind,
       projectPath: placement.root.path,
@@ -1242,7 +1227,7 @@ export class DesignService {
       threadId,
       // A preview is served from the root the folder really lives in, so a design
       // kept in another checkout of the project opens exactly like the project's own.
-      directory: insideRootPath(placement.root.path, placement.folder.absolute),
+      directory: placement.relative,
       entry,
       attention: 'background',
       reveal,
@@ -1294,29 +1279,22 @@ export class DesignService {
     const origins = scope.appOwned
       ? new Map<string, string>()
       : await this.designs.originsViaWorker(projectId)
-    const list = async (kind: AuthoredWorkKind): Promise<DesignEntry[]> => {
-      const listed = await this.listProjectFolders(
-        projectId,
-        // A conversation scope always names a thread: its workspace is the thread's
-        // (or its assistant's), so `authoredWorkRoot` refused above without one.
-        threadId ?? '',
-        scope,
-        kind
-      )
-      const extra =
-        kind === 'design'
-          ? await listAuthoredWorkFromExtraRoots(
-              await authoredWorkRoots(this.options.database, projectId, threadId),
-              currentWorkRoot(kind, projectId)
-            )
-          : []
-      return [...listed, ...extra]
-        .map((item) => ({
-          ...item,
-          creatorThreadId: origins.get(item.directory) ?? null
-        }))
-        .sort((left, right) => right.updatedAt - left.updatedAt)
-    }
+    // One listing, from every checkout the project writes into, for both kinds: a
+    // composition found in another scope is reachable from the project's rail
+    // exactly like a design is.
+    const list = async (kind: AuthoredWorkKind): Promise<DesignEntry[]> =>
+      (
+        await listAuthoredWork(this.options.database, {
+          projectId,
+          // A conversation scope always names a thread: its workspace is the thread's
+          // (or its assistant's), so `authoredWorkRoot` refused above without one.
+          threadId: threadId ?? '',
+          kind
+        })
+      ).map((item) => ({
+        ...item,
+        creatorThreadId: origins.get(item.directory) ?? null
+      }))
     return { projectId, design: await list('design'), video: await list('video') }
   }
 
@@ -1348,10 +1326,10 @@ export class DesignService {
     const result = await this.serveWork({
       kind,
       projectPath: placement.root.path,
-      display: placement.folder.display,
+      display: placement.display,
       projectId,
       threadId,
-      directory: insideRootPath(placement.root.path, placement.folder.absolute),
+      directory: placement.relative,
       // The entry is passed through so the picture is the page the user is actually
       // looking at, not always the folder's index file.
       entry,
@@ -1426,8 +1404,8 @@ export class DesignService {
   async folderPath(projectId: string, threadId: string, directory: unknown): Promise<string> {
     try {
       const placement = await this.placeFolder(projectId, threadId, directory, 'design')
-      const metadata = await lstat(placement.folder.absolute)
-      return metadata.isDirectory() ? placement.folder.absolute : ''
+      const metadata = await lstat(placement.absolute)
+      return metadata.isDirectory() ? placement.absolute : ''
     } catch {
       // An unresolvable or missing folder is not an error the caller can act on:
       // it is the answer "there is nothing here to reveal".
@@ -1442,8 +1420,8 @@ export class DesignService {
     width: number,
     force: boolean
   ): Promise<DesignScreenShot[]> {
-    const placement = await this.placeFolder(projectId, threadId, directory, 'design')
-    const { folder } = placement
+    const folder = await this.placeFolder(projectId, threadId, directory, 'design')
+    const placement = folder
     // The Screen Canvas is pictured with the screens, because the board shows it
     // as the canvas itself rather than as a screen inside it. It is generated
     // from the folder, so it is listed as one more entry stamped with the newest
@@ -1511,7 +1489,7 @@ export class DesignService {
           threadId,
           projectPath: placement.root.path,
           display: folder.display,
-          directory: insideRootPath(placement.root.path, folder.absolute),
+          directory: folder.relative,
           screen,
           width: shotWidth
         })
@@ -1553,7 +1531,7 @@ export class DesignService {
     threadId: string,
     directory: unknown
   ): Promise<ScreenCanvasState | null> {
-    const { folder } = await this.placeFolder(projectId, threadId, directory, 'design')
+    const folder = await this.placeFolder(projectId, threadId, directory, 'design')
     const screens = await listDesignScreens(folder.absolute)
     // Reading the canvas is what starts discovery of the states its screens
     // declare: the board asks for a canvas before the user opens one, so by the
@@ -1570,44 +1548,6 @@ export class DesignService {
       directory: folder.display,
       metadataError: read.metadataError
     })
-  }
-
-  /**
-   * The folders one scope's board lists.
-   *
-   * A checkout answers from the registry, which discovers the canonical default
-   * directories and remembers every exact folder the project was pointed at. A
-   * conversation's workspace answers from itself instead: its threads' records
-   * stand in for the registry, because the registry is keyed by project id and
-   * every assistant task shares one container id.
-   */
-  private async listProjectFolders(
-    projectId: string,
-    threadId: string,
-    /**
-     * The scope the board is listing: a project checkout, or a conversation's own
-     * workspace. The workspace is what a conversation's records are scoped to,
-     * because the workspace is the only thing that separates one assistant's work
-     * from another's under the shared container id.
-     */
-    scope: AuthoredWorkRoot,
-    kind: AuthoredWorkKind
-  ): Promise<DesignEntry[]> {
-    // A conversation workspace has no registry it can trust: the registry is keyed
-    // by project id, and every assistant task shares one container id, so a
-    // registry read there would answer for whichever assistant happened to write
-    // a folder of that name first. Its threads' own records are scoped to the
-    // workspace, so those stand in for the registry (see `listConversationWorkFolders`).
-    if (scope.appOwned)
-      return listConversationWorkFolders({
-        database: this.options.database,
-        projectId,
-        threadId,
-        assistantId: scope.assistantId,
-        workspacePath: scope.path,
-        kind
-      })
-    return new WorkFolderRegistry(this.options.database).list(projectId, scope.path, kind)
   }
 
   async listWorkFolders(
@@ -1844,10 +1784,10 @@ export class DesignService {
       const restored = await this.serveWork({
         kind: input.before.kind,
         projectPath: placement.root.path,
-        display: placement.folder.display,
+        display: placement.display,
         projectId: input.projectId,
         threadId: input.threadId,
-        directory: insideRootPath(placement.root.path, placement.folder.absolute),
+        directory: placement.relative,
         entry: input.before.entry,
         attention: 'background',
         reveal: false,

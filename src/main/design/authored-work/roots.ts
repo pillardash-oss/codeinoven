@@ -1,7 +1,7 @@
-import type { Database } from '../database/database'
-import { ProjectRepo } from '../database/repositories/project-repo'
-import { ThreadRepo } from '../database/repositories/thread-repo'
-import { threadAuthoredWorkRoot } from '../../lib/thread-storage-paths'
+import type { Database } from '../../database/database'
+import { ProjectRepo } from '../../database/repositories/project-repo'
+import { ThreadRepo } from '../../database/repositories/thread-repo'
+import { threadAuthoredWorkRoot } from '../../../lib/thread-storage-paths'
 
 /**
  * The folder a thread's designs and compositions are written under.

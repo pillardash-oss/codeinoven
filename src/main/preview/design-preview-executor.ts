@@ -1,9 +1,4 @@
-import { authoredWorkRoot } from '../design/authored-work-root'
-import {
-  authoredWorkRoots,
-  findAuthoredFolder,
-  insideRootPath
-} from '../design/authored-work-roots'
+import { authoredWorkRoot, findAuthoredWork } from '../design/authored-work'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { workFolderNote } from '../../lib/design/work-roots'
 import type { BrowserService } from '../browser/browser-service'
@@ -116,12 +111,12 @@ export function createDesignPreviewExecutor(
     // The folder is resolved against every checkout this project writes work into,
     // so a design the agent wrote while its session ran in a scope worktree opens
     // from the spelling it used rather than being looked for in the project root.
-    const placement = await findAuthoredFolder(
-      await authoredWorkRoots(options.database, context.projectId, context.threadId),
+    const placement = await findAuthoredWork(
+      options.database,
+      { projectId: context.projectId, threadId: context.threadId, kind: 'design' },
       typeof input['directory'] === 'string'
         ? new DesignRepo(options.database).resolveDirectory(context.projectId, input['directory'])
-        : input['directory'],
-      currentWorkRoot('design', context.projectId)
+        : input['directory']
     )
     const attention = input['attention'] === 'focus' ? 'focus' : 'background'
     const result = await openDesignPreview(
@@ -130,8 +125,8 @@ export function createDesignPreviewExecutor(
         projectPath: placement.root.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory: insideRootPath(placement.root.path, placement.folder.absolute),
-        display: placement.folder.display,
+        directory: placement.relative,
+        display: placement.display,
         entry: input['entry'],
         defaultRoot: currentWorkRoot('design', context.projectId),
         attention,

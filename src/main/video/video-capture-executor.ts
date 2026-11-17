@@ -1,6 +1,5 @@
-import { authoredWorkRoot } from '../design/authored-work-root'
+import { findAuthoredWork } from '../design/authored-work'
 import { videoClampTime } from '../../lib/video/project'
-import { resolveServedFolder } from '../preview/served-folder'
 import { currentWorkRoot } from '../design/work-roots-state'
 import { loadCompositionManifest } from './video-manifest'
 import type { BrowserService } from '../browser/browser-service'
@@ -59,13 +58,15 @@ export function createVideoCaptureExecutor(
     if (!browser) {
       throw new Error('A frame cannot be captured while the app has no window to render it in.')
     }
-    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
-    const directory = resolveServedFolder(
-      scope.path,
-      input['directory'],
-      currentWorkRoot('video', context.projectId)
+    // The composition is found in whichever checkout of the project holds it, so a
+    // frame is drawn from the folder the agent wrote rather than from a same-named
+    // folder in the project root, and the reply names it the way the board does.
+    const placement = await findAuthoredWork(
+      options.database,
+      { projectId: context.projectId, threadId: context.threadId, kind: 'video' },
+      input['directory']
     )
-    const manifest = await loadCompositionManifest(directory.absolute, directory.display)
+    const manifest = await loadCompositionManifest(placement.absolute, placement.display)
     // Clamp before the page is loaded, so the URL and the frame drawn agree on
     // which second is being captured.
     const seconds = videoClampTime(manifest, input['time'])
@@ -73,10 +74,11 @@ export function createVideoCaptureExecutor(
     const session = await openVideoPreview(
       { previews: options.previews, browser: options.browser },
       {
-        projectPath: scope.path,
+        projectPath: placement.root.path,
         projectId: context.projectId,
         threadId: context.threadId,
-        directory: input['directory'],
+        directory: placement.relative,
+        display: placement.display,
         entry: input['entry'],
         defaultRoot: currentWorkRoot('video', context.projectId),
         attention: 'background',
@@ -110,7 +112,7 @@ export function createVideoCaptureExecutor(
       const shot = await browser.executeUtility('screenshot', { force: true }, target)
       const picture = isRecord(shot) ? shot : {}
       return {
-        directory: directory.display,
+        directory: placement.display,
         entry: session.entry,
         time: seconds,
         duration: manifest.duration,

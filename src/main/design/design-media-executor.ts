@@ -1,12 +1,10 @@
-import { relative, sep } from 'node:path'
-import { authoredWorkRoot } from './authored-work-root'
+import { isAbsolute, relative, sep } from 'node:path'
+import { findAuthoredWork, slashPath } from './authored-work'
 import {
   MAX_DESIGN_MEDIA_NAME_LENGTH,
   MAX_DESIGN_MEDIA_SOURCE_LENGTH
 } from '../../lib/design-media'
 import { requiredString } from '../utilities/utility-orchestration/utility-input'
-import { resolveServedFolder } from '../preview/served-folder'
-import { currentWorkRoot } from './work-roots-state'
 import { saveDesignMedia } from './design-media-service'
 import type { Database } from '../database/database'
 import type { DesignCapabilityExecutor } from '../utilities/utility-orchestration-service'
@@ -59,11 +57,12 @@ export function createDesignMediaExecutor(
     }
     const source = requiredString(input['source'], 'source', MAX_DESIGN_MEDIA_SOURCE_LENGTH)
     const name = optionalMediaName(input['name'])
-    const scope = await authoredWorkRoot(options.database, context.projectId, context.threadId)
-    const directory = resolveServedFolder(
-      scope.path,
-      input['directory'],
-      currentWorkRoot('design', context.projectId)
+    // The folder is resolved through the pipeline both boards share, so a media
+    // file saved for a design kept in another checkout lands beside that design.
+    const directory = await findAuthoredWork(
+      options.database,
+      { projectId: context.projectId, threadId: context.threadId, kind: 'design' },
+      input['directory']
     )
 
     const saved = await saveDesignMedia({
@@ -71,7 +70,9 @@ export function createDesignMediaExecutor(
       source,
       name
     })
-    const file = relative(scope.path, saved.path).split(sep).join('/')
+    const file = isAbsolute(directory.display)
+      ? slashPath(saved.path)
+      : relative(directory.root.path, saved.path).split(sep).join('/')
     return {
       file,
       directory: directory.display,
