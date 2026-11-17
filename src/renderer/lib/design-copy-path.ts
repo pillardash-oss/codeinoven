@@ -16,6 +16,7 @@
  */
 
 import { LOCAL_OVEN_ID, type Oven } from '$shared/ovens'
+import { isAbsoluteishPath } from '$shared/paths'
 import type { Project, Thread } from '$shared/types'
 
 /** Which form of the path was produced, for the caller's toast. */
@@ -72,6 +73,17 @@ export function designCopyPayload(
   directory: string,
   entry?: string | null
 ): DesignCopyPayload {
+  // A folder the board found in another checkout of the project is spelled by its
+  // absolute path, because that is the only spelling that names it: it is not
+  // below the project's own root, so a relative path would point at nothing. The
+  // user copying that design gets the path it really has on this machine.
+  if (isAbsoluteishPath(directory)) {
+    return absoluteSpellingPayload(
+      context,
+      designRelativePath(directory, entry),
+      `The folder path of this ${entry ? 'screen' : 'design'}`
+    )
+  }
   const relative = designRelativePath(directory, entry)
   const absolute = designAbsolutePath(context.project.path, directory, entry)
   const targetOvenId = context.project.ovenId ?? LOCAL_OVEN_ID
@@ -93,6 +105,26 @@ export function designCopyPayload(
   const name = oven?.name ?? targetOvenId
   return {
     text: `This design lives on the Oven "${name}", not on this machine.${ovenReach(oven, name)} Read it there:\n${absolute}`,
+    mode: 'oven',
+    message: 'Oven path copied.'
+  }
+}
+
+/** The same copy decision for a folder that only has an absolute spelling. */
+function absoluteSpellingPayload(
+  context: DesignCopyContext,
+  absolute: string,
+  what: string
+): DesignCopyPayload {
+  const targetOvenId = context.project.ovenId ?? LOCAL_OVEN_ID
+  const threadOvenId = context.thread?.settings?.ovenId ?? LOCAL_OVEN_ID
+  if (threadOvenId === targetOvenId) {
+    return { text: absolute, mode: 'absolute', message: 'Absolute path copied.' }
+  }
+  const oven = context.projectOven
+  const name = oven?.name ?? targetOvenId
+  return {
+    text: `${what} lives on the Oven "${name}", not on this machine.${ovenReach(oven, name)} Read it there:\n${absolute}`,
     mode: 'oven',
     message: 'Oven path copied.'
   }
