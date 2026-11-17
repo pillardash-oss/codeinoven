@@ -366,73 +366,50 @@ export function lexMarkdown(
   repository: GithubRepoContext | null = null,
   citationThread?: CitationThreadContext
 ): Token[] {
-  const parser = parserFor(allowHtml, repository)
-  const sectionLinked = linkifySectionReferences(text, collectSectionKeys(text))
-  const tokens = parser.lexer(
-    linkifyFileCitations(
-      sectionLinked,
-      (path) =>
-        citationThread
-          ? citationPathsState.isThreadPathValid(
-              citationThread.projectId,
-              citationThread.scopeBucketId,
-              path,
-              citationThread.threadId
-            )
-          : citationPathsState.isValidPath(path),
-      (path) => citationPathsState.isKnownExternalPath(path)
-    )
+  return resolveFootnotes(
+    blockLexMarkdown(prepareMarkdown(text, citationThread), allowHtml, repository)
   )
-  return resolveFootnotes(tokens)
 }
 
-/** Bounded memo cache for lexed message markdown. Completed message text is
- *  immutable, but the lex OUTPUT also depends on the reactive citation-path
- *  state (file citations become links only once their existence is confirmed),
- *  so the cache key folds in the store's revision. Without it, a cache hit
- *  after a resolution bump would return stale, un-linkified tokens forever  
- *  the reason linkify appeared dead until a thread was left and re-opened.
- *  Entries hold the exact source string as key; callers treat the returned
- *  tokens as read-only (blockHtml already memoizes its output). */
-const LEX_CACHE_LIMIT = 24
-const lexCache = new Map<string, Token[]>()
+/**
+ * Run the pre-lex text passes and return the source `marked` should see.
+ *
+ * These passes are document-wide: a section reference is only a link when the
+ * document defines that heading somewhere, and a file citation is only a link
+ * once its path is confirmed. That is why they are their own stage   a streamed
+ * message re-parses only its tail, but this stage still runs over the whole
+ * text (see `StreamingMarkdownLex`).
+ */
+export function prepareMarkdown(text: string, citationThread?: CitationThreadContext): string {
+  const sectionLinked = linkifySectionReferences(text, collectSectionKeys(text))
+  return linkifyFileCitations(
+    sectionLinked,
+    (path) =>
+      citationThread
+        ? citationPathsState.isThreadPathValid(
+            citationThread.projectId,
+            citationThread.scopeBucketId,
+            path,
+            citationThread.threadId
+          )
+        : citationPathsState.isValidPath(path),
+    (path) => citationPathsState.isKnownExternalPath(path)
+  )
+}
 
-export function lexMarkdownCached(
-  text: string,
+/**
+ * Block-lex prepared source.
+ *
+ * Footnotes are deliberately left unresolved: a streamed message lexes its tail
+ * on its own and has to resolve footnote references over the whole document, so
+ * resolution belongs to whoever holds every token (`resolveFootnotes`).
+ */
+export function blockLexMarkdown(
+  prepared: string,
   allowHtml = false,
-  repository: GithubRepoContext | null = null,
-  citationThread?: CitationThreadContext
+  repository: GithubRepoContext | null = null
 ): Token[] {
-  // Read the revision in the caller's reactive context so a resolution bump
-  // re-evaluates this expression, and use it as part of the key so the bumped
-  // evaluation cannot hit a stale pre-resolution entry. The repository belongs in
-  // the key too: the same text lexes to different links in a different repo.
-  const revision = citationPathsState.revision
-  // The shortcode table is a chunk of its own and can land after a text was
-  // lexed. Only text that actually contains a shortcode can render differently
-  // once it arrives, so only that text is keyed on (and subscribes to) the
-  // table   keying every message on it would re-lex the whole conversation the
-  // moment the table landed.
-  const emoji = hasGithubEmojiCandidate(text) ? `\u0000emoji${githubEmojiRevision()}` : ''
-  const scope = repository ? `${repository.owner}/${repository.repo}` : ''
-  const threadScope = citationThread
-    ? `${citationThread.projectId}/${citationThread.threadId}/${citationThread.scopeBucketId ?? ''}`
-    : ''
-  const key = `\u0000rev${revision}${emoji}\u0000${allowHtml ? '\u0000html\u0000' : ''}\u0000${scope}\u0000${threadScope}\u0000${text}`
-  const cached = lexCache.get(key)
-  if (cached) {
-    // Refresh for LRU ordering   most recently used survives eviction.
-    lexCache.delete(key)
-    lexCache.set(key, cached)
-    return cached
-  }
-  const tokens = lexMarkdown(text, allowHtml, repository, citationThread)
-  lexCache.set(key, tokens)
-  if (lexCache.size > LEX_CACHE_LIMIT) {
-    const oldest = lexCache.keys().next().value
-    if (oldest !== undefined) lexCache.delete(oldest)
-  }
-  return tokens
+  return parserFor(allowHtml, repository).lexer(prepared)
 }
 
 // ─── Footnote resolution ────────────────────────────────────────────────────
@@ -474,7 +451,7 @@ function isFootnoteDef(token: Token): token is FootnoteDefToken {
   return token.type === 'footnoteDef'
 }
 
-function resolveFootnotes(tokens: Token[]): Token[] {
+export function resolveFootnotes(tokens: Token[]): Token[] {
   const defs = new Map<string, FootnoteDefToken>()
   const refs: FootnoteRefToken[] = []
   const body: Token[] = []

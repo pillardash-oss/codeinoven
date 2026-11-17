@@ -622,6 +622,18 @@ export class ChatEngineState {
   /** Coalesces live-activity repairs of a task's persisted working status. */
   workingStatusReconciliations = new Map<string, Promise<void>>()
 
+  /**
+   * When each session's working-status reconciliation last started.
+   *
+   * `markSessionWorking` runs on every streamed delta, and each reconciliation
+   * costs two reads through the single-flight DB worker every UI read also
+   * queues on, so this stamp is the interval gate that keeps one live turn from
+   * spending the worker's whole capacity (see
+   * `reconcileWorkingThreadStatus`). Entries are dropped when the session is
+   * retired.
+   */
+  workingStatusReconciledAt = new Map<string, number>()
+
   readonly agentProcesses = new AgentProcessService()
 
   generatedArtifactService!: GeneratedArtifactService

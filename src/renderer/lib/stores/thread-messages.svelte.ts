@@ -121,6 +121,18 @@ class ThreadMessagesStore {
   }
 
   /**
+   * Hold a thread's transcript as read by a mounted view.
+   *
+   * Returns the release. A streaming thread nobody is watching publishes on a
+   * slow cadence instead of the frame cadence, which is what keeps a dozen
+   * background runs from costing the renderer anything while the reader is
+   * looking at one conversation.
+   */
+  retain(projectId: string, threadId: string): () => void {
+    return this.cache.retain(projectId, threadId)
+  }
+
+  /**
    * The thread's transcript as of its last structural change: the same message
    * objects, but a reference that only moves when messages are added, removed,
    * or reshaped. A streamed delta does not touch it.

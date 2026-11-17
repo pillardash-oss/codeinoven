@@ -12,9 +12,9 @@
     blockHtml,
     fileCitationTarget,
     htmlFragment,
-    lexMarkdownCached,
     type CitationThreadContext
   } from './markdown'
+  import { StreamingMarkdownLex } from './markdown-stream-lex'
   import { groupHtmlContainers, type MarkdownNode } from './html-containers'
   import { openInBrowser, type LinkDestination } from '$lib/open-in-browser'
   import { extractCitationCandidates } from '$lib/agent-source-citations'
@@ -104,6 +104,75 @@
   }: Props = $props()
 
   /**
+   * The text this view has adopted for display.
+   *
+   * Streaming hands this component a fresh message text up to sixty times a
+   * second, and every adoption costs full-text work that only the reader can
+   * justify: tag substitution, the citation/favicon/image scans, the lex, and a
+   * DOM patch of every block. At that rate a fast model pays all of it to move a
+   * tail nobody can read that fast. An update that only extends what is already
+   * on screen is therefore deferred until the budget below has passed, and a
+   * trailing timer adopts it regardless, so the last chunk of a finished message
+   * always lands instead of leaving the tail a budget behind forever.
+   *
+   * A rewind, an edit or a mode change is adopted immediately: those replace the
+   * document rather than extend it, and delaying them would show text that is no
+   * longer the message.
+   */
+  const STREAM_ADOPT_BUDGET_MS = 64
+
+  // Intentional initial-value capture   the first paint must adopt synchronously.
+  // svelte-ignore state_referenced_locally
+  let adoptedText = $state(text)
+  // svelte-ignore state_referenced_locally
+  let adoptedAllowHtml = $state(allowHtml)
+  let adoptedAt = 0
+  let adoptTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Adopt now and start the next budget window. */
+  function adoptText(next: string, mode: boolean): void {
+    clearAdoptTimer()
+    adoptedText = next
+    adoptedAllowHtml = mode
+    adoptedAt = Date.now()
+  }
+
+  /**
+   * Adopt whatever the source says once the budget expires.
+   *
+   * The source is re-read at fire time, not captured when this was scheduled:
+   * several chunks land inside one budget window, and the reader wants the last
+   * of them, not the first.
+   */
+  function scheduleAdopt(delayMs: number): void {
+    clearAdoptTimer()
+    adoptTimer = setTimeout(() => {
+      adoptTimer = null
+      adoptText(text, allowHtml)
+    }, delayMs)
+  }
+
+  function clearAdoptTimer(): void {
+    if (adoptTimer === null) return
+    clearTimeout(adoptTimer)
+    adoptTimer = null
+  }
+
+  $effect(() => {
+    const next = text
+    const mode = allowHtml
+    if (next === adoptedText && mode === adoptedAllowHtml) return
+    const isExtension =
+      mode === adoptedAllowHtml && next.length > adoptedText.length && next.startsWith(adoptedText)
+    const elapsed = Date.now() - adoptedAt
+    if (isExtension && elapsed < STREAM_ADOPT_BUDGET_MS) {
+      scheduleAdopt(STREAM_ADOPT_BUDGET_MS - elapsed)
+      return
+    }
+    adoptText(next, mode)
+  })
+
+  /**
    * Substitute each reference token with a private-use placeholder before
    * lexing so the markdown pipeline treats the token as opaque text. The
    * placeholder is then swapped for the trusted chip HTML after DOMPurify has
@@ -114,8 +183,9 @@
       .filter((tag) => tag.token.length > 0)
       .slice()
       .sort((left, right) => right.token.length - left.token.length)
-    if (tags.length === 0) return { prepared: text, substitutions: new Map<string, string>() }
-    let prepared = text
+    if (tags.length === 0)
+      return { prepared: adoptedText, substitutions: new Map<string, string>() }
+    let prepared = adoptedText
     const substitutions = new Map<string, string>() // eslint-disable-line svelte/prefer-svelte-reactivity
     for (const [index, tag] of tags.entries()) {
       if (!prepared.includes(tag.token)) continue
@@ -140,7 +210,7 @@
 
   $effect(() => {
     const prepared = tagSubstitutions.prepared
-    const htmlMode = allowHtml
+    const htmlMode = adoptedAllowHtml
     if (prepared === lexedText && htmlMode === lexedAllowHtml) return
     lexPending = { text: prepared, allowHtml: htmlMode }
     if (lexFrame) return
@@ -219,15 +289,17 @@
 
   const segments = $derived(splitLongLineSegments(lexedText))
 
-  /**
-   * The render tree for a token run, built once per run.
+  /** The render tree for a token run.
    *
-   * `lexMarkdownCached` hands back the same array for the same text, so keying on
-   * the array identity makes this a memo rather than a per-render scan   the
-   * important property when a list item calls it again for every one of its own
-   * tokens on every render.
+   * `StreamingMarkdownLex` hands back the same array when the text did not
+   * change, so keying on the array identity makes this a memo rather than a
+   * per-render scan   the important property when a list item calls it again for
+   * every one of its own tokens on every render.
    */
   const nodeCache = new WeakMap<Token[], MarkdownNode[]>()
+
+  /** Per-view lex without the tail re-parse of everything already on screen. */
+  const streamLex = new StreamingMarkdownLex()
 
   function nodesFor(tokens: Token[]): MarkdownNode[] {
     const cached = nodeCache.get(tokens)
@@ -254,7 +326,7 @@
   // Register cited paths for existence checks so only files that truly exist
   // render as links. Streaming re-fires per chunk, but the store dedupes.
   $effect(() => {
-    const candidates = extractCitationCandidates(text)
+    const candidates = extractCitationCandidates(adoptedText)
     if (citationThread) {
       citationPathsState.ensureThreadChecked(
         citationThread.projectId,
@@ -265,16 +337,17 @@
     } else {
       citationPathsState.ensureActiveProjectChecked(candidates)
     }
-    faviconState.ensureResolved(faviconState.externalUrlsFromText(text))
+    faviconState.ensureResolved(faviconState.externalUrlsFromText(adoptedText))
     // Images in the source are queued the same way favicons are, from the raw
     // text: the renderer cannot fetch them itself (the CSP blocks remote hosts),
     // so main downloads each one and the block re-renders once it lands.
-    githubImageState.ensureResolved(githubImageState.imageUrlsFromText(text))
+    githubImageState.ensureResolved(githubImageState.imageUrlsFromText(adoptedText))
   })
 
   onDestroy(() => {
     if (tooltipTimer) clearTimeout(tooltipTimer)
     if (lexFrame) cancelAnimationFrame(lexFrame)
+    clearAdoptTimer()
   })
 
   function isCodeToken(token: Token): token is Tokens.Code {
@@ -549,7 +622,7 @@
         <LongTextBlock text={seg.text} />
       {:else}
         {@render renderNodes(
-          nodesFor(lexMarkdownCached(seg.text, lexedAllowHtml, repository, citationThread))
+          nodesFor(streamLex.lex(segIndex, seg.text, lexedAllowHtml, repository, citationThread))
         )}
       {/if}
     {/each}

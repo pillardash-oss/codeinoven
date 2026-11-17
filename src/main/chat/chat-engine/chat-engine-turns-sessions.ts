@@ -493,6 +493,9 @@ export class ChatEngineTurnsSessions {
     updateRetryWakeWindow(sessionId, null)
     this.host.state.reasoningTimes.delete(sessionId)
     this.host.state.toolTimes.delete(sessionId)
+    // The reconcile gate is per-session state like the two maps above: leaving
+    // the stamp behind would keep the entry in a process-lifetime map.
+    this.host.state.workingStatusReconciledAt.delete(sessionId)
     this.host.state.generationClock.dropSession(sessionId)
     this.host.handledIdleSessions.delete(sessionId)
     this.host.state.userAbortedSessions.delete(sessionId)
