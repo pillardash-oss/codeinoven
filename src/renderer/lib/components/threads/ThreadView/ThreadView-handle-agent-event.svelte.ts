@@ -12,6 +12,7 @@ import {
 } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
+import { readDeviceHold } from '$lib/stores/queued-resource-wait.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import {
   responseReferencesState,
@@ -507,6 +508,22 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
           })
           return
         }
+        // The device can hold a turn the thread is ready to start. Parking it
+        // puts the message behind the queue card, whose gate says why the turn
+        // has not started and re-runs this send once the machine has room.
+        if (!direct && (await readDeviceHold()) !== null) {
+          this.root.steerQueuedMessage.parkComposerSend({
+            text: normalizeComposerMessage(text, projectReferences),
+            attachments,
+            promptContext,
+            promptReferences,
+            projectReferences,
+            presentation,
+            taskReferences,
+            startAfterThreads: dependencyThreads
+          })
+          return
+        }
       }
       const payload: SendPayload = {
         text,
@@ -565,6 +582,23 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
       (this.root.switchProject.busy && !direct) ||
       pendingScopeSwitch
     ) {
+      this.root.steerQueuedMessage.parkComposerSend({
+        text: msg,
+        attachments,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        presentation,
+        taskReferences,
+        startAfterThreads: dependencyThreads
+      })
+      return
+    }
+
+    // The device can hold a turn this thread is ready to start. Parking the send
+    // is the protection: the queue card names the device reading, and the gate
+    // re-runs the send when the machine has room again.
+    if (!direct && (await readDeviceHold()) !== null) {
       this.root.steerQueuedMessage.parkComposerSend({
         text: msg,
         attachments,

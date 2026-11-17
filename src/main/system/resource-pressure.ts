@@ -14,6 +14,8 @@
  * that would queue work on a perfectly healthy machine.
  */
 import { cpus, freemem, totalmem } from 'node:os'
+import { readFileSync } from 'node:fs'
+import { app } from 'electron'
 import { decideAdmission, type AdmissionDecision } from '../../lib/resource-admission'
 import { Logger } from './logger'
 
@@ -86,6 +88,59 @@ function totalMemoryBytes(): number {
   return Math.max(0, totalmem())
 }
 
+/**
+ * The preset a dev probe asked for, or null to read the real device.
+ *
+ * `CIO_FORCE_ADMISSION_FILE` names a file whose contents are read on every
+ * sample, so a probe can move the machine from short to roomy mid-run and watch
+ * the five second recheck release the message. `CIO_FORCE_ADMISSION` is the
+ * fixed form. `app.isPackaged` keeps both out of a shipped build.
+ */
+function forcedPreset(): string | null {
+  if (app.isPackaged) return null
+  const path = process.env['CIO_FORCE_ADMISSION_FILE']?.trim()
+  if (path) {
+    try {
+      const value = readFileSync(path, 'utf8').trim()
+      if (value === 'queue' || value === 'offload' || value === 'proceed') return value
+    } catch {
+      // A missing or unreadable file means no forcing, never a stuck queue.
+    }
+  }
+  const fixed = process.env['CIO_FORCE_ADMISSION']?.trim()
+  return fixed === 'queue' || fixed === 'offload' || fixed === 'proceed' ? fixed : null
+}
+
+/**
+ * A dev probe can force the answer, so the waiting card can be exercised without
+ * starving the machine it runs on. The sample behind each preset is a fixed one,
+ * so the numbers the card shows are the numbers the policy was given.
+ */
+function forcedDecision(): AdmissionDecision | null {
+  const forced = forcedPreset()
+  if (forced === null) return null
+  const gigabyte = 1024 ** 3
+  if (forced === 'queue') {
+    return decideAdmission({
+      cpuAvailablePercent: 1,
+      memoryAvailableBytes: 0.2 * gigabyte,
+      totalMemoryBytes: 32 * gigabyte
+    })
+  }
+  if (forced === 'offload') {
+    return decideAdmission({
+      cpuAvailablePercent: 1,
+      memoryAvailableBytes: 6 * gigabyte,
+      totalMemoryBytes: 32 * gigabyte
+    })
+  }
+  return decideAdmission({
+    cpuAvailablePercent: 50,
+    memoryAvailableBytes: 6 * gigabyte,
+    totalMemoryBytes: 32 * gigabyte
+  })
+}
+
 class ResourcePressureSampler {
   #previous: CpuSnapshot | null = null
   #window: number[] = []
@@ -95,6 +150,8 @@ class ResourcePressureSampler {
 
   /** Read the device. Arms the sampler, and answers from the current window. */
   async read(): Promise<AdmissionDecision> {
+    const forced = forcedDecision()
+    if (forced !== null) return forced
     if (this.#window.length === 0) await this.#prime()
     this.#armIdleDisarm()
     return decideAdmission({

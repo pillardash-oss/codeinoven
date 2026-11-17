@@ -14,7 +14,7 @@
  */
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import type { AdmissionDecision } from '$shared/resource-admission'
+import { holdsAdmission, type AdmissionDecision } from '$shared/resource-admission'
 
 /** How often a message waiting on the device asks again. */
 const RECHECK_MS = 5_000
@@ -104,7 +104,7 @@ class QueuedResourceWait {
     } catch {
       return
     }
-    if (decision.action === 'queue') {
+    if (holdsAdmission(decision)) {
       this.#waits = this.#waits.map((wait) => ({ ...wait, decision }))
       return
     }
@@ -113,6 +113,20 @@ class QueuedResourceWait {
       .filter((retry): retry is () => void => retry !== null)
     this.clearAll()
     for (const retry of retries) retry()
+  }
+}
+
+/**
+ * The device reading that should hold a new turn, or null when the turn may
+ * start. A reading that cannot be taken fails open: an unreachable sampler must
+ * never stop the user's work.
+ */
+export async function readDeviceHold(): Promise<AdmissionDecision | null> {
+  try {
+    const decision = await invoke('system:resourceAdmission')
+    return holdsAdmission(decision) ? decision : null
+  } catch {
+    return null
   }
 }
 
