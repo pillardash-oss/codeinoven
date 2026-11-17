@@ -95,6 +95,9 @@ export class PiCioRuntimeFiles {
       const oversizedFlagRelative = join(directory, 'oversized-recovery.json')
       const stopFlagRelative = join(directory, 'stop-request.json')
       const handoffWorkersRelative = join(directory, 'handoff-workers.json')
+      // Never seeded: the adopting instance publishes the roster before this
+      // module exists, and a seed written here would erase the workers the move
+      // carried over. A missing file simply reads as an empty roster.
       const watchFlagRelative = join(directory, 'watched-subagents.json')
       const compactionContextRelative = join(directory, 'compaction-context.json')
       const extensionRelative = join(directory, 'cio-core-tools.ts')
@@ -107,7 +110,6 @@ export class PiCioRuntimeFiles {
         await this.host.storage.writeRaw(allowedToolsRelative, '[]')
         await this.host.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
         await this.host.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
-        await this.host.storage.writeRaw(handoffWorkersRelative, JSON.stringify({ workers: [] }))
         await this.host.storage.writeRaw(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
       }
       await this.host.storage.writeRaw(

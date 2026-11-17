@@ -217,6 +217,7 @@ export async function attachWindowServices(
   }
 }
 import { reconcileInterruptedWork, watchForInstanceTakeOver } from './interrupted-work-recovery'
+import { installProbeControl } from './probe-control'
 
 declare const __CODEINOVEN_PROTOTYPE_PREVIEW_ORIGIN__: string | undefined
 
@@ -1267,6 +1268,13 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
   })
   state.threadTransfer.registerIpc()
   state.threadTransfer.start()
+  // A probe launched with CODEINOVEN_PROBE_CONTROL can start and move a turn
+  // from here, because the composer cannot be driven by synthetic input and the
+  // hand-off is exactly the thing that has to be exercised across two instances.
+  // A normal launch never arms it.
+  if (state.threadTransfer) {
+    installProbeControl({ chatEngine: state.chatEngine, threadTransfer: state.threadTransfer })
+  }
   // Custom vendor artwork is read by every `VendorIcon` the first frame mounts,
   // and the renderer only invokes feature channels once `app:featuresReady` has
   // fired. Register it ahead of that signal so the gate is truthful: registering
