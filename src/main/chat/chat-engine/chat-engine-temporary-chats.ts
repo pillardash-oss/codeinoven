@@ -32,7 +32,7 @@ import { modelKey } from '../../../lib/model-keys'
 import { deriveTitleFromText } from '../title-generator'
 import { GLOBAL_BROWSER_PROJECT_ID } from '../../../lib/ipc/browser'
 import { messageId as createMessageId } from '../../../lib/id'
-import type { TemporaryChatSession } from './chat-engine-types'
+import type { TemporaryChatDisplayRecord, TemporaryChatSession } from './chat-engine-types'
 import { TemporaryChatCancelledError, rawErrorDetail } from './chat-engine-errors'
 import { presentableMessages, stampHarnessId } from './chat-engine-message-merge'
 import {
@@ -108,10 +108,7 @@ export class ChatEngineTemporaryChats {
     // destroyTemporaryChat wiped the display history   rebuild it from the
     // kept conversation so the deleted span can never reappear on reload.
     this.host.state.temporaryChatDisplayMessages.set(temporaryChatId, {
-      records: kept.map((message) => ({
-        message,
-        references: message.references ?? []
-      })),
+      records: kept.map((message) => this.displayRecordForMessage(message)),
       ...(pendingContext ? { pendingContext } : {})
     })
     return presentableMessages(kept)
@@ -168,10 +165,7 @@ export class ChatEngineTemporaryChats {
     await this.destroyTemporaryChat(temporary.id)
     if (conversation.length === 0 && !pendingContext) return
     this.host.state.temporaryChatDisplayMessages.set(temporary.id, {
-      records: conversation.map((message) => ({
-        message,
-        references: message.references ?? []
-      })),
+      records: conversation.map((message) => this.displayRecordForMessage(message)),
       ...(pendingContext ? { pendingContext } : {})
     })
   }
@@ -374,7 +368,8 @@ export class ChatEngineTemporaryChats {
         userMessageId,
         safeDisplayText,
         validatedAttachments,
-        validatedReferences
+        validatedReferences,
+        promptText
       )
       const request: SendPromptOptions = {
         sessionId: temporary.sessionId,
@@ -592,7 +587,8 @@ export class ChatEngineTemporaryChats {
       steerUserMessageId,
       safeDisplayText,
       validatedAttachments,
-      validatedReferences
+      validatedReferences,
+      promptText
     )
     const steerOptions = {
       sessionId: temporary.sessionId,
@@ -844,7 +840,8 @@ export class ChatEngineTemporaryChats {
     messageId: string,
     displayText: string,
     attachments: Array<{ mime: string; url: string; filename?: string }>,
-    references: PromptReference[]
+    references: PromptReference[],
+    transportText?: string
   ): void {
     const fileParts = attachments.map((attachment, index): AgentPart => ({
       type: 'file',
@@ -876,7 +873,7 @@ export class ChatEngineTemporaryChats {
     this.host.state.temporaryChatDisplayMessages.set(temporaryChatId, {
       records: [
         ...records.filter((existing) => existing.message.id !== messageId),
-        { message, references }
+        { message, references, ...(transportText ? { transportText } : {}) }
       ]
     })
     const outboundIds =
@@ -896,36 +893,85 @@ export class ChatEngineTemporaryChats {
   async loadTemporaryConversation(temporaryChatId: string): Promise<AgentMessage[]> {
     const messages = await this.host.loadTemporaryChatMessages(temporaryChatId)
     const history = this.host.state.temporaryChatDisplayMessages.get(temporaryChatId)
-    if (!history || history.records.length === 0) return messages
-    const recordsById = new Map(history.records.map((entry) => [entry.message.id, entry]))
+    const records = [...(history?.records ?? [])]
     const overlaid: AgentMessage[] = []
     for (const message of messages) {
-      const record = recordsById.get(message.id)
-      if (!record) {
+      if (message.role !== 'user') {
         overlaid.push(message)
         continue
       }
+      // The echo is matched to the record it belongs to: by the client id the
+      // driver was handed, or, for a harness that numbers its own transcript
+      // entries (pi), by the transport text both sides still agree on.
+      const index = this.matchDisplayRecord(records, message)
+      if (index === -1) {
+        // A harness user turn with no recorded presentation is internal
+        // transport. Showing it would print a composed prompt (reference
+        // block, selection wrappers, the side chat's own instruction) as if
+        // the user had typed it, so the turn stays out of the conversation
+        // and only its answer is shown.
+        continue
+      }
+      const [record] = records.splice(index, 1)
+      if (!record) continue
       // The echo keeps its ID but loses its raw payload   the display record
       // becomes the visible parts, the raw harness parts demote to transport.
+      // The message takes back the client id every renderer call site already
+      // knows, so a reload reconciles with the turn on screen instead of
+      // adding a second copy under the harness's own transcript id.
       overlaid.push({
         ...message,
+        id: record.message.id,
         origin: 'user',
         visibility: 'conversation',
         parts: record.message.parts,
         transportParts: message.parts,
         transportOrigin: 'orchestrator',
+        createdAt: record.message.createdAt,
         references: record.references.length > 0 ? record.references : undefined
       })
     }
     // Records the transcript has not echoed yet (turn still streaming, or the
     // driver does not mirror user turns) still render: append them in recorded
     // order so a mid-turn reload keeps the conversation coherent.
-    const echoedIds = new Set(messages.map((message) => message.id))
-    for (const record of history.records) {
-      if (echoedIds.has(record.message.id)) continue
-      overlaid.push(record.message)
-    }
+    overlaid.push(...records.map((record) => record.message))
     return overlaid.sort((left, right) => left.createdAt - right.createdAt)
+  }
+
+  /**
+   * The display record a rebuilt history keeps for one message.
+   *
+   * A record that predates this session's transcript must still name the
+   * prompt it was sent with, or the first echo in a rebind's replacement
+   * session would find no record and be treated as internal transport.
+   */
+  private displayRecordForMessage(message: AgentMessage): TemporaryChatDisplayRecord {
+    const transport = message.transportParts?.find((part) => part.type === 'text')
+    const transportText = transport?.type === 'text' ? transport.text : textForMessage(message)
+    return {
+      message,
+      references: message.references ?? [],
+      ...(transportText ? { transportText } : {})
+    }
+  }
+
+  /**
+   * Which recorded turn a harness user echo belongs to, or -1 when it is a
+   * prompt the side chat never presented to the user.
+   *
+   * The id match covers every driver that echoes the client message id. The
+   * transport-text match covers the rest (pi numbers its own transcript
+   * entries), and it is exact because the text is what the engine itself sent.
+   */
+  private matchDisplayRecord(
+    records: readonly TemporaryChatDisplayRecord[],
+    message: AgentMessage
+  ): number {
+    const byId = records.findIndex((record) => record.message.id === message.id)
+    if (byId !== -1) return byId
+    const text = textForMessage(message).trim()
+    if (!text) return -1
+    return records.findIndex((record) => record.transportText?.trim() === text)
   }
 
   getTemporaryChatStatus(temporaryChatId: string): {

@@ -185,7 +185,8 @@ export class ChatEnginePermissions {
           alternativeMessageId,
           alternativeInstruction,
           [],
-          []
+          [],
+          alternativeInstruction
         )
         this.host.units['temporary-chats'].refreshTemporaryChatExpiry(sideChat)
         return

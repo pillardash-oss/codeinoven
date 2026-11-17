@@ -198,6 +198,18 @@ export interface HeldSteer {
 export interface TemporaryChatDisplayRecord {
   message: AgentMessage
   references: PromptReference[]
+  /**
+   * The exact prompt this turn handed the harness, when it is longer than the
+   * displayed text (a side chat's "Explain" label, an internal instruction).
+   *
+   * Most drivers echo the user turn under the client message id and the
+   * overlay matches on that id. A harness that numbers its own transcript
+   * entries (pi's `pi-<session>-user-<n>`) echoes under an id nothing here can
+   * predict, saying nothing about it. Only the transport text survives both
+   * sides, so it is what an unmatched echo is recognised by, and a user turn
+   * that matches nothing is internal transport that is never displayed.
+   */
+  transportText?: string
 }
 
 /** Every recorded turn, ordered oldest-first   one record per user turn, so
