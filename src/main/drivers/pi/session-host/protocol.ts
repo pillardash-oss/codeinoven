@@ -83,6 +83,8 @@ export interface HostSessionState {
   nativeSessionId: string
   sessionFile?: string
   cwd: string
+  /** The account directory the session runs under, so it can move to another host. */
+  agentDir: string
   model?: { provider: string; id: string }
   thinkingLevel: string
   isStreaming: boolean

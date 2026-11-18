@@ -44,6 +44,8 @@ interface HostedSession {
   readonly session: AgentSession
   readonly unsubscribe: () => void
   readonly cwd: string
+  /** Account dir the session was created under, reported so it can be moved. */
+  readonly agentDir: string
 }
 
 export class PiSessionHost {
@@ -192,7 +194,13 @@ export class PiSessionHost {
     const unsubscribe = created.session.subscribe((event) => {
       this.sink({ type: 'event', sessionId: key, event })
     })
-    this.sessions.set(key, { key, session: created.session, unsubscribe, cwd: command.cwd })
+    this.sessions.set(key, {
+      key,
+      session: created.session,
+      unsubscribe,
+      cwd: command.cwd,
+      agentDir: command.agentDir
+    })
     return this.stateOf(key)
   }
 
@@ -222,6 +230,7 @@ export class PiSessionHost {
         ? {}
         : { sessionFile: hosted.session.sessionFile }),
       cwd: hosted.cwd,
+      agentDir: hosted.agentDir,
       ...(model === undefined ? {} : { model: { provider: model.provider, id: model.id } }),
       thinkingLevel: hosted.session.thinkingLevel,
       isStreaming: hosted.session.isStreaming,
