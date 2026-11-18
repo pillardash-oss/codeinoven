@@ -280,6 +280,24 @@ export class ChatEngineMisc {
     }
   }
 
+  /**
+   * Close the Achievement stage once the audit verifies the goal.
+   *
+   * Completing the circle turns its switch off and drops the thread back to
+   * implementation mode, which is what a verified Achievement means. It is
+   * best-effort: the work is already verified, so a lifecycle write must never
+   * turn a finished achievement into a failure.
+   */
+  private completeAchievementStage(projectId: string, threadId: string): void {
+    const engine = this.host.state.engineeringLifecycleEngine
+    if (engine.get(projectId, threadId)?.activeStage !== 'achievement') return
+    try {
+      engine.completeStage(projectId, threadId, 'achievement')
+    } catch (error) {
+      Logger.dev('Achievement stage completion failed:', error)
+    }
+  }
+
   async continueLoop(projectId: string, threadId: string): Promise<void> {
     const key = `${projectId}:${threadId}`
     if (this.host.state.activeLoopRuns.has(key)) return
@@ -325,6 +343,11 @@ export class ChatEngineMisc {
           loopMode: false
         })
         await this.host.threadManager.setStatus(projectId, threadId, 'completed', { read: false })
+        // The loop itself is what drives Achievement, so nothing else ever closes
+        // its stage. Leaving it active kept the thread in Engineering forever:
+        // every later message took the planning path and parked on a Brainstorm
+        // entry the loop never asked for.
+        this.completeAchievementStage(projectId, threadId)
         if (current.sessionId) {
           this.host.state.engineeringImplementationSessions.delete(current.sessionId)
         }

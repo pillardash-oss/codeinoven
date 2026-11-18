@@ -779,9 +779,10 @@ export class ChatEngineThreadsTitle {
       )
       if (!resumed && thread.settings.loopMode === true) {
         // An Achievement loop resumes through its own driver, not a plain
-        // Continue; mirror the loop branch restart recovery uses.
+        // Continue; mirror the loop branch restart recovery uses, including the
+        // goal an Achievement started without an approved specification carries.
         const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, threadId)
-        if (activeSpec?.status === 'approved') {
+        if (activeSpec?.status === 'approved' || (thread.achievementGoal ?? '').trim().length > 0) {
           void this.host.units['misc'].continueLoop(projectId, threadId)
           resumed = true
         }

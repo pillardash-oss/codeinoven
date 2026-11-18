@@ -171,8 +171,14 @@ export class ChatEngineRuntimeConnectivity {
     }
     if (thread.settings?.loopMode !== true) return false
     const activeSpec = await this.host.units['spec'].getActiveSpec(thread.projectId, thread.id)
+    // Achievement keeps its engineering stage active for as long as the loop
+    // runs, so the stage veto below belongs to workflows the loop does not
+    // drive. A run working toward a captured goal resumes exactly like one
+    // working toward an approved specification, through `continueLoop`.
+    const goalDriven = (thread.achievementGoal ?? '').trim().length > 0
+    if (activeSpec?.status !== 'approved' && !goalDriven) return false
     if (
-      activeSpec?.status !== 'approved' ||
+      !goalDriven &&
       this.host.units['turns'].engineeringLifecycleActive(thread.projectId, thread.id)
     ) {
       return false

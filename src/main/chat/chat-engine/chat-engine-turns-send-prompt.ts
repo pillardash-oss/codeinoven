@@ -608,10 +608,17 @@ export class ChatEngineTurnsSendPrompt {
     const ownedAssignment = this.host.state.assignmentEngine.getActive(projectId, threadId)
     const assignmentInProgress = ownedAssignment !== null && ownedAssignment.status !== 'draft'
     const explicitPlanningAction = specAction === 'request' || specAction === 'review'
+    // Achievement is an implementation stage, never a planning one: its loop owns
+    // the thread, and a plain message is work for the run rather than a request
+    // to plan. Sending it down the planning path found no Brainstorm entry to
+    // answer, created a `choice_pending` workflow nobody had asked for, parked
+    // the thread on `awaiting_approval`, and swallowed the message with nothing
+    // on screen but a Brainstorm entry card.
+    const achievementStage = lifecycleForMode?.activeStage === 'achievement'
     const planningSpecTurn =
       engineeringActive &&
       specAction !== 'implement' &&
-      (explicitPlanningAction || (!lifecycleParked && !assignmentInProgress))
+      (explicitPlanningAction || (!lifecycleParked && !assignmentInProgress && !achievementStage))
     // Persist the selected harness before resolving the session. The renderer
     // pre-binds this same harness immediately before dispatch; leaving the old
     // harness in thread settings would make ensureSession replace that session
