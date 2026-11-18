@@ -1,6 +1,9 @@
 import { buildProcessEnvironmentAsync, OWNED_SESSION_MARKER } from '../cli-environment'
 import { prepareHarnessInvocation, resolveHarnessRuntime } from '../harness-runtime'
 import { PiRpcClient } from '../pi-rpc-client'
+import type { PiSessionClient } from './pi-client'
+import { PiHostClient } from './pi-host-client'
+import { piHostSupervisor } from '../../agents/pi-host-runtime'
 import { SpawnAdmission } from '../spawn-admission'
 import type { AgentMessage } from '../../../lib/types'
 import { Logger } from '../../system/logger'
@@ -36,6 +39,8 @@ const PI_SESSION_IDLE_SWEEP_MS = 60_000
 export interface PiRpcSessionsHost {
   readonly id: string
   readonly accountEnvironment: NodeJS.ProcessEnv
+  /** The account's Pi agent dir, which a hosted session is created under. */
+  readonly agentDirectory: string | undefined
   requireSession(projectPath: string, sessionId: string): Promise<PersistentCliSession>
   isTitleSession(sessionId: string): boolean
   utilityRuntime(sessionId: string): PreparedUtilityRuntime | undefined
@@ -57,7 +62,7 @@ export interface PiRpcSessionsHost {
   materializeProvidersExtension(sessionId: string): Promise<string | null>
   providerExtensionEnv(sessionId: string): Record<string, string> | undefined
   forgetCioSession(sessionId: string): void
-  resumeNativeSession(projectPath: string, sessionId: string, client: PiRpcClient): Promise<void>
+  resumeNativeSession(projectPath: string, sessionId: string, client: PiSessionClient): Promise<void>
   syncNativeSessionId(projectPath: string, sessionId: string): Promise<void>
   /** Start the session's turn state from its mirrored messages. */
   initializeTurnState(sessionId: string, messages: AgentMessage[]): void
@@ -87,7 +92,7 @@ export interface PiRpcSessionsHost {
  * releases a process the user has stopped using.
  */
 export class PiRpcSessions {
-  private readonly rpcClients = new Map<string, PiRpcClient>()
+  private readonly rpcClients = new Map<string, PiSessionClient>()
   /**
    * In-flight session bootstraps, keyed by session id.
    *
@@ -103,7 +108,7 @@ export class PiRpcSessions {
    * turn), because the second caller found the client in `rpcClients` and
    * dispatched immediately. Every caller now awaits the one bootstrap.
    */
-  private readonly rpcClientBootstraps = new Map<string, Promise<PiRpcClient>>()
+  private readonly rpcClientBootstraps = new Map<string, Promise<PiSessionClient>>()
   private readonly sessionProjects = new Map<string, string>()
   /**
    * Last activity per live RPC session (any RPC record, prompt, steer, or
@@ -142,7 +147,7 @@ export class PiRpcSessions {
 
   constructor(private readonly host: PiRpcSessionsHost) {}
 
-  client(sessionId: string): PiRpcClient | undefined {
+  client(sessionId: string): PiSessionClient | undefined {
     return this.rpcClients.get(sessionId)
   }
 
@@ -154,7 +159,7 @@ export class PiRpcSessions {
     return [...this.rpcClients.keys()]
   }
 
-  clientEntries(): IterableIterator<[string, PiRpcClient]> {
+  clientEntries(): IterableIterator<[string, PiSessionClient]> {
     return this.rpcClients.entries()
   }
 
@@ -203,7 +208,7 @@ export class PiRpcSessions {
     projectPath: string,
     sessionId: string,
     steps?: DevStepClock
-  ): Promise<PiRpcClient> {
+  ): Promise<PiSessionClient> {
     // The in-flight bootstrap wins over the published client: `rpcClients` holds
     // the client from the moment it is spawned (Pi's events, UI requests, exit
     // handling and the task manager all need that reference), but the client is
@@ -230,7 +235,7 @@ export class PiRpcSessions {
    * that failed leaves the caller with whatever the map holds, let it fail its
    * own way rather than surfacing the bootstrap error twice.
    */
-  async settledClient(sessionId: string): Promise<PiRpcClient | undefined> {
+  async settledClient(sessionId: string): Promise<PiSessionClient | undefined> {
     const bootstrap = this.rpcClientBootstraps.get(sessionId)
     if (!bootstrap) return this.rpcClients.get(sessionId)
     try {
@@ -253,7 +258,7 @@ export class PiRpcSessions {
     projectPath: string,
     sessionId: string,
     steps?: DevStepClock
-  ): Promise<PiRpcClient> {
+  ): Promise<PiSessionClient> {
     const finishAdmissionWait = steps?.begin('spawnAdmission')
     const releaseSpawn = await this.spawnAdmission.enter(
       this.host.isTitleSession(sessionId) ? 'background' : 'interactive'
@@ -271,7 +276,7 @@ export class PiRpcSessions {
     projectPath: string,
     sessionId: string,
     steps?: DevStepClock
-  ): Promise<PiRpcClient> {
+  ): Promise<PiSessionClient> {
     const session = await this.timedStep(
       steps,
       'sessionLookup',
@@ -361,21 +366,55 @@ export class PiRpcSessions {
       )
       if (!rematerialized) throw new Error('Cannot start Pi without its file-access policy')
     }
-    const client = new PiRpcClient({
-      invocation,
-      onEvent: (record) => {
-        void this.host.handleRpcEvent(record, sessionId, projectPath)
-      },
-      onUiRequest: (record) => {
-        this.host.handleUiRequest(record, sessionId)
-      },
-      onExtensionStatus: (record) => {
-        this.host.handleExtensionStatus(record, sessionId)
-      },
-      onExit: (code) => {
-        this.handleExit(code, sessionId, client)
-      }
-    })
+    // The bundled harness runs on the app's own CIO Pi host: one long-lived
+    // process for every thread, instead of a `pi --mode rpc` child per session.
+    // An installed Pi keeps the process it always had. `CIO_PI_HOST=0` opts out
+    // for a single run when the host has to be ruled out of a failure.
+    const runtimeKind = invocation.runtime.target.kind
+    const hosted = runtimeKind === 'bundled' && process.env['CIO_PI_HOST'] !== '0'
+    const extensionPaths = [
+      cioCoreToolsExtensionPath,
+      ...(providersExtensionPath === null ? [] : [providersExtensionPath])
+    ]
+    let client: PiSessionClient
+    if (hosted) {
+      const hostClient = new PiHostClient({
+        supervisor: piHostSupervisor(),
+        sessionId,
+        cwd: projectPath,
+        agentDir: this.host.agentDirectory ?? '',
+        extensionPaths,
+        onEvent: (record) => {
+          void this.host.handleRpcEvent(record, sessionId, projectPath)
+        },
+        onUiRequest: (record) => {
+          this.host.handleUiRequest(record, sessionId)
+        },
+        onExtensionStatus: (record) => {
+          this.host.handleExtensionStatus(record, sessionId)
+        },
+        onExit: (code) => {
+          this.handleExit(code, sessionId, hostClient)
+        }
+      })
+      client = hostClient
+    } else {
+      client = new PiRpcClient({
+        invocation,
+        onEvent: (record) => {
+          void this.host.handleRpcEvent(record, sessionId, projectPath)
+        },
+        onUiRequest: (record) => {
+          this.host.handleUiRequest(record, sessionId)
+        },
+        onExtensionStatus: (record) => {
+          this.host.handleExtensionStatus(record, sessionId)
+        },
+        onExit: (code) => {
+          this.handleExit(code, sessionId, client)
+        }
+      })
+    }
     this.rpcClients.set(sessionId, client)
     this.sessionProjects.set(sessionId, projectPath)
     this.touchSessionActivity(sessionId)
@@ -389,12 +428,17 @@ export class PiRpcSessions {
     // `CodeInOven-electron` instead of `pi`. `runtime.command` is the command
     // the user asked for in both the bundled and native cases, so the row reads
     // the harness that actually owns the process again.
-    this.host.observeHarnessProcess(
-      sessionId,
-      client.process,
-      invocation.runtime?.command ?? invocation.command,
-      projectPath
-    )
+    // A hosted session is not a child process: the host itself is the process,
+    // and it is registered once with the app's service list instead of a row per
+    // thread. Only a real RPC child is handed to the process tracker.
+    if (client instanceof PiRpcClient) {
+      this.host.observeHarnessProcess(
+        sessionId,
+        client.process,
+        invocation.runtime?.command ?? invocation.command,
+        projectPath
+      )
+    }
     try {
       this.compactionReadySessions.delete(sessionId)
       await this.timedStep(steps, 'newSession', client.newSession())
@@ -450,7 +494,7 @@ export class PiRpcSessions {
   }
 
   /** A client's exit event; a replaced client's stale exit is ignored. */
-  handleExit(code: number | null, sessionId: string, exitedClient: PiRpcClient): void {
+  handleExit(code: number | null, sessionId: string, exitedClient: PiSessionClient): void {
     void code
     // A session can replace its RPC process while the old child is still
     // delivering its exit event. Never let that stale callback dispose the

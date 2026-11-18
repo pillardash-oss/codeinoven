@@ -9,6 +9,7 @@ import type {
 import { Logger } from '../../system/logger'
 import type { PersistentCliSession } from '../persistent-cli-driver'
 import type { PiRpcClient } from '../pi-rpc-client'
+import type { PiSessionClient } from './pi-client'
 import { numberValue, record } from './pi-values'
 
 /** Pi token, cost, context, and provider rate-limit accounting. */
@@ -378,7 +379,7 @@ export {
 
 /** Everything a usage refresh needs from its host driver. */
 export interface PiUsageRefreshContext {
-  client: PiRpcClient | null
+  client: PiSessionClient | null
   sessionStatsBroken: Set<string>
   rateLimits: AgentRateLimitWindow[]
   applyEvent: (session: PersistentCliSession, event: SessionAgentEvent) => void

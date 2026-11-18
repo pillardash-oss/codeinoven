@@ -32,7 +32,8 @@ import {
   type PersistentCliSession,
   type TitleModelCandidate
 } from './persistent-cli-driver'
-import { PiRpcClient, type PiRpcImage } from './pi-rpc-client'
+import { type PiRpcImage } from './pi-rpc-client'
+import type { PiSessionClient } from './pi/pi-client'
 import { runHarnessCommand } from './harness-runtime'
 
 import { record, withTimeout } from './pi/pi-values'
@@ -216,6 +217,7 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.rpcSessions = new PiRpcSessions({
       id: this.id,
+      agentDirectory: this.agentDirectory,
       accountEnvironment,
       requireSession: (projectPath, sessionId) => this.requireSession(projectPath, sessionId),
       isTitleSession: (sessionId) => this.isTitleSession(sessionId),
@@ -745,7 +747,7 @@ export class PiDriver extends PersistentCliDriver {
    */
   private async applyPiSettingsIfChanged(
     sessionId: string,
-    client: PiRpcClient,
+    client: PiSessionClient,
     model: { provider: string; modelId: string },
     thinkingLevel: string
   ): Promise<void> {
@@ -1202,7 +1204,7 @@ export class PiDriver extends PersistentCliDriver {
    * A refusal with no live run behind it stays the caller's error to report.
    */
   private async promptIntoSession(
-    client: PiRpcClient,
+    client: PiSessionClient,
     projectPath: string,
     sessionId: string,
     prompt: string,

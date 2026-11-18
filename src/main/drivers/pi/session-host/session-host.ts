@@ -155,6 +155,37 @@ export class PiSessionHost {
         respond({ disposition })
         return
       }
+      case 'get_session_stats': {
+        const hosted = this.requireSession(request.sessionId)
+        const usage = hosted.session.getContextUsage()
+        respond({ contextUsage: usage ?? null })
+        return
+      }
+      case 'get_available_models': {
+        const hosted = this.requireSession(request.sessionId)
+        respond({ models: hosted.services.modelRuntime.getModels() })
+        return
+      }
+      case 'set_model': {
+        const hosted = this.requireSession(request.sessionId)
+        const model = hosted.services.modelRuntime.getModel(command.provider, command.modelId)
+        if (model === undefined) {
+          throw new Error(`Unknown model: ${command.provider}/${command.modelId}`)
+        }
+        await hosted.session.setModel(model)
+        respond(this.stateOf(hosted.key))
+        return
+      }
+      case 'set_thinking_level': {
+        const hosted = this.requireSession(request.sessionId)
+        hosted.session.setThinkingLevel(command.level)
+        respond(this.stateOf(hosted.key))
+        return
+      }
+      case 'get_commands': {
+        respond({ commands: [] })
+        return
+      }
       case 'new_session': {
         const hosted = this.requireSession(request.sessionId)
         const manager = SessionManager.create(

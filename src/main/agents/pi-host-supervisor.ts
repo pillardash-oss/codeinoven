@@ -73,6 +73,7 @@ export class PiHostSupervisor {
   #sequence = 0
   #hostSequence = 0
   readonly #uiListeners: ((sessionId: string, request: HostUiRequest) => void)[] = []
+  readonly #eventListeners: ((sessionId: string, event: Record<string, unknown>) => void)[] = []
   /** Where each session runs, so a move can resume it rather than rebuild it. */
   readonly #sessions = new Map<string, TransferableSession>()
 
@@ -185,6 +186,15 @@ export class PiHostSupervisor {
    * Listen to the dialogs hosted sessions are blocked on, so main can draw the
    * same permission and question cards it draws for an RPC process.
    */
+  /** Listen to the events every hosted session streams, keyed by session. */
+  onEvent(listener: (sessionId: string, event: Record<string, unknown>) => void): () => void {
+    this.#eventListeners.push(listener)
+    return () => {
+      const index = this.#eventListeners.indexOf(listener)
+      if (index >= 0) this.#eventListeners.splice(index, 1)
+    }
+  }
+
   onUiRequest(listener: (sessionId: string, request: HostUiRequest) => void): () => void {
     this.#uiListeners.push(listener)
     return () => {
@@ -275,6 +285,19 @@ export class PiHostSupervisor {
     try {
       envelope = JSON.parse(line) as { type?: string; id?: string }
     } catch {
+      return
+    }
+    if (envelope.type === 'event') {
+      const event = envelope as { sessionId?: unknown; event?: unknown }
+      if (
+        typeof event.sessionId === 'string' &&
+        typeof event.event === 'object' &&
+        event.event !== null
+      ) {
+        for (const listener of this.#eventListeners) {
+          listener(event.sessionId, event.event as Record<string, unknown>)
+        }
+      }
       return
     }
     if (envelope.type === 'ui_request') {

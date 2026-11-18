@@ -71,10 +71,20 @@ export type HostCommand =
   | { type: 'switch_session'; sessionPath: string }
   /** Compact the hosted session's context now. */
   | { type: 'compact'; instructions?: string }
+  /** Switch the model the session runs on. */
+  | { type: 'set_model'; provider: string; modelId: string }
+  /** Switch the reasoning effort the session runs at. */
+  | { type: 'set_thinking_level'; level: HostThinkingLevel }
   /** Answer a dialog the host forwarded. The host never decides for the user. */
   | { type: 'ui_response'; requestId: string; response: HostUiResponse }
   | { type: 'dispose_session' }
   | { type: 'get_state' }
+  /** Context usage, in the shape the app's usage panel reads. */
+  | { type: 'get_session_stats' }
+  /** Every model this account can start a session on. */
+  | { type: 'get_available_models' }
+  /** Slash commands; a hosted session exposes none yet, and answers an empty list. */
+  | { type: 'get_commands' }
   | { type: 'get_messages' }
   | { type: 'list_sessions' }
 
@@ -252,6 +262,20 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
         ...(dialogs ? { dialogs } : {}),
         ...(parentSessionId === undefined ? {} : { parentSessionId })
       }
+    }
+    case 'get_session_stats':
+    case 'get_available_models':
+    case 'get_commands':
+    case 'set_model': {
+      const provider = stringField(value, 'provider')
+      const modelId = stringField(value, 'modelId')
+      if (provider === undefined || modelId === undefined) return null
+      return { type, provider, modelId }
+    }
+    case 'set_thinking_level': {
+      const level = thinkingLevelField(value)
+      if (level === undefined) return null
+      return { type, level }
     }
     case 'new_session':
       return { type }

@@ -6,6 +6,7 @@ import { parseRecord } from '../../../lib/agent-interactions'
 import type { PersistentCliSession } from '../persistent-cli-driver'
 import type { CliLineParseContext, CliLineParseResult } from '../persistent-cli-driver'
 import type { PiRpcClient } from '../pi-rpc-client'
+import type { PiSessionClient } from './pi-client'
 import { PI_COMPACTION_EXTENSION_KEY } from '../pi-compaction-extension'
 import {
   PI_STATUS_COMPACTING,
@@ -43,10 +44,10 @@ export interface PiTurnLifecycleHost {
   mergeMessages(session: PersistentCliSession, messages: AgentMessage[]): void
   applySessionEvent(session: PersistentCliSession, event: AgentEvent): void
   emitEvent(event: AgentEvent): void
-  client(sessionId: string): PiRpcClient | undefined
+  client(sessionId: string): PiSessionClient | undefined
   projectOf(sessionId: string): string | undefined
-  ensureClient(projectPath: string, sessionId: string): Promise<PiRpcClient>
-  settledClient(sessionId: string): Promise<PiRpcClient | undefined>
+  ensureClient(projectPath: string, sessionId: string): Promise<PiSessionClient>
+  settledClient(sessionId: string): Promise<PiSessionClient | undefined>
   disposeClient(sessionId: string): void
   touchActivity(sessionId: string): void
   refreshSessionUsage(session: PersistentCliSession): Promise<void>
@@ -370,7 +371,7 @@ export class PiTurnLifecycle {
   async compactSession(
     session: PersistentCliSession,
     projectPath: string,
-    client: PiRpcClient
+    client: PiSessionClient
   ): Promise<void> {
     const sessionId = session.id
     // pi's `compact` RPC aborts any active run and then compacts, so it works
@@ -721,7 +722,7 @@ export class PiTurnLifecycle {
    */
   private async compactAndContinue(
     session: PersistentCliSession,
-    client: PiRpcClient,
+    client: PiSessionClient,
     state: PiSilentContinueState
   ): Promise<void> {
     const projectPath = this.host.projectOf(session.id)

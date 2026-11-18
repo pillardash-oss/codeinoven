@@ -7,6 +7,7 @@ import { Logger } from '../../system/logger'
 import type { StorageEngine } from '../../storage/storage-engine'
 import type { PersistentCliSession } from '../persistent-cli-driver'
 import type { PiRpcClient } from '../pi-rpc-client'
+import type { PiSessionClient } from './pi-client'
 import {
   findNativePiSessionFile,
   loadNativeSubagentMessages,
@@ -21,7 +22,7 @@ export interface PiNativeSessionsHost {
   readonly agentDirectory: string | undefined
   readonly storage: StorageEngine
   hasClient(sessionId: string): boolean
-  rpcClient(sessionId: string): PiRpcClient | undefined
+  rpcClient(sessionId: string): PiSessionClient | undefined
   session(projectPath: string, sessionId: string): Promise<PersistentCliSession>
   persistSession(session: PersistentCliSession): Promise<void>
   sessionRecordPath(sessionId: string): string
@@ -58,7 +59,7 @@ export class PiNativeSessions {
   async resumeNativePiSession(
     projectPath: string,
     sessionId: string,
-    client: PiRpcClient
+    client: PiSessionClient
   ): Promise<void> {
     try {
       const session = await this.host.session(projectPath, sessionId)

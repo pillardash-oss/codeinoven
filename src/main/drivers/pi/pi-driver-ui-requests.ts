@@ -3,20 +3,21 @@ import { normalizeAgentQuestions } from '../../../lib/agent-interactions'
 import { Logger } from '../../system/logger'
 import { PermissionRequestGoneError, QuestionRequestGoneError } from '../driver.interface'
 import type { PiRpcClient } from '../pi-rpc-client'
+import type { PiSessionClient } from './pi-client'
 import { permissionMarkerPayload, questionMarkerPayload } from './pi-ui-markers'
 import { stringValue } from './pi-values'
 
 interface PiUiRequest {
   sessionId: string
   method: string
-  client: PiRpcClient
+  client: PiSessionClient
   request: Record<string, unknown>
 }
 
 /** Everything the dialog board needs from the driver. */
 export interface PiUiRequestHost {
   readonly name: string
-  rpcClient(sessionId: string): PiRpcClient | undefined
+  rpcClient(sessionId: string): PiSessionClient | undefined
   emitEvent(event: AgentEvent): void
 }
 
