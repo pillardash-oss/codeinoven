@@ -196,6 +196,37 @@
    * the element it hands over and nothing else.
    */
   let panelProgress = $state(0)
+
+  /**
+   * Whether the reader has reached the end of the timeline's list.
+   *
+   * The older-history control is the list's own ending, not a doorway into it:
+   * painted above the rows it belongs to, it read as a way to open the done
+   * group it sits under, which is not what it does. It is therefore only offered
+   * once the reader is at the bottom, where the tail of the loaded history is
+   * what they are looking at. No thread is lost by waiting: the rows above are
+   * the loaded history itself.
+   *
+   * The two ends are different distances on purpose. Revealing the control adds
+   * its own height below the last row, which moves the end of the list away by
+   * exactly that height; a single threshold would hide it again in the same
+   * frame and flap forever. The reveal distance is inside the hiding distance by
+   * far more than the control's height, so the strip settles instead of
+   * oscillating.
+   */
+  const TAIL_REVEAL_DISTANCE = 48
+  const TAIL_HIDE_DISTANCE = 200
+  let listTailRevealed = $state(true)
+
+  function measureListTail(element: HTMLElement): void {
+    const fromEnd = element.scrollHeight - (element.scrollTop + element.clientHeight)
+    if (listTailRevealed) {
+      if (fromEnd > TAIL_HIDE_DISTANCE) listTailRevealed = false
+    } else if (fromEnd <= TAIL_REVEAL_DISTANCE) {
+      listTailRevealed = true
+    }
+  }
+
   $effect(() => {
     const element = scroller
     if (!element) return
@@ -211,6 +242,7 @@
       if (atTop) panelProgress = 0
       else if (atEnd) panelProgress = 1
       else panelProgress = Math.min(1, element.scrollTop / 160)
+      measureListTail(element)
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
@@ -552,8 +584,23 @@
     threadsRowReflow.capture(threadsListElement, scroller ?? null, threadRowArrangement)
   })
 
+  /**
+   * Re-reads the end of the list whenever the rows it holds, or the pane drawing
+   * them, change.
+   *
+   * A scroll event fires only when the reader moves: paging older history in,
+   * folding a group or a filter narrowing the list all change where the end is
+   * without a single scroll, and the scroller is shared by every pane, so the
+   * pane coming back on screen has to be measured too. The arrangement this
+   * effect already follows is exactly that signal, and an effect runs after the
+   * DOM update, so the measurement reads the layout the reader is looking at.
+   */
   $effect(() => {
+    const threadsPaneVisible = !loading && mode === 'threads'
+    const element = scroller
     threadsRowReflow.play(threadsListElement, scroller ?? null, threadRowArrangement)
+    if (!threadsPaneVisible || !element) return
+    measureListTail(element)
   })
 
   /** When this list first painted. A row that lands because the app just created
@@ -1177,9 +1224,16 @@
                the last section, inside the fold that holds the tail's rows. Left
                as a sibling of the sections it floated under a folded group with
                no visible tie to it; nested here it reads as the section's own
-               ending and folds away with the group it continues. -->
+               ending and folds away with the group it continues. A folded last
+               section therefore shows no control at all: the rows it would
+               continue are not on screen, and the button under a folded heading
+               read as a way to open that heading instead. -->
           {@const isLastSection = sectionIndex === threadSections.length - 1}
-          {@const showLoadOlder = isLastSection && !searchPanelActive && hasMoreHistory}
+          {@const lastSectionExpanded = section.group
+            ? !threadGroupingState.isFolded(section.group.label)
+            : true}
+          {@const showLoadOlder =
+            isLastSection && lastSectionExpanded && !searchPanelActive && hasMoreHistory}
           <section>
             {#if section.group}
               {@const group = section.group}
@@ -1275,7 +1329,7 @@
                 Show less
               </button>
             {/if}
-            {#if showLoadOlder}
+            {#if showLoadOlder && listTailRevealed}
               <button
                 class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait {section.group
                   ? 'pb-5'
@@ -1298,7 +1352,7 @@
           {/if}
           <!-- No section owns the tail here, so the older-history control falls
                back to the pane itself. -->
-          {#if !searchPanelActive && hasMoreHistory}
+          {#if !searchPanelActive && hasMoreHistory && listTailRevealed}
             <button
               class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
               disabled={historyLoading}
