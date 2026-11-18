@@ -42,14 +42,10 @@ export class NativeToastView {
   apply(stack: ToastOverlayRequestStack | null): boolean {
     if (stack?.toasts.length) clearTimeout(this.idleTimer)
     const focused = webContents.getFocusedWebContents()
-    if (
-      focused &&
-      focused !== this.view?.webContents &&
-      (focused === this.parent.webContents ||
-        this.parent.contentView.children.some(
-          (child) => child instanceof WebContentsView && child.webContents === focused
-        ))
-    )
+    // Whatever held the keyboard before a card appeared is the one that gets it
+    // back, including the modal host this card is drawn over: a toast is a
+    // passive surface and must never keep the caret the user left behind it.
+    if (focused && focused !== this.view?.webContents && !focused.isDestroyed())
       this.focusBeforeToast = focused
     this.stack = stack
     if (!this.view && !stack?.toasts.length) return true
@@ -82,8 +78,38 @@ export class NativeToastView {
     }
   }
   raise(): void {
-    if (this.height && this.view && !this.host.isDestroyed())
-      this.host.contentView.addChildView(this.view)
+    if (!this.height || !this.view || this.host.isDestroyed()) return
+    const view = this.view
+    this.host.contentView.addChildView(view)
+    this.yieldKeyboard(view)
+  }
+
+  /**
+   * Hand the keyboard straight back to the surface the card was drawn over.
+   *
+   * A card is a passive announcement, so attaching it must never move the caret
+   * out of the field behind it. Electron gives a view added to a key window the
+   * keyboard, which meant the keystroke right after a toast appeared was typed
+   * into the card instead of the dialog the user was working in: a Space or an
+   * Enter then activated the card's own button ("Open thread"), and opening a
+   * notification deliberately steps every blocking surface aside, so the dialog
+   * vanished under the user's hands as soon as the card came up.
+   *
+   * The check waits a turn, because the focus a newly attached view receives
+   * lands after the attachment returns.
+   */
+  private yieldKeyboard(view: WebContentsView): void {
+    setImmediate(() => {
+      if (this.view !== view) return
+      const contents = liveContents(view)
+      if (!contents || contents.isDestroyed() || !contents.isFocused()) return
+      const target =
+        this.host === this.parent
+          ? (this.focusBeforeToast ?? this.host.webContents)
+          : this.host.webContents
+      if (!target || target.isDestroyed() || target.id === contents.id) return
+      target.focus()
+    })
   }
   dispose(): void {
     clearTimeout(this.idleTimer)
