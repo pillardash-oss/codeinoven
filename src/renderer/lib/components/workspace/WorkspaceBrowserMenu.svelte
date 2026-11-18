@@ -3,6 +3,7 @@
   import CioDownload from '@pdslng/cio-icon/CioDownload.svelte'
   import CioClose from '@pdslng/cio-icon/CioClose.svelte'
   import CioThreadBrowser from '@pdslng/cio-icon/CioThreadBrowser.svelte'
+  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
   import type { WorkspaceBrowserController } from './WorkspaceBrowserController.svelte'
 
   interface Props {
@@ -22,10 +23,15 @@
     browser.menuOpen = false
   }}
 ></button>
+<!-- The menu opens over the thread browser itself, which a native page paints
+     above every DOM node. Publishing its rectangle parks the page while the menu
+     is up, so the actions stay visible and the backdrop can take the outside
+     click that closes it. -->
 <div
   class="absolute right-full top-0 z-40 mr-2 w-56 overflow-hidden border bg-surface p-1 shadow-lg"
   role="menu"
   aria-label="Browser menu"
+  {@attach trackBrowserOcclusion}
 >
   <button
     type="button"
