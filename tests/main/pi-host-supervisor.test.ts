@@ -49,6 +49,11 @@ class FakeHost {
     for (const listener of this.#exitListeners) listener(1)
   }
 
+  /** Push a line the supervisor did not ask for, the way a host forwards a dialog. */
+  emit(line: unknown): void {
+    for (const listener of this.#listeners) listener(JSON.stringify(line))
+  }
+
   #answer(request: HostRequestEnvelope): void {
     const reply = (data: unknown): void => {
       const line = JSON.stringify({ type: 'response', id: request.id, ok: true, data })
@@ -150,6 +155,42 @@ describe('PiHostSupervisor', () => {
     const response = await pending
     expect(response.ok).toBe(false)
     expect(supervisor.pid()).toBeNull()
+  })
+
+  it('forwards a dialog to its listener and answers it on the session', async () => {
+    const { supervisor, hosts } = harness()
+    await supervisor.createSession({
+      sessionId: 'atlas',
+      command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
+    })
+    const seen: { sessionId: string; method: string }[] = []
+    supervisor.onUiRequest((sessionId, request) => seen.push({ sessionId, method: request.method }))
+    hosts[0].emit({
+      type: 'ui_request',
+      sessionId: 'atlas',
+      request: { id: 'ui-1', method: 'confirm', title: 'Allow write?', message: 'write a file', timeout: 1000 }
+    })
+    expect(seen).toEqual([{ sessionId: 'atlas', method: 'confirm' }])
+    await supervisor.respondToUi('atlas', 'ui-1', { confirmed: true })
+    const answered = hosts[0].lines.find((line) => line.command.type === 'ui_response')
+    expect(answered?.command).toMatchObject({
+      type: 'ui_response',
+      requestId: 'ui-1',
+      response: { confirmed: true }
+    })
+  })
+
+  it('stops calling a listener after it unsubscribes', async () => {
+    const { supervisor, hosts } = harness()
+    await supervisor.createSession({
+      sessionId: 'atlas',
+      command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
+    })
+    const listener = vi.fn()
+    const off = supervisor.onUiRequest(listener)
+    off()
+    hosts[0].emit({ type: 'ui_request', sessionId: 'atlas', request: { id: 'ui-2', method: 'notify', message: 'x', notifyType: undefined } })
+    expect(listener).not.toHaveBeenCalled()
   })
 
   it('refuses to move a session it never created', async () => {

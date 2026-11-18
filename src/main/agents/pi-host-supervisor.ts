@@ -20,7 +20,9 @@ import type {
   HostRequestEnvelope,
   HostResponseEnvelope,
   HostSessionListEntry,
-  HostSessionState
+  HostSessionState,
+  HostUiRequest,
+  HostUiResponse
 } from '../drivers/pi/session-host/protocol'
 
 /** One running host process, addressed by lines. */
@@ -68,6 +70,7 @@ export class PiHostSupervisor {
   #primaryId: string | null = null
   #sequence = 0
   #hostSequence = 0
+  readonly #uiListeners: ((sessionId: string, request: HostUiRequest) => void)[] = []
   /** Where each session runs, so a move can resume it rather than rebuild it. */
   readonly #sessions = new Map<string, TransferableSession>()
 
@@ -171,6 +174,23 @@ export class PiHostSupervisor {
     }
   }
 
+  /**
+   * Listen to the dialogs hosted sessions are blocked on, so main can draw the
+   * same permission and question cards it draws for an RPC process.
+   */
+  onUiRequest(listener: (sessionId: string, request: HostUiRequest) => void): () => void {
+    this.#uiListeners.push(listener)
+    return () => {
+      const index = this.#uiListeners.indexOf(listener)
+      if (index >= 0) this.#uiListeners.splice(index, 1)
+    }
+  }
+
+  /** Answer a dialog the host forwarded. Never answered by the host itself. */
+  async respondToUi(sessionId: string, requestId: string, response: HostUiResponse): Promise<void> {
+    await this.request(sessionId, { type: 'ui_response', requestId, response })
+  }
+
   /** What every running host reports it is running, as each host sees it. */
   async listSessions(): Promise<HostSessionListEntry[]> {
     const entries: HostSessionListEntry[] = []
@@ -248,6 +268,15 @@ export class PiHostSupervisor {
     try {
       envelope = JSON.parse(line) as { type?: string; id?: string }
     } catch {
+      return
+    }
+    if (envelope.type === 'ui_request') {
+      const request = envelope as { sessionId?: unknown; request?: unknown }
+      if (typeof request.sessionId === 'string' && request.request !== undefined) {
+        for (const listener of this.#uiListeners) {
+          listener(request.sessionId, request.request as HostUiRequest)
+        }
+      }
       return
     }
     if (envelope.type !== 'response' || typeof envelope.id !== 'string') return

@@ -48,6 +48,13 @@ export interface HostCreateSessionCommand {
   model?: { provider: string; id: string }
   /** Initial reasoning effort, resolved against the session's own model runtime. */
   thinkingLevel?: HostThinkingLevel
+  /**
+   * Bind the host's dialog context so extension questions reach the app.
+   *
+   * Off by default and on for the app's own sessions: binding needs the SDK's
+   * interactive theme, which only exists once the extension runtime has one.
+   */
+  dialogs?: boolean
 }
 
 export type HostCommand =
@@ -56,10 +63,39 @@ export type HostCommand =
   | { type: 'steer'; message: string; images?: HostImageContent[] }
   | { type: 'follow_up'; message: string }
   | { type: 'abort' }
+  /** Answer a dialog the host forwarded. The host never decides for the user. */
+  | { type: 'ui_response'; requestId: string; response: HostUiResponse }
   | { type: 'dispose_session' }
   | { type: 'get_state' }
   | { type: 'get_messages' }
   | { type: 'list_sessions' }
+
+/** One dialog a hosted session is blocked on. The app renders and answers it. */
+export type HostUiResponse = { cancelled: true } | { value: string } | { confirmed: boolean }
+
+export type HostUiRequest =
+  | { id: string; method: 'select'; title: string; options: string[]; timeout: number | undefined }
+  | { id: string; method: 'confirm'; title: string; message: string; timeout: number | undefined }
+  | {
+      id: string
+      method: 'input'
+      title: string
+      placeholder: string | undefined
+      timeout: number | undefined
+    }
+  | { id: string; method: 'editor'; title: string; prefill: string | undefined }
+  | {
+      id: string
+      method: 'notify'
+      message: string
+      notifyType: 'info' | 'warning' | 'error' | undefined
+    }
+
+export interface HostUiRequestEnvelope {
+  type: 'ui_request'
+  sessionId: string
+  request: HostUiRequest
+}
 
 /** One command line from the app to the host. */
 export interface HostRequestEnvelope {
@@ -162,6 +198,18 @@ function modelField(
   return { provider, id }
 }
 
+/** Validate one dialog answer: cancelled, a value, or a confirmation. */
+function uiResponseField(record: Record<string, unknown>, key: string): HostUiResponse | undefined {
+  const value = record[key]
+  if (!isRecord(value)) return undefined
+  if (value['cancelled'] === true) return { cancelled: true }
+  const confirmed = value['confirmed']
+  if (typeof confirmed === 'boolean') return { confirmed }
+  const text = value['value']
+  if (typeof text === 'string') return { value: text }
+  return undefined
+}
+
 function thinkingLevelField(record: Record<string, unknown>): HostThinkingLevel | undefined {
   const value = record['thinkingLevel']
   if (typeof value !== 'string') return undefined
@@ -181,6 +229,7 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
       const tools = stringArrayField(value, 'tools')
       const model = modelField(value, 'model')
       const thinkingLevel = thinkingLevelField(value)
+      const dialogs = value['dialogs'] === true
       return {
         type,
         cwd,
@@ -189,8 +238,15 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
         ...(sessionPath === undefined ? {} : { sessionPath }),
         ...(tools === undefined ? {} : { tools }),
         ...(model === undefined ? {} : { model }),
-        ...(thinkingLevel === undefined ? {} : { thinkingLevel })
+        ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
+        ...(dialogs ? { dialogs } : {})
       }
+    }
+    case 'ui_response': {
+      const requestId = stringField(value, 'requestId')
+      const response = uiResponseField(value, 'response')
+      if (requestId === undefined || response === undefined) return null
+      return { type, requestId, response }
     }
     case 'prompt':
     case 'steer': {

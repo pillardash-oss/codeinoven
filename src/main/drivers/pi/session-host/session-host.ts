@@ -24,6 +24,7 @@ import {
   SessionManager
 } from '@earendil-works/pi-coding-agent'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
+import { createHostUiContext } from './ui-context'
 import type {
   HostCreateSessionCommand,
   HostEventEnvelope,
@@ -31,12 +32,15 @@ import type {
   HostRequestEnvelope,
   HostResponseEnvelope,
   HostSessionListEntry,
-  HostSessionState
+  HostSessionState,
+  HostUiRequest,
+  HostUiRequestEnvelope,
+  HostUiResponse
 } from './protocol'
 
 /** Lines the host pushes to its transport. */
 export type HostLineSink = (
-  line: HostResponseEnvelope | HostEventEnvelope | HostNoticeEnvelope
+  line: HostResponseEnvelope | HostEventEnvelope | HostNoticeEnvelope | HostUiRequestEnvelope
 ) => void
 
 interface HostedSession {
@@ -50,6 +54,9 @@ interface HostedSession {
 
 export class PiSessionHost {
   private readonly sessions = new Map<string, HostedSession>()
+
+  /** Dialogs a session is blocked on, by request id, until the app answers. */
+  private readonly pendingUi = new Map<string, (response: HostUiResponse) => void>()
 
   constructor(private readonly sink: HostLineSink) {}
 
@@ -155,6 +162,13 @@ export class PiSessionHost {
         respond(this.requireSession(request.sessionId).session.messages)
         return
       }
+      case 'ui_response': {
+        const resolve = this.pendingUi.get(command.requestId)
+        this.pendingUi.delete(command.requestId)
+        resolve?.(command.response)
+        respond({ resolved: resolve !== undefined })
+        return
+      }
       case 'list_sessions': {
         respond(this.listSessions())
         return
@@ -195,6 +209,19 @@ export class PiSessionHost {
     const unsubscribe = created.session.subscribe((event) => {
       this.sink({ type: 'event', sessionId: key, event })
     })
+    // A session's extensions ask their questions here, and every answer goes to
+    // the app: the host renders nothing and decides nothing. Binding is opt-in
+    // because the SDK builds the extension context with an interactive theme,
+    // which a session that never asks a question does not need.
+    if (command.dialogs === true) {
+      await created.session.bindExtensions({
+        uiContext: createHostUiContext({
+          ask: (request) => this.askUi(key, request),
+          notify: (request) => this.sink({ type: 'ui_request', sessionId: key, request })
+        }),
+        mode: 'rpc'
+      })
+    }
     this.sessions.set(key, {
       key,
       session: created.session,
@@ -205,10 +232,30 @@ export class PiSessionHost {
     return this.stateOf(key)
   }
 
+  /** Forward one dialog to the app and resolve when the answer comes back. */
+  private askUi(sessionId: string, request: HostUiRequest): Promise<HostUiResponse> {
+    const key = this.requireSessionKey(sessionId)
+    return new Promise<HostUiResponse>((resolve) => {
+      this.pendingUi.set(request.id, resolve)
+      if (request.method === 'notify') {
+        this.pendingUi.delete(request.id)
+        this.sink({ type: 'ui_request', sessionId: key, request })
+        resolve({ cancelled: true })
+        return
+      }
+      this.sink({ type: 'ui_request', sessionId: key, request })
+    })
+  }
+
   private disposeSession(key: string): void {
     const hosted = this.sessions.get(key)
     if (hosted === undefined) return
     this.sessions.delete(key)
+    // A dialog nobody can answer any more is a cancelled dialog, never a hang.
+    for (const [requestId, resolve] of this.pendingUi) {
+      resolve({ cancelled: true })
+      this.pendingUi.delete(requestId)
+    }
     hosted.unsubscribe()
     hosted.session.dispose()
   }
