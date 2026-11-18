@@ -44,11 +44,10 @@
   } from '$lib/components/threads/thread-state-marks'
   import Modal from '$lib/components/ui/Modal.svelte'
   import StatusPill from '$lib/components/ui/StatusPill.svelte'
+  import ThreadScopeChip from '$lib/components/shared/ThreadScopeChip.svelte'
   import ThreadDeleteConfirm from '$lib/components/ui/ThreadDeleteConfirm.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import { longPress } from '$lib/long-press.svelte'
-  import { pickColorForSeed } from '$lib/project-colors'
-  import { generateInitialsIconSvg, getIconSvgDataUrl } from '$lib/project-svg-icons'
   import { relativeTimeClock } from '$lib/relative-time.svelte'
   import { speechController } from '$lib/speech/speech-controller.svelte'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -70,7 +69,7 @@
   import { preloadThreadConversation } from '$lib/stores/thread-preload'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
-  import { abbreviatedScopeName, threadScopeBucket } from '$lib/threads/thread-scope'
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
   import { THREAD_DRAG_TYPE } from '$lib/components/chats/chat-composer-drop-source'
   import VendorIcon from '$lib/vendor-icons/VendorIcon.svelte'
   import { threadStatusPolicy, settledThreadReadsUnread } from '$shared/thread-status-policy'
@@ -920,17 +919,6 @@
       pinMarkVisible
   )
 
-  let scopeColor = $derived(
-    scopeBucket ? (scopeBucket.color ?? pickColorForSeed(scopeBucket.id)) : ''
-  )
-
-  let scopeIconUrl = $derived.by((): string | null => {
-    if (!scopeBucket) return null
-    if (scopeBucket.iconType) return getIconSvgDataUrl(scopeBucket.iconType, scopeColor)
-    if (scopeBucket.color) return generateInitialsIconSvg(scopeBucket.name, scopeColor)
-    return null
-  })
-
   /** Status remains visible for pinned threads; hover temporarily reveals the pin action. */
   let pinVisible = $derived(hovered || effectivePinned)
 
@@ -1073,36 +1061,6 @@
       title={temporaryChatLabel}
     >
       <CioTemporaryChat size={11} strokeWidth={2} aria-hidden="true" />
-    </span>
-  {/if}
-{/snippet}
-
-{#snippet scopeChip(classes: string)}
-  {#if scopeBucket}
-    <!-- The chip is allowed to shrink: its track is the flexible one, so a
-         crowded footer narrows the scope (name truncates with an ellipsis)
-         rather than letting the chip run under the neighbouring marks. -->
-    <span
-      class="relative flex min-w-0 max-w-full items-center gap-1 overflow-hidden border-b px-1 text-[0.5625rem] text-muted {classes}"
-      title={scopeBucket.name}
-      style="border-bottom-color: color-mix(in srgb, {scopeColor} 30%, var(--color-muted));"
-    >
-      {#if scopeIconUrl}
-        <img
-          src={scopeIconUrl}
-          alt=""
-          class="h-2 w-2 shrink-0 object-contain opacity-50 grayscale"
-          draggable="false"
-        />
-      {/if}
-      {#if scopeBucket.pinned}
-        <CioPin size={8} class="shrink-0 text-accent" aria-hidden="true" />
-      {/if}
-      <!-- The scope is shortened at its own punctuation before the chip ever
-           truncates, so a long name keeps its distinguishing head instead of
-           spending the chip's width on a prefix several scopes share. The full
-           name stays in the title. -->
-      <span class="min-w-0 truncate">{abbreviatedScopeName(scopeBucket.name)}</span>
     </span>
   {/if}
 {/snippet}
@@ -1270,7 +1228,7 @@
           </span>
         {/if}
 
-        {@render scopeChip('col-start-2 pb-1 pt-0.5')}
+        <ThreadScopeChip {thread} classes="col-start-2 pb-1 pt-0.5" />
 
         <span class="col-start-3 flex min-w-0 items-center justify-end gap-1 overflow-hidden">
           {#if isRemote}
@@ -1556,7 +1514,7 @@
           {/if}
 
           {#if !hideScope}
-            {@render scopeChip('col-start-2 max-w-[7rem] pb-1 pt-0.5')}
+            <ThreadScopeChip {thread} classes="col-start-2 max-w-[7rem] pb-1 pt-0.5" />
           {/if}
 
           <span class="col-start-3 flex min-w-0 items-center justify-end gap-1 overflow-hidden">
@@ -1740,7 +1698,7 @@
                 </span>
               {/if}
               {#if scopeVisible}
-                {@render scopeChip('shrink max-w-[6.5rem]')}
+                <ThreadScopeChip {thread} classes="shrink max-w-[6.5rem]" />
               {/if}
               {#if dispatchBadge}
                 <span class="truncate text-[0.625rem] text-muted" title={dispatchBadge.title}

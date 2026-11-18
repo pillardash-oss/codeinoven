@@ -5,6 +5,9 @@
   import type { Attachment } from 'svelte/attachments'
   import StatusBadge from '$lib/components/shared/StatusBadge.svelte'
   import ThreadHoverPopover from '$lib/components/shared/ThreadHoverPopover.svelte'
+  import ThreadScopeChip from '$lib/components/shared/ThreadScopeChip.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { threadScopeBucket } from '$lib/threads/thread-scope'
   import { formatCompactAge } from '$shared/date-time-format'
   import { createThreadHoverPopover } from '$lib/components/shared/thread-hover-popover.svelte'
   import {
@@ -18,18 +21,43 @@
   import { settledThreadReadsUnread } from '$shared/thread-status-policy'
   import { threadBranchRowLabel } from '$lib/threads/thread-branch-label'
   import { ovens } from '$lib/stores/ovens.svelte'
-  import { type Thread, type ThreadSearchResult } from '$shared/types'
+  import { isRealProjectId, type Thread, type ThreadSearchResult } from '$shared/types'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
 
   interface Props {
     result: ThreadSearchResult
     selected?: boolean
+    /** Hide the project's name, because the list the results sit in already names
+     *  it (one project's own search). The scope still shows: it is the one thing
+     *  the surrounding list cannot say. */
+    hideProjectName?: boolean
     onOpen: (thread: Thread) => void
   }
 
-  let { result, selected = false, onOpen }: Props = $props()
+  let { result, selected = false, hideProjectName = false, onOpen }: Props = $props()
 
   let thread = $derived(result.thread)
+
+  /** The project the thread lives in, so a search that spans several projects
+   *  can say which one each row came from. Chats and assistant tasks live in a
+   *  hidden container with no record here, so they show no project at all. */
+  let project = $derived(
+    isRealProjectId(thread.projectId)
+      ? (scopeState.projects.find((candidate) => candidate.id === thread.projectId) ?? null)
+      : null
+  )
+
+  /** The scope the thread belongs to, or null for the project's Default scope. */
+  let hasScope = $derived(threadScopeBucket(thread) !== null)
+
+  /** A thread's scope resolves against its own project's board, which a search
+   *  result's project rarely has cached. Warming it here is what lets the chip
+   *  paint: the boards map is reactive, so the chip appears as the board lands. */
+  $effect(() => {
+    if (!thread.scopeBucketId) return
+    if (scopeState.hasBoard(thread.projectId)) return
+    void scopeState.cacheBoardForLookup(thread.projectId)
+  })
   /** Oven the thread runs on, or null when it runs on this computer. */
   let oven = $derived(
     thread.settings?.ovenId && thread.settings.ovenId !== LOCAL_OVEN_ID
@@ -173,8 +201,26 @@
       </span>
     {/if}
   </span>
-  {#if oven || branch}
+  {#if project || hasScope || oven || branch}
     <span class="flex min-w-0 items-center gap-2 pl-[22px] text-[0.625rem] text-dimmed">
+      {#if project}
+        <span class="flex min-w-0 items-center gap-1" title={project.name}>
+          {#if project.iconUrl}
+            <img
+              src={project.iconUrl}
+              alt=""
+              class="h-3 w-3 shrink-0 object-contain"
+              draggable="false"
+            />
+          {/if}
+          {#if !hideProjectName}
+            <span class="max-w-[9rem] truncate">{project.name}</span>
+          {/if}
+        </span>
+      {/if}
+      {#if hasScope}
+        <ThreadScopeChip {thread} classes="max-w-[7rem]" />
+      {/if}
       {#if oven}
         <span class="flex min-w-0 items-center gap-1" title={`Oven: ${oven.name}`}>
           {#if oven.iconUrl}
