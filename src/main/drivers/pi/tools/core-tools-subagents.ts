@@ -1131,10 +1131,15 @@ export function piCoreToolsSubagentSource(): string {
       // shared services the mirror already ran once for the whole process.
       mirrorParentProviders(parentCtx, session.modelRuntime)
     }
+    // A resumed worker must keep the child session id its card is keyed by: pi
+    // may hand the reopened session a fresh id, and every card update, settle
+    // and status row is addressed by this id.
+    const childSessionId =
+      handoff && handoff.childSessionId ? handoff.childSessionId : session.sessionId
     const record = {
       agentId,
       purpose: spec.purpose,
-      childSessionId: session.sessionId,
+      childSessionId,
       sessionFile: session.sessionFile,
       modelId: resolvedModel ? resolvedModel.provider + '/' + resolvedModel.id : '',
       thinkingLevel: spec.thinkingLevel ?? parentCtx.thinkingLevel ?? 'medium',
@@ -1157,7 +1162,10 @@ export function piCoreToolsSubagentSource(): string {
     // The child's transcript streams to the app from the moment the session
     // exists: no waiting for pi to flush the child's session file, and no
     // polling on the renderer side.
-    const stream = createSubAgentStream(parentCtx, session.sessionId)
+    // Streamed under the record's own id, not the reopened session's id: every
+    // card update, settle and transcript row is addressed by the id the primary
+    // thread already keys on, and pi may hand a resumed session a fresh one.
+    const stream = createSubAgentStream(parentCtx, childSessionId)
     // The run that spawned this worker was aborted, so the worker's own run
     // ends with it and its result is not a completion. The stop-request sweep
     // is the app-initiated path; this covers an abort pi raised itself.
@@ -1453,7 +1461,8 @@ export function piCoreToolsSubagentSource(): string {
       }
       void runSubAgent(parentCtx, null, spec, undefined, {
         agentId: worker.agentId,
-        sessionFile: worker.sessionFile
+        sessionFile: worker.sessionFile,
+        childSessionId: worker.childSessionId
       })
     }
   }

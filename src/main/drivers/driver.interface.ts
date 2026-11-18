@@ -442,6 +442,8 @@ export interface HandoffWorkerSession {
   purpose: string
   /** Persisted session file the worker continues from. */
   sessionFile: string
+  /** Child session id the primary thread's card is keyed by. */
+  childSessionId?: string
   /** `provider/model-id` the worker ran on, when the card recorded it. */
   modelId?: string
   /** Reasoning effort the worker ran with. */

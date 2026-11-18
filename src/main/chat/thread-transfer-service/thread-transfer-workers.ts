@@ -32,6 +32,8 @@ export interface HandedOffWorker {
   kind: 'nested' | 'pawn'
   /** Session file the adopting instance opens to continue this worker. */
   sessionFile?: string
+  /** Child session id the card is keyed by, so a resume updates the same card. */
+  childSessionId?: string
   /** Model the worker ran on, so a resume continues on the same one. */
   modelId?: string
   /** Reasoning effort the worker ran at, so a resume keeps that level. */
@@ -122,6 +124,7 @@ export function runningWorkers(messages: readonly AgentMessage[]): HandedOffWork
         label: workerLabel(activity),
         kind: activity.pawn === true ? 'pawn' : 'nested',
         ...(activity.sessionFile ? { sessionFile: activity.sessionFile } : {}),
+        ...(activity.childSessionId ? { childSessionId: activity.childSessionId } : {}),
         ...(activity.modelId ? { modelId: activity.modelId } : {}),
         ...(activity.thinkingLevel ? { thinkingLevel: activity.thinkingLevel } : {}),
         ...(activity.prompt ? { prompt: activity.prompt } : {})

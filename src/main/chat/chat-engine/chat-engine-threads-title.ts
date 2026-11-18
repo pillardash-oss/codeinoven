@@ -443,6 +443,9 @@ export class ChatEngineThreadsTitle {
           agentId,
           purpose: typeof item['purpose'] === 'string' ? item['purpose'] : 'sub-agent',
           sessionFile,
+          ...(typeof item['childSessionId'] === 'string'
+            ? { childSessionId: item['childSessionId'] }
+            : {}),
           ...(typeof item['modelId'] === 'string' ? { modelId: item['modelId'] } : {}),
           ...(typeof item['thinkingLevel'] === 'string'
             ? { thinkingLevel: item['thinkingLevel'] }
