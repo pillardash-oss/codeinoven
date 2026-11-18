@@ -859,6 +859,14 @@ export class ChatEngineTurnsSessions {
     // last event and read as stalled the moment the watchdog first fired.
     const info = this.host.sessionRegistry.get(sessionId)
     if (info) info.lastWorkEventAt = Date.now()
+    // Arm the same inactivity watchdog a harness `working` status arms. The
+    // optimistic working state is set here, before the harness reports
+    // anything, so a turn whose harness accepts the prompt and then never
+    // emits a single event (no status, no stream) would otherwise have no
+    // watchdog at all and park the thread in silence for the life of the
+    // process. Nothing here kills a live turn: the watchdog's own grace window
+    // and its silence ceiling decide, exactly as they do for a reported one.
+    this.host.units['lifecycle'].startSessionWatchdog(sessionId)
     if (changed) {
       this.host.sessionStatuses.set(sessionId, { state: 'working' })
       this.host.broadcast({

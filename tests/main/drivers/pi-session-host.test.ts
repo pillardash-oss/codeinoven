@@ -318,4 +318,58 @@ describe('Pi session host core', () => {
     const remaining = responseData(listedAgain)
     expect(Array.isArray(remaining) ? remaining.length : 0).toBe(1)
   }, 60_000)
+
+  /**
+   * A prompt that carries the app's steering preference must still start a run
+   * on an idle session.
+   *
+   * Pi's steering queue is drained only *inside* a run, so a client that turns
+   * `streamingBehavior: 'steer'` into the `steer` command accepts the prompt in
+   * a millisecond, starts nothing, writes nothing, and parks the thread: the
+   * regression this test exists for.
+   */
+  it('starts a run when an idle session is prompted with a steering preference', async () => {
+    const fake = await createFakeProvider()
+    const ownScratch = join(scratch, 'steer')
+    rmSync(ownScratch, { recursive: true, force: true })
+    const projectDir = join(ownScratch, 'project')
+    const agentDir = join(ownScratch, 'agent')
+    mkdirSync(projectDir, { recursive: true })
+    mkdirSync(agentDir, { recursive: true })
+    const providersPath = join(ownScratch, 'providers.ts')
+    writeFileSync(providersPath, providersSource(fake.baseUrl))
+
+    const input = new PassThrough()
+    const output = new PassThrough()
+    const own = runSessionHost(input, output)
+    try {
+      const client = new HostTestClient(input, output)
+      client.send('create', 'session-steer', {
+        type: 'create_session',
+        cwd: projectDir,
+        agentDir,
+        extensionPaths: [providersPath],
+        model: { provider: 'probe', id: 'probe-1' }
+      })
+      expect((await client.response('create')).ok).toBe(true)
+
+      client.send('prompt', 'session-steer', {
+        type: 'prompt',
+        message: 'Answer with MARKER-A only.',
+        streamingBehavior: 'steer'
+      })
+      const accepted = await client.response('prompt')
+      expect(accepted.ok).toBe(true)
+      const disposition = responseData(accepted)
+      expect(isRecord(disposition) && disposition['disposition']).toBe('started')
+
+      await client.event('session-steer', 'agent_end')
+      client.send('messages', 'session-steer', { type: 'get_messages' })
+      expect(assistantText(responseData(await client.response('messages')))).toContain('MA-20')
+    } finally {
+      own.host.dispose()
+      own.stop()
+      await new Promise<void>((resolve) => fake.server.close(() => resolve()))
+    }
+  }, 60_000)
 })

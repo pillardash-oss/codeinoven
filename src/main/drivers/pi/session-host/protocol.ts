@@ -21,6 +21,9 @@ export interface HostImageContent {
 /** Reasoning effort a session starts on. Kept local so the protocol stays self-contained. */
 export type HostThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
+/** How a prompt that arrives during a live run joins it, as on Pi's RPC wire. */
+export type HostStreamingBehavior = 'steer' | 'followUp'
+
 const HOST_THINKING_LEVELS: readonly HostThinkingLevel[] = [
   'off',
   'minimal',
@@ -77,7 +80,21 @@ export interface HostCreateSessionCommand {
 
 export type HostCommand =
   | HostCreateSessionCommand
-  | { type: 'prompt'; message: string; images?: HostImageContent[] }
+  /**
+   * Run a prompt, exactly like Pi's RPC `prompt` command.
+   *
+   * `streamingBehavior` is the RPC field, not a host invention: idle it is
+   * ignored and the message starts a run, live it queues into that run as a
+   * steer or a follow-up. A client that wants to steer must never reach for the
+   * `steer` command instead, because Pi's steering queue is only drained inside
+   * a run, so steering an idle session parks the message forever.
+   */
+  | {
+      type: 'prompt'
+      message: string
+      images?: HostImageContent[]
+      streamingBehavior?: HostStreamingBehavior
+    }
   | { type: 'steer'; message: string; images?: HostImageContent[] }
   | { type: 'follow_up'; message: string }
   | { type: 'abort' }
@@ -288,6 +305,14 @@ function booleanField(record: Record<string, unknown>, key: string): boolean | u
   return typeof value === 'boolean' ? value : undefined
 }
 
+function streamingBehaviorField(
+  record: Record<string, unknown>,
+  key: string
+): HostStreamingBehavior | undefined {
+  const value = record[key]
+  return value === 'steer' || value === 'followUp' ? value : undefined
+}
+
 /** Validate and narrow one parsed command object. */
 function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
   const type = value['type']
@@ -356,7 +381,18 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
       if (requestId === undefined || response === undefined) return null
       return { type, requestId, response }
     }
-    case 'prompt':
+    case 'prompt': {
+      const message = stringField(value, 'message')
+      if (message === undefined) return null
+      const images = imagesField(value, 'images')
+      const streamingBehavior = streamingBehaviorField(value, 'streamingBehavior')
+      return {
+        type,
+        message,
+        ...(images === undefined ? {} : { images }),
+        ...(streamingBehavior === undefined ? {} : { streamingBehavior })
+      }
+    }
     case 'steer': {
       const message = stringField(value, 'message')
       if (message === undefined) return null

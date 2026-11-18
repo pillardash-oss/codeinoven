@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { PiHostSupervisor, type HostTransport } from '../../src/main/agents/pi-host-supervisor'
+import { PiHostClient } from '../../src/main/drivers/pi/pi-host-client'
 import type {
   HostRequestEnvelope,
   HostSessionState
@@ -9,6 +10,8 @@ import type {
 class FakeHost {
   readonly lines: HostRequestEnvelope[] = []
   stopped = false
+  /** Answer `prompt` with a preflight disposition, instead of leaving it in flight. */
+  answerPrompts = false
   readonly transport: HostTransport
   #listeners: ((line: string) => void)[] = []
   #exitListeners: ((code: number | null) => void)[] = []
@@ -64,6 +67,9 @@ class FakeHost {
         this.#sessions.add(String(request.sessionId))
         reply(this.state(String(request.sessionId)))
         return
+      case 'get_state':
+        reply(this.state(String(request.sessionId)))
+        return
       case 'dispose_session':
         this.#sessions.delete(String(request.sessionId))
         reply({ disposed: true })
@@ -71,6 +77,7 @@ class FakeHost {
       case 'prompt':
         // A prompt answers when the turn preflights; staying silent is how a
         // request that is still in flight looks.
+        if (this.answerPrompts) reply({ disposition: 'started' })
         return
       case 'list_sessions':
         reply(
@@ -157,6 +164,41 @@ describe('PiHostSupervisor', () => {
     expect(supervisor.pid()).toBeNull()
   })
 
+  /**
+   * A prompt keeps its own command on the wire, with the steering preference as
+   * the RPC option.
+   *
+   * Translating it into the `steer` command parked every hosted turn: Pi drains
+   * its steering queue only inside a run, so an idle session accepted the prompt
+   * in a millisecond, started nothing, and left the thread working forever.
+   */
+  it('sends a steered prompt as a prompt, never as a bare steer command', async () => {
+    const { supervisor, hosts } = harness()
+    await supervisor.createSession({
+      sessionId: 'atlas',
+      command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
+    })
+    hosts[0].answerPrompts = true
+    const client = new PiHostClient({
+      supervisor,
+      sessionId: 'atlas',
+      cwd: '/work/atlas',
+      extensionPaths: []
+    })
+    try {
+      await client.prompt('hello', undefined, 'steer')
+    } finally {
+      client.dispose()
+    }
+    const sent = hosts[0]?.lines.map((line) => line.command) ?? []
+    expect(sent.some((command) => command.type === 'steer')).toBe(false)
+    expect(sent.find((command) => command.type === 'prompt')).toMatchObject({
+      type: 'prompt',
+      message: 'hello',
+      streamingBehavior: 'steer'
+    })
+  })
+
   it('forwards a dialog to its listener and answers it on the session', async () => {
     const { supervisor, hosts } = harness()
     await supervisor.createSession({
@@ -168,7 +210,13 @@ describe('PiHostSupervisor', () => {
     hosts[0].emit({
       type: 'ui_request',
       sessionId: 'atlas',
-      request: { id: 'ui-1', method: 'confirm', title: 'Allow write?', message: 'write a file', timeout: 1000 }
+      request: {
+        id: 'ui-1',
+        method: 'confirm',
+        title: 'Allow write?',
+        message: 'write a file',
+        timeout: 1000
+      }
     })
     expect(seen).toEqual([{ sessionId: 'atlas', method: 'confirm' }])
     await supervisor.respondToUi('atlas', 'ui-1', { confirmed: true })
@@ -189,7 +237,11 @@ describe('PiHostSupervisor', () => {
     const listener = vi.fn()
     const off = supervisor.onUiRequest(listener)
     off()
-    hosts[0].emit({ type: 'ui_request', sessionId: 'atlas', request: { id: 'ui-2', method: 'notify', message: 'x', notifyType: undefined } })
+    hosts[0].emit({
+      type: 'ui_request',
+      sessionId: 'atlas',
+      request: { id: 'ui-2', method: 'notify', message: 'x', notifyType: undefined }
+    })
     expect(listener).not.toHaveBeenCalled()
   })
 

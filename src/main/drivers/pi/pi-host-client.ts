@@ -144,15 +144,17 @@ export class PiHostClient implements PiSessionClient {
     streamingBehavior?: 'steer' | 'followUp'
   ): Promise<void> {
     await this.start()
-    if (streamingBehavior === 'steer') {
-      await this.steer(message, images)
-      return
-    }
-    if (streamingBehavior === 'followUp') {
-      await this.followUp(message, images)
-      return
-    }
-    await this.send({ type: 'prompt', message, ...(images === undefined ? {} : { images }) })
+    // A prompt stays a prompt on the wire, exactly as it does on the RPC
+    // client. Routing it to the `steer` command instead parked every hosted
+    // turn: Pi's steering queue is drained only inside a run, so a prompt sent
+    // to an idle session was accepted in a millisecond, never started a run,
+    // never wrote to the transcript, and left the thread working forever.
+    await this.send({
+      type: 'prompt',
+      message,
+      ...(images === undefined || images.length === 0 ? {} : { images }),
+      ...(streamingBehavior === undefined ? {} : { streamingBehavior })
+    })
   }
 
   async steer(message: string, images?: PiRpcImage[]): Promise<void> {

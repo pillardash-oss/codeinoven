@@ -121,11 +121,17 @@ export class PiSessionHost {
       case 'prompt': {
         const hosted = this.requireSession(request.sessionId)
         // Pi's RPC mode answers after prompt preflight, not at turn end; the
-        // turn then streams through the event channel, exactly like RPC.
+        // turn then streams through the event channel, exactly like RPC. The
+        // steering preference travels as the RPC option, never as the `steer`
+        // command: Pi ignores it on an idle session (the prompt starts a run)
+        // and queues it only when a run is live.
         let responded = false
         void hosted.session
           .prompt(command.message, {
             ...(command.images === undefined ? {} : { images: command.images }),
+            ...(command.streamingBehavior === undefined
+              ? {}
+              : { streamingBehavior: command.streamingBehavior }),
             source: 'rpc',
             preflightResult: (disposition) => {
               if (responded) return
