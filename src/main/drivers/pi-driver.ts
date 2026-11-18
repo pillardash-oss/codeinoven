@@ -4,7 +4,8 @@ import type {
   AgentMessage,
   AgentRateLimitWindow,
   AgentUsageCredits,
-  ProviderCatalog
+  ProviderCatalog,
+  AgentPart
 } from '../../lib/types'
 import type { UtilityGatewayEndpoint } from '../../lib/gateway-timeout'
 import { buildProcessEnvironmentAsync } from './cli-environment'
@@ -423,6 +424,21 @@ export class PiDriver extends PersistentCliDriver {
   /** Narrow host surface for the extracted units; every call stays typed. */
   emitEvent(event: AgentEvent): void {
     this.emit(event)
+  }
+
+  /**
+   * Hand this instance the sub-agent cards a resumed thread already shows.
+   *
+   * The engine owns the conversation, so it is the only side that can say which
+   * card a settled worker belongs to after a move: the driver's own session was
+   * rebuilt from the harness transcript and has no cards in it.
+   */
+  prefillSubagentCards(
+    _projectPath: string,
+    sessionId: string,
+    parts: readonly Extract<AgentPart, { type: 'subagent' }>[]
+  ): void {
+    this.subagentStreams.registerCardParts(sessionId, parts)
   }
 
   cachedSession(sessionId: string): PersistentCliSession | undefined {

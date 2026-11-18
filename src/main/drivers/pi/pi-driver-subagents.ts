@@ -84,6 +84,18 @@ export class PiSubagentStreams {
   private readonly cioWatchedChildren = new Map<string, Map<string, number>>()
   /** Last watch list published per session, so unchanged state is not rewritten. */
   private readonly cioPublishedWatch = new Map<string, string>()
+  /**
+   * Sub-agent card parts per parent session, supplied by the engine.
+   *
+   * A thread adopted from another instance is rebuilt from the harness
+   * transcript, which carries the spawn tool call but not the app-side card. The
+   * engine already has those parts, so it hands them over once and a worker that
+   * settles afterwards stamps the card the conversation actually shows.
+   */
+  private readonly cardParts = new Map<
+    string,
+    Map<string, Extract<AgentPart, { type: 'subagent' }>>
+  >()
 
   constructor(private readonly host: PiSubagentStreamHost) {}
 
@@ -206,7 +218,21 @@ export class PiSubagentStreams {
     // The child's own settle record closes the parent thread's card, so the
     // working-trace dropdown and the sub-agent tab flip together instead of
     // the card waiting for the model loop to drain its done notification.
-    this.closeSubagentCard(parentSessionId, childSessionId, error, status, aborted || force)
+    const stamped = this.closeSubagentCard(
+      parentSessionId,
+      childSessionId,
+      error,
+      status,
+      aborted || force
+    )
+    Logger.info('Sub-agent settle folded', {
+      parentSessionId,
+      childSessionId,
+      status,
+      aborted,
+      force,
+      stamped
+    })
     if (!error || aborted) {
       this.host.emitEvent({
         type: 'session.status',
@@ -252,7 +278,7 @@ export class PiSubagentStreams {
     error: string | undefined,
     status: AgentToolStatus = error ? 'error' : 'completed',
     force = false
-  ): void {
+  ): number {
     // A parent that is mid-turn buffers the done notification until its loop
     // reaches the next step, which is exactly the lag this closes. An idle
     // parent runs the notification turn immediately, so its own patch lands
@@ -260,9 +286,13 @@ export class PiSubagentStreams {
     // activity back on with no turn behind it. A stop is the exception: the
     // parent's turn is already gone when its workers settle, so a stopped
     // worker's card is stamped regardless   otherwise it spins forever.
-    if (!force && !this.host.hasActiveTurn(parentSessionId)) return
+    if (!force && !this.host.hasActiveTurn(parentSessionId)) return 0
     const session = this.host.cachedSession(parentSessionId)
-    if (!session) return
+    if (!session) {
+      this.stampRegisteredCard(parentSessionId, childSessionId, status, error)
+      return 0
+    }
+    let stamped = 0
     for (const message of session.messages) {
       const part = message.parts.findLast(
         (candidate): candidate is Extract<AgentPart, { type: 'subagent' }> =>
@@ -289,7 +319,57 @@ export class PiSubagentStreams {
       }
       this.host.applySessionEvent(session, event)
       this.host.emitEvent(event)
+      stamped += 1
     }
+    // A thread adopted from another instance has a live session rebuilt from
+    // the harness transcript, so its card is not in memory here. The app's own
+    // copy still has it, and stamping that is what stops the card spinning.
+    if (stamped === 0) {
+      this.stampRegisteredCard(parentSessionId, childSessionId, status, error)
+      Logger.info('Sub-agent settle found no live card', {
+        parentSessionId,
+        childSessionId,
+        registered: this.cardParts.get(parentSessionId)?.has(childSessionId) === true
+      })
+    }
+    return stamped
+  }
+
+  /** Register the card parts a resumed thread already has on screen. */
+  registerCardParts(
+    parentSessionId: string,
+    parts: readonly Extract<AgentPart, { type: 'subagent' }>[]
+  ): void {
+    const cards = new Map<string, Extract<AgentPart, { type: 'subagent' }>>()
+    for (const part of parts) {
+      const childSessionId = part.activity.childSessionId
+      if (childSessionId) cards.set(childSessionId, part)
+    }
+    if (cards.size > 0) this.cardParts.set(parentSessionId, cards)
+  }
+
+  /** Stamp a card the engine registered, when the live session has none. */
+  private stampRegisteredCard(
+    parentSessionId: string,
+    childSessionId: string,
+    status: AgentToolStatus,
+    error: string | undefined
+  ): void {
+    const part = this.cardParts.get(parentSessionId)?.get(childSessionId)
+    if (!part || TERMINAL_SUBAGENT_STATUSES.has(part.activity.status)) return
+    this.host.emitEvent({
+      type: 'message.part.updated',
+      sessionId: parentSessionId,
+      part: {
+        ...part,
+        activity: {
+          ...part.activity,
+          status,
+          ...(error ? { error } : {}),
+          time: subagentTimeRange(part.activity, status)
+        }
+      }
+    })
   }
 
   /**

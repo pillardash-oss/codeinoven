@@ -2,6 +2,7 @@ import type {
   AgentBankedResets,
   AgentEvent,
   AgentMessage,
+  AgentPart,
   AgentQuestionRequest,
   AgentRateLimitWindow,
   AgentUsageCredits,
@@ -759,6 +760,20 @@ export interface HarnessDriver {
    * so the workers are already running when the agent resumes. Best-effort:
    * a worker that cannot be published must never block the move.
    */
+  /**
+   * Register the sub-agent cards a resumed thread already shows.
+   *
+   * A thread adopted from another instance is rebuilt from the harness
+   * transcript, which has the spawn tool call but no app-side card. Without the
+   * cards the engine owns, a worker that settles afterwards has nothing to stamp
+   * and its card spins forever.
+   */
+  prefillSubagentCards?(
+    projectPath: string,
+    sessionId: string,
+    parts: readonly Extract<AgentPart, { type: 'subagent' }>[]
+  ): void
+
   resumeHandedOffWorkers?(
     projectPath: string,
     sessionId: string,

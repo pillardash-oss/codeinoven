@@ -16,6 +16,7 @@ import { DEFAULT_HARNESS } from '../../../lib/harness-default'
 import { cioCoreToolsDirectory } from '../../drivers/pi/pi-driver-cio-files'
 import { instanceRegistry } from '../../system/instance-registry'
 import type {
+  AgentMessage,
   Thread,
   ThreadSettings,
   ThreadTransferResult,
@@ -412,6 +413,10 @@ export class ChatEngineThreadsTitle {
         thread.id,
         accountId
       )
+      // The cards this thread already shows belong to the engine, not to the
+      // harness that will run its turn here. Handing them over is what lets a
+      // carried-over worker stamp its card when it settles.
+      await this.prefillSubagentCards(thread, driver, projectPath)
       await driver.resumeHandedOffWorkers?.(projectPath, thread.sessionId, resumable)
     } catch (error) {
       Logger.dev('Handed-off worker publication failed:', {
@@ -420,6 +425,32 @@ export class ChatEngineThreadsTitle {
         error: rawErrorMessage(error)
       })
     }
+  }
+
+  /** Give the adopting harness the sub-agent cards this thread already shows. */
+  private async prefillSubagentCards(
+    thread: Thread,
+    driver: HarnessDriver,
+    projectPath: string
+  ): Promise<void> {
+    if (!thread.sessionId || !driver.prefillSubagentCards) return
+    const cards: Extract<AgentMessage['parts'][number], { type: 'subagent' }>[] = []
+    try {
+      const messages = await this.host.threadManager.loadMessages(thread.projectId, thread.id)
+      for (const message of messages) {
+        for (const part of message.parts) {
+          if (part.type === 'subagent') cards.push(part)
+        }
+      }
+    } catch (error) {
+      Logger.dev('Sub-agent card prefill skipped:', {
+        threadId: thread.id,
+        error: rawErrorMessage(error)
+      })
+      return
+    }
+    if (cards.length === 0) return
+    driver.prefillSubagentCards(projectPath, thread.sessionId, cards)
   }
 
   /** The workers a session's harness last reported as in flight. */
