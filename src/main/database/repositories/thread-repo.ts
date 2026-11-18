@@ -431,7 +431,11 @@ export interface ThreadSearchOptions {
   projectId?: string
   limit?: number
   family?: ThreadSearchFamily
-  /** Narrow an assistant search to one assistant. Ignored for other families. */
+  /**
+   * Narrow the search to the threads one assistant scheduled or runs. It
+   * narrows whichever family the caller asked for instead of replacing it, so a
+   * search never accepts this id and silently ignores it.
+   */
   assistantId?: string
   /**
    * Narrow the search to one scope bucket (a sidebar group) inside the searched
@@ -1794,20 +1798,26 @@ function threadSearchScopeClause(
     scopeBucketId
       ? { sql: `${sql} AND ${alias}.scope_bucket_id = ?`, params: [...params, scopeBucketId] }
       : { sql, params }
+  // An assistant id narrows every family, exactly like a scope bucket does: a
+  // project thread an assistant scheduled carries the same column.
+  const narrowed = (sql: string, params: unknown[]): { sql: string; params: unknown[] } => {
+    const scoped = withScopeBucket(sql, params)
+    return assistantId
+      ? {
+          sql: `${scoped.sql} AND ${alias}.assistant_id = ?`,
+          params: [...scoped.params, assistantId]
+        }
+      : scoped
+  }
   switch (options.family) {
     case 'chats':
-      return withScopeBucket(`${alias}.project_id = ? AND ${unarchivedThreadSql(alias)}`, [
+      return narrowed(`${alias}.project_id = ? AND ${unarchivedThreadSql(alias)}`, [
         INBOX_PROJECT_ID
       ])
-    case 'assistant': {
-      const clauses = [`${alias}.project_id = ?`, unarchivedThreadSql(alias)]
-      const params: unknown[] = [ASSISTANT_SPACE_ID]
-      if (assistantId) {
-        clauses.push(`${alias}.assistant_id = ?`)
-        params.push(assistantId)
-      }
-      return withScopeBucket(clauses.join(' AND '), params)
-    }
+    case 'assistant':
+      return narrowed(`${alias}.project_id = ? AND ${unarchivedThreadSql(alias)}`, [
+        ASSISTANT_SPACE_ID
+      ])
     case 'projects': {
       // Every engineering project, never the hidden inbox/assistant/browser
       // containers that share the same table.
@@ -1822,7 +1832,7 @@ function threadSearchScopeClause(
         clauses.push(`${alias}.project_id = ?`)
         params.push(projectId)
       }
-      return withScopeBucket(clauses.join(' AND '), params)
+      return narrowed(clauses.join(' AND '), params)
     }
     default: {
       // Unscoped/global: every family except the hidden browser-chat container,
@@ -1833,7 +1843,7 @@ function threadSearchScopeClause(
         clauses.push(`${alias}.project_id = ?`)
         params.push(projectId)
       }
-      return withScopeBucket(clauses.join(' AND '), params)
+      return narrowed(clauses.join(' AND '), params)
     }
   }
 }
@@ -1849,14 +1859,12 @@ export function threadMatchesSearchScope(
   options: ThreadSearchOptions
 ): boolean {
   if (options.scopeBucketId && thread.scopeBucketId !== options.scopeBucketId) return false
+  if (options.assistantId && thread.assistantId !== options.assistantId) return false
   switch (options.family) {
     case 'chats':
       return thread.projectId === INBOX_PROJECT_ID
     case 'assistant':
-      return (
-        thread.projectId === ASSISTANT_SPACE_ID &&
-        (!options.assistantId || thread.assistantId === options.assistantId)
-      )
+      return thread.projectId === ASSISTANT_SPACE_ID
     case 'projects':
       if (
         thread.projectId === GLOBAL_BROWSER_PROJECT_ID ||

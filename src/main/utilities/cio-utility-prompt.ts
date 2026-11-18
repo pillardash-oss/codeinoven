@@ -72,7 +72,8 @@ Diagnostics role - ${UTILITY_DIAGNOSTICS_TOOL_NAME} actions:
 - search_threads: {"action":"search_threads","query":"<what the conversation was about>"}
   Ranks up to 20 matching threads by keyword and by meaning and includes the
   matching passages. Narrow it whenever the work belongs to one container:
-  add "project_id", "scope_id" (a sidebar scope bucket), "assistant_id", or
+  add "project_id", "scope_id" (a sidebar scope bucket), "assistant_id" (the
+  assistant that scheduled the thread, which narrows any family), or
   "family" ("projects", "chats", or "assistant"). Those ids are exactly what
   list_groups returns, so never guess one.
 - list_groups: {"action":"list_groups"} or {"action":"list_groups","project_id":"<id>"}

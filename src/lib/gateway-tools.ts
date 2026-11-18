@@ -447,7 +447,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
         assistant_id: {
           type: 'string',
           description:
-            'For search_threads: narrow to the threads one assistant scheduled, as listed by list_groups. Pair it with family "assistant".'
+            'For search_threads: narrow to the threads one assistant scheduled, as listed by list_groups. Narrows any family, and never needs family "assistant".'
         },
         family: {
           type: 'string',
