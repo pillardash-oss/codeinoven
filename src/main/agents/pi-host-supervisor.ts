@@ -306,6 +306,25 @@ export class PiHostSupervisor {
     for (const hostId of [...this.#hosts.keys()]) this.#stopHost(hostId)
   }
 
+  /**
+   * Stop one host by its OS pid, which is what the task manager offers.
+   *
+   * Only that process goes. Its sessions lose their host exactly as they would
+   * if it crashed, so each of their clients is told now and the turns that were
+   * running fail visibly instead of waiting on a process that no longer exists;
+   * every other host keeps working. A pid that is not a live host is ignored,
+   * because a row can outlive the process it describes by one refresh.
+   */
+  stopHost(pid: number): void {
+    for (const [hostId, host] of [...this.#hosts]) {
+      if (host.transport.pid !== pid) continue
+      for (const sessionId of this.#stopHost(hostId)) {
+        for (const listener of this.#lostListeners) listener(sessionId)
+      }
+      return
+    }
+  }
+
   #primary(): LiveHost | null {
     return this.#primaryId === null ? null : (this.#hosts.get(this.#primaryId) ?? null)
   }
@@ -433,9 +452,10 @@ export class PiHostSupervisor {
     waiting(response)
   }
 
-  #stopHost(hostId: string): void {
+  /** Stop one host, answering with the sessions it had to drop. */
+  #stopHost(hostId: string): string[] {
     const host = this.#hosts.get(hostId)
-    if (host === undefined) return
+    if (host === undefined) return []
     this.#hosts.delete(hostId)
     if (this.#primaryId === hostId) this.#primaryId = null
     for (const [, resolve] of host.waiting) {
@@ -445,9 +465,10 @@ export class PiHostSupervisor {
     // A deliberate stop is not a crash: the caller either emptied the host or
     // is shutting the app down, and the sessions' clients are being disposed by
     // that caller. Releasing here keeps ownership and the map from drifting.
-    this.#releaseSessions(host)
+    const released = this.#releaseSessions(host)
     host.transport.stop()
     this.#hostsChanged()
+    return released
   }
 
   #request(

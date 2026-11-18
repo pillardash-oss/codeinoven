@@ -250,6 +250,49 @@ describe('PiHostSupervisor', () => {
     await expect(supervisor.moveToNewHost('ghost')).rejects.toThrow(/Unknown session/)
   })
 
+  /**
+   * The task manager stops one host by pid, and only that host's work ends.
+   *
+   * Its sessions are reported as lost so their turns fail visibly instead of
+   * waiting on a process that no longer exists, and every other host keeps its
+   * sessions because it was never the one the user ended.
+   */
+  it('stops one host by pid and reports only its sessions as lost', async () => {
+    const hosts: FakeHost[] = []
+    const supervisor = new PiHostSupervisor(
+      () => {
+        const host = new FakeHost(500 + hosts.length)
+        hosts.push(host)
+        return host.transport
+      },
+      { maxSessionsPerHost: 1 }
+    )
+    const lost: string[] = []
+    supervisor.onSessionLost((sessionId) => lost.push(sessionId))
+    await supervisor.createSession({
+      sessionId: 'atlas',
+      command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
+    })
+    await supervisor.createSession({
+      sessionId: 'ledger',
+      command: { type: 'create_session', cwd: '/work/ledger', agentDir: '/agent' }
+    })
+    expect(hosts).toHaveLength(2)
+    expect(supervisor.pids()).toEqual(hosts.map((host) => host.transport.pid))
+
+    supervisor.stopHost(hosts[0].transport.pid)
+
+    expect(hosts[0].stopped).toBe(true)
+    expect(hosts[1].stopped).toBe(false)
+    expect(lost).toEqual(['atlas'])
+    expect(supervisor.sessions()).toEqual(['ledger'])
+    expect(supervisor.pids()).toEqual([hosts[1].transport.pid])
+
+    // A row can outlive its process by one refresh: an unknown pid is ignored.
+    supervisor.stopHost(999_999)
+    expect(supervisor.sessions()).toEqual(['ledger'])
+  })
+
   it('fails a request that never answers, rather than waiting forever', async () => {
     vi.useFakeTimers()
     try {
