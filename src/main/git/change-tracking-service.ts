@@ -344,7 +344,7 @@ export class ChangeTrackingService {
       if (!metadata.isFile()) continue
       const relativePath = relative(projectRoot, absolutePath)
       if (!relativePath || relativePath.startsWith(`..${sep}`)) continue
-      files[relativePath] =
+      files[toPosixPath(relativePath)] =
         `${metadata.dev}:${metadata.ino}:${metadata.size}:${metadata.mtimeMs}:${metadata.ctimeMs}`
     }
     return { projectRoot, capturedAt: Date.now(), files }
@@ -556,12 +556,23 @@ export class ChangeTrackingService {
     await writeFile(target, content)
   }
 
+  /**
+   * A checkpoint key is always POSIX-separated, never the platform separator.
+   *
+   * Every consumer of these keys compares them against a POSIX relative path:
+   * tool write evidence (`projectRelativePath`), the excluded-path rules, the
+   * change breakdown and the file-changes card all speak `/`. Emitting native
+   * separators here made a Windows snapshot key `apps\\app\\src\\x.ts` while
+   * the evidence for that same file was `apps/app/src/x.ts`, so no path ever
+   * matched its proof, a contested diff dropped every real change, and a card
+   * that could have been repaired from its snapshots stayed empty.
+   */
   private relativePath(projectRoot: string, target: string): string {
     const relativePath = relative(projectRoot, target)
     if (!relativePath || relativePath === '..' || relativePath.startsWith(`..${sep}`)) {
       throw new CheckpointSafetyError(`Path escapes project root: ${target}`)
     }
-    return relativePath
+    return toPosixPath(relativePath)
   }
 
   private assertWithinRoot(projectRoot: string, target: string): void {
