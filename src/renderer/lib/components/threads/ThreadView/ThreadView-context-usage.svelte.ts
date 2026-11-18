@@ -450,20 +450,25 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
     }
     if (kind === 'achievement') {
       const activeSpec = this.root.submitBrainstormDecision.spec
-      if (!activeSpec) return null
+      const coordinator = this.root.handleAgentEvent.thread
+      // Without a specification the contract is the goal captured when Achievement
+      // was enabled, and the board reports that goal exactly as it reports an
+      // approved specification. Requiring the specification here left a running
+      // Achievement with no coordinator docked at all.
+      const capturedGoal = (coordinator.achievementGoal ?? '').trim()
+      if (!activeSpec && !capturedGoal) return null
       return {
         component: 'achievement',
         props: {
-          specTitle: this.root.handleAgentEvent.thread.title,
+          specTitle: coordinator.title,
           runStartedAt: activeSpec?.approvedAt ?? this.durableAuditThread?.createdAt,
-          specSummary: activeSpec.content.resolutionSummary,
+          specSummary: activeSpec ? activeSpec.content.resolutionSummary : capturedGoal,
           auditThread: this.durableAuditThread,
           auditState: this.root.submitSpecDecision.auditState,
           reportAvailable: this.auditReport !== null,
           achievementReached:
-            this.root.handleAgentEvent.thread.status === 'completed' &&
-            (this.root.handleAgentEvent.thread.loopIteration ?? 0) > 0,
-          selectedThreadId: this.root.handleAgentEvent.thread.id,
+            coordinator.status === 'completed' && (coordinator.loopIteration ?? 0) > 0,
+          selectedThreadId: coordinator.id,
           auditorSettings: this.auditSettings,
           providers: this.root.currentWorkingTraceAttribution.providers,
           projectId: this.root.handleAgentEvent.thread.projectId,
