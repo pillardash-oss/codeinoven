@@ -450,7 +450,12 @@ export class ChatEngineThreadLifecycle {
     // Sub-agents the closure killed are closed before the turn continues: their
     // cards cannot keep claiming to be running, and the note below is what tells
     // the agent which of them produced nothing.
-    const interruptedSubagents = await this.settleInterruptedSubagents(thread)
+    //
+    // A transfer is the one resume whose workers were not killed by a closure:
+    // the release handed them over with their session files, so closing their
+    // cards here would report as lost the exact work this resume is continuing.
+    // Restart recovery, which has no hand-off, still closes them.
+    const interruptedSubagents = force ? '' : await this.settleInterruptedSubagents(thread)
     const continuation = await this.host.units['turns'].continuationTurnRequest(
       thread.projectId,
       thread.id,

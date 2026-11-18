@@ -85,6 +85,33 @@ function shortcutKeysFor(el: HTMLElement): readonly string[] {
   return decodeShortcutTokens(el.getAttribute('data-shortcut'))
 }
 
+interface TooltipAnchor {
+  x: number
+  y: number
+  side: TooltipSide
+}
+
+/**
+ * A rail hugs a window edge, so a tooltip above the pointer opens away from the
+ * rail and its arrow points down at nothing. A rail item gets its tooltip beside
+ * the rail instead, anchored to the item's own edge so the arrow points back at
+ * the icon that owns it.
+ */
+function railAnchorFor(el: HTMLElement): TooltipAnchor | null {
+  const dock = el.closest<HTMLElement>('[data-region="context-dock"]')
+  const rail = dock ? null : el.closest<HTMLElement>('[data-region="view-rail"]')
+  if (!dock && !rail) return null
+  const rect = el.getBoundingClientRect()
+  return dock
+    ? { x: rect.left, y: rect.top + rect.height / 2, side: 'left' }
+    : { x: rect.right, y: rect.top + rect.height / 2, side: 'right' }
+}
+
+/** Where a title tooltip starts: beside a rail item, otherwise at the pointer. */
+function anchorFor(el: HTMLElement, clientX: number, clientY: number): TooltipAnchor {
+  return railAnchorFor(el) ?? { x: clientX, y: clientY, side: 'top' }
+}
+
 function resolveTitleElement(target: EventTarget | null): HTMLElement | null {
   if (!(target instanceof Element)) return null
   let el: HTMLElement | null = target instanceof HTMLElement ? target : target.parentElement
@@ -163,7 +190,10 @@ export function syncTitleTooltipPointer(x: number, y: number): void {
   if (el !== dismissedTitleElement) dismissedTitleElement = null
   if (el && el === dismissedTitleElement) return
   if (activeTitleElement === el) {
-    if (el) tooltipState.update(x, y)
+    if (el) {
+      const anchor = anchorFor(el, x, y)
+      tooltipState.update(anchor.x, anchor.y)
+    }
     return
   }
   if (activeTitleElement) restoreNativeTitle(activeTitleElement)
@@ -173,8 +203,9 @@ export function syncTitleTooltipPointer(x: number, y: number): void {
     return
   }
   const title = SUPPRESSED_TITLES.get(el)?.title ?? el.getAttribute('title') ?? ''
+  const anchor = anchorFor(el, x, y)
   suppressNativeTitle(el)
-  tooltipState.begin(title, x, y, 'top', TOOLTIP_GAP_PX, shortcutKeysFor(el))
+  tooltipState.begin(title, anchor.x, anchor.y, anchor.side, TOOLTIP_GAP_PX, shortcutKeysFor(el))
 }
 
 /**
@@ -189,9 +220,10 @@ export function attachTitleTooltipDelegation(): () => void {
     const el = resolveTitleElement(event.target)
     if (!el || el === dismissedTitleElement) return
     dismissedTitleElement = null
+    const anchor = anchorFor(el, event.clientX, event.clientY)
     if (activeTitleElement === el) {
       suppressNativeTitle(el)
-      tooltipState.update(event.clientX, event.clientY)
+      tooltipState.update(anchor.x, anchor.y)
       return
     }
     const title = SUPPRESSED_TITLES.get(el)?.title ?? el.getAttribute('title') ?? ''
@@ -200,20 +232,16 @@ export function attachTitleTooltipDelegation(): () => void {
     }
     suppressNativeTitle(el)
     activeTitleElement = el
-    tooltipState.begin(
-      title,
-      event.clientX,
-      event.clientY,
-      'top',
-      TOOLTIP_GAP_PX,
-      shortcutKeysFor(el)
-    )
+    tooltipState.begin(title, anchor.x, anchor.y, anchor.side, TOOLTIP_GAP_PX, shortcutKeysFor(el))
   }
 
   function onPointerMove(event: PointerEvent): void {
-    if (!activeTitleElement) return
+    const el = activeTitleElement
+    if (!el) return
     if (!(event.target instanceof Node)) return
-    if (!activeTitleElement.contains(event.target)) return
+    if (!el.contains(event.target)) return
+    // A rail tooltip stays pinned to its item; only a cursor-anchored one follows.
+    if (railAnchorFor(el)) return
     tooltipState.update(event.clientX, event.clientY)
   }
 

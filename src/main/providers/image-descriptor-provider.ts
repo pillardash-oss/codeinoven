@@ -3,6 +3,7 @@
 import { stat, readdir } from 'node:fs/promises'
 import { basename, dirname, extname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { materializeDataUrlAttachment } from '../drivers/attachment-data-url'
 import { generateId } from '../../lib/utils'
 import { toPosixPath } from '../../lib/paths'
 import type { PromptAttachment } from '../../lib/types'
@@ -423,14 +424,24 @@ function normalizeFilenameSpaces(name: string): string {
  * will open. Pasted and dropped images are copied into the project's temporary
  * attachment directory before dispatch, so the path is stable for the life of
  * the conversation; passing that path (instead of embedding the bytes) keeps
- * the vision prompt free of base64 inflation. Remote `http(s)` and already
- * embedded `data:` sources are returned unchanged (the harness fetches or
- * decodes those itself). An unresolvable local file throws a clear error
- * instead of handing the vision session a dead file URL.
+ * the vision prompt free of base64 inflation. Remote `http(s)` sources are
+ * returned unchanged (the harness fetches those itself). An unresolvable local
+ * file throws a clear error instead of handing the vision session a dead file
+ * URL.
+ *
+ * An embedded `data:` payload is written to `scratchDirectory` when one is
+ * supplied and dispatched as a real file, because not every harness can open a
+ * data URL: the OpenCode backend resolves a prompt file part through `Bun.file`,
+ * which treats the whole `data:...` string as a filesystem path and fails with
+ * ENOENT. Writing the bytes once keeps every harness on the same file path.
  */
 export async function resolveVisionAttachment(
-  entry: ResolvedImageEntry
+  entry: ResolvedImageEntry,
+  scratchDirectory?: string
 ): Promise<PromptAttachment> {
+  if (scratchDirectory !== undefined && entry.attachment.url.startsWith('data:')) {
+    return materializeDataUrlAttachment(entry.attachment, scratchDirectory)
+  }
   if (entry.type !== 'path' || entry.attachment.url.startsWith('data:')) {
     return entry.attachment
   }

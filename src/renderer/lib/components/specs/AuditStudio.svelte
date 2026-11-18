@@ -356,6 +356,20 @@
     changed()
   }
 
+  // Verification checks cite findings by id. Removing a finding must also drop
+  // its references, otherwise the report carries dangling citations that no
+  // editor in this surface can repair.
+  function removeFinding(index: number): void {
+    const [removed] = draft.content.findings.splice(index, 1)
+    if (removed && draft.content.verification) {
+      for (const check of draft.content.verification.checks) {
+        if (!check.findingIds.includes(removed.id)) continue
+        check.findingIds = check.findingIds.filter((findingId) => findingId !== removed.id)
+      }
+    }
+    changed()
+  }
+
   async function scrollToFinding(findingId: string): Promise<void> {
     selectedSection = 'findings'
     await tick()
@@ -922,10 +936,7 @@
                   class="p-1 text-muted hover:bg-danger/10 hover:text-danger"
                   title={`Remove finding ${index + 1}`}
                   aria-label={`Remove finding ${index + 1}`}
-                  onclick={() => {
-                    draft.content.findings.splice(index, 1)
-                    changed()
-                  }}
+                  onclick={() => removeFinding(index)}
                 >
                   <CioClose size={13} />
                 </button>

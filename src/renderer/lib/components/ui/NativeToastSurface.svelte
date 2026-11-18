@@ -62,6 +62,11 @@
             label: entry.action.label,
             onClick: (event) => {
               event.preventDefault()
+              // A card's action is a press, never a keystroke. Opening a
+              // notification deliberately steps every blocking surface aside,
+              // so a Space typed while this card held the keyboard would have
+              // thrown away the dialog the user was typing in.
+              if (event.detail === 0) return
               report(entry.id, 'action')
             }
           }
@@ -71,6 +76,7 @@
             label: entry.cancel.label,
             onClick: (event) => {
               event.preventDefault()
+              if (event.detail === 0) return
               report(entry.id, 'cancel')
             }
           }

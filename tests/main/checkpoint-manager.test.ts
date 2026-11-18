@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import {
@@ -865,6 +865,86 @@ describe('CheckpointManager', () => {
     })
     expect(settled).toBe(1)
     expect((await manager.get('projectZ', 'threadZ', active.id))?.status).toBe('interrupted')
+  })
+
+  it('repairs an empty card from the scope worktree its snapshots were taken in', async () => {
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    // A scoped thread works in its own managed worktree while the project row
+    // still points at the main checkout. Evidence has to resolve against the
+    // snapshot root, or every write in the worktree resolves to nothing.
+    // Canonical, because a snapshot records the resolved root while a command
+    // carries the path the agent typed.
+    const worktree = await realpath(await temporaryDirectory('codeinoven-scope-'))
+    database.run(
+      `INSERT OR IGNORE INTO projects(id, name, path, source, provider_id, workflow_id, thread_limit, change_tracking_mode, created_at, updated_at)
+       VALUES('project-scope', 'Project', '/main-checkout', 'local', 'pi', 'default', 70, 'manual', 1, 1)`
+    )
+    database.run(
+      `INSERT INTO threads(id, project_id, provider_id, title, status, pinned, archived, read, scope_bucket_id, created_at, updated_at, last_activity)
+       VALUES('scope-thread', 'project-scope', '', 'Scope', 'created', 0, 0, 1, 'scope-a', 1, 1, 1)`
+    )
+    const journal = join(worktree, 'apps', 'application', 'src', 'journal')
+    await mkdir(journal, { recursive: true })
+    const target = join(journal, 'viewer.css')
+    await writeFile(target, 'before', 'utf-8')
+
+    const turn = await manager.beginTurn(
+      'project-scope',
+      'scope-thread',
+      worktree,
+      'Drawer turn',
+      false
+    )
+    await writeFile(target, 'after', 'utf-8')
+    database.run(
+      `INSERT INTO agent_messages(id, thread_id, role, parts, created_at)
+       VALUES('msg-scope', 'scope-thread', 'assistant', ?, ?)`,
+      [
+        JSON.stringify([
+          {
+            type: 'tool',
+            id: 'msg-scope:tool:call-1',
+            messageID: 'msg-scope',
+            callID: 'call-1',
+            tool: 'bash',
+            state: {
+              status: 'completed',
+              input: {
+                command: `cd ${journal} && python3 - <<'PY'
+p='viewer.css'
+s=open(p).read()
+open(p,'w').write(s)
+PY`
+              }
+            }
+          }
+        ]),
+        turn.before.createdAt
+      ]
+    )
+
+    // Contested, with no live evidence: completion records nothing and keeps
+    // both snapshot maps for exactly this repair.
+    const completed = await manager.completeTurn(
+      'project-scope',
+      'scope-thread',
+      turn.id,
+      worktree,
+      'completed',
+      undefined,
+      undefined,
+      { contestedDiff: true }
+    )
+    expect(completed.changes).toEqual([])
+
+    expect(await manager.repairEvidenceDroppedCheckpoints()).toBe(1)
+    const repaired = await manager.get('project-scope', 'scope-thread', turn.id)
+    expect(repaired?.changes.map((change) => change.path)).toEqual([
+      'apps/application/src/journal/viewer.css'
+    ])
+    expect(repaired?.changeSourceRefs?.['apps/application/src/journal/viewer.css']?.length).toBe(1)
   })
 
   it('strips overlong legacy failure text when reading a checkpoint', async () => {

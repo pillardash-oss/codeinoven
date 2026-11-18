@@ -49,6 +49,15 @@ export function piCoreToolsSubagentSource(): string {
   // this session's stop-flag file when the user stops the thread (or one
   // worker), and this is the only code that can act on it.
   const CIO_STOP_FLAG_PATH = '__CIO_STOP_FLAG_PATH__'
+  // The workers a thread move carried to this instance. The adopting driver
+  // writes the roster before the resumed thread's first turn; this session
+  // starts each worker from its own session file and empties the file again.
+  const CIO_HANDOFF_WORKERS_PATH = '__CIO_HANDOFF_WORKERS_PATH__'
+  // The workers this session is running right now. A background worker has no
+  // persisted card until its turn is flushed, so a thread that is moving has no
+  // roster anywhere else: this file is what the adopting instance reads while
+  // the departure is still settling.
+  const CIO_LIVE_SUBAGENTS_PATH = '__CIO_LIVE_SUBAGENTS_PATH__'
   // Poll window while workers are live: two orders of magnitude below a
   // worker's own turn latency, and armed only while a worker runs, so an idle
   // session never polls.
@@ -56,6 +65,8 @@ export function piCoreToolsSubagentSource(): string {
   let stopFlagMtimeMs = -1
   let stopRequestToken = ''
   let stopRequestChildIds = []
+  let stopRequestReason = ''
+  let transferStopApplied = false
   let consumedStopToken = ''
   let stopApplied = false
   let stopPollTimer = null
@@ -71,11 +82,13 @@ export function piCoreToolsSubagentSource(): string {
         const source = typeof parsed === 'object' && parsed !== null ? parsed : {}
         stopRequestToken = typeof source.token === 'string' ? source.token : ''
         stopRequestChildIds = Array.isArray(source.childSessionIds) ? source.childSessionIds : []
+        stopRequestReason = typeof source.reason === 'string' ? source.reason : ''
       }
     } catch {
       stopFlagMtimeMs = -1
       stopRequestToken = ''
       stopRequestChildIds = []
+      stopRequestReason = ''
     }
     return stopRequestToken
   }
@@ -96,10 +109,19 @@ export function piCoreToolsSubagentSource(): string {
     if (hasStopRequest()) {
       consumedStopToken = stopRequestToken
       const ids = stopRequestChildIds
+      // A thread move stops this run but not its work: the workers are handed
+      // to the instance adopting the thread, so they keep their session files
+      // and their cards stay in flight instead of being stamped as ended.
+      const handOff = stopRequestReason === 'transfer'
       for (const record of subAgents.values()) {
         if (record.status !== 'running') continue
         if (ids.length > 0 && !ids.includes(record.childSessionId)) continue
-        stopSubAgent(record)
+        if (handOff) {
+          transferStopApplied = true
+          handOffSubAgent(record)
+        } else {
+          stopSubAgent(record)
+        }
       }
       stopApplied = true
     }
@@ -124,6 +146,51 @@ export function piCoreToolsSubagentSource(): string {
     record.stopRequested = true
     try {
       void record.session.abort()
+    } catch {}
+  }
+
+  /**
+   * End one worker's run for a thread move, keeping its work resumable.
+   *
+   * The move is not a stop: this process is going away, but the worker is not
+   * abandoned. Its session file is what the adopting instance reopens, so the
+   * record keeps reporting 'running' (it is still in flight, just elsewhere),
+   * its transcript is never discarded, and it never reports a failed or
+   * finished result to a primary agent that has already left.
+   */
+  function handOffSubAgent(record) {
+    if (record.status !== 'running') return
+    record.handedOff = true
+    try {
+      void record.session.abort()
+    } catch {}
+    publishLiveSubAgents()
+  }
+
+  /**
+   * Rewrite this session's live worker roster.
+   *
+   * Only workers still in flight (or handed to another instance) belong in it:
+   * a finished worker is either on its card or reported to the primary, and a
+   * stale entry would make a later resume start work that already happened.
+   */
+  function publishLiveSubAgents() {
+    const workers = []
+    for (const record of subAgents.values()) {
+      if (record.status !== 'running' && record.handedOff !== true) continue
+      if (!record.sessionFile) continue
+      workers.push({
+        agentId: record.agentId,
+        purpose: record.purpose,
+        sessionFile: record.sessionFile,
+        childSessionId: record.childSessionId,
+        ...(record.modelId ? { modelId: record.modelId } : {}),
+        ...(record.thinkingLevel ? { thinkingLevel: record.thinkingLevel } : {}),
+        ...(record.instructions ? { prompt: record.instructions } : {})
+      })
+    }
+    try {
+      writeFileSync(CIO_LIVE_SUBAGENTS_PATH, JSON.stringify({ workers }))
     } catch {}
   }
 
@@ -477,8 +544,13 @@ export function piCoreToolsSubagentSource(): string {
         queue.push(record)
         if (!timer) timer = setTimeout(function () { flush() }, CIO_SUBAGENT_STREAM_FLUSH_MS)
       },
-      settle(status, error) {
-        flush({ settled: true, status, ...(error ? { error } : {}) })
+      settle(status, error, force) {
+        flush({
+          settled: true,
+          status,
+          ...(error ? { error } : {}),
+          ...(force ? { force: true } : {})
+        })
       }
     }
   }
@@ -990,15 +1062,17 @@ export function piCoreToolsSubagentSource(): string {
     return { session: created.session, shared: false }
   }
 
-  async function runSubAgent(parentCtx, onUpdate, spec, signal) {
+  async function runSubAgent(parentCtx, onUpdate, spec, signal, handoff) {
     // The first context a worker is ever spawned from is the one every
     // permission card is raised on, however deep the chain below it runs.
     if (!rootCtx) rootCtx = parentCtx
+    // A worker carried over from a thread move already passed this ceiling in
+    // the instance that spawned it, so resuming one never queues behind it.
     let runningCount = 0
     for (const record of subAgents.values()) {
       if (record.status === 'running') runningCount += 1
     }
-    if (runningCount >= CIO_SUBAGENT_MAX_CONCURRENT) {
+    if (!handoff && runningCount >= CIO_SUBAGENT_MAX_CONCURRENT) {
       return {
         error:
           'Too many sub-agents are running (' +
@@ -1011,8 +1085,13 @@ export function piCoreToolsSubagentSource(): string {
       resolvedModel = await resolveSubAgentModel(parentCtx, spec.model)
       if (!resolvedModel) return { error: 'Model not found: ' + spec.model }
     }
-    subAgentCounter += 1
-    const agentId = 'cio-subagent-' + subAgentCounter
+    if (!handoff) subAgentCounter += 1
+    // A resumed worker keeps the id its primary agent already used, so every
+    // cio_agent_status and cio_agent_output call from before the move still
+    // names this worker.
+    const agentId = handoff
+      ? handoff.agentId
+      : 'cio-subagent-' + subAgentCounter
     // Declared before the session is built: gatedWorkerTools receives this
     // array at creation time, so it must not sit in the temporal dead zone.
     const touchedFiles = []
@@ -1025,9 +1104,17 @@ export function piCoreToolsSubagentSource(): string {
       // orphaned worker transcript can be told apart from a thread transcript
       // when stale session files are pruned.
       const newSessionOptions = parentSessionFile ? { parentSession: parentSessionFile } : undefined
-      const sessionManager = sessionDir
-        ? SessionManager.create(parentCtx.cwd, sessionDir, newSessionOptions)
-        : SessionManager.create(parentCtx.cwd, undefined, newSessionOptions)
+      let sessionManager
+      if (handoff) {
+        // A worker the thread move carried over: its own transcript IS its
+        // state, so the session is opened rather than created, and the resume
+        // continues from the last step it finished.
+        sessionManager = SessionManager.open(handoff.sessionFile, sessionDir, parentCtx.cwd)
+      } else if (sessionDir) {
+        sessionManager = SessionManager.create(parentCtx.cwd, sessionDir, newSessionOptions)
+      } else {
+        sessionManager = SessionManager.create(parentCtx.cwd, undefined, newSessionOptions)
+      }
       const created = await createWorkerSession(
         parentCtx,
         sessionManager,
@@ -1054,10 +1141,15 @@ export function piCoreToolsSubagentSource(): string {
       // shared services the mirror already ran once for the whole process.
       mirrorParentProviders(parentCtx, session.modelRuntime)
     }
+    // A resumed worker must keep the child session id its card is keyed by: pi
+    // may hand the reopened session a fresh id, and every card update, settle
+    // and status row is addressed by this id.
+    const childSessionId =
+      handoff && handoff.childSessionId ? handoff.childSessionId : session.sessionId
     const record = {
       agentId,
       purpose: spec.purpose,
-      childSessionId: session.sessionId,
+      childSessionId,
       sessionFile: session.sessionFile,
       modelId: resolvedModel ? resolvedModel.provider + '/' + resolvedModel.id : '',
       thinkingLevel: spec.thinkingLevel ?? parentCtx.thinkingLevel ?? 'medium',
@@ -1069,17 +1161,33 @@ export function piCoreToolsSubagentSource(): string {
       // settle status ('aborted') and bars the done notification from waking
       // the primary after the user stopped the session.
       stopRequested: false,
+      // Set when a thread move stopped the run this worker belonged to. The
+      // worker is not finished: its session continues on the adopting instance.
+      handedOff: false,
+      instructions: spec.instructions,
+      // A carried-over worker outlives the turn that adopted it, so its settle
+      // has to stamp its own card even if the primary has already gone idle.
+      resumed: handoff !== undefined,
       session
     }
     subAgents.set(agentId, record)
+    publishLiveSubAgents()
     // The child's transcript streams to the app from the moment the session
     // exists: no waiting for pi to flush the child's session file, and no
     // polling on the renderer side.
-    const stream = createSubAgentStream(parentCtx, session.sessionId)
+    // Streamed under the record's own id, not the reopened session's id: every
+    // card update, settle and transcript row is addressed by the id the primary
+    // thread already keys on, and pi may hand a resumed session a fresh one.
+    const stream = createSubAgentStream(parentCtx, childSessionId)
     // The run that spawned this worker was aborted, so the worker's own run
     // ends with it and its result is not a completion. The stop-request sweep
     // is the app-initiated path; this covers an abort pi raised itself.
     const onAbort = function () {
+      if (record.status !== 'running') return
+      // The app publishes the reason before it aborts, so apply it here first:
+      // pi's own abort reaches this worker within milliseconds, long before the
+      // stop poll would, and a move must never be read as a user stop.
+      applyStopRequest()
       if (record.status !== 'running') return
       record.status = 'aborted'
       try {
@@ -1110,12 +1218,15 @@ export function piCoreToolsSubagentSource(): string {
         // instructions, so the file-report contract (the primary agent is the one
         // that commits) actually reaches the worker instead of only being
         // described in the spawn tool's schema.
-        await session.prompt(workerPrompt(spec, agentId), { expandPromptTemplates: false })
+        await session.prompt(handoff ? handoffWorkerPrompt(spec, agentId) : workerPrompt(spec, agentId), {
+          expandPromptTemplates: false
+        })
         // A worker the user stopped never resolves as a completion: an aborted
         // child run resolves its prompt, so the status must not be reset here.
-        if (record.status !== 'aborted') record.status = 'completed'
+        // A handed-off worker is still running, just on another instance.
+        if (record.status !== 'aborted' && !record.handedOff) record.status = 'completed'
       } catch (error) {
-        if (record.status !== 'aborted') {
+        if (record.status !== 'aborted' && !record.handedOff) {
           record.status = 'error'
           record.error = error && error.message ? error.message : String(error)
         }
@@ -1125,39 +1236,50 @@ export function piCoreToolsSubagentSource(): string {
         // The sweep is applied as well, so the remaining workers stop with it.
         const coveredByStop = stopRequestCovers(record)
         applyStopRequest()
-        if (coveredByStop) {
+        if (coveredByStop && !record.handedOff) {
           record.status = 'aborted'
           record.stopRequested = true
         }
-        // Only the sub-agent's final message goes back to the primary agent;
-        // the accumulated output stays a live preview for the UI card.
-        record.finalOutput = capOutput(subAgentText(lastAssistant(session)))
-        record.endedAt = Date.now()
-        // A worker that ends without a word has not done the job, and a
-        // completed card for it told the primary agent the opposite: it kept
-        // waiting on work that had already died, usually on an account or model
-        // that could not pay for the run. Report it as the failure it is, with
-        // the one lookup that can find an account able to pay for the retry.
-        if (record.status === 'completed' && !record.finalOutput && !record.output) {
-          record.status = 'error'
-          record.error =
-            'The sub-agent finished without producing any output, so its work is unverified and probably never ran. It may have stopped before doing anything, or run on an account or model with no remaining usage. Call ${ORCHESTRATION_TARGETS_TOOL_NAME} to find a connected account with subscription capacity, then spawn the work again there, or do it yourself.'
+        // A handed-off worker has not finished anything: its run ends here only
+        // because this process is handing the thread over, and the adopting
+        // instance continues the same session from this transcript. Its card
+        // stays in flight and its transcript is never discarded.
+        if (!record.handedOff) {
+          // Only the sub-agent's final message goes back to the primary agent;
+          // the accumulated output stays a live preview for the UI card.
+          record.finalOutput = capOutput(subAgentText(lastAssistant(session)))
+          record.endedAt = Date.now()
+          // A worker that ends without a word has not done the job, and a
+          // completed card for it told the primary agent the opposite: it kept
+          // waiting on work that had already died, usually on an account or model
+          // that could not pay for the run. Report it as the failure it is, with
+          // the one lookup that can find an account able to pay for the retry.
+          if (record.status === 'completed' && !record.finalOutput && !record.output) {
+            record.status = 'error'
+            record.error =
+              'The sub-agent finished without producing any output, so its work is unverified and probably never ran. It may have stopped before doing anything, or run on an account or model with no remaining usage. Call ${ORCHESTRATION_TARGETS_TOOL_NAME} to find a connected account with subscription capacity, then spawn the work again there, or do it yourself.'
+          }
+          // Flush the tail of the transcript and close the live stream so the
+          // view settles on its final transcript instead of a stuck spinner.
+          stream.settle(
+            record.status === 'aborted' ? 'aborted' : record.status === 'error' ? 'error' : 'idle',
+            record.error,
+            record.resumed === true
+          )
+          // The worker's transcript is app-owned from here on: the engine mirrors
+          // it into its own store when the child settles, so the harness session
+          // file is pure duplication from the harness session dir, which holds
+          // whole transcripts and never had a pruning path.
+          // A transfer stop ends this run without ending the work: the session
+          // file is what the adopting instance reopens, so it is kept even when
+          // the per-record flag was missed in a race with the stop.
+          if (!record.handedOff && !transferStopApplied) discardWorkerSessionFile(record.sessionFile)
+          // Background workers announce themselves; foreground spawns are
+          // awaited inline by the primary and need no notification.
+          if (spec.background && !record.stopRequested) notifySubAgentDone(record)
         }
         sendSubAgentUpdate(onUpdate, record)
-        // Flush the tail of the transcript and close the live stream so the
-        // view settles on its final transcript instead of a stuck spinner.
-        stream.settle(
-          record.status === 'aborted' ? 'aborted' : record.status === 'error' ? 'error' : 'idle',
-          record.error
-        )
-        // The worker's transcript is app-owned from here on: the engine mirrors
-        // it into its own store when the child settles, so the harness session
-        // file is pure duplication from the harness session dir, which holds
-        // whole transcripts and never had a pruning path.
-        discardWorkerSessionFile(record.sessionFile)
-        // Background workers announce themselves; foreground spawns are
-        // awaited inline by the primary and need no notification.
-        if (spec.background && !record.stopRequested) notifySubAgentDone(record)
+        publishLiveSubAgents()
       }
     })()
     return { record }
@@ -1268,6 +1390,131 @@ export function piCoreToolsSubagentSource(): string {
       spec.instructions
     ].join('\\n')
   }
+
+  /**
+   * The prompt a worker resumes with after its thread moved to this instance.
+   *
+   * Its own session file already holds everything it did, so the prompt does
+   * not restate the job: it says why the run stopped and that the transcript is
+   * the state to continue from, and it re-delivers the app contract a resumed
+   * nested session would otherwise be missing.
+   */
+  function handoffWorkerPrompt(spec, agentId) {
+    return [
+      'You are a CodeInOven sub-agent, and this is a continuation, not a new job.',
+      'Your worker id is ' + agentId + '.',
+      'Purpose: ' + spec.purpose + '.',
+      'The thread you work under was moved to another CodeInOven instance mid-run. Your session was carried over intact, so your own transcript above is the state of the work: read what you already did before you continue, and do not start over or redo finished steps.',
+      'Continue the same job from the first unfinished step and finish it. Anything you had already written to the repository is still there.',
+      'The user does not chat with you directly: your final message is returned to the primary agent, which reports to the user.',
+      'You are reachable while you work: ${CIO_AGENT_MESSAGE_TOOL_NAME} sends to "primary" or to a sibling worker id, and a message that arrives mid-run is part of the job you already have, not a new one.',
+      'Work autonomously and do not ask the user questions. Permission requests for destructive actions are surfaced to the user on the primary thread.',
+      'Your final message MUST list every file you created or modified (relative to the project root), including files changed through shell commands   the primary agent is responsible for committing the work and needs this list.',
+      '',
+      CIO_WORKER_CONTRACT,
+      '',
+      'Instructions you were spawned with:',
+      '',
+      spec.instructions
+    ].join('\\n')
+  }
+
+  // ── Workers carried over by a thread move ────────────────────────────
+  // A move stops the departing process, so a nested worker only survives as
+  // its own session file. The adopting instance publishes that roster before
+  // the resumed thread's first turn, and this reads it exactly once: every
+  // listed worker is opened from its transcript and continues under the id its
+  // primary agent already knows, so nothing it reported before the move is
+  // read back as a failure.
+  let handoffResumed = false
+
+  function readHandoffWorkers() {
+    try {
+      const parsed = JSON.parse(readFileSync(CIO_HANDOFF_WORKERS_PATH, 'utf8'))
+      if (!parsed || typeof parsed !== 'object') return []
+      const workers = Array.isArray(parsed.workers) ? parsed.workers : []
+      return workers.filter(function (entry) {
+        return (
+          entry &&
+          typeof entry.agentId === 'string' &&
+          entry.agentId.length > 0 &&
+          typeof entry.sessionFile === 'string' &&
+          entry.sessionFile.length > 0
+        )
+      })
+    } catch {
+      return []
+    }
+  }
+
+  /** Path of the resume outcome, beside the roster it belongs to. */
+  const CIO_HANDOFF_RESUME_PATH = CIO_HANDOFF_WORKERS_PATH.replace(
+    'handoff-workers.json',
+    'handoff-resume.json'
+  )
+
+  /** Record what happened to each carried-over worker, for the card and support. */
+  function writeResumeOutcome(entries) {
+    try {
+      writeFileSync(CIO_HANDOFF_RESUME_PATH, JSON.stringify({ at: Date.now(), workers: entries }))
+    } catch {}
+  }
+
+  /** Empty the roster so a later turn in this process cannot resume it twice. */
+  function clearHandoffWorkers() {
+    try {
+      writeFileSync(CIO_HANDOFF_WORKERS_PATH, JSON.stringify({ workers: [] }))
+    } catch {}
+  }
+
+  /** Continue every worker a thread move carried over to this instance. */
+  function resumeHandoffWorkers(parentCtx) {
+    if (handoffResumed) return
+    const workers = readHandoffWorkers()
+    if (workers.length === 0) return
+    handoffResumed = true
+    clearHandoffWorkers()
+    const outcomes = []
+    for (const worker of workers) {
+      const spec = {
+        purpose:
+          typeof worker.purpose === 'string' && worker.purpose.length > 0
+            ? worker.purpose
+            : 'sub-agent',
+        instructions: typeof worker.prompt === 'string' ? worker.prompt : '',
+        ...(typeof worker.modelId === 'string' && worker.modelId.length > 0
+          ? { model: worker.modelId }
+          : {}),
+        ...(CIO_SUBAGENT_THINKING_LEVELS.includes(worker.thinkingLevel)
+          ? { thinkingLevel: worker.thinkingLevel }
+          : {}),
+        background: true
+      }
+      const outcome = runSubAgent(parentCtx, null, spec, undefined, {
+        agentId: worker.agentId,
+        sessionFile: worker.sessionFile,
+        childSessionId: worker.childSessionId
+      })
+      // A resume that refuses (a missing model, a session file that will not
+      // open) must not disappear: the roster is already cleared, so this record
+      // is the only account of why the worker did not continue.
+      outcomes.push({ agentId: worker.agentId, started: true, error: null })
+      void outcome.then(function (result) {
+        if (!result || !result.error) return
+        for (const entry of outcomes) {
+          if (entry.agentId === worker.agentId) entry.error = result.error
+        }
+        writeResumeOutcome(outcomes)
+      })
+    }
+    writeResumeOutcome(outcomes)
+  }
+
+  // The resumed thread's first turn is when its carried-over workers continue:
+  // their roster is published before that turn is prompted.
+  pi.on('agent_start', function (event, ctx) {
+    resumeHandoffWorkers(ctx)
+  })
 
   pi.registerTool({
     name: '${CIO_SPAWN_AGENT_TOOL_NAME}',

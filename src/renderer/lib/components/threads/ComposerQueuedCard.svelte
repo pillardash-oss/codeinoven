@@ -14,6 +14,7 @@
   import CardTag from '../shared/CardTag.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import type { StartAfterThreadReference } from '$lib/stores/renderer-recovery'
+  import type { AdmissionDecision } from '$shared/resource-admission'
   import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
   import type { PromptAttachment, UserMessagePresentation } from '$shared/types'
 
@@ -37,6 +38,8 @@
     presentation: UserMessagePresentation | undefined
     /** Threads the queued message waits for before it sends. */
     startAfterThreads: StartAfterThreadReference[]
+    /** The device reading holding this message, when the machine is what waits. */
+    resourceWait?: AdmissionDecision | null
     /** The steer combo, so the send-now action names the key that does it. */
     steerModifierLabel: string
     /** Thread the queued message belongs to, so its fold state is remembered. */
@@ -66,6 +69,7 @@
     promptReferences,
     presentation,
     startAfterThreads,
+    resourceWait = null,
     steerModifierLabel,
     threadId,
     stackedAbove = false,
@@ -95,21 +99,37 @@
 
   /** The head names what is waiting: a count, a dependency, or one message. */
   const title = $derived(
-    count > 1
-      ? `Queued · ${count}`
-      : startAfterThreads.length > 0
-        ? 'Starts after'
-        : 'Queued message'
+    resourceWait
+      ? 'Low resource available'
+      : count > 1
+        ? `Queued · ${count}`
+        : startAfterThreads.length > 0
+          ? 'Starts after'
+          : 'Queued message'
   )
   /** The reading is a state, never an invented duration: the app keeps no
    *  timestamp for a queued message, so the chip says what is actually true. */
   const chip = $derived(
-    count > 1
-      ? { text: `${count} waiting`, tone: 'paused' as const }
-      : startAfterThreads.length > 0
-        ? { text: 'Waiting', tone: 'paused' as const }
-        : undefined
+    resourceWait
+      ? { text: 'Low resource', tone: 'paused' as const }
+      : count > 1
+        ? { text: `${count} waiting`, tone: 'paused' as const }
+        : startAfterThreads.length > 0
+          ? { text: 'Waiting', tone: 'paused' as const }
+          : undefined
   )
+
+  /** Available CPU, rounded the way a person reads a percentage. */
+  function formatPercent(value: number): string {
+    return `${Math.max(0, Math.round(value))}%`
+  }
+
+  /** Available memory, in the unit that keeps the number short. */
+  function formatMemory(bytes: number): string {
+    const gigabytes = bytes / 1024 ** 3
+    if (gigabytes >= 1) return `${gigabytes.toFixed(1)} GB`
+    return `${Math.max(0, Math.round(bytes / 1024 ** 2))} MB`
+  }
 
   function toggleQueueMenu(): void {
     queueMenuOpen = !queueMenuOpen
@@ -136,7 +156,9 @@ the head's menu. -->
   bind:folded={foldState.folded}
 >
   {#snippet meta()}
-    {#if startAfterThreads.length === 0}
+    {#if resourceWait}
+      <CardTag text="Waiting on this device" />
+    {:else if startAfterThreads.length === 0}
       <CardTag text="Sends after this turn" />
     {/if}
   {/snippet}
@@ -229,6 +251,18 @@ the head's menu. -->
 
   {#snippet body()}
     <div class="space-y-2 px-3 py-2.5">
+      {#if resourceWait}
+        <div class="border border-warning/40 bg-warning/10 px-2 py-1.5">
+          <p class="text-[0.75rem] text-foreground">
+            Thread will start as soon as there is enough resource for it.
+          </p>
+          <p class="pt-1 text-[0.6875rem] text-muted">
+            CPU {formatPercent(resourceWait.cpuAvailablePercent)} free · Memory {formatMemory(
+              resourceWait.memoryAvailableBytes
+            )} free
+          </p>
+        </div>
+      {/if}
       {#if promptReferences.length > 0}
         <div class="flex flex-wrap gap-1.5">
           {#each promptReferences as reference (reference.id)}

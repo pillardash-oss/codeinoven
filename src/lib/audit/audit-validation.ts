@@ -23,6 +23,14 @@ const UTILITY_STATUSES = new Set(['used', 'unavailable', 'not_applicable'])
 
 export interface AuditReportValidationOptions {
   requireVerification?: boolean
+  /**
+   * Accept a report whose verification checks drifted away from its findings or
+   * audited files. Auditors generate these facts together, but a human editing
+   * the report in the studio can delete a finding while the checks that cite it
+   * remain untouched. Saving must never be blocked by that drift: unknown
+   * finding references are dropped and coverage gaps stop failing the save.
+   */
+  tolerateCrossReferenceDrift?: boolean
 }
 
 export class AuditReportValidationError extends TypeError {
@@ -111,7 +119,8 @@ function collectAuditedFiles(value: unknown, issues: string[]): AuditedFileEvide
 function collectVerificationCheck(
   value: unknown,
   index: number,
-  issues: string[]
+  issues: string[],
+  tolerateCrossReferenceDrift: boolean
 ): AuditVerificationCheck | null {
   const label = `verification.checks[${index}]`
   let input: Record<string, unknown>
@@ -149,7 +158,7 @@ function collectVerificationCheck(
       issues.push(`${label}.exitCode must be 0 when passed`)
     if (status === 'failed' && exitCode === 0)
       issues.push(`${label}.exitCode must be non-zero when failed`)
-    if (status === 'failed' && findingIds.length === 0) {
+    if (status === 'failed' && findingIds.length === 0 && !tolerateCrossReferenceDrift) {
       issues.push(`${label}.findingIds must link a failed check to an audit finding`)
     }
   } else if (status === 'not_applicable' && exitCode !== undefined) {
@@ -199,7 +208,8 @@ function collectVerification(
   value: unknown,
   auditedFiles: AuditedFileEvidence[],
   findingIds: Set<string>,
-  issues: string[]
+  issues: string[],
+  tolerateCrossReferenceDrift: boolean
 ): AuditVerificationEvidence | undefined {
   if (value === undefined) return undefined
   let input: Record<string, unknown>
@@ -211,7 +221,7 @@ function collectVerification(
   }
   const checks = Array.isArray(input.checks)
     ? input.checks.flatMap((entry, index) => {
-        const check = collectVerificationCheck(entry, index, issues)
+        const check = collectVerificationCheck(entry, index, issues, tolerateCrossReferenceDrift)
         return check ? [check] : []
       })
     : (issues.push('verification.checks must be an array'), [])
@@ -239,16 +249,24 @@ function collectVerification(
     }
   }
   for (const check of checks) {
-    for (const findingId of check.findingIds) {
-      if (!findingIds.has(findingId)) {
-        issues.push(`verification check ${check.id} references unknown finding ${findingId}`)
-      }
+    const unknownFindingIds = check.findingIds.filter((findingId) => !findingIds.has(findingId))
+    if (unknownFindingIds.length === 0) continue
+    if (tolerateCrossReferenceDrift) {
+      check.findingIds = check.findingIds.filter((findingId) => findingIds.has(findingId))
+      continue
+    }
+    for (const findingId of unknownFindingIds) {
+      issues.push(`verification check ${check.id} references unknown finding ${findingId}`)
     }
   }
-  for (const auditedFile of auditedFiles) {
-    for (const kind of ['format', 'lint'] as const) {
-      if (!checks.some((check) => check.kind === kind && check.files.includes(auditedFile.path))) {
-        issues.push(`${auditedFile.path} is missing from ${kind} verification scope`)
+  if (!tolerateCrossReferenceDrift) {
+    for (const auditedFile of auditedFiles) {
+      for (const kind of ['format', 'lint'] as const) {
+        if (
+          !checks.some((check) => check.kind === kind && check.files.includes(auditedFile.path))
+        ) {
+          issues.push(`${auditedFile.path} is missing from ${kind} verification scope`)
+        }
       }
     }
   }
@@ -319,7 +337,8 @@ export function validateAuditReportContent(
     input.verification,
     auditedFiles ?? [],
     new Set(content.findings.map((finding) => finding.id)),
-    issues
+    issues,
+    options.tolerateCrossReferenceDrift === true
   )
   if (options.requireVerification) {
     if (!auditedFiles || auditedFiles.length === 0) {

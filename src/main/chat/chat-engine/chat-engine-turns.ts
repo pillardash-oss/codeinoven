@@ -14,6 +14,7 @@ import { instanceRegistry } from '../../system/instance-registry'
 import type {
   AgentAccountUsage,
   AgentEvent,
+  AgentPart,
   AgentProviderIssue,
   AgentSessionStatus,
   PromptProjectReference,
@@ -21,6 +22,9 @@ import type {
   Thread
 } from '../../../lib/types'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '../../../lib/types'
+
+/** Sub-agent lifecycle states that mean the worker is over, whatever its outcome. */
+const SETTLED_SUBAGENT_STATUSES: ReadonlySet<string> = new Set(['completed', 'error', 'aborted'])
 import { foldTurnStreamDetailed } from '../turn-stream'
 import { auxiliarySelectionFor } from '../../../lib/auxiliary-agents'
 import { classifyProviderIssue, isUsageResetWaitIssue } from '../../../lib/provider-issue'
@@ -486,6 +490,40 @@ export class ChatEngineTurns {
   }
 
   /** Process an event from a driver: apply permission policy, then broadcast. */
+  /**
+   * Write one settled sub-agent card into the thread's mirrored conversation.
+   *
+   * The lifecycle fields are the only thing a settle carries, so the existing
+   * card supplies everything else (its message, its output, its model). A card
+   * already in a terminal state is left alone: it carries the richer payload.
+   */
+  private async persistSettledSubagentCard(
+    owner: { projectId: string; threadId: string },
+    part: Extract<AgentPart, { type: 'subagent' }>
+  ): Promise<void> {
+    try {
+      const messages = await this.host.threadManager.loadMessages(owner.projectId, owner.threadId)
+      for (const message of messages) {
+        const index = message.parts.findIndex((candidate) => candidate.id === part.id)
+        if (index === -1) continue
+        const existing = message.parts[index]
+        if (existing?.type !== 'subagent') return
+        if (SETTLED_SUBAGENT_STATUSES.has(existing.activity.status)) return
+        const parts = [...message.parts]
+        parts[index] = part
+        await this.host.threadManager.upsertMessages(owner.projectId, owner.threadId, [
+          { ...message, parts }
+        ])
+        return
+      }
+    } catch (error) {
+      Logger.dev('Settled sub-agent card persistence failed:', {
+        threadId: owner.threadId,
+        error: rawErrorMessage(error)
+      })
+    }
+  }
+
   handleDriverEvent(driverId: string, event: AgentEvent, sourceDriver?: HarnessDriver): void {
     // A driver finished enriching its catalog in the background (e.g. Cline's
     // remote list). Re-merge every project we already exposed a catalog for and
@@ -646,6 +684,20 @@ export class ChatEngineTurns {
         Date.now(),
         event.tokenUsageScope ?? 'message'
       )
+    }
+    // A sub-agent card can settle after the turn that owned it is gone: a worker
+    // carried over by a cross-instance move outlives the adopting turn, and a
+    // stopped thread's workers settle seconds after the stop. Nothing else
+    // writes the mirror at that point, so without this a reopened thread shows
+    // the finished worker as still running.
+    if (
+      eventOwner &&
+      !eventOwner.ephemeral &&
+      event.type === 'message.part.updated' &&
+      event.part.type === 'subagent' &&
+      SETTLED_SUBAGENT_STATUSES.has(event.part.activity.status)
+    ) {
+      void this.persistSettledSubagentCard(eventOwner, event.part)
     }
     if (
       eventOwner &&

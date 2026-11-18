@@ -1,6 +1,7 @@
 import type { PromptAttachment } from '../../../lib/types'
 import { resolveFastModelId } from '../../../lib/fast-inference'
 import type { SendPromptOptions } from '../driver.interface'
+import { materializeDataUrlAttachment } from '../attachment-data-url'
 import {
   isDocumentAttachment,
   formatDocumentAsText,
@@ -13,12 +14,22 @@ import { opencodePermissionTools } from './opencode-models'
 /**
  * Build OpenCode prompt parts, inlining SVG, text, and document attachments as
  * text because the backend's default decoder cannot rasterize them.
+ *
+ * An embedded `data:` attachment is written to `scratchDirectory` first and
+ * dispatched as a file part: the backend resolves a file part's URL with
+ * `Bun.file`, which reads the whole `data:...` string as a filesystem path and
+ * fails with ENOENT before the model ever sees the image.
  */
 export async function buildOpenCodePromptParts(
-  attachments: readonly PromptAttachment[]
+  attachments: readonly PromptAttachment[],
+  scratchDirectory?: string
 ): Promise<Array<Record<string, unknown>>> {
   const parts: Array<Record<string, unknown>> = []
   for (const attachment of attachments) {
+    const resolved =
+      scratchDirectory === undefined || !attachment.url.startsWith('data:')
+        ? attachment
+        : await materializeDataUrlAttachment(attachment, scratchDirectory)
     if (isSvgAttachment(attachment)) {
       // The opencode backend rasterizes image parts and its default decoder
       // cannot decode SVG, so inline the raw markup as text instead.
@@ -46,9 +57,9 @@ export async function buildOpenCodePromptParts(
     }
     parts.push({
       type: 'file',
-      mime: attachment.mime,
-      url: attachment.url,
-      filename: attachment.filename
+      mime: resolved.mime,
+      url: resolved.url,
+      filename: resolved.filename
     })
   }
   return parts

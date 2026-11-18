@@ -488,6 +488,15 @@
             if (!escapeCloses) event.preventDefault()
           }}
           onInteractOutside={(event) => {
+            // Only the presentation on screen may be dismissed. Once the native
+            // host has drawn this panel, the dialog here is invisible and inert:
+            // there is no backdrop of its own for the user to press, so an
+            // interaction that reaches this copy is never a gesture aimed at it,
+            // and honouring one closed a surface the user was working in.
+            if (!domPresented) {
+              event.preventDefault()
+              return
+            }
             // A toast (svelte-sonner stacks at `z-index: 999999999`) and Vite's
             // development compile-error overlay both draw above this modal and
             // stay interactive there, so a press that lands on either is not a

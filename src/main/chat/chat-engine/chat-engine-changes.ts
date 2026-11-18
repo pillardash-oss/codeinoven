@@ -139,7 +139,7 @@ export function shellWorkingDirectory(
     break
   }
   const directoryChanges = new RegExp(
-    String.raw`(?:^|&&|;|\n)\s*cd\s+("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;&|]+)(?=\s*(?:&&|;|\n|$))`,
+    String.raw`(?:^|&&|;|\n)\s*cd\s+("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s;&|]+)(?=\s*(?:[;&|)]|\n|$))`,
     'gmu'
   )
   for (const match of command.matchAll(directoryChanges)) {
@@ -361,7 +361,7 @@ export function shellWritePaths(projectPath: string, input: Record<string, unkno
   // the write target, the turn claimed nothing, and completion dropped the real
   // edit from the changes card. Any shell separator opens a new command.
   const heredoc =
-    /(?:^|[;\n|&(])\s*(python[\d.]*|node|bun|deno|apply_patch)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z_0-9]*)['"]?[^\n]*\n([\s\S]*?)\n\2(?:\n|$)/gmu
+    /(?:^|&&|\|\||[;\n|&(])\s*(python[\d.]*|node|bun|deno|apply_patch)\b[^\n]*<<-?\s*['"]?([A-Za-z_][A-Za-z_0-9]*)['"]?[^\n]*\n([\s\S]*?)\n\2(?:\n|$)/gmu
   for (const match of sourceCommand.matchAll(heredoc)) {
     const code = match[3] ?? ''
     // A heredoc body belongs to the command that opened it, so its targets are

@@ -20,6 +20,8 @@
  */
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
+import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
+import { holdsAdmission, type AdmissionDecision } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
@@ -71,6 +73,11 @@ class QueuedMessageDispatcher {
     this.#mounted.delete(threadKey(projectId, threadId))
   }
 
+  /** Deliver the queue now instead of waiting for the next idle event. */
+  sweepNow(): void {
+    this.#sweep()
+  }
+
   /**
    * An idle transition means some agent just became free — re-check every
    * queued message. The authoritative per-thread status check in #dispatch
@@ -112,6 +119,8 @@ class QueuedMessageDispatcher {
       ) {
         return
       }
+      // The device, not the thread, can be what holds this turn back.
+      if (await this.#holdForResources(projectId, threadId)) return
       if (!(await threadAgentIsIdle(projectId, threadId))) return
       dispatched = entry
       userMessageId = createMessageId()
@@ -157,6 +166,25 @@ class QueuedMessageDispatcher {
       this.#inFlight.delete(key)
       releaseQueuedMessage(projectId, threadId)
     }
+  }
+
+  /**
+   * Ask the device whether the turn may start. A machine short on CPU and memory
+   * holds the message here, and the shared watch re-runs the sweep once it clears.
+   */
+  async #holdForResources(projectId: string, threadId: string): Promise<boolean> {
+    let decision: AdmissionDecision
+    try {
+      decision = await invoke('system:resourceAdmission')
+    } catch {
+      return false
+    }
+    if (!holdsAdmission(decision)) {
+      queuedResourceWait.clear(projectId, threadId)
+      return false
+    }
+    queuedResourceWait.hold(projectId, threadId, decision, () => this.#sweep())
+    return true
   }
 
   /** True when every thread this parked message waits on has settled. */

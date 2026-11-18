@@ -390,6 +390,13 @@
     }
     if (fieldKey(event)) return
     if ((event.key === 'Enter' || event.key === ' ') && event.target instanceof Element) {
+      // The backdrop is a press target only. A keystroke that reaches it (a
+      // caret that lost its field, a key forwarded while the card above was
+      // showing) must never dismiss the dialog the user is typing in.
+      if (event.target.closest('[data-native-modal-backdrop]')) {
+        event.preventDefault()
+        return
+      }
       const control = event.target.closest<HTMLElement>('[data-native-dock-action]')
       if (control && !isDisabled(control)) {
         event.preventDefault()
@@ -495,7 +502,14 @@
       class="absolute inset-0 h-full w-full cursor-default bg-overlay/70"
       aria-label="Dismiss dialog"
       title="Dismiss dialog"
-      onclick={() => report({ id: dock.id, kind: 'dismiss' })}
+      onclick={(event) => {
+        // A backdrop is dismissed by a press, never by a keystroke. A keyboard
+        // activation arrives with no click count, so a Space or Enter typed
+        // into a dialog whose caret had wandered off its field would have
+        // thrown the whole surface away from under the user's hands.
+        if (event.detail === 0) return
+        report({ id: dock.id, kind: 'dismiss' })
+      }}
     ></button>
   {/if}
   <div
