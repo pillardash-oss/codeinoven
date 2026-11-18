@@ -66,6 +66,7 @@ export function piCoreToolsSubagentSource(): string {
   let stopRequestToken = ''
   let stopRequestChildIds = []
   let stopRequestReason = ''
+  let transferStopApplied = false
   let consumedStopToken = ''
   let stopApplied = false
   let stopPollTimer = null
@@ -115,8 +116,12 @@ export function piCoreToolsSubagentSource(): string {
       for (const record of subAgents.values()) {
         if (record.status !== 'running') continue
         if (ids.length > 0 && !ids.includes(record.childSessionId)) continue
-        if (handOff) handOffSubAgent(record)
-        else stopSubAgent(record)
+        if (handOff) {
+          transferStopApplied = true
+          handOffSubAgent(record)
+        } else {
+          stopSubAgent(record)
+        }
       }
       stopApplied = true
     }
@@ -539,8 +544,13 @@ export function piCoreToolsSubagentSource(): string {
         queue.push(record)
         if (!timer) timer = setTimeout(function () { flush() }, CIO_SUBAGENT_STREAM_FLUSH_MS)
       },
-      settle(status, error) {
-        flush({ settled: true, status, ...(error ? { error } : {}) })
+      settle(status, error, force) {
+        flush({
+          settled: true,
+          status,
+          ...(error ? { error } : {}),
+          ...(force ? { force: true } : {})
+        })
       }
     }
   }
@@ -1155,6 +1165,9 @@ export function piCoreToolsSubagentSource(): string {
       // worker is not finished: its session continues on the adopting instance.
       handedOff: false,
       instructions: spec.instructions,
+      // A carried-over worker outlives the turn that adopted it, so its settle
+      // has to stamp its own card even if the primary has already gone idle.
+      resumed: handoff !== undefined,
       session
     }
     subAgents.set(agentId, record)
@@ -1250,13 +1263,17 @@ export function piCoreToolsSubagentSource(): string {
           // view settles on its final transcript instead of a stuck spinner.
           stream.settle(
             record.status === 'aborted' ? 'aborted' : record.status === 'error' ? 'error' : 'idle',
-            record.error
+            record.error,
+            record.resumed === true
           )
           // The worker's transcript is app-owned from here on: the engine mirrors
           // it into its own store when the child settles, so the harness session
           // file is pure duplication from the harness session dir, which holds
           // whole transcripts and never had a pruning path.
-          discardWorkerSessionFile(record.sessionFile)
+          // A transfer stop ends this run without ending the work: the session
+          // file is what the adopting instance reopens, so it is kept even when
+          // the per-record flag was missed in a race with the stop.
+          if (!record.handedOff && !transferStopApplied) discardWorkerSessionFile(record.sessionFile)
           // Background workers announce themselves; foreground spawns are
           // awaited inline by the primary and need no notification.
           if (spec.background && !record.stopRequested) notifySubAgentDone(record)
@@ -1430,6 +1447,19 @@ export function piCoreToolsSubagentSource(): string {
     }
   }
 
+  /** Path of the resume outcome, beside the roster it belongs to. */
+  const CIO_HANDOFF_RESUME_PATH = CIO_HANDOFF_WORKERS_PATH.replace(
+    'handoff-workers.json',
+    'handoff-resume.json'
+  )
+
+  /** Record what happened to each carried-over worker, for the card and support. */
+  function writeResumeOutcome(entries) {
+    try {
+      writeFileSync(CIO_HANDOFF_RESUME_PATH, JSON.stringify({ at: Date.now(), workers: entries }))
+    } catch {}
+  }
+
   /** Empty the roster so a later turn in this process cannot resume it twice. */
   function clearHandoffWorkers() {
     try {
@@ -1444,6 +1474,7 @@ export function piCoreToolsSubagentSource(): string {
     if (workers.length === 0) return
     handoffResumed = true
     clearHandoffWorkers()
+    const outcomes = []
     for (const worker of workers) {
       const spec = {
         purpose:
@@ -1459,12 +1490,24 @@ export function piCoreToolsSubagentSource(): string {
           : {}),
         background: true
       }
-      void runSubAgent(parentCtx, null, spec, undefined, {
+      const outcome = runSubAgent(parentCtx, null, spec, undefined, {
         agentId: worker.agentId,
         sessionFile: worker.sessionFile,
         childSessionId: worker.childSessionId
       })
+      // A resume that refuses (a missing model, a session file that will not
+      // open) must not disappear: the roster is already cleared, so this record
+      // is the only account of why the worker did not continue.
+      outcomes.push({ agentId: worker.agentId, started: true, error: null })
+      void outcome.then(function (result) {
+        if (!result || !result.error) return
+        for (const entry of outcomes) {
+          if (entry.agentId === worker.agentId) entry.error = result.error
+        }
+        writeResumeOutcome(outcomes)
+      })
     }
+    writeResumeOutcome(outcomes)
   }
 
   // The resumed thread's first turn is when its carried-over workers continue:

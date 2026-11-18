@@ -110,8 +110,12 @@ export class PiCioRuntimeFiles {
         await this.host.storage.writeRaw(historyRecapRelative, '')
         await this.host.storage.writeRaw(allowedToolsRelative, '[]')
         await this.host.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
-        await this.host.storage.writeRaw(stopFlagRelative, JSON.stringify(emptyStopRequest()))
-        await this.host.storage.writeRaw(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
+        // A session that moved between instances shares this directory with the
+        // process that just released it. Seeding would erase a transfer's own
+        // stop request and the live worker roster before the adopting instance
+        // reads them, so a file that already exists is left exactly as it is.
+        await this.seedIfMissing(stopFlagRelative, JSON.stringify(emptyStopRequest()))
+        await this.seedIfMissing(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
       }
       await this.host.storage.writeRaw(
         extensionRelative,
@@ -259,6 +263,12 @@ export class PiCioRuntimeFiles {
     } catch (error) {
       Logger.dev('Pi stop-request publication failed:', error)
     }
+  }
+
+  /** Write a seed flag file only when nothing wrote it first. */
+  private async seedIfMissing(relative: string, content: string): Promise<void> {
+    if ((await this.host.storage.readRaw(relative)) !== null) return
+    await this.host.storage.writeRaw(relative, content)
   }
 
   /**

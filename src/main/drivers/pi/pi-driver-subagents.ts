@@ -197,11 +197,16 @@ export class PiSubagentStreams {
     // its own terminal status so no surface can report finished work, and its
     // card is stamped even though the stopped parent turn is already gone.
     const aborted = stringValue(payload['status']) === 'aborted'
+    // A worker that outlived the turn which adopted it (a transferred thread)
+    // stamps its card even with no live parent turn, or the card spins forever.
+    const force =
+      payload['force'] === true ||
+      (typeof payload['records'] !== 'undefined' && payload['force'] === 'true')
     const status: AgentToolStatus = aborted ? 'aborted' : error ? 'error' : 'completed'
     // The child's own settle record closes the parent thread's card, so the
     // working-trace dropdown and the sub-agent tab flip together instead of
     // the card waiting for the model loop to drain its done notification.
-    this.closeSubagentCard(parentSessionId, childSessionId, error, status, aborted)
+    this.closeSubagentCard(parentSessionId, childSessionId, error, status, aborted || force)
     if (!error || aborted) {
       this.host.emitEvent({
         type: 'session.status',
