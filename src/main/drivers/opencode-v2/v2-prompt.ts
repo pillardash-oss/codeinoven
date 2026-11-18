@@ -1,6 +1,7 @@
 import type { PromptAttachment } from '../../../lib/types'
 import { resolveFastModelId } from '../../../lib/fast-inference'
 import type { SendPromptOptions } from '../driver.interface'
+import { materializeDataUrlAttachment } from '../attachment-data-url'
 import {
   formatDocumentAsText,
   isDocumentAttachment,
@@ -22,11 +23,15 @@ export interface OpenCodeV2PromptFile {
  * V2 accepts file attachments by URI and the server expands them itself, but
  * its decoder cannot rasterize SVG and some providers reject media types they
  * do not support (e.g. `application/json`). Those attachments are inlined as
- * text, exactly as the V1 driver does, so the model still receives them.
+ * text, exactly as the V1 driver does, so the model still receives them. An
+ * embedded `data:` payload is written to `scratchDirectory` and sent as a file
+ * URI, because the server opens a file URI as a path and a data URL fails with
+ * ENOENT.
  */
 export async function buildOpenCodeV2PromptPayload(
   text: string,
-  attachments: readonly PromptAttachment[]
+  attachments: readonly PromptAttachment[],
+  scratchDirectory?: string
 ): Promise<{ text: string; files: OpenCodeV2PromptFile[] }> {
   const inlined: string[] = []
   const files: OpenCodeV2PromptFile[] = []
@@ -52,9 +57,13 @@ export async function buildOpenCodeV2PromptPayload(
         continue
       }
     }
+    const resolved =
+      scratchDirectory === undefined || !attachment.url.startsWith('data:')
+        ? attachment
+        : await materializeDataUrlAttachment(attachment, scratchDirectory)
     files.push({
-      uri: attachment.url,
-      ...(attachment.filename ? { name: attachment.filename } : {})
+      uri: resolved.url,
+      ...(resolved.filename ? { name: resolved.filename } : {})
     })
   }
   return {

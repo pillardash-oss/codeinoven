@@ -1,4 +1,5 @@
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
+import { attachmentScratchDirectory } from '../../drivers/attachment-data-url'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import {
@@ -65,6 +66,17 @@ import type { ChatEngine } from '../chat-engine'
 /** What a cancelled descriptor reports to the model that requested it. */
 const IMAGE_DESCRIPTOR_CANCELLED_MESSAGE =
   'The image descriptor was cancelled because the turn was stopped.'
+
+/**
+ * Where an embedded image payload is written before dispatch. It sits in the
+ * conversation's own scratch directory (the project's `.cio/tmp/attachments`,
+ * or the equivalent folder of the workspace a chat runs in), exactly where the
+ * composer stages pasted attachments, so it is gitignored and removed with the
+ * thread.
+ */
+function visionScratchDirectory(request: ImageDescriptorExecutorRequest): string {
+  return attachmentScratchDirectory(request.projectPath)
+}
 
 /** ChatEngine media-visual: one concern, moved verbatim from the composition root. */
 export class ChatEngineMediaVisual {
@@ -532,7 +544,7 @@ export class ChatEngineMediaVisual {
     try {
       const attachments: PromptAttachment[] = []
       for (const image of images) {
-        attachments.push(await resolveVisionAttachment(image))
+        attachments.push(await resolveVisionAttachment(image, visionScratchDirectory(request)))
       }
       const firstAttachment = attachments[0] ?? { mime: 'image/*' as const, url: '' }
       const timeoutMs = imageDescriptorInactivityTimeoutMs(firstAttachment, 0)
@@ -996,7 +1008,10 @@ export class ChatEngineMediaVisual {
       // let the harness read it itself   no base64 inflation in the prompt.
       // A missing file throws here and surfaces via the recovery card, where
       // the user can pick a replacement image.
-      const attachment = await resolveVisionAttachment(image)
+      const attachment = await resolveVisionAttachment(
+        image,
+        attachmentScratchDirectory(projectPath)
+      )
       const timeoutMs = imageDescriptorInactivityTimeoutMs(attachment, attempt)
       const nextTimeoutMs =
         attempt === 0 ? imageDescriptorInactivityTimeoutMs(attachment, attempt + 1) : undefined

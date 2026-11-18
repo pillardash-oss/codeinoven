@@ -1,6 +1,7 @@
 import { spawn } from 'child_process'
 import type { ChildProcess } from 'child_process'
 import { readFile } from 'node:fs/promises'
+import { attachmentScratchDirectory } from './attachment-data-url'
 import { OPENCODE_COMMAND } from '../../lib/opencode-version'
 import { Logger } from '../system/logger'
 import type {
@@ -589,7 +590,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
 
     const parts: Array<Record<string, unknown>> = [
       { type: 'text', text: prependHistoryRecap(opts.text, opts.historyRecap) },
-      ...(await buildOpenCodePromptParts(opts.attachments))
+      ...(await buildOpenCodePromptParts(opts.attachments, attachmentScratchDirectory(projectPath)))
     ]
     const body = buildOpenCodePromptBody(opts, parts)
 
@@ -622,7 +623,7 @@ export class OpenCodeDriver implements HarnessDriver, IsolatedSessionDriver {
       (await this.ensureServer(projectPath))
     const parts: Array<Record<string, unknown>> = [
       { type: 'text', text: opts.text },
-      ...(await buildOpenCodePromptParts(opts.attachments))
+      ...(await buildOpenCodePromptParts(opts.attachments, attachmentScratchDirectory(projectPath)))
     ]
 
     const res = await fetch(`${handle.baseUrl}/session/${opts.sessionId}/prompt_async`, {
