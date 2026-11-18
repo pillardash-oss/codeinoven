@@ -101,6 +101,7 @@
   import CioEllipsis from '@pdslng/cio-icon/CioEllipsis.svelte'
   import { fly, slide } from 'svelte/transition'
   import { motionDuration } from '$lib/motion'
+  import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
 
   interface Props {
     /** Ordered groups. Empty groups are dropped so no stray hairline renders. */
@@ -307,7 +308,14 @@
       {/if}
     </button>
     {#if item.flyout && hoveredId === item.id}
-      <div class="pointer-events-none absolute top-1/2 right-full z-50 mr-1.5 -translate-y-1/2">
+      <!-- The card opens over the panel beside the dock, which a native thread
+           browser paints above every DOM node. Publishing its rectangle parks
+           that page for as long as the card is up, so the summary is readable
+           instead of disappearing behind the page it describes. -->
+      <div
+        class="pointer-events-none absolute top-1/2 right-full z-50 mr-1.5 -translate-y-1/2"
+        {@attach trackBrowserOcclusion}
+      >
         {@render item.flyout()}
       </div>
     {/if}
