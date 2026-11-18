@@ -64,7 +64,10 @@ export class PiSessionHost {
   private readonly sessions = new Map<string, HostedSession>()
 
   /** Dialogs a session is blocked on, by request id, until the app answers. */
-  private readonly pendingUi = new Map<string, (response: HostUiResponse) => void>()
+  private readonly pendingUi = new Map<
+    string,
+    { sessionId: string; resolve: (response: HostUiResponse) => void }
+  >()
 
   constructor(private readonly sink: HostLineSink) {}
 
@@ -194,10 +197,16 @@ export class PiSessionHost {
         return
       }
       case 'ui_response': {
-        const resolve = this.pendingUi.get(command.requestId)
+        const pending = this.pendingUi.get(command.requestId)
+        // A dialog belongs to the session that asked it. An answer aimed at
+        // another session is refused instead of resolving someone else's card.
+        if (pending !== undefined && pending.sessionId !== request.sessionId) {
+          respond({ resolved: false })
+          return
+        }
         this.pendingUi.delete(command.requestId)
-        resolve?.(command.response)
-        respond({ resolved: resolve !== undefined })
+        pending?.resolve(command.response)
+        respond({ resolved: pending !== undefined })
         return
       }
       case 'list_sessions': {
@@ -246,10 +255,14 @@ export class PiSessionHost {
     // which a session that never asks a question does not need.
     if (command.dialogs === true) {
       await created.session.bindExtensions({
-        uiContext: createHostUiContext({
-          ask: (request) => this.askUi(key, request),
-          notify: (request) => this.sink({ type: 'ui_request', sessionId: key, request })
-        }),
+        uiContext: createHostUiContext(
+          {
+            ask: (request) => this.askUi(key, request),
+            notify: (request) => this.sink({ type: 'ui_request', sessionId: key, request }),
+            status: (request) => this.sink({ type: 'ui_request', sessionId: key, request })
+          },
+          { idPrefix: key }
+        ),
         mode: 'rpc'
       })
     }
@@ -297,10 +310,14 @@ export class PiSessionHost {
     })
     if (hosted.dialogs) {
       await created.session.bindExtensions({
-        uiContext: createHostUiContext({
-          ask: (request) => this.askUi(key, request),
-          notify: (request) => this.sink({ type: 'ui_request', sessionId: key, request })
-        }),
+        uiContext: createHostUiContext(
+          {
+            ask: (request) => this.askUi(key, request),
+            notify: (request) => this.sink({ type: 'ui_request', sessionId: key, request }),
+            status: (request) => this.sink({ type: 'ui_request', sessionId: key, request })
+          },
+          { idPrefix: key }
+        ),
         mode: 'rpc'
       })
     }
@@ -321,7 +338,7 @@ export class PiSessionHost {
   private askUi(sessionId: string, request: HostUiRequest): Promise<HostUiResponse> {
     const key = this.requireSessionKey(sessionId)
     return new Promise<HostUiResponse>((resolve) => {
-      this.pendingUi.set(request.id, resolve)
+      this.pendingUi.set(request.id, { sessionId: key, resolve })
       if (request.method === 'notify') {
         this.pendingUi.delete(request.id)
         this.sink({ type: 'ui_request', sessionId: key, request })
@@ -337,8 +354,9 @@ export class PiSessionHost {
     if (hosted === undefined) return
     this.sessions.delete(key)
     // A dialog nobody can answer any more is a cancelled dialog, never a hang.
-    for (const [requestId, resolve] of this.pendingUi) {
-      resolve({ cancelled: true })
+    for (const [requestId, pending] of this.pendingUi) {
+      if (pending.sessionId !== key) continue
+      pending.resolve({ cancelled: true })
       this.pendingUi.delete(requestId)
     }
     hosted.unsubscribe()

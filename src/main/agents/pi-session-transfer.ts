@@ -69,7 +69,10 @@ export function resumeRequest(
       sessionPath: session.sessionPath,
       ...(session.extensionPaths === undefined ? {} : { extensionPaths: session.extensionPaths }),
       ...(session.tools === undefined ? {} : { tools: session.tools }),
-      ...(session.model === undefined ? {} : { model: session.model })
+      ...(session.model === undefined ? {} : { model: session.model }),
+      // A moved sub-agent keeps its parent, so the target host does not adopt an
+      // orphan and the app can still walk the family.
+      ...(session.parentSessionId === undefined ? {} : { parentSessionId: session.parentSessionId })
     }
   }
 }

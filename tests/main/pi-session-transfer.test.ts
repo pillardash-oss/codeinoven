@@ -141,7 +141,11 @@ describe('session transfer', () => {
       const created = await create(source, 'worker-1', location)
       const moved = locationFromState('host-a', created, 'parent-1')
       expect(moved.session.parentSessionId).toBe('parent-1')
-      expect(resumeRequest(moved.session, 'resume-1').sessionId).toBe('worker-1')
+      const request = resumeRequest(moved.session, 'resume-1')
+      expect(request.sessionId).toBe('worker-1')
+      // The parent link has to travel with the resume, or the target host adopts
+      // the worker as an orphan.
+      expect(request.command).toMatchObject({ type: 'create_session', parentSessionId: 'parent-1' })
     } finally {
       source.dispose()
     }

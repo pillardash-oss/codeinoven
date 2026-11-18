@@ -34,19 +34,29 @@ const HEADLESS_THEME = new Proxy({} as Record<string, unknown>, {
   get: (_target, property) => (property === 'name' ? 'cio-host' : () => '')
 }) as unknown as Theme
 
+export interface UiContextOptions {
+  /** Prefix for every request id, normally the session key. */
+  idPrefix?: string
+}
+
 export interface UiContextHost {
   /** Send one request to the app and wait for its answer. */
   ask(request: HostUiRequest): Promise<HostUiResponse>
   /** A notification needs no answer. */
   notify(request: Extract<HostUiRequest, { method: 'notify' }>): void
+  /** Status text needs no answer either, and the app reads it as a state line. */
+  status?(request: Extract<HostUiRequest, { method: 'setStatus' }>): void
 }
 
 /** Build the context a session binds its extensions with. */
-export function createHostUiContext(host: UiContextHost): ExtensionUIContext {
+export function createHostUiContext(
+  host: UiContextHost,
+  options: UiContextOptions = {}
+): ExtensionUIContext {
   let requestSequence = 0
   const nextId = (): string => {
     requestSequence += 1
-    return `ui-${requestSequence}`
+    return `${options.idPrefix ?? 'ui'}-${requestSequence}`
   }
 
   const ask = async (
@@ -104,7 +114,9 @@ export function createHostUiContext(host: UiContextHost): ExtensionUIContext {
     // session does not have. `never` parameters keep each one assignable to its
     // declared signature without inventing a component or a theme.
     onTerminalInput: () => () => undefined,
-    setStatus: () => undefined,
+    setStatus(key, text) {
+      host.status?.({ id: nextId(), method: 'setStatus', statusKey: key, statusText: text })
+    },
     setWorkingMessage: () => undefined,
     setWorkingVisible: () => undefined,
     setWorkingIndicator: () => undefined,

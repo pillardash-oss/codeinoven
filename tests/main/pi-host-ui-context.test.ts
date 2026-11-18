@@ -84,6 +84,21 @@ describe('createHostUiContext', () => {
     expect(requests[0].id).not.toBe(requests[1].id)
   })
 
+  it('prefixes every request id with the session so two hosts cannot collide', () => {
+    const requests: string[] = []
+    const first = createHostUiContext(
+      { ask: (request) => (requests.push(request.id), new Promise(() => undefined)), notify: () => undefined },
+      { idPrefix: 'sess-a' }
+    )
+    const second = createHostUiContext(
+      { ask: (request) => (requests.push(request.id), new Promise(() => undefined)), notify: () => undefined },
+      { idPrefix: 'sess-b' }
+    )
+    void first.confirm('a', 'a')
+    void second.confirm('b', 'b')
+    expect(requests).toEqual(['sess-a-1', 'sess-b-1'])
+  })
+
   it('sends a notification without waiting for an answer', () => {
     const { context, notifications, requests } = harness()
     context.notify('working', 'info')

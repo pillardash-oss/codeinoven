@@ -41,6 +41,8 @@ export type HostSpawner = () => HostTransport
 export interface HostCreateRequest {
   /** The app's session key. Stable across hosts. */
   sessionId: string
+  /** Set for a sub-agent session: the session that spawned it. */
+  parentSessionId?: string
   command: HostCreateSessionCommand
 }
 
@@ -114,7 +116,12 @@ export class PiHostSupervisor {
       const response = await this.#request(host, request.sessionId, request.command)
       const state = this.#stateOf(response)
       this.#sessionHost.set(request.sessionId, host.id)
-      this.#sessions.set(request.sessionId, this.#transferable(state))
+      this.#sessions.set(request.sessionId, {
+        ...this.#transferable(state),
+        ...(request.parentSessionId === undefined
+          ? {}
+          : { parentSessionId: request.parentSessionId })
+      })
       return state
     } catch (error) {
       this.#ownership.release(request.sessionId, host.id)

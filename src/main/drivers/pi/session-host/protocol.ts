@@ -48,6 +48,8 @@ export interface HostCreateSessionCommand {
   model?: { provider: string; id: string }
   /** Initial reasoning effort, resolved against the session's own model runtime. */
   thinkingLevel?: HostThinkingLevel
+  /** Set for a sub-agent session: the session that spawned it. */
+  parentSessionId?: string
   /**
    * Bind the host's dialog context so extension questions reach the app.
    *
@@ -96,6 +98,7 @@ export type HostUiRequest =
       message: string
       notifyType: 'info' | 'warning' | 'error' | undefined
     }
+  | { id: string; method: 'setStatus'; statusKey: string; statusText: string | undefined }
 
 export interface HostUiRequestEnvelope {
   type: 'ui_request'
@@ -236,6 +239,7 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
       const model = modelField(value, 'model')
       const thinkingLevel = thinkingLevelField(value)
       const dialogs = value['dialogs'] === true
+      const parentSessionId = stringField(value, 'parentSessionId')
       return {
         type,
         cwd,
@@ -245,7 +249,8 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
         ...(tools === undefined ? {} : { tools }),
         ...(model === undefined ? {} : { model }),
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
-        ...(dialogs ? { dialogs } : {})
+        ...(dialogs ? { dialogs } : {}),
+        ...(parentSessionId === undefined ? {} : { parentSessionId })
       }
     }
     case 'new_session':
