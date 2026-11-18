@@ -261,13 +261,21 @@ export async function repairEvidenceDroppedCheckpoints(
     try {
       const checkpoint = await host.get(projectId, threadId, turnId)
       if (!checkpoint || checkpoint.status !== 'completed' || !checkpoint.after) continue
-      const projectRows = await host.queryRows(
-        'SELECT path FROM projects WHERE id = ?',
-        [projectId],
-        1
-      )
-      const projectPath = projectRows[0]?.['path']
-      if (typeof projectPath !== 'string' || projectPath.length === 0) continue
+      // Evidence must be resolved against the root the snapshots were taken
+      // from, not the project's main checkout: a scoped thread works in its own
+      // managed worktree, where every absolute write target lives outside the
+      // repository path and resolved to nothing.
+      let evidenceRoot = checkpoint.before.projectRoot
+      if (typeof evidenceRoot !== 'string' || evidenceRoot.length === 0) {
+        const projectRows = await host.queryRows(
+          'SELECT path FROM projects WHERE id = ?',
+          [projectId],
+          1
+        )
+        const projectPath = projectRows[0]?.['path']
+        if (typeof projectPath !== 'string' || projectPath.length === 0) continue
+        evidenceRoot = projectPath
+      }
       const diff = diffCheckpointFiles(checkpoint.before, checkpoint.after)
       if (diff.length === 0 || diff.length > EVIDENCE_REPAIR_MAX_PATHS) continue
       const transcript = await host.queryRows(
@@ -278,7 +286,7 @@ export async function repairEvidenceDroppedCheckpoints(
         TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT
       )
       const evidence = transcriptWriteEvidence(
-        projectPath,
+        evidenceRoot,
         transcript.map((row) => ({ parts: row['parts'] }))
       )
       const kept = diff.filter((change) => (evidence.get(change.path)?.length ?? 0) > 0)

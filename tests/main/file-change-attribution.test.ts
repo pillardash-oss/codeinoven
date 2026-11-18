@@ -103,6 +103,34 @@ sed -n 44,60p packages/shared/src/ui/floating-panel.ts`
     ])
   })
 
+  // Regression: the chained command usually `cd`s into a subdirectory first.
+  // The heredoc prefix consumed only the second `&` of the `&&` operator, which
+  // left a dangling `&&` that the working-directory reader refuses to end a
+  // `cd` on: the body's relative target resolved against the project root, the
+  // turn proved nothing about the file it wrote, and its card came up empty.
+  it('extracts a heredoc target against the subdirectory it runs in', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-subdir-script',
+      messageID: 'message-subdir-script',
+      callID: 'call-subdir-script',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `cd /project/tools/generator && python3 - <<'PY'
+p='out/schema.ts'
+s=open(p).read()
+open(p,'w').write(s)
+PY
+cd /project && git status --porcelain`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual(['tools/generator/out/schema.ts'])
+  })
+
   it('extracts paths from Codex file-change items', () => {
     const part: Extract<AgentPart, { type: 'tool' }> = {
       type: 'tool',
