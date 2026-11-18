@@ -516,6 +516,9 @@
     key: string
     /** The status group this section heads, or null for the ungrouped list. */
     group: (typeof threadGroups)[number] | null
+    /** Whether this group is folded, so only its heading (and the thread being
+     *  worked in) is drawn. Always false for the ungrouped list. */
+    folded: boolean
     threads: Thread[]
   }
 
@@ -526,13 +529,14 @@
         : settledTimelineThreads
       // No section at all when there is nothing to show, so the list's own empty
       // state still fires for an ungrouped view with no threads.
-      return threads.length > 0 ? [{ key: 'flat', group: null, threads }] : []
+      return threads.length > 0 ? [{ key: 'flat', group: null, folded: false, threads }] : []
     }
     return threadGroups
       .filter((group) => threadGroupingState.isVisible(group.label))
       .map((group) => ({
         key: `group:${group.label}`,
         group,
+        folded: threadGroupingState.isFolded(group.label),
         // A folded group keeps its heading and drops its rows   except the thread
         // the user is on: the group holding the active thread stays temporarily
         // open by that one row, so folding can never take the thread being worked
@@ -541,6 +545,48 @@
           ? foldedSectionRows(group.threads, activeThreadId)
           : group.threads
       }))
+  })
+
+  /**
+   * The sections as they are drawn: the expanded groups in the user's order
+   * first, then every folded group, also in that order, against the end of the
+   * list.
+   *
+   * This is where a folded group belongs. Left in place, folding the group above
+   * the one being read left its heading in the middle of the list with the
+   * expanded rows it continues passing underneath it, and it read as a stray
+   * entry rather than a group the reader put away. Sunk to the end, the folded
+   * groups queue up together before the panel's own controls, and the group the
+   * reader is actually working in owns the top of the list with its rows. Doing
+   * it the other way round   floating a folded group above its expanded
+   * neighbours   is what would make the order look arranged: the statuses keep
+   * exactly the order the user gave them, folding only decides which side of the
+   * expanded block a group lands on.
+   */
+  const drawnThreadSections = $derived.by((): ThreadSection[] => {
+    if (threadSections.length < 2) return threadSections
+    const expanded: ThreadSection[] = []
+    const folded: ThreadSection[] = []
+    for (const section of threadSections) {
+      if (section.folded) folded.push(section)
+      else expanded.push(section)
+    }
+    return [...expanded, ...folded]
+  })
+
+  /**
+   * Position of the last section whose rows are on screen, or -1 when every
+   * group is folded.
+   *
+   * The older-history control continues the drawn rows, so it ends the last
+   * expanded group rather than the list: under a folded heading it would read as
+   * that heading's own affordance, which is what moved it here.
+   */
+  const lastOpenSectionIndex = $derived.by((): number => {
+    for (let index = drawnThreadSections.length - 1; index >= 0; index -= 1) {
+      if (!drawnThreadSections[index].folded) return index
+    }
+    return -1
   })
 
   /**
@@ -573,7 +619,7 @@
    */
   const threadRowArrangement = $derived(
     rowArrangement(
-      threadSections.map((section) => ({
+      drawnThreadSections.map((section) => ({
         key: section.key,
         rowKeys: section.threads.map((thread) => thread.id)
       }))
@@ -1170,7 +1216,7 @@
              in a different list and travels with the reflow pair above instead
              of Svelte's FLIP. -->
       <div bind:this={threadsListElement}>
-        {#each threadSections as section, sectionIndex (section.key)}
+        {#each drawnThreadSections as section, sectionIndex (section.key)}
           <!-- The section spans the heading and its rows, so `position: sticky`
                  keeps the heading put while its own rows pass underneath and the
                  next section pushes it out as that section reaches the top. Three
@@ -1221,19 +1267,16 @@
                 TIMELINE_PAGE_SIZE
               )}
           <!-- Older history is the tail of this list, so its control belongs to
-               the last section, inside the fold that holds the tail's rows. Left
-               as a sibling of the sections it floated under a folded group with
-               no visible tie to it; nested here it reads as the section's own
-               ending and folds away with the group it continues. A folded last
-               section therefore shows no control at all: the rows it would
-               continue are not on screen, and the button under a folded heading
-               read as a way to open that heading instead. -->
-          {@const isLastSection = sectionIndex === threadSections.length - 1}
-          {@const lastSectionExpanded = section.group
-            ? !threadGroupingState.isFolded(section.group.label)
-            : true}
-          {@const showLoadOlder =
-            isLastSection && lastSectionExpanded && !searchPanelActive && hasMoreHistory}
+               the last section whose rows are drawn, inside the fold that holds
+               the tail's rows. Left as a sibling of the sections it floated
+               under a folded group with no visible tie to it; nested here it
+               reads as the section's own ending and folds away with the group it
+               continues. The groups folded below it are headings on their way to
+               the end of the list, so the control ends the drawn rows instead of
+               the list. -->
+          {@const isLastSection = sectionIndex === drawnThreadSections.length - 1}
+          {@const isLastOpenSection = sectionIndex === lastOpenSectionIndex}
+          {@const showLoadOlder = isLastOpenSection && !searchPanelActive && hasMoreHistory}
           <section>
             {#if section.group}
               {@const group = section.group}
