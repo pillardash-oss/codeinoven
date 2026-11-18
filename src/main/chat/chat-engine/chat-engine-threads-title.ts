@@ -371,7 +371,10 @@ export class ChatEngineThreadsTitle {
     thread: Thread,
     workers: readonly HandedOffWorker[]
   ): Promise<void> {
-    if (workers.length === 0 || !thread.sessionId) return
+    // The live roster is read even when the release carried nothing: a worker
+    // that was still running has no persisted card, which is exactly the case
+    // this fallback exists for.
+    if (!thread.sessionId) return
     const resumable: HandoffWorkerSession[] = []
     for (const worker of workers) {
       if (worker.kind !== 'nested' || !worker.sessionFile) continue
@@ -390,6 +393,11 @@ export class ChatEngineThreadsTitle {
       // the shared storage root both instances read.
       resumable.push(...(await this.liveWorkerRoster(thread.sessionId)))
     }
+    Logger.info('Handed-off worker roster', {
+      projectId: thread.projectId,
+      threadId: thread.id,
+      workers: resumable.length
+    })
     if (resumable.length === 0) return
     try {
       const driverId =
@@ -563,6 +571,12 @@ export class ChatEngineThreadsTitle {
       pawnThreadIds.push(pawn.id)
     }
     if (pawnThreadIds.length > 0) instanceRegistry.publishTurnActivity()
+    Logger.info('Transfer release read its worker roster', {
+      projectId,
+      threadId,
+      workers: workers.length,
+      pawns: pawnThreadIds.length
+    })
     return {
       released: true,
       ...(workers.length > 0 ? { workers } : {}),
