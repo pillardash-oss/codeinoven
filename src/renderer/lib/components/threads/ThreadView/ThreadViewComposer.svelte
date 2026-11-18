@@ -83,6 +83,39 @@
   })
 </script>
 
+<!-- One queued-message card, rendered in two places: over the bottom chrome in
+     every layout, and inside the composer's own column in the centered one. -->
+{#snippet queuedMessageCard()}
+  <ComposerQueuedCard
+    text={board.steerQueuedMessage.queuedMessage}
+    hasContent={board.steerQueuedMessage.queuedHasContent}
+    attachments={board.steerQueuedMessage.queuedAttachments}
+    previewUrls={board.studioTemporaryChatContext.attachmentPreview.urls}
+    count={board.unmirroredTraceStartTime.queuedCount}
+    next={board.unmirroredTraceStartTime.queuedNextMessages}
+    promptReferences={board.steerQueuedMessage.queuedPromptReferences}
+    presentation={board.steerQueuedMessage.queuedPresentation}
+    startAfterThreads={board.steerQueuedMessage.queuedStartAfterThreads}
+    resourceWait={queuedResourceWait.for(
+      board.handleAgentEvent.thread.projectId,
+      board.handleAgentEvent.thread.id
+    )}
+    steerModifierLabel={board.state.steerModifierLabel}
+    threadId={board.handleAgentEvent.thread.id}
+    stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}
+    onPreviewAttachment={board.studioTemporaryChatContext.openQueuedAttachment}
+    onSteer={() => void board.steerQueuedMessage.steerQueuedMessage()}
+    onEdit={board.steerQueuedMessage.editQueuedMessage}
+    onDelete={board.unmirroredTraceStartTime.deleteQueuedMessage}
+    onDeleteAll={board.steerQueuedMessage.deleteAllQueuedMessages}
+    onAddStartAfter={() => (board.state.queuedStartAfterPickerOpen = true)}
+    onRemoveStartAfter={(dependency) =>
+      (board.steerQueuedMessage.queuedStartAfterPendingRemoval = dependency)}
+    onOpenStartAfter={(id) => void board.unmirroredTraceStartTime.openStartAfterThread(id)}
+    onPreloadStartAfter={board.unmirroredTraceStartTime.preloadStartAfterThread}
+  />
+{/snippet}
+
 <!-- The bottom chrome takes the composer's own rung (z-40). A card here answers
      for the conversation below it, so it paints over what the transcript draws
      across this band, including the comment bubbles pinned to annotated
@@ -333,38 +366,18 @@
        way it closes, on the slot rather than the card: the space grows out of the
        composer's edge (`cardArrive`) exactly as the card's own dismissal collapses
        it, so parking a message never snaps the transcript up by a card's height.
-       The head names what waits, and Send now (the steer key) is a head control. -->
-    {#if board.steerQueuedMessage.queuedCardVisible}
+       The head names what waits, and Send now (the steer key) is a head control.
+
+       The centered composer is the one state where this block is not the card's
+       home: there the hero heading sits between the composer and anything stacked
+       over the bottom chrome, so a card parked here would float above the title
+       instead of on the composer it belongs to. The centered card therefore
+       renders inside the composer's own column, at the composer's width, right
+       above the slot it is attached to. -->
+    {#if board.steerQueuedMessage.queuedCardVisible && !board.composerScope.centeredComposer}
       <div class="conversation-gutter shrink-0 px-6" in:slide={cardArrive()}>
         <div class="mx-auto max-w-3xl">
-          <ComposerQueuedCard
-            text={board.steerQueuedMessage.queuedMessage}
-            hasContent={board.steerQueuedMessage.queuedHasContent}
-            attachments={board.steerQueuedMessage.queuedAttachments}
-            previewUrls={board.studioTemporaryChatContext.attachmentPreview.urls}
-            count={board.unmirroredTraceStartTime.queuedCount}
-            next={board.unmirroredTraceStartTime.queuedNextMessages}
-            promptReferences={board.steerQueuedMessage.queuedPromptReferences}
-            presentation={board.steerQueuedMessage.queuedPresentation}
-            startAfterThreads={board.steerQueuedMessage.queuedStartAfterThreads}
-            resourceWait={queuedResourceWait.for(
-              board.handleAgentEvent.thread.projectId,
-              board.handleAgentEvent.thread.id
-            )}
-            steerModifierLabel={board.state.steerModifierLabel}
-            threadId={board.handleAgentEvent.thread.id}
-            stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}
-            onPreviewAttachment={board.studioTemporaryChatContext.openQueuedAttachment}
-            onSteer={() => void board.steerQueuedMessage.steerQueuedMessage()}
-            onEdit={board.steerQueuedMessage.editQueuedMessage}
-            onDelete={board.unmirroredTraceStartTime.deleteQueuedMessage}
-            onDeleteAll={board.steerQueuedMessage.deleteAllQueuedMessages}
-            onAddStartAfter={() => (board.state.queuedStartAfterPickerOpen = true)}
-            onRemoveStartAfter={(dependency) =>
-              (board.steerQueuedMessage.queuedStartAfterPendingRemoval = dependency)}
-            onOpenStartAfter={(id) => void board.unmirroredTraceStartTime.openStartAfterThread(id)}
-            onPreloadStartAfter={board.unmirroredTraceStartTime.preloadStartAfterThread}
-          />
+          {@render queuedMessageCard()}
         </div>
       </div>
     {/if}
@@ -971,6 +984,15 @@
                     board.composerScope.visibleTodo?.signature ?? ''
                   )}
               />
+            {/if}
+            <!-- The centered composer's queued card: on the composer's own top edge,
+                 at the composer's width, under the hero heading rather than above
+                 it. Everything below this point is the composer slot the card is
+                 attached to. -->
+            {#if board.composerScope.centeredComposer && board.steerQueuedMessage.queuedCardVisible}
+              <div class="w-full" in:slide={cardArrive()}>
+                {@render queuedMessageCard()}
+              </div>
             {/if}
             {#if board.composerScope.foreignRunActive}
               <ForeignRunCard
