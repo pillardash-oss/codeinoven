@@ -33,6 +33,7 @@ import { type UtilitySuggestionResolution } from '../../lib/utility-suggestion'
 import type { AgentMcpSignInResolution } from '../../lib/mcp-sign-in'
 import type { McpOAuthService } from './mcp-oauth/mcp-oauth-service'
 import { buildUtilityOrchestrationServiceUnits } from './utility-orchestration-service/utility-orchestration-service-units'
+import type { ThreadSearchOptions } from '../database/repositories/thread-repo'
 
 export const CUA_UTILITY_ID = 'cio:cua-driver'
 
@@ -635,9 +636,11 @@ export class UtilityOrchestrationService {
    * is how an agent reaches the user's other conversations: keyword and semantic
    * matching over titles and content, bounded by the caller's own timeout.
    */
-  threadSearch: ((query: string) => Promise<ThreadSearchResult[]>) | null = null
+  threadSearch:
+    ((query: string, options: ThreadSearchOptions) => Promise<ThreadSearchResult[]>) | null = null
   setThreadSearchProvider(
-    provider: ((query: string) => Promise<ThreadSearchResult[]>) | null
+    provider:
+      ((query: string, options: ThreadSearchOptions) => Promise<ThreadSearchResult[]>) | null
   ): void {
     return this.units['capability-invoke'].setThreadSearchProvider(provider)
   }

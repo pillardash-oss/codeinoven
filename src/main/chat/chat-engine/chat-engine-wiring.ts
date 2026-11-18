@@ -187,11 +187,12 @@ export function wireChatEngine(
     )
     // The diagnostics tool is the one app capability every turn carries, so the
     // hybrid thread search hangs off it: an agent gathering context searches the
-    // user's conversation history by meaning, not only by the words it guessed.
-    engine.state.utilityOrchestration.setThreadSearchProvider(async (query) => {
+    // user's conversation history by meaning, not only by the words it guessed,
+    // and narrows the read to one project, scope, or assistant when it knows the id.
+    engine.state.utilityOrchestration.setThreadSearchProvider(async (query, options) => {
       const { results } = await engine.threadManager.searchThreadsWithIntent(
         query,
-        { limit: 20 },
+        { ...options, limit: 20 },
         12_000
       )
       return results

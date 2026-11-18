@@ -69,8 +69,16 @@ Diagnostics role - ${UTILITY_DIAGNOSTICS_TOOL_NAME} actions:
 - read_messages: {"action":"read_messages","thread_id":"<id>","limit":40}
   Returns a bounded, redacted page of the thread's mirrored conversation,
   newest page first, oldest-to-newest order.
-- search_threads: {"action":"search_threads","query":"<title substring>"}
-  Lists up to 20 matching threads across all projects.
+- search_threads: {"action":"search_threads","query":"<what the conversation was about>"}
+  Ranks up to 20 matching threads by keyword and by meaning and includes the
+  matching passages. Narrow it whenever the work belongs to one container:
+  add "project_id", "scope_id" (a sidebar scope bucket), "assistant_id", or
+  "family" ("projects", "chats", or "assistant"). Those ids are exactly what
+  list_groups returns, so never guess one.
+- list_groups: {"action":"list_groups"} or {"action":"list_groups","project_id":"<id>"}
+  Lists every project with its scope buckets and every assistant, each with its
+  id and thread count. This is the lookup for the narrowing ids search_threads
+  takes: project_id, scope_id, and assistant_id.
 - read_log: {"action":"read_log","file":"logs/error.log","level":"error","limit":100}
   Logs are split into one folder per local day. A bare file name reads today's
   folder (logs/<YYYY-MM-DD>/<file>); pass the day explicitly to read an earlier
@@ -92,10 +100,10 @@ Diagnostics role - ${UTILITY_DIAGNOSTICS_TOOL_NAME} actions:
   know the schema, always filter with WHERE, and prefer a narrow projection
   over SELECT *. Use params for values instead of string interpolation.
 
-Prefer the structured actions (lookup_thread, search_threads, read_messages,
-read_log) first; reach for list_schema and query_sql only when they cannot
-answer the question. Never use them to change data - a rejected write means
-report the need to the user instead of retrying with different SQL.
+Prefer the structured actions (lookup_thread, search_threads, list_groups,
+read_messages, read_log) first; reach for list_schema and query_sql only when
+they cannot answer the question. Never use them to change data - a rejected
+write means report the need to the user instead of retrying with different SQL.
 
 Diagnostics are read-only and cross-project. Do not attempt to modify, delete,
 or reconfigure anything through them.
@@ -204,7 +212,7 @@ Install defaults, which you follow unless the user asks otherwise:
 export const CIO_UTILITY_REUSE_PROMPT = `CodeInOven utility contract (reuse)
 
 The user invoked @cio-utility earlier in this thread; the contract stays active for reuse without repeating the setup briefing:
-- ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only app debugging: lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql) is available on every turn and never modifies app data; it does not depend on this invocation.
+- ${UTILITY_DIAGNOSTICS_TOOL_NAME} (read-only app debugging: lookup_thread, search_threads, list_groups, read_messages, read_log, list_schema, query_sql) is available on every turn and never modifies app data; it does not depend on this invocation.
 - ${UTILITY_MANAGE_TOOL_NAME} (action install_bundle) is reserved for turns where the user explicitly asks to install a utility; definitions must stay secret-free. When a capability needs a secret, collect it with ${ASK_SECRET_TOOL_NAME} instead of asking the user to paste it in chat.
 - Utilities activated earlier in this thread are registered in the thread utilities bank: invoke them directly with ${UTILITY_INVOKE_TOOL_NAME} by id (no re-activation), and re-list capability docs after compaction with ${UTILITY_DOCS_TOOL_NAME} (accepts only the utility id).
 - Install defaults stay as briefed: global scope and the single all-harness binding for both kinds (omit harnessBindings), and an MCP server always "on_demand" behind the utility gateway (never a native harness entry).

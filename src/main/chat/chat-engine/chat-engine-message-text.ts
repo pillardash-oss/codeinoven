@@ -356,7 +356,7 @@ export function formatHistoryRecap(
 const HANDOFF_QUERY_GUIDE = [
   'Everything older than the recent tail is still in the app database, so query it instead of guessing or redoing the work:',
   '- cio_util_diagnose {"action":"read_messages","thread_id":"<the thread id above>","limit":40} returns a bounded page of this thread conversation, newest page first.',
-  '- cio_util_diagnose {"action":"search_threads","query":"<what you need>"} ranks every thread by keyword and by meaning and returns the matching passages, which is how you find where an earlier step stopped and what was already tried or verified.',
+  '- cio_util_diagnose {"action":"search_threads","query":"<what you need>"} ranks every thread by keyword and by meaning and returns the matching passages, which is how you find where an earlier step stopped and what was already tried or verified. Add project_id, scope_id or assistant_id to keep it inside this work, and {"action":"list_groups"} returns those ids.',
   '- cio_util_diagnose {"action":"read_log"} reads recent app logs, {"action":"list_schema"} lists the app database schema, and {"action":"query_sql"} runs a read-only SELECT.',
   'Those tools only read. Use them whenever a decision depends on what happened earlier: a command already run, a file already changed, an error already seen, a preference already stated.'
 ].join('\n')
