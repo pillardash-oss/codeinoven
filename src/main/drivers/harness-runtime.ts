@@ -504,6 +504,16 @@ export async function discoverHarnessRuntimes(
       result.set(command, cached.value)
       continue
     }
+    // Pi is the app's own engine: the bundled runtime IS CIO Pi, so it wins over
+    // whatever `pi` happens to sit on PATH. A build without the bundled entry
+    // still falls back to the native install below, and the harness page keeps
+    // showing it as bundled Pi.
+    const bundled = command === 'pi' ? bundledPiRuntime(command) : null
+    if (bundled) {
+      runtimeCache.set(key, { value: bundled, checkedAt: Date.now() })
+      result.set(command, bundled)
+      continue
+    }
     const native = preferredDistribution ? null : await nativeRuntime(command, env)
     if (native) result.set(command, native)
     else missing.push(command)
