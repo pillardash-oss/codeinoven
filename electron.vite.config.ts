@@ -301,7 +301,10 @@ export default defineConfig(({ mode }) => {
             'sharp'
           ],
           input: {
-            index: resolve(__dirname, 'src/main/entry.ts')
+            index: resolve(__dirname, 'src/main/entry.ts'),
+            // The CIO Pi host runs as its own utility process, so it is its own
+            // entry beside the main bundle rather than part of it.
+            'pi-session-host': resolve(__dirname, 'src/main/drivers/pi/session-host/entry.ts')
           },
           output: {
             format: 'es',
