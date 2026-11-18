@@ -95,10 +95,13 @@ describe('createHostUiContext', () => {
     })
   })
 
-  it('throws instead of faking an interactive theme', () => {
+  it('offers a named headless theme and no interactive surface', () => {
     const { context } = harness()
-    expect(() => context.theme).toThrow(/no interactive theme/)
+    // The runner spreads the UI context when it binds extensions, so a theme has
+    // to exist even though a hosted session never renders one.
+    expect(context.theme.name).toBe('cio-host')
     expect(context.getToolsExpanded()).toBe(false)
     expect(context.getAllThemes()).toEqual([])
+    expect(context.getEditorText()).toBe('')
   })
 })
