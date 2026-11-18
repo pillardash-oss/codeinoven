@@ -29,8 +29,6 @@ export class WorkspaceBrowserController {
   private readonly getSelectedThreadId: () => string | null
   private readonly closeThreadBrowser: () => void
 
-  /** Whether the message-history jump menu's browser context menu is open. */
-  menuOpen = $state(false)
   clearDataConfirmOpen = $state(false)
   clearDataProjectId = $state<string | null>(null)
   clearing = $state(false)
@@ -50,7 +48,6 @@ export class WorkspaceBrowserController {
    * pages: destroying the views is what gives the renderer processes back.
    */
   async closeAllTabs(): Promise<void> {
-    this.menuOpen = false
     const projectId = this.getSelectedProjectId()
     const threadId = this.getSelectedThreadId()
     if (!projectId || !threadId) return
@@ -71,7 +68,6 @@ export class WorkspaceBrowserController {
 
   /** Close every tab and put the thread browser away for this thread. */
   async closeBrowser(): Promise<void> {
-    this.menuOpen = false
     const projectId = this.getSelectedProjectId()
     const threadId = this.getSelectedThreadId()
     if (projectId && threadId) {
@@ -177,19 +173,33 @@ export class WorkspaceBrowserController {
     }
   }
 
-  openContextMenu(event: MouseEvent): void {
+  /** Show the rail's native menu above the thread browser page. */
+  async openContextMenu(event: MouseEvent): Promise<void> {
     event.preventDefault()
-    this.menuOpen = true
-  }
-
-  closeMenu(): void {
-    this.menuOpen = false
+    try {
+      const choice = await invoke('browser:railContextMenu', event.clientX, event.clientY)
+      if (!choice) return
+      switch (choice.action) {
+        case 'closeAllTabs':
+          await this.closeAllTabs()
+          return
+        case 'closeBrowser':
+          await this.closeBrowser()
+          return
+        case 'downloads':
+          this.openDownloads()
+          return
+        case 'clearData':
+          this.requestDataClear()
+      }
+    } catch (error: unknown) {
+      reportError(error, 'The browser menu could not be opened.')
+    }
   }
 
   requestDataClear(): void {
     const projectId = this.getSelectedProjectId()
     if (!projectId) return
-    this.menuOpen = false
     this.clearDataProjectId = projectId
     this.clearDataConfirmOpen = true
   }
@@ -216,7 +226,6 @@ export class WorkspaceBrowserController {
   }
 
   openDownloads(): void {
-    this.menuOpen = false
     this.downloadsOpen = true
     const projectId = this.getSelectedProjectId()
     if (!projectId) return

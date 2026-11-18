@@ -38,6 +38,7 @@ import type {
 } from './browser'
 import type { Contract } from './contract-helpers'
 import type { BrowserSearchEngine } from '../browser-search-engines'
+import type { BrowserRailContextMenuChoice } from '../browser/browser-rail-context-menu'
 import type {
   BrowserTabContextMenuChoice,
   BrowserTabContextMenuInput
@@ -635,6 +636,18 @@ export const invokeBrowserContract = {
   'browser:boxMenu': {} as Contract<
     [input: BrowserBoxMenuInput, x: number, y: number],
     BrowserBoxMenuChoice | null
+  >,
+  /**
+   * Open the thread browser rail icon's native menu, anchored at the given
+   * point (window-content coordinates in density-independent pixels).
+   *
+   * The rail is beside a native page, so an OS popup is the only surface that
+   * can paint over it without tearing the page down. The reply names the action
+   * the user picked, or null when the menu was dismissed.
+   */
+  'browser:railContextMenu': {} as Contract<
+    [x: number, y: number],
+    BrowserRailContextMenuChoice | null
   >,
   /** Open the native context menu for a multi-tab selection. */
   'browser:tabSelectionMenu': {} as Contract<

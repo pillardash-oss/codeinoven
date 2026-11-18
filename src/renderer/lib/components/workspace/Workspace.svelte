@@ -525,15 +525,13 @@
           board.switcherPanelTabs.browser.unfinishedDownloadCount > 0
             ? String(board.switcherPanelTabs.browser.unfinishedDownloadCount)
             : undefined,
-        menu: board.switcherPanelTabs.browser.menuOpen ? browserMenu : undefined,
-        onSelect: () => {
-          board.switcherPanelTabs.browser.menuOpen = false
-          board.switcherPanelTabs.toggleDockPanel('browser', board.state.focusBrowser)
-        },
+        onSelect: () =>
+          board.switcherPanelTabs.toggleDockPanel('browser', board.state.focusBrowser),
         // Wrapped rather than passed by reference: the controller's handler reads
         // `this`, and the dock calls whatever it was given without a receiver, so a
         // bare method reference threw before it could open the menu.
-        onContextMenu: (event: MouseEvent) => board.switcherPanelTabs.browser.openContextMenu(event)
+        onContextMenu: (event: MouseEvent) =>
+          void board.switcherPanelTabs.browser.openContextMenu(event)
       })
     }
 
@@ -954,12 +952,6 @@
     onClose={() => (board.jumpToHistoryMessage.showHistoryMenu = false)}
     onSelect={board.jumpToHistoryMessage.jumpToHistoryMessage}
   />
-{/snippet}
-
-{#snippet browserMenu()}
-  {#await loadCachedPanelModule('module:lib/components/workspace/WorkspaceBrowserMenu.svelte', () => import('./WorkspaceBrowserMenu.svelte')) then { default: WorkspaceBrowserMenu }}
-    <WorkspaceBrowserMenu browser={board.switcherPanelTabs.browser} />
-  {/await}
 {/snippet}
 
 <!-- The Changes rail item's hover preview: the current change set's line totals

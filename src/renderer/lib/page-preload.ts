@@ -110,7 +110,6 @@ export function preloadBrowserChunk(): void {
     import('$lib/components/layout/AppHeaderBrowserCenter.svelte'),
     import('$lib/components/threads/SwitcherBrowserRow.svelte'),
     import('$lib/components/workspace/WorkspaceFullscreenBrowser.svelte'),
-    import('$lib/components/workspace/WorkspaceBrowserMenu.svelte'),
     import('$lib/components/workspace/WorkspaceBrowserDataModal.svelte'),
     import('$lib/components/workspace/WorkspaceBrowserDownloadsModal.svelte')
   ]).catch((error: unknown) => {
