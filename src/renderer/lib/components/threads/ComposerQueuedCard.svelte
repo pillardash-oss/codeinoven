@@ -14,7 +14,7 @@
   import CardTag from '../shared/CardTag.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import type { StartAfterThreadReference } from '$lib/stores/renderer-recovery'
-  import type { AdmissionDecision } from '$shared/resource-admission'
+  import { CPU_AVAILABLE_FLOOR_PERCENT, type AdmissionDecision } from '$shared/resource-admission'
   import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
   import type { PromptAttachment, UserMessagePresentation } from '$shared/types'
 
@@ -254,12 +254,13 @@ the head's menu. -->
       {#if resourceWait}
         <div class="border border-warning/40 bg-warning/10 px-2 py-1.5">
           <p class="text-[0.75rem] text-foreground">
-            Thread will start as soon as there is enough resource for it.
+            Resumes when free CPU &gt; {formatPercent(CPU_AVAILABLE_FLOOR_PERCENT)} and free RAM &gt;
+            {formatMemory(resourceWait.memoryFloorBytes)}.
           </p>
           <p class="pt-1 text-[0.6875rem] text-muted">
-            CPU {formatPercent(resourceWait.cpuAvailablePercent)} free · Memory {formatMemory(
+            Now {formatPercent(resourceWait.cpuAvailablePercent)} CPU free · {formatMemory(
               resourceWait.memoryAvailableBytes
-            )} free
+            )} RAM free
           </p>
         </div>
       {/if}
