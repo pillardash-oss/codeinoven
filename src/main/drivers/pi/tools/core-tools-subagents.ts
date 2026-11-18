@@ -914,6 +914,12 @@ export function piCoreToolsSubagentSource(): string {
     async function gate(toolName, params, skipSensitive = false) {
       const cuaBypass = unmanagedCuaShellReason(toolName, recordValue(params) ?? {})
       if (cuaBypass) return cuaBypass
+      // The process-lifecycle invariant holds for workers too. A sub-agent that
+      // could run pkill, a port-kill one-liner or a child script would take down
+      // a server this session never started, so the same block applies here. It
+      // is never a permission card: Full Access would auto-approve it.
+      const processKillBypass = unmanagedProcessKillReason(toolName, recordValue(params) ?? {})
+      if (processKillBypass) return processKillBypass
       if (['bash', 'powershell', 'cmd'].includes(toolName) && recordValue(params) && typeof params['command'] === 'string') {
         const workspaceWide = params['command']
           .split(/&&|;|\\|\\||\\|/u)
