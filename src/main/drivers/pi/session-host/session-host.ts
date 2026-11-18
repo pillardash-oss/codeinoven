@@ -189,6 +189,7 @@ export class PiSessionHost {
       services,
       sessionManager,
       ...(model === undefined ? {} : { model }),
+      ...(command.thinkingLevel === undefined ? {} : { thinkingLevel: command.thinkingLevel }),
       ...(command.tools === undefined ? {} : { tools: [...command.tools] })
     })
     const unsubscribe = created.session.subscribe((event) => {

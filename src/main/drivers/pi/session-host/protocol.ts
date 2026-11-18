@@ -18,6 +18,19 @@ export interface HostImageContent {
   mimeType: string
 }
 
+/** Reasoning effort a session starts on. Kept local so the protocol stays self-contained. */
+export type HostThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+const HOST_THINKING_LEVELS: readonly HostThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max'
+]
+
 /** Create a new session, or resume one from an existing native transcript. */
 export interface HostCreateSessionCommand {
   type: 'create_session'
@@ -33,6 +46,8 @@ export interface HostCreateSessionCommand {
   tools?: string[]
   /** Initial model, resolved against the session's own model runtime. */
   model?: { provider: string; id: string }
+  /** Initial reasoning effort, resolved against the session's own model runtime. */
+  thinkingLevel?: HostThinkingLevel
 }
 
 export type HostCommand =
@@ -147,6 +162,12 @@ function modelField(
   return { provider, id }
 }
 
+function thinkingLevelField(record: Record<string, unknown>): HostThinkingLevel | undefined {
+  const value = record['thinkingLevel']
+  if (typeof value !== 'string') return undefined
+  return HOST_THINKING_LEVELS.find((level) => level === value)
+}
+
 /** Validate and narrow one parsed command object. */
 function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
   const type = value['type']
@@ -159,6 +180,7 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
       const sessionPath = stringField(value, 'sessionPath')
       const tools = stringArrayField(value, 'tools')
       const model = modelField(value, 'model')
+      const thinkingLevel = thinkingLevelField(value)
       return {
         type,
         cwd,
@@ -166,7 +188,8 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
         ...(extensionPaths === undefined ? {} : { extensionPaths }),
         ...(sessionPath === undefined ? {} : { sessionPath }),
         ...(tools === undefined ? {} : { tools }),
-        ...(model === undefined ? {} : { model })
+        ...(model === undefined ? {} : { model }),
+        ...(thinkingLevel === undefined ? {} : { thinkingLevel })
       }
     }
     case 'prompt':
