@@ -41,7 +41,7 @@ export class WorkspaceBrowserController {
   }
 
   /**
-   * Close every tab the conversation's browser owns, then leave one blank page
+   * Close every tab the conversation's browser shows, then leave one blank page
    * so the address bar still has somewhere to navigate.
    *
    * This is the rail menu's escape hatch for a browser that has accumulated
@@ -52,7 +52,7 @@ export class WorkspaceBrowserController {
     const threadId = this.getSelectedThreadId()
     if (!projectId || !threadId) return
     try {
-      await contextSidebarState.closeBrowserTabsForThread(projectId, threadId)
+      await contextSidebarState.closeActiveBrowserTabs()
       const blank = contextSidebarState.openBrowserForContext(
         '',
         projectId,
@@ -72,7 +72,7 @@ export class WorkspaceBrowserController {
     const threadId = this.getSelectedThreadId()
     if (projectId && threadId) {
       try {
-        await contextSidebarState.closeBrowserTabsForThread(projectId, threadId)
+        await contextSidebarState.closeActiveBrowserTabs()
       } catch (error: unknown) {
         reportError(error, 'The thread browser could not be closed.')
       }
