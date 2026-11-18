@@ -11,6 +11,7 @@ import {
   agentFieldValueScript,
   agentFocusScript,
   agentHitTestScript,
+  agentQueryScript,
   agentScrollScript,
   agentSelectScript,
   agentPrepareTypingScript,
@@ -19,7 +20,8 @@ import {
   agentListboxOptionsScript,
   agentWaitScript,
   AGENT_REF_ATTRIBUTE,
-  BROWSER_WAIT_MAX_TIMEOUT_MS
+  BROWSER_WAIT_MAX_TIMEOUT_MS,
+  MAX_TEXT_CHARS
 } from './browser-agent-page'
 import {
   agentCount,
@@ -66,6 +68,14 @@ import {
 const MAX_FRAME_ELEMENTS = 120
 /** Characters of an embedded document's text a snapshot reports. */
 const MAX_FRAME_TEXT = 4000
+/** Steps one `run` may carry, so one call is a flow and not a whole program. */
+const MAX_RUN_STEPS = 40
+/** Fields one query may read from an element, so no answer becomes a dump. */
+const MAX_QUERY_FIELDS = 24
+/** Characters one property path or style name a query accepts. */
+const MAX_QUERY_FIELD_CHARS = 200
+/** Characters of markup one query may return for an element. */
+const MAX_QUERY_HTML_CHARS = 8000
 /** Times a combobox is read while its list fills, and the pause between reads. */
 const COMBOBOX_POLL_ATTEMPTS = 12
 const COMBOBOX_POLL_INTERVAL_MS = 250
@@ -172,6 +182,14 @@ export class BrowserServiceAgentUtility {
       // treats the missing level as review-required rather than full access.
       permissionLevel?: PermissionLevel
       sessionId?: string
+      /**
+       * Set on a step inside a `run`, whose whole sequence was already reviewed.
+       *
+       * A run of twelve steps must not raise twelve permission cards for one
+       * decision a person already made: the aggregate review shows every step, so
+       * the steps themselves do not ask again.
+       */
+      reviewedWithinRun?: boolean
     }
   ): Promise<unknown> {
     const projectId = validateProjectId(context.projectId)
@@ -264,6 +282,7 @@ export class BrowserServiceAgentUtility {
     }
     if (
       context.permissionLevel !== 'full_access' &&
+      !context.reviewedWithinRun &&
       ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation) &&
       operation !== 'upload'
     ) {
@@ -332,6 +351,17 @@ export class BrowserServiceAgentUtility {
     }
     if (operation === 'snapshot') {
       return { ...utilityContext, ...(await this.readSnapshot(tab, input)) }
+    }
+    if (operation === 'query') {
+      return { ...utilityContext, result: await this.readQuery(tab, input) }
+    }
+    if (operation === 'run') {
+      return this.runSteps(input, utilityContext, {
+        projectId,
+        threadId,
+        ...(context.permissionLevel ? { permissionLevel: context.permissionLevel } : {}),
+        ...(context.sessionId ? { sessionId: context.sessionId } : {})
+      })
     }
     if (operation === 'click') {
       const target = this.host.agentTarget(input, tab.view.webContents)
@@ -852,8 +882,165 @@ export class BrowserServiceAgentUtility {
           }
         : {}),
       detail:
-        'Each element carries ref (pass it as ref to act on that element), its unique CSS selector, its live value, checked state and box, so an action targets exactly what was read. Elements inside a frame carry a ref prefixed with that frame (f2r7) and work the same way; the frames list names every document that was read, with the text of each embedded one.'
+        'Each element carries ref (pass it as ref to act on that element), its unique CSS selector, its live value, checked state, accessibility state and box, so an action targets exactly what was read. Elements drawn inside a web component carry shadow: true and a selector across the boundary (host >>> inner), and the toolkit resolves them the same way. Elements inside a frame carry a ref prefixed with that frame (f2r7) and work the same way; the frames list names every document that was read, with the text of each embedded one. When the page is showing floating layers (a menu, a picker list, a dialog), they are listed with the ref of their container. query reads one element in full when this summary is not enough.'
     }
+  }
+
+  /**
+   * Read one element, or a set of them, in full.
+   *
+   * A snapshot summarises a page so an agent can see what to do next; this answers
+   * the next question, which is everything about one element: an attribute no
+   * selector names, a computed style, a property the page keeps its state in, or the
+   * accessibility description a screen reader would get. It reads through shadow
+   * roots, so a control inside a web component is describable at all.
+   */
+  private async readQuery(
+    tab: BrowserTab,
+    input: Record<string, unknown>
+  ): Promise<Record<string, unknown>> {
+    const contents = tab.view.webContents
+    const entry = this.host.agentEntry(input, contents)
+    const text = (field: string): string | undefined => {
+      const value = input[field]
+      return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
+    }
+    const report = asObject(
+      await this.host.runAgentScriptIn(
+        entry,
+        agentQueryScript({
+          ...(text('ref') ? { ref: text('ref') } : {}),
+          ...(text('selector') ? { selector: text('selector') } : {}),
+          ...(text('text') ? { text: text('text') } : {}),
+          ...(text('role') ? { role: text('role') } : {}),
+          ...(text('tag') ? { tag: text('tag') } : {}),
+          ...(text('scope') ? { scope: text('scope') } : {}),
+          pointerTargets: input['pointerTargets'] === true,
+          limit: this.host.agentBoundedNumber(input['limit'], 20, 1, 500),
+          maxText: this.host.agentBoundedNumber(input['maxText'], 500, 0, MAX_TEXT_CHARS),
+          attributes: input['attributes'] !== false,
+          properties: this.queryFields(input['properties']),
+          style: this.queryFields(input['style']),
+          accessibility: input['accessibility'] !== false,
+          allProperties: input['allProperties'] === true,
+          outerHtml: this.host.agentBoundedNumber(input['outerHtml'], 0, 0, MAX_QUERY_HTML_CHARS)
+        })
+      )
+    )
+    const result = report ?? { found: false, count: 0, elements: [] }
+    return entry.index === 0 ? result : { ...result, frame: entry.index }
+  }
+
+  /** Property paths, style names or attribute names one query may read. */
+  private queryFields(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    const fields: string[] = []
+    for (const entry of value) {
+      if (typeof entry !== 'string') continue
+      const trimmed = entry.trim()
+      if (trimmed.length === 0 || trimmed.length > MAX_QUERY_FIELD_CHARS) continue
+      if (!fields.includes(trimmed)) fields.push(trimmed)
+      if (fields.length >= MAX_QUERY_FIELDS) break
+    }
+    return fields
+  }
+
+  /**
+   * Run a whole flow in one call.
+   *
+   * One operation per round trip is what made a five field form five model steps,
+   * which is the cost this exists to remove: the steps here carry the same input the
+   * single operations take, run in order against one page, and answer with one
+   * compact result per step. A step that fails stops the run by default, because a
+   * flow that carries on after a failed click acts on a page that is not the one it
+   * was written against; `stopOnError: false` keeps going and reports each failure.
+   *
+   * Each step is one ordinary operation, so it takes the same approval path, the same
+   * real input and the same page targeting. On a page the user is on, the whole run is
+   * reviewed once with every step described, rather than asking once per click.
+   */
+  private async runSteps(
+    input: Record<string, unknown>,
+    utilityContext: Record<string, unknown>,
+    context: {
+      projectId: string
+      threadId: string
+      permissionLevel?: PermissionLevel
+      sessionId?: string
+    }
+  ): Promise<unknown> {
+    const raw = input['steps']
+    if (!Array.isArray(raw) || raw.length === 0) {
+      throw new TypeError('steps must be a list of {"op": "click", ...} operations to run in order')
+    }
+    if (raw.length > MAX_RUN_STEPS) {
+      throw new TypeError(
+        `A run carries at most ${MAX_RUN_STEPS} steps. Split the flow into two calls rather than one long one.`
+      )
+    }
+    const stopOnError = input['stopOnError'] !== false
+    const page = input['page']
+    const results: Record<string, unknown>[] = []
+    let failed = false
+    for (const [index, step] of raw.entries()) {
+      const record = asObject(step)
+      const operation = typeof record?.['op'] === 'string' ? record['op'].trim() : ''
+      if (!operation) {
+        failed = true
+        results.push({ step: index, error: 'each step needs an "op" naming the operation to run' })
+        if (stopOnError) break
+        continue
+      }
+      if (operation === 'run') {
+        failed = true
+        results.push({ step: index, op: operation, error: 'a run cannot contain another run' })
+        if (stopOnError) break
+        continue
+      }
+      const stepInput: Record<string, unknown> = { ...record }
+      delete stepInput['op']
+      // Every step stays on the page the run was pointed at, so a flow cannot drift
+      // onto another tab because one step named a different page.
+      if (page !== undefined) stepInput['page'] = page
+      try {
+        const outcome = asObject(
+          await this.executeUtility(operation, stepInput, { ...context, reviewedWithinRun: true })
+        )
+        results.push({ step: index, op: operation, ...this.stepSummary(outcome) })
+      } catch (error) {
+        failed = true
+        results.push({
+          step: index,
+          op: operation,
+          error: error instanceof Error ? error.message : String(error)
+        })
+        if (stopOnError) break
+      }
+    }
+    // The run's own tab context is the answer's context: repeating it per step would
+    // make a twelve step flow cost more tokens than the page it drove.
+    return {
+      ...utilityContext,
+      result: {
+        steps: results.length,
+        requested: raw.length,
+        failed,
+        ...(failed && stopOnError ? { stopped: true } : {})
+      },
+      steps: results
+    }
+  }
+
+  /** One step's answer, without the tab context this run already reported. */
+  private stepSummary(outcome: Record<string, unknown> | null): Record<string, unknown> {
+    if (!outcome) return {}
+    const summary: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(outcome)) {
+      if (key === 'tabId' || key === 'projectId' || key === 'threadId' || key === 'page') continue
+      if (value === undefined) continue
+      summary[key] = value
+    }
+    return summary
   }
 
   /**
@@ -988,6 +1175,30 @@ export class BrowserServiceAgentUtility {
         return 'Scroll the page.'
       case 'mouse':
         return `Move or press the pointer in the page:\n${JSON.stringify({ action: input['action'], x: input['x'], y: input['y'], selector: input['selector'], ref: input['ref'], button: input['button'] })}`
+      case 'query':
+        return `Read one element of the page in full:\n${JSON.stringify({ ref: input['ref'], selector: input['selector'], text: input['text'], properties: input['properties'], style: input['style'] })}`
+      case 'run': {
+        const steps = Array.isArray(input['steps']) ? input['steps'] : []
+        const described = steps.map((step, index) => {
+          const record =
+            typeof step === 'object' && step !== null ? (step as Record<string, unknown>) : {}
+          const op = typeof record['op'] === 'string' ? record['op'] : 'unknown'
+          const target =
+            typeof record['ref'] === 'string'
+              ? record['ref']
+              : typeof record['selector'] === 'string'
+                ? record['selector']
+                : typeof record['url'] === 'string'
+                  ? record['url']
+                  : typeof record['text'] === 'string'
+                    ? `text: ${record['text']}`
+                    : typeof record['key'] === 'string'
+                      ? `key: ${record['key']}`
+                      : ''
+          return `${index + 1}. ${op}${target ? ` ${target}` : ''}`
+        })
+        return `Run this sequence of ${String(steps.length)} actions in the page:\n${described.join('\n')}`
+      }
       case 'drag':
         return `Drag in the page:\n${JSON.stringify({ from: input['from'], to: input['to'] })}`
       case 'evaluate':

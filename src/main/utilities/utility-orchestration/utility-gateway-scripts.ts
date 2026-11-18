@@ -173,7 +173,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'snapshot',
     description:
-      'Read the page: its title, URL, visible text, scroll position, and every element you could act on, in every document the page is made of. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state and its box on screen, so you can see a form exactly as it stands before you fill it. A page renders much of its real content inside frames (a portal blade, a payment form, a chat widget), so the snapshot reads those too: their elements carry a ref prefixed with the frame (f2r7) and work with every operation exactly as a page-level ref does, and the frames list names each document that was read, with the text of every embedded one. An answer too large to show whole drops page prose and hidden elements first and says what it left out; read one frame with frame to see that document in full. The page this conversation\u2019s thread browser resolved for you is readable with page "user", and page "strip" reads whatever that browser shows now; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
+      'Read the page: its title, URL, visible text, scroll position, and every element you could act on, in every document the page is made of. Each element reports a ref (pass it back as ref), its unique CSS selector, its live value, checked state, disabled state, accessibility state and its box on screen, so you can see a form exactly as it stands before you fill it. It reads what a flat query cannot: elements drawn inside open shadow roots (web components, Fluent UI, the Azure portal and most design systems) report shadow: true with a selector across the boundary (host >>> inner) and work with every operation, and SVG icons, charts and clickable divs with no role are included. A page renders much of its real content inside frames (a portal blade, a payment form, a chat widget), so the snapshot reads those too: their elements carry a ref prefixed with the frame (f2r7) and work with every operation exactly as a page-level ref does, and the frames list names each document that was read, with the text of every embedded one. Open menus, picker lists and dialogs are listed under layers with the ref of their container, which is how a control that only exists while a layer is open is reached. An answer too large to show whole drops page prose and hidden elements first and says what it left out; read one frame with frame to see that document in full, or read one element in full with query. The page this conversation\u2019s thread browser resolved for you is readable with page "user", and page "strip" reads whatever that browser shows now; the default reads your own page. Auto Review allows recognized browsing actions and asks before consequential or unknown ones: call the operation and let the app enforce approval rather than asking the user yourself.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -182,6 +182,11 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           type: 'boolean',
           description:
             'Report only elements a person could act on (default true). Pass false to also see labels, images and canvases.'
+        },
+        pointerTargets: {
+          type: 'boolean',
+          description:
+            'Also report elements that are clickable only because they draw a pointer, such as a chart point, an SVG group or a clickable div with no role. This reads computed style for every node, so pass it when a page is driven by such elements and the ordinary read looks incomplete.'
         },
         maxElements: {
           type: 'number',
@@ -202,9 +207,143 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
     }
   },
   {
+    name: 'query',
+    description:
+      'Read one element, or a matching set of them, in full: every attribute it carries, any property by name (dotted paths allowed, such as scrollHeight or ownerDocument.title), any computed style value, its accessibility description (role, name, description, every aria state), its box, its text and its markup. Use it when a snapshot\u2019s summary is not enough, or to read something a snapshot never describes: a data attribute, a custom element\u2019s state, a layer\u2019s geometry, the reason a control looks disabled. It reads through shadow roots and settles a floating layer by naming it. Read only: it changes nothing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: REF_FIELD,
+        selector: {
+          type: 'string',
+          description:
+            'A CSS selector, including the deep selectors a snapshot reports (host >>> inner). Combine with scope to search inside one element only.'
+        },
+        text: {
+          type: 'string',
+          description: 'Report elements whose own text contains this, case-insensitively.'
+        },
+        role: {
+          type: 'string',
+          description: 'Report elements with this role, such as dialog, listbox, option or img.'
+        },
+        tag: {
+          type: 'string',
+          description: 'Report elements with this tag name, such as svg, path or custom-element.'
+        },
+        scope: {
+          type: 'string',
+          description: 'Search only inside this element, by ref or selector.'
+        },
+        frame: FRAME_FIELD,
+        limit: {
+          type: 'number',
+          description: 'Elements to report, up to 500. Defaults to 20.'
+        },
+        maxText: {
+          type: 'number',
+          description: 'Characters of each element\u2019s text, up to 40000. Defaults to 500.'
+        },
+        attributes: {
+          type: 'boolean',
+          description: 'Report every attribute (default true).'
+        },
+        properties: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Properties to read, by name; a dotted path reads into an object (ownerDocument.title). Up to 24.'
+        },
+        style: {
+          type: 'array',
+          items: { type: 'string' },
+          description:
+            'Computed style values to read, such as display, position, z-index or pointer-events. Up to 24.'
+        },
+        accessibility: {
+          type: 'boolean',
+          description:
+            'Report the accessibility description: role, name, description, every aria state, focusability (default true).'
+        },
+        allProperties: {
+          type: 'boolean',
+          description:
+            'List every property name the element exposes and the primitive values among them, for when you do not know what to ask for.'
+        },
+        pointerTargets: {
+          type: 'boolean',
+          description:
+            'With no other selector, report elements that are clickable only because they draw a pointer.'
+        },
+        outerHtml: {
+          type: 'number',
+          description:
+            'Characters of each element\u2019s markup to return, up to 8000. Defaults to none.'
+        },
+        page: PAGE_TARGET_FIELD
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    name: 'run',
+    description:
+      'Run a sequence of browser operations in one call and get one compact result per step. This is how a whole flow costs one round trip instead of one per click: steps run in order against the same page, each step is an ordinary operation with the same real input and the same approval, and a step that fails stops the run by default so nothing lands on a page that is not the one you wrote against. Reach for it whenever a flow is more than one action: fill a form, open a picker and choose an option, submit and wait for the result. Prefer this over one operation per message, which is the slowest and most expensive way to drive a page.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        steps: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 40,
+          description:
+            'Operations to run in order. Each step is {"op": "click", ...that operation\u2019s own input}, so {"op": "type", "ref": "r4", "text": "Lagos"} or {"op": "wait", "selector": "#done"}. Any operation except run may be a step, and snapshot or query as a step reads the page between actions without a second call.',
+          items: {
+            type: 'object',
+            properties: {
+              op: {
+                type: 'string',
+                enum: [
+                  'snapshot',
+                  'query',
+                  'click',
+                  'type',
+                  'press',
+                  'select',
+                  'check',
+                  'mouse',
+                  'drag',
+                  'scroll',
+                  'wait',
+                  'evaluate',
+                  'navigate',
+                  'reload',
+                  'viewport',
+                  'upload',
+                  'screenshot'
+                ],
+                description: 'The operation this step runs.'
+              }
+            },
+            required: ['op'],
+            additionalProperties: true
+          }
+        },
+        stopOnError: {
+          type: 'boolean',
+          description:
+            'Stop at the first failing step (default true). Pass false to run every step and report each failure.'
+        },
+        page: PAGE_TARGET_FIELD
+      },
+      required: ['steps'],
+      additionalProperties: false
+    }
+  },
+  {
     name: 'click',
     description:
-      'Click an element as a pointer does: a real move, press and release through the browser\u2019s input pipeline, so hover, focus, caret and pointer handlers all run. Falls back to the element\u2019s own click only when a pointer cannot reach it, and says which happened (via "pointer" or "dom"). On the thread browser\u2019s page (page "user" or "strip") the click is reviewed before it happens.',
+      'Click an element as a pointer does: a real move, press and release through the browser\u2019s input pipeline, so hover, focus, caret and pointer handlers all run. It works on anything the page drew, including SVG paths and icons and controls inside a web component\u2019s shadow root, because a click inside one lands where the pointer would and is not reported as covered by its own host. When another layer really is over the element, the pointer is moved away once so a hover card, tooltip or stray menu can clear, and the answer names what covered it; if a real pointer still cannot reach it, the element\u2019s own handler is used instead and the result says so (via "pointer" or "dom"). On the thread browser\u2019s page (page "user" or "strip") the click is reviewed before it happens.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -432,7 +571,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'evaluate',
     description:
-      'Run an expression in the page and return its value. This is the escape hatch for what the element operations do not cover: reading state a snapshot does not describe, dispatching a page\u2019s own API, or measuring layout. It reaches the page exactly as its own script would, so it is reviewed before it runs on the page the user is on.',
+      "Run an expression in the page and return its value. This is the escape hatch for what the element operations do not cover: reading state a snapshot does not describe, dispatching a page\u2019s own API, or measuring layout. The expression runs with the page toolkit on the global as __cio, so it can reach the same deep DOM layer the operations use: __cio.deep('selector') finds an element inside a shadow root, __cio.all('selector') returns every match, __cio.ref('r7') resolves a reference a snapshot reported, __cio.layers() names the floating layers on screen, __cio.describe(el) describes an element, __cio.hit(x, y) is the deep hit test and __cio.click(el) is the composed DOM click. A promise is awaited, and an element returned by the expression is reported as its selector and ref. It reaches the page exactly as its own script would, so it is reviewed before it runs on the page the user is on.",
     inputSchema: {
       type: 'object',
       properties: {

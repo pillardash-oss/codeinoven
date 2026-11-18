@@ -56,6 +56,15 @@ export function reviewBrowserAction(
   if (operation === 'viewport' || operation === 'reload' || operation === 'scroll') {
     return allow('Assistant browser presentation, reload, or scroll action.')
   }
+  if (operation === 'query') {
+    return allow('Reading one element of the page describes it and changes nothing.')
+  }
+  if (operation === 'run') {
+    // A run is several actions behind one decision, so the card has to show all of
+    // them. It is never fast-pathed: the point of the review is that a person sees
+    // the whole sequence before any of it happens.
+    return ask('This runs a sequence of actions in the page, one after another.', 'high')
+  }
   if (operation === 'mouse') {
     const action = typeof input.action === 'string' ? input.action : ''
     // Moving or hovering commits nothing: it is how a menu is opened and how a
