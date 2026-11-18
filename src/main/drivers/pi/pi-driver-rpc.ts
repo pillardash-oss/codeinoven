@@ -62,7 +62,11 @@ export interface PiRpcSessionsHost {
   materializeProvidersExtension(sessionId: string): Promise<string | null>
   providerExtensionEnv(sessionId: string): Record<string, string> | undefined
   forgetCioSession(sessionId: string): void
-  resumeNativeSession(projectPath: string, sessionId: string, client: PiSessionClient): Promise<void>
+  resumeNativeSession(
+    projectPath: string,
+    sessionId: string,
+    client: PiSessionClient
+  ): Promise<void>
   syncNativeSessionId(projectPath: string, sessionId: string): Promise<void>
   /** Start the session's turn state from its mirrored messages. */
   initializeTurnState(sessionId: string, messages: AgentMessage[]): void
@@ -216,7 +220,13 @@ export class PiRpcSessions {
     const bootstrap = this.rpcClientBootstraps.get(sessionId)
     if (bootstrap) return bootstrap
     const existing = this.rpcClients.get(sessionId)
-    if (existing) return existing
+    if (existing) {
+      // A hosted client outlives its host process unless somebody notices. A
+      // client that is no longer running settles the same way a crashed child
+      // does, so the thread leaves "working" and the next turn resumes.
+      if (existing.running) return existing
+      this.settleDeadClient(sessionId)
+    }
     const started = this.startClient(projectPath, sessionId, steps)
     this.rpcClientBootstraps.set(sessionId, started)
     try {
@@ -378,12 +388,25 @@ export class PiRpcSessions {
     ]
     let client: PiSessionClient
     if (hosted) {
+      // The session runs with exactly the environment the harness process was
+      // prepared with: the account's provider credentials and its isolated
+      // agent directory arrive through it, not through this process.
+      const sessionEnv = hostedSessionEnvironment(invocation.env)
+      const agentDirectory = sessionEnv?.['PI_CODING_AGENT_DIR']?.trim() || undefined
       const hostClient = new PiHostClient({
         supervisor: piHostSupervisor(),
         sessionId,
         cwd: projectPath,
-        agentDir: this.host.agentDirectory ?? '',
+        // An account with no agent directory names none here: the host applies
+        // Pi's own default, which is what the CLI would have done.
+        ...(agentDirectory === undefined || agentDirectory.length === 0
+          ? {}
+          : { agentDir: agentDirectory }),
         extensionPaths,
+        // A CLI child receives the account environment and the custom-provider
+        // keys. A hosted session has no child, so the same environment travels
+        // with the session and the host applies it before building services.
+        ...(sessionEnv === undefined ? {} : { sessionEnv }),
         onEvent: (record) => {
           void this.host.handleRpcEvent(record, sessionId, projectPath)
         },
@@ -574,6 +597,28 @@ export class PiRpcSessions {
     }
   }
 
+  /**
+   * Move a hosted session to a host process of its own.
+   *
+   * Only a hosted session can move: an installed Pi runs the process launched
+   * for that thread, and there is no second host to hand it to. The transcript
+   * is the state, so the target resumes it and both the app's session key and
+   * the native id stay the same.
+   */
+  async moveToNewHost(
+    sessionId: string
+  ): Promise<{ hostPid: number | null; nativeSessionId: string }> {
+    const client = this.rpcClients.get(sessionId)
+    if (client === undefined) throw new Error('No live session to move')
+    if (!(client instanceof PiHostClient)) {
+      throw new Error('Only a hosted Pi session can move to another host')
+    }
+    const supervisor = piHostSupervisor()
+    const state = await supervisor.moveToNewHost(sessionId)
+    this.touchSessionActivity(sessionId)
+    return { hostPid: supervisor.hostOf(sessionId), nativeSessionId: state.nativeSessionId }
+  }
+
   /** Drop every client and its bookkeeping (driver disposal). */
   clear(): void {
     for (const client of this.rpcClients.values()) client.dispose()
@@ -627,4 +672,26 @@ export class PiRpcSessions {
       this.disposeClient(sessionId)
     }
   }
+}
+
+/**
+ * The environment a hosted session runs with, or undefined when there is none.
+ *
+ * A harness process is launched with an environment the app composed for the
+ * session: the account's provider credentials, its isolated agent directory, and
+ * the custom-provider keys. The host has no child per session, so the same set
+ * travels with the session instead. Keys that wire a CLI child (the Electron
+ * run-as-node switch and its module search path) mean nothing to a host that is
+ * already running, so they are left behind.
+ */
+const HOST_CLI_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'NODE_PATH', 'NODE_OPTIONS'])
+
+function hostedSessionEnvironment(composed: NodeJS.ProcessEnv): Record<string, string> | undefined {
+  const sessionEnv: Record<string, string> = {}
+  for (const [name, value] of Object.entries(composed)) {
+    if (typeof value !== 'string' || value.length === 0) continue
+    if (HOST_CLI_ONLY_ENV.has(name)) continue
+    sessionEnv[name] = value
+  }
+  return Object.keys(sessionEnv).length === 0 ? undefined : sessionEnv
 }

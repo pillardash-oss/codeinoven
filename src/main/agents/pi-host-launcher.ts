@@ -7,17 +7,19 @@
  * port, because a utility process has no stdin, and it speaks the same newline
  * JSON the protocol defines.
  *
- * The entry sits beside the main bundle (`pi-session-host.js`), built from the
- * same source (`src/main/drivers/pi/session-host/entry.ts`).
+ * The entry is its own rollup input and lands at `out/main/pi-session-host.js`,
+ * beside the main bundle in dev and inside the asar in the package. It cannot
+ * be found from `__dirname` here: this module is bundled into a shared chunk
+ * under `out/main/chunks/`, so the app root is what locates the entry.
  */
-import { utilityProcess } from 'electron'
+import { app, utilityProcess } from 'electron'
 import { join } from 'node:path'
 import { Logger } from '../system/logger'
 import type { HostTransport } from './pi-host-supervisor'
 
 /** The built host entry, beside the main bundle in dev and in the package. */
 export function piHostEntryPath(): string {
-  return join(__dirname, 'pi-session-host.js')
+  return join(app.getAppPath(), 'out/main/pi-session-host.js')
 }
 
 /** One host process, spoken to as protocol lines. */

@@ -17,6 +17,7 @@
  * `.cio/work/pi-session-host/plan.md` (phase 1).
  */
 import { mkdirSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
   createAgentSessionFromServices,
@@ -43,6 +44,9 @@ import type {
 export type HostLineSink = (
   line: HostResponseEnvelope | HostEventEnvelope | HostNoticeEnvelope | HostUiRequestEnvelope
 ) => void
+
+/** Pi's own default agent directory, used when an account does not name one. */
+const DEFAULT_AGENT_DIR = join(homedir(), '.pi', 'agent')
 
 interface HostedSession {
   readonly key: string
@@ -157,8 +161,10 @@ export class PiSessionHost {
       }
       case 'get_session_stats': {
         const hosted = this.requireSession(request.sessionId)
-        const usage = hosted.session.getContextUsage()
-        respond({ contextUsage: usage ?? null })
+        // The full stats walk, not only the context usage: the app reads the
+        // cumulative cost and the token totals from the same payload, and the
+        // RPC protocol this replaces returns exactly this shape.
+        respond(hosted.session.getSessionStats())
         return
       }
       case 'get_available_models': {
@@ -180,6 +186,18 @@ export class PiSessionHost {
         const hosted = this.requireSession(request.sessionId)
         hosted.session.setThinkingLevel(command.level)
         respond(this.stateOf(hosted.key))
+        return
+      }
+      case 'set_auto_compaction': {
+        const hosted = this.requireSession(request.sessionId)
+        hosted.session.setAutoCompactionEnabled(command.enabled)
+        respond({ enabled: hosted.session.autoCompactionEnabled })
+        return
+      }
+      case 'set_auto_retry': {
+        const hosted = this.requireSession(request.sessionId)
+        hosted.session.setAutoRetryEnabled(command.enabled)
+        respond({ enabled: hosted.session.autoRetryEnabled })
         return
       }
       case 'get_commands': {
@@ -253,16 +271,32 @@ export class PiSessionHost {
   ): Promise<HostSessionState> {
     const key = this.requireSessionKey(sessionId)
     if (this.sessions.has(key)) throw new Error(`Session already exists: ${key}`)
+    // An account that has not been configured yet names no agent directory. The
+    // CLI falls back to Pi's own default there, so the host does the same rather
+    // than refusing a session that account can already run.
+    const agentDir = command.agentDir ?? DEFAULT_AGENT_DIR
+    // Provider keys ride the session rather than a child environment. They are
+    // applied to the host process before services are built, because that is
+    // the moment the model runtime and the providers extension read them.
+    if (command.sessionEnv !== undefined) {
+      for (const [name, value] of Object.entries(command.sessionEnv)) process.env[name] = value
+    }
     const services = await createAgentSessionServices({
       cwd: command.cwd,
-      agentDir: command.agentDir,
+      agentDir,
       ...(command.extensionPaths === undefined || command.extensionPaths.length === 0
         ? {}
         : { resourceLoaderOptions: { additionalExtensionPaths: [...command.extensionPaths] } })
     })
+    // An extension that failed to load is never silent: the app-owned ones carry
+    // the checkpoint policy and the tool surface, so a hosted session without
+    // them looks alive and is not. The app sees the reason and stops the turn.
+    for (const failure of services.resourceLoader.getExtensions().errors) {
+      this.notice(key, 'error', `Extension failed to load: ${failure.path}: ${failure.error}`)
+    }
     const sessionManager = command.sessionPath
       ? SessionManager.open(command.sessionPath, undefined, command.cwd)
-      : SessionManager.create(command.cwd, nativeSessionDir(command.agentDir, command.cwd))
+      : SessionManager.create(command.cwd, nativeSessionDir(agentDir, command.cwd))
     const model =
       command.model === undefined
         ? undefined
@@ -302,7 +336,7 @@ export class PiSessionHost {
       session: created.session,
       unsubscribe,
       cwd: command.cwd,
-      agentDir: command.agentDir,
+      agentDir,
       services,
       dialogs: command.dialogs === true,
       modelId: model === undefined ? null : { provider: model.provider, id: model.id },

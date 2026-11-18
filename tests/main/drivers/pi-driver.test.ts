@@ -65,6 +65,8 @@ const rpcMock = vi.hoisted(() => {
       respondToExtensionUiRequest: ReturnType<typeof vi.fn>
       dispose: ReturnType<typeof vi.fn>
       process: ChildProcess
+      /** The real client answers whether its child is still alive; this double is. */
+      running: boolean
       constructor(options: {
         onEvent?: (record: Record<string, unknown>) => void
         onUiRequest?: (record: Record<string, unknown>) => void
@@ -104,6 +106,7 @@ const rpcMock = vi.hoisted(() => {
         this.setAutoCompaction = vi.fn(async () => undefined)
         this.respondToExtensionUiRequest = vi.fn()
         this.dispose = vi.fn()
+        this.running = true
         this.process = {
           pid: 4242,
           once: vi.fn()

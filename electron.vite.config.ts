@@ -205,9 +205,13 @@ function standaloneOvenService(): Plugin {
   }
 }
 
+// `var`, not `const`: a bundled package may declare its own `__filename` or
+// `__dirname` at module scope (the bundled Pi coding agent's config does), and a
+// second `var` declaration is legal where a `const` followed by a `var` is a
+// SyntaxError that kills the whole chunk at load.
 const mainCommonJsBanner = `import { createRequire as __cioCreateRequire } from 'node:module';
-const __filename = import.meta.filename;
-const __dirname = import.meta.dirname;
+var __filename = import.meta.filename;
+var __dirname = import.meta.dirname;
 const require = __cioCreateRequire(import.meta.url);`
 
 /**
@@ -277,7 +281,14 @@ export default defineConfig(({ mode }) => {
         // The team identifier the WebAuthn keychain group is derived from. See
         // `resolveMacTeamId`; an empty value simply leaves the macOS platform
         // authenticator unarmed.
-        __CODEINOVEN_MAC_TEAM_ID__: JSON.stringify(resolveMacTeamId())
+        __CODEINOVEN_MAC_TEAM_ID__: JSON.stringify(resolveMacTeamId()),
+        // Pi's extension loader decides where its SDK specifiers resolve from
+        // this flag. This build inlines the Pi SDK, so the loader's packaged-mode
+        // alias (`<dist>/../..` -> `index.js`) points at a file that does not
+        // exist here and every extension that imports the SDK fails to load. The
+        // flag sends it to the embedded module map instead, which is the same
+        // route Pi's own compiled binary takes.
+        PI_BUNDLED_NODE: 'true'
       },
       build: {
         outDir: 'out/main',
@@ -303,7 +314,11 @@ export default defineConfig(({ mode }) => {
           input: {
             index: resolve(__dirname, 'src/main/entry.ts'),
             // The CIO Pi host runs as its own utility process, so it is its own
-            // entry beside the main bundle rather than part of it.
+            // entry beside the main bundle rather than part of it. It must stay
+            // an explicit entry: reaching it through electron-vite's
+            // `?modulePath` query builds it a second time under a chunk name
+            // (`entry-<hash>.js`) that collides with the main bundle's shared
+            // chunk, which merges the two builds into one broken file.
             'pi-session-host': resolve(__dirname, 'src/main/drivers/pi/session-host/entry.ts')
           },
           output: {

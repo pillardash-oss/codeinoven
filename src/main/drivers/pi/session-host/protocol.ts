@@ -36,8 +36,14 @@ export interface HostCreateSessionCommand {
   type: 'create_session'
   /** Working directory of the session; also selects the native session dir. */
   cwd: string
-  /** The account's Pi agent directory the session belongs to. */
-  agentDir: string
+  /**
+   * The account's Pi agent directory the session belongs to.
+   *
+   * Omitted when the account does not name one, which is an ordinary state for
+   * a not-yet-configured account. The host then uses Pi's own default
+   * (`~/.pi/agent`), exactly as the CLI would.
+   */
+  agentDir?: string
   /** Extension modules to load for this session only. */
   extensionPaths?: string[]
   /** Resume this native transcript instead of starting a fresh session. */
@@ -50,6 +56,16 @@ export interface HostCreateSessionCommand {
   thinkingLevel?: HostThinkingLevel
   /** Set for a sub-agent session: the session that spawned it. */
   parentSessionId?: string
+  /**
+   * Environment this session's extensions, model runtime and tools read.
+   *
+   * The CLI path hands the child process an environment built from the account
+   * (provider keys, an isolated agent directory) and the custom-provider keys.
+   * A hosted session has no child of its own, so that environment travels with
+   * the session instead and the host applies it before building its services.
+   * Never logged, never echoed back.
+   */
+  sessionEnv?: Record<string, string>
   /**
    * Bind the host's dialog context so extension questions reach the app.
    *
@@ -75,6 +91,10 @@ export type HostCommand =
   | { type: 'set_model'; provider: string; modelId: string }
   /** Switch the reasoning effort the session runs at. */
   | { type: 'set_thinking_level'; level: HostThinkingLevel }
+  /** Turn the SDK's automatic compaction on or off for this session. */
+  | { type: 'set_auto_compaction'; enabled: boolean }
+  /** Turn the SDK's automatic retry on or off for this session. */
+  | { type: 'set_auto_retry'; enabled: boolean }
   /** Answer a dialog the host forwarded. The host never decides for the user. */
   | { type: 'ui_response'; requestId: string; response: HostUiResponse }
   | { type: 'dispose_session' }
@@ -189,6 +209,20 @@ function stringArrayField(record: Record<string, unknown>, key: string): string[
   return items
 }
 
+function stringRecordField(
+  record: Record<string, unknown>,
+  key: string
+): Record<string, string> | undefined {
+  const value = record[key]
+  if (!isRecord(value)) return undefined
+  const entries: Record<string, string> = {}
+  for (const [name, item] of Object.entries(value)) {
+    if (typeof item !== 'string') return undefined
+    entries[name] = item
+  }
+  return entries
+}
+
 function imagesField(record: Record<string, unknown>, key: string): HostImageContent[] | undefined {
   const value = record[key]
   if (value === undefined) return undefined
@@ -235,14 +269,33 @@ function thinkingLevelField(record: Record<string, unknown>): HostThinkingLevel 
   return HOST_THINKING_LEVELS.find((level) => level === value)
 }
 
+/**
+ * The level the `set_thinking_level` command carries.
+ *
+ * The command names the field `level` because the SDK setter does; a create
+ * request names it `thinkingLevel` because that is the field of the session
+ * options. Both spellings are accepted here so a hand-written probe and the
+ * app client cannot disagree about the wire format.
+ */
+function levelField(record: Record<string, unknown>): HostThinkingLevel | undefined {
+  const value = record['level'] ?? record['thinkingLevel']
+  if (typeof value !== 'string') return undefined
+  return HOST_THINKING_LEVELS.find((level) => level === value)
+}
+
+function booleanField(record: Record<string, unknown>, key: string): boolean | undefined {
+  const value = record[key]
+  return typeof value === 'boolean' ? value : undefined
+}
+
 /** Validate and narrow one parsed command object. */
 function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
   const type = value['type']
   switch (type) {
     case 'create_session': {
       const cwd = stringField(value, 'cwd')
+      if (cwd === undefined) return null
       const agentDir = stringField(value, 'agentDir')
-      if (cwd === undefined || agentDir === undefined) return null
       const extensionPaths = stringArrayField(value, 'extensionPaths')
       const sessionPath = stringField(value, 'sessionPath')
       const tools = stringArrayField(value, 'tools')
@@ -250,10 +303,12 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
       const thinkingLevel = thinkingLevelField(value)
       const dialogs = value['dialogs'] === true
       const parentSessionId = stringField(value, 'parentSessionId')
+      const sessionEnv = stringRecordField(value, 'sessionEnv')
       return {
         type,
         cwd,
-        agentDir,
+        ...(sessionEnv === undefined ? {} : { sessionEnv }),
+        ...(agentDir === undefined ? {} : { agentDir }),
         ...(extensionPaths === undefined ? {} : { extensionPaths }),
         ...(sessionPath === undefined ? {} : { sessionPath }),
         ...(tools === undefined ? {} : { tools }),
@@ -263,9 +318,6 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
         ...(parentSessionId === undefined ? {} : { parentSessionId })
       }
     }
-    case 'get_session_stats':
-    case 'get_available_models':
-    case 'get_commands':
     case 'set_model': {
       const provider = stringField(value, 'provider')
       const modelId = stringField(value, 'modelId')
@@ -273,10 +325,20 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
       return { type, provider, modelId }
     }
     case 'set_thinking_level': {
-      const level = thinkingLevelField(value)
+      const level = levelField(value)
       if (level === undefined) return null
       return { type, level }
     }
+    case 'set_auto_compaction':
+    case 'set_auto_retry': {
+      const enabled = booleanField(value, 'enabled')
+      if (enabled === undefined) return null
+      return { type, enabled }
+    }
+    case 'get_session_stats':
+    case 'get_available_models':
+    case 'get_commands':
+      return { type }
     case 'new_session':
       return { type }
     case 'switch_session': {
@@ -318,19 +380,54 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
 
 /** Parse one request line; returns null for anything malformed. */
 export function parseHostRequestLine(line: string): HostRequestEnvelope | null {
+  const parsed = parseHostLine(line)
+  return parsed.status === 'request' ? parsed.request : null
+}
+
+/**
+ * What one input line means: a command to run, or a rejection to answer.
+ *
+ * A rejection is answered instead of dropped, and it carries the request id
+ * whenever the line named one. A dropped line left the caller waiting for the
+ * full request timeout, which is ten minutes in the app, so an unknown command
+ * looked exactly like a hung host. Answering in milliseconds turns it into an
+ * ordinary failed request that the driver can surface.
+ */
+export type HostLineParse =
+  | { status: 'request'; request: HostRequestEnvelope }
+  | { status: 'rejected'; id: string | null; sessionId: string | null; error: string }
+
+export function parseHostLine(line: string): HostLineParse {
   let value: unknown
   try {
     value = JSON.parse(line)
   } catch {
-    return null
+    return { status: 'rejected', id: null, sessionId: null, error: 'Unparseable request line' }
   }
-  if (!isRecord(value) || value['type'] !== 'request') return null
-  const id = stringField(value, 'id')
-  if (id === undefined) return null
-  const sessionId = stringField(value, 'sessionId')
+  if (!isRecord(value) || value['type'] !== 'request') {
+    return { status: 'rejected', id: null, sessionId: null, error: 'Unparseable request line' }
+  }
+  const id = stringField(value, 'id') ?? null
+  const sessionId = stringField(value, 'sessionId') ?? null
+  if (id === null) {
+    return { status: 'rejected', id: null, sessionId, error: 'Request has no id' }
+  }
   const command = value['command']
-  if (!isRecord(command)) return null
+  if (!isRecord(command)) {
+    return { status: 'rejected', id, sessionId, error: 'Request has no command' }
+  }
   const parsed = parseHostCommand(command)
-  if (parsed === null) return null
-  return { type: 'request', id, ...(sessionId === undefined ? {} : { sessionId }), command: parsed }
+  if (parsed === null) {
+    const type = stringField(command, 'type') ?? 'unknown'
+    return { status: 'rejected', id, sessionId, error: `Unsupported command: ${type}` }
+  }
+  return {
+    status: 'request',
+    request: {
+      type: 'request',
+      id,
+      ...(sessionId === null ? {} : { sessionId }),
+      command: parsed
+    }
+  }
 }

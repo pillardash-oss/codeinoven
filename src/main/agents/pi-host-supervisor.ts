@@ -17,6 +17,7 @@ import { SessionOwnership, resumeRequest, type TransferableSession } from './pi-
 import type {
   HostCommand,
   HostCreateSessionCommand,
+  HostNoticeEnvelope,
   HostRequestEnvelope,
   HostResponseEnvelope,
   HostSessionListEntry,
@@ -49,6 +50,13 @@ export interface HostCreateRequest {
 export interface SupervisorOptions {
   /** Requests that never answer are failed instead of hanging a caller forever. */
   requestTimeoutMs?: number
+  /**
+   * Sessions one host may hold before the next one lands on a second host.
+   *
+   * This is the app's soft cap: the device decides how many sessions one process
+   * carries, and past it the supervisor scales out instead of refusing work.
+   */
+  maxSessionsPerHost?: number
 }
 
 interface LiveHost {
@@ -64,6 +72,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
 export class PiHostSupervisor {
   readonly #spawn: HostSpawner
   readonly #timeoutMs: number
+  readonly #maxSessionsPerHost: number
   readonly #ownership = new SessionOwnership()
   /** Every running host. More than one when a device cap or a move needs it. */
   readonly #hosts = new Map<string, LiveHost>()
@@ -73,13 +82,20 @@ export class PiHostSupervisor {
   #sequence = 0
   #hostSequence = 0
   readonly #uiListeners: ((sessionId: string, request: HostUiRequest) => void)[] = []
+  readonly #noticeListeners: ((
+    sessionId: string | undefined,
+    notice: HostNoticeEnvelope
+  ) => void)[] = []
   readonly #eventListeners: ((sessionId: string, event: Record<string, unknown>) => void)[] = []
+  readonly #lostListeners: ((sessionId: string) => void)[] = []
+  readonly #hostsChangedListeners: (() => void)[] = []
   /** Where each session runs, so a move can resume it rather than rebuild it. */
   readonly #sessions = new Map<string, TransferableSession>()
 
   constructor(spawn: HostSpawner, options: SupervisorOptions = {}) {
     this.#spawn = spawn
     this.#timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    this.#maxSessionsPerHost = Math.max(1, options.maxSessionsPerHost ?? 8)
   }
 
   /** The primary host's pid, or null when nothing is running. */
@@ -109,20 +125,36 @@ export class PiHostSupervisor {
     return this.#ensurePrimary().transport.pid
   }
 
-  /** Create a session on the primary host, starting one if needed. */
+  /**
+   * Create a session, on the primary host while it has room and on a new host
+   * once it does not. A full host never refuses a session and never grows past
+   * the cap, which is what keeps one process from carrying the whole machine.
+   */
   async createSession(request: HostCreateRequest): Promise<HostSessionState> {
-    const host = this.#ensurePrimary()
+    const primary = this.#ensurePrimary()
+    const host =
+      this.#sessionsOn(primary.id).length >= this.#maxSessionsPerHost ? this.#spawnHost() : primary
     this.#ownership.claim(request.sessionId, host.id)
     try {
       const response = await this.#request(host, request.sessionId, request.command)
       const state = this.#stateOf(response)
+      const parentSessionId = request.parentSessionId ?? request.command.parentSessionId
       this.#sessionHost.set(request.sessionId, host.id)
-      this.#sessions.set(request.sessionId, {
-        ...this.#transferable(state),
-        ...(request.parentSessionId === undefined
-          ? {}
-          : { parentSessionId: request.parentSessionId })
-      })
+      this.#sessions.set(
+        request.sessionId,
+        this.#transferable(state, {
+          sessionId: request.sessionId,
+          cwd: state.cwd,
+          agentDir: state.agentDir,
+          sessionPath: state.sessionFile ?? '',
+          ...(request.command.extensionPaths === undefined
+            ? {}
+            : { extensionPaths: request.command.extensionPaths }),
+          ...(request.command.tools === undefined ? {} : { tools: request.command.tools }),
+          ...(state.model === undefined ? {} : { model: state.model }),
+          ...(parentSessionId === undefined ? {} : { parentSessionId })
+        })
+      )
       return state
     } catch (error) {
       this.#ownership.release(request.sessionId, host.id)
@@ -155,9 +187,17 @@ export class PiHostSupervisor {
    * process, because a move that stays on the same process is not a move.
    */
   async moveToNewHost(sessionId: string): Promise<HostSessionState> {
-    const record = this.#sessions.get(sessionId)
+    const known = this.#sessions.get(sessionId)
     const source = this.#hostForSession(sessionId)
-    if (record === undefined || source === null) throw new Error(`Unknown session: ${sessionId}`)
+    if (known === undefined || source === null) throw new Error(`Unknown session: ${sessionId}`)
+    // Read the live session before it is disposed: the model and transcript it
+    // reports now are what the target has to resume, and the create-time record
+    // may predate a model switch made by the driver.
+    const live = await this.#request(source, sessionId, { type: 'get_state' })
+    const record =
+      live.ok && live.data !== undefined
+        ? this.#transferable(live.data as HostSessionState, known)
+        : known
     await this.#request(source, sessionId, { type: 'dispose_session' })
     this.#ownership.release(sessionId, source.id)
     this.#sessionHost.delete(sessionId)
@@ -173,10 +213,15 @@ export class PiHostSupervisor {
       )
       const state = this.#stateOf(response)
       this.#sessionHost.set(sessionId, target.id)
-      this.#sessions.set(sessionId, this.#transferable(state))
+      this.#sessions.set(sessionId, this.#transferable(state, record))
       return state
     } catch (error) {
-      this.#ownership.release(sessionId, target.id)
+      try {
+        this.#ownership.release(sessionId, target.id)
+      } catch {
+        // The claim above is what created this ownership; a release that finds
+        // nobody only happens if it was already given back.
+      }
       this.#stopHost(target.id)
       throw error
     }
@@ -195,11 +240,47 @@ export class PiHostSupervisor {
     }
   }
 
+  /** Unsolicited host-level messages, such as a session that failed to load. */
+  onNotice(
+    listener: (sessionId: string | undefined, notice: HostNoticeEnvelope) => void
+  ): () => void {
+    this.#noticeListeners.push(listener)
+    return () => {
+      const index = this.#noticeListeners.indexOf(listener)
+      if (index >= 0) this.#noticeListeners.splice(index, 1)
+    }
+  }
+
   onUiRequest(listener: (sessionId: string, request: HostUiRequest) => void): () => void {
     this.#uiListeners.push(listener)
     return () => {
       const index = this.#uiListeners.indexOf(listener)
       if (index >= 0) this.#uiListeners.splice(index, 1)
+    }
+  }
+
+  /**
+   * Sessions whose host disappeared without disposing them.
+   *
+   * A crash is not a disposal: the session's transcript is still on disk and it
+   * can be resumed, but everything the caller was waiting on in that process is
+   * gone. The driver listens here so a crashed host settles its turn immediately
+   * instead of leaving the thread working until the next request fails.
+   */
+  onSessionLost(listener: (sessionId: string) => void): () => void {
+    this.#lostListeners.push(listener)
+    return () => {
+      const index = this.#lostListeners.indexOf(listener)
+      if (index >= 0) this.#lostListeners.splice(index, 1)
+    }
+  }
+
+  /** Running hosts changed: a host started, died, or was stopped. */
+  onHostsChanged(listener: () => void): () => void {
+    this.#hostsChangedListeners.push(listener)
+    return () => {
+      const index = this.#hostsChangedListeners.indexOf(listener)
+      if (index >= 0) this.#hostsChangedListeners.splice(index, 1)
     }
   }
 
@@ -262,6 +343,7 @@ export class PiHostSupervisor {
     transport.onLine((line) => this.#consume(host, line))
     transport.onExit(() => this.#onExit(host))
     this.#hosts.set(host.id, host)
+    this.#hostsChanged()
     return host
   }
 
@@ -274,10 +356,37 @@ export class PiHostSupervisor {
     if (this.#primaryId === host.id) this.#primaryId = null
     // A dead host's sessions lose their process but not their transcript: they
     // are dropped from the host map so a later request can be resumed elsewhere.
-    for (const sessionId of this.#sessionsOn(host.id)) {
-      this.#ownership.release(sessionId, host.id)
+    for (const sessionId of this.#releaseSessions(host)) {
+      for (const listener of this.#lostListeners) listener(sessionId)
+    }
+    this.#hostsChanged()
+  }
+
+  /**
+   * Drop every session a host owns, without throwing out of an exit listener.
+   *
+   * Ownership and the session map can diverge (a rejected create, a probe that
+   * disposes twice), and an exception here would escape into the transport's
+   * exit callback with nobody to catch it. The caller needs the session ids so
+   * it can report the loss, so the ids are collected first and the release is
+   * best effort per session.
+   */
+  #releaseSessions(host: LiveHost): string[] {
+    const sessionIds = this.#sessionsOn(host.id)
+    for (const sessionId of sessionIds) {
+      try {
+        this.#ownership.release(sessionId, host.id)
+      } catch {
+        // Already released by an earlier failure path; the mapping is what has
+        // to go, and it goes below.
+      }
       this.#sessionHost.delete(sessionId)
     }
+    return sessionIds
+  }
+
+  #hostsChanged(): void {
+    for (const listener of this.#hostsChangedListeners) listener()
   }
 
   #consume(host: LiveHost, line: string): void {
@@ -309,6 +418,13 @@ export class PiHostSupervisor {
       }
       return
     }
+    if (envelope.type === 'host_notice') {
+      const notice = envelope as HostNoticeEnvelope
+      for (const listener of this.#noticeListeners) {
+        listener(notice.sessionId, notice)
+      }
+      return
+    }
     if (envelope.type !== 'response' || typeof envelope.id !== 'string') return
     const response = envelope as HostResponseEnvelope
     const waiting = host.waiting.get(response.id)
@@ -326,7 +442,12 @@ export class PiHostSupervisor {
       resolve({ type: 'response', id: 'stopped', ok: false, error: 'Host stopped' })
     }
     host.waiting.clear()
+    // A deliberate stop is not a crash: the caller either emptied the host or
+    // is shutting the app down, and the sessions' clients are being disposed by
+    // that caller. Releasing here keeps ownership and the map from drifting.
+    this.#releaseSessions(host)
     host.transport.stop()
+    this.#hostsChanged()
   }
 
   #request(
@@ -361,12 +482,24 @@ export class PiHostSupervisor {
     return response.data as HostSessionState
   }
 
-  #transferable(state: HostSessionState): TransferableSession {
+  #transferable(state: HostSessionState, previous?: TransferableSession): TransferableSession {
+    const extensionPaths = previous?.extensionPaths
+    const tools = previous?.tools
+    const parentSessionId = previous?.parentSessionId
+    const model = state.model ?? previous?.model
     return {
       sessionId: state.sessionId,
       cwd: state.cwd,
       agentDir: state.agentDir,
-      sessionPath: state.sessionFile ?? ''
+      sessionPath: state.sessionFile ?? previous?.sessionPath ?? '',
+      // These three are not part of the host's session state: the host reports
+      // where and how it runs, not what the app loaded into it. They are carried
+      // from the record so a moved session keeps its extensions, its tools, and
+      // the parent a sub-agent belongs to.
+      ...(extensionPaths === undefined ? {} : { extensionPaths }),
+      ...(tools === undefined ? {} : { tools }),
+      ...(model === undefined ? {} : { model }),
+      ...(parentSessionId === undefined ? {} : { parentSessionId })
     }
   }
 }

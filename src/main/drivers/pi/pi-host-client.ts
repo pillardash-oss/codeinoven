@@ -18,13 +18,17 @@
 import type { PiHostSupervisor } from '../../agents/pi-host-supervisor'
 import type { PiSessionClient } from './pi-client'
 import type { PiRpcImage } from '../pi-rpc-client'
+import { Logger } from '../../system/logger'
 import type { HostSessionState, HostUiResponse } from '../pi/session-host/protocol'
 
 export interface PiHostClientOptions {
   supervisor: PiHostSupervisor
   sessionId: string
   cwd: string
-  agentDir: string
+  /** The account's agent directory; omitted for an account that names none. */
+  agentDir?: string
+  /** Provider credentials the session's model runtime and extensions read. */
+  sessionEnv?: Record<string, string>
   extensionPaths: string[]
   thinkingLevel?: string
   onEvent?: (record: Record<string, unknown>) => void
@@ -37,7 +41,11 @@ export class PiHostClient implements PiSessionClient {
   readonly #options: PiHostClientOptions
   #disposed = false
   #started = false
+  #exitReported = false
   readonly #unsubscribeUi: () => void
+  readonly #unsubscribeEvents: () => void
+  readonly #unsubscribeLost: () => void
+  readonly #unsubscribeNotice: () => void
 
   constructor(options: PiHostClientOptions) {
     this.#options = options
@@ -64,14 +72,31 @@ export class PiHostClient implements PiSessionClient {
         ...('timeout' in request ? { timeout: request.timeout } : {})
       })
     })
-    options.supervisor.onEvent((sessionId, event) => {
+    this.#unsubscribeEvents = options.supervisor.onEvent((sessionId, event) => {
       if (sessionId !== options.sessionId) return
       options.onEvent?.(event)
+    })
+    // A host that exits takes this session's process with it, but not its
+    // transcript. The driver has to hear about it now, not on the next request:
+    // otherwise the thread stays working and the worker cards never settle.
+    this.#unsubscribeLost = options.supervisor.onSessionLost((sessionId) => {
+      if (sessionId !== options.sessionId) return
+      this.#reportExit(null)
+    })
+    // A host notice names something that happened inside the host and carries no
+    // request id: an extension that failed to load, for instance. It is the only
+    // trace of that failure, so it belongs in the app log rather than nowhere.
+    this.#unsubscribeNotice = options.supervisor.onNotice((sessionId, notice) => {
+      if (sessionId !== undefined && sessionId !== options.sessionId) return
+      const message = `[pi host] ${notice.message}`
+      if (notice.level === 'error') Logger.error(message)
+      else Logger.dev(message)
     })
   }
 
   get running(): boolean {
-    return !this.#disposed && this.#started
+    if (this.#disposed || !this.#started) return false
+    return this.#options.supervisor.hostOf(this.#options.sessionId) !== null
   }
 
   /** The host process that runs this session, for the app's service list. */
@@ -87,7 +112,8 @@ export class PiHostClient implements PiSessionClient {
       command: {
         type: 'create_session',
         cwd: this.#options.cwd,
-        agentDir: this.#options.agentDir,
+        ...(this.#options.agentDir === undefined ? {} : { agentDir: this.#options.agentDir }),
+        ...(this.#options.sessionEnv === undefined ? {} : { sessionEnv: this.#options.sessionEnv }),
         dialogs: true,
         extensionPaths: this.#options.extensionPaths,
         ...(this.#options.thinkingLevel === undefined
@@ -153,8 +179,12 @@ export class PiHostClient implements PiSessionClient {
     await this.send({ type: 'abort' })
   }
 
-  async compact(_customInstructions?: string): Promise<unknown> {
-    return this.send({ type: 'compact' })
+  async compact(customInstructions?: string): Promise<unknown> {
+    await this.start()
+    return this.send({
+      type: 'compact',
+      ...(customInstructions === undefined ? {} : { instructions: customInstructions })
+    })
   }
 
   async getState(): Promise<unknown> {
@@ -187,13 +217,16 @@ export class PiHostClient implements PiSessionClient {
     return this.send({ type: 'get_commands' })
   }
 
-  /** The hosted session's compaction policy comes from the CIO extension. */
-  async setAutoCompaction(_enabled: boolean): Promise<void> {
-    return undefined
+  /** Pi's own compaction policy, per session, exactly as the RPC client sets it. */
+  async setAutoCompaction(enabled: boolean): Promise<void> {
+    await this.start()
+    await this.send({ type: 'set_auto_compaction', enabled })
   }
 
-  async setAutoRetry(_enabled: boolean): Promise<void> {
-    return undefined
+  /** Pi's own retry policy, so a stopped turn is not resurrected by a retry. */
+  async setAutoRetry(enabled: boolean): Promise<void> {
+    await this.start()
+    await this.send({ type: 'set_auto_retry', enabled })
   }
 
   /** Answer a dialog the host forwarded, in the RPC response shape. */
@@ -221,11 +254,35 @@ export class PiHostClient implements PiSessionClient {
     return applied.data
   }
 
+  /**
+   * Move this session to a host of its own and answer where it landed.
+   *
+   * The transcript travels, so the native session id does not change; only the
+   * process does.
+   */
+  async moveToNewHost(): Promise<{ hostPid: number; nativeSessionId: string }> {
+    const state = await this.#options.supervisor.moveToNewHost(this.#options.sessionId)
+    return {
+      hostPid: this.#options.supervisor.hostOf(this.#options.sessionId) ?? 0,
+      nativeSessionId: state.nativeSessionId
+    }
+  }
+
   dispose(): void {
     if (this.#disposed) return
     this.#disposed = true
     this.#unsubscribeUi()
+    this.#unsubscribeEvents()
+    this.#unsubscribeLost()
+    this.#unsubscribeNotice()
     void this.#options.supervisor.disposeSession(this.#options.sessionId).catch(() => undefined)
+  }
+
+  /** Report the host's death once, even if a caller also notices it is gone. */
+  #reportExit(code: number | null): void {
+    if (this.#exitReported || this.#disposed) return
+    this.#exitReported = true
+    this.#options.onExit?.(code)
   }
 
   async #sendState(command: Parameters<PiHostSupervisor['request']>[1]): Promise<HostSessionState> {
