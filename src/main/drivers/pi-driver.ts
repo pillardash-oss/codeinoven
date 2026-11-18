@@ -694,6 +694,9 @@ export class PiDriver extends PersistentCliDriver {
     markDispatch('settings')
     this.appendUserMessage(session, options)
     this.turns.clearSilentContinue(session.id)
+    // A new turn is a fresh start: checkpoint stalls earned by the previous
+    // turn's compactions must not end this one.
+    this.turns.clearCheckpointStalls(session.id)
     this.turns.clearReconcileAnswer(session.id)
     this.turns.addActiveTurn(session.id)
 

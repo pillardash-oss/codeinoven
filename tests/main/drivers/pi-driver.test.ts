@@ -951,6 +951,103 @@ describe('PiDriver', () => {
     })
   })
 
+  it('waits for pi to finish compacting instead of restarting the session', async () => {
+    const driver = new PiDriver(await storage())
+    const events: SessionAgentEvent[] = []
+    driver.onEvent((event) => events.push(event as SessionAgentEvent))
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+
+    // pi reports the compaction finished only after two reads, and the first
+    // continuation prompt lands inside that window the way a real session
+    // refuses it.
+    let compacting = false
+    let settleReads = 0
+    client.compact.mockImplementation(async () => {
+      compacting = true
+    })
+    client.getState.mockImplementation(async () => {
+      if (compacting) {
+        settleReads += 1
+        if (settleReads >= 2) compacting = false
+      }
+      return {
+        sessionId: 'native-1',
+        model: null,
+        thinkingLevel: 'medium',
+        isCompacting: compacting,
+        isStreaming: false,
+        pendingMessageCount: 0
+      }
+    })
+    // Only the checkpoint continuation is refused; the turn's own dispatch
+    // prompt already went out.
+    client.prompt.mockClear()
+    let promptCalls = 0
+    client.prompt.mockImplementation(async () => {
+      promptCalls += 1
+      if (promptCalls === 1) {
+        throw new Error(
+          'Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.'
+        )
+      }
+    })
+
+    client.emitStatus({
+      type: 'extension_ui_request',
+      method: 'setStatus',
+      statusKey: 'codeinoven-compaction',
+      statusText: JSON.stringify({ type: 'threshold', resume: true })
+    })
+
+    await vi.waitFor(() => expect(client.prompt).toHaveBeenCalledTimes(2), { timeout: 10_000 })
+    // The session was never thrown away: a fresh process would abort the
+    // compaction the user had already paid for and start the cycle again.
+    expect(client.dispose).not.toHaveBeenCalled()
+    expect(events.some((event) => event.type === 'session.error')).toBe(false)
+  }, 20_000)
+
+  it('ends the turn when checkpoints keep compacting without answering', async () => {
+    const driver = new PiDriver(await storage())
+    const events: SessionAgentEvent[] = []
+    driver.onEvent((event) => events.push(event as SessionAgentEvent))
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.compact.mockImplementation(async () => undefined)
+
+    const requestCheckpoint = (): void => {
+      client.emitStatus({
+        type: 'extension_ui_request',
+        method: 'setStatus',
+        statusKey: 'codeinoven-compaction',
+        statusText: JSON.stringify({ type: 'threshold', resume: true })
+      })
+    }
+
+    requestCheckpoint()
+    await vi.waitFor(() => expect(client.compact).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(client.prompt).toHaveBeenCalledTimes(2))
+    requestCheckpoint()
+    await vi.waitFor(() => expect(client.compact).toHaveBeenCalledTimes(2))
+    requestCheckpoint()
+
+    await vi.waitFor(() => {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: 'session.error',
+          sessionId,
+          error: expect.stringContaining('kept checkpointing') as unknown as string
+        })
+      )
+    })
+    // The third checkpoint never ran: the turn ended instead of paying for it.
+    expect(client.compact).toHaveBeenCalledTimes(2)
+  }, 20_000)
+
   it('keeps sub-agent-done custom messages out of the transcript', () => {
     const context = sessionContext('s-1')
     const state = { assistantMessageId: null, turnIndex: 1 }
