@@ -225,7 +225,7 @@ export class PiSubagentStreams {
       status,
       aborted || force
     )
-    Logger.info('Sub-agent settle folded', {
+    Logger.dev('Sub-agent settle folded', {
       parentSessionId,
       childSessionId,
       status,
@@ -326,7 +326,7 @@ export class PiSubagentStreams {
     // copy still has it, and stamping that is what stops the card spinning.
     if (stamped === 0) {
       this.stampRegisteredCard(parentSessionId, childSessionId, status, error)
-      Logger.info('Sub-agent settle found no live card', {
+      Logger.dev('Sub-agent settle found no live card', {
         parentSessionId,
         childSessionId,
         registered: this.cardParts.get(parentSessionId)?.has(childSessionId) === true
