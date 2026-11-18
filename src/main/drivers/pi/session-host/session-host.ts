@@ -25,6 +25,7 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import type { AgentSession } from '@earendil-works/pi-coding-agent'
 import { createHostUiContext } from './ui-context'
+import type { AgentSessionServices } from '@earendil-works/pi-coding-agent'
 import type {
   HostCreateSessionCommand,
   HostEventEnvelope,
@@ -50,6 +51,13 @@ interface HostedSession {
   readonly cwd: string
   /** Account dir the session was created under, reported so it can be moved. */
   readonly agentDir: string
+  /** Services the session was built from, so a new transcript can reuse them. */
+  readonly services: AgentSessionServices
+  /** Whether this session forwarded extension dialogs to the app. */
+  readonly dialogs: boolean
+  /** Model and thinking the session was created with, restored after a switch. */
+  readonly modelId: { provider: string; id: string } | null
+  readonly thinkingLevel: string
 }
 
 export class PiSessionHost {
@@ -144,6 +152,29 @@ export class PiSessionHost {
         respond({ disposition })
         return
       }
+      case 'new_session': {
+        const hosted = this.requireSession(request.sessionId)
+        const manager = SessionManager.create(
+          hosted.cwd,
+          nativeSessionDir(hosted.agentDir, hosted.cwd)
+        )
+        await this.replaceSession(hosted.key, manager)
+        respond(this.stateOf(hosted.key))
+        return
+      }
+      case 'switch_session': {
+        const hosted = this.requireSession(request.sessionId)
+        const manager = SessionManager.open(command.sessionPath, undefined, hosted.cwd)
+        await this.replaceSession(hosted.key, manager)
+        respond(this.stateOf(hosted.key))
+        return
+      }
+      case 'compact': {
+        const hosted = this.requireSession(request.sessionId)
+        const result = await hosted.session.compact(command.instructions)
+        respond(result)
+        return
+      }
       case 'abort': {
         await this.requireSession(request.sessionId).session.abort()
         respond()
@@ -227,9 +258,63 @@ export class PiSessionHost {
       session: created.session,
       unsubscribe,
       cwd: command.cwd,
-      agentDir: command.agentDir
+      agentDir: command.agentDir,
+      services,
+      dialogs: command.dialogs === true,
+      modelId: model === undefined ? null : { provider: model.provider, id: model.id },
+      thinkingLevel: created.session.thinkingLevel
     })
     return this.stateOf(key)
+  }
+
+  /**
+   * Swap the transcript a hosted session continues from.
+   *
+   * Pi has no session switch on an AgentSession, so the session is rebuilt from
+   * the same services over the new transcript, with its model, thinking level and
+   * dialog binding restored. The app's session key never changes: that is what
+   * makes a resume, a fork or a fresh start invisible above this line.
+   */
+  private async replaceSession(key: string, manager: SessionManager): Promise<void> {
+    const hosted = this.sessions.get(key)
+    if (hosted === undefined) throw new Error(`Unknown session: ${key}`)
+    const created = await createAgentSessionFromServices({
+      services: hosted.services,
+      sessionManager: manager,
+      ...(hosted.modelId === null
+        ? {}
+        : {
+            model: hosted.services.modelRuntime.getModel(hosted.modelId.provider, hosted.modelId.id)
+          }),
+      thinkingLevel: hosted.thinkingLevel as never
+    })
+    hosted.unsubscribe()
+    hosted.session.dispose()
+    this.sessions.delete(key)
+
+    const unsubscribe = created.session.subscribe((event) => {
+      this.sink({ type: 'event', sessionId: key, event })
+    })
+    if (hosted.dialogs) {
+      await created.session.bindExtensions({
+        uiContext: createHostUiContext({
+          ask: (request) => this.askUi(key, request),
+          notify: (request) => this.sink({ type: 'ui_request', sessionId: key, request })
+        }),
+        mode: 'rpc'
+      })
+    }
+    this.sessions.set(key, {
+      key,
+      session: created.session,
+      unsubscribe,
+      cwd: hosted.cwd,
+      agentDir: hosted.agentDir,
+      services: hosted.services,
+      dialogs: hosted.dialogs,
+      modelId: hosted.modelId,
+      thinkingLevel: created.session.thinkingLevel
+    })
   }
 
   /** Forward one dialog to the app and resolve when the answer comes back. */

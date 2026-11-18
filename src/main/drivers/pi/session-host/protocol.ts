@@ -63,6 +63,12 @@ export type HostCommand =
   | { type: 'steer'; message: string; images?: HostImageContent[] }
   | { type: 'follow_up'; message: string }
   | { type: 'abort' }
+  /** Start a fresh native session in the same hosted session. */
+  | { type: 'new_session' }
+  /** Continue from an existing transcript, exactly like pi's `switch_session`. */
+  | { type: 'switch_session'; sessionPath: string }
+  /** Compact the hosted session's context now. */
+  | { type: 'compact'; instructions?: string }
   /** Answer a dialog the host forwarded. The host never decides for the user. */
   | { type: 'ui_response'; requestId: string; response: HostUiResponse }
   | { type: 'dispose_session' }
@@ -241,6 +247,17 @@ function parseHostCommand(value: Record<string, unknown>): HostCommand | null {
         ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
         ...(dialogs ? { dialogs } : {})
       }
+    }
+    case 'new_session':
+      return { type }
+    case 'switch_session': {
+      const sessionPath = stringField(value, 'sessionPath')
+      if (sessionPath === undefined) return null
+      return { type, sessionPath }
+    }
+    case 'compact': {
+      const instructions = stringField(value, 'instructions')
+      return { type, ...(instructions === undefined ? {} : { instructions }) }
     }
     case 'ui_response': {
       const requestId = stringField(value, 'requestId')
