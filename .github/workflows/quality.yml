@@ -178,7 +178,7 @@ jobs:
 
       # The command is the `audit` script, not a bare `bun audit`, so the accepted
       # advisory list has exactly one home (package.json) instead of one copy per
-      # caller. It currently accepts five:
+      # caller. It currently accepts six:
       #
       #   GHSA-ch52-4w7c-c8xp (high, CVE-2026-93748), http-cache-semantics <=4.2.0
       #   reachable only through electron-builder > dmg-builder >
@@ -245,6 +245,19 @@ jobs:
       #   and the whole chain is devDependency/build tooling that ships no runtime
       #   code in the app bundle. Remove the flag once any of those parents widen
       #   to ^11.
+      #
+      #   GHSA-fc5q-39xc-vjpf (high), picomatch <=4.0.7
+      #   reachable only through build and test tooling: vite and vitest each
+      #   depend on it directly and through tinyglobby > fdir, svelte-check through
+      #   fdir, typescript-eslint through tinyglobby > fdir, and electron-builder
+      #   through @electron/rebuild > node-gyp > tinyglobby > fdir. Upstream has
+      #   published no fix (4.0.7 is `latest`), so `bun audit fix` reports "no
+      #   published version fixes" and suggests this same flag. The advisory is a
+      #   ReDoS that needs a caller-supplied extglob with a repeated single-branch
+      #   group; every pattern on these paths is a literal from this repository's
+      #   own config, and the whole chain is devDependency/build tooling that ships
+      #   no runtime code in the app bundle. Remove the flag once upstream ships a
+      #   release above 4.0.7 and its parents widen to it.
       #
       # Remove the flag from the `audit` script as soon as upstream ships a fix.
       - name: Audit dependencies

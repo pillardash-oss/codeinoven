@@ -174,11 +174,25 @@ describe('native overlay drawing and interactions', () => {
   })
   it('reports backdrop dismissal without altering the browser document', () => {
     const target = render()
-    target.querySelector<HTMLButtonElement>('[aria-label="Dismiss dialog"]')!.click()
+    // A press carries a click count; a keyboard activation arrives with detail 0
+    // and is deliberately ignored by the backdrop.
+    target
+      .querySelector<HTMLButtonElement>('[aria-label="Dismiss dialog"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, detail: 1 }))
     expect(bridge.invoke).toHaveBeenCalledWith('browser:overlayDockInteract', {
       id: dock.id,
       kind: 'dismiss'
     })
+  })
+  it('ignores a keystroke that lands on the backdrop', () => {
+    const target = render()
+    target
+      .querySelector<HTMLButtonElement>('[aria-label="Dismiss dialog"]')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    expect(bridge.invoke).not.toHaveBeenCalledWith(
+      'browser:overlayDockInteract',
+      expect.objectContaining({ kind: 'dismiss' })
+    )
   })
   it('commits Ctrl+Tab selection from the native document', () => {
     render()
