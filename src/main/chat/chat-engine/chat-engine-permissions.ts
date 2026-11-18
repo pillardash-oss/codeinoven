@@ -15,6 +15,7 @@ import {
   chatThreadWorkspaceDirectory
 } from '../../../lib/project-artifacts'
 import { messageId as createMessageId } from '../../../lib/id'
+import { unmanagedProcessKillReason } from '../../../lib/agent-control-policy'
 import type { PendingPermissionInfo, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { permissionCommands } from './chat-engine-generated-artifacts'
@@ -511,6 +512,13 @@ export class ChatEnginePermissions {
     }
 
     const commands = permissionCommands(request.metadata)
+    // Process lifecycle is an invariant, not a permission tier. A command that
+    // stops a process by pid, port, name, pattern, signal, interpreter or script
+    // can only reach something this session did not start, so it is answered
+    // here with a refusal instead of a card: this is the one place every harness
+    // that asks the app before running a shell command passes through, which is
+    // how ACP agents and Claude Code reach us. A card would be auto-approved in
+    // Full Access and would let the same command run.
     const unclassifiedTool = request.metadata['surface']
     const sensitiveFileProtectionEnabled =
       request.permission !== 'bundled-pi-sensitive-files' ||
@@ -650,6 +658,21 @@ export class ChatEnginePermissions {
     }
     this.host.state.pendingPermissions.set(request.id, pending)
     this.host.units['turns'].markProjectActive(info.projectId)
+
+    // The refusal is answered before any tier logic below can approve it.
+    const refusedCommand = commands.find(
+      (command) => unmanagedProcessKillReason('bash', { command }) !== null
+    )
+    if (refusedCommand !== undefined) {
+      const reason = unmanagedProcessKillReason('bash', { command: refusedCommand })
+      await this.replyPermissionRaw(
+        pending,
+        'reject',
+        'policy:process-lifecycle',
+        reason ?? undefined
+      )
+      return
+    }
 
     // A temporary side chat registers its session against the parent thread, but
     // its permission gate is the side chat's own: the parent thread is idle and
