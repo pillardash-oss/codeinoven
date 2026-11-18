@@ -298,6 +298,10 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
     this.workflowReady &&
       !this.conversationAssignmentDismissed &&
       this.root.loadOlderMessages.settings.assignmentMode === true &&
+      // An Achievement loop is not waiting for an Assignment: the loop owns the
+      // thread and works toward its goal, and echoing an Assignment entry here
+      // offered to decompose work the goal already describes.
+      this.root.loadOlderMessages.settings.loopMode !== true &&
       this.root.submitBrainstormDecision.spec === null &&
       this.root.submitSpecDecision.assignment === null &&
       !this.root.harnessUsage.specFormulating &&
