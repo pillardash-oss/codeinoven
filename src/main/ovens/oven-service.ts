@@ -243,6 +243,18 @@ export class OvenService {
   }
 
   /**
+   * Forget a finished run's journal and record.
+   *
+   * The Oven keeps runs in memory under a fixed cap and refuses to remove one
+   * whose process is still alive, so a caller that starts a run of its own
+   * (an account-quota probe) removes it once it is done rather than spending
+   * one of that cap on work nobody will read again.
+   */
+  async remove(id: string, runId: string): Promise<void> {
+    this.decode(await this.control(id, { method: 'remove', runId }))
+  }
+
+  /**
    * Filesystem and Git work inside one checkout on the Oven.
    *
    * A clone first mirrors the identity this machine already authenticates with

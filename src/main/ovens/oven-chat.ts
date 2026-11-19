@@ -14,6 +14,8 @@ import type {
 } from '../../lib/types'
 import { LOCAL_OVEN_ID, isRemoteOvenId } from '../../lib/ovens'
 import { MAX_PROMPT_ATTACHMENTS } from '../../lib/types'
+import type { AgentAccountUsage } from '../../lib/types'
+import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
 import type { OvenAppearance, OvenFile, OvenPreflightReport } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { ProjectManager } from '../../lib/engines/project-manager'
@@ -30,6 +32,8 @@ import { remoteArgvCommand } from './oven-remote-command'
 import { findHarness } from '../agents/harness-registry'
 import { OvenService } from './oven-service'
 import { syncOvenAccount } from './oven-accounts'
+import { ovenAccountUsage, readOvenAccountUsage } from './oven-account-usage'
+import { ovenDataRoot } from './remote/oven-root-paths'
 import type { SecretsService } from '../secrets/secrets-service'
 import type {
   PersistentCliSession,
@@ -147,6 +151,93 @@ export class OvenChat {
 
   remote(thread: Thread, settings = thread.settings): boolean {
     return isRemoteOvenId(settings?.ovenId)
+  }
+
+  /**
+   * One account's quota as the Oven this surface is bound to reports it.
+   *
+   * This machine is always asked first (see the providers catalog): quota is
+   * provider-level account state, so the same credential container answers the
+   * same question wherever the harness runs, and the local read costs no round
+   * trip. The Oven is the fallback for the one case this machine cannot answer
+   * - it has no such harness installed - and it answers through the harness it
+   * does have, primed with the credentials this app syncs for that account.
+   *
+   * `ovenId` names the thread's own Oven, and naming this device means no
+   * other machine is asked. The Accounts settings page has no thread, so the
+   * registry's default Oven answers there instead.
+   */
+  async readAccountUsage(target: {
+    ovenId?: string
+    harnessId: string
+    providerId: string
+    accountId?: string
+  }): Promise<AgentAccountUsage | null> {
+    try {
+      const ovenId = await this.usageOven(target.ovenId)
+      if (!ovenId) return null
+      const probe = await this.service.probe(ovenId)
+      // A harness the Oven does not have is not a machine to ask, and a missing
+      // inventory row is the same answer as a `missing` one: the Oven lists
+      // every harness it can host. `unknown` health is never treated as absent,
+      // because a version probe that timed out says nothing about the install.
+      // An older service that reports no inventory at all is asked anyway.
+      if (probe.inventory) {
+        const item = probe.inventory.find((entry) => entry.harnessId === target.harnessId)
+        if (!item || item.health === 'missing' || item.health === 'unsupported') return null
+      }
+      const account = await this.accounts.resolveForProvider(
+        target.harnessId,
+        target.providerId,
+        target.accountId
+      )
+      const environment = await syncOvenAccount(this.service, this.accounts, ovenId, account)
+      // A custom base-URL provider has no authenticated account row, so several
+      // custom providers in one harness would answer under one id and overwrite
+      // each other's reading. The provider id is the identity the battery hover
+      // and the Accounts rows both match.
+      const accountId = isCodeInOvenCustomProviderId(target.providerId)
+        ? target.providerId
+        : account.id
+      const telemetry = await readOvenAccountUsage(this.service, {
+        ovenId,
+        harnessId: target.harnessId,
+        providerId: target.providerId,
+        accountId,
+        cwd: `${ovenDataRoot(probe.home)}/accounts/${account.id}`,
+        environment
+      })
+      if (!telemetry) return null
+      return ovenAccountUsage(
+        { harnessId: target.harnessId, providerId: target.providerId, accountId },
+        telemetry
+      )
+    } catch (error) {
+      Logger.dev('Oven account usage read unavailable:', error)
+      return null
+    }
+  }
+
+  /**
+   * The Oven an account reading falls back to.
+   *
+   * A thread's own Oven answers for that thread, and a thread on this device
+   * answers nowhere else: this machine has no harness, and pinning a thread to
+   * Local means another machine's quota would describe work this thread never
+   * does. A surface with no thread at all (the Accounts settings page) uses the
+   * default Oven, and a remote id the registry no longer lists is not a target
+   * either, since the probe would only fail.
+   */
+  private async usageOven(requested: string | undefined): Promise<string | null> {
+    if (requested === LOCAL_OVEN_ID) return null
+    const state = await this.registry.state()
+    const listed = (ovenId: string | undefined): ovenId is string =>
+      ovenId !== undefined &&
+      isRemoteOvenId(ovenId) &&
+      state.ovens.some((oven) => oven.id === ovenId)
+    if (listed(requested)) return requested
+    if (requested !== undefined) return null
+    return listed(state.defaultOvenId) ? state.defaultOvenId : null
   }
 
   private path(thread: Pick<Thread, 'projectId' | 'id'>): string {

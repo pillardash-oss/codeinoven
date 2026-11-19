@@ -121,6 +121,8 @@ Preparing a checkout is visible while it happens. The first send on a remote thr
 
 Harness session transcripts live with the Oven's app state, at `~/.config/pillardash/codeinoven/ovens/sessions/<session>.jsonl`, never inside the checkout. A transcript an older release left in the project root as `.cio-pi-<session>.jsonl` is moved into that directory the next time its thread runs, so the session keeps resuming and the working tree stays clean.
 
+Account quota is read on this computer first, always, because it is account-level provider state and the credential container is the same wherever the harness runs. Only when this computer has no such harness installed does the Oven that does answer instead: the battery hover on a thread asks that thread's own Oven, and the Accounts settings page (which has no thread) asks the default Oven. The read reuses the run channel a turn uses, primed with the credentials this app already syncs for that account, and it starts the harness there only for as long as the answer takes. Harnesses whose quota lives behind a resident local server rather than a stdio protocol report nothing from an Oven; a harness installed on neither side is offered by neither model picker.
+
 Thread rows carry the Oven's own mark and the checkout's branch beside the row's status indicator; a branch longer than four characters is shortened there. The hover card names the Oven, the branch, and the checkout path, and the search results name the Oven and branch too. Switching branches through the remote Changes panel updates the thread's recorded branch.
 
 ## Recovery and inventory

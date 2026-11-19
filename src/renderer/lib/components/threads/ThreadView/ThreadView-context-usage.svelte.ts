@@ -5,6 +5,7 @@ import { getProjectIcon } from '$lib/project-icons'
 import { normalizeFastInference } from '$shared/fast-inference'
 import { invoke } from '$lib/ipc.svelte'
 import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
+import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { clearIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
 import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -325,12 +326,16 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
   async refreshAccountUsageOnDemand(): Promise<void> {
     // Drop a response for a harness selection the user already moved away
     // from   an out-of-order resolve must not clobber the current selection.
-    const refreshKey = `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}`
+    const refreshKey = `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}:${this.root.loadOlderMessages.settings.ovenId ?? ''}`
     const usageList = await this.accountUsageCache.refresh(
       {
         harnessId: this.root.loadOlderMessages.settings.harnessId,
         providerId: this.root.loadOlderMessages.settings.providerId,
         accountId: this.root.loadOlderMessages.settings.accountId,
+        // The Oven this thread runs on. It answers only when this machine has
+        // no such harness installed; a local reading always wins over it, and a
+        // thread on this device asks no other machine at all.
+        ovenId: this.root.loadOlderMessages.settings.ovenId ?? LOCAL_OVEN_ID,
         // Name the thread so the reading can only be answered by this thread's
         // own session. Account quota ignores it; context occupancy must never
         // come from another conversation's live process.
@@ -339,7 +344,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       },
       () =>
         refreshKey !==
-        `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}`
+        `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}:${this.root.loadOlderMessages.settings.ovenId ?? ''}`
     )
     const currentUsage = usageList.find(
       (usage) =>
