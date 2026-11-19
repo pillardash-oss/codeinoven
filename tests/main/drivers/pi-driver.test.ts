@@ -1048,6 +1048,15 @@ describe('PiDriver', () => {
     expect(client.compact).toHaveBeenCalledTimes(2)
   }, 20_000)
 
+  it('cannot trim history natively without a native transcript', async () => {
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    // Nothing reported a native session id, so there is no transcript this
+    // harness could edit: the engine has to fall back to discarding the session.
+    expect(await driver.trimSessionHistory(projectPath(), sessionId, [])).toBe(false)
+  })
+
   it('keeps sub-agent-done custom messages out of the transcript', () => {
     const context = sessionContext('s-1')
     const state = { assistantMessageId: null, turnIndex: 1 }

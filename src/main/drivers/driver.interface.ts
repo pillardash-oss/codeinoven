@@ -986,6 +986,23 @@ export interface HarnessDriver {
   compactSession?(projectPath: string, sessionId: string, settings: ThreadSettings): Promise<void>
 
   /**
+   * Remove messages from the harness's own history in place, keeping the live
+   * session and its native transcript.
+   *
+   * Returns true when the harness applied the trim natively; false when it
+   * cannot (no transcript, or the two histories disagree), so the caller falls
+   * back to discarding the session and replaying the remaining mirror into a
+   * fresh one. A harness that never implemented this is that fallback by
+   * definition.
+   */
+  trimSessionHistory?(
+    projectPath: string,
+    sessionId: string,
+    kept: readonly AgentMessage[]
+  ): Promise<boolean>
+
+
+  /**
    * Reconcile harness-side durable state (for example auto-compactions pi
    * wrote to its session transcript without emitting reportable events) with
    * the mirrored session. Best-effort backstop for finalization gaps: the

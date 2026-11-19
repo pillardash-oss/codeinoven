@@ -43,6 +43,8 @@ import { PiSubagentStreams } from './pi/pi-driver-subagents'
 import { PiUiRequestBoard } from './pi/pi-driver-ui-requests'
 import { PiUsageTracker } from './pi/pi-driver-usage'
 import { PiNativeSessions } from './pi/pi-driver-native-session'
+import { findNativePiSessionFile } from './pi/pi-native-session'
+import { trimPiTranscript } from './pi/pi-transcript-trim'
 import { PiCioRuntimeFiles } from './pi/pi-driver-cio-files'
 import { PiRpcSessions } from './pi/pi-driver-rpc'
 import { PiTurnLifecycle } from './pi/pi-driver-turns'
@@ -594,6 +596,64 @@ export class PiDriver extends PersistentCliDriver {
     const session = await this.requireSession(projectPath, sessionId)
     const client = await this.rpcSessions.ensureClient(projectPath, sessionId)
     return this.turns.compactSession(session, projectPath, client)
+  }
+
+  /**
+   * Trim this thread's Pi history in place, keeping the live session.
+   *
+   * The app's mirror is what the user edited, so the removed messages are the
+   * ones the session carries but the kept list does not. They become Pi's own
+   * `context_edit` records in the native transcript, appended, never rewritten:
+   * the model stops seeing them and the file keeps the full audit trail. The
+   * live session then reloads the same transcript, so an idle session costs no
+   * new process and a running one is never edited underneath.
+   */
+  async trimSessionHistory(
+    projectPath: string,
+    sessionId: string,
+    kept: readonly AgentMessage[]
+  ): Promise<boolean> {
+    const session = await this.requireSession(projectPath, sessionId).catch(() => null)
+    if (!session) return false
+    const keepIds = new Set(kept.map((message) => message.id))
+    const removed = session.messages.filter((message) => !keepIds.has(message.id))
+    if (removed.length === 0) return true
+    if (!session.nativeSessionId) return false
+    const file = await findNativePiSessionFile(
+      projectPath,
+      session.nativeSessionId,
+      this.agentDirectory
+    )
+    if (!file) return false
+    const result = await trimPiTranscript(file, removed)
+    if (result.missing > 0) {
+      Logger.dev('Pi native history trim could not find every removed turn:', {
+        sessionId,
+        missing: result.missing
+      })
+      return false
+    }
+    // The driver's own mirror follows the edit, or its next idle sync would
+    // write the removed messages back into the thread.
+    session.messages = session.messages.filter((message) => keepIds.has(message.id))
+    session.updatedAt = Date.now()
+    await this.persistSession(session)
+    const client = this.rpcSessions.client(sessionId)
+    if (client?.running) {
+      try {
+        await client.switchSession(file)
+      } catch (error) {
+        // The transcript is already correct; a session that could not reload
+        // resumes the edited file on its next turn anyway.
+        Logger.dev('Pi session reload after a native history trim failed:', error)
+      }
+    }
+    Logger.info('Pi history trimmed natively', {
+      sessionId,
+      edited: result.edited,
+      removed: removed.length
+    })
+    return true
   }
 
   override async sendPrompt(projectPath: string, options: SendPromptOptions): Promise<void> {
