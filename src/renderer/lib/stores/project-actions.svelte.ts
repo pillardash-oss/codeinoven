@@ -14,6 +14,8 @@ export interface ProjectActionRun {
    *  at when they pressed Run, never against whatever scope the panel happens to
    *  show once its terminal finishes attaching. */
   scopeBucketId: string
+  /** Root identity captured at launch, so later scope edits cannot rewrite history. */
+  scopeRootIdentity: string | null
   running: boolean
   expanded: boolean
 }
@@ -137,7 +139,8 @@ class ProjectActionsState {
     projectId: string,
     action: ProjectAction,
     variables: Record<string, string>,
-    scopeBucketId: string
+    scopeBucketId: string,
+    scopeRootIdentity: string | null
   ): void {
     const terminalId = `action-${action.id}-${crypto.randomUUID()}`
     this.exitSubscriptions.get(action.id)?.()
@@ -147,6 +150,7 @@ class ProjectActionsState {
       script: action.script,
       variables,
       scopeBucketId,
+      scopeRootIdentity,
       running: true,
       expanded: true
     })

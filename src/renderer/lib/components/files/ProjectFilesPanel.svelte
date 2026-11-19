@@ -23,6 +23,7 @@
   import { invoke, subscribe } from '$lib/ipc.svelte'
   import { AssistantDefaultIcon } from '$lib/assistant-icons'
   import { workspaceState } from '$lib/stores/workspace.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
   import ConflictResolutionView from './ConflictResolutionView.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
   import ErrorStrip from '$lib/components/ui/ErrorStrip.svelte'
@@ -156,6 +157,7 @@
    *  swaps the tree out from under the user: it raises the stale-scope notice
    *  instead, and the toggle the notice asks for is what lands the new root. */
   $effect(() => {
+    void scopeState.ensureBoardLoaded(projectId)
     if (!projectState.explorerVisible) return
     void projectFilesWorkspace.loadDirectory(projectId, '')
   })

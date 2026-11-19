@@ -176,6 +176,12 @@ export function isManagedScopeRoot(
   return root?.kind === 'worktree'
 }
 
+/** Stable identity for comparing the filesystem roots two scopes resolve to. */
+export function scopeRootIdentity(root: ScopeRootDescriptor | undefined): string | null {
+  if (!root) return null
+  return isManagedScopeRoot(root) ? `worktree:${root.directoryName}` : 'project'
+}
+
 export interface ScopeBoard {
   version: 2
   buckets: ScopeBucket[]
