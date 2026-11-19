@@ -1408,6 +1408,12 @@ void app
 
     const startPostVisualServices = (force = false): void => {
       if (postVisualServicesStarted || (!force && (!documentLoaded || !visualReady))) return
+      // A process that already declared the workspace dead, or began quitting,
+      // has nothing left for this graph to serve. Building it anyway imported
+      // and constructed every repository and IPC channel inside a process that
+      // was tearing down, then reached its own `quitCleanupStarted` check a
+      // thousand lines later, after the work had already been done.
+      if (state.startupRecovery || state.quitCleanupStarted) return
       postVisualServicesStarted = true
       // All feature service graphs are imported and constructed only after
       // the primary window has both loaded and rendered. This includes the IPC
@@ -1438,18 +1444,24 @@ void app
     const splashFailsafe = setTimeout(() => {
       closeSplash()
       if (!window.isDestroyed() && !window.isVisible()) window.show()
-      if (!postVisualServicesStarted) {
-        Logger.error(
-          'Visual startup milestone timed out; starting optional services in fallback mode'
-        )
-        startPostVisualServices(true)
-      }
+      // These two branches are ordered, not interchangeable. A renderer that
+      // never painted is a dead boot: it enters recovery and offers updates.
+      // Starting the optional services first built the whole feature graph in
+      // that dying process, and its boot then raced the database close of the
+      // quit it had just triggered.
       if (!visualReady) {
         void handleFatalStartup(new Error('Workspace renderer did not become ready.'), {
           state,
           database,
           storage
         })
+        return
+      }
+      if (!postVisualServicesStarted) {
+        Logger.error(
+          'Visual startup milestone timed out; starting optional services in fallback mode'
+        )
+        startPostVisualServices(true)
       }
     }, 60_000)
     window.webContents.once('did-finish-load', () => {
