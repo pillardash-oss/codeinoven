@@ -1,6 +1,7 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { join } from 'path'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'path'
 import type { AgentMessage } from '../../../lib/types'
 import { Logger } from '../../system/logger'
 import type { StorageEngine } from '../../storage/storage-engine'
@@ -10,12 +11,22 @@ import {
   findNativePiTranscriptName,
   loadNativeSubagentMessages,
   localPiNativeTranscriptSource,
-  nativePiSessionDir,
   parseNativePiTranscriptText,
   prefillTranscriptEntries,
   type PiNativeTranscriptSource
 } from './pi-native-session'
+import { trimPiTranscript } from './pi-transcript-trim'
 import { record, stringValue } from './pi-values'
+
+/** One native transcript edit: what pi must reload, and what the edit did. */
+export interface PiNativeTrimOutcome {
+  /** The path this session's own pi process opens to reload the edited file. */
+  file: string
+  /** `context_edit` records appended to the transcript. */
+  edited: number
+  /** Removed user turns the transcript does not carry. */
+  missing: number
+}
 
 /** Everything the native transcript binding needs from the driver. */
 export interface PiNativeSessionsHost {
@@ -211,10 +222,14 @@ export class PiNativeSessions {
   /**
    * Seed a fresh session with the thread's edited history as a native pi
    * transcript. Used after the user edits a session (delete/truncate/collapse):
-   * instead of replaying the remaining mirror as a history recap   which weak
-   * models read as injected fiction and stall on   the next RPC spawn resumes
+   * instead of replaying the remaining mirror as a history recap, which weak
+   * models read as injected fiction and stall on, the next RPC spawn resumes
    * this synthetic transcript natively, exactly as if the conversation had
    * happened in pi itself.
+   *
+   * The file is written through the transcript source, so an edited session
+   * whose pi runs on an Oven is seeded in that machine's session directory and
+   * the bound native id names a file the Oven's own pi will list.
    */
   async prefillNativeSession(
     projectPath: string,
@@ -224,23 +239,14 @@ export class PiNativeSessions {
     try {
       const session = await this.host.session(projectPath, sessionId)
       if (session.nativeSessionId) return true
-      // Seeding is a write, and the seam above only reads: a session whose pi
-      // runs on an Oven cannot be given a transcript from here. Reporting that
-      // honestly keeps the record free of a native id whose file exists only on
-      // this machine, which the next resume could never open.
-      if (this.host.nativeTranscripts) {
-        Logger.dev('Native Pi transcript prefill skipped: the session runs elsewhere', {
-          sessionId
-        })
-        return false
-      }
       const entries = prefillTranscriptEntries(projectPath, messages)
       if (entries.length === 0) return false
-      const dir = nativePiSessionDir(projectPath, this.host.agentDirectory)
-      await mkdir(dir, { recursive: true })
       const nativeId = randomUUID()
-      const file = join(dir, `${new Date().toISOString().replace(/[:.]/gu, '-')}_${nativeId}.jsonl`)
-      await writeFile(file, `${entries.join('\n')}\n`, 'utf8')
+      await this.transcripts.write(
+        projectPath,
+        `${new Date().toISOString().replace(/[:.]/gu, '-')}_${nativeId}.jsonl`,
+        `${entries.join('\n')}\n`
+      )
       session.nativeSessionId = nativeId
       await this.host.persistSession(session)
       Logger.info('Seeded a native Pi transcript from the edited mirror', {
@@ -252,6 +258,45 @@ export class PiNativeSessions {
     } catch (error) {
       Logger.dev('Native Pi transcript prefill skipped:', error)
       return false
+    }
+  }
+
+  /**
+   * Remove the given messages from a session's native transcript.
+   *
+   * Pi's own history editing appends `context_edit` records to the transcript,
+   * whether the user edited a thread on this machine or on an Oven, so the
+   * records are computed by the same rule and written through the transcript
+   * source. Null means there is no transcript to edit, which is what the caller
+   * needs to fall back to discarding the session.
+   */
+  async trimTranscript(
+    projectPath: string,
+    nativeSessionId: string,
+    removed: readonly AgentMessage[]
+  ): Promise<PiNativeTrimOutcome | null> {
+    const source = this.transcripts
+    const name = await findNativePiTranscriptName(source, projectPath, nativeSessionId)
+    if (!name) return null
+    const text = await source.read(projectPath, name)
+    if (text === null) return null
+    // The edit rule is a file-in, append-out operation, and the transcript it
+    // must edit can live on an Oven. The text is therefore trimmed through a
+    // scratch file this process owns and the records it appends are written back
+    // through the source: the Oven's transcript receives exactly the records a
+    // local one would, and this machine keeps no copy of it.
+    const scratch = await mkdtemp(join(tmpdir(), 'codeinoven-pi-trim-'))
+    try {
+      // The scratch file carries the transcript's own name so the edit rule sees
+      // nothing about where the transcript really lives.
+      const staged = join(scratch, basename(name))
+      await writeFile(staged, text, 'utf8')
+      const result = await trimPiTranscript(staged, removed)
+      const appended = (await readFile(staged, 'utf8')).slice(text.length)
+      if (appended.length > 0) await source.write(projectPath, name, text + appended)
+      return { file: source.resolve(projectPath, name), ...result }
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
     }
   }
 
@@ -320,12 +365,11 @@ export class PiNativeSessions {
     try {
       return await this.host.loadMirroredMessages(projectPath, sessionId)
     } catch (error) {
-      const native = await loadNativeSubagentMessages(
-        projectPath,
-        sessionId,
+      const native = await loadNativeSubagentMessages(projectPath, sessionId, {
         waitForFlush,
-        this.host.agentDirectory
-      )
+        ...(this.host.agentDirectory ? { agentDirectory: this.host.agentDirectory } : {}),
+        source: this.transcripts
+      })
       if (native) return native
       // Throwing stays correct whenever a record genuinely exists   including
       // a hash-mismatched one (moved project), where the engine must retire

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../lib/ovens'
 import { Logger } from '../system/logger'
 import { nativePiSessionDir, type PiNativeTranscriptSource } from '../drivers/pi/pi-native-session'
@@ -32,6 +33,18 @@ export interface OvenPiTranscriptRoute {
 
 /** The Oven's read chunk, which bounds one `read` answer. */
 export const OVEN_PI_TRANSCRIPT_CHUNK_BYTES = 128 * 1024
+
+/**
+ * How often `waitFor` asks the Oven for the directory again.
+ *
+ * A transcript pi flushed within this window is found on the next poll, and a
+ * poll is one cheap listing: the alternative is a stream the service does not
+ * offer for a directory nobody is running on the Oven's own side.
+ */
+export const OVEN_PI_TRANSCRIPT_POLL_MS = 250
+
+/** A transcript file is read by the pi process on the Oven only. */
+const TRANSCRIPT_FILE_MODE = 0o600
 
 /**
  * A transcript source over the Oven a session's pi process runs on.
@@ -84,11 +97,54 @@ export function ovenPiTranscriptSource(input: {
         return null
       }
     },
+    write: async (projectPath, fileName, content) => {
+      const route = input.route(projectPath)
+      if (!route) throw unreachable(projectPath)
+      await writeTranscript(
+        input.service,
+        route,
+        directoryOf(projectPath, route),
+        fileName,
+        content
+      )
+    },
+    waitFor: async (projectPath, suffix, timeoutMs) => {
+      const route = input.route(projectPath)
+      if (!route) return null
+      const directory = directoryOf(projectPath, route)
+      // The caller's budget is the whole wait: a poll is only started while
+      // there is time left to answer it, and the sleep never runs past the
+      // deadline, so the wait is as slow as one listing and never longer.
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        const names = await listTranscriptNames(input.service, route, directory).catch(
+          (error: unknown) => {
+            // A machine that cannot answer has no transcript this app can read
+            // yet, which is the same "nothing there" a poll keeps checking for.
+            Logger.dev('Could not poll native Pi transcripts on the Oven:', error)
+            return null
+          }
+        )
+        const newest = names
+          ?.filter((name) => name.endsWith(suffix))
+          .sort()
+          .at(-1)
+        if (newest) return `${directory}/${newest}`
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) return null
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.min(OVEN_PI_TRANSCRIPT_POLL_MS, remaining))
+        )
+      }
+    },
     remove: async (projectPath, fileName) => {
       const route = input.route(projectPath)
       if (!route) return
       await removeTranscript(input.service, route, directoryOf(projectPath, route), fileName)
-    }
+    },
+    // Only a checkout one of this runtime's sessions works in has transcripts
+    // here; every other project is read on this computer, exactly as before.
+    holds: (projectPath) => input.route(projectPath) !== null
   }
 }
 
@@ -161,6 +217,58 @@ async function readTranscriptText(
     if (typeof result.size === 'number' && offset >= result.size) break
   }
   return Buffer.concat(chunks).toString('utf8')
+}
+
+/**
+ * Write one transcript whole, and publish it in a single step.
+ *
+ * The chunks land in a staging file beside the destination and one rename
+ * publishes it, so a pi process resuming onto this session never opens half a
+ * transcript. The directory pi's own layout names is created first, exactly as
+ * the local source creates it for a seeded transcript.
+ */
+async function writeTranscript(
+  service: OvenPiTranscriptService,
+  route: OvenPiTranscriptRoute,
+  directory: string,
+  fileName: string,
+  content: string
+): Promise<void> {
+  const bytes = Buffer.from(content, 'utf8')
+  await service.workspace(route.ovenId, { operation: 'mkdir', root: directory, path: '.' })
+  const staged = `${fileName}.${randomUUID()}.next`
+  try {
+    for (
+      let offset = 0;
+      offset < bytes.length || offset === 0;
+      offset += OVEN_PI_TRANSCRIPT_CHUNK_BYTES
+    ) {
+      await service.workspace(route.ovenId, {
+        operation: 'write',
+        root: directory,
+        path: staged,
+        offset,
+        data: bytes.subarray(offset, offset + OVEN_PI_TRANSCRIPT_CHUNK_BYTES).toString('base64'),
+        exclusive: offset === 0,
+        mode: TRANSCRIPT_FILE_MODE
+      })
+    }
+    await service.workspace(route.ovenId, {
+      operation: 'replace',
+      root: directory,
+      path: fileName,
+      staged,
+      mode: TRANSCRIPT_FILE_MODE
+    })
+  } catch (error) {
+    // The staged file is invisible to pi either way; deleting it keeps the
+    // session directory from collecting one leftover per failed write.
+    await removeOvenWorkspaceFile((request) => service.workspace(route.ovenId, request), {
+      root: directory,
+      path: staged
+    }).catch(() => undefined)
+    throw error
+  }
 }
 
 /**

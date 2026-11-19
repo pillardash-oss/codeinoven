@@ -112,8 +112,25 @@ class FakeTranscripts implements PiNativeTranscriptSource {
     return this.files.get(`${projectPath}/${fileName}`) ?? null
   }
 
+  async write(projectPath: string, fileName: string, content: string): Promise<void> {
+    this.files.set(`${projectPath}/${fileName}`, content)
+  }
+
+  async waitFor(projectPath: string, suffix: string): Promise<string | null> {
+    const names = await this.list(projectPath)
+    const name = names
+      ?.filter((entry) => entry.endsWith(suffix))
+      .sort()
+      .at(-1)
+    return name ? this.resolve(projectPath, name) : null
+  }
+
   async remove(projectPath: string, fileName: string): Promise<void> {
     this.files.delete(`${projectPath}/${fileName}`)
+  }
+
+  holds(): boolean {
+    return true
   }
 }
 
@@ -192,6 +209,55 @@ describe('local Pi native transcript source', () => {
     const source = localPiNativeTranscriptSource(join(await scratch(), 'agent'))
     expect(await source.list('/projects/never-opened')).toBeNull()
     expect(await source.read('/projects/never-opened', 'anything.jsonl')).toBeNull()
+  })
+
+  it('writes a transcript into the directory pi would have created', async () => {
+    const agentDirectory = join(await scratch(), 'agent')
+    const source = localPiNativeTranscriptSource(agentDirectory)
+    const name = transcriptName('2026-01-01T00-00-00-000Z')
+
+    // No session directory exists yet: a seeded transcript creates it.
+    expect(await source.list(PROJECT)).toBeNull()
+    await source.write(PROJECT, name, transcriptText())
+
+    expect(await source.list(PROJECT)).toEqual([name])
+    expect(await source.read(PROJECT, name)).toBe(transcriptText())
+    expect(source.resolve(PROJECT, name)).toBe(
+      join(nativePiSessionDir(PROJECT, agentDirectory), name)
+    )
+  })
+
+  it('waits for a transcript that appears after the caller started waiting', async () => {
+    const agentDirectory = join(await scratch(), 'agent')
+    const source = localPiNativeTranscriptSource(agentDirectory)
+    const directory = nativePiSessionDir(PROJECT, agentDirectory)
+    await mkdir(directory, { recursive: true })
+    const name = transcriptName('2026-01-01T00-00-00-000Z')
+
+    const waiting = source.waitFor(PROJECT, `_${NATIVE}.jsonl`, 5_000)
+    // pi flushes the child's session file once its first assistant message
+    // completes, so the file is genuinely late   not there when the watch starts.
+    setTimeout(() => void writeFile(join(directory, name), transcriptText()), 150)
+
+    expect(await waiting).toBe(join(directory, name))
+  })
+
+  it('gives up as null when no transcript appears inside the budget', async () => {
+    const agentDirectory = join(await scratch(), 'agent')
+    const source = localPiNativeTranscriptSource(agentDirectory)
+    await mkdir(nativePiSessionDir(PROJECT, agentDirectory), { recursive: true })
+    const startedAt = Date.now()
+
+    expect(await source.waitFor(PROJECT, `_${NATIVE}.jsonl`, 200)).toBeNull()
+    const elapsed = Date.now() - startedAt
+    expect(elapsed).toBeGreaterThanOrEqual(190)
+    expect(elapsed).toBeLessThan(500)
+  })
+
+  it('holds every project, because this is the source of last resort', () => {
+    const source = localPiNativeTranscriptSource(join(process.cwd(), '.cio', 'tmp', 'unused'))
+    expect(source.holds(PROJECT)).toBe(true)
+    expect(source.holds('/projects/never-opened')).toBe(true)
   })
 })
 
@@ -276,6 +342,174 @@ describe('resuming through the transcript source', () => {
     expect(messages.map((message) => message.role)).toEqual(['user', 'assistant', 'assistant'])
     expect(messages[0]?.parts[0]).toMatchObject({ type: 'text', text: 'Plan the migration' })
     expect(messages[2]?.parts[0]).toMatchObject({ type: 'compaction' })
+  })
+})
+
+describe('seeding an edited mirror through the transcript source', () => {
+  it('writes the seeded transcript where the session runs and binds it', async () => {
+    const source = new FakeTranscripts()
+    const persisted: PersistentCliSession[] = []
+    const record = sessionRecord()
+    delete record.nativeSessionId
+    const sessions = new PiNativeSessions(
+      host({
+        nativeTranscripts: source,
+        session: async () => record,
+        persistSession: async (session) => void persisted.push({ ...session })
+      })
+    )
+
+    const seeded = await sessions.prefillNativeSession(PROJECT, 'session-1', [
+      mirrored('m-1', 'user', 'Plan the migration'),
+      mirrored('m-2', 'assistant', 'Reading first.')
+    ])
+
+    expect(seeded).toBe(true)
+    const names = await source.list(PROJECT)
+    expect(names).toHaveLength(1)
+    expect(names?.[0]).toMatch(/^\d{4}-\d{2}-\d{2}T[\d-]+Z_[\da-f-]{36}\.jsonl$/u)
+    expect(names?.[0]?.endsWith(`_${record.nativeSessionId}.jsonl`)).toBe(true)
+    // The seeded entries parse back into the mirrored conversation, which is
+    // what the resumed session reads as its own history.
+    const messages = await parseNativePiTranscriptText(
+      await source.read(PROJECT, names?.[0] ?? '').then((text) => text ?? ''),
+      'session-1'
+    )
+    expect(messages.map((message) => message.role)).toEqual(['user', 'assistant'])
+    expect(persisted.map((session) => session.nativeSessionId)).toEqual([record.nativeSessionId])
+  })
+
+  it('keeps a bound native session instead of seeding a second file', async () => {
+    const source = new FakeTranscripts()
+    const sessions = new PiNativeSessions(
+      host({ nativeTranscripts: source, session: async () => sessionRecord() })
+    )
+
+    expect(await sessions.prefillNativeSession(PROJECT, 'session-1', [])).toBe(true)
+    expect(await source.list(PROJECT)).toBeNull()
+  })
+})
+
+/**
+ * A transcript whose active branch is a plain three-message chain, so a trim can
+ * append a `context_edit` against a real entry.
+ */
+function trimTranscriptText(): string {
+  return `${[
+    {
+      type: 'session',
+      version: 3,
+      id: NATIVE,
+      timestamp: '2026-01-01T00:00:00.000Z',
+      cwd: PROJECT
+    },
+    {
+      type: 'message',
+      id: 'entry-1',
+      parentId: null,
+      timestamp: '2026-01-01T00:00:01.000Z',
+      message: {
+        role: 'user',
+        timestamp: 1_767_225_601_000,
+        content: [{ type: 'text', text: 'first question' }]
+      }
+    },
+    {
+      type: 'message',
+      id: 'entry-2',
+      parentId: 'entry-1',
+      timestamp: '2026-01-01T00:00:02.000Z',
+      message: {
+        role: 'assistant',
+        timestamp: 1_767_225_602_000,
+        model: 'gpt-5',
+        provider: 'openai',
+        stopReason: 'stop',
+        content: [{ type: 'text', text: 'reading it now' }]
+      }
+    },
+    {
+      type: 'message',
+      id: 'entry-3',
+      parentId: 'entry-2',
+      timestamp: '2026-01-01T00:00:03.000Z',
+      message: {
+        role: 'user',
+        timestamp: 1_767_225_603_000,
+        content: [{ type: 'text', text: 'second question' }]
+      }
+    }
+  ]
+    .map((entry) => JSON.stringify(entry))
+    .join('\n')}\n`
+}
+
+/** One mirrored message the app would have kept after an edit. */
+function mirrored(id: string, role: 'user' | 'assistant', text: string): AgentMessage {
+  return {
+    id,
+    role,
+    createdAt: 1_767_225_600_000,
+    parts: [{ type: 'text', id: `${id}:text`, messageID: id, text }]
+  }
+}
+
+describe('trimming a native transcript through the transcript source', () => {
+  it('appends the edit records to the file a local session reads', async () => {
+    const agentDirectory = join(await scratch(), 'agent')
+    const source = localPiNativeTranscriptSource(agentDirectory)
+    const name = transcriptName('2026-01-01T00-00-00-000Z')
+    await source.write(PROJECT, name, trimTranscriptText())
+    const sessions = new PiNativeSessions(
+      host({ nativeTranscripts: source, session: async () => sessionRecord() })
+    )
+
+    const outcome = await sessions.trimTranscript(PROJECT, NATIVE, [
+      mirrored('m-2', 'assistant', 'reading it now')
+    ])
+
+    expect(outcome).toMatchObject({ edited: 1, missing: 0 })
+    expect(outcome?.file).toBe(source.resolve(PROJECT, name))
+    const edited = (await source.read(PROJECT, name)) ?? ''
+    expect(edited.startsWith(trimTranscriptText())).toBe(true)
+    const appended = edited.slice(trimTranscriptText().length).trim()
+    expect(JSON.parse(appended)).toMatchObject({
+      type: 'context_edit',
+      targetId: 'entry-2',
+      replacement: null
+    })
+  })
+
+  it('appends them to the transcript a session on another machine holds', async () => {
+    const source = new FakeTranscripts()
+    const name = transcriptName('2026-01-01T00-00-00-000Z')
+    source.files.set(`${PROJECT}/${name}`, trimTranscriptText())
+    const sessions = new PiNativeSessions(
+      host({ nativeTranscripts: source, session: async () => sessionRecord() })
+    )
+
+    const outcome = await sessions.trimTranscript(PROJECT, NATIVE, [
+      mirrored('m-3', 'user', 'second question')
+    ])
+
+    expect(outcome).toMatchObject({ edited: 1, missing: 0 })
+    expect(outcome?.file).toBe(`${PROJECT}/${name}`)
+    const edited = source.files.get(`${PROJECT}/${name}`) ?? ''
+    expect(edited.startsWith(trimTranscriptText())).toBe(true)
+    expect(JSON.parse(edited.slice(trimTranscriptText().length).trim())).toMatchObject({
+      type: 'context_edit',
+      targetId: 'entry-3'
+    })
+  })
+
+  it('reports no transcript to edit when the source holds none', async () => {
+    const sessions = new PiNativeSessions(
+      host({ nativeTranscripts: new FakeTranscripts(), session: async () => sessionRecord() })
+    )
+
+    expect(
+      await sessions.trimTranscript(PROJECT, NATIVE, [mirrored('m-1', 'user', 'first question')])
+    ).toBeNull()
   })
 })
 

@@ -1,5 +1,3 @@
-import { createReadStream } from 'node:fs'
-import { createInterface } from 'node:readline'
 import type { AgentEvent, AgentMessage, SessionAgentEvent } from '../../../lib/types'
 import { CIO_SUBAGENT_STREAM_STATUS_KEY } from '../../../lib/core-tools'
 import { parseRecord } from '../../../lib/agent-interactions'
@@ -16,7 +14,7 @@ import {
 import { PI_USAGE_EXTENSION_KEY } from '../pi-usage-extension'
 import { Logger } from '../../system/logger'
 import { isOversizedRequestError } from './pi-errors'
-import { findNativePiSessionFile, reconcileNativeCompactions } from './pi-native-session'
+import { piNativeTranscriptSourceFor, reconcileNativeCompactions } from './pi-native-session'
 import { latestPiTurnIndex, mapPiRecord } from './pi-stream-fold'
 import type { PiTurnState } from './pi-stream-types'
 import { messageTimestamp, numberValue, record, stringValue } from './pi-values'
@@ -277,27 +275,24 @@ export class PiTurnLifecycle {
           session.nativeSessionId
         ) {
           try {
-            const file = await findNativePiSessionFile(
-              projectPath,
-              session.nativeSessionId,
-              this.host.agentDirectory
-            )
-            if (file) {
-              const input = createReadStream(file)
-              const lines = createInterface({ input, crlfDelay: Infinity })
-              try {
-                for await (const line of lines) {
-                  const entry = parseRecord(line)
-                  if (entry?.['id'] === keptId) {
-                    const message = parseRecord(entry['message'])
-                    if (message) record['firstKeptCreatedAt'] = messageTimestamp(message)
-                    break
-                  }
-                  await new Promise<void>((resolve) => setImmediate(resolve))
+            // Through the transcript source, not this machine's filesystem: on an
+            // Oven the transcript being read lives on that machine, and reading a
+            // local path there silently yields nothing.
+            const source = piNativeTranscriptSourceFor(projectPath, this.host.agentDirectory)
+            const files = await source.list(projectPath)
+            const fileName = files
+              ?.filter((name) => name.endsWith(`_${session.nativeSessionId}.jsonl`))
+              .sort()
+              .at(-1)
+            const text = fileName ? await source.read(projectPath, fileName) : null
+            if (text) {
+              for (const line of text.split(/\r?\n/u)) {
+                const entry = parseRecord(line)
+                if (entry?.['id'] === keptId) {
+                  const message = parseRecord(entry['message'])
+                  if (message) record['firstKeptCreatedAt'] = messageTimestamp(message)
+                  break
                 }
-              } finally {
-                lines.close()
-                input.destroy()
               }
             }
           } catch (error) {

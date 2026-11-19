@@ -22,6 +22,7 @@ import {
 } from '../../../src/main/drivers/pi/pi-native-session'
 import {
   OVEN_PI_TRANSCRIPT_CHUNK_BYTES,
+  OVEN_PI_TRANSCRIPT_POLL_MS,
   ovenPiTranscriptSource,
   type OvenPiTranscriptRoute,
   type OvenPiTranscriptService
@@ -71,6 +72,8 @@ class FakeOven implements OvenPiTranscriptService {
   readonly files = new Map<string, Buffer>()
   /** Directories that exist; a path not listed here has never been created. */
   readonly directories = new Set<string>([TRANSCRIPTS, ACCOUNT])
+  /** The mode each published file was given. */
+  readonly modes = new Map<string, number>()
   /** True for the bundle this app replaces: it has no `remove` at all. */
   cannotDelete = false
 
@@ -97,7 +100,7 @@ class FakeOven implements OvenPiTranscriptService {
             kind: 'file',
             size: this.files.get(`${prefix}${name}`)?.length ?? 0,
             modifiedAt: 0,
-            mode: 0o600
+            mode: this.modes.get(`${prefix}${name}`) ?? 0o600
           })),
           ...(page.length === PAGE ? { after: page[page.length - 1] } : {})
         }
@@ -112,9 +115,49 @@ class FakeOven implements OvenPiTranscriptService {
           size: data.length
         }
       }
+      case 'mkdir': {
+        const path =
+          input.path === '.' ? asOvenPath(input.root) : `${asOvenPath(input.root)}/${input.path}`
+        if (input.exclusive === true && this.directories.has(path))
+          throw Object.assign(new Error(`EEXIST: file already exists, mkdir '${path}'`), {
+            code: 'EEXIST'
+          })
+        this.directories.add(path)
+        return { root: input.root }
+      }
+      case 'write': {
+        const path = `${asOvenPath(input.root)}/${input.path}`
+        if (!this.directories.has(asOvenPath(input.root))) throw missing(input.root)
+        if (input.exclusive === true && this.files.has(path))
+          throw Object.assign(new Error(`EEXIST: file already exists, open '${path}'`), {
+            code: 'EEXIST'
+          })
+        const data = Buffer.from(input.data, 'base64')
+        const current = this.files.get(path) ?? Buffer.alloc(0)
+        const end = Math.max(current.length, input.offset + data.length)
+        const merged = Buffer.alloc(end)
+        current.copy(merged, 0)
+        data.copy(merged, input.offset)
+        this.files.set(path, merged)
+        if (typeof input.mode === 'number') this.modes.set(path, input.mode)
+        return { root: input.root }
+      }
+      case 'replace': {
+        const path = `${asOvenPath(input.root)}/${input.path}`
+        const staged = `${asOvenPath(input.root)}/${input.staged}`
+        const data = this.files.get(staged)
+        if (!data) throw missing(staged)
+        this.files.delete(staged)
+        this.modes.delete(staged)
+        this.files.set(path, data)
+        this.modes.set(path, input.mode)
+        this.directories.add(asOvenPath(input.root))
+        return { root: input.root }
+      }
       case 'remove': {
         const path = `${asOvenPath(input.root)}/${input.path}`
         if (!this.files.delete(path)) throw missing(path)
+        this.modes.delete(path)
         return { root: input.root }
       }
       case 'move': {
@@ -246,7 +289,91 @@ describe('ovenPiTranscriptSource', () => {
 
     expect(await source.list(CHECKOUT)).toBeNull()
     expect(await source.read(CHECKOUT, 'anything.jsonl')).toBeNull()
+    expect(await source.waitFor(CHECKOUT, '.jsonl', 10)).toBeNull()
+    expect(source.holds(CHECKOUT)).toBe(false)
     expect(() => source.resolve(CHECKOUT, 'anything.jsonl')).toThrow(CHECKOUT)
+  })
+
+  it('holds only the checkouts a session of this runtime works in', () => {
+    const source = ovenPiTranscriptSource({
+      service: new FakeOven(),
+      route: (projectPath) => (projectPath === CHECKOUT ? route() : null)
+    })
+    expect(source.holds(CHECKOUT)).toBe(true)
+    expect(source.holds(`${DATA_ROOT}/checkouts/elsewhere`)).toBe(false)
+  })
+
+  it('stages a written transcript and publishes it in one step', async () => {
+    const service = new FakeOven()
+    service.directories.delete(TRANSCRIPTS)
+    const source = ovenPiTranscriptSource({ service, route })
+    const name = transcriptName('2026-01-01T00-00-00-000Z')
+    const text = '{"type":"session"}\n'
+
+    // pi creates the project's session directory on its first flush; a seeded
+    // transcript creates it the same way.
+    await source.write(CHECKOUT, name, text)
+
+    expect(service.directories.has(TRANSCRIPTS)).toBe(true)
+    expect(await source.list(CHECKOUT)).toEqual([name])
+    expect(await source.read(CHECKOUT, name)).toBe(text)
+    expect(service.modes.get(`${TRANSCRIPTS}/${name}`)).toBe(0o600)
+    // Staged first, published by a rename: pi never opens half a transcript.
+    const writes = service.calls.flatMap((call) => (call.operation === 'write' ? [call.path] : []))
+    expect(writes).toHaveLength(1)
+    expect(writes[0]).toMatch(new RegExp(`^${name}\\.[0-9a-f-]{36}\\.next$`, 'u'))
+    const replace = service.calls.flatMap((call) => (call.operation === 'replace' ? [call] : []))
+    expect(replace).toHaveLength(1)
+    expect(replace[0]).toMatchObject({ path: name, staged: writes[0], mode: 0o600 })
+    // Nothing is left behind beside the published transcript.
+    expect([...service.files.keys()]).toEqual([`${TRANSCRIPTS}/${name}`])
+  })
+
+  it('writes a transcript longer than one chunk as one published file', async () => {
+    const service = new FakeOven()
+    const source = ovenPiTranscriptSource({ service, route })
+    const name = transcriptName('2026-01-01T00-00-00-000Z')
+    const text = `${'x'.repeat(3 * CHUNK)}\n`
+
+    await source.write(CHECKOUT, name, text)
+
+    expect(await source.read(CHECKOUT, name)).toBe(text)
+    const offsets = service.calls.flatMap((call) =>
+      call.operation === 'write' ? [call.offset] : []
+    )
+    expect(offsets).toEqual([0, CHUNK, 2 * CHUNK, 3 * CHUNK])
+  })
+
+  it('polls for a transcript pi has not flushed yet and resolves the newest match', async () => {
+    const service = new FakeOven()
+    const source = ovenPiTranscriptSource({ service, route })
+    const older = transcriptName('2026-01-01T00-00-00-000Z')
+    const newer = transcriptName('2026-02-01T00-00-00-000Z')
+
+    const waiting = source.waitFor(CHECKOUT, `_${NATIVE}.jsonl`, 5_000)
+    // The Oven-side pi flushes the child's session file once its first
+    // assistant message completes, so the file is genuinely late.
+    setTimeout(() => {
+      service.files.set(`${TRANSCRIPTS}/${older}`, Buffer.from('{}\n'))
+      service.files.set(`${TRANSCRIPTS}/${newer}`, Buffer.from('{}\n'))
+    }, 300)
+
+    expect(await waiting).toBe(`${TRANSCRIPTS}/${newer}`)
+    expect(service.calls.filter((call) => call.operation === 'list').length).toBeGreaterThan(1)
+  })
+
+  it('answers null on time and never waits past the caller\u2019s budget', async () => {
+    const service = new FakeOven()
+    const source = ovenPiTranscriptSource({ service, route })
+    const startedAt = Date.now()
+
+    expect(await source.waitFor(CHECKOUT, `_${NATIVE}.jsonl`, 200)).toBeNull()
+    const elapsed = Date.now() - startedAt
+    expect(elapsed).toBeGreaterThanOrEqual(190)
+    // One listing may still be in flight when the deadline lands, and a poll may
+    // not run longer than the time left, so the overshoot is a single poll.
+    expect(elapsed).toBeLessThan(200 + OVEN_PI_TRANSCRIPT_POLL_MS + 150)
+    expect(service.calls.filter((call) => call.operation === 'list').length).toBeGreaterThan(1)
   })
 })
 

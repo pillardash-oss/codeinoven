@@ -45,11 +45,10 @@ import { PiUiRequestBoard } from './pi/pi-driver-ui-requests'
 import { PiUsageTracker } from './pi/pi-driver-usage'
 import { PiNativeSessions } from './pi/pi-driver-native-session'
 import {
-  findNativePiSessionFile,
+  installRemotePiNativeTranscriptSource,
   isPiNativeTranscriptSource,
   type PiNativeTranscriptSource
 } from './pi/pi-native-session'
-import { trimPiTranscript } from './pi/pi-transcript-trim'
 import {
   PiCioRuntimeFiles,
   PiCioSessionStorages,
@@ -244,6 +243,12 @@ export class PiDriver extends PersistentCliDriver {
     // sessions start on; an explicit source wins for callers that build a
     // driver without a launcher.
     const transcripts = nativeTranscripts ?? launcherTranscripts(launch)
+    // The turn lifecycle reaches two transcript reads by project path alone (the
+    // retained compaction boundary and the post-turn reconciliation), so a
+    // driver whose sessions start somewhere else installs its source for the
+    // whole app. A driver whose sessions run here installs nothing, and every
+    // read stays on this machine's disk exactly as it always has.
+    if (transcripts) installRemotePiNativeTranscriptSource(transcripts)
     this.agentDirectory = accountEnvironment['PI_CODING_AGENT_DIR']?.trim() || undefined
     this.authConfig = this.agentDirectory
       ? new PiAuthConfigService(join(this.agentDirectory, 'auth.json'))
@@ -700,13 +705,13 @@ export class PiDriver extends PersistentCliDriver {
     const removed = session.messages.filter((message) => !keepIds.has(message.id))
     if (removed.length === 0) return true
     if (!session.nativeSessionId) return false
-    const file = await findNativePiSessionFile(
-      projectPath,
-      session.nativeSessionId,
-      this.agentDirectory
-    )
-    if (!file) return false
-    const result = await trimPiTranscript(file, removed)
+    const result = await this.nativeSessions
+      .trimTranscript(projectPath, session.nativeSessionId, removed)
+      .catch((error: unknown) => {
+        Logger.dev('Pi native history trim failed:', error)
+        return null
+      })
+    if (!result) return false
     if (result.missing > 0) {
       Logger.dev('Pi native history trim could not find every removed turn:', {
         sessionId,
@@ -722,7 +727,7 @@ export class PiDriver extends PersistentCliDriver {
     const client = this.rpcSessions.client(sessionId)
     if (client?.running) {
       try {
-        await client.switchSession(file)
+        await client.switchSession(result.file)
       } catch (error) {
         // The transcript is already correct; a session that could not reload
         // resumes the edited file on its next turn anyway.

@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
-import { readdir, readFile, rm } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -57,7 +57,25 @@ export interface PiNativeTranscriptSource {
   list(projectPath: string): Promise<string[] | null>
   /** File text, or null when it is gone. */
   read(projectPath: string, fileName: string): Promise<string | null>
+  /**
+   * Write one whole transcript file, creating the directory pi would have
+   * created for it.
+   */
+  write(projectPath: string, fileName: string, content: string): Promise<void>
+  /** Resolve the newest file whose name ends with this suffix, waiting up to `timeoutMs` for it to appear. */
+  waitFor(projectPath: string, suffix: string, timeoutMs: number): Promise<string | null>
   remove(projectPath: string, fileName: string): Promise<void>
+  /**
+   * Whether this source is where that project's transcripts live at all.
+   *
+   * The turn lifecycle reaches two transcript reads by project path alone (see
+   * `reconcileNativeCompactions` and `findNativePiSessionFile`), so a driver
+   * whose sessions run on another machine installs its source for the whole app
+   * (see `installRemotePiNativeTranscriptSource`). This is what keeps a project
+   * that runs here on this machine's own files instead of being read over that
+   * source's machine, where it has no transcripts at all.
+   */
+  holds(projectPath: string): boolean
 }
 
 /**
@@ -67,7 +85,7 @@ export interface PiNativeTranscriptSource {
 function localPiNativeTranscriptSource(agentDirectory?: string): PiNativeTranscriptSource {
   const directoryOf = (projectPath: string): string =>
     nativePiSessionDir(projectPath, agentDirectory)
-  return {
+  const source: PiNativeTranscriptSource = {
     resolve: (projectPath, fileName) => join(directoryOf(projectPath), fileName),
     list: async (projectPath) => {
       try {
@@ -85,26 +103,86 @@ function localPiNativeTranscriptSource(agentDirectory?: string): PiNativeTranscr
         return null
       }
     },
+    write: async (projectPath, fileName, content) => {
+      // pi creates the project's session directory on its first flush, so a
+      // seeded transcript has to create it exactly the same way.
+      const directory = directoryOf(projectPath)
+      await mkdir(directory, { recursive: true })
+      await writeFile(join(directory, fileName), content, 'utf8')
+    },
+    waitFor: (projectPath, suffix, timeoutMs) =>
+      watchForNativePiTranscript(source, directoryOf(projectPath), projectPath, suffix, timeoutMs),
     remove: async (projectPath, fileName) => {
       await rm(join(directoryOf(projectPath), fileName), { force: true })
-    }
+    },
+    // Every project's transcripts are here: this is the source of last resort.
+    holds: () => true
   }
+  return source
 }
+
+/**
+ * The source for sessions whose pi process runs on another machine.
+ *
+ * `reconcileNativeCompactions` and `findNativePiSessionFile` are reached from the
+ * turn lifecycle by project path alone, so a driver that starts pi somewhere
+ * else installs its source here once and every transcript read for a project
+ * that machine holds goes there instead of this computer's disk. A driver whose
+ * sessions run here installs nothing and leaves the local source in place. One
+ * app run has one Oven runtime (`installOvenPiRuntime`), so at most one such
+ * source exists.
+ */
+let remotePiNativeTranscripts: PiNativeTranscriptSource | null = null
+
+/** Install the source for projects whose pi runs elsewhere, or clear it with null. */
+export function installRemotePiNativeTranscriptSource(
+  source: PiNativeTranscriptSource | null
+): void {
+  remotePiNativeTranscripts = source
+}
+
+/**
+ * Where one project's transcripts are read from.
+ *
+ * A project bound to the installed remote source is read there; every other
+ * project is read here, so a machine that also runs pi sessions on an Oven keeps
+ * its local threads on its own files.
+ */
+function piNativeTranscriptSourceFor(
+  projectPath: string,
+  agentDirectory?: string
+): PiNativeTranscriptSource {
+  const remote = remotePiNativeTranscripts
+  if (remote?.holds(projectPath)) return remote
+  return localPiNativeTranscriptSource(agentDirectory)
+}
+
+/**
+ * The members a source must implement to be usable by every reader above.
+ *
+ * A source can arrive from another layer (the Oven runtime hands one to the
+ * driver that starts pi there), so they are checked at the boundary instead of
+ * being trusted on a structural cast.
+ */
+const MANDATORY_TRANSCRIPT_SOURCE_MEMBERS = [
+  'resolve',
+  'list',
+  'read',
+  'write',
+  'waitFor',
+  'remove',
+  'holds'
+] as const
 
 /**
  * Whether a value is a usable transcript source.
  *
- * A source can arrive from another layer (the Oven runtime hands one to the
- * driver that starts pi there), so it is checked at the boundary instead of
- * being trusted on a structural cast.
+ * See `MANDATORY_TRANSCRIPT_SOURCE_MEMBERS`.
  */
 function isPiNativeTranscriptSource(value: unknown): value is PiNativeTranscriptSource {
   const candidate = record(value)
-  return (
-    typeof candidate?.['resolve'] === 'function' &&
-    typeof candidate['list'] === 'function' &&
-    typeof candidate['read'] === 'function' &&
-    typeof candidate['remove'] === 'function'
+  return MANDATORY_TRANSCRIPT_SOURCE_MEMBERS.every(
+    (member) => typeof candidate?.[member] === 'function'
   )
 }
 
@@ -117,50 +195,68 @@ async function findNativePiTranscriptName(
   projectPath: string,
   sessionId: string
 ): Promise<string | null> {
+  return newestTranscriptName(source, projectPath, `_${sessionId}.jsonl`)
+}
+
+/** The newest file name in one transcript directory whose name ends with a suffix. */
+async function newestTranscriptName(
+  source: PiNativeTranscriptSource,
+  projectPath: string,
+  suffix: string
+): Promise<string | null> {
   const entries = await source.list(projectPath)
   if (!entries) return null
-  const matches = entries.filter((name) => name.endsWith(`_${sessionId}.jsonl`)).sort()
+  const matches = entries.filter((name) => name.endsWith(suffix)).sort()
   return matches.at(-1) ?? null
 }
 
-/** The absolute path of a native pi transcript read from this machine. */
+/** The absolute path of a native pi transcript, read wherever it lives. */
 async function findNativePiSessionFile(
   projectPath: string,
   sessionId: string,
   agentDirectory?: string
 ): Promise<string | null> {
-  const source = localPiNativeTranscriptSource(agentDirectory)
+  const source = piNativeTranscriptSourceFor(projectPath, agentDirectory)
   const name = await findNativePiTranscriptName(source, projectPath, sessionId)
   return name ? source.resolve(projectPath, name) : null
 }
 
-/**
- * Wait for pi to flush a sub-agent's native session transcript. pi creates
- * the .jsonl in one synchronous write when the session's first assistant
- * message completes, so watching the directory for its creation is the
- * reliable signal   no polling. Resolves the file path, or null on timeout
- * or if the directory cannot be watched.
- */
-async function waitForNativePiSessionFile(
+/** The newest file in one transcript directory whose name ends with a suffix. */
+async function newestTranscriptMatching(
+  source: PiNativeTranscriptSource,
   projectPath: string,
-  sessionId: string,
-  timeoutMs = 10_000,
-  agentDirectory?: string
+  suffix: string
 ): Promise<string | null> {
-  const dir = nativePiSessionDir(projectPath, agentDirectory)
-  const suffix = `_${sessionId}.jsonl`
+  const name = await newestTranscriptName(source, projectPath, suffix)
+  return name ? source.resolve(projectPath, name) : null
+}
+
+/**
+ * Wait for pi to flush a sub-agent's native session transcript. pi creates the
+ * .jsonl in one synchronous write when the session's first assistant message
+ * completes, so watching the directory for its creation is the reliable signal,
+ * never a poll. Resolves the file path, or null on timeout or if the directory
+ * cannot be watched.
+ */
+async function watchForNativePiTranscript(
+  source: PiNativeTranscriptSource,
+  directory: string,
+  projectPath: string,
+  suffix: string,
+  timeoutMs: number
+): Promise<string | null> {
   const deadline = Date.now() + timeoutMs
   // A sub-agent can spawn before the primary session's first flush has
   // created the project's native session directory, so `watch(dir)` throws.
   // Wait for the directory to appear within the same budget instead of
   // failing immediately with "CLI session is unavailable".
-  while (!existsSync(dir)) {
+  while (!existsSync(directory)) {
     if (Date.now() >= deadline) return null
     await new Promise((resolve) => setTimeout(resolve, 150))
   }
   let watcher: FSWatcher
   try {
-    watcher = watch(dir)
+    watcher = watch(directory)
   } catch {
     return null
   }
@@ -171,18 +267,22 @@ async function waitForNativePiSessionFile(
       watcher.close()
       resolve(file)
     }
+    // Any event in the directory can be the flush. The name a watcher reports
+    // is not dependable (some runtimes hand back the event type instead of the
+    // file), and re-listing answers exactly the question the caller asked, so
+    // every event re-checks for the newest match.
+    const check = (): void => {
+      void newestTranscriptMatching(source, projectPath, suffix).then((file) => {
+        if (file) finish(file)
+      })
+    }
     watcher.on('error', () => finish(null))
-    watcher.on('rename', (filename) => {
-      if (typeof filename === 'string' && filename.endsWith(suffix)) {
-        finish(join(dir, filename))
-      }
-    })
+    watcher.on('rename', check)
+    watcher.on('change', check)
     // The transcript may have been flushed between the caller's existence
-    // check and the watcher attaching   no rename event would fire for it.
-    // Attach the watcher first, then re-check so neither window is missed.
-    void findNativePiSessionFile(projectPath, sessionId, agentDirectory).then((file) => {
-      if (file) finish(file)
-    })
+    // check and the watcher attaching, so no event would fire for it. Attach the
+    // watcher first, then re-check so neither window is missed.
+    check()
   })
 }
 
@@ -398,21 +498,30 @@ async function parseNativePiTranscriptLines(
 export {
   nativePiSessionDir,
   localPiNativeTranscriptSource,
+  piNativeTranscriptSourceFor,
   isPiNativeTranscriptSource,
   findNativePiTranscriptName,
   findNativePiSessionFile,
-  waitForNativePiSessionFile,
   prefillTranscriptEntries,
   parseNativePiSession,
   parseNativePiTranscriptText
 }
 
-/** Returns null when no native transcript exists so the caller rethrows. */
+/**
+ * A delegated child session's transcript, read wherever that child's pi process
+ * writes it.
+ *
+ * Returns null when no native transcript exists so the caller rethrows.
+ */
 export async function loadNativeSubagentMessages(
   projectPath: string,
   sessionId: string,
-  waitForFlush: boolean,
-  agentDirectory?: string
+  options: {
+    waitForFlush: boolean
+    agentDirectory?: string
+    /** The machine the child's pi runs on; this computer's disk when absent. */
+    source?: PiNativeTranscriptSource
+  }
 ): Promise<AgentMessage[] | null> {
   // The chat engine captures a sub-agent's transcript the moment the spawn
   // tool reports its childSessionId   but pi defers a new session's first
@@ -424,13 +533,13 @@ export async function loadNativeSubagentMessages(
   // guarantees the child is no longer live (`waitForFlush: false`) a
   // missing file is final   watching would only burn seconds waiting for
   // a transcript that can never appear, on every tab reopen.
-  const source = localPiNativeTranscriptSource(agentDirectory)
+  const source = options.source ?? localPiNativeTranscriptSource(options.agentDirectory)
   const existing = await findNativePiTranscriptName(source, projectPath, sessionId)
   const file =
     existing !== null
       ? source.resolve(projectPath, existing)
-      : waitForFlush
-        ? await waitForNativePiSessionFile(projectPath, sessionId, 10_000, agentDirectory)
+      : options.waitForFlush
+        ? await source.waitFor(projectPath, `_${sessionId}.jsonl`, 10_000)
         : null
   if (!file) return null
   // pi writes the flushed file synchronously before closing it, but keep a
@@ -481,7 +590,7 @@ export async function reconcileNativeCompactions(
 ): Promise<void> {
   const nativeSessionId = session.nativeSessionId
   if (!projectPath || !nativeSessionId) return
-  const source = localPiNativeTranscriptSource(agentDirectory)
+  const source = piNativeTranscriptSourceFor(projectPath, agentDirectory)
   const name = await findNativePiTranscriptName(source, projectPath, nativeSessionId)
   if (!name) return
   const text = await source.read(projectPath, name)
