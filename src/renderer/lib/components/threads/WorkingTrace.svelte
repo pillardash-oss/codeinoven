@@ -5,7 +5,7 @@
   import { foldSlide } from '$lib/components/shared/card-motion'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-  import type { AgentPart, ThinkingLevel } from '$shared/types'
+  import type { AgentPart, OvenPrepareStep, ThinkingLevel } from '$shared/types'
   import type { TraceSpan } from '$shared/working-trace-span'
   import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
@@ -47,6 +47,9 @@
     /** What the app is doing before the harness streams, e.g. preparing a remote
      *  checkout or cloning a repository. */
     note?: string | null
+    /** The parallel preparation steps behind that note: install the harness,
+     *  install git, clone the checkout. Each reports its own state. */
+    steps?: OvenPrepareStep[] | null
     /** What this trace is, in the header. Defaults to "Working Trace". A trace
      *  that belongs to another session   an Assignment draft offshoot bubbled
      *  up into its coordinator thread   names itself here, so it never reads as
@@ -169,6 +172,7 @@
     rehydrated = false,
     foreignRun = false,
     note = null,
+    steps = null,
     headerLabel = 'Working Trace',
     initialOpen = false,
     folded,
@@ -737,8 +741,8 @@
           {onOpenSubagent}
         />
       {/each}
-      {#if busy && (foreignRun || rehydrated || note)}
-        <WorkingTraceStatus {rehydrated} {foreignRun} {note} />
+      {#if busy && (foreignRun || rehydrated || note || (steps?.length ?? 0) > 0)}
+        <WorkingTraceStatus {rehydrated} {foreignRun} {note} {steps} />
       {/if}
     </div>
   {/if}

@@ -342,6 +342,16 @@ export class ThreadViewUnmirroredTraceStartTime extends BoardUnit<ThreadView> {
       : null
   )
 
+  /** The parallel preparation steps behind that note, when the app is doing more
+   *  than one thing on the Oven at once: install the harness, install git, clone
+   *  the checkout. Each one reports its own state, so the reader can see which is
+   *  still working when one of them is slower than the others. */
+  workingStatusSteps = $derived(
+    this.root.handleAgentEvent.providerStatus?.state === 'working'
+      ? (this.root.handleAgentEvent.providerStatus.steps ?? null)
+      : null
+  )
+
   /** True once the saved position (or initial bottom) has been applied. */
   scrollRestored = $state(false)
 

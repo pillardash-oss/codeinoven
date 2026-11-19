@@ -547,6 +547,7 @@
           busy={traceBusy}
           done={!traceBusy}
           note={traceBusy ? board.unmirroredTraceStartTime.workingStatusNote : null}
+          steps={traceBusy ? board.unmirroredTraceStartTime.workingStatusSteps : null}
           active={board.props.active}
           olderPartsAvailable={board.pollStreamParts.streamTrace.hasOlder}
           onLoadOlderParts={board.pollStreamParts.loadOlderStreamParts}
