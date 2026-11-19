@@ -5,7 +5,6 @@ import { BUNDLED_PI_FILE_POLICY } from '../../../lib/bundled-pi-file-protection'
 import { AGENT_SECRET_ROOT } from '../../../lib/secret-request'
 import type { CompactionFallbackContext, HandoffWorkerSession } from '../driver.interface'
 import { piCioCoreToolsExtension } from '../pi-cio-core-tools-extension'
-import type { StorageEngine } from '../../storage/storage-engine'
 import { Logger } from '../../system/logger'
 import { emptyStopRequest } from './pi-values'
 
@@ -20,9 +19,28 @@ export function cioCoreToolsDirectory(sessionId: string): string {
   return join('runtime', 'cio-core-tools', sessionId)
 }
 
+/** The file surface a pi session's handoff files need. */
+export interface PiHandoffStorage {
+  resolve(relativePath: string): string
+  readRaw(relativePath: string): Promise<string | null>
+  writeRaw(relativePath: string, content: string): Promise<void>
+  remove(relativePath: string): Promise<void>
+}
+
+/**
+ * Handoff files plus the app setting the materialized module embeds.
+ *
+ * The setting is this device's own (the user's question cap); only the files can
+ * live on an Oven, so a remote session composes this from an Oven-backed file
+ * store and the local configuration. `StorageEngine` satisfies both halves.
+ */
+export interface PiCioFilesStorage extends PiHandoffStorage {
+  getConfig(): Promise<{ agentQuestionCap: number }>
+}
+
 /** Everything the per-session runtime files need from the driver. */
 export interface PiCioFilesHost {
-  readonly storage: StorageEngine
+  readonly storage: PiCioFilesStorage
   /** Whether the session is an auxiliary one-shot (title, grading, lessons). */
   isTitleSession(sessionId: string): boolean
   /** Register the materialized sub-agent watch file for the session. */
@@ -205,7 +223,7 @@ export class PiCioRuntimeFiles {
       return
     }
     try {
-      if (endpoint === null) await this.host.storage.removeRaw(handoffPath)
+      if (endpoint === null) await this.host.storage.remove(handoffPath)
       else {
         await this.host.storage.writeRaw(handoffPath, JSON.stringify(endpoint))
       }
@@ -376,7 +394,7 @@ export class PiCioRuntimeFiles {
     this.gatewayHandoffPaths.delete(sessionId)
     this.pendingGatewayEndpoints.delete(sessionId)
     try {
-      await this.host.storage.removeRaw(handoffPath)
+      await this.host.storage.remove(handoffPath)
     } catch (error) {
       Logger.dev('Pi utility gateway handoff removal failed:', error)
     }

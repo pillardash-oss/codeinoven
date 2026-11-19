@@ -1,0 +1,277 @@
+import { randomUUID } from 'node:crypto'
+import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../lib/ovens'
+import type { PiHandoffStorage } from '../drivers/pi/pi-driver-cio-files'
+
+/**
+ * The slice of the Oven client a remote Pi handoff store needs.
+ *
+ * `OvenService` already satisfies it: the same warm request channel that lists a
+ * checkout and reads a file carries these calls.
+ */
+export interface OvenPiStorageService {
+  workspace(id: string, input: OvenWorkspaceRequest): Promise<OvenWorkspaceResult>
+}
+
+/**
+ * One write chunk the Oven's file API accepts.
+ *
+ * The Oven refuses a larger request, so a handoff file bigger than one turn's
+ * system prompt is written and read back as a sequence of these.
+ */
+export const OVEN_PI_STORAGE_CHUNK_BYTES = 128 * 1024
+
+/** A handoff file is read by the harness process on the Oven only. */
+const FILE_MODE = 0o600
+
+/** Where a removal parks a file; see `trash`. */
+const TRASH_DIRECTORY = '.trash'
+
+/**
+ * The app-owned handoff files a pi session reads, held on a remote Oven.
+ *
+ * A pi session on an Oven needs exactly what a local one reads through
+ * `StorageEngine`: its composed extension's per-turn handoffs (system prompt,
+ * history recap, allowed tools, gateway endpoint, stop flag, compaction
+ * context). This implements that same file surface over the Oven's workspace
+ * API, so the driver publishes and reads them without knowing which machine
+ * holds them.
+ *
+ * `root` must be an app-owned directory on the Oven, never a checkout: these
+ * files are application state, and nothing here deletes something it did not
+ * write.
+ */
+export class OvenPiStorage implements PiHandoffStorage {
+  private readonly service: OvenPiStorageService
+  private readonly ovenId: string
+  private readonly root: string
+  /**
+   * One tail promise per file path.
+   *
+   * A multi-chunk write is a sequence of requests, so two writers of the same
+   * file would otherwise interleave chunks into one another's staging file and
+   * publish a mixture of both. Reads and removals queue behind the same tail so
+   * a caller never observes a file mid-publish.
+   */
+  private readonly queues = new Map<string, Promise<unknown>>()
+
+  constructor(input: { service: OvenPiStorageService; ovenId: string; root: string }) {
+    this.service = input.service
+    this.ovenId = input.ovenId
+    this.root = ovenRootPath(input.root)
+  }
+
+  /** The absolute Oven path a storage-relative handoff path names. */
+  resolve(relativePath: string): string {
+    return joinOvenPath(this.root, relativePathOf(relativePath))
+  }
+
+  /** The handoff file's text, or null when nothing was published at that path. */
+  async readRaw(relativePath: string): Promise<string | null> {
+    const path = relativePathOf(relativePath)
+    return this.enqueue(path, () => this.read(path))
+  }
+
+  /** Publish a whole handoff file, replacing whatever the path held. */
+  async writeRaw(relativePath: string, content: string): Promise<void> {
+    const path = relativePathOf(relativePath)
+    return this.enqueue(path, () => this.write(path, content))
+  }
+
+  /**
+   * Take a handoff file out of its path.
+   *
+   * A file that is already gone is not an error: clearing a handoff twice is
+   * routine, and the caller only cares that nothing is there afterwards.
+   */
+  async remove(relativePath: string): Promise<void> {
+    const path = relativePathOf(relativePath)
+    return this.enqueue(path, () => this.trash(path, true))
+  }
+
+  /** Read every chunk of one file, or null when the file does not exist. */
+  private async read(path: string): Promise<string | null> {
+    const chunks: Buffer[] = []
+    let offset = 0
+    for (;;) {
+      let result: OvenWorkspaceResult
+      try {
+        result = await this.request(
+          { operation: 'read', root: this.root, path, offset },
+          `read ${path}`
+        )
+      } catch (error) {
+        // A handoff that was never published (or was cleared) reads as absent,
+        // exactly as the local engine reports it. A later chunk failing is a
+        // real failure: a truncated read would hand pi half a system prompt.
+        if (offset === 0 && isMissing(error)) return null
+        throw error
+      }
+      const bytes = Buffer.from(result.data ?? '', 'base64')
+      if (!bytes.length) break
+      chunks.push(bytes)
+      offset += bytes.length
+      // A short chunk is the last one; `size` ends the walk without the extra
+      // request a file whose length is an exact multiple of the chunk needs.
+      if (bytes.length < OVEN_PI_STORAGE_CHUNK_BYTES) break
+      if (typeof result.size === 'number' && offset >= result.size) break
+    }
+    return Buffer.concat(chunks).toString('utf8')
+  }
+
+  /**
+   * Write one file whole, in chunks, and publish it in a single step.
+   *
+   * Chunks go to a staging file beside the destination and a rename publishes
+   * it, so pi never reads a half-written handoff: the old content stays visible
+   * until the last chunk has landed.
+   */
+  private async write(path: string, content: string): Promise<void> {
+    const bytes = Buffer.from(content, 'utf8')
+    const directory = parentOf(path)
+    if (directory)
+      await this.request(
+        { operation: 'mkdir', root: this.root, path: directory },
+        `create the directory for ${path}`
+      )
+    const staged = `${path}.${randomUUID()}.next`
+    try {
+      for (
+        let offset = 0;
+        offset < bytes.length || offset === 0;
+        offset += OVEN_PI_STORAGE_CHUNK_BYTES
+      ) {
+        await this.request(
+          {
+            operation: 'write',
+            root: this.root,
+            path: staged,
+            offset,
+            data: bytes.subarray(offset, offset + OVEN_PI_STORAGE_CHUNK_BYTES).toString('base64'),
+            exclusive: offset === 0,
+            mode: FILE_MODE
+          },
+          `write ${path}`
+        )
+      }
+      await this.request(
+        { operation: 'replace', root: this.root, path, staged, mode: FILE_MODE },
+        `publish ${path}`
+      )
+    } catch (error) {
+      // The staged file is invisible to pi either way; parking it keeps the
+      // session directory from collecting one leftover per failed write.
+      await this.trash(staged, true).catch(() => undefined)
+      throw error
+    }
+  }
+
+  /**
+   * Move one handoff file into a `.trash` folder beside it.
+   *
+   * The Oven's file API has no unlink, and this app never deletes a remote file
+   * outright: a removal is a rename, so the path the extension reads is empty
+   * again and a mistaken removal stays recoverable on the Oven.
+   */
+  private async trash(path: string, tolerateMissing: boolean): Promise<void> {
+    const directory = parentOf(path)
+    try {
+      await this.request(
+        {
+          operation: 'move',
+          root: this.root,
+          path,
+          to: joinOvenPath(
+            directory ? `${directory}/${TRASH_DIRECTORY}` : TRASH_DIRECTORY,
+            randomUUID()
+          )
+        },
+        `remove ${path}`
+      )
+    } catch (error) {
+      if (tolerateMissing && isMissing(error)) return
+      throw error
+    }
+  }
+
+  /** One request, with a failure that names the operation and the path only. */
+  private async request(input: OvenWorkspaceRequest, action: string): Promise<OvenWorkspaceResult> {
+    try {
+      return await this.service.workspace(this.ovenId, input)
+    } catch (error) {
+      const failure = new Error(`Could not ${action} on the Oven: ${messageOf(error)}`, {
+        cause: error
+      })
+      throw isMissing(error) ? Object.assign(failure, { code: 'ENOENT' }) : failure
+    }
+  }
+
+  /** Run one file operation after every earlier operation on the same path. */
+  private enqueue<T>(path: string, run: () => Promise<T>): Promise<T> {
+    const previous = this.queues.get(path) ?? Promise.resolve()
+    const result = previous.then(run, run)
+    const tail = result.catch(() => undefined)
+    this.queues.set(path, tail)
+    void tail.then(() => {
+      if (this.queues.get(path) === tail) this.queues.delete(path)
+    })
+    return result
+  }
+}
+
+/**
+ * An absolute Oven directory in the forward-slash form every Oven path uses.
+ *
+ * A root that is not absolute would make every handoff path a guess on a machine
+ * this app cannot see, so it is refused here rather than at the first write.
+ */
+function ovenRootPath(value: string): string {
+  if (typeof value !== 'string' || /[\0\r\n]/u.test(value))
+    throw new Error('The Pi handoff root must be an absolute Oven path.')
+  const normalized = value.replace(/\\/gu, '/')
+  if (!/^(?:\/|[A-Za-z]:\/)/u.test(normalized))
+    throw new Error(`The Pi handoff root must be an absolute Oven path, not "${value}".`)
+  return normalized.replace(/\/+$/u, '') || '/'
+}
+
+/**
+ * A storage-relative handoff path, normalised to forward slashes.
+ *
+ * The paths arrive from `path.join` on this machine, which is backslash-
+ * separated on Windows, while the Oven may run any platform. An absolute path,
+ * a drive letter, or a `..` segment is refused rather than repaired: these files
+ * belong to one app-owned directory, and a path that leaves it is a bug.
+ */
+function relativePathOf(value: string): string {
+  if (typeof value !== 'string' || !value.length)
+    throw new Error('A Pi handoff file needs a relative path.')
+  if (/[\0\r\n]/u.test(value))
+    throw new Error(`A Pi handoff path cannot contain control characters: ${JSON.stringify(value)}`)
+  if (/^(?:[/\\]|[A-Za-z]:)/u.test(value))
+    throw new Error(`Refusing an absolute Pi handoff path: ${value}`)
+  const segments = value.split(/[\\/]+/u).filter((segment) => segment.length && segment !== '.')
+  for (const segment of segments)
+    if (segment === '..')
+      throw new Error(`Refusing a Pi handoff path that leaves its root: ${value}`)
+  if (!segments.length) throw new Error(`Refusing an empty Pi handoff path: ${value}`)
+  return segments.join('/')
+}
+
+/** One path joined onto another with the Oven's separator, never doubled. */
+function joinOvenPath(base: string, path: string): string {
+  return base.endsWith('/') ? `${base}${path}` : `${base}/${path}`
+}
+
+/** The directory part of a normalised relative path, empty at the root. */
+function parentOf(path: string): string {
+  return path.split('/').slice(0, -1).join('/')
+}
+
+/** Missing paths are answers here (`does this file exist?`), not failures. */
+function isMissing(error: unknown): boolean {
+  if ((error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT') return true
+  return error instanceof Error && /\bENOENT\b/u.test(error.message)
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
