@@ -127,6 +127,34 @@
   const groupThread = $derived(isGroupThread(board.handleAgentEvent.thread))
 
   /**
+   * The live work of a group turn that has not written its answer yet.
+   *
+   * A group reply is drawn from the row that closes the turn, and a streaming
+   * run mirrors a new assistant row for every step, so that closing row moves
+   * the whole time. A bubble anchored to it is torn down and rebuilt on each
+   * step, which resets the trace body's scroll to its top and reads as the work
+   * vanishing and starting over. The live work is therefore drawn once, below
+   * the turn's rows, where it is a single element for the whole run: the reader
+   * can tail it, and a new step appends instead of replacing everything above.
+   *
+   * Null while the reply owns its own drawing: a closing answer exists (the row
+   * that closes the turn draws the same work inside its bubble), or the turn is
+   * not the active one (a newer prompt has opened a turn of its own, which the
+   * pending-turn path above handles).
+   */
+  const liveGroupTrace = $derived.by(() => {
+    if (!groupThread) return null
+    if (!board.pollStreamParts.conversationBusy) return null
+    if (!board.buildSpecActionPrompt.latestTurnInfo.active) return null
+    const messages = board.loadOlderMessages.messages
+    const last = messages.length - 1
+    if (last < 0) return null
+    const closing = getTurnFinalText(messages, last, board.pollStreamParts.isTransparentTurnMessage)
+    if (closing) return null
+    return { parts: board.pollStreamParts.latestTurnRenderableParts }
+  })
+
+  /**
    * The same text rule the answer uses, applied to whatever the trace draws.
    *
    * An assistant run wraps its update in the app's `<assistant_result>` boundary.
@@ -1326,16 +1354,6 @@
             : msg.ovenLabel === undefined || msg.ovenLabel === 'Local'}
           {@const fastVariant = msg.modelId ? fastVariantForModelId(msg.modelId) : null}
           {@const isLatest = absIndex === board.loadOlderMessages.messages.length - 1}
-          <!-- A group reply whose turn has only produced tool calls so far has
-               no closing text yet. The reply still has to be drawn, or the
-               speaker and its whole working trace vanish from the conversation
-               until the agent writes words, even though the run never stopped. -->
-          {@const liveGroupReply =
-            groupThread &&
-            isLatest &&
-            msg.completedAt === undefined &&
-            !msg.error &&
-            board.pollStreamParts.conversationBusy}
           {@const questionParts = msg.parts.filter(
             (p): p is Extract<AgentPart, { type: 'question' }> => p.type === 'question'
           )}
@@ -1352,7 +1370,7 @@
                 )
               : null}
 
-          {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || closesReply || liveGroupReply}
+          {#if traceSegmentsAbove.length > 0 || questionParts.length > 0 || closesReply}
             <div class="group mb-6 flex min-w-0 flex-col">
               {#if !groupThread}
                 {#each traceSegmentsAbove as segment (segment.segmentIndex)}
@@ -1360,7 +1378,7 @@
                 {/each}
               {/if}
 
-              {#if closesReply || liveGroupReply}
+              {#if closesReply}
                 <!-- Final text output + footer   hide only on the active in-progress turn -->
                 {#if board.unmirroredTraceStartTime.isAssignmentAuditorThread}
                   {#if !board.pollStreamParts.conversationBusy || !isLatest || turnAuditReport}
@@ -1410,7 +1428,7 @@
                        waiting for the turn to hand the floor back: hiding the
                        bubble withheld the whole answer while the agent was still
                        writing it, so the message simply vanished mid-stream. -->
-                  {#if (turnClosingText && (groupThread || turnClosingVisible)) || pinnedAboveHeldSteer || liveGroupReply}
+                  {#if (turnClosingText && (groupThread || turnClosingVisible)) || pinnedAboveHeldSteer}
                     {@const isReadingThisTurn =
                       'messageId' in speechController.playback &&
                       speechController.playback.messageId === msg.id &&
@@ -1514,24 +1532,19 @@
                               }
                             : undefined
                         )}
-                        <!-- A live reply drawn before its turn has written
-                             anything has no text to show: the speaker and the
-                             trace inside the bubble are its whole content. -->
-                        {#if turnClosingText}
-                          <DeferredMarkdownView
-                            text={deliveredClosingText}
-                            citationThread={board.unmirroredTraceStartTime.citationThreadContext}
-                            annotationScope={{
-                              projectId: board.handleAgentEvent.thread.projectId,
-                              threadId: board.handleAgentEvent.thread.id
-                            }}
-                            inlineFileTags={assistantInlineTags}
-                            onOpenAssistantTag={board.state.openAssistantTag}
-                            onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
-                            onOpenLocalFile={(url) =>
-                              void board.unmirroredTraceStartTime.openFilePart(url)}
-                          />
-                        {/if}
+                        <DeferredMarkdownView
+                          text={deliveredClosingText}
+                          citationThread={board.unmirroredTraceStartTime.citationThreadContext}
+                          annotationScope={{
+                            projectId: board.handleAgentEvent.thread.projectId,
+                            threadId: board.handleAgentEvent.thread.id
+                          }}
+                          inlineFileTags={assistantInlineTags}
+                          onOpenAssistantTag={board.state.openAssistantTag}
+                          onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
+                          onOpenLocalFile={(url) =>
+                            void board.unmirroredTraceStartTime.openFilePart(url)}
+                        />
                       {/if}
                     </div>
                   {/if}
@@ -1840,11 +1853,14 @@
         />
       {/key}
 
-      {#if (board.buildSpecActionPrompt.pendingLiveTurn && board.buildSpecActionPrompt.heldSteerAbsIndex === -1) || board.pollStreamParts.settledTurnParts.length > 0}
+      {#if (board.buildSpecActionPrompt.pendingLiveTurn && board.buildSpecActionPrompt.heldSteerAbsIndex === -1) || board.pollStreamParts.settledTurnParts.length > 0 || liveGroupTrace}
         {@const tracePartsForTurn = board.buildSpecActionPrompt.pendingLiveTurn
           ? board.composerScope.unmirroredTraceParts
-          : board.pollStreamParts.settledTurnParts}
-        {@const traceBusyForTurn = Boolean(board.buildSpecActionPrompt.pendingLiveTurn)}
+          : liveGroupTrace
+            ? liveGroupTrace.parts
+            : board.pollStreamParts.settledTurnParts}
+        {@const traceBusyForTurn =
+          Boolean(board.buildSpecActionPrompt.pendingLiveTurn) || liveGroupTrace !== null}
         {#if groupThread}
           <!-- In a group conversation the work is part of the reply, not a band
                above it: the bubble opens with who is speaking, the trace sits

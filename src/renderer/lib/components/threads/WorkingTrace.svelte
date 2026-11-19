@@ -278,6 +278,19 @@
   let traceHeaderHeight = $state(0)
   /** How far below the scroller's top the oldest mounted work counts as the top. */
   const pagingTopInset = $derived(bodyMaxHeightRem === undefined ? traceHeaderHeight : 0)
+  /**
+   * Whether the height-bounded body is following the live tail.
+   *
+   * A group reply's trace is a small scroller of its own, and a run appends a
+   * row at a time to it. Without this the newest step always landed below the
+   * fold, so the work could not be watched as it arrived and every attempt to
+   * follow it meant chasing the scrollbar. Latched from the reader's own
+   * position: at the bottom of the box it keeps the newest entry in view, and
+   * the moment they scroll up it stops and leaves them where they are.
+   */
+  let followingTail = true
+  /** How close to the bottom still counts as following. */
+  const TRACE_TAIL_REACH = 24
   /** The turn's trace as chains of thought, grouped from the mounted steps.
    *  A chain that produced an output is keyed by that output, which is the
    *  boundary that defines it, so paging older steps in above never remounts a
@@ -390,6 +403,38 @@
     }
     root.addEventListener('scroll', onScroll, { passive: true })
     return () => root.removeEventListener('scroll', onScroll)
+  })
+
+  // Watch the bounded body's own scroll position, so following the tail is the
+  // reader's choice and not a guess: at the bottom it follows, and one scroll up
+  // hands the position back to them.
+  $effect(() => {
+    const body = traceBodyEl
+    if (!body || bodyMaxHeightRem === undefined) return
+    const nearBottom = (): boolean =>
+      body.scrollHeight - body.scrollTop - body.clientHeight <= TRACE_TAIL_REACH
+    followingTail = nearBottom()
+    const onScroll = (): void => {
+      followingTail = nearBottom()
+    }
+    body.addEventListener('scroll', onScroll, { passive: true })
+    return () => body.removeEventListener('scroll', onScroll)
+  })
+
+  // A new step while the reader is at the bottom of the box: keep the newest
+  // entry in view instead of appending it below the fold. The scroll waits a
+  // frame, after the new row has been laid out.
+  $effect(() => {
+    void visibleParts.length
+    void chains.length
+    const body = traceBodyEl
+    if (!body || bodyMaxHeightRem === undefined || !followingTail) return
+    const frame = requestAnimationFrame(() => {
+      if (!followingTail) return
+      const el = traceBodyEl
+      if (el) el.scrollTop = el.scrollHeight
+    })
+    return () => cancelAnimationFrame(frame)
   })
 
   // A trace whose work fits the transcript leaves older steps behind no scroll
