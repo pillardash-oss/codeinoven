@@ -5,20 +5,24 @@
  * the task manager attaches CPU and memory by looking that pid up in the process
  * snapshot, and a row without one showed the host but never its usage.
  *
- * The launcher is mocked because a real host is an Electron utility process; the
- * transport double answers nothing, so only spawning and stopping are observed.
+ * The launcher is mocked because a real host is an Electron utility process. The
+ * double keeps Electron's actual shape too: `utilityProcess.fork` returns before
+ * the operating system names a pid, so a transport reports 0 until the process
+ * exists. That asynchronous pid is the whole point of the retry below.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HostTransport } from '../../../src/main/agents/pi-host-supervisor'
 
 const spawned: { pid: number; stopped: boolean }[] = []
 
 vi.mock('../../../src/main/agents/pi-host-launcher', () => ({
   spawnPiHost: (): HostTransport => {
-    const record = { pid: 5000 + spawned.length, stopped: false }
+    const record = { pid: 0, stopped: false }
     spawned.push(record)
     return {
-      pid: record.pid,
+      get pid(): number {
+        return record.pid
+      },
       send: () => undefined,
       onLine: () => undefined,
       onExit: () => undefined,
@@ -47,29 +51,39 @@ function hostRows(): { id: string; pid: number | null; name: string; stoppable: 
 
 describe('Pi host service rows', () => {
   beforeEach(() => {
+    vi.useFakeTimers()
     stopPiHost()
     spawned.length = 0
   })
 
-  it('registers the host row with its pid as soon as a host starts', async () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('lists the host only once Electron has named its pid', async () => {
     const supervisor = piHostSupervisor()
     expect(hostRows()).toEqual([])
 
-    const pid = await supervisor.start()
+    await supervisor.start()
+    // The spawn announced a host the operating system has not named yet: a row
+    // registered now would carry pid 0 and never show usage.
+    expect(hostRows()).toEqual([])
+
+    spawned[0]!.pid = 5123
+    await vi.advanceTimersByTimeAsync(300)
 
     expect(hostRows()).toEqual([
-      { id: `pi-host-${pid}`, pid, name: 'CIO Pi host', stoppable: true }
+      { id: 'pi-host-5123', pid: 5123, name: 'CIO Pi host', stoppable: true }
     ])
-
-    supervisor.stop()
-    expect(hostRows()).toEqual([])
   })
 
   it('stops only that host when the row is ended from the task manager', async () => {
     const supervisor = piHostSupervisor()
-    const pid = await supervisor.start()
+    await supervisor.start()
+    spawned[0]!.pid = 5124
+    await vi.advanceTimersByTimeAsync(300)
     const [row] = hostRows()
-    expect(row?.pid).toBe(pid)
+    expect(row?.pid).toBe(5124)
 
     await appServiceRegistry.stop(row?.id ?? '')
 

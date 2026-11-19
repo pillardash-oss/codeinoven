@@ -14,6 +14,10 @@ import { Logger } from '../system/logger'
 
 let supervisor: PiHostSupervisor | null = null
 let unsubscribeHosts: (() => void) | null = null
+/** Retry that waits for Electron to name a host process's pid. */
+let pidRetry: ReturnType<typeof setTimeout> | null = null
+/** Pid retries left for the hosts running right now. */
+let pidRetriesLeft = 20
 /** Registry row per live host, keyed by its OS pid. */
 const hostServiceIds = new Map<number, string>()
 
@@ -35,6 +39,8 @@ export function piHostSupervisor(): PiHostSupervisor {
 export function stopPiHost(): void {
   unsubscribeHosts?.()
   unsubscribeHosts = null
+  if (pidRetry !== null) clearTimeout(pidRetry)
+  pidRetry = null
   supervisor?.stop()
   supervisor = null
   for (const id of hostServiceIds.values()) appServiceRegistry.unregister(id)
@@ -46,25 +52,30 @@ export function stopPiHost(): void {
  *
  * Rows are keyed by pid, so a host that exited loses its row and a new host
  * gets its own, and re-registering a live one keeps its original start time.
+ * A host is only listed once the operating system has named its pid: Electron
+ * creates the utility process asynchronously, so the spawn that announces the
+ * host reports none yet, and a row registered then would carry pid 0 and show
+ * no CPU or memory for as long as it lived.
  */
 function syncHostServices(host: PiHostSupervisor): void {
-  const pids = host.pids()
+  const live = host.pids()
+  const named = live.filter((pid) => pid > 0)
   for (const [pid, id] of [...hostServiceIds]) {
-    if (pids.includes(pid)) continue
+    if (named.includes(pid)) continue
     appServiceRegistry.unregister(id)
     hostServiceIds.delete(pid)
   }
-  pids.forEach((pid, index) => {
+  named.forEach((pid, index) => {
     const detail =
-      pids.length === 1
+      named.length === 1
         ? 'Hosts every Pi thread on this device'
-        : `Pi host ${index + 1} of ${pids.length} on this device`
+        : `Pi host ${index + 1} of ${named.length} on this device`
     hostServiceIds.set(
       pid,
       appServiceRegistry.register({
         id: `pi-host-${pid}`,
         kind: 'worker',
-        name: pids.length === 1 ? 'CIO Pi host' : `CIO Pi host ${index + 1}`,
+        name: named.length === 1 ? 'CIO Pi host' : `CIO Pi host ${index + 1}`,
         detail,
         scope: 'app',
         pid,
@@ -74,4 +85,13 @@ function syncHostServices(host: PiHostSupervisor): void {
       })
     )
   })
+  if (live.length > named.length && pidRetry === null && pidRetriesLeft > 0) {
+    pidRetriesLeft -= 1
+    pidRetry = setTimeout(() => {
+      pidRetry = null
+      if (supervisor === host) syncHostServices(host)
+    }, 250)
+    pidRetry.unref?.()
+  }
+  if (live.length === named.length) pidRetriesLeft = 20
 }
