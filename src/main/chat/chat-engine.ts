@@ -2,6 +2,7 @@ import { wireChatEngine } from './chat-engine/chat-engine-wiring'
 import type { DonRuntime } from './chat-engine-don'
 import { ChatEngineState } from './chat-engine/chat-engine-state'
 import type { ThreadTransferRelease } from './thread-transfer-service/thread-transfer-workers'
+import { deviceHoldForNewTurn } from '../system/device-hold'
 import type { HandoffReleaseDetails } from '../system/instance-handoff-bus'
 import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import { ThreadManager } from '../../lib/engines/thread-manager'
@@ -927,6 +928,13 @@ export class ChatEngine {
      *  the first user prompt in its conversation. */
     visiblePrompt = false
   ): Promise<AgentMessage> {
+    // A user turn may not start on a machine that has no room for it. The window
+    // parks the message before it gets here, so this is the guard for every other
+    // caller that reaches a thread without a composer.
+    if (origin === 'user') {
+      const held = await deviceHoldForNewTurn()
+      if (held !== null) throw held
+    }
     return this.units['turns-send-prompt'].sendPrompt(
       projectId,
       threadId,
