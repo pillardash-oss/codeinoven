@@ -841,6 +841,10 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
           projectReferences,
           taskReferences
         )
+        // The restored draft is now the only durable copy of words the
+        // database never saw, and the debounce can lose it to a crash or
+        // force-quit. Write it through at once.
+        rendererRecovery.persistQueuedNow()
         this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
       }
       if (promptReferences.length > 0) {

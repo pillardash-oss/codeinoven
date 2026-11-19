@@ -160,6 +160,9 @@ class QueuedMessageDispatcher {
             dispatched.taskReferences,
             dispatched.promptReferences
           )
+          // The restored draft is the last durable copy of words the database
+          // never saw; the debounce must not be able to lose it.
+          rendererRecovery.persistQueuedNow()
         }
       }
     } finally {

@@ -204,6 +204,47 @@ describe('RendererRecoveryStore', () => {
     })
   })
 
+  it('writes a queued message to storage immediately, without the debounce', () => {
+    // A queued message can be the only durable copy of words the database
+    // never saw. The trailing debounce could lose it to a crash or force-quit
+    // between park and flush, which is exactly the restart that ate a user's
+    // message: no timer advances here, so the write must already have happened.
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    store.setQueuedMessage('project-1', 'thread-1', {
+      text: 'the words that must survive a force-quit',
+      attachments: [],
+      promptContext: undefined,
+      promptReferences: [],
+      projectReferences: [],
+      presentation: undefined,
+      taskReferences: [],
+      startAfterThreads: []
+    })
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.queuedMessageFor('project-1', 'thread-1')?.text).toBe(
+      'the words that must survive a force-quit'
+    )
+  })
+
+  it('writes a cleared queue immediately, so a crash cannot resurrect a sent message', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    store.setQueuedMessage('project-1', 'thread-1', {
+      text: 'about to be delivered',
+      attachments: [],
+      promptContext: undefined,
+      promptReferences: [],
+      projectReferences: [],
+      presentation: undefined,
+      taskReferences: [],
+      startAfterThreads: []
+    })
+    store.clearQueuedMessage('project-1', 'thread-1')
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.queuedMessageFor('project-1', 'thread-1')).toBeNull()
+  })
+
   it('keeps the design page a comment belongs to across a restart', () => {
     const storage = new MemoryStorage()
     const store = new RendererRecoveryStore(storage)

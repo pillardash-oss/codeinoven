@@ -796,7 +796,7 @@ export class RendererRecoveryStore {
     }
     next[key] = [...(queue ?? []), persistedEntry]
     this.queuedMessages = next
-    this.persist()
+    this.persistQueuedNow()
   }
 
   /** Rewrite the oldest queued message in place (e.g. editing its "starts
@@ -839,7 +839,7 @@ export class RendererRecoveryStore {
       delete next[key]
     }
     this.queuedMessages = next
-    this.persist()
+    this.persistQueuedNow()
   }
 
   /** Drop every queued message for a thread (Delete all). */
@@ -850,7 +850,7 @@ export class RendererRecoveryStore {
     const next = { ...this.queuedMessages }
     delete next[key]
     this.queuedMessages = next
-    this.persist()
+    this.persistQueuedNow()
   }
 
   reset(): void {
@@ -1076,6 +1076,24 @@ export class RendererRecoveryStore {
       this.persistTimer = undefined
       persistRendererRecoveryState(this.storage, this.snapshot())
     }, PERSIST_DEBOUNCE_MS)
+  }
+
+  /**
+   * Write the recovery snapshot synchronously, bypassing the debounce.
+   *
+   * A queued message and a failure-restored draft are the only durable copies
+   * of words the database has never seen. The trailing debounce exists for
+   * keystroke-scale mutations; a queue or restore mutation is rare and is
+   * exactly the moment a crash or force-quit must not be able to eat: without
+   * this, a failed dispatch cleared the queue entry, restored only a draft in
+   * memory, and a restart before the debounce fired lost the words entirely.
+   */
+  persistQueuedNow(): void {
+    if (this.persistTimer !== undefined) {
+      clearTimeout(this.persistTimer)
+      this.persistTimer = undefined
+    }
+    persistRendererRecoveryState(this.storage, this.snapshot())
   }
 
   /** Write any pending state immediately (used on window hide/shutdown). */
