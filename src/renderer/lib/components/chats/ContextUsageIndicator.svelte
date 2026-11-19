@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioArchive from '@pdslng/cio-icon/CioArchive.svelte'
+  import CioServer from '@pdslng/cio-icon/CioServer.svelte'
   import CioBatteryCharging from '@pdslng/cio-icon/CioBatteryCharging.svelte'
   import CioChevronDown from '@pdslng/cio-icon/CioChevronDown.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
@@ -34,6 +35,9 @@
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
+    canMoveHost?: boolean
+    movingHost?: boolean
+    onMoveHost?: () => void
     /** Opens the destructive confirmation dialog for redeeming a banked reset. */
     onActivateBankedReset?: () => void
     /** Called when the user hovers the indicator to flush the latest usage. */
@@ -54,6 +58,9 @@
     canCompact = false,
     compacting = false,
     onCompact,
+    canMoveHost = false,
+    movingHost = false,
+    onMoveHost,
     onActivateBankedReset,
     onReveal,
     onHide,
@@ -452,6 +459,27 @@
         Compact Work
       {/if}
     </button>
+
+    {#if canMoveHost}
+      <!-- A crowded host hands one session to a process of its own. The
+           transcript travels, so the thread keeps its history and its place. -->
+      <button
+        type="button"
+        class="mt-2 flex h-8 w-full items-center justify-center gap-2 border border-border text-[0.6875rem] font-medium text-foreground hover:bg-elevated disabled:cursor-not-allowed disabled:text-dimmed"
+        disabled={movingHost}
+        title="Move this session to a host process of its own, with the same transcript"
+        aria-label="Move this session to a host process of its own"
+        onclick={onMoveHost}
+      >
+        {#if movingHost}
+          <CioSpinner size={12} class="animate-spin" />
+          Moving…
+        {:else}
+          <CioServer size={12} />
+          Move to a New Host
+        {/if}
+      </button>
+    {/if}
   </div>
 {/snippet}
 

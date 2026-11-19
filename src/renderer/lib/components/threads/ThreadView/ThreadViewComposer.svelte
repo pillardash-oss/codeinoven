@@ -1121,6 +1121,10 @@
                   ) && !board.switchProject.busy}
                   compacting={board.switchProject.compacting}
                   onCompact={() => void board.switchProject.compactWork()}
+                  canMoveHost={board.loadOlderMessages.settings.harnessId === 'pi' &&
+                    !board.switchProject.busy}
+                  movingHost={board.switchProject.movingHost}
+                  onMoveHost={() => void board.switchProject.moveToOwnHost()}
                   onActivateBankedReset={() => {
                     board.state.showBankedResetConfirm = true
                   }}

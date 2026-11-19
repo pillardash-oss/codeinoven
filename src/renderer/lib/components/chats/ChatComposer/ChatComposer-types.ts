@@ -183,6 +183,10 @@ export interface Props {
   canCompact?: boolean
   compacting?: boolean
   onCompact?: () => void
+  /** Whether this thread's session can move to a host process of its own. */
+  canMoveHost?: boolean
+  movingHost?: boolean
+  onMoveHost?: () => void
   /** Opens the destructive confirmation dialog for redeeming a banked Codex reset. */
   onActivateBankedReset?: () => void
   /** Previous user messages for terminal-like up-arrow history recall. */
@@ -255,6 +259,8 @@ export type ChatComposerSurfaceProps = {
       | 'usageRefreshing'
       | 'canCompact'
       | 'compacting'
+      | 'canMoveHost'
+      | 'movingHost'
       | 'historyMessages'
       | 'imageDescriptorAskAgain'
       | 'enableImageDescriptorGate'
@@ -293,6 +299,8 @@ export type ChatComposerSurfaceProps = {
   | 'usageRefreshing'
   | 'canCompact'
   | 'compacting'
+  | 'canMoveHost'
+  | 'movingHost'
   | 'historyMessages'
   | 'imageDescriptorAskAgain'
   | 'enableImageDescriptorGate'
