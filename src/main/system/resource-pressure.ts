@@ -9,12 +9,15 @@
  *
  * CPU comes from `os.cpus()` deltas rather than a load average, because a load
  * average is a minute of history and the question here is "is there room right
- * now". Memory comes from `process.getSystemMemoryInfo().free` in main, which on
- * macOS already reports what can be handed out, not the tiny raw free-page count
- * that would queue work on a perfectly healthy machine.
+ * now". Memory is what the machine can actually hand out: `MemAvailable` on
+ * Linux, and free plus inactive, speculative and purgeable pages on macOS. The
+ * raw free-page count is far too small to judge a healthy Mac by (a 16 GB machine
+ * idling at 56 MB free still has about 2.9 GB available), and reading it made the
+ * gate hold work on a machine with plenty of room.
  */
 import { cpus, freemem, totalmem } from 'node:os'
 import { readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { app } from 'electron'
 import { decideAdmission, type AdmissionDecision } from '../../lib/resource-admission'
 import { Logger } from './logger'
@@ -72,11 +75,57 @@ function readableSystemMemory(): SystemMemoryInfo | null {
 }
 
 /**
- * Bytes new work can use. Electron reports the machine's own free memory in
- * kilobytes, which is the number that already accounts for reclaimable cache;
- * the Node figure is only a fallback for a platform that cannot answer.
+ * Bytes macOS says can be handed out, from `vm_stat`.
+ *
+ * Free pages alone are not availability: the kernel keeps most idle memory in
+ * inactive, speculative and purgeable pages, which it reclaims on demand. The
+ * page size is printed in the same output, so nothing has to assume 4 KB pages
+ * on Apple silicon.
  */
+export function darwinAvailableBytes(vmStat: string): number | null {
+  const pageSize = /page size of (\d+) bytes/u.exec(vmStat)
+  if (!pageSize) return null
+  const size = Number(pageSize[1])
+  if (!Number.isFinite(size) || size <= 0) return null
+  const pages = (label: string): number => {
+    const match = new RegExp(`^${label}:\\s+(\\d+)\\.`, 'mu').exec(vmStat)
+    return match ? Number(match[1]) : 0
+  }
+  const availablePages =
+    pages('Pages free') +
+    pages('Pages inactive') +
+    pages('Pages speculative') +
+    pages('Pages purgeable')
+  return Math.max(0, availablePages * size)
+}
+
+/** Bytes Linux says can be handed out, from `/proc/meminfo`'s `MemAvailable`. */
+export function linuxAvailableBytes(meminfo: string): number | null {
+  const match = /^MemAvailable:\s+(\d+) kB$/mu.exec(meminfo)
+  if (!match) return null
+  return Math.max(0, Number(match[1]) * 1024)
+}
+
+/** What the platform reports as available, or null when nothing can be read. */
+function platformAvailableBytes(): number | null {
+  try {
+    if (process.platform === 'darwin') {
+      const output = execFileSync('/usr/bin/vm_stat', { encoding: 'utf8', timeout: 1_000 })
+      return darwinAvailableBytes(output)
+    }
+    if (process.platform === 'linux') {
+      return linuxAvailableBytes(readFileSync('/proc/meminfo', 'utf8'))
+    }
+  } catch (error) {
+    Logger.dev('Resource pressure: available memory reading failed', error)
+  }
+  return null
+}
+
+/** Bytes new work can use, falling back to raw free memory when nothing answers. */
 function availableMemoryBytes(): number {
+  const available = platformAvailableBytes()
+  if (available !== null) return available
   const info = readableSystemMemory()
   if (info) return Math.max(0, info.free * 1024)
   return Math.max(0, freemem())
