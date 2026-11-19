@@ -1,9 +1,9 @@
 import { createReadStream, existsSync, watch } from 'node:fs'
 import type { FSWatcher } from 'node:fs'
-import { readdir } from 'node:fs/promises'
+import { readdir, readFile, rm } from 'node:fs/promises'
 import { createInterface } from 'node:readline'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { AgentMessage } from '../../../lib/types'
 import { parseRecord } from '../../../lib/agent-interactions'
@@ -42,24 +42,96 @@ function nativePiSessionDir(projectPath: string, agentDirectory?: string): strin
 }
 
 /**
- * Find a native pi session transcript by session id. Pi names files
+ * Where pi's own session transcripts for one project are read from.
+ *
+ * A pi process writes its transcript beside itself, so a reader has to look
+ * where that process wrote it: this machine's disk for a local session, and the
+ * machine the session runs on for an Oven turn. Discovery, resume, cold-session
+ * reads and deletion are therefore written once against this seam, and a
+ * caller that runs pi somewhere else supplies its own source instead.
+ */
+export interface PiNativeTranscriptSource {
+  /** The absolute path a pi running beside these files would open. */
+  resolve(projectPath: string, fileName: string): string
+  /** File names in the project's transcript directory, or null when it is absent. */
+  list(projectPath: string): Promise<string[] | null>
+  /** File text, or null when it is gone. */
+  read(projectPath: string, fileName: string): Promise<string | null>
+  remove(projectPath: string, fileName: string): Promise<void>
+}
+
+/**
+ * The transcripts pi writes on this machine, under the agent directory its own
+ * process was launched with.
+ */
+function localPiNativeTranscriptSource(agentDirectory?: string): PiNativeTranscriptSource {
+  const directoryOf = (projectPath: string): string =>
+    nativePiSessionDir(projectPath, agentDirectory)
+  return {
+    resolve: (projectPath, fileName) => join(directoryOf(projectPath), fileName),
+    list: async (projectPath) => {
+      try {
+        return await readdir(directoryOf(projectPath))
+      } catch {
+        // A project pi has never written to has no session directory at all,
+        // which is "no transcripts", not a failure.
+        return null
+      }
+    },
+    read: async (projectPath, fileName) => {
+      try {
+        return await readFile(join(directoryOf(projectPath), fileName), 'utf8')
+      } catch {
+        return null
+      }
+    },
+    remove: async (projectPath, fileName) => {
+      await rm(join(directoryOf(projectPath), fileName), { force: true })
+    }
+  }
+}
+
+/**
+ * Whether a value is a usable transcript source.
+ *
+ * A source can arrive from another layer (the Oven runtime hands one to the
+ * driver that starts pi there), so it is checked at the boundary instead of
+ * being trusted on a structural cast.
+ */
+function isPiNativeTranscriptSource(value: unknown): value is PiNativeTranscriptSource {
+  const candidate = record(value)
+  return (
+    typeof candidate?.['resolve'] === 'function' &&
+    typeof candidate['list'] === 'function' &&
+    typeof candidate['read'] === 'function' &&
+    typeof candidate['remove'] === 'function'
+  )
+}
+
+/**
+ * Find a native pi session transcript's file name by session id. Pi names files
  * `<timestamp>_<sessionId>.jsonl`; the newest match wins.
  */
+async function findNativePiTranscriptName(
+  source: PiNativeTranscriptSource,
+  projectPath: string,
+  sessionId: string
+): Promise<string | null> {
+  const entries = await source.list(projectPath)
+  if (!entries) return null
+  const matches = entries.filter((name) => name.endsWith(`_${sessionId}.jsonl`)).sort()
+  return matches.at(-1) ?? null
+}
+
+/** The absolute path of a native pi transcript read from this machine. */
 async function findNativePiSessionFile(
   projectPath: string,
   sessionId: string,
   agentDirectory?: string
 ): Promise<string | null> {
-  const dir = nativePiSessionDir(projectPath, agentDirectory)
-  let entries: string[]
-  try {
-    entries = await readdir(dir)
-  } catch {
-    return null
-  }
-  const matches = entries.filter((name) => name.endsWith(`_${sessionId}.jsonl`)).sort()
-  const latest = matches.at(-1)
-  return latest ? join(dir, latest) : null
+  const source = localPiNativeTranscriptSource(agentDirectory)
+  const name = await findNativePiTranscriptName(source, projectPath, sessionId)
+  return name ? source.resolve(projectPath, name) : null
 }
 
 /**
@@ -182,12 +254,43 @@ function prefillTranscriptEntries(
 }
 
 /**
- * Parse a native pi session JSONL transcript into CodeInOven messages.
+ * Parse the text of a native pi session JSONL transcript into CodeInOven
+ * messages.
+ *
  * Used for sub-agent worker threads, which run as in-process pi sessions
- * persisted by pi's own SessionManager rather than mirrored through RPC.
+ * persisted by pi's own SessionManager rather than mirrored through RPC, and
+ * for every transcript that does not live on this machine. The parsing is split
+ * from the reading so a transcript fetched from an Oven yields exactly the
+ * messages the same content yields here.
  */
+async function parseNativePiTranscriptText(
+  text: string,
+  sessionId: string
+): Promise<AgentMessage[]> {
+  return parseNativePiTranscriptLines(linesOfText(text), sessionId)
+}
+
+/** Parse a native pi session JSONL transcript that lives on this machine. */
 async function parseNativePiSession(file: string, sessionId: string): Promise<AgentMessage[]> {
-  const lines = createInterface({ input: createReadStream(file), crlfDelay: Infinity })
+  const input = createReadStream(file)
+  const lines = createInterface({ input, crlfDelay: Infinity })
+  try {
+    return await parseNativePiTranscriptLines(lines, sessionId)
+  } finally {
+    lines.close()
+    input.destroy()
+  }
+}
+
+/** The lines of a transcript that is already in memory. */
+async function* linesOfText(text: string): AsyncGenerator<string> {
+  for (const line of text.split(/\r?\n/u)) yield line
+}
+
+async function parseNativePiTranscriptLines(
+  lines: AsyncIterable<string>,
+  sessionId: string
+): Promise<AgentMessage[]> {
   const messages: AgentMessage[] = []
   const entryTimes = new Map<string, number>()
   let turnIndex = 0
@@ -294,10 +397,14 @@ async function parseNativePiSession(file: string, sessionId: string): Promise<Ag
 
 export {
   nativePiSessionDir,
+  localPiNativeTranscriptSource,
+  isPiNativeTranscriptSource,
+  findNativePiTranscriptName,
   findNativePiSessionFile,
   waitForNativePiSessionFile,
   prefillTranscriptEntries,
-  parseNativePiSession
+  parseNativePiSession,
+  parseNativePiTranscriptText
 }
 
 /** Returns null when no native transcript exists so the caller rethrows. */
@@ -317,20 +424,26 @@ export async function loadNativeSubagentMessages(
   // guarantees the child is no longer live (`waitForFlush: false`) a
   // missing file is final   watching would only burn seconds waiting for
   // a transcript that can never appear, on every tab reopen.
-  const existing = await findNativePiSessionFile(projectPath, sessionId, agentDirectory)
+  const source = localPiNativeTranscriptSource(agentDirectory)
+  const existing = await findNativePiTranscriptName(source, projectPath, sessionId)
   const file =
-    existing ??
-    (waitForFlush
-      ? await waitForNativePiSessionFile(projectPath, sessionId, 10_000, agentDirectory)
-      : null)
+    existing !== null
+      ? source.resolve(projectPath, existing)
+      : waitForFlush
+        ? await waitForNativePiSessionFile(projectPath, sessionId, 10_000, agentDirectory)
+        : null
   if (!file) return null
   // pi writes the flushed file synchronously before closing it, but keep a
   // short stabilization window in case the create event lands mid-flush.
+  const name = basename(file)
   const populatedBy = Date.now() + 2_000
   for (;;) {
     try {
-      const messages = await parseNativePiSession(file, sessionId)
-      if (messages.length > 0) return messages
+      const text = await source.read(projectPath, name)
+      if (text !== null) {
+        const messages = await parseNativePiTranscriptText(text, sessionId)
+        if (messages.length > 0) return messages
+      }
     } catch (error) {
       if (Date.now() >= populatedBy) {
         Logger.dev('Pi native sub-agent transcript parse failed:', error)
@@ -368,42 +481,38 @@ export async function reconcileNativeCompactions(
 ): Promise<void> {
   const nativeSessionId = session.nativeSessionId
   if (!projectPath || !nativeSessionId) return
-  const file = await findNativePiSessionFile(projectPath, nativeSessionId, agentDirectory)
-  if (!file) return
+  const source = localPiNativeTranscriptSource(agentDirectory)
+  const name = await findNativePiTranscriptName(source, projectPath, nativeSessionId)
+  if (!name) return
+  const text = await source.read(projectPath, name)
+  if (text === null) return
   const compactionEntries: {
     summary: string
     firstKeptEntryId?: string
     createdAt: number
   }[] = []
   const entryTimes = new Map<string, number>()
-  const input = createReadStream(file)
-  const lines = createInterface({ input, crlfDelay: Infinity })
-  try {
-    for await (const line of lines) {
-      const entry = parseRecord(line)
-      if (!entry) continue
-      if (entry['type'] === 'compaction') {
-        const summary = stringValue(entry['summary'])
-        if (summary?.trim()) {
-          compactionEntries.push({
-            summary,
-            firstKeptEntryId: stringValue(entry['firstKeptEntryId']),
-            createdAt: Date.parse(String(entry['timestamp'])) || Date.now()
-          })
-        }
-        continue
+  for (const line of text.split(/\r?\n/u)) {
+    const entry = parseRecord(line)
+    if (!entry) continue
+    if (entry['type'] === 'compaction') {
+      const summary = stringValue(entry['summary'])
+      if (summary?.trim()) {
+        compactionEntries.push({
+          summary,
+          firstKeptEntryId: stringValue(entry['firstKeptEntryId']),
+          createdAt: Date.parse(String(entry['timestamp'])) || Date.now()
+        })
       }
-      if (entry['type'] === 'message') {
-        const id = entry['id']
-        const nativeMessage = parseRecord(entry['message'])
-        if (typeof id === 'string' && nativeMessage) {
-          entryTimes.set(id, messageTimestamp(nativeMessage))
-        }
+      continue
+    }
+    if (entry['type'] === 'message') {
+      const id = entry['id']
+      const nativeMessage = parseRecord(entry['message'])
+      if (typeof id === 'string' && nativeMessage) {
+        entryTimes.set(id, messageTimestamp(nativeMessage))
       }
     }
-  } finally {
-    lines.close()
-    input.destroy()
   }
   let patched = false
   for (const message of session.messages) {

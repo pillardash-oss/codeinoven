@@ -44,7 +44,11 @@ import { PiSubagentStreams } from './pi/pi-driver-subagents'
 import { PiUiRequestBoard } from './pi/pi-driver-ui-requests'
 import { PiUsageTracker } from './pi/pi-driver-usage'
 import { PiNativeSessions } from './pi/pi-driver-native-session'
-import { findNativePiSessionFile } from './pi/pi-native-session'
+import {
+  findNativePiSessionFile,
+  isPiNativeTranscriptSource,
+  type PiNativeTranscriptSource
+} from './pi/pi-native-session'
 import { trimPiTranscript } from './pi/pi-transcript-trim'
 import {
   PiCioRuntimeFiles,
@@ -129,6 +133,22 @@ function isPiInputRefusal(error: unknown): boolean {
 }
 
 /**
+ * The transcript source a launcher carries.
+ *
+ * A launcher that starts every session's pi process on another machine also
+ * knows where that machine keeps pi's own session files, so the Oven runtime
+ * attaches the matching source to the launcher it supplies. Without one the
+ * sessions read pi's transcripts here, exactly as they always have.
+ */
+function launcherTranscripts(
+  launch: PiRpcLaunch | undefined
+): PiNativeTranscriptSource | undefined {
+  if (!launch || !('nativeTranscripts' in launch)) return undefined
+  const carried: unknown = launch.nativeTranscripts
+  return isPiNativeTranscriptSource(carried) ? carried : undefined
+}
+
+/**
  * Driver for Pi's headless agent. Unlike the former in-process SDK path, this
  * shells out to the `pi` CLI the user installs on PATH (like Claude Code), so
  * the heavy Pi runtime is never bundled. It drives `pi --mode rpc` over stdio
@@ -205,9 +225,25 @@ export class PiDriver extends PersistentCliDriver {
      * machine's local pi turns use must not carry one, or they would be started
      * somewhere else too.
      */
-    launch?: PiRpcLaunch
+    launch?: PiRpcLaunch,
+    /**
+     * Where this driver's sessions keep pi's own native transcripts.
+     *
+     * Absent, every session resumes and reads its transcript on this machine,
+     * exactly as it always has. A driver built to serve one machine (an Oven)
+     * carries the source that reads that machine's copies, so a session running
+     * there resumes its own transcript instead of cold-starting on the engine's
+     * history recap. The Oven runtime hands its source along with the launcher
+     * (see `launcherTranscripts`), so an explicit one is only needed by a
+     * caller that builds a driver without a launcher.
+     */
+    nativeTranscripts?: PiNativeTranscriptSource
   ) {
     super(storage)
+    // The source a launcher carries is the one that matches the machine its
+    // sessions start on; an explicit source wins for callers that build a
+    // driver without a launcher.
+    const transcripts = nativeTranscripts ?? launcherTranscripts(launch)
     this.agentDirectory = accountEnvironment['PI_CODING_AGENT_DIR']?.trim() || undefined
     this.authConfig = this.agentDirectory
       ? new PiAuthConfigService(join(this.agentDirectory, 'auth.json'))
@@ -326,6 +362,7 @@ export class PiDriver extends PersistentCliDriver {
     })
     this.nativeSessions = new PiNativeSessions({
       agentDirectory: this.agentDirectory,
+      ...(transcripts ? { nativeTranscripts: transcripts } : {}),
       storage,
       hasClient: (sessionId) => this.rpcSessions.hasClient(sessionId),
       rpcClient: (sessionId) => this.rpcSessions.client(sessionId),

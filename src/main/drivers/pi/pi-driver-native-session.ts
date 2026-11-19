@@ -1,6 +1,5 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { existsSync } from 'node:fs'
 import { join } from 'path'
 import type { AgentMessage } from '../../../lib/types'
 import { Logger } from '../../system/logger'
@@ -8,17 +7,28 @@ import type { StorageEngine } from '../../storage/storage-engine'
 import type { PersistentCliSession } from '../persistent-cli-driver'
 import type { PiSessionClient } from './pi-client'
 import {
-  findNativePiSessionFile,
+  findNativePiTranscriptName,
   loadNativeSubagentMessages,
+  localPiNativeTranscriptSource,
   nativePiSessionDir,
-  parseNativePiSession,
-  prefillTranscriptEntries
+  parseNativePiTranscriptText,
+  prefillTranscriptEntries,
+  type PiNativeTranscriptSource
 } from './pi-native-session'
 import { record, stringValue } from './pi-values'
 
 /** Everything the native transcript binding needs from the driver. */
 export interface PiNativeSessionsHost {
   readonly agentDirectory: string | undefined
+  /**
+   * Where the sessions' pi processes keep their own transcripts.
+   *
+   * Absent, every transcript is read from this machine, exactly as it always
+   * has. A driver whose sessions run on an Oven carries a source that reads the
+   * Oven's copy instead: pi writes its session file beside its own process, so
+   * resuming one has to open the path that process would open.
+   */
+  readonly nativeTranscripts?: PiNativeTranscriptSource
   readonly storage: StorageEngine
   hasClient(sessionId: string): boolean
   rpcClient(sessionId: string): PiSessionClient | undefined
@@ -46,7 +56,18 @@ export interface PiNativeSessionsHost {
  * without tool evidence treat it as fabricated and refuse to continue.
  */
 export class PiNativeSessions {
+  /** The local source, built once for the agent directory this driver serves. */
+  private localSource: PiNativeTranscriptSource | null = null
+
   constructor(private readonly host: PiNativeSessionsHost) {}
+
+  /** Where the bound sessions' pi processes keep their own transcripts. */
+  private get transcripts(): PiNativeTranscriptSource {
+    return (
+      this.host.nativeTranscripts ??
+      (this.localSource ??= localPiNativeTranscriptSource(this.host.agentDirectory))
+    )
+  }
 
   /**
    * Continue a previously persisted native pi session in the freshly spawned
@@ -64,10 +85,12 @@ export class PiNativeSessions {
       const session = await this.host.session(projectPath, sessionId)
       const nativeId = session.nativeSessionId
       if (!nativeId) return
-      if (!existsSync(nativePiSessionDir(projectPath, this.host.agentDirectory))) return
-      const file = await findNativePiSessionFile(projectPath, nativeId, this.host.agentDirectory)
-      if (!file) return
-      await client.switchSession(file)
+      const source = this.transcripts
+      const name = await findNativePiTranscriptName(source, projectPath, nativeId)
+      if (!name) return
+      // The path has to be the one the peer's own pi would open: on an Oven that
+      // is the Oven's copy of the session file, never this machine's.
+      await client.switchSession(source.resolve(projectPath, name))
       this.host.markNativeSessionResumed(sessionId)
       Logger.info('Resumed native Pi session transcript', { sessionId, nativeSessionId: nativeId })
     } catch (error) {
@@ -90,13 +113,10 @@ export class PiNativeSessions {
   ): Promise<void> {
     if (!nativeSessionId) return
     try {
-      const file = await findNativePiSessionFile(
-        projectPath,
-        nativeSessionId,
-        this.host.agentDirectory
-      )
-      if (!file) return
-      await rm(file, { force: true })
+      const source = this.transcripts
+      const name = await findNativePiTranscriptName(source, projectPath, nativeSessionId)
+      if (!name) return
+      await source.remove(projectPath, name)
       Logger.info('Removed the discarded native Pi transcript', { nativeSessionId })
     } catch (error) {
       Logger.dev('Native Pi transcript removal skipped:', error)
@@ -149,8 +169,8 @@ export class PiNativeSessions {
     const record = await this.readSessionRecord(projectPath, sessionId)
     const nativeId = record?.nativeSessionId
     if (!nativeId) return false
-    const file = await findNativePiSessionFile(projectPath, nativeId, this.host.agentDirectory)
-    return file !== null
+    const name = await findNativePiTranscriptName(this.transcripts, projectPath, nativeId)
+    return name !== null
   }
 
   /**
@@ -173,9 +193,7 @@ export class PiNativeSessions {
       if (!previous || previous.id === sessionId) return false
       const nativeId = previous.nativeSessionId
       if (!nativeId) return false
-      if (!existsSync(nativePiSessionDir(projectPath, this.host.agentDirectory))) return false
-      if (!(await findNativePiSessionFile(projectPath, nativeId, this.host.agentDirectory)))
-        return false
+      if (!(await findNativePiTranscriptName(this.transcripts, projectPath, nativeId))) return false
       replacement.nativeSessionId = nativeId
       Logger.info('Restored native Pi transcript binding after harness switch', {
         sessionId,
@@ -206,6 +224,16 @@ export class PiNativeSessions {
     try {
       const session = await this.host.session(projectPath, sessionId)
       if (session.nativeSessionId) return true
+      // Seeding is a write, and the seam above only reads: a session whose pi
+      // runs on an Oven cannot be given a transcript from here. Reporting that
+      // honestly keeps the record free of a native id whose file exists only on
+      // this machine, which the next resume could never open.
+      if (this.host.nativeTranscripts) {
+        Logger.dev('Native Pi transcript prefill skipped: the session runs elsewhere', {
+          sessionId
+        })
+        return false
+      }
       const entries = prefillTranscriptEntries(projectPath, messages)
       if (entries.length === 0) return false
       const dir = nativePiSessionDir(projectPath, this.host.agentDirectory)
@@ -244,9 +272,7 @@ export class PiNativeSessions {
       const previous = await this.readSessionRecord(projectPath, fromSessionId)
       const nativeId = previous?.nativeSessionId
       if (!nativeId) return false
-      if (!existsSync(nativePiSessionDir(projectPath, this.host.agentDirectory))) return false
-      if (!(await findNativePiSessionFile(projectPath, nativeId, this.host.agentDirectory)))
-        return false
+      if (!(await findNativePiTranscriptName(this.transcripts, projectPath, nativeId))) return false
       const replacement = await this.host.session(projectPath, toSessionId)
       if (replacement.nativeSessionId) return true
       replacement.nativeSessionId = nativeId
@@ -352,11 +378,13 @@ export class PiNativeSessions {
   ): Promise<AgentMessage[] | null> {
     const nativeId = sessionRecord.nativeSessionId
     if (!nativeId) return null
-    if (!existsSync(nativePiSessionDir(projectPath, this.host.agentDirectory))) return null
-    const file = await findNativePiSessionFile(projectPath, nativeId, this.host.agentDirectory)
-    if (!file) return null
+    const source = this.transcripts
+    const name = await findNativePiTranscriptName(source, projectPath, nativeId)
+    if (!name) return null
     try {
-      const messages = await parseNativePiSession(file, sessionId)
+      const text = await source.read(projectPath, name)
+      if (text === null) return null
+      const messages = await parseNativePiTranscriptText(text, sessionId)
       return messages.length > 0 ? messages : null
     } catch (error) {
       Logger.dev('Pi native transcript parse failed during resume check:', error)

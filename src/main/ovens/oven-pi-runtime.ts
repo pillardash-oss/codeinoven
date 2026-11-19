@@ -5,8 +5,14 @@ import type { ThreadSettings } from '../../lib/types'
 import type { HarnessDriver } from '../drivers/driver.interface'
 import type { PiRpcLaunch, PiRpcLaunchInput, PiRpcLaunchResult } from '../drivers/pi/pi-driver-rpc'
 import type { PiCioFilesStorage } from '../drivers/pi/pi-driver-cio-files'
+import type { PiNativeTranscriptSource } from '../drivers/pi/pi-native-session'
 import { ovenRpcTransport, type OvenRunService } from './oven-rpc-transport'
 import { OvenPiStorage, type OvenPiStorageService } from './oven-pi-storage'
+import {
+  ovenPiTranscriptSource,
+  type OvenPiTranscriptRoute,
+  type OvenPiTranscriptService
+} from './oven-pi-transcripts'
 import {
   publishOvenPiExtensions,
   readPiExtensionFiles,
@@ -69,11 +75,46 @@ export class OvenPiSessions {
   clear(): void {
     this.sessions.clear()
   }
+
+  /**
+   * The route whose checkout is one project path, newest binding first.
+   *
+   * The transcript reader is addressed by the checkout pi works in, because
+   * that path is what pi encodes into its own session directory. A path no
+   * bound session works in belongs to no Oven here, so it resolves to nothing
+   * and the caller reads this machine instead.
+   */
+  routeFor(projectPath: string): OvenPiSession | undefined {
+    const wanted = comparablePath(projectPath)
+    if (!wanted) return undefined
+    const routes = [...this.sessions.values()]
+    for (let index = routes.length - 1; index >= 0; index -= 1) {
+      const session = routes[index]
+      if (session && comparablePath(session.cwd) === wanted) return session
+    }
+    return undefined
+  }
+}
+
+/** One checkout path in the single spelling a comparison can rely on. */
+function comparablePath(value: string): string {
+  return value.replace(/\\/gu, '/').replace(/\/+$/u, '')
 }
 
 /** The slice of the Oven client a remote pi run needs to be started. */
 export interface OvenPiLaunchService extends OvenRunService {
   start(ovenId: string, input: StartOvenRunInput): Promise<OvenRun>
+}
+
+/**
+ * The launcher the reserved Oven pi driver carries.
+ *
+ * Besides starting a session's process on the Oven, it carries where that
+ * machine keeps pi's own session transcripts, so the driver's resume path can
+ * open the copy the Oven-side pi wrote instead of looking on this computer.
+ */
+export interface OvenPiLaunch extends PiRpcLaunch {
+  readonly nativeTranscripts?: PiNativeTranscriptSource
 }
 
 /**
@@ -150,12 +191,20 @@ function looksLikePath(arg: string): boolean {
 export function createOvenPiLaunch(input: {
   sessions: OvenPiSessions
   service: OvenPiLaunchService
-}): PiRpcLaunch {
-  return async (launch: PiRpcLaunchInput): Promise<PiRpcLaunchResult> => {
-    const session = input.sessions.get(launch.sessionId)
+  /**
+   * Where the sessions this launcher starts keep pi's own transcripts.
+   *
+   * A session resumed on that machine must open the Oven's own session file, so
+   * the source travels with the launcher the driver already receives and the
+   * driver's native-transcript seam reads through it (see `PiDriver`).
+   */
+  nativeTranscripts?: PiNativeTranscriptSource
+}): OvenPiLaunch {
+  const launch: PiRpcLaunch = async (launchInput: PiRpcLaunchInput): Promise<PiRpcLaunchResult> => {
+    const session = input.sessions.get(launchInput.sessionId)
     if (!session)
       throw new Error(
-        `No Oven is bound to Pi session ${launch.sessionId}, so this turn cannot start there.`
+        `No Oven is bound to Pi session ${launchInput.sessionId}, so this turn cannot start there.`
       )
     const runId = randomUUID()
     let run: OvenRun
@@ -163,14 +212,14 @@ export function createOvenPiLaunch(input: {
       run = await input.service.start(session.ovenId, {
         id: runId,
         command: 'pi',
-        args: ovenPiOvenArgs(launch.args, session),
+        args: ovenPiOvenArgs(launchInput.args, session),
         cwd: session.cwd,
         // The driver composes the environment the local spawn would have used,
         // and that is where the custom providers' API keys ride. The session's
         // own environment is the account the Oven synced, so the two are merged
         // here: dropping the driver's half would leave every provider key empty
         // on the Oven. The remote PATH and HOME stay the Oven's own.
-        environment: ovenPiRunEnvironment(session.environment, launch.env),
+        environment: ovenPiRunEnvironment(session.environment, launchInput.env),
         // An RPC session is a conversation, not a one-shot run: its input stays
         // open for the prompts and controls the driver writes after launch.
         input: '',
@@ -189,6 +238,10 @@ export function createOvenPiLaunch(input: {
       })
     }
   }
+  return Object.assign(
+    launch,
+    input.nativeTranscripts ? { nativeTranscripts: input.nativeTranscripts } : {}
+  )
 }
 
 /**
@@ -307,7 +360,8 @@ export async function prepareOvenPiSession(input: {
 /** The Oven client every part of a remote pi run goes through. */
 export type OvenPiRuntimeService = OvenPiExtensionService &
   OvenPiLaunchService &
-  OvenPiStorageService
+  OvenPiStorageService &
+  OvenPiTranscriptService
 
 /**
  * The one shared Oven pi runtime: the session routes, the launcher the reserved
@@ -319,11 +373,40 @@ export type OvenPiRuntimeService = OvenPiExtensionService &
  */
 export class OvenPiRuntime {
   readonly sessions = new OvenPiSessions()
-  readonly launch: PiRpcLaunch
+  readonly launch: OvenPiLaunch
   private piDriver: (HarnessDriver & OvenPiDriver) | null = null
+  private transcriptSource: PiNativeTranscriptSource | null = null
 
   constructor(readonly service: OvenPiRuntimeService) {
-    this.launch = createOvenPiLaunch({ sessions: this.sessions, service: this.service })
+    this.launch = createOvenPiLaunch({
+      sessions: this.sessions,
+      service: this.service,
+      nativeTranscripts: this.nativeTranscripts
+    })
+  }
+
+  /**
+   * Where the sessions on this runtime's Ovens keep pi's own transcripts.
+   *
+   * The driver that starts pi there reads through this, which is what makes a
+   * session resumed on an Oven open the Oven's own session file. The account
+   * root is the one that session's pi was started with, so an Oven running a
+   * managed account reads that account's directory and not the machine's
+   * default one.
+   */
+  get nativeTranscripts(): PiNativeTranscriptSource {
+    return (this.transcriptSource ??= ovenPiTranscriptSource({
+      service: this.service,
+      route: (projectPath) => this.transcriptRoute(projectPath)
+    }))
+  }
+
+  /** One project path's Oven and account root, or null when nothing runs there. */
+  private transcriptRoute(projectPath: string): OvenPiTranscriptRoute | null {
+    const session = this.sessions.routeFor(projectPath)
+    const agentDirectory = session?.environment['PI_CODING_AGENT_DIR']?.trim()
+    if (!session || !agentDirectory) return null
+    return { ovenId: session.ovenId, agentDirectory }
   }
 
   /** The pi driver this runtime starts sessions on. */
