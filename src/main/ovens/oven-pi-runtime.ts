@@ -463,6 +463,14 @@ export class OvenPiRuntime {
 /** The pi driver surface this runtime routes a session into. */
 export interface OvenPiDriver {
   setSessionStorage(sessionId: string, storage: PiCioFilesStorage | null): void
+  /**
+   * Bind the session id the thread already carries to the Oven's checkout.
+   *
+   * The record hashes the directory the harness runs in, and that turn runs on
+   * the Oven: without the re-stamp the very next request rejects the id as an
+   * unavailable session.
+   */
+  adoptSessionPath(projectPath: string, sessionId: string, title: string): Promise<void>
 }
 
 let runtime: OvenPiRuntime | null = null

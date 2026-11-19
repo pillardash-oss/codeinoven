@@ -161,6 +161,10 @@ export class ChatEngineTurnsSendPrompt {
       startedAt,
       account
     })
+    // The session id was minted here, but this turn runs the harness there: bind
+    // the record to the Oven's checkout, or the next request rejects a live
+    // session as unavailable.
+    await runtime.driver?.adoptSessionPath(prepared.root, sessionId, thread.title)
     // The route is what makes this session's `sendPrompt` start its process on
     // the Oven, and the storage is what makes every handoff file this turn
     // publishes land beside that process instead of on this machine.
