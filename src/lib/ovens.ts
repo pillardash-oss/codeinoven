@@ -286,6 +286,14 @@ export type OvenWorkspaceRequest =
   | { operation: 'move'; root: string; path: string; to: string }
   | { operation: 'symlink'; root: string; path: string; target: string }
   | { operation: 'stat'; root: string; path: string }
+  /**
+   * Delete one file or symbolic link inside the root.
+   *
+   * A directory is refused, and a missing file is not an error: discarding a
+   * turn or a handoff is idempotent, and the caller only cares that the path is
+   * empty afterwards.
+   */
+  | { operation: 'remove'; root: string; path: string }
   | {
       operation: 'replace'
       root: string
@@ -310,6 +318,24 @@ export type OvenWorkspaceRequest =
        */
       localIdentityFile?: string
     }
+
+/**
+ * How an Oven service answers a workspace operation it does not know.
+ *
+ * A bundle older than this app refuses anything outside the operations it
+ * implements with this one sentence, which is the only way to tell "this Oven
+ * has not been updated yet" from a genuine failure: the request itself looks
+ * the same either way, and waiting longer proves nothing. Matching on the
+ * answer, not on a timeout, is what lets a newer app keep working against an
+ * older Oven instead of reporting a file that is perfectly fine as broken.
+ */
+export const OVEN_UNSUPPORTED_WORKSPACE_OPERATION = 'Unsupported workspace operation.'
+
+/** True when a failure means the Oven's service predates the operation asked for. */
+export function isUnsupportedWorkspaceOperation(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : error
+  return typeof message === 'string' && message.includes(OVEN_UNSUPPORTED_WORKSPACE_OPERATION)
+}
 
 /** Scope checkouts that exist on one Oven, offered as the other end of a Git sync. */
 export interface OvenRootPeers {

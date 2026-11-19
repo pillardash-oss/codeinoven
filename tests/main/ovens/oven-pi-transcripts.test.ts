@@ -6,6 +6,7 @@
  * Every service here is an in-memory fake: no SSH, no Oven, no network.
  */
 import { describe, expect, it } from 'vitest'
+import { OVEN_UNSUPPORTED_WORKSPACE_OPERATION } from '../../../src/lib/ovens'
 import type {
   OvenProbe,
   OvenRun,
@@ -70,10 +71,14 @@ class FakeOven implements OvenPiTranscriptService {
   readonly files = new Map<string, Buffer>()
   /** Directories that exist; a path not listed here has never been created. */
   readonly directories = new Set<string>([TRANSCRIPTS, ACCOUNT])
+  /** True for the bundle this app replaces: it has no `remove` at all. */
+  cannotDelete = false
 
   async workspace(id: string, input: OvenWorkspaceRequest): Promise<OvenWorkspaceResult> {
     expect(id).toBe(OVEN)
     this.calls.push(input)
+    if (this.cannotDelete && input.operation === 'remove')
+      throw new Error(OVEN_UNSUPPORTED_WORKSPACE_OPERATION)
     switch (input.operation) {
       case 'list': {
         const prefix = `${asOvenPath(input.root)}/`
@@ -107,12 +112,21 @@ class FakeOven implements OvenPiTranscriptService {
           size: data.length
         }
       }
+      case 'remove': {
+        const path = `${asOvenPath(input.root)}/${input.path}`
+        if (!this.files.delete(path)) throw missing(path)
+        return { root: input.root }
+      }
       case 'move': {
         const from = `${asOvenPath(input.root)}/${input.path}`
         const data = this.files.get(from)
         if (!data) throw missing(from)
+        const to = `${asOvenPath(input.root)}/${input.to}`
         this.files.delete(from)
-        this.files.set(`${asOvenPath(input.root)}/${input.to}`, data)
+        this.files.set(to, data)
+        // A parked entry brings its `.trash` directory into existence, which is
+        // what lets the next removal look at what is already parked.
+        this.directories.add(to.slice(0, to.lastIndexOf('/')))
         return { root: input.root }
       }
       default:
@@ -190,8 +204,23 @@ describe('ovenPiTranscriptSource', () => {
     expect(offsets).toEqual([0, CHUNK, 2 * CHUNK, 3 * CHUNK])
   })
 
-  it('parks a removed transcript in the same .trash convention handoffs use', async () => {
+  it('deletes a removed transcript from the directory pi resumes from', async () => {
     const service = new FakeOven()
+    const name = transcriptName('2026-01-01T00-00-00-000Z')
+    service.files.set(`${TRANSCRIPTS}/${name}`, Buffer.from('{}\n'))
+    const source = ovenPiTranscriptSource({ service, route })
+
+    await source.remove(CHECKOUT, name)
+
+    expect(await source.list(CHECKOUT)).toEqual([])
+    expect(service.calls.some((call) => call.operation === 'remove')).toBe(true)
+    // Deleted, not parked: a machine that discards turns keeps no leftovers.
+    expect([...service.files.keys()].filter((path) => path.includes('/.trash/'))).toHaveLength(0)
+  })
+
+  it('parks a removed transcript only when the Oven service predates remove', async () => {
+    const service = new FakeOven()
+    service.cannotDelete = true
     const name = transcriptName('2026-01-01T00-00-00-000Z')
     service.files.set(`${TRANSCRIPTS}/${name}`, Buffer.from('{}\n'))
     const source = ovenPiTranscriptSource({ service, route })

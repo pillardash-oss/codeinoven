@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto'
 import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../lib/ovens'
 import { Logger } from '../system/logger'
 import { nativePiSessionDir, type PiNativeTranscriptSource } from '../drivers/pi/pi-native-session'
+import { removeOvenWorkspaceFile } from './oven-pi-storage'
 
 /**
  * Pi's own session transcripts, read from the Oven a session runs on.
@@ -29,9 +29,6 @@ export interface OvenPiTranscriptRoute {
    */
   agentDirectory: string
 }
-
-/** Where a removal parks a transcript; see `removeTranscript`. */
-const TRASH_DIRECTORY = '.trash'
 
 /** The Oven's read chunk, which bounds one `read` answer. */
 export const OVEN_PI_TRANSCRIPT_CHUNK_BYTES = 128 * 1024
@@ -169,10 +166,14 @@ async function readTranscriptText(
 /**
  * Take one transcript out of the directory pi resumes from.
  *
- * The Oven's file API has no unlink and this app never deletes a remote file
- * outright, so a removal is a rename into the same `.trash` convention the
- * session's handoff files use: pi no longer lists the file, and a mistaken
- * removal stays recoverable on the Oven.
+ * The Oven deletes it. A service bundle older than this app has no delete, so
+ * there the file is parked in the same `.trash` directory the session's handoff
+ * files use, which `removeOvenWorkspaceFile` keeps to a few entries: pi no longer
+ * lists the file, and a mistaken removal stays recoverable on the Oven without
+ * the directory growing for the life of the machine.
+ *
+ * A transcript that is already gone is not a failure: pi may have cleaned up a
+ * session this app discarded, and the caller only cares that nothing is there.
  */
 async function removeTranscript(
   service: OvenPiTranscriptService,
@@ -181,15 +182,12 @@ async function removeTranscript(
   fileName: string
 ): Promise<void> {
   try {
-    await service.workspace(route.ovenId, {
-      operation: 'move',
+    await removeOvenWorkspaceFile((input) => service.workspace(route.ovenId, input), {
       root: directory,
-      path: fileName,
-      to: `${TRASH_DIRECTORY}/${randomUUID()}`
+      path: fileName
     })
   } catch (error) {
-    if (isMissing(error)) return
-    Logger.dev('Could not park a discarded Pi transcript on the Oven:', error)
+    Logger.dev('Could not discard a Pi transcript on the Oven:', error)
   }
 }
 

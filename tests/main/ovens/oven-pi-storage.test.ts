@@ -1,14 +1,20 @@
 import { describe, expect, it } from 'vitest'
-import type { OvenWorkspaceRequest, OvenWorkspaceResult } from '../../../src/lib/ovens'
+import {
+  OVEN_UNSUPPORTED_WORKSPACE_OPERATION,
+  type OvenWorkspaceRequest,
+  type OvenWorkspaceResult
+} from '../../../src/lib/ovens'
 import {
   OvenPiStorage,
   OVEN_PI_STORAGE_CHUNK_BYTES,
+  OVEN_PI_TRASH_KEEP,
   type OvenPiStorageService
 } from '../../../src/main/ovens/oven-pi-storage'
 
 const OVEN = 'oven-6a1f0d3c'
 const ROOT = '/home/ova/.config/pillardash/codeinoven/ovens/pi-status'
 const HANDOFF = 'runtime/cio-core-tools/session-1/gateway-handoff.json'
+const TRASH = 'runtime/cio-core-tools/session-1/.trash'
 const CHUNK = OVEN_PI_STORAGE_CHUNK_BYTES
 
 function missing(path: string): Error {
@@ -28,17 +34,59 @@ class FakeOven implements OvenPiStorageService {
   readonly calls: OvenWorkspaceRequest[] = []
   readonly files = new Map<string, Buffer>()
   readonly directories = new Set<string>()
-  /** Fail one request, to prove a failure is surfaced instead of hidden. */
+  /**
+   * Fail a request, to prove a failure is surfaced instead of hidden.
+   */
   fail: ((input: OvenWorkspaceRequest) => boolean) | null = null
+  /**
+   * When set, this Oven runs a service bundle that predates `remove`, and
+   * answers every such request the way that bundle does.
+   */
+  cannotDelete = false
+  /**
+   * Write time per file, in call order.
+   *
+   * A fake cannot reproduce filesystem timestamp precision, and two parks in the
+   * same millisecond must still order the way the real `.trash` does: newest
+   * first, because that decides which entry survives.
+   */
+  private readonly stamps = new Map<string, number>()
+  private clock = 0
 
   async workspace(id: string, input: OvenWorkspaceRequest): Promise<OvenWorkspaceResult> {
     expect(id).toBe(OVEN)
     if (this.fail?.(input)) throw new Error('The Oven service stopped answering.')
     this.calls.push(input)
+    if (this.cannotDelete && input.operation === 'remove')
+      throw new Error(OVEN_UNSUPPORTED_WORKSPACE_OPERATION)
     switch (input.operation) {
       case 'mkdir':
         this.directories.add(input.path)
         return { root: input.root }
+      case 'list': {
+        const prefix = input.path === '.' ? '' : `${input.path}/`
+        const names = [...this.files.keys()]
+          .filter((path) => path.startsWith(prefix))
+          .map((path) => path.slice(prefix.length))
+          // One directory's own entries, never a subdirectory's.
+          .filter((name) => !name.includes('/'))
+          .sort()
+          .filter((name) => !input.after || name > input.after)
+        return {
+          root: input.root,
+          files: names.map((name) => ({
+            path: `${prefix}${name}`,
+            kind: 'file' as const,
+            size: this.files.get(`${prefix}${name}`)?.length ?? 0,
+            modifiedAt: this.stamps.get(`${prefix}${name}`) ?? 0,
+            mode: 0o600
+          }))
+        }
+      }
+      case 'remove': {
+        if (!this.files.delete(input.path)) throw missing(`${input.root}/${input.path}`)
+        return { root: input.root }
+      }
       case 'read': {
         const data = this.files.get(input.path)
         if (!data) throw missing(`${input.root}/${input.path}`)
@@ -56,6 +104,7 @@ class FakeOven implements OvenPiStorageService {
         current.copy(next)
         data.copy(next, input.offset)
         this.files.set(input.path, next)
+        this.stamps.set(input.path, ++this.clock)
         return { root: input.root }
       }
       case 'replace': {
@@ -63,6 +112,7 @@ class FakeOven implements OvenPiStorageService {
         if (!staged) throw missing(`${input.root}/${input.staged}`)
         this.files.delete(input.staged)
         this.files.set(input.path, staged)
+        this.stamps.set(input.path, ++this.clock)
         return { root: input.root }
       }
       case 'move': {
@@ -71,11 +121,18 @@ class FakeOven implements OvenPiStorageService {
         if (this.files.has(input.to)) throw new Error('The destination already exists on the Oven.')
         this.files.delete(input.path)
         this.files.set(input.to, data)
+        this.stamps.set(input.to, ++this.clock)
         return { root: input.root }
       }
       default:
         throw new Error(`Unexpected workspace operation: ${input.operation}`)
     }
+  }
+
+  /** Put one file on the Oven without asking it, in write order. */
+  seed(path: string, content: string): void {
+    this.files.set(path, Buffer.from(content))
+    this.stamps.set(path, ++this.clock)
   }
 
   /** Every write request's staged path, in the order the Oven received them. */
@@ -183,8 +240,94 @@ describe('OvenPiStorage', () => {
     await storage.remove(HANDOFF)
 
     await expect(storage.readRaw(HANDOFF)).resolves.toBeNull()
-    // The Oven's file API has no unlink: a removal parks the file recoverably.
-    expect([...oven.files.keys()].filter((path) => path.includes('.trash/'))).toHaveLength(1)
+    // The Oven deletes the file: nothing is left behind, in `.trash` or anywhere.
+    expect(oven.files.has(HANDOFF)).toBe(false)
+    expect([...oven.files.keys()].filter((path) => path.includes('.trash/'))).toHaveLength(0)
+    expect(oven.calls.filter((call) => call.operation === 'remove')).toEqual([
+      { operation: 'remove', root: ROOT, path: HANDOFF },
+      { operation: 'remove', root: ROOT, path: HANDOFF }
+    ])
+  })
+
+  it('parks a handoff file only when the Oven service predates remove', async () => {
+    const oven = new FakeOven()
+    oven.cannotDelete = true
+    const storage = storageFor(oven)
+    await storage.writeRaw(HANDOFF, 'token')
+
+    await storage.remove(HANDOFF)
+
+    await expect(storage.readRaw(HANDOFF)).resolves.toBeNull()
+    expect(oven.calls.some((call) => call.operation === 'remove')).toBe(true)
+    const parked = [...oven.files.keys()].filter((path) => path.startsWith(`${TRASH}/`))
+    expect(parked).toHaveLength(1)
+    expect(oven.files.get(parked[0]!)?.toString('utf8')).toBe('token')
+  })
+
+  it('keeps a parked .trash directory to the newest few entries', async () => {
+    const oven = new FakeOven()
+    oven.cannotDelete = true
+    const storage = storageFor(oven)
+    const total = OVEN_PI_TRASH_KEEP + 4
+
+    for (let index = 0; index < total; index++) {
+      const path = `runtime/cio-core-tools/session-1/handoff-${index}.json`
+      await storage.writeRaw(path, `content-${index}`)
+      await storage.remove(path)
+    }
+
+    const parked = [...oven.files.entries()].filter(([path]) => path.startsWith(`${TRASH}/`))
+    const holding = parked.filter(([, data]) => data.length > 0)
+    // A bundle with no delete cannot lose the names, but it must not keep the
+    // bytes either: the newest few survive whole and everything older is emptied.
+    expect(holding).toHaveLength(OVEN_PI_TRASH_KEEP)
+    expect(holding.map(([, data]) => data.toString('utf8'))).toEqual(
+      Array.from(
+        { length: OVEN_PI_TRASH_KEEP },
+        (_, index) => `content-${total - OVEN_PI_TRASH_KEEP + index}`
+      )
+    )
+  })
+
+  it('bounds a .trash directory an older bundle left behind once removal can delete', async () => {
+    const oven = new FakeOven()
+    const total = OVEN_PI_TRASH_KEEP + 5
+    for (let index = 0; index < total; index++)
+      oven.seed(`${TRASH}/parked-${index}`, `old-${index}`)
+    const storage = storageFor(oven)
+    await storage.writeRaw(HANDOFF, 'token')
+
+    await storage.remove(HANDOFF)
+
+    // The oldest entries are gone, not merely emptied: this Oven can delete.
+    expect([...oven.files.keys()].filter((path) => path.startsWith(`${TRASH}/`))).toEqual(
+      Array.from(
+        { length: OVEN_PI_TRASH_KEEP },
+        (_, index) => `${TRASH}/parked-${total - OVEN_PI_TRASH_KEEP + index}`
+      )
+    )
+    expect(oven.files.has(HANDOFF)).toBe(false)
+  })
+
+  it('propagates a genuine removal failure and parks nothing', async () => {
+    const oven = new FakeOven()
+    const storage = storageFor(oven)
+    await storage.writeRaw(HANDOFF, 'token')
+    oven.fail = (input) => input.operation === 'remove'
+
+    const error = await storage.remove(HANDOFF).then(
+      () => null,
+      (failure: unknown) => failure
+    )
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toContain(`Could not remove ${HANDOFF} on the Oven`)
+    expect((error as Error).message).toContain('The Oven service stopped answering.')
+    // A real failure is not the old-bundle answer, so it is never turned into a
+    // parked file: the caller has to see what the Oven said, and the file stays.
+    expect([...oven.files.keys()].filter((path) => path.includes('.trash/'))).toHaveLength(0)
+    oven.fail = null
+    expect(oven.files.has(HANDOFF)).toBe(true)
   })
 
   it('rejects with the operation and path, never the content, and keeps the old file', async () => {
