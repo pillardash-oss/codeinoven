@@ -9,17 +9,25 @@ import type {
   PermissionReply,
   HarnessAccount,
   PermissionRequest,
-  PendingAgentQuestionRequest
+  PendingAgentQuestionRequest,
+  OvenPrepareStep
 } from '../../lib/types'
 import { LOCAL_OVEN_ID, isRemoteOvenId } from '../../lib/ovens'
 import { MAX_PROMPT_ATTACHMENTS } from '../../lib/types'
-import type { OvenAppearance, OvenFile } from '../../lib/ovens'
+import type { OvenAppearance, OvenFile, OvenPreflightReport } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { ProjectManager } from '../../lib/engines/project-manager'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import { OvenRegistry } from './oven-registry'
-import { resolveOvenThreadRoot } from './oven-thread-root'
+import { ovenCheckoutExists, planOvenThreadRoot, resolveOvenThreadRoot } from './oven-thread-root'
+import { planOvenPrepare, runOvenPrepare } from './oven-prepare'
+import { OvenHarnessService } from './oven-harness-service'
+import { collectPreflight } from './oven-setup-bootstrap'
+import { toolInstallCommands } from './remote/oven-setup-script'
+import { shellForPlatform } from './oven-remote-shell'
+import { remoteArgvCommand } from './oven-remote-command'
+import { findHarness } from '../agents/harness-registry'
 import { OvenService } from './oven-service'
 import { syncOvenAccount } from './oven-accounts'
 import type { SecretsService } from '../secrets/secrets-service'
@@ -89,10 +97,22 @@ interface Live {
  */
 const MISSING_RUN = 'The remote run does not exist.'
 
+/** A package install on the Oven is real work; bound it without pretending it is instant. */
+const GIT_INSTALL_TIMEOUT_MS = 5 * 60_000
+
 /** Remote turns bypass desktop repository work. Only transcript metadata stays here. */
 export class OvenChat {
   readonly service: OvenService
   private readonly registry: OvenRegistry
+  /**
+   * Harness install and inventory for the Oven being prepared.
+   *
+   * The send path owns the install it needs rather than waiting for the setup
+   * dialog, so a first turn on a fresh Oven is not a dead end. The per-Oven and
+   * per-harness mutation locks are process-wide, so this instance cannot race the
+   * one the Ovens page uses.
+   */
+  private readonly harnesses: OvenHarnessService
   private readonly live = new Map<string, Live>()
   private readonly starting = new Set<string>()
   private disposed = false
@@ -107,6 +127,7 @@ export class OvenChat {
   ) {
     this.registry = new OvenRegistry(storage, vault)
     this.service = new OvenService(this.registry)
+    this.harnesses = new OvenHarnessService(this.service, storage)
   }
 
   async nameFor(ovenId: string): Promise<string> {
@@ -205,7 +226,19 @@ export class OvenChat {
         account.id
       )
       await this.threads.setStatus(thread.projectId, thread.id, 'executing')
-      this.publishNote(turnSessionId, startedAt, `Preparing the project on ${ovenLabel}…`)
+      const preparationNote = `Preparing the project on ${ovenLabel}…`
+      this.publishNote(turnSessionId, startedAt, preparationNote)
+      // Nothing below this line is supposed to be the first time the Oven hears
+      // that it needs a harness, git, or the checkout: those are prepared here.
+      await this.prepareOven({
+        sessionId: turnSessionId,
+        startedAt,
+        note: preparationNote,
+        thread,
+        settings,
+        ovenId,
+        ovenLabel
+      })
       const prepared = await resolveOvenThreadRoot(
         this.service,
         { ...thread, settings },
@@ -508,6 +541,142 @@ export class OvenChat {
       sessionId,
       status: { state: 'working', startedAt, note }
     })
+  }
+
+  /**
+   * Put whatever the Oven lacks in place before the turn reaches it.
+   *
+   * A remote turn used to fail outright when the chosen harness was not on the
+   * Oven, and it assumed git was there and the checkout could be cloned the
+   * moment the run asked for it. Both are ordinary states for a new Oven, so the
+   * three facts that decide the work are read first, without mutating anything,
+   * and only what is missing is installed or cloned.
+   *
+   * The three pieces do not depend on each other, so `runOvenPrepare` starts them
+   * together: a slow clone must not queue behind a harness download. The working
+   * trace gets the whole plan, then a fresh snapshot as each step starts and
+   * settles, so the reader can see which one is still working.
+   */
+  private async prepareOven(input: {
+    sessionId: string
+    startedAt: number
+    note: string
+    thread: Thread
+    settings: ThreadSettings
+    ovenId: string
+    ovenLabel: string
+  }): Promise<void> {
+    const { sessionId, startedAt, note, thread, settings, ovenId, ovenLabel } = input
+    const target = { ...thread, settings }
+    // One probe answers both questions it can: which harnesses answer on the Oven
+    // (the same list the Oven itself checks before it starts a run), and where
+    // this thread's checkout belongs.
+    const probe = await this.service.probe(ovenId)
+    const plan = await planOvenThreadRoot(this.service, target, this.projects, probe)
+    const harness = findHarness(settings.harnessId)
+    const accepted = harness ? [harness.command, ...(harness.commandAliases ?? [])] : []
+    // A harness the registry does not know (an ACP agent) has no install channel
+    // here, so it is never scheduled for an install it could not perform.
+    const harnessInstalled =
+      !harness || probe.harnesses.some((entry) => !!entry.path && accepted.includes(entry.command))
+    const checkoutPresent = await ovenCheckoutExists(this.service, ovenId, plan.root)
+    // Git is only read when something else is already missing: an Oven that runs
+    // the harness against an existing checkout needs no clone, so it owes nothing
+    // to a package install and the extra SSH read would be wasted.
+    const report =
+      harnessInstalled && checkoutPresent ? null : await collectPreflight(this.service.ssh, ovenId)
+    const project = await this.projects.getProject(thread.projectId)
+    const harnessName = harness?.name ?? settings.harnessId
+    const projectName = project?.name ?? 'the project'
+    const steps = planOvenPrepare({
+      harnessInstalled,
+      gitInstalled: report?.git.installed ?? true,
+      checkoutPresent,
+      ovenLabel,
+      harnessName,
+      projectName
+    })
+    if (steps.length === 0) return
+
+    const publish = (next: OvenPrepareStep[]): void => {
+      this.publish({
+        type: 'session.status',
+        sessionId,
+        status: { state: 'working', startedAt, note, steps: next }
+      })
+    }
+    publish(steps)
+    const outcome = await runOvenPrepare({
+      steps,
+      publish,
+      actions: {
+        harness: async () => {
+          await this.harnesses.installHarness(ovenId, settings.harnessId)
+        },
+        git: async () => {
+          await this.installGitOnOven(
+            ovenId,
+            report ?? (await collectPreflight(this.service.ssh, ovenId))
+          )
+        },
+        checkout: async () => {
+          await this.service.workspace(
+            ovenId,
+            plan.origin
+              ? { operation: 'clone', root: plan.root, url: plan.origin }
+              : { operation: 'ensure', root: plan.root },
+            plan.localRepository
+          )
+        }
+      }
+    })
+    if (outcome.failures.length === 0) return
+    // Name the step and its reason: "preparing the Oven failed" leaves the user
+    // with nothing to act on, while the step that broke names what to install by
+    // hand, or what to fix before the next send.
+    const descriptions: Record<OvenPrepareStep['id'], string> = {
+      harness: `Installing ${harnessName} on ${ovenLabel}`,
+      git: `Installing git on ${ovenLabel}`,
+      checkout: `Cloning ${projectName} onto ${ovenLabel}`
+    }
+    throw new Error(
+      outcome.failures
+        .map((failure) => `${descriptions[failure.id]} failed: ${failure.message}`)
+        .join(' ')
+    )
+  }
+
+  /**
+   * Install git on the Oven with the commands oven setup already uses.
+   *
+   * The package manager, platform and privilege come from the preflight report,
+   * and the command list comes from the shared setup script, so a turn never
+   * invents a package-manager invocation setup would not run.
+   */
+  private async installGitOnOven(ovenId: string, report: OvenPreflightReport): Promise<void> {
+    if (report.git.installed) return
+    const commands = toolInstallCommands(
+      'git',
+      report.platform,
+      report.packageManager,
+      report.privilege
+    )
+    if (commands.length === 0)
+      throw new Error(
+        `CodeInOven cannot install git with ${report.packageManager} on this Oven. Install it on the Oven itself.`
+      )
+    const shell = shellForPlatform(report.platform)
+    if (shell !== 'posix' && commands.some((entry) => entry.elevated))
+      throw new Error(
+        'Installing git needs administrator rights, which CodeInOven does not request on a Windows Oven. Install git on the Oven itself.'
+      )
+    for (const entry of commands)
+      await this.service.ssh.execute(
+        ovenId,
+        remoteArgvCommand(shell, [entry.command, ...entry.args], { elevated: entry.elevated }),
+        '',
+        GIT_INSTALL_TIMEOUT_MS
+      )
   }
 
   /**

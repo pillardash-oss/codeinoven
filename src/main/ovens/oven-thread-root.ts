@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { usesThreadWorkspaceMount } from '../../lib/types'
 import type { Project, Thread } from '../../lib/types'
+import type { OvenProbe } from '../../lib/ovens'
 import type { OvenService } from './oven-service'
 import { ovenDataRoot, ovenScopeRoot, ovenSessionsRoot } from './remote/oven-root-paths'
 
@@ -48,16 +49,10 @@ export async function resolveOvenThreadRoot(
   projects: { getProject(id: string): Promise<Project | null> },
   onProgress?: (step: OvenRootStep) => void
 ): Promise<OvenThreadRoot> {
-  const ovenId = thread.settings?.ovenId
-  if (!ovenId || ovenId === 'local') throw new Error('This thread has no remote Oven.')
-  const project = await projects.getProject(thread.projectId)
-  const localRepository = project?.source === 'local' ? project.path : undefined
-  const probe = await service.probe(ovenId)
-  const dataRoot = ovenDataRoot(probe.home)
-  const sessionsRoot = ovenSessionsRoot(probe.home)
+  const plan = await planOvenThreadRoot(service, thread, projects)
+  const { ovenId, root, dataRoot, sessionsRoot, origin, localRepository } = plan
 
-  if (thread.settings?.ovenPath) {
-    const root = thread.settings.ovenPath
+  if (thread.settings?.ovenPath)
     return {
       ovenId,
       root,
@@ -66,15 +61,9 @@ export async function resolveOvenThreadRoot(
       ...(localRepository ? { localRepository } : {}),
       ...(await checkoutBranch(service, ovenId, root))
     }
-  }
 
-  const scopeId = usesThreadWorkspaceMount(thread.projectId)
-    ? thread.id
-    : thread.scopeBucketId || 'default'
-  const root = ovenScopeRoot(probe.home, thread.projectId, scopeId)
-  const origin = localRepository ? await githubOrigin(localRepository) : null
   if (!origin) onProgress?.('checkout')
-  else if (await checkoutExists(service, ovenId, root)) onProgress?.('checkout')
+  else if (await ovenCheckoutExists(service, ovenId, root)) onProgress?.('checkout')
   else onProgress?.('clone')
   const prepared = await service.workspace(
     ovenId,
@@ -92,8 +81,61 @@ export async function resolveOvenThreadRoot(
   }
 }
 
+/**
+ * Which checkout a thread resolves to, without touching the Oven beyond reading.
+ *
+ * A send has to know whether the checkout exists before it can tell the user what
+ * preparation is needed, and the answer must not create the directory it asks
+ * about, so planning is separated from `resolveOvenThreadRoot`.
+ */
+export interface OvenThreadRootPlan {
+  ovenId: string
+  root: string
+  dataRoot: string
+  sessionsRoot: string
+  localRepository?: string
+  origin?: string
+}
+
+export async function planOvenThreadRoot(
+  service: OvenService,
+  thread: Thread,
+  projects: { getProject(id: string): Promise<Project | null> },
+  /** A probe the caller already took, so planning costs no extra round trip. */
+  observed?: OvenProbe
+): Promise<OvenThreadRootPlan> {
+  const ovenId = thread.settings?.ovenId
+  if (!ovenId || ovenId === 'local') throw new Error('This thread has no remote Oven.')
+  const project = await projects.getProject(thread.projectId)
+  const localRepository = project?.source === 'local' ? project.path : undefined
+  const probe = observed ?? (await service.probe(ovenId))
+  const dataRoot = ovenDataRoot(probe.home)
+  const sessionsRoot = ovenSessionsRoot(probe.home)
+  if (thread.settings?.ovenPath)
+    return {
+      ovenId,
+      root: thread.settings.ovenPath,
+      dataRoot,
+      sessionsRoot,
+      ...(localRepository ? { localRepository } : {})
+    }
+  const scopeId = usesThreadWorkspaceMount(thread.projectId)
+    ? thread.id
+    : thread.scopeBucketId || 'default'
+  const root = ovenScopeRoot(probe.home, thread.projectId, scopeId)
+  const origin = localRepository ? await githubOrigin(localRepository) : null
+  return {
+    ovenId,
+    root,
+    dataRoot,
+    sessionsRoot,
+    ...(localRepository ? { localRepository } : {}),
+    ...(origin ? { origin } : {})
+  }
+}
+
 /** Whether the scope checkout already exists, without creating anything on the Oven. */
-async function checkoutExists(
+export async function ovenCheckoutExists(
   service: OvenService,
   ovenId: string,
   root: string

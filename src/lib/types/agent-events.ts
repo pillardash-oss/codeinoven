@@ -46,6 +46,26 @@ export interface AgentProviderIssue {
 }
 
 /**
+ * One piece of preparation the app performs on a remote Oven before the harness
+ * can stream: installing the harness, installing git, cloning the checkout.
+ *
+ * They are independent of each other and run at the same time, so a turn reports
+ * a list of these rather than a single label: the reader has to be able to see
+ * which one is still working when one of them is slower than the others.
+ */
+export interface OvenPrepareStep {
+  /** Stable across updates, so a row is replaced rather than appended. */
+  id: 'harness' | 'git' | 'checkout'
+  label: string
+  status: 'waiting' | 'running' | 'done' | 'failed'
+  /** What the step is doing right now, or why it failed. */
+  detail?: string
+  /** Epoch milliseconds, so a step can show its own elapsed time. */
+  startedAt?: number
+  endedAt?: number
+}
+
+/**
  * Provider-neutral session lifecycle state.
  *
  * Drivers must emit `session.status` when a provider pauses and schedules a
@@ -71,6 +91,11 @@ export type AgentSessionStatus =
        * carries no note.
        */
       note?: string
+      /**
+       * The parallel preparation steps behind that note, when the app is doing
+       * more than one thing on the Oven at once. Cleared with it.
+       */
+      steps?: OvenPrepareStep[]
     }
   | { state: 'idle' }
   | { state: 'waiting'; issue: AgentProviderIssue }
