@@ -1190,8 +1190,11 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
      * The draft store holds the applied state, but the mounted composer holds
      * its words in its own editor, so it is rebuilt from the restored draft: an
      * empty slot empties the field the words were sent from, and a slot that
-     * moved fills a field that never saw the new draft. The selection pins the
-     * sent message carried are dropped with them.
+     * moved fills a field that never saw the new draft.
+     *
+     * Annotations are dropped only when the slot itself holds none. A slot that
+     * moved to new words carries its own annotations, and clearing them here
+     * would throw away the selections the user made in this very composer.
      */
     $effect(() => {
       return onSharedDraftApplied((projectId, threadId) => {
@@ -1200,7 +1203,9 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           this.root.handleAgentEvent.thread.id !== threadId
         )
           return
-        this.root.steerQueuedMessage.clearResponseReferences()
+        if (rendererRecovery.draftPromptReferences(projectId, threadId).length === 0) {
+          this.root.steerQueuedMessage.clearResponseReferences()
+        }
         this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
       })
     })

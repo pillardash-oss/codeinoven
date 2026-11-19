@@ -13,7 +13,7 @@ const subscribe = vi.hoisted(() => (name: string, callback: (...args: unknown[])
 vi.mock('$lib/ipc.svelte', () => ({ invoke, subscribe }))
 vi.mock('$lib/system/renderer-logger', () => ({ logRendererError: vi.fn() }))
 vi.mock('$lib/stores/renderer-recovery.svelte', () => ({
-  rendererRecovery: { setPromptReferences: vi.fn() }
+  rendererRecovery: { setPromptReferences: vi.fn(), commitDraftNow: vi.fn() }
 }))
 
 const PROJECT = 'project-one'

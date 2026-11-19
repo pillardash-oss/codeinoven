@@ -303,6 +303,10 @@ class ResponseReferencesState {
     // Mirror into the recovery snapshot so annotations survive thread switches
     // and app restarts, alongside the rest of the composer draft.
     rendererRecovery.setPromptReferences(projectId, threadId, stored)
+    // An annotation is a deliberate, finished action rather than a keystroke, so
+    // it goes to the shared slot at once: the draft's ten-second debounce is
+    // exactly the window a refresh used to swallow them in.
+    rendererRecovery.commitDraftNow(projectId, threadId)
     for (const listener of this.listeners) listener(projectId, threadId)
   }
 

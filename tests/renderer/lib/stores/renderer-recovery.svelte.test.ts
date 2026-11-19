@@ -502,27 +502,26 @@ describe('RendererRecoveryStore', () => {
       expect(store.draftFor('project-1', 'thread-1')).toBe('Ship the release')
     })
 
-    it('settles a restored draft against the slot the database actually holds', () => {
+    it('never replaces a recovered draft with the slot older copy', () => {
       const storage = new MemoryStorage()
-      // A snapshot written before drafts recorded their origin: unvouched.
+      const annotations = [
+        { id: 'selection-1', label: 'Selection 1', text: 'First passage', comment: 'First' },
+        { id: 'selection-2', label: 'Selection 2', text: 'Second passage', comment: 'Second' },
+        { id: 'selection-3', label: 'Selection 3', text: 'Third passage', comment: 'Third' }
+      ]
+      // A snapshot written before drafts recorded their origin: unvouched, and
+      // possibly the only copy of words and annotations the user has.
       storage.setItem(
         RENDERER_RECOVERY_STORAGE_KEY,
         JSON.stringify({
           ...emptyRendererRecoverySnapshot(),
           composerDrafts: {
             [recoveryDraftKey('project-1', 'thread-1')]: {
-              text: 'Already sent',
+              text: 'Draft typed before the update',
               attachments: [],
               projectReferences: [],
               taskReferences: [],
-              promptReferences: []
-            },
-            [recoveryDraftKey('project-1', 'thread-2')]: {
-              text: 'Still drafted',
-              attachments: [],
-              projectReferences: [],
-              taskReferences: [],
-              promptReferences: []
+              promptReferences: annotations
             }
           }
         })
@@ -530,15 +529,29 @@ describe('RendererRecoveryStore', () => {
 
       const store = new RendererRecoveryStore(storage)
       expect(store.hasUnvouchedDraft('project-1', 'thread-1')).toBe(true)
-      store.reconcileUnvouchedDraft('project-1', 'thread-1', null)
-      store.reconcileUnvouchedDraft('project-1', 'thread-2', sharedDraftJson('Still drafted'))
+      // The slot holds an older copy with one of the three annotations.
+      store.importDbDraft(
+        'project-1',
+        'thread-1',
+        JSON.stringify({
+          origin: 'local',
+          text: '',
+          attachments: [],
+          projectReferences: [],
+          taskReferences: [],
+          promptReferences: [annotations[0]],
+          startAfterThreads: [],
+          threadReferences: []
+        })
+      )
+      expect(store.draftFor('project-1', 'thread-1')).toBe('Draft typed before the update')
+      expect(store.draftPromptReferences('project-1', 'thread-1')).toHaveLength(3)
 
-      // The empty slot wins: its words were already sent, so they are gone.
-      expect(store.draftFor('project-1', 'thread-1')).toBe('')
-      // The slot still holds the other draft, so it becomes this window's mirror.
-      expect(store.draftFor('project-1', 'thread-2')).toBe('Still drafted')
+      // And the words survive the next load instead of being filtered away.
       store.flushPersist()
-      expect(new RendererRecoveryStore(storage).draftFor('project-1', 'thread-2')).toBe('')
+      const reloaded = new RendererRecoveryStore(storage)
+      expect(reloaded.draftFor('project-1', 'thread-1')).toBe('Draft typed before the update')
+      expect(reloaded.draftPromptReferences('project-1', 'thread-1')).toHaveLength(3)
     })
   })
 

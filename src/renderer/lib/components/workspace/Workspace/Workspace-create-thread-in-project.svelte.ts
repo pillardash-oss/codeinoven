@@ -399,62 +399,10 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     }
   }
 
-  /**
-   * Settle every draft this window cannot vouch for against the shared slot.
-   *
-   * A snapshot written before drafts recorded who typed them says nothing about
-   * whether those words were authored here or mirrored from another instance. A
-   * mirrored draft that is still on screen after its message was sent elsewhere
-   * is the revival this pass exists to end: the thread row's draft slot is the
-   * one shared value, so a slot that is empty means the words are already sent
-   * and the recovered copy has to go, and a slot that holds words replaces the
-   * mirror with them.
-   *
-   * Only unvouched drafts are read, so after the first launch this costs one
-   * empty list and no round trips.
-   */
-  private async settleUnvouchedDrafts(): Promise<void> {
-    const unvouched = rendererRecovery
-      .listDraftThreadRefs()
-      .filter((ref) => rendererRecovery.hasUnvouchedDraft(ref.projectId, ref.threadId))
-    if (unvouched.length === 0) return
-    let next = 0
-    const settleOne = async (): Promise<void> => {
-      while (next < unvouched.length) {
-        const ref = unvouched[next]
-        next += 1
-        if (!ref) continue
-        let thread: Thread | null
-        try {
-          thread = await invoke('thread:get', ref.projectId, ref.threadId)
-        } catch {
-          // A read that failed is not a verdict: the draft stays unvouched and
-          // the next startup asks again rather than guessing at its words.
-          continue
-        }
-        if (!thread) continue
-        rendererRecovery.reconcileUnvouchedDraft(
-          ref.projectId,
-          ref.threadId,
-          thread.draftJson ?? null
-        )
-      }
-    }
-    await Promise.all(
-      Array.from(
-        {
-          length: Math.min(this.root.switcherPanelTabs.DRAFT_RESCUE_CONCURRENCY, unvouched.length)
-        },
-        settleOne
-      )
-    )
-  }
-
   async rescueDraftThreads(): Promise<void> {
     if (this.root.switcherPanelTabs.rescuingDraftThreads) return
     this.root.switcherPanelTabs.rescuingDraftThreads = true
     try {
-      await this.settleUnvouchedDrafts()
       const known = new SvelteSet([
         ...this.allThreads.map((thread) => thread.id),
         ...scopeState.allScopeThreads.map((thread) => thread.id)

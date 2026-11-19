@@ -73,19 +73,24 @@ const PERSIST_DEBOUNCE_MS = 400
 /**
  * The drafts worth restoring from local storage.
  *
- * Only the words this window authored belong in a snapshot: a mirrored draft is
- * a copy of the thread's shared slot, which the database already holds and every
- * sibling can read, so saving it here would give a copy of an already-sent draft
- * a chance to be restored and shown again after the message was sent elsewhere.
+ * A mirrored draft is left out: it is a copy of the thread's shared slot, which
+ * the database already holds and every sibling can read, so saving it here would
+ * only give a stale copy a chance to be revived after the message it holds was
+ * sent somewhere else.
+ *
+ * Everything else is kept, including a draft from a snapshot written before
+ * drafts recorded where they came from. Those words may be the only copy the
+ * user has: dropping them because a slot is empty threw away typing and
+ * annotations that had not reached the database yet.
  */
-function authoredDraftsOnly(
+function restorableDrafts(
   drafts: Record<string, ComposerDraftEntry>
 ): Record<string, ComposerDraftEntry> {
-  const authored: Record<string, ComposerDraftEntry> = {}
+  const restorable: Record<string, ComposerDraftEntry> = {}
   for (const [key, entry] of Object.entries(drafts)) {
-    if (entry.origin === 'local') authored[key] = entry
+    if (entry.origin !== 'mirrored') restorable[key] = entry
   }
-  return authored
+  return restorable
 }
 
 /**
@@ -185,11 +190,12 @@ export class RendererRecoveryStore {
       lastViewBeforeSettings: this.lastViewBeforeSettings,
       selectedProjectId: this.selectedProjectId,
       selectedThread: this.selectedThread ? { ...this.selectedThread } : null,
-      // Only the words this window authored are worth restoring. A mirrored
-      // draft is a copy of the shared slot, which outlives the window in the
-      // database, so persisting it would only give a stale copy a chance to be
-      // revived after the message it holds was sent somewhere else.
-      composerDrafts: authoredDraftsOnly(this.composerDrafts),
+      // Only the words this window authored (or recovered from an older
+      // snapshot) are restored here. A mirrored draft is a copy of the shared
+      // slot, which outlives the window in the database, so persisting it would
+      // only give a stale copy a chance to be revived after its message was sent
+      // somewhere else.
+      composerDrafts: restorableDrafts(this.composerDrafts),
       queuedMessages: { ...this.queuedMessages }, // shallow-copied; arrays shared read-only
       collapsedFolders: [...this.collapsedFolders],
       favoriteModels: [...this.favoriteModels],
@@ -298,9 +304,11 @@ export class RendererRecoveryStore {
     if (!entry) return
     const mirrored: ComposerDraftEntry = { ...entry, origin: 'mirrored' }
     const existing = this.composerDrafts[key]
-    // Typed here and not yet committed: the slot is behind these words, not
-    // ahead of them, and its own debounced commit re-asserts them.
-    if (existing?.origin === 'local') return
+    // Words this window holds always win over the slot: they may be typing the
+    // database has not received yet, or a draft recovered from an older
+    // snapshot whose provenance nobody can prove. Replacing either would delete
+    // the only copy of something the user wrote, so only a mirror is refreshed.
+    if (existing && existing.origin !== 'mirrored') return
     const content = JSON.stringify(mirrored)
     if (existing && JSON.stringify({ ...existing, origin: 'mirrored' }) === content) {
       // The mirror already says exactly this: nothing to repaint.
@@ -343,7 +351,9 @@ export class RendererRecoveryStore {
    * mirror cannot even owe the slot a commit, because only words typed here are
    * committed). A draft typed here is dropped too, unless it is still waiting out
    * its own commit: those words were typed after the slot's last write, so the
-   * slot never carried them and nothing has sent them yet.
+   * slot never carried them and nothing has sent them yet. A draft recovered
+   * from an older snapshot is never dropped on somebody else's word: only its own
+   * composer can give it up.
    *
    * Deliberately not routed through `setDraft`/`clearDraft`: those commit, and
    * a commit here would bounce this clear straight back at the window that made
@@ -361,6 +371,7 @@ export class RendererRecoveryStore {
       clearDraftLabelCookie(threadId)
       return
     }
+    if (local.origin === 'legacy') return
     if (local.origin === 'local' && hasPendingDraftCommit(projectId, threadId)) return
     const next = { ...this.composerDrafts }
     delete next[key]
@@ -375,29 +386,30 @@ export class RendererRecoveryStore {
    *
    * A snapshot written before drafts recorded where they came from cannot say
    * whether its words were typed in that window or copied from another
-   * instance. Until the slot answers, such a draft must not be committed back,
-   * so the workspace asks once at startup instead of trusting it.
+   * instance. Those words are never written back to the slot and never replaced
+   * by it until a composer here edits them, which is what makes a recovered
+   * draft harmless to other instances without ever costing the user a draft.
    */
   hasUnvouchedDraft(projectId: string, threadId: string): boolean {
     return this.composerDrafts[recoveryDraftKey(projectId, threadId)]?.origin === 'legacy'
   }
 
   /**
-   * Settle one unvouched draft against the slot the database actually holds.
+   * Write this thread's draft to the shared slot now instead of on the debounce.
    *
-   * The slot is the truth: a draft it still carries becomes this window's
-   * mirror of it, and a slot that is empty means the words were already sent, so
-   * the recovered copy is dropped rather than revived in a composer nothing will
-   * ever send on its own.
+   * Used for a discrete, deliberate edit (an annotation, its comment): waiting
+   * ten seconds for a commit is what a refresh inside that window turns into a
+   * lost annotation. A mirror owes the slot nothing, so it never commits.
    */
-  reconcileUnvouchedDraft(projectId: string, threadId: string, rawDraftJson: string | null): void {
+  commitDraftNow(projectId: string, threadId: string): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
-    if (!this.hasUnvouchedDraft(projectId, threadId)) return
-    if (rawDraftJson !== null) {
-      this.importDbDraft(projectId, threadId, rawDraftJson)
+    const entry = this.composerDrafts[recoveryDraftKey(projectId, threadId)]
+    if (!entry) {
+      commitDraftStateNow(projectId, threadId, false, null)
       return
     }
-    this.dropCommittedAwayDraft(projectId, threadId)
+    if (entry.origin === 'mirrored') return
+    commitDraftStateNow(projectId, threadId, true, JSON.stringify(entry))
   }
 
   /**
