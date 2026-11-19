@@ -625,6 +625,51 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     }
   }
 
+  /**
+   * Recall a user message that never reached the agent.
+   *
+   * A failed send leaves the words on screen carrying their error, which is the
+   * right place to see them and the wrong place to keep them: this pulls them
+   * back into the composer so they can be edited and sent again, and removes the
+   * row so the conversation stops showing a message the agent never received. It
+   * is the same promise as undoing a held steer, applied to a send that failed
+   * outright, and the words are never dropped: they are moved, not deleted.
+   */
+  async recallUnsentMessage(msg: AgentMessage): Promise<void> {
+    const projectId = this.root.handleAgentEvent.thread.projectId
+    const conversationId = this.conversationId
+    const text = msg.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n\n')
+    const attachments: PromptAttachment[] = msg.parts
+      .filter((part) => part.type === 'file')
+      .map((part) => ({ mime: part.mime, url: part.url, filename: part.filename }))
+    try {
+      // Temporary side chats own no durable thread: their row is dropped and the
+      // words go back to the composer of the thread the user is looking at.
+      if (conversationId === this.root.handleAgentEvent.thread.id) {
+        threadMessages.removeUnsentMessage(projectId, conversationId, msg.id)
+      } else {
+        threadMessages.removeUnsentMessage(projectId, conversationId, msg.id)
+      }
+      rendererRecovery.setDraft(
+        projectId,
+        this.root.handleAgentEvent.thread.id,
+        text,
+        attachments,
+        [],
+        []
+      )
+      rendererRecovery.persistQueuedNow()
+      this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+      this.root.handleAgentEvent.errorMessage = ''
+    } catch (error) {
+      this.root.handleAgentEvent.errorMessage =
+        error instanceof Error ? error.message : 'The message could not be recalled.'
+    }
+  }
+
   /** True when the persisted latest turn shows a run was mid-flight when the
    *  live stream went away: the turn has not completed a terminal message but
    *  already persisted real working parts (reasoning, tool calls, sub-agents).

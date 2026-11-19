@@ -46,6 +46,8 @@
     resourceWait?: AdmissionDecision | null
     /** Whose machine the wait belongs to, when a machine is what waits. */
     resourceWaitTarget?: ResourceWaitTarget | null
+    /** True while this message is being handed to the conversation. */
+    delivering?: boolean
     /** The steer combo, so the send-now action names the key that does it. */
     steerModifierLabel: string
     /** Thread the queued message belongs to, so its fold state is remembered. */
@@ -77,6 +79,7 @@
     startAfterThreads,
     resourceWait = null,
     resourceWaitTarget = null,
+    delivering = false,
     steerModifierLabel,
     threadId,
     stackedAbove = false,
@@ -163,7 +166,9 @@ the head's menu. -->
   bind:folded={foldState.folded}
 >
   {#snippet meta()}
-    {#if resourceWait}
+    {#if delivering}
+      <CardTag text="Sending" />
+    {:else if resourceWait}
       <CardTag
         text={resourceWaitTarget?.kind === 'oven'
           ? `Waiting on ${resourceWaitTarget.name}`

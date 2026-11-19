@@ -442,6 +442,7 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     // concurrent path) cannot also deliver this same queued message. If we lose
     // the race, whoever claimed it will send it   never send here.
     if (!claimQueuedMessage(projectId, id)) return
+    this.queuedDelivering = true
     try {
       // Dequeue only the head   remaining queued messages stay FIFO for the
       // following idle transitions (one message per turn).
@@ -456,9 +457,19 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
         pendingProjectReferences,
         pendingPresentation,
         pendingTaskReferences,
-        true
+        // Not restorable: a failed send already leaves the message on screen
+        // with its error, so restoring a draft as well would show the same
+        // words twice and invite a double send.
+        false
       )
     } finally {
+      // The attempt owns this message from here on. A send that finds the
+      // thread busy parks itself back into the queue, and without this the card
+      // reappeared a frame after it left: the queue visibly thrashing while the
+      // message never moved. Whatever the outcome, the queue does not take it
+      // back; a failure stays on screen with its error and can be recalled.
+      this.clearQueuedState()
+      this.queuedDelivering = false
       releaseQueuedMessage(projectId, id)
     }
   }
@@ -570,6 +581,14 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
   }
 
   queuedMessage = $state('')
+
+  /**
+   * True while a queued message is being handed to the conversation.
+   *
+   * The card reads this so it can say it is sending instead of disappearing and
+   * reappearing, which is what made the queue look like it was thrashing.
+   */
+  queuedDelivering = $state(false)
 
   queuedAttachments = $state<PromptAttachment[]>([])
 

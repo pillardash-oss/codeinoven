@@ -100,6 +100,7 @@
       board.handleAgentEvent.thread.projectId,
       board.handleAgentEvent.thread.id
     )?.decision ?? null}
+    delivering={board.steerQueuedMessage.queuedDelivering}
     resourceWaitTarget={queuedResourceWait.for(
       board.handleAgentEvent.thread.projectId,
       board.handleAgentEvent.thread.id

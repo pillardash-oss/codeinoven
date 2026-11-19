@@ -211,6 +211,11 @@ class ThreadMessagesStore {
   }
 
   /** Ask the engine to drop a held steer before it reaches the harness. */
+  /** Drop a message the agent never received, after recall put it back in the composer. */
+  removeUnsentMessage(projectId: string, threadId: string, messageId: string): void {
+    this.cache.removeUnsentMessage(projectId, threadId, messageId)
+  }
+
   async discardSteer(projectId: string, threadId: string, messageId: string): Promise<void> {
     await invoke('agent:discardSteer', projectId, threadId, messageId)
   }
