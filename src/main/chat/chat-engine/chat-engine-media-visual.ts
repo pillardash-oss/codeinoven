@@ -1,5 +1,5 @@
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
-import { attachmentScratchDirectory } from '../../drivers/attachment-data-url'
+import { ImageSourceError, attachmentScratchDirectory } from '../../drivers/attachment-data-url'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import {
@@ -693,6 +693,19 @@ export class ChatEngineMediaVisual {
           description
         }
       } catch (error) {
+        // A source the app cannot read or download is a problem with the
+        // request, not with the vision model: retrying another model cannot fix
+        // it and the user has nothing to choose. Report it on this image's own
+        // result so the model that asked can correct the source instead.
+        if (error instanceof ImageSourceError) {
+          return {
+            id: currentImage.id,
+            source: currentImage.source,
+            type: currentImage.type,
+            description: '',
+            error: error.message
+          }
+        }
         const message = imageDescriptorFailureMessage(error)
         const kind: AgentProviderIssueKind =
           error instanceof ImageDescriptorInactivityError

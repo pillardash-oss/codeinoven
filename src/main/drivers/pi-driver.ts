@@ -38,6 +38,7 @@ import { runHarnessCommand } from './harness-runtime'
 
 import { record, withTimeout } from './pi/pi-values'
 import { composePiAttachments } from './pi/pi-prompt-assembly'
+import { attachmentScratchDirectory } from './attachment-data-url'
 import { PiModelCatalog } from './pi/pi-driver-models'
 import { PiSubagentStreams } from './pi/pi-driver-subagents'
 import { PiUiRequestBoard } from './pi/pi-driver-ui-requests'
@@ -714,7 +715,7 @@ export class PiDriver extends PersistentCliDriver {
       )
       this.appendUserMessage(session, options)
       this.turns.clearSilentContinue(session.id)
-      await this.steerIntoActiveTurn(session.id, options.text, options.attachments)
+      await this.steerIntoActiveTurn(projectPath, session.id, options.text, options.attachments)
       return
     }
     const model = this.resolveModel(options.settings.providerId, options.settings.modelId)
@@ -761,7 +762,10 @@ export class PiDriver extends PersistentCliDriver {
     this.turns.clearReconcileAnswer(session.id)
     this.turns.addActiveTurn(session.id)
 
-    const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+    const { inlineSvg, images, references } = await composePiAttachments(
+      options.attachments,
+      attachmentScratchDirectory(projectPath)
+    )
     markDispatch('attachments')
     if (options.systemPrompt) {
       await this.cioFiles.publishCioSystemPrompt(session.id, options.systemPrompt)
@@ -862,11 +866,19 @@ export class PiDriver extends PersistentCliDriver {
     // between agent runs. Manual compaction drains the queue afterwards
     // (see `compactSession`).
     if (client && this.turns.hasActiveTurn(options.sessionId)) {
-      await this.steerIntoActiveTurn(options.sessionId, options.text, options.attachments)
+      await this.steerIntoActiveTurn(
+        projectPath,
+        options.sessionId,
+        options.text,
+        options.attachments
+      )
       return
     }
     if (client && (await this.isSessionBusy(projectPath, options.sessionId))) {
-      const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+      const { inlineSvg, images, references } = await composePiAttachments(
+        options.attachments,
+        attachmentScratchDirectory(projectPath)
+      )
       const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
       this.appendUserMessage(session, options)
       this.turns.clearSilentContinue(options.sessionId)
@@ -894,7 +906,10 @@ export class PiDriver extends PersistentCliDriver {
       Logger.dev('Pi auto-retry re-arm failed:', error)
     })
     this.turns.addActiveTurn(options.sessionId)
-    const { inlineSvg, images, references } = await composePiAttachments(options.attachments)
+    const { inlineSvg, images, references } = await composePiAttachments(
+      options.attachments,
+      attachmentScratchDirectory(projectPath)
+    )
     const message = [inlineSvg, ...references, options.text].filter(Boolean).join('\n\n')
     try {
       await this.promptIntoSession(activeClient, projectPath, options.sessionId, message, images)
@@ -910,6 +925,7 @@ export class PiDriver extends PersistentCliDriver {
   /** Compose attachments + text and deliver them into the session's live turn
    *  through pi's steer channel. The caller must have verified an active turn. */
   private async steerIntoActiveTurn(
+    projectPath: string,
     sessionId: string,
     text: string,
     attachments: SendPromptOptions['attachments']
@@ -919,7 +935,10 @@ export class PiDriver extends PersistentCliDriver {
     if (!client) {
       throw new Error(`No active Pi turn is available to steer for session ${sessionId}`)
     }
-    const { inlineSvg, images, references } = await composePiAttachments(attachments)
+    const { inlineSvg, images, references } = await composePiAttachments(
+      attachments,
+      attachmentScratchDirectory(projectPath)
+    )
     const message = [inlineSvg, ...references, text].filter(Boolean).join('\n\n')
     await client.steer(message, images)
   }
