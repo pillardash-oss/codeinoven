@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import type { PreparedHarnessInvocation } from './harness-runtime'
 import { spawnInUtilityHost } from './harness-utility-host'
 import { PI_COMPACTION_EXTENSION_KEY } from './pi-compaction-extension'
+import { localRpcTransport, type RpcTransport } from './pi-rpc-transport'
 
 /**
  * A single Pi image content block, sent with a prompt or steer message.
@@ -33,6 +34,12 @@ interface PiRpcOptions {
   onExtensionStatus?: (record: Record<string, unknown>) => void
   /** Called once when the pi process exits unexpectedly. */
   onExit?: (code: number | null) => void
+  /**
+   * Where the protocol travels. A local run leaves this out and the client
+   * spawns `pi` itself; a run on an Oven passes the transport that carries the
+   * same JSON lines to the child on that machine.
+   */
+  transport?: RpcTransport
 }
 
 const REQUEST_TIMEOUT_MS = 120_000
@@ -42,25 +49,31 @@ const COMPACTION_IDLE_TIMEOUT_MS = 300_000
 /**
  * Minimal JSONL RPC client for `pi --mode rpc` (installed on the user's PATH).
  *
- * Pi's headless RPC mode accepts length-prefixed JSON commands on stdin and
- * emits JSON events plus `{ type: "response" }` records on stdout. This client
- * owns the spawned `pi` process, correlates responses by their `id`, forwards
- * agent events to a callback, and answers Pi's extension UI requests so the
- * agent never blocks on an unattended dialog.
+ * Pi's headless RPC mode accepts JSON commands on stdin and emits JSON events
+ * plus `{ type: "response" }` records on stdout. This client correlates
+ * responses by their `id`, forwards agent events to a callback, and answers
+ * Pi's extension UI requests so the agent never blocks on an unattended dialog.
+ *
+ * It reaches Pi through an {@link RpcTransport}: by default it spawns the `pi`
+ * child itself, and a caller that already has a peer (a run on an Oven) passes
+ * the transport that carries the same lines to it. Nothing above the transport
+ * knows which of the two it is talking to.
  *
  * The driver keeps this in-process only to speak the protocol; the actual agent
  * runs in the `pi` binary the user installs, mirroring how Claude Code is used.
  */
 export class PiRpcClient {
-  private readonly child: ChildProcess
+  /** The spawned child, or null when the caller supplied its own transport. */
+  private readonly child: ChildProcess | null
+  private readonly transport: RpcTransport
   private readonly onEvent: (record: Record<string, unknown>) => void
   private readonly onExit: (code: number | null) => void
   private readonly onUiRequest: (record: Record<string, unknown>) => void
   private readonly onExtensionStatus: (record: Record<string, unknown>) => void
   private readonly pending = new Map<string, PendingRequest>()
-  private buffer = ''
   private stderrBuffer = ''
   private nextId = 1
+  private exited = false
   private disposed = false
 
   constructor(options: PiRpcOptions) {
@@ -70,30 +83,26 @@ export class PiRpcClient {
     this.onUiRequest = options.onUiRequest ?? ((record) => this.dismissUiDialog(record))
     this.onExtensionStatus = options.onExtensionStatus ?? (() => undefined)
     this.onExit = options.onExit ?? (() => undefined)
-    // Bundled Pi (electron run-as-node) must run in-process inside Electron's
-    // utilityProcess helper; a direct child registers a standalone LaunchServices
-    // app on macOS and bounces a terminal-like Dock icon per session.
-    this.child =
-      options.invocation.runtime?.target?.kind === 'bundled'
-        ? spawnInUtilityHost(options.invocation)
-        : spawn(options.invocation.command, options.invocation.args, {
-            ...(options.invocation.cwd ? { cwd: options.invocation.cwd } : {}),
-            env: options.invocation.env,
-            shell: options.invocation.shell,
-            stdio: ['pipe', 'pipe', 'pipe']
-          })
-    this.child.stdout?.on('data', (chunk: Buffer) => this.consume(chunk.toString()))
+    if (options.transport) {
+      this.child = null
+      this.transport = options.transport
+    } else {
+      const child = this.spawnChild(options.invocation)
+      this.child = child
+      this.transport = localRpcTransport(child)
+    }
+    this.transport.onLine((line) => this.consumeLine(line))
     // Capped rolling tail so a crash reason (missing dependency, bad flag,
     // uncaught exception) reaches the error surfaced to the user instead of
     // a bare "exited with code 1" that gives no clue what went wrong.
-    this.child.stderr?.on('data', (chunk: Buffer) => {
-      this.stderrBuffer = `${this.stderrBuffer}${chunk.toString()}`.slice(-4_000)
+    this.transport.onStderr((text) => {
+      this.stderrBuffer = `${this.stderrBuffer}${text}`.slice(-4_000)
     })
-    this.child.on('error', (error) => {
+    this.transport.onError?.((error) => {
       this.failAll(new Error(`Failed to launch pi: ${error.message}`))
-      this.onExit(null)
     })
-    this.child.on('exit', (code) => {
+    this.transport.onExit((code) => {
+      this.exited = true
       const detail = this.stderrBuffer.trim()
       // The stderr tail (which usually contains the crash's stack trace) must
       // stay OUT of the error message: the error card renders `message` as the
@@ -109,19 +118,37 @@ export class PiRpcClient {
     })
   }
 
+  private spawnChild(invocation: PreparedHarnessInvocation): ChildProcess {
+    // Bundled Pi (electron run-as-node) must run in-process inside Electron's
+    // utilityProcess helper; a direct child registers a standalone LaunchServices
+    // app on macOS and bounces a terminal-like Dock icon per session.
+    return invocation.runtime?.target?.kind === 'bundled'
+      ? spawnInUtilityHost(invocation)
+      : spawn(invocation.command, invocation.args, {
+          ...(invocation.cwd ? { cwd: invocation.cwd } : {}),
+          env: invocation.env,
+          shell: invocation.shell,
+          stdio: ['pipe', 'pipe', 'pipe']
+        })
+  }
+
   get running(): boolean {
-    return !this.disposed && !this.child.killed
+    if (this.disposed) return false
+    // A local child answers from its own handle, exactly as it always has; an
+    // injected transport has only the exit it already reported.
+    return this.child ? !this.child.killed : !this.exited
   }
 
   /** The spawned `pi --mode rpc` child, exposed so drivers can register it
    * with the app's process tracker (task manager, orphan reaping). */
   get process(): ChildProcess {
+    if (!this.child) throw new Error('This Pi session has no local process')
     return this.child
   }
 
   /** Send an RPC command and resolve with its `data` once the matching response arrives. */
   send(command: Record<string, unknown>): Promise<unknown> {
-    if (this.disposed || !this.child.stdin || this.child.killed) {
+    if (!this.available) {
       return Promise.reject(new Error('Pi process is not running'))
     }
     const id = String(this.nextId++)
@@ -135,7 +162,13 @@ export class PiRpcClient {
         command['type'] === 'compact' ? COMPACTION_IDLE_TIMEOUT_MS : REQUEST_TIMEOUT_MS
       )
       this.pending.set(id, { resolve, reject, timer, compacting: command['type'] === 'compact' })
-      this.child.stdin?.write(`${payload}\n`)
+      void this.transport.write(payload).catch((error: unknown) => {
+        const pending = this.pending.get(id)
+        if (!pending) return
+        this.pending.delete(id)
+        clearTimeout(pending.timer)
+        pending.reject(error instanceof Error ? error : new Error(String(error)))
+      })
     })
   }
 
@@ -253,20 +286,22 @@ export class PiRpcClient {
     if (this.disposed) return
     this.disposed = true
     this.failAll(new Error('Pi process disposed'))
-    if (!this.child.killed) this.child.kill()
+    if (this.child) {
+      if (!this.child.killed) this.child.kill()
+      return
+    }
+    void this.transport.close().catch(() => undefined)
   }
 
-  private consume(chunk: string): void {
-    this.buffer += chunk
-    const lines = this.buffer.split(/\r?\n/u)
-    this.buffer = lines.pop() ?? ''
-    for (const line of lines) {
-      if (!line.trim()) continue
-      this.consumeLine(line)
-    }
+  /** Whether a command can still be written to the peer. */
+  private get available(): boolean {
+    if (this.disposed) return false
+    if (this.child) return this.child.stdin !== null && !this.child.killed
+    return !this.exited
   }
 
   private consumeLine(line: string): void {
+    if (!line.trim()) return
     let record: Record<string, unknown>
     try {
       const value = JSON.parse(line) as unknown
@@ -324,9 +359,9 @@ export class PiRpcClient {
     requestId: string | number,
     response: { value?: string; confirmed?: boolean; cancelled?: boolean }
   ): void {
-    this.child.stdin?.write(
-      `${JSON.stringify({ type: 'extension_ui_response', id: requestId, ...response })}\n`
-    )
+    void this.transport
+      .write(JSON.stringify({ type: 'extension_ui_response', id: requestId, ...response }))
+      .catch(() => undefined)
   }
 
   /** Auto-dismiss a dialog when no consumer is attached so the agent never stalls. */
