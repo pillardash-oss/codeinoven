@@ -21,6 +21,7 @@ import {
   OvenPiSessions,
   createOvenPiLaunch,
   ovenPiOvenArgs,
+  ovenPiRunEnvironment,
   ovenPiSessionsRoot,
   ovenPiTurnApplies,
   prepareOvenPiSession,
@@ -354,5 +355,34 @@ describe('ovenPiTurnApplies', () => {
     expect(ovenPiTurnApplies(settings({ ovenId: 'local' }), true)).toBe(false)
     expect(ovenPiTurnApplies(settings(), false)).toBe(false)
     expect(ovenPiTurnApplies(undefined, true)).toBe(false)
+  })
+})
+
+describe('ovenPiRunEnvironment', () => {
+  it('forwards only the names the Oven accepts', () => {
+    // A development shell exports lowercase names, and one of them failed the
+    // whole run with "Invalid remote environment override" on the Oven.
+    const environment = ovenPiRunEnvironment(
+      { PI_SESSION: 'session-1' },
+      {
+        ANTHROPIC_API_KEY: 'sk-test',
+        npm_config_user_agent: 'bun/1.4.3',
+        npm_package_name: 'codeinoven',
+        'BASH_FUNC_thing%%': '() { :; }',
+        PATH: '/usr/local/bin',
+        HOME: '/Users/someone',
+        NODE_OPTIONS: '--max-old-space-size=4096',
+        EMPTY: ''
+      }
+    )
+    expect(environment).toEqual({
+      ANTHROPIC_API_KEY: 'sk-test',
+      PI_SESSION: 'session-1'
+    })
+  })
+
+  it('drops a value larger than the Oven will accept', () => {
+    const environment = ovenPiRunEnvironment({}, { HUGE_VALUE: 'x'.repeat(32_769) })
+    expect(environment).toEqual({})
   })
 })

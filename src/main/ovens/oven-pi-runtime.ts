@@ -262,10 +262,20 @@ export function ovenPiRunEnvironment(
     if (typeof value !== 'string' || value.length === 0) continue
     if (OVEN_OWNED_ENVIRONMENT.has(name)) continue
     if (value.includes('\0')) continue
+    // The Oven enforces this name shape and length on every override it
+    // accepts, so anything else must not be sent: a development shell exports
+    // plenty of lowercase names (`npm_config_*`, `npm_package_*`), and one of
+    // them made the whole run fail with "Invalid remote environment override"
+    // instead of starting the turn.
+    if (!OVEN_ENVIRONMENT_NAME.test(name)) continue
+    if (value.length > 32_768) continue
     environment[name] = value
   }
   return { ...environment, ...session }
 }
+
+/** The name shape and value bound the Oven accepts for an environment override. */
+const OVEN_ENVIRONMENT_NAME = /^[A-Z_][A-Z0-9_]*$/u
 
 /** Variables the Oven must keep from its own session, never from this machine. */
 const OVEN_OWNED_ENVIRONMENT = new Set([
