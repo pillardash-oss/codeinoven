@@ -49,9 +49,40 @@ import { toolActionLabelForPart } from '../../../lib/tool-action-label'
 import { displayDeviceAttention } from '../../display/display-device-attention'
 import { ChatEngine, isTurnBoundaryPrompt } from '../chat-engine'
 
+/**
+ * Delays after which a parked idle is re-examined.
+ *
+ * An idle that arrives while the driver still registers the turn is parked
+ * rather than honoured, because that is what a resume inside one logical turn
+ * looks like. When the driver releases the registration without ever sending a
+ * second idle (the release and the signal can cross), nothing was left to
+ * settle the turn and the thread sat at "working" with no run behind it. The
+ * re-checks are bounded: a turn that never releases its registration is the
+ * watchdog's problem, not this one's.
+ */
+const DEFERRED_IDLE_RECHECKS_MS = [2_000, 30_000, 120_000, 600_000, 1_800_000] as const
+
+/** An idle signal kept until the driver that parked it lets the turn go. */
+interface DeferredIdleSignal {
+  event: AgentEvent
+  driverId: string
+  sourceDriver?: HarnessDriver
+  /** How many re-checks have already been scheduled. */
+  attempt: number
+  timer?: ReturnType<typeof setTimeout>
+}
+
 /** ChatEngine turns: one concern, moved verbatim from the composition root. */
 export class ChatEngineTurns {
   constructor(private readonly host: ChatEngine) {}
+
+  /**
+   * Idle signals parked because their driver still registered the turn.
+   *
+   * In memory only: a parked signal is a live instruction for one turn, and a
+   * restart has no turn left to settle.
+   */
+  private readonly deferredIdles = new Map<string, DeferredIdleSignal>()
 
   /**
    * Join the OpenCode install probe and converge the driver map on its result.
@@ -553,6 +584,7 @@ export class ChatEngineTurns {
     if (event.type === 'message.part.updated' && event.part.type === 'tool') {
       event.part = toolActionLabelForPart(event.part)
     }
+    if (!isIdleSignalEvent(event)) this.cancelDeferredIdle(event.sessionId)
     // Any live harness activity means the session's project is doing work
     // keep its idle-server clock reset until the stream goes quiet.
     const eventOwner = this.host.sessionRegistry.get(event.sessionId)
@@ -801,6 +833,11 @@ export class ChatEngineTurns {
         sessionId: event.sessionId,
         driverId
       })
+      // Parked, not dropped: the driver's terminal idle is supposed to follow
+      // once it releases the registration, and when the two cross nothing ever
+      // settles the turn. Re-checking a few times over is what closes that
+      // window without ever settling a turn the driver still owns.
+      this.deferIdle(event.sessionId, event, driverId, sourceDriver)
       return
     }
     this.host.units['runtime-connectivity'].updateCompletionWaiter(event)
@@ -1462,6 +1499,103 @@ export class ChatEngineTurns {
         error: rawErrorMessage(error)
       })
       return { text: nudge, attachments: [] }
+    }
+  }
+
+  /** Park an idle the driver still holds, and schedule its first re-check. */
+  private deferIdle(
+    sessionId: string,
+    event: AgentEvent,
+    driverId: string,
+    sourceDriver?: HarnessDriver
+  ): void {
+    const existing = this.deferredIdles.get(sessionId)
+    if (existing?.timer) clearTimeout(existing.timer)
+    const entry: DeferredIdleSignal = {
+      event,
+      driverId,
+      ...(sourceDriver ? { sourceDriver } : {}),
+      attempt: existing?.attempt ?? 0
+    }
+    this.deferredIdles.set(sessionId, entry)
+    this.scheduleDeferredIdleCheck(sessionId)
+  }
+
+  /**
+   * Forget a parked idle.
+   *
+   * Any other event for the session means the turn is alive again: the idle it
+   * parked was genuinely intermediate, and the turn's own end will arrive on its
+   * own. Called for every non-idle event, so a resume never leaves a stale
+   * signal waiting to settle it later.
+   */
+  private cancelDeferredIdle(sessionId: string): void {
+    const parked = this.deferredIdles.get(sessionId)
+    if (!parked) return
+    if (parked.timer) clearTimeout(parked.timer)
+    this.deferredIdles.delete(sessionId)
+  }
+
+  /** One bounded re-check, or give the turn back to the watchdog. */
+  private scheduleDeferredIdleCheck(sessionId: string): void {
+    const parked = this.deferredIdles.get(sessionId)
+    if (!parked) return
+    const delay = DEFERRED_IDLE_RECHECKS_MS[parked.attempt]
+    if (delay === undefined) {
+      this.deferredIdles.delete(sessionId)
+      Logger.dev('Stopped re-checking a parked idle the driver never released', { sessionId })
+      return
+    }
+    parked.attempt += 1
+    const timer = setTimeout(() => void this.runDeferredIdleCheck(sessionId), delay)
+    // A parked idle must never keep the process alive on its own.
+    timer.unref?.()
+    parked.timer = timer
+  }
+
+  /**
+   * Settle a parked idle once the turn can no longer resume.
+   *
+   * Two questions decide it, both of which the driver answers about itself: has
+   * it released the registration, and does the harness still consider the
+   * session busy? A compaction gap releases the registration but leaves the
+   * harness working, so this waits through it instead of settling a turn that
+   * is about to be re-prompted.
+   */
+  private async runDeferredIdleCheck(sessionId: string): Promise<void> {
+    const parked = this.deferredIdles.get(sessionId)
+    if (!parked) return
+    parked.timer = undefined
+    if (this.driverHoldsTurn(sessionId, parked.driverId, parked.sourceDriver)) {
+      this.scheduleDeferredIdleCheck(sessionId)
+      return
+    }
+    if (await this.sessionStillBusy(sessionId, parked)) {
+      this.scheduleDeferredIdleCheck(sessionId)
+      return
+    }
+    // The driver let the turn go and the harness is not running it: the parked
+    // idle was the turn's real end, and it was dropped only because the two
+    // signals crossed.
+    this.deferredIdles.delete(sessionId)
+    Logger.dev('Settling a parked idle after the driver released the turn', { sessionId })
+    this.handleDriverEvent(parked.driverId, parked.event, parked.sourceDriver)
+  }
+
+  /** Whether the harness itself still reports the session as busy. */
+  private async sessionStillBusy(sessionId: string, parked: DeferredIdleSignal): Promise<boolean> {
+    const info = this.host.sessionRegistry.get(sessionId)
+    if (!info) return false
+    const driver =
+      parked.sourceDriver ??
+      this.host.units['turns-dispatch'].driverForRuntime(parked.driverId, info.accountId)
+    // Without a probe the driver's released registration is the only answer we
+    // have, which is the same bargain every other caller of the probe makes.
+    if (!driver?.isSessionBusy) return false
+    try {
+      return await driver.isSessionBusy(info.projectPath, sessionId)
+    } catch {
+      return false
     }
   }
 
