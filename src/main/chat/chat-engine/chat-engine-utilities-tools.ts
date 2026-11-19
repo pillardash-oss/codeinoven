@@ -829,8 +829,10 @@ export class ChatEngineUtilitiesTools {
       if (openTools.size === 0) {
         // A window-open snapshot may reuse a walk that just completed: a stale
         // opening bound only over-includes paths, and the close below always
-        // takes a fresh scan. Threads in one project no longer each pay the
-        // four git spawns and the tree walk for windows that overlap in time.
+        // takes a fresh scan. Sessions that share a working tree (a scope's
+        // worktree, the project checkout) no longer each pay the four git
+        // spawns and the tree walk for windows that overlap in time; sessions
+        // in different worktrees resolve to different paths and never share.
         session.unboundedWindowStart = this.host.checkpointManager
           .fingerprint(session.projectId, session.projectPath, { reuseRecent: true })
           .catch((error) => {

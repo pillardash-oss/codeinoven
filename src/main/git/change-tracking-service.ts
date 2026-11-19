@@ -347,10 +347,15 @@ export class ChangeTrackingService {
    * reading or storing content. Used to bound an unbounded tool (a shell
    * command) to the files it touched while it was running.
    *
-   * Concurrent requests for the same project path share one scan: several
-   * threads in one project each opening a change window used to each spawn
+   * Concurrent requests for the same working tree share one scan: several
+   * threads in one checkout each opening a change window used to each spawn
    * their own `git status` / `git ls-files` pair and walk the tree four times
-   * over. A `reuseRecent` request may answer from the most recent completed
+   * over. The key is the session's resolved path, which the scope resolver
+   * answers per checkout: a scope with its own worktree gets its own key, a
+   * project thread gets the project checkout, and the assistant, inbox and
+   * browser spaces get their own per-thread directories, so a shared scan
+   * always means a literally shared tree and never crosses a worktree. A
+   * `reuseRecent` request may answer from the most recent completed
    * fingerprint inside {@link FINGERPRINT_REUSE_MS} instead of scanning again,
    * which only a window-open snapshot may do.
    */
