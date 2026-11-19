@@ -1671,7 +1671,11 @@
                               {/if}
                             </button>
                           {/if}
-                          {#if board.props.controller?.kind !== 'temporary-chat' && !groupThread}
+                          <!-- Forking is offered in a group conversation too: Don's
+                               replies are the work that gets carried into a
+                               conversation of its own, and the fork keeps the
+                               group's speakers. -->
+                          {#if board.props.controller?.kind !== 'temporary-chat'}
                             <button
                               class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
                               aria-label="Fork thread from this message"
