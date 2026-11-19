@@ -17,7 +17,8 @@
  */
 import { cpus, freemem, totalmem } from 'node:os'
 import { readFileSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { app } from 'electron'
 import { decideAdmission, type AdmissionDecision } from '../../lib/resource-admission'
 import { Logger } from './logger'
@@ -106,12 +107,28 @@ export function linuxAvailableBytes(meminfo: string): number | null {
   return Math.max(0, Number(match[1]) * 1024)
 }
 
-/** What the platform reports as available, or null when nothing can be read. */
-function platformAvailableBytes(): number | null {
+/** Longest the darwin read waits for `vm_stat` before it is treated as no answer. */
+const VM_STAT_TIMEOUT_MS = 1_000
+
+const execFileAsync = promisify(execFile)
+
+/** What the platform reports as available, or null when nothing can be read.
+ *
+ * The darwin read spawns a child process, so it is asynchronous: `vm_stat` on a
+ * busy machine can take longer than the answer is worth, and this sampler runs
+ * on the Electron main thread, where a synchronous spawn froze the UI. A
+ * failure or a timeout is one caught rejection, never a rejected sampler. The
+ * Linux read stays synchronous: `/proc/meminfo` is a small in-memory file whose
+ * read is cheaper than the promise that would wrap it.
+ */
+async function platformAvailableBytes(): Promise<number | null> {
   try {
     if (process.platform === 'darwin') {
-      const output = execFileSync('/usr/bin/vm_stat', { encoding: 'utf8', timeout: 1_000 })
-      return darwinAvailableBytes(output)
+      const { stdout } = await execFileAsync('/usr/bin/vm_stat', {
+        encoding: 'utf8',
+        timeout: VM_STAT_TIMEOUT_MS
+      })
+      return darwinAvailableBytes(stdout)
     }
     if (process.platform === 'linux') {
       return linuxAvailableBytes(readFileSync('/proc/meminfo', 'utf8'))
@@ -123,8 +140,8 @@ function platformAvailableBytes(): number | null {
 }
 
 /** Bytes new work can use, falling back to raw free memory when nothing answers. */
-function availableMemoryBytes(): number {
-  const available = platformAvailableBytes()
+async function availableMemoryBytes(): Promise<number> {
+  const available = await platformAvailableBytes()
   if (available !== null) return available
   const info = readableSystemMemory()
   if (info) return Math.max(0, info.free * 1024)
@@ -205,7 +222,7 @@ class ResourcePressureSampler {
     this.#armIdleDisarm()
     return decideAdmission({
       cpuAvailablePercent: this.#averageIdlePercent(),
-      memoryAvailableBytes: availableMemoryBytes(),
+      memoryAvailableBytes: await availableMemoryBytes(),
       totalMemoryBytes: totalMemoryBytes()
     })
   }

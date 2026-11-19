@@ -132,11 +132,14 @@ export class AssistantSchedulerService {
     // Drop records that predate their schedule (or whose task is gone) before
     // anything else, so a miss written by an older build cannot keep badging.
     this.pruneStaleMisses()
-    this.pruneStaleSkips(this.deps.assistants.listAssistantTasks(), this.now())
+    // Both startup reads go through the worker: launch already contends with
+    // the checkpoint trim and the corpus sweep, and neither read may add a
+    // main-thread query to that moment.
+    this.pruneStaleSkips(await this.deps.assistants.listAssistantTasksViaWorker(), this.now())
     this.startedAt = this.now()
     // Detect misses that happened while the app was closed before ticking, so a
     // slot that comes due only after startup is fired, not mis-recorded.
-    this.evaluate(false)
+    await this.evaluateViaWorker(false)
     this.refreshSchedule()
     this.notifyChange()
   }
@@ -402,12 +405,38 @@ export class AssistantSchedulerService {
 
   /** Evaluate every scheduled task once (used by start and by tests). */
   evaluate(allowDispatch = true): void {
+    this.evaluateTasks(this.readTasksForEvaluation(), allowDispatch)
+  }
+
+  /**
+   * The tick's evaluation, which answers its task listing on the database
+   * worker instead of the Electron main thread. The tick fires every 30
+   * seconds for as long as a task is on the clock, and the sync listing held
+   * the event loop for the length of the archived-subtree query on every one
+   * of them; nothing about the decision needs the primary connection.
+   */
+  async evaluateViaWorker(allowDispatch = true): Promise<void> {
+    const tasks = await this.deps.assistants
+      .listAssistantTasksViaWorker()
+      .catch((error: unknown): Thread[] => {
+        Logger.error('Assistant schedule could not be read from the worker', error)
+        return this.readTasksForEvaluation()
+      })
+    this.evaluateTasks(tasks, allowDispatch)
+  }
+
+  /** The incumbent-only task read that opens every evaluation. */
+  private readTasksForEvaluation(): Thread[] {
     // Scheduled work happens exactly once per config root: only the elected
     // owner evaluates schedules, so two live instances can never double-fire a
     // slot. A secondary still serves "Run now", which is user-initiated and
     // does not go through this path.
-    if (!instanceRegistry.isIncumbentInstance()) return
-    const tasks = this.deps.assistants.listAssistantTasks()
+    if (!instanceRegistry.isIncumbentInstance()) return []
+    return this.deps.assistants.listAssistantTasks()
+  }
+
+  /** One evaluation over an already-read task listing. */
+  private evaluateTasks(tasks: Thread[], allowDispatch: boolean): void {
     if (this.pruneStaleSkips(tasks, this.now()) > 0) this.notifyChange()
     for (const task of tasks) {
       try {
@@ -505,10 +534,11 @@ export class AssistantSchedulerService {
   }
 
   private tick(): void {
-    // Serialize ticks: a slow tick must not overlap the next one.
+    // Serialize ticks: a slow tick must not overlap the next one. The worker
+    // read keeps the 30-second cadence off the Electron main thread entirely.
     this.tickChain = this.tickChain
       .then(() => {
-        this.evaluate(true)
+        return this.evaluateViaWorker(true)
       })
       .catch((error) => {
         Logger.error('Assistant scheduler tick failed', error)

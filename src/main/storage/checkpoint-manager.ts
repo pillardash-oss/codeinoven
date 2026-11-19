@@ -20,6 +20,7 @@ import {
   isExcludedRelativePath,
   type CheckpointChange,
   type CheckpointFile,
+  type FingerprintOptions,
   type ProjectCheckpoint,
   type ProjectFingerprint
 } from '../git/change-tracking-service'
@@ -373,10 +374,18 @@ export class CheckpointManager {
     return transcriptWriteEvidence(projectPath, rows)
   }
 
-  /** Stat-only project scan used to attribute shell-command mutations to their run window. */
-  fingerprint(projectId: string, projectPath: string): Promise<ProjectFingerprint> {
+  /**
+   * Stat-only project scan used to attribute shell-command mutations to their run window.
+   * A window-open caller passes `reuseRecent` so several threads opening windows
+   * around the same moment share one walk; a window-close caller never does.
+   */
+  fingerprint(
+    projectId: string,
+    projectPath: string,
+    options: FingerprintOptions = {}
+  ): Promise<ProjectFingerprint> {
     assertId(projectId)
-    return this.tracker(projectId).fingerprint(projectPath)
+    return this.tracker(projectId).fingerprint(projectPath, options)
   }
 
   /** Project-relative paths that changed between two fingerprints. */

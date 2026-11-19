@@ -827,8 +827,12 @@ export class ChatEngineUtilitiesTools {
       // snapshot catches tools that finish while the previous scan is pending.
       if ((session.pendingWindowScans?.size ?? 0) > 0) return
       if (openTools.size === 0) {
+        // A window-open snapshot may reuse a walk that just completed: a stale
+        // opening bound only over-includes paths, and the close below always
+        // takes a fresh scan. Threads in one project no longer each pay the
+        // four git spawns and the tree walk for windows that overlap in time.
         session.unboundedWindowStart = this.host.checkpointManager
-          .fingerprint(session.projectId, session.projectPath)
+          .fingerprint(session.projectId, session.projectPath, { reuseRecent: true })
           .catch((error) => {
             Logger.error('turn change window scan failed:', error)
             return null

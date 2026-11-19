@@ -161,6 +161,23 @@ const DEFAULT_LIMITS: CheckpointLimits = {
 }
 
 /**
+ * Options for a fingerprint request. The defaults always take a fresh scan;
+ * a caller opening a change window may opt into reusing a just-completed one.
+ */
+export interface FingerprintOptions {
+  /**
+   * Reuse a fingerprint that completed within the reuse window. Only a
+   * window-open snapshot may ask for this: a stale open snapshot widens the
+   * bound (over-includes paths as "possibly touched"), while a stale close
+   * snapshot would silently lose changes a tool really made.
+   */
+  reuseRecent?: boolean
+}
+
+/** How long a completed fingerprint may be reused by a window-open request. */
+const FINGERPRINT_REUSE_MS = 500
+
+/**
  * Captures content-addressed local-project checkpoints. It never follows symlinks
  * and restores only paths derived from the comparison supplied by the caller.
  */
@@ -170,6 +187,10 @@ export class ChangeTrackingService {
   private cachedProjectRoot: string | undefined
   private cachedBlobRevision: string | undefined
   private snapshotCache = new Map<string, CachedCheckpointFile>()
+  /** One in-flight fingerprint per project path, so concurrent windows share one git walk. */
+  private fingerprintInFlight = new Map<string, Promise<ProjectFingerprint>>()
+  /** Fingerprints that just completed, reusable only by window-open requests. */
+  private fingerprintRecent = new Map<string, { at: number; value: ProjectFingerprint }>()
 
   constructor(
     private readonly blobs: CheckpointBlobStore,
@@ -325,8 +346,41 @@ export class ChangeTrackingService {
    * Records path, size, and modification time for every tracked file without
    * reading or storing content. Used to bound an unbounded tool (a shell
    * command) to the files it touched while it was running.
+   *
+   * Concurrent requests for the same project path share one scan: several
+   * threads in one project each opening a change window used to each spawn
+   * their own `git status` / `git ls-files` pair and walk the tree four times
+   * over. A `reuseRecent` request may answer from the most recent completed
+   * fingerprint inside {@link FINGERPRINT_REUSE_MS} instead of scanning again,
+   * which only a window-open snapshot may do.
    */
-  async fingerprint(projectPath: string): Promise<ProjectFingerprint> {
+  async fingerprint(
+    projectPath: string,
+    options: FingerprintOptions = {}
+  ): Promise<ProjectFingerprint> {
+    const inFlight = this.fingerprintInFlight.get(projectPath)
+    if (inFlight) return inFlight
+    if (options.reuseRecent === true) {
+      const recent = this.fingerprintRecent.get(projectPath)
+      if (recent && Date.now() - recent.at <= FINGERPRINT_REUSE_MS) return recent.value
+    }
+    const scan = this.scanFingerprint(projectPath).finally(() => {
+      this.fingerprintInFlight.delete(projectPath)
+    })
+    this.fingerprintInFlight.set(projectPath, scan)
+    void scan.then(
+      (value) => {
+        this.fingerprintRecent.set(projectPath, { at: Date.now(), value })
+        for (const [path, entry] of this.fingerprintRecent) {
+          if (Date.now() - entry.at > FINGERPRINT_REUSE_MS) this.fingerprintRecent.delete(path)
+        }
+      },
+      () => undefined
+    )
+    return scan
+  }
+
+  private async scanFingerprint(projectPath: string): Promise<ProjectFingerprint> {
     const projectRoot = await this.resolveProjectRoot(projectPath)
     const git = await this.readGitMetadata(projectRoot)
     const gitPaths = git

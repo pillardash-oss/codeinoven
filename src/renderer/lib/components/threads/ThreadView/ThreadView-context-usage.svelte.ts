@@ -144,7 +144,9 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       total: 0
     }
 
-    for (const message of this.root.loadOlderMessages.messages) {
+    // The coarse snapshot, not the per-flush array: the meter is a header
+    // value, and mid-stream updates at the snapshot cadence are indistinguishable.
+    for (const message of this.root.loadOlderMessages.scanMessages) {
       if (message.role !== 'assistant') continue
       // Usage belongs to the harness/provider that reported it. Do not carry
       // cost, context, tokens, or quota across a harness switch; records with
@@ -320,7 +322,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
    * empty rather than adopt a live session's system-prompt baseline.
    */
   private describesConversation(): boolean {
-    return this.root.loadOlderMessages.messages.some((message) => message.role === 'assistant')
+    return this.root.loadOlderMessages.scanMessages.some((message) => message.role === 'assistant')
   }
 
   async refreshAccountUsageOnDemand(): Promise<void> {

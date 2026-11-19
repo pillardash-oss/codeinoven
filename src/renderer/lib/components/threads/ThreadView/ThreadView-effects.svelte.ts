@@ -452,8 +452,10 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
 
     // Convert file:// image/media URLs to blob: Object URLs for reliable display
     // in the Electron renderer (file:// URLs are blocked on http:// origins).
+    // Reads the coarse snapshot: this walk covers the whole transcript, and
+    // file parts appear when messages land, never per streamed token.
     $effect(() => {
-      for (const msg of this.root.loadOlderMessages.messages) {
+      for (const msg of this.root.loadOlderMessages.scanMessages) {
         for (const part of msg.parts) {
           if (
             part.type === 'file' &&
@@ -492,9 +494,14 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     // in the mirror, deduped and kept in chronological order. Each message carries
     // a short work-trace preview from the turn that follows it.
     $effect(() => {
-      const tracePreviews = tracePreviewByUserMessage(this.root.loadOlderMessages.messages)
+      // The coarse snapshot: both walks are O(transcript) and feed a panel the
+      // user reads per turn, not per token. Publishing global state at the
+      // snapshot cadence also stops every sidebar row from re-deriving on
+      // each 16 ms flush of the active stream.
+      const scanMessages = this.root.loadOlderMessages.scanMessages
+      const tracePreviews = tracePreviewByUserMessage(scanMessages)
       const userMessages = mergedUserMessageSummaries(
-        this.root.loadOlderMessages.messages,
+        scanMessages,
         this.root.editVideoNote.fullUserMessageHistory
       ).map(({ id, content, isAction }) => ({
         id,

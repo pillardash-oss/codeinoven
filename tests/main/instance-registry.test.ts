@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
+import { rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -131,5 +132,35 @@ describe('InstanceRegistry shared-thread announcements', () => {
 
     expect(remote).toHaveLength(1)
     expect(remote[0]?.drafts).toEqual([{ projectId: PROJECT_ID, threadId: THREAD_ID }])
+  })
+
+  it('serves a live-entry reading for a short TTL and re-reads once the truth moved', async () => {
+    const directory = await registryDirectory()
+    const registry = createRegistry(directory)
+    registry.start()
+    // A sibling registers: a pid this test process can prove is alive, with a
+    // heartbeat that is fresh.
+    const peerFile = join(directory, `${process.pid}.json`)
+    writeFileSync(
+      peerFile,
+      JSON.stringify({ pid: process.pid, startedAt: Date.now(), lastHeartbeat: Date.now() }),
+      'utf8'
+    )
+    await waitFor(() => registry.hasOtherLiveInstance())
+
+    rmSync(peerFile)
+    // Within the TTL the cached reading still serves the sibling that just
+    // disappeared, which is what keeps repeated reconciles off the filesystem.
+    expect(registry.hasOtherLiveInstance()).toBe(true)
+
+    // A foreign registry write busts the cache through the membership check (and
+    // the TTL expires on its own soon after), so a departed sibling cannot
+    // outlive either by more than the pace the reconciler already keeps.
+    writeFileSync(
+      join(directory, '800099.json'),
+      JSON.stringify({ pid: 800_099, startedAt: Date.now(), lastHeartbeat: Date.now() }),
+      'utf8'
+    )
+    await waitFor(() => !registry.hasOtherLiveInstance(), 4_000)
   })
 })

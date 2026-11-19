@@ -8,7 +8,12 @@ import { scheduleDeferredWork } from '$lib/deferred-work'
 import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadHoldsOpenTrace } from '$lib/stores/thread-preload'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
-import type { ThreadMessageCursor, ThreadSettings, TurnStreamPartsPage } from '$shared/types'
+import type {
+  AgentMessage,
+  ThreadMessageCursor,
+  ThreadSettings,
+  TurnStreamPartsPage
+} from '$shared/types'
 import {
   hasRenderableWorkingParts,
   isActivityOnlyUserMessage,
@@ -19,6 +24,9 @@ import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+/** Longest the expensive whole-transcript scans may lag a live stream. */
+const MESSAGE_SCAN_CADENCE_MS = 250
+
 /** One concern of the ThreadView board. */
 export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
@@ -39,6 +47,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
    * built, so the board asks for it right after construction.
    */
   bind(): void {
+    this.bindScanCadence()
     const mounted = this.root.unmirroredTraceStartTime.mountedThread
     this.userScrolledAway =
       this.root.unmirroredTraceStartTime.savedScrollState?.awayFromBottom ?? false
@@ -46,6 +55,34 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       threadMessages.messages(mounted.projectId, mounted.id).length,
       this.root.composerScope.INITIAL_PAINT_MESSAGES
     )
+  }
+
+  /**
+   * Own the snapshot cadence, from `bind()` so the effect is created inside
+   * the component's setup like every other board effect.
+   */
+  private bindScanCadence(): void {
+    $effect(() => {
+      const messages = this.messages
+      if (messages.length !== this.#scanLength) {
+        // Shape changed: publish now, so counts and boundaries stay exact.
+        this.#scanLength = messages.length
+        this.#scanLastAt = Date.now()
+        this.scanMessages = messages
+        return
+      }
+      if (this.#scanTimer !== null) return
+      // Same shape with a new array identity: only the tail moved. One refresh
+      // per cadence is plenty for a header or a panel nobody reads per token.
+      const wait = Math.max(0, MESSAGE_SCAN_CADENCE_MS - (Date.now() - this.#scanLastAt))
+      this.#scanTimer = setTimeout(() => {
+        this.#scanTimer = null
+        if (!this.alive) return
+        this.#scanLastAt = Date.now()
+        this.#scanLength = this.messages.length
+        this.scanMessages = this.messages
+      }, wait)
+    })
   }
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   hasController = $derived(this.root.props.controller !== undefined)
@@ -59,6 +96,29 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         this.root.handleAgentEvent.thread.id
       )
   )
+
+  /**
+   * Coarse transcript snapshot for the expensive whole-list scans: the Sources
+   * panel fold, the context meter, the harness usage scan, and the history
+   * previews. The live `messages` array is republished on every 16 ms stream
+   * flush, and each republish re-runs those full-transcript walks even though
+   * only the streaming tail actually changed. This snapshot follows the same
+   * array, republished immediately when the transcript's shape changes (a
+   * message added or removed) and at most once per cadence while a stream
+   * runs, so the scans drop off the per-flush frame entirely and a settled
+   * transcript is never stale: with nothing streaming there is no flush, and
+   * the snapshot is the live array's exact content.
+   */
+  scanMessages = $state<AgentMessage[]>([])
+
+  /** When the snapshot last republished, for the streaming cadence. */
+  #scanLastAt = 0
+  /** Pending cadence refresh, armed only while a stream keeps publishing. */
+  #scanTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Length of the last snapshot, tracked outside reactivity to keep the
+   *  effect above from reading the state it writes. */
+  #scanLength = 0
 
   /** Set by `bind()`: whether the conversation was left scrolled away. */
   userScrolledAway = $state(false)

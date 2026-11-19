@@ -44,6 +44,19 @@ const HEARTBEAT_STALE_MS = HEARTBEAT_MS * 3
  * process, which left every sibling invalidation to the 30s heartbeat replay.
  */
 const WATCHER_RESTART_MS = 5_000
+/**
+ * How long a live-entry reading may serve its callers before the registry
+ * directory is read again.
+ *
+ * Reading the directory costs a readdir plus one file read, parse and liveness
+ * probe per entry, all synchronous on the main thread, and the cross-instance
+ * reconcile path asks on every published frame, so the reading has to be cheap.
+ * Every entry this process writes, every membership check and every foreign
+ * file the watch reports invalidate it sooner, so a sibling that appears is
+ * still adopted immediately and the TTL only bounds repeated reads that
+ * happened to change nothing.
+ */
+const LIVE_ENTRIES_TTL_MS = 1_000
 
 type CheckpointUpdatedEvent = Extract<AgentEvent, { type: 'checkpoint.updated' }>
 
@@ -190,6 +203,8 @@ export class InstanceRegistry {
   private readonly pendingDeletedChanges = new Map<string, CrossInstanceThreadChange>()
   /** Live process ids as of the last membership check, to filter heartbeat noise. */
   private liveSetSignature = ''
+  /** Live entries plus when they were read, so the reconcile path stays cheap. */
+  private liveEntriesCache: { at: number; entries: InstanceEntry[] } | null = null
   private readonly ownerFilePath: string
   private readonly ownershipListeners = new Set<() => void>()
   /** Last effective owner announced, so only a real hand-off notifies. */
@@ -256,6 +271,7 @@ export class InstanceRegistry {
       clearTimeout(this.watcherRestartTimer)
       this.watcherRestartTimer = null
     }
+    this.liveEntriesCache = null
     try {
       rmSync(join(this.dir, `${this.selfEntry.pid}.json`), { force: true })
     } catch {
@@ -775,6 +791,10 @@ export class InstanceRegistry {
   /** Notify membership listeners when the live process ids changed. */
   private checkLiveInstanceSet(): void {
     try {
+      // The membership answer must be fresh: a sibling that just wrote its entry
+      // has to be seen now, not one TTL later, so the reading is not served from
+      // the cache this check is about to compare against.
+      this.invalidateLiveEntriesCache()
       const signature = this.readLiveSetSignature()
       if (signature === this.liveSetSignature) return
       this.liveSetSignature = signature
@@ -804,6 +824,20 @@ export class InstanceRegistry {
   }
 
   private liveEntries(): InstanceEntry[] {
+    const cached = this.liveEntriesCache
+    if (cached && Date.now() - cached.at < LIVE_ENTRIES_TTL_MS) return cached.entries
+    const entries = this.readLiveEntries()
+    this.liveEntriesCache = { at: Date.now(), entries }
+    return entries
+  }
+
+  /** Drop the cached live-entry reading, so the next read sees the directory again. */
+  private invalidateLiveEntriesCache(): void {
+    this.liveEntriesCache = null
+  }
+
+  /** Read the registry directory and keep the entries that are alive and fresh. */
+  private readLiveEntries(): InstanceEntry[] {
     const files = readdirSync(this.dir).filter((name) => name.endsWith('.json'))
     const entries: InstanceEntry[] = []
     for (const file of files) {
@@ -834,6 +868,8 @@ export class InstanceRegistry {
     const tmpPath = join(this.dir, `.${this.selfEntry.pid}.tmp`)
     writeFileSync(tmpPath, payload, 'utf8')
     renameSync(tmpPath, join(this.dir, `${this.selfEntry.pid}.json`))
+    // Our own entry changed, so any cached reading of the directory is stale.
+    this.invalidateLiveEntriesCache()
   }
 
   private startWatcher(): void {
