@@ -278,6 +278,7 @@ export class ChatEngineThreadsDelete {
     this.host.state.activeLoopRuns.delete(`${projectId}:${threadId}`)
     this.host.state.activeAchievementAuditorEnsures.delete(`${projectId}:${threadId}`)
     this.host.state.activeAchievementAuditRuns.delete(`${projectId}:${threadId}`)
+    this.host.state.imageDescriptorSelections.delete(`${projectId}:${threadId}`)
 
     // The thread's own workspace directory (the directory its session ran in
     // and the mount root of its file tree) is per-thread app data, as are the

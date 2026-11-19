@@ -372,10 +372,14 @@ export class ChatEngineMediaVisual {
       }))
     }
     const config = await this.host.storage.getConfig()
-    // A thread-level pick (e.g. a model chosen on the error card) always wins,
-    // then the utility pin, then the global default. The pin is read fresh at
-    // invoke time so re-pinning mid-turn affects later descriptor calls.
+    // The model the user chose on a vision card wins over everything else: it
+    // was their explicit answer for this conversation, and it is read from the
+    // engine's own record so a request that started before the thread settings
+    // write landed still runs the model they picked. Then the thread-level pick,
+    // the utility pin, and the global default. The pin is read fresh at invoke
+    // time so re-pinning mid-turn affects later descriptor calls.
     let selection =
+      this.rememberedImageDescriptorSelection(request) ??
       thread?.settings?.imageDescriptor ??
       request.pinnedSelection ??
       config.agentDefaults.imageDescriptor ??
@@ -397,8 +401,9 @@ export class ChatEngineMediaVisual {
           'No vision model was selected to describe the image.'
         )
       }
+      // The reply handler already recorded and persisted this choice before
+      // answering the decision, so it is only adopted here.
       selection = decision.selection
-      await this.persistImageDescriptorSelection(request.projectId, request.threadId, selection)
     }
     // The selection is shared with the recovery path so a model chosen while
     // resolving one image is reused for the remaining images in the same run.
@@ -801,12 +806,10 @@ export class ChatEngineMediaVisual {
             runDecision.selection = decision.selection ?? active
           }
           if (decision.selection) {
+            // The reply handler already recorded this choice (memory and thread
+            // settings) before the decision resolved, so persisting again here
+            // could overwrite a newer answer from another card.
             selection.current = decision.selection
-            await this.persistImageDescriptorSelection(
-              request.projectId,
-              request.threadId,
-              selection.current
-            )
             next = decision.selection
           } else {
             next = active
@@ -909,7 +912,9 @@ export class ChatEngineMediaVisual {
         ...(owningThread?.assignmentRole === 'worker' ? { workerTitle: owningThread.title } : {}),
         error,
         kind,
-        selection,
+        // Pre-fill the picker with the model the user chose last time, never
+        // with a default they already replaced.
+        selection: this.rememberedImageDescriptorSelection(request) ?? selection,
         ...(imageId ? { imageId } : {}),
         ...(requestingModel ? { requestingModel } : {}),
         partialOutput: '',
@@ -1002,6 +1007,23 @@ export class ChatEngineMediaVisual {
       action: 'ignore'
     })
     pending.resolve({ action: 'ignore' })
+  }
+
+  /** The vision model the user last chose for this conversation, if any. */
+  private rememberedImageDescriptorSelection(
+    request: Pick<ImageDescriptorExecutorRequest, 'projectId' | 'threadId'>
+  ): AgentModelSelection | undefined {
+    return this.host.state.imageDescriptorSelections.get(`${request.projectId}:${request.threadId}`)
+  }
+
+  /** Record the user's vision-model answer immediately, before any settings
+   *  write can race it, so later requests and in-flight cards use it. */
+  private rememberImageDescriptorSelection(
+    projectId: string,
+    threadId: string,
+    selection: AgentModelSelection
+  ): void {
+    this.host.state.imageDescriptorSelections.set(`${projectId}:${threadId}`, selection)
   }
 
   /** Persist the image-descriptor vision model to the thread so retries and
@@ -1302,6 +1324,14 @@ export class ChatEngineMediaVisual {
       // trap the user.
       Logger.dev(`Ignoring reply for settled image descriptor request: ${requestId}`)
       return
+    }
+    if (action === 'retry' && selection !== undefined) {
+      // Record the pick before anything else can ask: the very next request, and
+      // any card already in flight, must run and show the model the user chose
+      // rather than the default they replaced. Persisting the thread settings is
+      // the durable copy; this write is the immediate one.
+      this.rememberImageDescriptorSelection(pending.projectId, pending.threadId, selection)
+      void this.persistImageDescriptorSelection(pending.projectId, pending.threadId, selection)
     }
     // A replacement image picked from the error card is validated here (it must
     // be a readable file) and keeps the failed image's id so its description

@@ -52,7 +52,8 @@ import type {
   Thread,
   ThreadTransferResult,
   ThinkingLevel,
-  AssistantAgents
+  AssistantAgents,
+  AgentModelSelection
 } from '../../../lib/types'
 import { OpenUsageClient } from '../../usage/openusage-client'
 import { CustomProviderUsageClient } from '../../providers/custom-provider-usage-client'
@@ -155,6 +156,16 @@ export class ChatEngineState {
   pendingToolCreations = new Map<string, string[]>()
 
   pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
+
+  /**
+   * The vision model the user last chose on a vision card, keyed by
+   * `<projectId>:<threadId>`. The answer is recorded here the moment it is
+   * given, so the next descriptor request in this conversation and any card
+   * still in flight use the model the user actually picked instead of falling
+   * back to the default while the thread settings write catches up (or after it
+   * is replaced by an older copy of the thread's settings).
+   */
+  imageDescriptorSelections = new Map<string, AgentModelSelection>()
 
   /**
    * The disposable vision sessions the image descriptor is running right now,
