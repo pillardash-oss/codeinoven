@@ -153,6 +153,15 @@ describe('queuedResourceWait', () => {
     await expect(readThreadHold('p', 't')).resolves.toBeNull()
   })
 
+  it('answers null for an idle machine, so a send is never parked by a healthy gate', async () => {
+    // The gate answers for every thread. Returning that answer as-is made every
+    // send read as held: the message parked, the wait released it, the retry
+    // parked it again. Null is the only "may send now" answer.
+    const { readThreadHold } = await loadStore()
+    invoke.mockResolvedValue(gate(null))
+    await expect(readThreadHold('p', 't')).resolves.toBeNull()
+  })
+
   it('answers the reading and whose machine from the thread gate', async () => {
     const { readThreadHold } = await loadStore()
     invoke.mockResolvedValue(gate(decision('queue'), { kind: 'oven', ovenId: 'o1', name: 'Az' }))

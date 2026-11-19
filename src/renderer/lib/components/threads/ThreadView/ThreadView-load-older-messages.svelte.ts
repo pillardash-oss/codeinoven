@@ -109,7 +109,13 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
    * transcript is never stale: with nothing streaming there is no flush, and
    * the snapshot is the live array's exact content.
    */
-  scanMessages = $state<AgentMessage[]>([])
+  // Raw, not deep state: this holds the transcript array the cache already owns,
+  // and wrapping it in a proxy made every consumer read proxies instead of the
+  // real messages. Svelte warned about exactly that identity mismatch
+  // (state_proxy_equality_mismatch), and any `===` against the store's own
+  // array then answered wrong, which is how a freshly sent message could
+  // vanish from the view it had just been added to.
+  scanMessages = $state.raw<AgentMessage[]>([])
 
   /** When the snapshot last republished, for the streaming cadence. */
   #scanLastAt = 0

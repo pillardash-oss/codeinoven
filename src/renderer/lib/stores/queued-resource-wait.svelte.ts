@@ -164,7 +164,12 @@ export async function readThreadHold(
   threadId: string
 ): Promise<ThreadResourceGateAnswer | null> {
   try {
-    return await invoke('system:threadResourceGate', projectId, threadId)
+    const answer = await invoke('system:threadResourceGate', projectId, threadId)
+    // Null means "may send". The gate answers for every thread, so returning the
+    // answer itself would read as a hold for a perfectly idle machine, and every
+    // send would park instead of leaving: a message that slides up the screen and
+    // never arrives.
+    return answer.wait === null ? null : answer
   } catch {
     return null
   }
