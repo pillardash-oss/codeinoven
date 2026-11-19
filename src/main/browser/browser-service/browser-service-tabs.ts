@@ -46,6 +46,7 @@ export interface TabsHost {
   readonly agentReveals: BrowserService['agentReveals']
   readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabIds: BrowserService['agentTabIds']
+  readonly agentTabLastUsed: BrowserService['agentTabLastUsed']
   readonly allowSiteKeymapOverride: BrowserService['allowSiteKeymapOverride']
   readonly appendConsoleEntry: BrowserService['appendConsoleEntry']
   readonly applyPageStyles: BrowserService['applyPageStyles']
@@ -774,8 +775,69 @@ export class BrowserServiceTabs {
       if (browserContextKey(tab.projectId, tab.threadId) !== contextKey) continue
       unreferenced.push(tabId)
     }
-    for (const tabId of unreferenced) this.destroy(tabId, 'closed')
-    return unreferenced.length
+    return this.requestRelease(unreferenced)
+  }
+
+  /**
+   * Close the agent pages of a project that nothing is using any more.
+   *
+   * A project's threads share one browser strip, so every conversation that ever
+   * opened a page leaves a row in it. Nothing released those rows when a thread's
+   * work was done, so with several threads browsing the same project the strip
+   * became a pile of pages nobody had looked at for hours. This keeps at most
+   * `budget` agent pages per project: the least recently used ones go first, only
+   * ones idle past `idleMs`, never the caller's own page and never the page on
+   * screen, and only a couple per sweep so closing never arrives as a burst.
+   */
+  releaseStaleAgentTabs(input: {
+    projectId: string
+    keepTabId: string
+    budget: number
+    idleMs: number
+    maxClose: number
+  }): number {
+    const now = Date.now()
+    const owned: Array<{ tabId: string; usedAt: number }> = []
+    for (const [tabId, tab] of this.host.tabs) {
+      if (!tabId.startsWith('browser:agent:') || tab.projectId !== input.projectId) continue
+      owned.push({ tabId, usedAt: this.host.agentTabLastUsed.get(tabId) ?? 0 })
+    }
+    if (owned.length <= input.budget) return 0
+    const closable = owned
+      .filter((entry) => entry.tabId !== input.keepTabId && entry.tabId !== this.host.activeTabId)
+      .filter((entry) => now - entry.usedAt >= input.idleMs)
+      .sort((a, b) => a.usedAt - b.usedAt)
+    const releasing: string[] = []
+    for (const entry of closable) {
+      if (owned.length - releasing.length <= input.budget || releasing.length >= input.maxClose)
+        break
+      // A tab whose page is on screen is the page a person is reading, whatever the
+      // clock says about the agent's last operation on it.
+      const tab = this.host.tabs.get(entry.tabId)
+      if (tab && !this.host.stage.isParked(tab.view)) continue
+      releasing.push(entry.tabId)
+    }
+    // Through the strip, so the row goes with the page. A tab closed only in main
+    // leaves a row that opens nothing, which is the clutter this is meant to remove.
+    return this.requestRelease(releasing)
+  }
+
+  /**
+   * Hand tab ids to the strip to close, or close them here when nobody can listen.
+   *
+   * The strip keeps the rows and it is the only side that can drop one, so a
+   * release starts there. When no window is on screen to take the request, there is
+   * no strip to disagree with, and the tabs are closed directly.
+   */
+  private requestRelease(tabIds: string[]): number {
+    if (tabIds.length === 0) return 0
+    const owner = liveWindowContents(this.host.window)
+    if (owner) {
+      sendToRenderer(owner, 'browser:releaseTabs', tabIds)
+      return tabIds.length
+    }
+    for (const tabId of tabIds) this.destroy(tabId, 'closed')
+    return tabIds.length
   }
 
   destroy(tabId: string, reason: BrowserTabDestroyReason): void {

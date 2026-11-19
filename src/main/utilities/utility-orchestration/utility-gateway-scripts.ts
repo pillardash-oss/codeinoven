@@ -136,7 +136,7 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
   {
     name: 'open',
     description:
-      'Open an http(s) URL in a browser tab owned by this project and thread, inside the box (cookie jar) this conversation\u2019s thread browser is using, so a session the user signed in there is the one the page runs in. The tab is mounted offscreen at a real viewport, so the page loads, runs and can be read even while the user views another project or thread. A page the user is on is never taken over by this: opening always makes a page of your own. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
+      'Go to an http(s) URL in this conversation\u2019s own browser page, in the box (cookie jar) the thread browser is using, so a session the user signed in there is the one the page runs in. It is a page, not a pile of them: this conversation has one, so opening again navigates it rather than adding another, and the answer says reuse "navigated" when that is what happened. Opening the address the conversation is already showing returns the page it already has (reuse "already-open") instead of a second copy of the same site. Use navigate to change page once you have one, and open when you have no page yet. The page is mounted offscreen at a real viewport, so it loads, runs and can be read even while the user views another project or thread. Background is the default. Pass attention "focus" only when background interaction cannot accomplish the task.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -146,6 +146,11 @@ export const BROWSER_UTILITY_TOOLS: McpTool[] = [
           enum: ['focus', 'background'],
           description:
             'background (default) keeps the tab offscreen without interrupting the user; focus remains available when background interaction cannot accomplish the task.'
+        },
+        fresh: {
+          type: 'boolean',
+          description:
+            'Open a page of your own even when this conversation already shows that address. Without it, opening the page the conversation is on adopts that page, which keeps one copy of a site in the browser instead of two.'
         }
       },
       required: ['url'],

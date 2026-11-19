@@ -163,6 +163,14 @@ export class BrowserService {
   >()
   public readonly agentTabIds = new Map<string, string>()
   /**
+   * When each agent tab was last operated on, for releasing the ones nothing uses.
+   *
+   * A project's threads share one browser strip, so an agent page that outlives the
+   * work it was opened for is a row the user has to deal with. This is the clock
+   * that sweep reads.
+   */
+  public readonly agentTabLastUsed = new Map<string, number>()
+  /**
    * The browser tab each assistant conversation answers about, by thread id.
    *
    * A browser tab's assistant chat is a real thread of its own rather than a tab,
@@ -1255,6 +1263,16 @@ export class BrowserService {
 
   closeUnreferencedAgentTabs(contextKey: string): number {
     return this.tabsUnit.closeUnreferencedAgentTabs(contextKey)
+  }
+
+  releaseStaleAgentTabs(input: {
+    projectId: string
+    keepTabId: string
+    budget: number
+    idleMs: number
+    maxClose: number
+  }): number {
+    return this.tabsUnit.releaseStaleAgentTabs(input)
   }
 
   // ---------------------------------------------------------------------------

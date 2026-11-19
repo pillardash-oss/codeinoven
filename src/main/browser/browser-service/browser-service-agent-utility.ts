@@ -35,7 +35,9 @@ import { sendToRenderer } from '../../ipc/renderer-delivery'
 import { type BrowserTab } from './browser-types'
 import {
   DEFAULT_PARKED_VIEWPORT,
+  agentTabIdFor,
   browserContextKey,
+  samePageUrl,
   validateAttention,
   validateBrowserUrl,
   validateProjectId,
@@ -68,6 +70,10 @@ import {
 const MAX_FRAME_ELEMENTS = 120
 /** Characters of an embedded document's text a snapshot reports. */
 const MAX_FRAME_TEXT = 4000
+/** Agent pages one project keeps before the least recently used ones are released. */
+const AGENT_PAGES_PER_PROJECT = 3
+/** How long an agent page may sit unused before the sweep may release it. */
+const AGENT_PAGE_IDLE_MS = 10 * 60 * 1000
 /** Steps one `run` may carry, so one call is a flow and not a whole program. */
 const MAX_RUN_STEPS = 40
 /** Fields one query may read from an element, so no answer becomes a dump. */
@@ -109,6 +115,7 @@ export interface AgentUtilityHost {
   readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabClaims: BrowserService['agentTabClaims']
   readonly agentTabIds: BrowserService['agentTabIds']
+  readonly agentTabLastUsed: BrowserService['agentTabLastUsed']
   readonly agentTarget: BrowserService['agentTarget']
   readonly agentTargetChange: BrowserService['agentTargetChange']
   readonly optionalAgentTarget: BrowserService['optionalAgentTarget']
@@ -116,6 +123,7 @@ export interface AgentUtilityHost {
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
   readonly boxOfExistingTab: BrowserService['boxOfExistingTab']
   readonly closeUnreferencedAgentTabs: BrowserService['closeUnreferencedAgentTabs']
+  readonly releaseStaleAgentTabs: BrowserService['releaseStaleAgentTabs']
   readonly captureScreenshot: BrowserService['captureScreenshot']
   readonly clickAgentTarget: BrowserService['clickAgentTarget']
   readonly conversationBoxFor: BrowserService['conversationBoxFor']
@@ -198,13 +206,33 @@ export class BrowserServiceAgentUtility {
     if (operation === 'open') {
       const url = validateBrowserUrl(this.host.requiredInputString(input, 'url'))
       const attention = validateAttention(input['attention'])
-      // One agent tab per conversation. A research turn opens several pages, and
+      // One agent page per conversation. A research turn opens several pages, and
       // minting a tab for each one left a renderer process behind every time:
       // 154 processes and 7.8 GB in a five hour session. The tab this
-      // conversation already owns is navigated instead.
+      // conversation already owns is navigated instead, and its id is derived from
+      // the conversation so a strip restored after a restart is the same row rather
+      // than a second copy of it.
       const existing = this.host.agentTabIds.get(contextKey) ?? null
       const reused = existing !== null && this.host.tabs.has(existing)
-      const tabId = reused && existing ? existing : `browser:agent:${crypto.randomUUID()}`
+      // A project's threads share one strip, so the pages of conversations that
+      // finished hours ago are what made it look like agents keep opening tabs. Every
+      // open is a chance to let those go, and it happens before this one is chosen so
+      // the budget counts the page about to be used.
+      this.host.releaseStaleAgentTabs({
+        projectId,
+        keepTabId: existing ?? agentTabIdFor(projectId, threadId),
+        budget: AGENT_PAGES_PER_PROJECT,
+        idleMs: AGENT_PAGE_IDLE_MS,
+        maxClose: 2
+      })
+      // A page this conversation was already handed and is already showing needs no
+      // second copy of itself in the strip: opening it again means "work on this
+      // page", which is what the page is for.
+      if (!reused && input['fresh'] !== true) {
+        const adopted = this.adoptOpenPage(projectId, threadId, contextKey, url, attention)
+        if (adopted) return adopted
+      }
+      const tabId = reused && existing ? existing : agentTabIdFor(projectId, threadId)
       const tab = this.host.ensureTab(
         tabId,
         projectId,
@@ -222,6 +250,7 @@ export class BrowserServiceAgentUtility {
       }
       this.host.load(tabId, url)
       this.host.agentTabIds.set(contextKey, tabId)
+      this.host.agentTabLastUsed.set(tabId, Date.now())
       this.host.agentTabClaimOwners.set(tabId, { projectId, threadId })
       this.publishAgentClaims()
       this.host.closeUnreferencedAgentTabs(contextKey)
@@ -242,6 +271,12 @@ export class BrowserServiceAgentUtility {
         viewport: this.host.parkedViewportFor(tab),
         attention: reveal ? 'focus' : 'background',
         relaxed,
+        // Said plainly, because a model that cannot tell an open from a reuse
+        // keeps calling open as though each call added a tab.
+        reuse: reused ? 'navigated' : 'created',
+        detail: reused
+          ? 'This is the page this conversation already had: it was navigated, and no new tab was opened. Use navigate to change page from here, and this same page stays the target.'
+          : 'This conversation now has one page of its own. Every later operation works on it, and navigate changes it.',
         page: this.host.stateFor(tabId, tab),
         ...this.host.threadBrowserHint(projectId, threadId, tabId, contextKey)
       }
@@ -257,7 +292,7 @@ export class BrowserServiceAgentUtility {
         page === 'user' || page === 'strip'
           ? 'The thread browser has no page for this conversation right now, so there is nothing to read. Open a page of your own with "open" if you need one.'
           : page === 'agent'
-            ? 'You have no page of your own open in this conversation. Open one with "open", or pass page "user" to reach the page the thread browser resolved for you.'
+            ? 'You have no page of your own open in this conversation. Open one with "open", or pass page "user" to reach the page the thread browser resolved for you. Opening the address this conversation is already showing returns that page instead of a copy of it; pass fresh: true to open one of your own.'
             : this.host.assistantPageTabIds.has(threadId)
               ? 'The page the user is on is not loaded right now, so it cannot be read. Open a page of your own with "open" if you need one.'
               : 'Open a browser page before using this operation'
@@ -306,6 +341,7 @@ export class BrowserServiceAgentUtility {
     // working on it. A page belonging to the user is never parked, claimed or
     // touched by that bookkeeping.
     if (!attached) {
+      this.host.agentTabLastUsed.set(tabId, Date.now())
       if (this.host.activeTabId !== tabId && !this.host.stage.isParked(tab.view)) {
         this.host.parkTab(tabId)
       } else {
@@ -588,6 +624,56 @@ export class BrowserServiceAgentUtility {
       return { ...utilityContext, entries: [...tab.consoleEntries] }
     }
     throw new Error(`In-app browser does not expose the operation "${operation}"`)
+  }
+
+  /**
+   * Open a page the conversation is already on, instead of a second copy of it.
+   *
+   * A conversation is handed a page (the thread browser's own, or one it worked on
+   * before), and reaching for the same address again is the commonest open there is:
+   * the agent read about a page, or the user pointed the strip at it, and the agent
+   * then asks for it. Minting a page of its own there puts the same site in the strip
+   * twice, once as the page the user is reading and once as the agent's copy, which
+   * is duplication nobody asked for and the user has to clean up.
+   *
+   * The page is only adopted when the conversation owns nothing yet and the page it
+   * was handed is showing exactly that address, so this can never take a tab away from
+   * an agent that has one, and never diverts an open to a different page. The answer
+   * says `reuse: "already-open"` so a caller knows it is working on the page the
+   * conversation already had.
+   */
+  private adoptOpenPage(
+    projectId: string,
+    threadId: string,
+    contextKey: string,
+    url: string,
+    attention: 'focus' | 'background'
+  ): Record<string, unknown> | null {
+    const assigned = this.host.utilityTarget({ projectId, threadId, contextKey, page: 'user' })
+    if (!assigned || assigned.attached === false) return null
+    const contents = liveContents(assigned.tab.view)
+    const current = contents && !contents.isDestroyed() ? contents.getURL() : ''
+    if (!samePageUrl(current, url)) return null
+    const relaxed = attention === 'focus' && this.host.isRelaxed(threadId)
+    const reveal = attention === 'focus' && !relaxed
+    sendToRenderer(liveWindowContents(this.host.window), 'browser:openRequested', url, {
+      projectId,
+      threadId,
+      requestedTabId: assigned.tabId,
+      reveal,
+      boxId: assigned.tab.boxId
+    })
+    return {
+      ...this.host.utilityTabContext(assigned.tabId, assigned.tab),
+      url,
+      page: 'user',
+      attached: true,
+      reuse: 'already-open',
+      attention: reveal ? 'focus' : 'background',
+      relaxed,
+      detail:
+        'This conversation is already on that page, so no second tab was opened: this is the page shown here, and it stays the target of every later operation. Operations that change it are reviewed. Open a different address, or navigate, to move it elsewhere.'
+    }
   }
 
   /** Tell the renderer which tabs agents are on, so a tab can name its thread. */
