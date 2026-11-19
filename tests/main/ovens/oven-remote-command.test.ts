@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   POSIX_NODE_CHECK,
   connectionInspectCommand,
@@ -196,5 +200,26 @@ describe('oven remote commands', () => {
 
   it('refuses a Windows install without a valid revision', () => {
     expect(() => remoteInstallServiceCommand('cmd', 'nope', 'token-1')).toThrow()
+  })
+
+  it('finds a Node that only a login shell can see', () => {
+    // The reported failure: an Oven whose Node came from nvm has nothing on the
+    // PATH of an SSH exec channel, so every request claimed Node was missing.
+    const home = mkdtempSync(join(tmpdir(), 'oven-home-'))
+    const bin = join(home, '.nvm', 'versions', 'node', 'v26.13.1', 'bin')
+    mkdirSync(bin, { recursive: true })
+    const runtime = join(bin, 'node')
+    writeFileSync(runtime, '#!/bin/sh\nexit 0\n')
+    chmodSync(runtime, 0o755)
+    try {
+      // PATH starts empty of real runtimes so only the version manager can answer.
+      const output = execFileSync('/bin/sh', ['-c', `${POSIX_NODE_CHECK}; command -v node`], {
+        env: { HOME: home, PATH: join(home, 'empty') },
+        encoding: 'utf8'
+      })
+      expect(output.trim()).toBe(runtime)
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
   })
 })
