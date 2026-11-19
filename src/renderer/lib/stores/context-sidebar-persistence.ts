@@ -113,7 +113,12 @@ function loadBrowserTabs(snapshot: Record<string, unknown>): BrowserContextTab[]
       // The box the tab was created in, so a restored thread browser keeps the
       // sign-ins it was using. A tab persisted before boxes, or with an id that
       // cannot be trusted, falls back to the scope's own jar.
-      boxId: isBrowserBoxId(tab['boxId']) ? tab['boxId'] : null
+      boxId: isBrowserBoxId(tab['boxId']) ? tab['boxId'] : null,
+      // A restart leaves main holding no page for any of these tabs, so every
+      // restored tab starts asleep: the strip says so until something shows it,
+      // and the clock starts now rather than at the moment the app was closed.
+      lastUsedAt: Date.now(),
+      hibernated: true
     })
   }
   return restored

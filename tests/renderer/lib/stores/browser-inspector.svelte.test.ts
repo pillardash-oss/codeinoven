@@ -25,7 +25,9 @@ const tab = {
   kind: 'browser' as const,
   projectId: PROJECT,
   threadId: THREAD,
-  url: 'http://127.0.0.1:52035/index.html'
+  url: 'http://127.0.0.1:52035/index.html',
+  lastUsedAt: Date.now(),
+  hibernated: false
 }
 
 /** The sidebar a session reads, written through the way the app writes it. */

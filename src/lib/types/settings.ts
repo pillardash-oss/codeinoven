@@ -476,8 +476,10 @@ export interface AppConfig {
    */
   openAllLinksInCioBrowser: boolean
   /**
-   * Minutes a global-browser tab may sit idle before it hibernates. Bounded to
-   * `MIN/MAX_BROWSER_HIBERNATION_MINUTES`.
+   * Minutes a browser tab may sit idle before it hibernates. One setting for both
+   * strips: a global tab and a thread browser tab are slept on the same clock, and
+   * this is read by the shared hibernation rules and by the thread browser's own
+   * scheduler. Bounded to `MIN/MAX_BROWSER_HIBERNATION_MINUTES`.
    */
   browserHibernationMinutes: number
   /**

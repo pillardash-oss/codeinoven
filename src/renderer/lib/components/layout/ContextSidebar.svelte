@@ -28,6 +28,7 @@
   import CioDebugger from '@pdslng/cio-icon/CioDebugger.svelte'
   import CioDiff from '@pdslng/cio-icon/CioDiff.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
+  import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
   import CioMemory from '@pdslng/cio-icon/CioMemory.svelte'
   import CioNetwork from '@pdslng/cio-icon/CioNetwork.svelte'
   import CioNotifications from '@pdslng/cio-icon/CioNotifications.svelte'
@@ -574,6 +575,7 @@
     {@const conversation = badgeConversation(tab)}
     {@const agentThread = agentThreadFor(tab)}
     {@const loading = tab.kind === 'browser' && contextSidebarState.browserTabLoading(tab.id)}
+    {@const hibernated = tab.kind === 'browser' && tab.hibernated}
     {@const closeTakesIcon = tab.kind === 'browser' && indicators.length === 0}
     <div
       class="group relative flex max-w-52 items-center border-r border-border transition-colors duration-150 {activeTabId ===
@@ -673,7 +675,7 @@
               class="truncate text-[0.6875rem] leading-[0.875rem] font-medium {tab.kind ===
                 'files' && tab.preview
                 ? 'italic'
-                : ''}">{tab.title}</span
+                : ''} {hibernated ? 'text-dimmed' : ''}">{tab.title}</span
             >
             {#if agentThread}
               <!-- Which conversation's agent is on this tab. It sits under the
@@ -704,6 +706,19 @@
               {tab.boxName}
             </span>
           {/if}
+        {/if}
+        {#if hibernated}
+          <!-- A page the app put to sleep to give its renderer process back. The
+               mark sits where the tab's other states do, so the site's own icon
+               stays readable and the row says why nothing is live. -->
+          <span
+            role="img"
+            class="mr-1 flex h-4 w-3 shrink-0 items-center justify-center text-dimmed"
+            title="Sleeping to save memory. Open the tab to reload it."
+            aria-label="Sleeping tab"
+          >
+            <CioMoon size={11} />
+          </span>
         {/if}
         {#if conversation}
           {#if conversationAttention.hasAttention(conversation.projectId, conversation.conversationId)}

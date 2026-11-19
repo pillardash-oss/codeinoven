@@ -832,6 +832,17 @@ class ContextSidebarState {
     return this.browser.loadingFor(tabId)
   }
 
+  /**
+   * Put one sidebar browser tab's page to sleep, keeping its row.
+   *
+   * Returns whether the page was released: the tab menu offers this and the idle
+   * clock runs it on its own, and both refuse the same tabs (one already asleep, a
+   * blank tab, or the page a surface is showing).
+   */
+  hibernateBrowserTab(tabId: string): boolean {
+    return this.browser.hibernate(tabId)
+  }
+
   /** Mute or unmute one browser tab's audio output. */
   toggleBrowserTabMute(tabId: string): void {
     this.browser.toggleMute(tabId)

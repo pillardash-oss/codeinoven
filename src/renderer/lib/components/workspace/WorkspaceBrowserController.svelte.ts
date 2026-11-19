@@ -115,9 +115,10 @@ export class WorkspaceBrowserController {
           bookmarkAvailable: Boolean(tab.url),
           bookmarked: browserBookmarks.isBookmarked(tab.url, tab.boxId),
           pinned: false,
-          // A thread's browser tabs are never hibernated (the whole surface goes
-          // with its thread), so the menu's sleep item is off for them either way.
-          hibernated: false,
+          // A thread tab sleeps on the same clock as a global one, so the menu's
+          // sleep item is live for it too, and it is off only while the page is
+          // already asleep or is the page on screen.
+          hibernated: tab.hibernated,
           active: contextSidebarState.activeBrowserTabId === tabId,
           groupId: null,
           boxId: tab.boxId,
@@ -150,6 +151,12 @@ export class WorkspaceBrowserController {
       if (choice.action === 'reopenInBox') {
         store.closeSourcePeek(tabId)
         contextSidebarState.setBrowserTabBox(tabId, choice.boxId)
+        return
+      }
+      if (choice.action === 'sleep') {
+        // The store refuses a page a surface is showing, so the row can never be
+        // left saying it is asleep while its page is still on screen.
+        contextSidebarState.hibernateBrowserTab(tabId)
         return
       }
       if (!['duplicate', 'newBefore', 'newTab', 'newPlaced'].includes(choice.action)) return

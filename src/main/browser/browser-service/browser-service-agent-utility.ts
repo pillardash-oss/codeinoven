@@ -337,12 +337,13 @@ export class BrowserServiceAgentUtility {
       }
       reviewedTarget = reviewed.target
     }
-    // An operation is a use: it revives a tab the agent owns that was evicted
-    // from the parked set, and protects it from eviction while the agent keeps
-    // working on it. A page belonging to the user is never parked, claimed or
-    // touched by that bookkeeping.
+    // An operation is a use, whether the page is the agent's own or the one the
+    // conversation was handed: it revives a tab the agent owns that was evicted
+    // from the parked set or put to sleep, and it resets the clock the strip reads
+    // before it sleeps a page. Only an agent-owned page is parked or claimed by
+    // that bookkeeping; a page belonging to the user is never parked.
+    this.host.agentTabLastUsed.set(tabId, Date.now())
     if (!attached) {
-      this.host.agentTabLastUsed.set(tabId, Date.now())
       if (this.host.activeTabId !== tabId && !this.host.stage.isParked(tab.view)) {
         this.host.parkTab(tabId)
       } else {

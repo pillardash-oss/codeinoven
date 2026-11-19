@@ -944,6 +944,9 @@ export class BrowserServiceTabs {
       if (agentTabId === tabId) this.host.agentTabIds.delete(contextKey)
     }
     this.host.agentTabClaimOwners.delete(tabId)
+    // The page is gone, so when an agent last used it says nothing about a tab
+    // that no longer exists.
+    this.host.agentTabLastUsed.delete(tabId)
     for (const [threadId, pageTabId] of this.host.assistantPageTabIds) {
       if (pageTabId === tabId) this.host.assistantPageTabIds.delete(threadId)
     }

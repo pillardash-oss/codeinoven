@@ -130,6 +130,24 @@ export interface BrowserContextTab {
    * moving it.
    */
   boxId: string | null
+  /**
+   * Last moment this tab was used, by a person or by an agent.
+   *
+   * The idle clock reads it: a tab left alone past the configured window is put to
+   * sleep, and every way of using one resets it, exactly as a global browser tab's
+   * own clock does.
+   */
+  lastUsedAt: number
+  /**
+   * True while this tab's page is asleep.
+   *
+   * A promise rather than a guess: a tab marked sleeping has no live page in main,
+   * and the next show or agent operation reloads it from `url`. The row stays, with
+   * its title, icon, address and box, which is the whole point of sleeping a tab
+   * instead of closing it. A restored tab starts here, because a restart leaves
+   * main holding no page for it.
+   */
+  hibernated: boolean
 }
 
 /**
