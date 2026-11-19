@@ -256,7 +256,18 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   }
 
   async deleteSession(projectPath: string, sessionId: string): Promise<void> {
-    const session = await this.requireSession(projectPath, sessionId)
+    let session: PersistentCliSession
+    try {
+      session = await this.requireSession(projectPath, sessionId)
+    } catch (error) {
+      // A record that is already gone satisfies the deletion. The caller is
+      // discarding a stale session, and a session with no record (an Oven
+      // session, whose record lives on the Oven, or one already cleaned) has
+      // nothing left to destroy: failing here only turned best-effort cleanup
+      // into an error for work that was already done.
+      if (error instanceof Error && error.message.startsWith('CLI session is unavailable:')) return
+      throw error
+    }
     this.deletedSessions.add(session.id)
     this.releaseSessionRuntime(session.id)
     await this.deleteNativeTranscript(projectPath, session)

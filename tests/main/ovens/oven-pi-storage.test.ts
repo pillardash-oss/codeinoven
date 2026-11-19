@@ -124,6 +124,12 @@ class FakeOven implements OvenPiStorageService {
         this.stamps.set(input.to, ++this.clock)
         return { root: input.root }
       }
+      case 'ensure': {
+        // The real Oven creates the root recursively; the fake only records
+        // that the storage asked, because the tests keep files in a map.
+        this.stamps.set('.', ++this.clock)
+        return { root: input.root }
+      }
       default:
         throw new Error(`Unexpected workspace operation: ${input.operation}`)
     }
@@ -148,6 +154,37 @@ function storageFor(oven: FakeOven, root: string = ROOT): OvenPiStorage {
 }
 
 describe('OvenPiStorage', () => {
+  it('ensures the session root before the first write, and only once', async () => {
+    const oven = new FakeOven()
+    const storage = storageFor(oven)
+    await storage.writeRaw(HANDOFF, 'first')
+    await storage.writeRaw(HANDOFF, 'second')
+    // A fresh Oven session's root is created by the storage itself: the
+    // workspace API realpath's the root before any subdirectory mkdir, so a
+    // root nobody created used to fail the very first handoff write.
+    const ensures = oven.calls.filter((call) => call.operation === 'ensure')
+    expect(ensures).toEqual([{ operation: 'ensure', root: ROOT }])
+    await expect(storage.readRaw(HANDOFF)).resolves.toBe('second')
+  })
+
+  it('retries the root ensure after a failed one', async () => {
+    let failures = 1
+    const oven = new FakeOven()
+    const failing = {
+      workspace: (ovenId: string, input: OvenWorkspaceRequest): Promise<OvenWorkspaceResult> => {
+        if (input.operation === 'ensure' && failures > 0) {
+          failures -= 1
+          return Promise.reject(new Error('Oven unreachable'))
+        }
+        return Promise.resolve(oven.workspace(ovenId, input))
+      }
+    }
+    const storage = new OvenPiStorage({ service: failing, ovenId: OVEN, root: ROOT })
+    await expect(storage.writeRaw(HANDOFF, 'nope')).rejects.toThrow('session root')
+    await storage.writeRaw(HANDOFF, 'yes')
+    await expect(storage.readRaw(HANDOFF)).resolves.toBe('yes')
+  })
+
   it('resolves a relative handoff path under the Oven root', () => {
     const storage = storageFor(new FakeOven(), `${ROOT}/`)
     expect(storage.resolve(HANDOFF)).toBe(`${ROOT}/${HANDOFF}`)

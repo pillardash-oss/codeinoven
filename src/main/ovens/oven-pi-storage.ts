@@ -152,6 +152,32 @@ export class OvenPiStorage implements PiHandoffStorage {
   }
 
   /**
+   * Ensure the session root exists, once per storage lifetime.
+   *
+   * `ensure` is the one workspace operation that creates the root itself
+   * (recursive, parents included), where `mkdir` only creates subdirectories
+   * under a root that already realpath's. A failure is not cached: the next
+   * write tries again, because a session whose root could not be created must
+   * fail loudly at that write, not silently forever.
+   */
+  private ensureRoot(): Promise<void> {
+    this.rootReady ??= this.request(
+      { operation: 'ensure', root: this.root },
+      `create the session root ${this.root}`
+    ).then(
+      () => undefined,
+      (error: unknown) => {
+        this.rootReady = null
+        throw error
+      }
+    )
+    return this.rootReady
+  }
+
+  /** Tail of the one-time root ensure, shared by every write. */
+  private rootReady: Promise<void> | null = null
+
+  /**
    * Write one file whole, in chunks, and publish it in a single step.
    *
    * Chunks go to a staging file beside the destination and a rename publishes
@@ -160,6 +186,13 @@ export class OvenPiStorage implements PiHandoffStorage {
    */
   private async write(path: string, content: string): Promise<void> {
     const bytes = Buffer.from(content, 'utf8')
+    // The session root must exist before anything under it can be written: the
+    // workspace API realpath's the root first, so a session root nobody created
+    // fails every write with ENOENT before the subdirectory mkdir ever runs.
+    // Extensions ensure their own tree and transcripts live in pi's own
+    // directory, which left this root as the one part of an Oven session that
+    // nothing created, and a fresh session's very first handoff write failed.
+    await this.ensureRoot()
     const directory = parentOf(path)
     if (directory)
       await this.request(
