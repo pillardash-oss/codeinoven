@@ -226,14 +226,13 @@ export class OvenChat {
         account.id
       )
       await this.threads.setStatus(thread.projectId, thread.id, 'executing')
-      const preparationNote = `Preparing the project on ${ovenLabel}…`
-      this.publishNote(turnSessionId, startedAt, preparationNote)
       // Nothing below this line is supposed to be the first time the Oven hears
-      // that it needs a harness, git, or the checkout: those are prepared here.
+      // that it needs a harness, git, or the checkout: those are prepared here,
+      // and the note this turn shows is the one that preparation publishes. An
+      // Oven that already has everything says nothing at all.
       await this.prepareOven({
         sessionId: turnSessionId,
         startedAt,
-        note: preparationNote,
         thread,
         settings,
         ovenId,
@@ -243,14 +242,12 @@ export class OvenChat {
         this.service,
         { ...thread, settings },
         this.projects,
-        (step) =>
-          this.publishNote(
-            turnSessionId,
-            startedAt,
-            step === 'clone'
-              ? `Cloning the repository onto ${ovenLabel}…`
-              : `Opening the checkout on ${ovenLabel}…`
-          )
+        (step) => {
+          // Only a clone is work a reader can act on; a checkout that merely has
+          // to be created (or opened) is not worth a line on every send.
+          if (step !== 'clone') return
+          this.publishNote(turnSessionId, startedAt, `Cloning the repository onto ${ovenLabel}…`)
+        }
       )
       const { root, dataRoot, sessionsRoot } = prepared
       if (prepared.branch && prepared.branch !== thread.branch)
@@ -560,13 +557,12 @@ export class OvenChat {
   private async prepareOven(input: {
     sessionId: string
     startedAt: number
-    note: string
     thread: Thread
     settings: ThreadSettings
     ovenId: string
     ovenLabel: string
   }): Promise<void> {
-    const { sessionId, startedAt, note, thread, settings, ovenId, ovenLabel } = input
+    const { sessionId, startedAt, thread, settings, ovenId, ovenLabel } = input
     const target = { ...thread, settings }
     // One probe answers both questions it can: which harnesses answer on the Oven
     // (the same list the Oven itself checks before it starts a run), and where
@@ -587,15 +583,21 @@ export class OvenChat {
       harnessInstalled && checkoutPresent ? null : await collectPreflight(this.service.ssh, ovenId)
     const project = await this.projects.getProject(thread.projectId)
     const harnessName = harness?.name ?? settings.harnessId
-    const projectName = project?.name ?? 'the project'
+    // A chat has no project to name, so it says what it is actually doing to the
+    // machine instead of claiming to prepare one.
+    const note = project ? `Preparing the project on ${ovenLabel}…` : `Preparing ${ovenLabel}…`
     const steps = planOvenPrepare({
       harnessInstalled,
       gitInstalled: report?.git.installed ?? true,
       checkoutPresent,
+      cloneExpected: Boolean(plan.origin),
       ovenLabel,
       harnessName,
-      projectName
+      projectName: project?.name ?? 'the project'
     })
+    // An Oven that already has the harness, git and the checkout is not preparing
+    // anything, so the turn shows no note at all rather than repeating one on
+    // every follow-up.
     if (steps.length === 0) return
 
     const publish = (next: OvenPrepareStep[]): void => {
@@ -637,7 +639,7 @@ export class OvenChat {
     const descriptions: Record<OvenPrepareStep['id'], string> = {
       harness: `Installing ${harnessName} on ${ovenLabel}`,
       git: `Installing git on ${ovenLabel}`,
-      checkout: `Cloning ${projectName} onto ${ovenLabel}`
+      checkout: `Cloning ${project?.name ?? 'the project'} onto ${ovenLabel}`
     }
     throw new Error(
       outcome.failures

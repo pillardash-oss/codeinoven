@@ -86,10 +86,9 @@
   const work = $derived<OvenSetupWork[]>([
     { icon: CioDownload, label: `Install ${harnessName} on ${ovenName}` },
     { icon: CioTerminal, label: `Install git on ${ovenName} if it is missing` },
-    {
-      icon: CioFolderGit,
-      label: projectName ? `Clone ${projectName} to the Oven` : 'Clone this checkout to the Oven'
-    }
+    // A chat has no repository to clone: its directory is created quietly, so a
+    // clone row here would promise work that never happens.
+    ...(projectName ? [{ icon: CioFolderGit, label: `Clone ${projectName} to the Oven` }] : [])
   ])
 
   function chooseModel(

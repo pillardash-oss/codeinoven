@@ -11,6 +11,7 @@ const facts: OvenPrepareFacts = {
   harnessInstalled: true,
   gitInstalled: true,
   checkoutPresent: true,
+  cloneExpected: true,
   ovenLabel: 'hetzner-1',
   harnessName: 'Claude Code',
   projectName: 'codeinoven'
@@ -76,6 +77,22 @@ describe('oven prepare planner', () => {
   it('plans git alone when only git is missing', () => {
     const steps = planOvenPrepare({ ...facts, gitInstalled: false })
     expect(steps.map((step) => step.id)).toEqual(['git'])
+  })
+
+  it('never plans a project clone for a chat that has no repository', () => {
+    // A chat's directory is created quietly: there is nothing to clone, so a
+    // "Clone the project" step would be a lie the reader cannot act on.
+    expect(planOvenPrepare({ ...facts, cloneExpected: false, checkoutPresent: false })).toEqual([])
+  })
+
+  it('still plans the harness for a chat when that is all that is missing', () => {
+    const steps = planOvenPrepare({
+      ...facts,
+      cloneExpected: false,
+      checkoutPresent: false,
+      harnessInstalled: false
+    })
+    expect(steps.map((step) => step.id)).toEqual(['harness'])
   })
 })
 

@@ -20,6 +20,12 @@ export interface OvenPrepareFacts {
   harnessInstalled: boolean
   gitInstalled: boolean
   checkoutPresent: boolean
+  /**
+   * True only when the thread's checkout comes from a repository this turn can
+   * clone. A chat has no repository, so its directory is created quietly instead
+   * of being announced (and labelled) as a project clone.
+   */
+  cloneExpected: boolean
   /** How the Oven is named in the UI, e.g. "hetzner-1". */
   ovenLabel: string
   /** The harness the turn will run, e.g. "Claude Code". */
@@ -42,7 +48,7 @@ export function planOvenPrepare(facts: OvenPrepareFacts): OvenPrepareStep[] {
     })
   if (!facts.gitInstalled)
     steps.push({ id: 'git', label: `Install git on ${facts.ovenLabel}`, status: 'waiting' })
-  if (!facts.checkoutPresent)
+  if (facts.cloneExpected && !facts.checkoutPresent)
     steps.push({
       id: 'checkout',
       label: `Clone ${facts.projectName} onto ${facts.ovenLabel}`,
