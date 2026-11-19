@@ -907,6 +907,10 @@ export class ChatEngine {
    * conversation the user typed them in, so a group chat reads as one inbox.
    */
   async sendDirectReply(input: DirectReplyInput): Promise<AgentMessage> {
+    // A reply in a group chat starts a turn in the thread that spoke, so it is
+    // user work and answers to the same device gate as a composer send.
+    const held = await deviceHoldForNewTurn()
+    if (held !== null) throw held
     return this.units['direct-reply'].send(input)
   }
   async sendPrompt(
@@ -964,6 +968,9 @@ export class ChatEngine {
     userMessageId?: string,
     displayText?: string
   ): Promise<AgentMessage | undefined> {
+    // A temporary chat is still a turn the user asked for, on the same device.
+    const held = await deviceHoldForNewTurn()
+    if (held !== null) throw held
     return this.units['temporary-chats'].sendTemporaryPrompt(
       projectId,
       threadId,
