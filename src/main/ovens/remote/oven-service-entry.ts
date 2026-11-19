@@ -18,7 +18,7 @@ import { availableParallelism, hostname, homedir, totalmem, tmpdir, uptime } fro
 import { createInterface } from 'node:readline'
 import { join, isAbsolute } from 'node:path'
 import { harnessLaunchSpec, launchSpec } from './oven-windows-command'
-import { constants } from 'node:fs'
+import { constants, existsSync, readdirSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
 import type { OvenHarnessInventoryItem, OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
@@ -28,6 +28,7 @@ import { OPENCODE_COMMAND_ALIASES } from '../../../lib/opencode-version'
 import { OVEN_DATA_DIRECTORY, OVEN_LEGACY_DATA_DIRECTORY } from './oven-root-paths'
 import { isCurrentServiceAnswer } from '../oven-service-bundle'
 import { OVEN_NPM_PREFIX } from '../oven-harness-paths'
+import { runtimePath } from './oven-runtime-path'
 import {
   NON_INTERACTIVE_WSL_DISTRIBUTIONS,
   WSL_DISCOVERY_SCRIPT,
@@ -116,10 +117,29 @@ function harnessInstallDirs(): string[] {
 }
 
 const installDirs = harnessInstallDirs()
-if (installDirs.length > 0) {
-  const separator = process.platform === 'win32' ? ';' : ':'
-  process.env['PATH'] = `${installDirs.join(separator)}${separator}${process.env['PATH'] ?? ''}`
-}
+const pathSeparator = process.platform === 'win32' ? ';' : ':'
+const basePath = [...installDirs, process.env['PATH'] ?? ''].filter(Boolean).join(pathSeparator)
+process.env['PATH'] =
+  process.platform === 'win32'
+    ? basePath
+    : // A harness shim is `#!/usr/bin/env node`, so the runtime that satisfies it
+      // has to be on this PATH too: the service is started by an SSH exec channel,
+      // which never sources the login files a version manager installs into.
+      runtimePath({
+        home: homedir(),
+        npmPrefix: OVEN_NPM_PREFIX,
+        basePath,
+        probe: {
+          exists: existsSync,
+          readDir: (path) => {
+            try {
+              return readdirSync(path)
+            } catch {
+              return []
+            }
+          }
+        }
+      })
 if (process.platform !== 'win32')
   process.env['npm_config_prefix'] = join(homedir(), OVEN_NPM_PREFIX)
 /**
