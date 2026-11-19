@@ -349,7 +349,13 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
     try {
       const result = await invoke('agent:moveToNewHost', projectId, id)
       if (result.moved) {
-        toast.success(`Session moved to host ${result.hostPid ?? 'of its own'}`)
+        // A pid of 0 is what a launcher that could not read the process reports,
+        // so the sentence falls back to the outcome instead of saying "host 0".
+        toast.success(
+          result.hostPid
+            ? `Session moved to host ${result.hostPid}`
+            : 'Session moved to a host of its own'
+        )
       } else {
         toast.warning(result.detail ?? 'This session cannot move right now.')
       }
