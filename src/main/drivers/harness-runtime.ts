@@ -814,9 +814,10 @@ export async function prepareHarnessInvocation(
         runtime: bundled
       }
     }
-    if (!(await resolveExecutablePathAsync(command, env))) {
-      throw new Error(`${command} was not found on PATH`)
-    }
+    // A command this resolver cannot find is still returned: the harness layer
+    // reports a missing install as its own, actionable failure (and a fixture
+    // driver degrades to its fallback), while throwing here turned every one of
+    // those into a hard error in a place that never owned the message.
     return {
       command,
       args,
