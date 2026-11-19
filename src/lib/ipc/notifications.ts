@@ -203,6 +203,17 @@ export type SystemNotificationTestResult =
 /**
  * macOS notification authorization, queried on demand. On non-macOS platforms the
  * permission concept does not apply, so `platform` is `'other'`.
+ *
+ * `reason` distinguishes the two ways a delivery can be refused: `macos-denied`
+ * is the user's System Settings choice and is theirs to reverse, while
+ * `signing-identity-mismatch` is a packaging defect in this build that no setting
+ * can fix   macOS refuses every request from a process whose code-signing
+ * identity is not the bundle identifier it asks for.
  */
 export type SystemNotificationPermissionStatus =
-  { platform: 'darwin'; status: 'granted' | 'denied' | 'prompt' } | { platform: 'other' }
+  | {
+      platform: 'darwin'
+      status: 'granted' | 'denied' | 'prompt'
+      reason?: 'macos-denied' | 'signing-identity-mismatch'
+    }
+  | { platform: 'other' }

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { trustedIpcMain as ipcMain } from '../ipc/trusted-ipc-main'
 import { requireString } from '../ipc/handlers/shared'
 import { NotificationInboxStore, familyOf } from './notification-inbox-store'
+import { notificationIdentityVerdict } from './notification-identity'
 import { APP_ID, APP_NAME, APP_SLUG } from '../../lib/brand'
 import { Logger } from '../system/logger'
 import { sendToRenderer } from '../ipc/renderer-delivery'
@@ -161,6 +162,15 @@ export class NotificationService {
    * stay stuck at 'denied' after the user re-enables notifications.
    */
   private macosNotificationPermission: 'granted' | 'denied' | 'prompt' = 'prompt'
+  /**
+   * Set when macOS refused a delivery and this build's code-signing identity
+   * turned out not to be its bundle identifier. That refusal is a packaging
+   * defect, not a setting: nothing the user switches on in System Settings can
+   * make the app present a card, so the panel and the toast must say so instead
+   * of pointing at a toggle that does not exist.
+   */
+  private signingIdentityMismatch = false
+  private signingIdentityMismatchLogged = false
   private permissionVerifyInFlight = false
   private lastPermissionVerifyAt = 0
   /**
@@ -371,18 +381,47 @@ export class NotificationService {
    */
   private recordNotificationOutcome(outcome: 'shown' | 'failed', error?: unknown): void {
     if (process.platform !== 'darwin') return
-    const previous = this.macosNotificationPermission
     if (outcome === 'shown') {
+      // A card that reached the screen is proof the identity is fine, whatever a
+      // static probe said earlier.
+      this.signingIdentityMismatch = false
+      if (this.macosNotificationPermission === 'granted') return
       this.macosNotificationPermission = 'granted'
-    } else if (isPermissionRefusal(error)) {
-      // A refusal is authoritative whatever the previous outcome was: macOS just
-      // said this app may not present cards, so a stale 'granted' (a build that
-      // lost its authorization record, or a setting switched off since) must not
-      // keep the panel claiming notifications work.
-      this.macosNotificationPermission = 'denied'
+      this.persistPermissionStatus()
+      this.pushPermissionStatus()
+      return
+    }
+    if (!isPermissionRefusal(error)) return
+    void this.applyDeliveryRefusal()
+  }
+
+  /**
+   * Turn an authoritative refusal into a status the UI can act on.
+   *
+   * The refusal is settled only after this build's notification identity has
+   * been checked, so the first status the panel and the toast see already says
+   * whether the user can fix it (a Settings toggle) or whether the build itself
+   * cannot deliver (an update).
+   */
+  private async applyDeliveryRefusal(): Promise<void> {
+    const previous = this.macosNotificationPermission
+    const hadMismatch = this.signingIdentityMismatch
+    this.macosNotificationPermission = 'denied'
+    const verdict = await notificationIdentityVerdict()
+    this.signingIdentityMismatch = verdict.kind === 'mismatched'
+    if (verdict.kind === 'mismatched' && !this.signingIdentityMismatchLogged) {
+      this.signingIdentityMismatchLogged = true
+      Logger.error(
+        `System notifications cannot be delivered by this build: it is signed as "${verdict.signatureIdentifier}" but its bundle identifier is "${verdict.bundleIdentifier}", and macOS refuses every notification request whose signing identity differs from the requested bundle identifier.`
+      )
     }
     if (this.macosNotificationPermission !== previous) {
       this.persistPermissionStatus()
+    }
+    if (
+      this.macosNotificationPermission !== previous ||
+      this.signingIdentityMismatch !== hadMismatch
+    ) {
       this.pushPermissionStatus()
     }
   }
@@ -490,6 +529,13 @@ export class NotificationService {
   getPermissionStatus(): SystemNotificationPermissionStatus {
     if (process.platform !== 'darwin') {
       return { platform: 'other' }
+    }
+    if (this.macosNotificationPermission === 'denied') {
+      return {
+        platform: 'darwin',
+        status: 'denied',
+        reason: this.signingIdentityMismatch ? 'signing-identity-mismatch' : 'macos-denied'
+      }
     }
     return { platform: 'darwin', status: this.macosNotificationPermission }
   }
@@ -1049,6 +1095,22 @@ export class NotificationService {
     })
   }
 
+  /**
+   * What to tell the user when macOS refused a delivery.
+   *
+   * A refusal from a build whose signing identity is not its bundle identifier
+   * is not a permission problem at all: there is no System Settings row that
+   * would make it work, so saying "allow notifications" would send the user on
+   * an errand that cannot succeed.
+   */
+  private async describeDeliveryRefusal(): Promise<string> {
+    const verdict = await notificationIdentityVerdict()
+    if (verdict.kind === 'mismatched') {
+      return `This build cannot deliver system notifications: it is signed as "${verdict.signatureIdentifier}" instead of its bundle identifier "${verdict.bundleIdentifier}", so macOS refuses every request. Update ${APP_NAME} to a build with the corrected packaging.`
+    }
+    return 'macOS blocked the test notification.'
+  }
+
   async sendTestNotification(): Promise<SystemNotificationTestResult> {
     // The test exercises the OS card path, so it always uses the full-volume
     // off-app alert regardless of which window is focused.
@@ -1096,13 +1158,7 @@ export class NotificationService {
       notification.once('failed', (_event, error) => {
         this.recordNotificationOutcome('failed', error)
         Logger.error('System notification test failed:', error)
-        finish({
-          status: 'failed',
-          // The panel renders the blocked banner (and its Open settings button)
-          // as soon as the refusal lands in the permission state, so this line
-          // only has to say what happened.
-          message: 'macOS blocked the test notification.'
-        })
+        void this.describeDeliveryRefusal().then((message) => finish({ status: 'failed', message }))
       })
 
       this.retainNotification('system-test', notification)

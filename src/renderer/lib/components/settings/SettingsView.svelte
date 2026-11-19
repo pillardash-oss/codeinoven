@@ -841,7 +841,26 @@
                     Notifications are allowed
                   </p>
                 {/if}
-                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied'}
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied' && notificationPermission.reason === 'signing-identity-mismatch'}
+                  <div
+                    class="mt-3 flex items-start gap-3 border border-warning/30 bg-warning/10 px-3 py-2"
+                    role="alert"
+                  >
+                    <CioAttention size={14} class="mt-0.5 shrink-0 text-warning" />
+                    <div>
+                      <p class="text-xs font-medium text-warning">
+                        This build cannot show notification cards
+                      </p>
+                      <p class="mt-0.5 text-[0.6875rem] leading-relaxed text-muted">
+                        macOS refused every request this build made before it read any setting,
+                        because the app is signed under a different identity than its bundle
+                        identifier. No System Settings toggle changes that. Update {APP_NAME} to a build
+                        with the corrected packaging.
+                      </p>
+                    </div>
+                  </div>
+                {/if}
+                {#if notificationPermission?.platform === 'darwin' && notificationPermission.status === 'denied' && notificationPermission.reason !== 'signing-identity-mismatch'}
                   <div
                     class="mt-3 flex items-start justify-between gap-3 border border-warning/30 bg-warning/10 px-3 py-2"
                     role="alert"

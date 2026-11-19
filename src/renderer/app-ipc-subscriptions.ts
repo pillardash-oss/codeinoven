@@ -247,6 +247,18 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     }
     if (notificationPermissionWarned) return
     notificationPermissionWarned = true
+    // A build whose signature identity does not match its bundle identifier is
+    // refused by macOS before any setting is read, so pointing the user at
+    // System Settings would send them to a pane with nothing to switch on.
+    if (status.reason === 'signing-identity-mismatch') {
+      showToastWarning(`${APP_NAME} cannot show system notifications in this build`, {
+        id: 'notification-permission-blocked',
+        description:
+          'macOS refuses every notification this build asks for, so no System Settings toggle can fix it. Update the app to a build with the corrected packaging.',
+        duration: 12_000
+      })
+      return
+    }
     showToastWarning(`${APP_NAME} notifications are blocked`, {
       id: 'notification-permission-blocked',
       description:
