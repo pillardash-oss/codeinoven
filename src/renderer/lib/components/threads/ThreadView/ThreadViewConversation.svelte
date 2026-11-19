@@ -82,7 +82,8 @@
     changesBeforeSteer,
     getTurnFinalText,
     isActivityOnlyUserMessage,
-    turnStartIndexForEnd
+    turnStartIndexForEnd,
+    type TraceSegmentLayout
   } from '../thread-turn-parts'
   import {
     explicitMessagePresentation,
@@ -124,6 +125,36 @@
    * unattributable, and the transcript signs both sides like a group chat.
    */
   const groupThread = $derived(isGroupThread(board.handleAgentEvent.thread))
+
+  /**
+   * Whether a group turn's slice draws itself where it belongs.
+   *
+   * Three owners exist for one turn's work: the bubble that closes it, the
+   * trailing live bubble while a single uncut turn runs, and the slices at their
+   * own mount points. A slice draws itself when its turn was cut by an answered
+   * question (so the answer card sits between the work that asked it and the
+   * work it unblocked), and when nothing else draws it at all, which is the
+   * steered or interrupted turn that never wrote a closing answer. A live uncut
+   * turn is the trailing bubble's, so its slice stands down until it settles.
+   */
+  function groupSliceDraws(segment: TraceSegmentLayout): boolean {
+    if (segment.boundaries.length > 0) return true
+    const messages = board.loadOlderMessages.messages
+    const turnEnd =
+      board.pollStreamParts.transcriptIndex.turnEnd[segment.turnStart] ?? segment.turnStart
+    const closing = getTurnFinalText(
+      messages,
+      turnEnd,
+      board.pollStreamParts.isTransparentTurnMessage
+    )
+    if (closing) return false
+    if (
+      segment.turnStart === board.buildSpecActionPrompt.latestTurnInfo.startIndex &&
+      board.pollStreamParts.conversationBusy
+    )
+      return false
+    return true
+  }
 
   /**
    * The live work of a group turn that has not written its answer yet.
@@ -913,7 +944,7 @@
                where it happened rather than at the end of the turn. -->
           {#if groupThread}
             {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
-              {#if segment.boundaries.length > 0}
+              {#if groupSliceDraws(segment)}
                 <ThreadViewConversationGroupTraceBubble
                   {board}
                   {segment}
@@ -979,7 +1010,7 @@
                 {/each}
               {:else}
                 {#each traceSegmentsAbove as segment (segment.segmentIndex)}
-                  {#if segment.boundaries.length > 0}
+                  {#if groupSliceDraws(segment)}
                     <ThreadViewConversationGroupTraceBubble {board} {segment} traceMsg={msg} />
                   {/if}
                 {/each}
@@ -1463,7 +1494,7 @@
           {/each}
         {:else}
           {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
-            {#if segment.boundaries.length > 0}
+            {#if groupSliceDraws(segment)}
               <ThreadViewConversationGroupTraceBubble
                 {board}
                 {segment}
