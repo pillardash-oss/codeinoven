@@ -46,7 +46,11 @@ import { PiUsageTracker } from './pi/pi-driver-usage'
 import { PiNativeSessions } from './pi/pi-driver-native-session'
 import { findNativePiSessionFile } from './pi/pi-native-session'
 import { trimPiTranscript } from './pi/pi-transcript-trim'
-import { PiCioRuntimeFiles } from './pi/pi-driver-cio-files'
+import {
+  PiCioRuntimeFiles,
+  PiCioSessionStorages,
+  type PiCioFilesStorage
+} from './pi/pi-driver-cio-files'
 import { PiRpcSessions } from './pi/pi-driver-rpc'
 import { PiHostClient } from './pi/pi-host-client'
 import { PiTurnLifecycle } from './pi/pi-driver-turns'
@@ -172,6 +176,9 @@ export class PiDriver extends PersistentCliDriver {
   private readonly usage: PiUsageTracker
   private readonly nativeSessions: PiNativeSessions
   private readonly cioFiles: PiCioRuntimeFiles
+  /** Which file surface each session's handoff files land on: the app engine
+   *  unless the Oven layer routed that session to a remote machine. */
+  private readonly sessionStorages: PiCioSessionStorages
   /** This driver's Pi agent directory when it serves a managed account
    *  container; undefined for the harness-global account. Every catalog input
    *  (credentials, native provider config) lives inside that directory, so the
@@ -237,7 +244,12 @@ export class PiDriver extends PersistentCliDriver {
       materializeProvidersExtension: (sessionId) =>
         this.modelCatalog.materializeProvidersExtension(sessionId),
       providerExtensionEnv: (sessionId) => this.cioFiles.providerExtensionEnv(sessionId),
-      forgetCioSession: (sessionId) => this.cioFiles.forgetSession(sessionId),
+      forgetCioSession: (sessionId) => {
+        this.cioFiles.forgetSession(sessionId)
+        // A dropped session's machine route goes with it: forgetting it here is
+        // what keeps a reused session id from publishing into a stale Oven.
+        this.sessionStorages.forget(sessionId)
+      },
       resumeNativeSession: (projectPath, sessionId, client) =>
         this.nativeSessions.resumeNativePiSession(projectPath, sessionId, client),
       syncNativeSessionId: (projectPath, sessionId) =>
@@ -314,12 +326,28 @@ export class PiDriver extends PersistentCliDriver {
       childSnapshot: (sessionId) => this.subagentStreams.snapshot(sessionId),
       watchChildSession: (sessionId) => this.subagentStreams.watchSubagentSession(sessionId)
     })
+    // Before the runtime files: their host reads this router on every publish.
+    this.sessionStorages = new PiCioSessionStorages(storage)
     this.cioFiles = new PiCioRuntimeFiles({
-      storage,
+      storageFor: (sessionId) => this.sessionStorages.storageFor(sessionId),
       isTitleSession: (sessionId) => this.isTitleSession(sessionId),
       registerWatchPath: (sessionId, watchFlagPath) =>
         this.subagentStreams.registerSession(sessionId, watchFlagPath)
     })
+  }
+
+  /**
+   * Route one session's handoff files to a remote machine, or back to the
+   * app's own engine with `null`.
+   *
+   * A driver instance serves many threads and only the Oven layer knows which
+   * of their machines is remote, so the choice is installed per session and the
+   * session teardown drops it: a reused session id never inherits a machine it
+   * no longer runs on. With nothing installed every session reads and writes
+   * the app engine exactly as before.
+   */
+  setSessionStorage(sessionId: string, storage: PiCioFilesStorage | null): void {
+    this.sessionStorages.set(sessionId, storage)
   }
 
   /**
@@ -1228,6 +1256,7 @@ export class PiDriver extends PersistentCliDriver {
     this.subagentStreams.clear()
     this.uiRequests.clear()
     this.cioFiles.clear()
+    this.sessionStorages.clear()
     super.dispose()
   }
 

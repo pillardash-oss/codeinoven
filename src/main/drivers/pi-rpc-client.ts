@@ -20,9 +20,7 @@ interface PendingRequest {
   timer: ReturnType<typeof setTimeout>
 }
 
-interface PiRpcOptions {
-  /** Prepared native or WSL invocation, including `--mode rpc`. */
-  invocation: PreparedHarnessInvocation
+interface PiRpcCommonOptions {
   /** Called once per agent event record streamed from the pi process. */
   onEvent?: (record: Record<string, unknown>) => void
   /** Called for dialog-style extension UI requests that need a human answer. */
@@ -34,13 +32,22 @@ interface PiRpcOptions {
   onExtensionStatus?: (record: Record<string, unknown>) => void
   /** Called once when the pi process exits unexpectedly. */
   onExit?: (code: number | null) => void
-  /**
-   * Where the protocol travels. A local run leaves this out and the client
-   * spawns `pi` itself; a run on an Oven passes the transport that carries the
-   * same JSON lines to the child on that machine.
-   */
-  transport?: RpcTransport
 }
+
+/**
+ * Where the client's peer comes from.
+ *
+ * A local run leaves the transport out and the client spawns the prepared
+ * invocation itself; a run whose peer already exists (an Oven) passes only the
+ * transport that carries the same JSON lines to it. `transport` wins when both
+ * are given, which is what keeps a caller that has a prepared invocation on
+ * hand and decides to route it elsewhere working.
+ */
+type PiRpcOptions = PiRpcCommonOptions &
+  (
+    | { invocation: PreparedHarnessInvocation; transport?: RpcTransport }
+    | { invocation?: undefined; transport: RpcTransport }
+  )
 
 const REQUEST_TIMEOUT_MS = 120_000
 /** A page checkpoint can take several requests; bound idle time between batches. */
@@ -87,7 +94,11 @@ export class PiRpcClient {
       this.child = null
       this.transport = options.transport
     } else {
-      const child = this.spawnChild(options.invocation)
+      const invocation = options.invocation
+      if (invocation === undefined) {
+        throw new Error('PiRpcClient needs an invocation to spawn or a transport to speak on')
+      }
+      const child = this.spawnChild(invocation)
       this.child = child
       this.transport = localRpcTransport(child)
     }

@@ -1,6 +1,7 @@
 import { buildProcessEnvironmentAsync, OWNED_SESSION_MARKER } from '../cli-environment'
 import { prepareHarnessInvocation, resolveHarnessRuntime } from '../harness-runtime'
 import { PiRpcClient } from '../pi-rpc-client'
+import type { RpcTransport } from '../pi-rpc-transport'
 import type { PiSessionClient } from './pi-client'
 import { PiHostClient } from './pi-host-client'
 import { piHostSupervisor } from '../../agents/pi-host-runtime'
@@ -35,6 +36,33 @@ const PI_SESSION_IDLE_DISPOSE_MS = 30 * 60_000
 /** Cadence of the idle sweep. One timer serves every session of the driver. */
 const PI_SESSION_IDLE_SWEEP_MS = 60_000
 
+/**
+ * One session's start-up, as the local spawn would have performed it.
+ *
+ * The launcher receives exactly what `PiRpcClient` would have spawned, so an
+ * implementation that starts the peer somewhere else (an Oven) runs the same
+ * argv in the same directory with the same environment, and nothing above the
+ * transport can tell the two apart.
+ */
+export interface PiRpcLaunchInput {
+  sessionId: string
+  /** The command the caller resolved for this machine, e.g. 'pi'. */
+  command: string
+  /** The full argv the local spawn would have used, `--mode rpc` first. */
+  args: string[]
+  cwd: string
+  env: NodeJS.ProcessEnv
+}
+
+export interface PiRpcLaunchResult {
+  transport: RpcTransport
+  /** Local pid when the peer runs on this machine; absent for a remote peer. */
+  pid?: number
+}
+
+/** Starts the peer for one session and returns the channel to speak on. */
+export type PiRpcLaunch = (input: PiRpcLaunchInput) => Promise<PiRpcLaunchResult>
+
 /** Everything the RPC process lifecycle needs from the driver. */
 export interface PiRpcSessionsHost {
   readonly id: string
@@ -48,12 +76,24 @@ export interface PiRpcSessionsHost {
   workspaceTemporaryEnvironment(
     projectPath: string
   ): Promise<{ TMPDIR: string; TEMP: string; TMP: string }>
+  /**
+   * Register a session's local harness child with the app's process tracker.
+   * Only a real child is observed, so a launched (remote) session never calls
+   * this.
+   */
   observeHarnessProcess(
     sessionId: string,
     process: ChildProcess,
     command: string,
     projectPath: string
   ): void
+  /**
+   * Start the session's peer somewhere other than this machine's child, e.g. a
+   * run on an Oven. Absent means the session spawns `pi --mode rpc` itself,
+   * exactly as it always has. A launched session is never a hosted session:
+   * the returned transport is the only channel it has.
+   */
+  launch?: PiRpcLaunch
   materializeCoreToolsExtension(
     sessionId: string,
     bundledRuntime: boolean,
@@ -381,13 +421,48 @@ export class PiRpcSessions {
     // An installed Pi keeps the process it always had. `CIO_PI_HOST=0` opts out
     // for a single run when the host has to be ruled out of a failure.
     const runtimeKind = invocation.runtime.target.kind
-    const hosted = runtimeKind === 'bundled' && process.env['CIO_PI_HOST'] !== '0'
+    // A caller that owns the peer elsewhere (a run on an Oven) starts this
+    // session's process itself, so neither the shared Pi host nor a local child
+    // is involved: the transport it hands back is the session's only channel.
+    const launch = this.host.launch
+    const hosted =
+      launch === undefined && runtimeKind === 'bundled' && process.env['CIO_PI_HOST'] !== '0'
     const extensionPaths = [
       cioCoreToolsExtensionPath,
       ...(providersExtensionPath === null ? [] : [providersExtensionPath])
     ]
+    // Every client reports the same session events; only the exit is bound to a
+    // client instance, because a replaced client's stale exit must be ignored.
+    const sessionCallbacks = {
+      onEvent: (record: Record<string, unknown>) => {
+        void this.host.handleRpcEvent(record, sessionId, projectPath)
+      },
+      onUiRequest: (record: Record<string, unknown>) => {
+        this.host.handleUiRequest(record, sessionId)
+      },
+      onExtensionStatus: (record: Record<string, unknown>) => {
+        this.host.handleExtensionStatus(record, sessionId)
+      }
+    }
     let client: PiSessionClient
-    if (hosted) {
+    /** The child this process spawned, or null when no local child exists. */
+    let localClient: PiRpcClient | null = null
+    if (launch) {
+      const launched = await launch({
+        sessionId,
+        command: invocation.command,
+        args: invocation.args,
+        cwd: invocation.cwd ?? projectPath,
+        env: invocation.env
+      })
+      client = new PiRpcClient({
+        ...sessionCallbacks,
+        transport: launched.transport,
+        onExit: (code) => {
+          this.handleExit(code, sessionId, client)
+        }
+      })
+    } else if (hosted) {
       // The session runs with exactly the environment the harness process was
       // prepared with: the account's provider credentials and its isolated
       // agent directory arrive through it, not through this process.
@@ -422,21 +497,14 @@ export class PiRpcSessions {
       })
       client = hostClient
     } else {
-      client = new PiRpcClient({
+      localClient = new PiRpcClient({
+        ...sessionCallbacks,
         invocation,
-        onEvent: (record) => {
-          void this.host.handleRpcEvent(record, sessionId, projectPath)
-        },
-        onUiRequest: (record) => {
-          this.host.handleUiRequest(record, sessionId)
-        },
-        onExtensionStatus: (record) => {
-          this.host.handleExtensionStatus(record, sessionId)
-        },
         onExit: (code) => {
           this.handleExit(code, sessionId, client)
         }
       })
+      client = localClient
     }
     this.rpcClients.set(sessionId, client)
     this.sessionProjects.set(sessionId, projectPath)
@@ -453,11 +521,12 @@ export class PiRpcSessions {
     // the harness that actually owns the process again.
     // A hosted session is not a child process: the host itself is the process,
     // and it is registered once with the app's service list instead of a row per
-    // thread. Only a real RPC child is handed to the process tracker.
-    if (client instanceof PiRpcClient) {
+    // thread. A launched session's peer is not this process's child either.
+    // Only a real RPC child is handed to the process tracker.
+    if (localClient) {
       this.host.observeHarnessProcess(
         sessionId,
-        client.process,
+        localClient.process,
         invocation.runtime?.command ?? invocation.command,
         projectPath
       )
