@@ -19,10 +19,6 @@ export interface ComposerUsage {
   canCompact?: boolean
   compacting?: boolean
   onCompact?: () => void
-  /** Whether this thread runs a harness whose session can move to its own host. */
-  canMoveHost?: boolean
-  movingHost?: boolean
-  onMoveHost?: () => void
   onActivateBankedReset?: () => void
   onReveal?: () => void
   onHide?: () => void

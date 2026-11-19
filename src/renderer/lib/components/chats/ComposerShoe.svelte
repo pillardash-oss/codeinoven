@@ -675,9 +675,6 @@
     canCompact={usage.canCompact ?? false}
     compacting={usage.compacting ?? false}
     onCompact={usage.onCompact}
-    canMoveHost={usage.canMoveHost ?? false}
-    movingHost={usage.movingHost ?? false}
-    onMoveHost={usage.onMoveHost}
     onActivateBankedReset={usage.onActivateBankedReset}
     onReveal={usage.onReveal}
     onHide={usage.onHide}

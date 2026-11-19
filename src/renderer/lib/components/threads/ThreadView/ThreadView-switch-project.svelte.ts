@@ -150,9 +150,6 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
 
   compacting = $state(false)
 
-  /** A session move in flight, so the action cannot be asked for twice. */
-  movingHost = $state(false)
-
   commandExecuting = $state(false)
 
   providerName = $derived(harnessDisplayName(this.root.loadOlderMessages.settings.harnessId))
@@ -332,38 +329,6 @@ export class ThreadViewSwitchProject extends BoardUnit<ThreadView> {
     } catch {
       // Command discovery is supplementary; messaging remains available.
       this.commands = []
-    }
-  }
-
-  /**
-   * Move this thread's session onto a host process of its own.
-   *
-   * The transcript is the session, so the thread keeps its history, its native
-   * session id and its place in the conversation; only the process changes.
-   */
-  async moveToOwnHost(): Promise<void> {
-    if (this.movingHost || this.busy) return
-    const { projectId, id } = this.root.handleAgentEvent.thread
-    this.movingHost = true
-    this.root.handleAgentEvent.errorMessage = ''
-    try {
-      const result = await invoke('agent:moveToNewHost', projectId, id)
-      if (result.moved) {
-        // A pid of 0 is what a launcher that could not read the process reports,
-        // so the sentence falls back to the outcome instead of saying "host 0".
-        toast.success(
-          result.hostPid
-            ? `Session moved to host ${result.hostPid}`
-            : 'Session moved to a host of its own'
-        )
-      } else {
-        toast.warning(result.detail ?? 'This session cannot move right now.')
-      }
-    } catch (error) {
-      this.root.handleAgentEvent.errorMessage =
-        error instanceof Error ? error.message : 'The session could not be moved.'
-    } finally {
-      this.movingHost = false
     }
   }
 
