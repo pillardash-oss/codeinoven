@@ -110,7 +110,7 @@ export interface AgentUtilityHost {
   readonly agentTabClaims: BrowserService['agentTabClaims']
   readonly agentTabIds: BrowserService['agentTabIds']
   readonly agentTarget: BrowserService['agentTarget']
-  readonly agentTargetChanged: BrowserService['agentTargetChanged']
+  readonly agentTargetChange: BrowserService['agentTargetChange']
   readonly optionalAgentTarget: BrowserService['optionalAgentTarget']
   readonly runAgentScriptIn: BrowserService['runAgentScriptIn']
   readonly assistantPageTabIds: BrowserService['assistantPageTabIds']
@@ -365,23 +365,15 @@ export class BrowserServiceAgentUtility {
     }
     if (operation === 'click') {
       const target = this.host.agentTarget(input, tab.view.webContents)
-      if (await this.host.agentTargetChanged(target, reviewedTarget)) {
-        return {
-          ...utilityContext,
-          result: { clicked: false, reason: 'target changed; inspect the page and retry' }
-        }
-      }
+      const changed = await this.host.agentTargetChange(target, reviewedTarget)
+      if (changed) return { ...utilityContext, result: { clicked: false, reason: changed } }
       return { ...utilityContext, result: await this.host.clickAgentTarget(tab, target, input) }
     }
     if (operation === 'type') {
       const target = this.host.agentTarget(input, tab.view.webContents)
       const text = this.host.requiredInputString(input, 'text', true)
-      if (await this.host.agentTargetChanged(target, reviewedTarget)) {
-        return {
-          ...utilityContext,
-          result: { typed: false, reason: 'target changed; inspect the page and retry' }
-        }
-      }
+      const changed = await this.host.agentTargetChange(target, reviewedTarget)
+      if (changed) return { ...utilityContext, result: { typed: false, reason: changed } }
       // A picker keeps only an option it offered, so text typed into one is a query
       // the control throws away. Choosing the option is what the caller meant.
       if (text && input['append'] !== true && input['submit'] !== true) {
@@ -448,12 +440,8 @@ export class BrowserServiceAgentUtility {
     }
     if (operation === 'select') {
       const target = this.host.agentTarget(input, tab.view.webContents)
-      if (await this.host.agentTargetChanged(target, reviewedTarget)) {
-        return {
-          ...utilityContext,
-          result: { selected: false, reason: 'target changed; inspect the page and retry' }
-        }
-      }
+      const changed = await this.host.agentTargetChange(target, reviewedTarget)
+      if (changed) return { ...utilityContext, result: { selected: false, reason: changed } }
       const values = Array.isArray(input['values'])
         ? (input['values'] as unknown[]).filter(
             (value): value is string => typeof value === 'string'
@@ -486,12 +474,8 @@ export class BrowserServiceAgentUtility {
     }
     if (operation === 'check') {
       const target = this.host.agentTarget(input, tab.view.webContents)
-      if (await this.host.agentTargetChanged(target, reviewedTarget)) {
-        return {
-          ...utilityContext,
-          result: { checked: false, reason: 'target changed; inspect the page and retry' }
-        }
-      }
+      const changed = await this.host.agentTargetChange(target, reviewedTarget)
+      if (changed) return { ...utilityContext, result: { checked: false, reason: changed } }
       const result = await this.host.runAgentScriptIn(
         target.entry,
         agentCheckScript({ selector: target.selector, checked: input['checked'] !== false })

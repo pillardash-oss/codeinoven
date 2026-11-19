@@ -10,6 +10,7 @@ import {
   agentQueryScript,
   agentSnapshotScript
 } from '../../../src/main/browser/browser-service/browser-agent-page'
+import { browserActionTargetScript } from '../../../src/main/browser/browser-service/browser-action-policy'
 
 /**
  * A page is not a flat document of HTML elements, and these are the cases that
@@ -91,6 +92,7 @@ afterEach(() => {
   document.body.innerHTML = ''
   Reflect.deleteProperty(globalThis, '__cioAgentRefSeq')
   Reflect.deleteProperty(globalThis, '__cioAgentRefStore')
+  Reflect.deleteProperty(globalThis, '__cioAgentRefAnchors')
   Reflect.deleteProperty(globalThis, '__cio')
 })
 
@@ -278,5 +280,84 @@ describe('evaluate', () => {
     )
     expect(result.ok).toBe(false)
     expect(typeof result.error).toBe('string')
+  })
+})
+
+describe('a reference on a page that redraws itself', () => {
+  /** A state-driven framework replaces its nodes; the attribute goes with the old node. */
+  function redraw(html: string): void {
+    document.body.innerHTML = html
+  }
+
+  it('resolves a reference again after the framework replaced the node', () => {
+    redraw('<div><input id="search" name="q" placeholder="Search resources" value="one"></div>')
+    const report = snapshot({ interactiveOnly: false })
+    const field = report.elements.find((element) => element.tag === 'input')
+    expect(field?.ref).toMatch(/^r\d+$/u)
+
+    redraw('<div><input id="search" name="q" placeholder="Search resources" value="one"></div>')
+    const revived = document.getElementById('search')
+    expect(revived?.hasAttribute('data-cio-ref')).toBe(false)
+
+    const read = run<{ found: boolean; value: string }>(agentFieldValueScript(field?.ref ?? ''))
+    expect(read.found).toBe(true)
+    expect(read.value).toBe('one')
+    // The healed reference is stamped back, so the next read is a plain lookup.
+    expect(revived?.getAttribute('data-cio-ref')).toBe(field?.ref)
+  })
+
+  it('acts on the redrawn node, not on the one it replaced', () => {
+    redraw('<button id="go" aria-label="Deploy">Deploy</button>')
+    const report = snapshot()
+    const ref = report.elements.find((element) => element.label.includes('Deploy'))?.ref ?? ''
+
+    redraw('<button id="go" aria-label="Deploy">Deploy</button>')
+    const fresh = document.getElementById('go')
+    let clicks = 0
+    fresh?.addEventListener('click', () => {
+      clicks += 1
+    })
+    const result = run<{ clicked: boolean }>(agentDomClickScript(ref))
+    expect(result.clicked).toBe(true)
+    expect(clicks).toBe(1)
+  })
+
+  it('refuses to guess when the identity is not unique, instead of acting on a neighbour', () => {
+    redraw('<input placeholder="Search"><input placeholder="Search">')
+    const report = snapshot({ interactiveOnly: false })
+    const first = report.elements.find((element) => element.tag === 'input')
+
+    redraw('<input placeholder="Search"><input placeholder="Search">')
+    const read = run<{ found: boolean }>(agentFieldValueScript(first?.ref ?? ''))
+    expect(read.found).toBe(false)
+  })
+
+  it('reads the same reviewed control after the page replaced the node, so a review still binds', () => {
+    redraw(
+      '<div><input id="search" name="q" aria-label="Search resources" placeholder="Search resources"></div>'
+    )
+    const report = snapshot({ interactiveOnly: false })
+    const ref = report.elements.find((element) => element.tag === 'input')?.ref ?? ''
+    const before = run<Record<string, unknown> | null>(
+      browserActionTargetScript(`[data-cio-ref="${ref}"]`)
+    )
+    redraw(
+      '<div><input id="search" name="q" aria-label="Search resources" placeholder="Search resources"></div>'
+    )
+    const after = run<Record<string, unknown> | null>(
+      browserActionTargetScript(`[data-cio-ref="${ref}"]`)
+    )
+    expect(before).not.toBeNull()
+    expect(after).toEqual(before)
+  })
+
+  it('reads the reviewed control through the same deep resolver, id, name and label included', () => {
+    shadowHost('<input id="search" name="q" aria-label="Search resources" />')
+    const target = run<Record<string, unknown> | null>(
+      browserActionTargetScript('my-panel >>> #search')
+    )
+    expect(target?.['tag']).toBe('input')
+    expect(target?.['name']).toBe('q')
+    expect(String(target?.['label'])).toContain('Search resources')
   })
 })

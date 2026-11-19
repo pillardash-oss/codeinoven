@@ -955,11 +955,11 @@ export class BrowserService {
     return this.agentScriptUnit.agentPointFrom(input, tab, label)
   }
 
-  async agentTargetChanged(
+  async agentTargetChange(
     target: AgentTarget,
     reviewedTarget: BrowserActionTarget | null
-  ): Promise<boolean> {
-    return this.agentScriptUnit.agentTargetChanged(target, reviewedTarget)
+  ): Promise<string | null> {
+    return this.agentScriptUnit.agentTargetChange(target, reviewedTarget)
   }
 
   async clickAgentTarget(

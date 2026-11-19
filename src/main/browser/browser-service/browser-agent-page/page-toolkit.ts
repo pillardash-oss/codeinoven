@@ -222,6 +222,94 @@ export function pageToolkitSource(options: PageToolkitOptions = {}): string {
     return isElement(element) && element.isConnected ? element : null;
   };
 
+  /**
+   * What a reference was handed out for, remembered beside the node itself.
+   *
+   * A page that renders from state replaces its nodes: the framework throws the old
+   * input away and mounts a new one, so an attribute written onto the old node is
+   * gone and a reference that only lived in that attribute dies with it. Acting on a
+   * page that redraws itself, which the Azure portal is, therefore used to fail every
+   * action with "target changed": the reference no longer resolved, and the node it
+   * named was not the node the page was showing any more.
+   *
+   * The anchor is the identity of the control rather than the node: its tag, its id,
+   * name, aria-label and placeholder, the role it presents and the short text it
+   * carried. A reference that no longer resolves is looked up again through it, and
+   * only accepted when the match is unique, so a redraw heals the reference instead
+   * of failing the action. This is the same rule a person follows: the search box is
+   * still the search box after the page re-renders it.
+   */
+  const anchorStore = () => {
+    let store = globalThis.__cioAgentRefAnchors;
+    if (!(store instanceof Map)) {
+      store = new Map();
+      try {
+        Object.defineProperty(globalThis, '__cioAgentRefAnchors', {
+          value: store, configurable: true, writable: true, enumerable: false
+        });
+      } catch { globalThis.__cioAgentRefAnchors = store; }
+    }
+    return store;
+  };
+
+  const rememberAnchor = (ref, element) => {
+    if (!isElement(element)) return;
+    const store = anchorStore();
+    if (store.size > MAX_REFS) store.clear();
+    const tag = element.tagName ? element.tagName.toLowerCase() : '';
+    store.set(ref, {
+      tag,
+      id: element.id || '',
+      name: element.getAttribute('name') || '',
+      ariaLabel: element.getAttribute('aria-label') || '',
+      placeholder: element.getAttribute('placeholder') || '',
+      role: (element.getAttribute('role') || '').toLowerCase(),
+      text: tag === 'input' || tag === 'textarea' ? '' : textOf(element, 120),
+      selector: localSelector(element)
+    });
+  };
+
+  /**
+   * The element an anchor still describes, or null when it is gone or ambiguous.
+   *
+   * Every candidate is accepted only when it matches exactly one element, because a
+   * healed reference must never point at a neighbour: acting on the wrong control is
+   * worse than reporting that the control is gone.
+   */
+  const findByAnchor = (anchor) => {
+    if (!anchor) return null;
+    const tag = anchor.tag || '';
+    const unique = (selector) => {
+      if (!selector) return null;
+      const matches = deepQueryAll(selector);
+      return matches.length === 1 ? matches[0] : null;
+    };
+    const quoted = (value) => JSON.stringify(value);
+    // Position is the last resort and only for a control that had no identity of its
+    // own: healing a named control by where it sat would act on a neighbour the moment
+    // the page reorders, which is exactly the mistake this must not make.
+    const hasIdentity = Boolean(anchor.id || anchor.name || anchor.ariaLabel || anchor.placeholder);
+    const candidates = [
+      anchor.id ? '#' + cssEscape(anchor.id) : '',
+      tag && anchor.name ? tag + '[name=' + quoted(anchor.name) + ']' : '',
+      tag && anchor.ariaLabel ? tag + '[aria-label=' + quoted(anchor.ariaLabel) + ']' : '',
+      tag && anchor.placeholder ? tag + '[placeholder=' + quoted(anchor.placeholder) + ']' : '',
+      hasIdentity ? '' : anchor.selector || ''
+    ];
+    for (const selector of candidates) {
+      const found = unique(selector);
+      if (found) return found;
+    }
+    if (tag && anchor.text) {
+      const matches = deepQueryAll(tag).filter((node) => {
+        if (anchor.role && (node.getAttribute('role') || '').toLowerCase() !== anchor.role) return false;
+        return textOf(node, 120) === anchor.text;
+      });
+      if (matches.length === 1) return matches[0];
+    }
+    return null;
+  };
+
   /* ------------------------------------------------------------ traversal --- */
 
   /**
@@ -347,17 +435,33 @@ export function pageToolkitSource(options: PageToolkitOptions = {}): string {
 
   /* ------------------------------------------------------------ resolving --- */
 
+  /**
+   * The element a reference names, healing it when the page has redrawn it.
+   *
+   * The order is the whole point: the node handed out is tried first, then the
+   * attribute it carried, then the identity recorded beside it. Only the last step
+   * ever guesses, and it refuses to guess when the identity is not unique.
+   */
   const resolveRef = (ref) => {
     const held = heldRef(ref);
     if (held) return held;
-    const found = deepQuery('[' + REF_ATTR + '=' + JSON.stringify(ref) + ']');
-    if (found) holdRef(ref, found);
-    return found;
+    const stamped = deepQuery('[' + REF_ATTR + '=' + JSON.stringify(ref) + ']');
+    if (stamped) { holdRef(ref, stamped); return stamped; }
+    const revived = findByAnchor(anchorStore().get(ref));
+    if (!revived) return null;
+    holdRef(ref, revived);
+    rememberAnchor(ref, revived);
+    try { revived.setAttribute(REF_ATTR, ref); } catch { /* a locked node keeps no attribute */ }
+    return revived;
   };
 
   const referenceFor = (element) => {
     const existing = element.getAttribute(REF_ATTR);
-    if (existing) { holdRef(existing, element); return existing; }
+    if (existing) {
+      holdRef(existing, element);
+      rememberAnchor(existing, element);
+      return existing;
+    }
     const next = (globalThis.__cioAgentRefSeq || 0) + 1;
     globalThis.__cioAgentRefSeq = next;
     const reference = REF_PREFIX + 'r' + next;
@@ -365,6 +469,7 @@ export function pageToolkitSource(options: PageToolkitOptions = {}): string {
       try { element.setAttribute(REF_ATTR, reference); } catch { /* a locked node keeps no attribute */ }
     }
     holdRef(reference, element);
+    rememberAnchor(reference, element);
     return reference;
   };
 
