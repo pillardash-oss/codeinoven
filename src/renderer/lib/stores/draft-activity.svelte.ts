@@ -38,10 +38,10 @@ interface PendingDraftCommit {
 const pendingDraftCommits = new SvelteMap<string, PendingDraftCommit>()
 
 type DraftActivityListener = (projectId: string, threadId: string, drafting: boolean) => void
-type SharedDraftAppliedListener = (projectId: string, threadId: string) => void
+type RemoteDraftClearListener = (projectId: string, threadId: string) => void
 
 const listeners = new SvelteSet<DraftActivityListener>()
-const sharedDraftAppliedListeners = new SvelteSet<SharedDraftAppliedListener>()
+const remoteClearListeners = new SvelteSet<RemoteDraftClearListener>()
 
 /** Last time each thread forwarded a composer activity ping, so pings throttle. */
 const lastActivityPingAt = new SvelteMap<string, number>()
@@ -53,38 +53,38 @@ export function onDraftActivity(listener: DraftActivityListener): () => void {
 }
 
 /**
- * Subscribe to the shared draft slot being applied to this window's mirror,
- * whether that means new words or none.
+ * Subscribe to drafts that were committed away somewhere other than the
+ * composer showing them.
  *
- * The draft store drops or replaces its own mirror of the slot, but a mounted
- * composer holds the words in its editor and not in the store, so it needs the
- * same notice to rebuild itself from what the store now holds. Surfaces pass
- * their thread and ignore everyone else's, so one listener can be registered per
- * open conversation.
+ * The draft store drops its own mirror of such a draft, but a mounted composer
+ * holds the words in its editor and not in the store, so it needs the same
+ * notice to empty itself. Surfaces pass their thread and ignore everyone
+ * else's, so one listener can be registered per open conversation.
  */
-export function onSharedDraftApplied(listener: SharedDraftAppliedListener): () => void {
-  sharedDraftAppliedListeners.add(listener)
-  return () => sharedDraftAppliedListeners.delete(listener)
+export function onRemoteDraftCleared(listener: RemoteDraftClearListener): () => void {
+  remoteClearListeners.add(listener)
+  return () => remoteClearListeners.delete(listener)
 }
 
 /**
- * Announce that a thread's shared draft slot was applied to the local mirror.
+ * Announce that a thread's draft was cleared outside this composer.
  *
- * Published only after the store has already applied it, so listeners never
- * react to a no-op, and the composer's throttle is forgotten with it: the next
- * keystroke in that thread is the first one again.
+ * Published after the store has already dropped the draft, so listeners only
+ * ever react to a clear that really happened, and the composer's throttle is
+ * forgotten with it: the next keystroke in that thread is the first one again.
  */
-export function publishSharedDraftApplied(projectId: string, threadId: string): void {
+export function publishRemoteDraftCleared(projectId: string, threadId: string): void {
   lastActivityPingAt.delete(`${projectId}:${threadId}`)
-  for (const listener of sharedDraftAppliedListeners) listener(projectId, threadId)
+  for (const listener of remoteClearListeners) listener(projectId, threadId)
 }
 
 /**
  * Whether this thread still owes the database a draft commit.
  *
- * A commit waiting out the debounce holds words typed here that the shared slot
- * has not seen yet, so a clear elsewhere must not take them: the composer that
- * typed them is still going to write them, and dropping them would lose typing.
+ * A commit waiting out the debounce is the one thing that is newer than what
+ * the database holds, so a draft committed or cleared elsewhere must not win
+ * over it: the user is typing here right now, and their pending commit is what
+ * re-asserts their words.
  */
 export function hasPendingDraftCommit(projectId: string, threadId: string): boolean {
   return pendingDraftCommits.has(`${projectId}:${threadId}`)

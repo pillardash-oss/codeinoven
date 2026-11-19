@@ -23,7 +23,7 @@ import {
 import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
 import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
 import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
-import { publishDraftActivity, onSharedDraftApplied } from '$lib/stores/renderer-recovery.svelte'
+import { publishDraftActivity, onRemoteDraftCleared } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -1184,28 +1184,22 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     /**
-     * The shared draft slot was applied to this window's mirror, by a clear
-     * somewhere else or by a draft this window did not type.
+     * A draft cleared in another window or instance leaves this conversation too.
      *
-     * The draft store holds the applied state, but the mounted composer holds
-     * its words in its own editor, so it is rebuilt from the restored draft: an
-     * empty slot empties the field the words were sent from, and a slot that
-     * moved fills a field that never saw the new draft.
-     *
-     * Annotations are dropped only when the slot itself holds none. A slot that
-     * moved to new words carries its own annotations, and clearing them here
-     * would throw away the selections the user made in this very composer.
+     * The draft store drops its mirror of the commit, but the mounted composer
+     * holds those words in its own editor and would keep them on screen, so the
+     * composer is remounted from the (now empty) restored draft and the selection
+     * pins the sent message carried are dropped with it. This is the same path a
+     * send takes, just triggered by whoever else sent it.
      */
     $effect(() => {
-      return onSharedDraftApplied((projectId, threadId) => {
+      return onRemoteDraftCleared((projectId, threadId) => {
         if (
           this.root.handleAgentEvent.thread.projectId !== projectId ||
           this.root.handleAgentEvent.thread.id !== threadId
         )
           return
-        if (rendererRecovery.draftPromptReferences(projectId, threadId).length === 0) {
-          this.root.steerQueuedMessage.clearResponseReferences()
-        }
+        this.root.steerQueuedMessage.clearResponseReferences()
         this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
       })
     })
