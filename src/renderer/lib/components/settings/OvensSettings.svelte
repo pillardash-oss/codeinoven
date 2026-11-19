@@ -940,14 +940,14 @@
         class="flex h-8 items-center gap-1.5 border bg-elevated px-3 text-xs font-medium text-foreground hover:bg-overlay"
         onclick={() => (agentOpen = true)}
       >
-        <CioTerminal size={14} /> Add via agent
+        <CioTerminal size={14} /> Add via oven service
       </button>
       <button
         type="button"
         class="flex h-8 items-center gap-1.5 bg-primary px-3 text-xs font-medium text-on-primary hover:bg-primary-hover"
         onclick={() => openEditor()}
       >
-        <CioPlus size={14} /> New Oven
+        <CioPlus size={14} /> Add manually
       </button>
     </div>
   </div>
@@ -1302,10 +1302,6 @@
         </div>
       {/each}
     </div>
-    <p class="mt-4 text-xs text-dimmed">
-      Service setup uses your SSH account and requires Node.js 22 or later on the Oven. Trust the
-      host in OpenSSH before connecting.
-    </p>
   {/if}
 </div>
 
