@@ -2,7 +2,6 @@ import type { AgentEvent, AgentQuestion, PermissionReply } from '../../../lib/ty
 import { normalizeAgentQuestions } from '../../../lib/agent-interactions'
 import { Logger } from '../../system/logger'
 import { PermissionRequestGoneError, QuestionRequestGoneError } from '../driver.interface'
-import type { PiRpcClient } from '../pi-rpc-client'
 import type { PiSessionClient } from './pi-client'
 import { permissionMarkerPayload, questionMarkerPayload } from './pi-ui-markers'
 import { stringValue } from './pi-values'

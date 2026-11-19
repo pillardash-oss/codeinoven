@@ -61,7 +61,11 @@ async function mockSidebar(): Promise<void> {
           else activeTabId.set('active', value)
         },
         browserTabs: [],
-        focus: vi.fn()
+        focus: vi.fn(),
+        // A session writes a fresh pick into the thread docked on the tab's
+        // project. Nothing is docked in these cases, so the tab's own owner is
+        // the conversation the pick lands in.
+        threadIdForProject: vi.fn(() => null)
       }
     }
   })

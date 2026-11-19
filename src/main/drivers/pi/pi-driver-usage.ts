@@ -3,7 +3,6 @@ import type { AgentEvent, AgentRateLimitWindow, AgentUsageCredits } from '../../
 import { Logger } from '../../system/logger'
 import type { StorageEngine } from '../../storage/storage-engine'
 import type { PersistentCliSession } from '../persistent-cli-driver'
-import type { PiRpcClient } from '../pi-rpc-client'
 import type { PiSessionClient } from './pi-client'
 import { fetchPiProviderUsage } from '../pi-provider-usage'
 import {

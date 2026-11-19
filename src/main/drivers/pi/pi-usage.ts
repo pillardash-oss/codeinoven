@@ -8,7 +8,6 @@ import type {
 } from '../../../lib/types'
 import { Logger } from '../../system/logger'
 import type { PersistentCliSession } from '../persistent-cli-driver'
-import type { PiRpcClient } from '../pi-rpc-client'
 import type { PiSessionClient } from './pi-client'
 import { numberValue, record } from './pi-values'
 
