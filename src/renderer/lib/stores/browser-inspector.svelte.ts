@@ -929,7 +929,11 @@ already have come and gone, which is why the list is watched rather than read
       return
     }
     if (!owner) return
-    const { projectId, threadId } = owner
+    // A pick is feedback for the conversation on screen, not for the conversation
+    // that happened to open the tab: an assistant's threads share one browser, so
+    // a tab outlives the thread that created it, and writing the pick against the
+    // tab's own owner put the comment in a chat the reader was not writing in.
+    const { projectId, threadId } = this.pickTarget(owner)
     const page = this.designs.get(tabId)
     const tab = { id: tabId, url: page?.url ?? this.tabUrl(tabId) }
     // A pick from a served design folder and a pick from an ordinary page are the
@@ -1042,6 +1046,22 @@ already have come and gone, which is why the list is watched rather than read
     const tab = contextSidebarState.browserTabs.find((candidate) => candidate.id === tabId)
     if (!tab || tab.kind !== 'browser') return null
     return { projectId: tab.projectId, threadId: tab.threadId }
+  }
+
+  /**
+   * The conversation a fresh pick is written into.
+   *
+   * The thread docked on the tab's project is the one whose composer the reader
+   * is typing in, so that is where the comment belongs even when the tab was
+   * opened by another thread of the same project (an assistant's threads share
+   * one browser, and a screen tab keeps its id across thread switches). The tab's
+   * own owner is the answer only while no thread of that project is open, which
+   * is the case for a restored tab or a browser shown with no conversation in
+   * front of it.
+   */
+  private pickTarget(owner: TabOwner): TabOwner {
+    const active = contextSidebarState.threadIdForProject(owner.projectId)
+    return active ? { projectId: owner.projectId, threadId: active } : owner
   }
 }
 
