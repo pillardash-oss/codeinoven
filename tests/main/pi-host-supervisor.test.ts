@@ -159,6 +159,36 @@ describe('PiHostSupervisor', () => {
     expect(supervisor.sessions()).toEqual(['atlas'])
   })
 
+  it('moves a sub-agent session with its parent link intact', async () => {
+    const { supervisor, hosts } = harness()
+    // The app path: a child session is created naming its parent, the way the
+    // driver creates a sub-agent. The record the supervisor keeps has to carry
+    // that link into the resume, not just the hand-built request in the
+    // transfer suite.
+    await supervisor.createSession({
+      sessionId: 'child-1',
+      parentSessionId: 'parent-1',
+      command: {
+        type: 'create_session',
+        cwd: '/work/atlas',
+        agentDir: '/agent',
+        parentSessionId: 'parent-1'
+      }
+    })
+    await supervisor.moveToNewHost('child-1')
+    const resume = hosts[1].lines.find((line) => line.command.type === 'create_session')
+    expect(resume?.command).toMatchObject({
+      type: 'create_session',
+      agentDir: '/agent',
+      sessionPath: '/agent/sessions/child-1.jsonl',
+      // The live state the host reports wins over the create-time record.
+      cwd: '/work/child-1',
+      parentSessionId: 'parent-1'
+    })
+    expect(supervisor.sessions()).toEqual(['child-1'])
+    expect(supervisor.hostOf('child-1')).toBe(501)
+  })
+
   it('fails a pending request instead of hanging when the host dies', async () => {
     const { supervisor, hosts } = harness()
     await supervisor.createSession({
