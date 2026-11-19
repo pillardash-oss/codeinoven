@@ -351,12 +351,26 @@ export class PiModelCatalog {
   /** Node uses TEMP/TMP on Windows and TMPDIR on Unix. The runtime boundary
    * translates TMPDIR for WSL and forwards it into the Linux process. Keep
    * output files available across turns under the scope's working directory.
+   *
+   * A path this machine cannot create is not an error: an Oven thread's working
+   * directory lives on the Oven (`/home/azureuser/...`), and the pi process that
+   * needs TMPDIR runs over there with the Oven's own environment. Creating it
+   * here failed with ENOENT on the Oven's home and took the whole send down, so
+   * an unusable path now means no override at all instead of a failed turn.
    */
   async workspaceTemporaryEnvironment(
     projectPath: string
-  ): Promise<{ TMPDIR: string; TEMP: string; TMP: string }> {
+  ): Promise<{ TMPDIR?: string; TEMP?: string; TMP?: string }> {
     const directory = join(projectPath, '.cio', 'tmp', 'pi')
-    await mkdir(directory, { recursive: true })
+    try {
+      await mkdir(directory, { recursive: true })
+    } catch (error) {
+      Logger.dev('Pi workspace temp directory is not on this machine:', {
+        projectPath,
+        error: error instanceof Error ? error.message : String(error)
+      })
+      return {}
+    }
     return { TMPDIR: directory, TEMP: directory, TMP: directory }
   }
 
@@ -367,7 +381,11 @@ export class PiModelCatalog {
     const resolved = await this.resolveOverlayProviders()
     if (resolved) {
       const temporaryEnvironment = await this.workspaceTemporaryEnvironment(projectPath)
-      directory = await mkdtemp(join(temporaryEnvironment['TMPDIR'], 'providers-'))
+      // No local temp directory means this path belongs to another machine, so
+      // there is nowhere here to write an overlay either: the turn runs with the
+      // Oven's own extensions, published by the Oven layer.
+      if (!temporaryEnvironment.TMPDIR) return { args, env, cleanup: async () => undefined }
+      directory = await mkdtemp(join(temporaryEnvironment.TMPDIR, 'providers-'))
       const extensionPath = join(directory, 'codeinoven-providers.ts')
       await writeFile(extensionPath, piCustomProvidersExtension(resolved.providers), 'utf8')
       args.push('--extension', extensionPath)

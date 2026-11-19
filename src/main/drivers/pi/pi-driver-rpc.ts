@@ -73,9 +73,10 @@ export interface PiRpcSessionsHost {
   isTitleSession(sessionId: string): boolean
   utilityRuntime(sessionId: string): PreparedUtilityRuntime | undefined
   resolveRuntimePlaceholders(value: string, runtime: PreparedUtilityRuntime): string
+  /** Optional: a path that is not on this machine (an Oven checkout) answers none. */
   workspaceTemporaryEnvironment(
     projectPath: string
-  ): Promise<{ TMPDIR: string; TEMP: string; TMP: string }>
+  ): Promise<{ TMPDIR?: string; TEMP?: string; TMP?: string }>
   /**
    * Register a session's local harness child with the app's process tracker.
    * Only a real child is observed, so a launched (remote) session never calls
