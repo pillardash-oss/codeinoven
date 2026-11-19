@@ -655,7 +655,9 @@ export class ChatEngineAssignmentWorkers {
         // A terminal event gets one fresh attempt even if the earlier snapshot failed.
       }
     }
-    await this.captureChildSession(owner, sessionId)
+    // The child is done, so its transcript is already on disk: nothing to wait
+    // for, and on an Oven waiting would poll for a flush that already happened.
+    await this.captureChildSession(owner, sessionId, undefined, { waitForFlush: false })
   }
 
   /**
@@ -1773,9 +1775,12 @@ export class ChatEngineAssignmentWorkers {
             Logger.dev('Sub-agent transcript capture unavailable:', error)
           )
         } else if (!alreadyTracked) {
-          void this.captureChildSession(owner, childSessionId).catch((error) =>
-            Logger.dev('Sub-agent transcript capture unavailable:', error)
-          )
+          // A capture nobody opened must not wait on the harness to flush: on an
+          // Oven that wait is a polling read, and the mirror and live activity
+          // already cover a worker whose view is closed.
+          void this.captureChildSession(owner, childSessionId, undefined, {
+            waitForFlush: false
+          }).catch((error) => Logger.dev('Sub-agent transcript capture unavailable:', error))
         }
       }
     }
