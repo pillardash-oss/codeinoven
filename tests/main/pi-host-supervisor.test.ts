@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { PiHostSupervisor, type HostTransport } from '../../src/main/agents/pi-host-supervisor'
 import { PiHostClient } from '../../src/main/drivers/pi/pi-host-client'
+import { decideAdmission, type AdmissionDecision } from '../../src/lib/resource-admission'
 import type {
   HostRequestEnvelope,
   HostSessionState
@@ -14,6 +15,8 @@ class FakeHost {
   answerPrompts = false
   /** Leave `compact` in flight, so a checkpoint's timeout behaviour is testable. */
   holdCompactions = false
+  /** Sessions that report a turn in flight, so a rejoin cannot pick them up. */
+  readonly streaming = new Set<string>()
   readonly transport: HostTransport
   #listeners: ((line: string) => void)[] = []
   #exitListeners: ((code: number | null) => void)[] = []
@@ -43,7 +46,7 @@ class FakeHost {
       cwd: `/work/${sessionId}`,
       agentDir: '/agent',
       thinkingLevel: 'low',
-      isStreaming: false,
+      isStreaming: this.streaming.has(sessionId),
       isCompacting: false,
       messageCount: 2,
       pendingMessageCount: 0
@@ -400,6 +403,141 @@ describe('PiHostSupervisor', () => {
       const rejected = expect(pending).rejects.toThrow(/did not answer/)
       await vi.advanceTimersByTimeAsync(60)
       await rejected
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+/**
+ * Where a new session lands, and how it gets home again.
+ *
+ * One host is the app's cheapest arrangement in RAM, so a second host is only
+ * ever a loan against CPU pressure: it opens for new work while the CPU is busy,
+ * and every session it borrowed resumes on the primary as soon as the same
+ * reading says there is room.
+ */
+describe('PiHostSupervisor placement and rejoin', () => {
+  /** A reading that says the CPU is busy, so new work needs a process of its own. */
+  function busyCpu(): AdmissionDecision {
+    return decideAdmission({
+      cpuAvailablePercent: 1,
+      memoryAvailableBytes: 6 * 1024 ** 3,
+      totalMemoryBytes: 32 * 1024 ** 3
+    })
+  }
+
+  /** A reading that says the device has room, so one host can carry everything. */
+  function roomy(): AdmissionDecision {
+    return decideAdmission({
+      cpuAvailablePercent: 55,
+      memoryAvailableBytes: 6 * 1024 ** 3,
+      totalMemoryBytes: 32 * 1024 ** 3
+    })
+  }
+
+  function harness(read: () => AdmissionDecision, rebalanceIntervalMs = 60_000) {
+    const hosts: FakeHost[] = []
+    const supervisor = new PiHostSupervisor(
+      () => {
+        const host = new FakeHost(500 + hosts.length)
+        hosts.push(host)
+        return host.transport
+      },
+      { readPressure: async () => read(), rebalanceIntervalMs }
+    )
+    return { supervisor, hosts }
+  }
+
+  function create(supervisor: PiHostSupervisor, sessionId: string): Promise<HostSessionState> {
+    return supervisor.createSession({
+      sessionId,
+      command: { type: 'create_session', cwd: `/work/${sessionId}`, agentDir: '/agent' }
+    })
+  }
+
+  it('opens one temporary host for new work while the CPU is busy', async () => {
+    const { supervisor, hosts } = harness(busyCpu)
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    // Both landed on the same temporary process: a loan against the CPU, not a
+    // host per thread, which is what would spend the RAM a single host saves.
+    expect(hosts).toHaveLength(2)
+    expect(supervisor.hostOf('atlas')).toBe(501)
+    expect(supervisor.hostOf('ledger')).toBe(501)
+    expect(supervisor.pid()).toBe(500)
+    supervisor.stop()
+  })
+
+  it('keeps new work on the primary while the device has room', async () => {
+    const { supervisor, hosts } = harness(roomy)
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    expect(hosts).toHaveLength(1)
+    expect(supervisor.hostOf('atlas')).toBe(500)
+    expect(supervisor.hostOf('ledger')).toBe(500)
+  })
+
+  it('rejoins both sessions into the primary once the device has room', async () => {
+    let reading = busyCpu
+    const { supervisor, hosts } = harness(() => reading())
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    expect(supervisor.hostOf('atlas')).toBe(501)
+
+    reading = roomy
+    await supervisor.rebalance()
+
+    expect(supervisor.hostOf('atlas')).toBe(500)
+    expect(supervisor.hostOf('ledger')).toBe(500)
+    // The temporary process stops once it holds nothing, and the transcripts it
+    // carried are what the primary resumed, so no history is rebuilt.
+    expect(hosts[1]?.stopped).toBe(true)
+    expect(supervisor.pids()).toEqual([500])
+    const resumed = hosts[0].lines
+      .map((line) => line.command)
+      .filter((command) => command.type === 'create_session')
+      .map((command) => command.sessionPath)
+    expect(resumed).toEqual(['/agent/sessions/atlas.jsonl', '/agent/sessions/ledger.jsonl'])
+  })
+
+  it('leaves a session with a turn in flight on its temporary host', async () => {
+    let reading = busyCpu
+    const { supervisor, hosts } = harness(() => reading())
+    await create(supervisor, 'atlas')
+    await create(supervisor, 'ledger')
+    // A move is a resume, so picking up a session mid-answer would lose the turn.
+    hosts[1]?.streaming.add('atlas')
+
+    reading = roomy
+    await supervisor.rebalance()
+
+    expect(supervisor.hostOf('atlas')).toBe(501)
+    expect(supervisor.hostOf('ledger')).toBe(500)
+    expect(hosts[1]?.stopped).toBe(false)
+  })
+
+  it('holds the temporary host while the CPU is still busy', async () => {
+    const { supervisor } = harness(busyCpu)
+    await create(supervisor, 'atlas')
+    await supervisor.rebalance()
+    expect(supervisor.hostOf('atlas')).toBe(501)
+    supervisor.stop()
+  })
+
+  it('drains the temporary host on its own once the reading clears', async () => {
+    vi.useFakeTimers()
+    try {
+      let reading = busyCpu
+      const { supervisor } = harness(() => reading(), 1000)
+      await create(supervisor, 'atlas')
+      expect(supervisor.hostOf('atlas')).toBe(501)
+
+      reading = roomy
+      await vi.advanceTimersByTimeAsync(1000)
+
+      expect(supervisor.hostOf('atlas')).toBe(500)
+      expect(supervisor.pids()).toEqual([500])
     } finally {
       vi.useRealTimers()
     }

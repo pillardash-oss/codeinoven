@@ -9,6 +9,7 @@
  */
 import { PiHostSupervisor } from './pi-host-supervisor'
 import { spawnPiHost } from './pi-host-launcher'
+import { resourcePressure } from '../system/resource-pressure'
 import { appServiceRegistry } from '../system/app-service-registry'
 import { Logger } from '../system/logger'
 
@@ -24,7 +25,14 @@ const hostServiceIds = new Map<number, string>()
 /** The supervisor every hosted session goes through. */
 export function piHostSupervisor(): PiHostSupervisor {
   if (supervisor !== null) return supervisor
-  const created = new PiHostSupervisor(spawnPiHost, { requestTimeoutMs: 10 * 60_000 })
+  const created = new PiHostSupervisor(spawnPiHost, {
+    requestTimeoutMs: 10 * 60_000,
+    // Placement is main's decision. A busy CPU opens a temporary host so new work
+    // does not queue behind it, and the rejoin check hands those sessions back to
+    // the primary once the same reading says there is room, which is what keeps
+    // the one-host arrangement that costs the least RAM.
+    readPressure: () => resourcePressure.read()
+  })
   // A host is a process, so its row is created when it starts and dropped when
   // it goes: a service announced without a pid had no process behind it, which
   // is exactly why the task manager could show the host but never its usage.

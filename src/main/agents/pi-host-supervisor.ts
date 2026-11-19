@@ -8,12 +8,19 @@
  * one when a host fills up or dies.
  *
  * The transport is injected so the supervisor can be driven by a real utility
- * process in the app and by a test double everywhere else. It owns three rules
+ * process in the app and by a test double everywhere else. It owns four rules
  * and nothing else: one session on one host at a time, a crash loses no session
- * (the transcript is on disk and the session resumes on the replacement), and a
- * host that has no sessions is stopped rather than left resident.
+ * (the transcript is on disk and the session resumes on the replacement), a host
+ * that has no sessions is stopped rather than left resident, and a busy CPU may
+ * open a temporary host whose sessions are drained back into the primary once
+ * the device has room again.
+ *
+ * One host stays the goal, because it is the cheapest arrangement in RAM. A
+ * second host is a loan taken against CPU pressure, never a second home.
  */
 import { SessionOwnership, resumeRequest, type TransferableSession } from './pi-session-transfer'
+import type { AdmissionDecision } from '../../lib/resource-admission'
+import { Logger } from '../system/logger'
 import type {
   HostCommand,
   HostCreateSessionCommand,
@@ -57,6 +64,21 @@ export interface SupervisorOptions {
    * carries, and past it the supervisor scales out instead of refusing work.
    */
   maxSessionsPerHost?: number
+  /**
+   * The device reading that decides where new work lands.
+   *
+   * Injected rather than imported so the supervisor has no dependency on the
+   * sampler and a test drives the placement arithmetic directly. Null means the
+   * device is never consulted, and then only the session cap opens a second host.
+   */
+  readPressure?: () => Promise<AdmissionDecision>
+  /**
+   * How often a temporary host is re-read for its chance to rejoin.
+   *
+   * The timer only exists while a temporary host does, and it goes as soon as
+   * the last one is drained, so an idle app holds no supervision loop.
+   */
+  rebalanceIntervalMs?: number
 }
 
 interface LiveHost {
@@ -83,6 +105,12 @@ export class PiHostSupervisor {
   readonly #spawn: HostSpawner
   readonly #timeoutMs: number
   readonly #maxSessionsPerHost: number
+  readonly #readPressure: (() => Promise<AdmissionDecision>) | null
+  readonly #rebalanceIntervalMs: number
+  /** The rejoin check, alive only while a temporary host is. */
+  #rebalanceTimer: NodeJS.Timeout | null = null
+  /** One rejoin at a time, so two ticks cannot move the same session twice. */
+  #rebalancing = false
   readonly #ownership = new SessionOwnership()
   /** Every running host. More than one when a device cap or a move needs it. */
   readonly #hosts = new Map<string, LiveHost>()
@@ -106,6 +134,8 @@ export class PiHostSupervisor {
     this.#spawn = spawn
     this.#timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     this.#maxSessionsPerHost = Math.max(1, options.maxSessionsPerHost ?? 8)
+    this.#readPressure = options.readPressure ?? null
+    this.#rebalanceIntervalMs = Math.max(250, options.rebalanceIntervalMs ?? 5_000)
   }
 
   /** The primary host's pid, or null when nothing is running. */
@@ -136,14 +166,17 @@ export class PiHostSupervisor {
   }
 
   /**
-   * Create a session, on the primary host while it has room and on a new host
-   * once it does not. A full host never refuses a session and never grows past
-   * the cap, which is what keeps one process from carrying the whole machine.
+   * Create a session, on the primary host while the device has room and on a
+   * temporary host of its own while the CPU cannot carry more work.
+   *
+   * One host keeps RAM low, so a second process is opened only for a real reason:
+   * the reading says the CPU is busy, or the primary is already at its session
+   * cap. A full host never refuses a session and never grows past the cap, which
+   * is what keeps one process from carrying the whole machine.
    */
   async createSession(request: HostCreateRequest): Promise<HostSessionState> {
     const primary = this.#ensurePrimary()
-    const host =
-      this.#sessionsOn(primary.id).length >= this.#maxSessionsPerHost ? this.#spawnHost() : primary
+    const host = await this.#hostForNewSession(primary)
     this.#ownership.claim(request.sessionId, host.id)
     try {
       const response = await this.#request(host, request.sessionId, request.command)
@@ -165,6 +198,9 @@ export class PiHostSupervisor {
           ...(parentSessionId === undefined ? {} : { parentSessionId })
         })
       )
+      // A session that landed off the primary is a loan against CPU pressure, so
+      // the rejoin check starts now and stops when the loan is repaid.
+      if (host.id !== primary.id) this.#armRebalance()
       return state
     } catch (error) {
       this.#ownership.release(request.sessionId, host.id)
@@ -194,7 +230,9 @@ export class PiHostSupervisor {
    *
    * The order matters: the source releases the session before the target claims
    * it, so two hosts never write one transcript. The target is always a new
-   * process, because a move that stays on the same process is not a move.
+   * process, because a move that stays on the same process is not a move. A
+   * temporary host drains the other way, into the primary, through the same
+   * release-then-claim pair (see {@link rebalance}).
    */
   async moveToNewHost(sessionId: string): Promise<HostSessionState> {
     const known = this.#sessions.get(sessionId)
@@ -203,37 +241,70 @@ export class PiHostSupervisor {
     // Read the live session before it is disposed: the model and transcript it
     // reports now are what the target has to resume, and the create-time record
     // may predate a model switch made by the driver.
-    const live = await this.#request(source, sessionId, { type: 'get_state' })
-    const record =
-      live.ok && live.data !== undefined
-        ? this.#transferable(live.data as HostSessionState, known)
-        : known
-    await this.#request(source, sessionId, { type: 'dispose_session' })
-    this.#ownership.release(sessionId, source.id)
-    this.#sessionHost.delete(sessionId)
-    if (this.#sessionsOn(source.id).length === 0) this.#stopHost(source.id)
-
+    const record = await this.#liveRecord(source, sessionId, known)
+    await this.#releaseFrom(source, sessionId)
     const target = this.#spawnHost()
-    this.#ownership.claim(sessionId, target.id)
     try {
-      const response = await this.#request(
-        target,
-        sessionId,
-        resumeRequest(record, `resume-${sessionId}`).command
-      )
-      const state = this.#stateOf(response)
-      this.#sessionHost.set(sessionId, target.id)
-      this.#sessions.set(sessionId, this.#transferable(state, record))
-      return state
+      return await this.#resumeOn(target, sessionId, record)
     } catch (error) {
-      try {
-        this.#ownership.release(sessionId, target.id)
-      } catch {
-        // The claim above is what created this ownership; a release that finds
-        // nobody only happens if it was already given back.
-      }
+      // This process exists only for the move, so a failed resume leaves nothing
+      // worth keeping. The primary is not this move's to stop, and rebalance
+      // never reaches here.
       this.#stopHost(target.id)
       throw error
+    }
+  }
+
+  /**
+   * Drain the sessions a temporary host borrowed back into the primary.
+   *
+   * A temporary host is a loan, not a home: once a fresh reading says the device
+   * has room, its sessions resume on the primary and the emptied process stops,
+   * which returns the app to the one-host arrangement that costs the least RAM.
+   *
+   * Three things hold a session where it is. The reading can refuse on its own —
+   * a busy CPU is what opened the temporary host, and a short memory is exactly
+   * when churn would hurt. A session with a turn or a checkpoint in flight stays,
+   * because a move is a resume and the answer would lose its process midway. And
+   * a session with no transcript cannot be resumed anywhere, so it is left alone.
+   * A move that fails leaves that one session on its temporary host and the rest
+   * still rejoin on the next tick.
+   */
+  async rebalance(): Promise<void> {
+    if (this.#rebalancing) return
+    const primary = this.#primary()
+    const donors = this.#secondaries()
+    if (primary === null || donors.length === 0) {
+      this.#disarmRebalance()
+      return
+    }
+    this.#rebalancing = true
+    try {
+      const decision = await this.#readDevice()
+      if (decision !== null && decision.action !== 'proceed') return
+      for (const donor of donors) {
+        for (const sessionId of this.#sessionsOn(donor.id)) {
+          if (this.#sessionsOn(primary.id).length >= this.#maxSessionsPerHost) return
+          if (!this.#hosts.has(donor.id)) break
+          const record = this.#sessions.get(sessionId)
+          if (record === undefined) continue
+          if (this.#requestInFlight(donor, sessionId)) continue
+          const state = await this.#idleState(donor, sessionId)
+          if (state === null) continue
+          try {
+            await this.#releaseFrom(donor, sessionId)
+            await this.#resumeOn(primary, sessionId, this.#transferable(state, record))
+          } catch (error) {
+            Logger.dev('Host rebalance: session stayed on its temporary host', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error)
+            })
+          }
+        }
+      }
+    } finally {
+      this.#rebalancing = false
+      if (this.#secondaries().length === 0) this.#disarmRebalance()
     }
   }
 
@@ -313,6 +384,7 @@ export class PiHostSupervisor {
 
   /** Stop every host. Sessions end; their transcripts stay on disk. */
   stop(): void {
+    this.#disarmRebalance()
     for (const hostId of [...this.#hosts.keys()]) this.#stopHost(hostId)
   }
 
@@ -337,6 +409,135 @@ export class PiHostSupervisor {
 
   #primary(): LiveHost | null {
     return this.#primaryId === null ? null : (this.#hosts.get(this.#primaryId) ?? null)
+  }
+
+  /** Every host that is not the primary, which is every temporary host. */
+  #secondaries(): LiveHost[] {
+    return [...this.#hosts.values()].filter((host) => host.id !== this.#primaryId)
+  }
+
+  /**
+   * Where a new session lands.
+   *
+   * A reading that says the CPU is busy places the work off the primary so it is
+   * not queued behind whatever is pinning the CPU, and the reading is not taken
+   * again until the session is already running. An unreadable device fails open:
+   * a sampler that cannot answer must never hold work back.
+   */
+  async #hostForNewSession(primary: LiveHost): Promise<LiveHost> {
+    const decision = await this.#readDevice()
+    if (decision?.action === 'offload') return this.#temporaryWithRoom()
+    if (this.#sessionsOn(primary.id).length < this.#maxSessionsPerHost) return primary
+    return this.#temporaryWithRoom()
+  }
+
+  /** A temporary host with room, started only when none has any. */
+  #temporaryWithRoom(): LiveHost {
+    for (const host of this.#secondaries()) {
+      if (this.#sessionsOn(host.id).length < this.#maxSessionsPerHost) return host
+    }
+    return this.#spawnHost()
+  }
+
+  /** The device reading, or null when no sampler is wired or it cannot answer. */
+  async #readDevice(): Promise<AdmissionDecision | null> {
+    if (this.#readPressure === null) return null
+    try {
+      return await this.#readPressure()
+    } catch (error) {
+      Logger.dev('Host placement: device reading failed, placing on the primary', error)
+      return null
+    }
+  }
+
+  /** Start the rejoin check, which exists only while a temporary host does. */
+  #armRebalance(): void {
+    if (this.#rebalanceTimer !== null) return
+    if (this.#secondaries().length === 0) return
+    const timer = setInterval(() => void this.rebalance(), this.#rebalanceIntervalMs)
+    timer.unref?.()
+    this.#rebalanceTimer = timer
+  }
+
+  #disarmRebalance(): void {
+    if (this.#rebalanceTimer === null) return
+    clearInterval(this.#rebalanceTimer)
+    this.#rebalanceTimer = null
+  }
+
+  /** The live record a target host needs, falling back to the create-time one. */
+  async #liveRecord(
+    source: LiveHost,
+    sessionId: string,
+    known: TransferableSession
+  ): Promise<TransferableSession> {
+    const live = await this.#request(source, sessionId, { type: 'get_state' })
+    return live.ok && live.data !== undefined
+      ? this.#transferable(live.data as HostSessionState, known)
+      : known
+  }
+
+  /**
+   * A session that can be picked up right now, or null when it cannot.
+   *
+   * A turn or a checkpoint in flight is what makes a move unsafe here, and a
+   * session with no transcript has nothing for another host to resume.
+   */
+  async #idleState(host: LiveHost, sessionId: string): Promise<HostSessionState | null> {
+    let response: HostResponseEnvelope
+    try {
+      response = await this.#request(host, sessionId, { type: 'get_state' })
+    } catch {
+      return null
+    }
+    if (!response.ok || response.data === undefined) return null
+    const state = response.data as HostSessionState
+    if (state.isStreaming || state.isCompacting) return null
+    if (typeof state.sessionFile !== 'string' || state.sessionFile.length === 0) return null
+    return state
+  }
+
+  #requestInFlight(host: LiveHost, sessionId: string): boolean {
+    for (const pending of host.waiting.values()) {
+      if (pending.sessionId === sessionId) return true
+    }
+    return false
+  }
+
+  /** Release a session from its host, stopping that host if this emptied it. */
+  async #releaseFrom(source: LiveHost, sessionId: string): Promise<void> {
+    await this.#request(source, sessionId, { type: 'dispose_session' })
+    this.#ownership.release(sessionId, source.id)
+    this.#sessionHost.delete(sessionId)
+    if (this.#sessionsOn(source.id).length === 0) this.#stopHost(source.id)
+  }
+
+  /** Claim a session on a target host and resume its transcript there. */
+  async #resumeOn(
+    target: LiveHost,
+    sessionId: string,
+    record: TransferableSession
+  ): Promise<HostSessionState> {
+    this.#ownership.claim(sessionId, target.id)
+    try {
+      const response = await this.#request(
+        target,
+        sessionId,
+        resumeRequest(record, `resume-${sessionId}`).command
+      )
+      const state = this.#stateOf(response)
+      this.#sessionHost.set(sessionId, target.id)
+      this.#sessions.set(sessionId, this.#transferable(state, record))
+      return state
+    } catch (error) {
+      try {
+        this.#ownership.release(sessionId, target.id)
+      } catch {
+        // The claim above is what created this ownership; a release that finds
+        // nobody only happens if it was already given back.
+      }
+      throw error
+    }
   }
 
   #hostForSession(sessionId: string): LiveHost | null {
@@ -388,6 +589,7 @@ export class PiHostSupervisor {
     for (const sessionId of this.#releaseSessions(host)) {
       for (const listener of this.#lostListeners) listener(sessionId)
     }
+    if (this.#secondaries().length === 0) this.#disarmRebalance()
     this.#hostsChanged()
   }
 
@@ -488,6 +690,7 @@ export class PiHostSupervisor {
     // that caller. Releasing here keeps ownership and the map from drifting.
     const released = this.#releaseSessions(host)
     host.transport.stop()
+    if (this.#secondaries().length === 0) this.#disarmRebalance()
     this.#hostsChanged()
     return released
   }
