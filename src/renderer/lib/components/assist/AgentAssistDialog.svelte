@@ -76,19 +76,7 @@
   const providers = $derived(
     providerCatalog.cached(request.projectId) ?? providerCatalog.allCached()
   )
-  const unavailableHarnessIds = $derived(
-    settings.ovenId && settings.ovenId !== LOCAL_OVEN_ID
-      ? ovens.unavailableHarnesses(settings.ovenId)
-      : null
-  )
-  const unavailableHarnessReason = $derived.by(() => {
-    const ovenId = settings.ovenId
-    if (!ovenId || ovenId === LOCAL_OVEN_ID) return null
-    const name = ovens.identity(ovenId)?.name
-    return name ? `Not installed on ${name}` : 'Not installed on this Oven'
-  })
-  const modelUnavailable = $derived(unavailableHarnessIds?.has(settings.harnessId) === true)
-  const canSubmit = $derived(Boolean(settings.modelId) && !modelUnavailable && !busy)
+  const canSubmit = $derived(Boolean(settings.modelId) && !busy)
   const lockedScope = $derived(
     request.scopeBucketId === null
       ? null
@@ -238,8 +226,6 @@
             providerId={settings.providerId}
             modelId={settings.modelId}
             accountId={settings.accountId}
-            {unavailableHarnessIds}
-            {unavailableHarnessReason}
             thinkingLevel={settings.thinkingLevel}
             runtimeSettings={settings}
             permissionLevel={settings.permissionLevel}
@@ -310,12 +296,6 @@
         </p>
       {/if}
     </section>
-
-    {#if modelUnavailable}
-      <p class="bg-danger/10 px-3 py-2 text-xs text-danger" role="alert">
-        {settings.harnessId} is not installed on this Oven. Choose a model that runs there.
-      </p>
-    {/if}
   </div>
 
   {#snippet footer()}

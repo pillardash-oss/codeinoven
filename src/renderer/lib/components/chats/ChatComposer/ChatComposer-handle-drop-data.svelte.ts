@@ -97,29 +97,15 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     return ovens.unavailableHarnesses(ovenId)
   })
 
-  unavailableHarnessReason = $derived.by((): string | null => {
-    const ovenId = this.targetOvenId
-    if (!ovenId || ovenId === 'local') return null
-    const identity = ovens.identity(ovenId)
-    return identity ? `Not installed on ${identity.name}` : 'Not installed on this Oven'
-  })
-
   /**
    * True when the selected model's harness is not installed on the target Oven.
    *
-   * The picker omits those harnesses, so the selection has to be treated as
-   * empty: the composer shows no model and holds the turn until the user picks
-   * one that exists on the Oven. Sending anyway is what dispatched a run the
-   * Oven could not start.
+   * It never blocks the turn: the app installs the harness on the Oven and sends
+   * the message, and a send that lands here parks on the composer's setup card
+   * so the user can confirm the work first. It only says which case the send is
+   * in.
    */
   ovenModelUnavailable = $derived(this.unavailableHarnessIds?.has(this.resolved.harnessId) === true)
-
-  /** Why the send is held, shown above the composer while it is. */
-  ovenModelNotice = $derived(
-    this.ovenModelUnavailable
-      ? `${this.unavailableHarnessReason ?? 'That model is not installed on this Oven'}. Choose a model that is available there to send this turn.`
-      : ''
-  )
 
   preview = createComposerAttachmentPreview()
 

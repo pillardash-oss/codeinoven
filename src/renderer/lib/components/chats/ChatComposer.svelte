@@ -17,6 +17,7 @@
   import ChatComposerAttachmentStrip from './ChatComposerAttachmentStrip.svelte'
   import ChatComposerDropZone from './ChatComposerDropZone.svelte'
   import ChatComposerImageGate from './ChatComposerImageGate.svelte'
+  import ChatComposerOvenSetupCard from './ChatComposerOvenSetupCard.svelte'
   import ExpertCard from './ExpertCard.svelte'
   import ChatComposerPermissionPicker from './ChatComposerPermissionPicker.svelte'
   import ChatComposerPlusMenu from './ChatComposerPlusMenu.svelte'
@@ -265,6 +266,28 @@
   onClearDropState={board.clearDropState.clearDropState}
 />
 
+<!-- A send the Oven is not ready for parks on this card. It sits on the composer's
+     top edge, where every card that stands for the composer's answer sits: the
+     draft is still in the composer below it, so cancelling costs nothing. -->
+{#if board.ovenSetup.open}
+  <ChatComposerOvenSetupCard
+    harnessName={board.ovenSetup.harnessName}
+    ovenName={board.ovenSetup.ovenName}
+    projectName={board.ovenSetup.projectName}
+    providers={board.props.providers}
+    projectId={board.props.projectId}
+    settings={board.handleDropData.resolved}
+    favoriteModels={board.props.favoriteModels}
+    recentModels={board.props.recentModels}
+    onRemoveRecent={board.props.onRemoveRecent}
+    onModelChange={board.handleDropData.applySettings}
+    onCancel={board.ovenSetup.cancel}
+    onProceed={board.ovenSetup.proceed}
+    onToggleFavorite={board.props.onToggleFavorite}
+    onReorderFavorite={board.props.onReorderFavorite}
+  />
+{/if}
+
 <!-- The composer owns a stacking context at z-40, one rung above everything the
      transcript paints (its board.props.working trace header pins at z-20) and above the
      scroll-to-latest button (z-30). Its own overlays all live inside this context
@@ -274,7 +297,8 @@
      below the app's menu and modal rungs (z-50/z-60) is what keeps those
      overlays from escaping over unrelated panels. -->
 <div
-  class="chat-composer relative z-40 border bg-surface {board.props.stackedAbove
+  class="chat-composer relative z-40 border bg-surface {board.props.stackedAbove ||
+  board.ovenSetup.open
     ? 'border-t border-dashed border-border-strong'
     : ''} {board.captureComposerRoot.expansion.maximized ? 'composer-maximized' : ''}"
   data-onboarding="composer"
@@ -314,12 +338,6 @@
       onNeverAsk={() => void board.captureComposerRoot.decideExperts('off', true)}
       onOpenSettings={() => workspaceState.navigateToSettings?.('design')}
     />
-  {/if}
-
-  {#if board.handleDropData.ovenModelNotice}
-    <CardNotice placement="composer" tone="warn">
-      {board.handleDropData.ovenModelNotice}
-    </CardNotice>
   {/if}
 
   {#if board.handleDropData.selectedHarnessLacksAttachments && (board.handleDropData.attachmentBlockedNotice || board.submit.attachments.length > 0)}
@@ -534,17 +552,8 @@
         providers={board.props.providers}
         projectId={board.props.projectId}
         harnessId={board.props.harnessId}
-        unavailableHarnessIds={board.handleDropData.unavailableHarnessIds}
-        unavailableHarnessReason={board.handleDropData.unavailableHarnessReason}
-        providerId={board.handleDropData.ovenModelUnavailable
-          ? ''
-          : board.handleDropData.resolved.providerId}
-        modelId={board.handleDropData.ovenModelUnavailable
-          ? ''
-          : board.handleDropData.resolved.modelId}
-        label={board.handleDropData.ovenModelUnavailable
-          ? 'Choose a model for this Oven'
-          : undefined}
+        providerId={board.handleDropData.resolved.providerId}
+        modelId={board.handleDropData.resolved.modelId}
         accountId={board.handleDropData.resolved.accountId}
         favoriteModels={board.props.favoriteModels}
         recentModels={board.props.recentModels}
@@ -636,7 +645,6 @@
               ? `Compact context, then send   ${board.state.sendModifierLabel}Enter`
               : `Send   ${board.state.sendModifierLabel}Enter`}
       disabled={board.props.disabled ||
-        (board.captureComposerRoot.canStop ? false : board.handleDropData.ovenModelUnavailable) ||
         (!board.props.working && !board.captureComposerRoot.hasSendableContent)}
       onclick={() => board.submit.submit()}
     >
