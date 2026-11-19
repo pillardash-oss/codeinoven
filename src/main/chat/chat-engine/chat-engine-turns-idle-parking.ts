@@ -15,6 +15,19 @@ import type { AgentEvent } from '../../../lib/types'
  */
 export const PARKED_IDLE_RECHECKS_MS = [2_000, 30_000, 120_000, 600_000, 1_800_000] as const
 
+/**
+ * Re-check interval once the schedule above is spent.
+ *
+ * A registrant that never releases its turn is a bug, not one of pi's own gaps
+ * (a compaction or a provider retry lasts seconds to minutes, never half an
+ * hour). Dropping the parked idle there left the turn unsettled with no run
+ * behind it: the thread read as "working" forever and every queued message
+ * waited behind a turn that would never end. So the schedule keeps a slow beat
+ * instead of ending, and the adjudication below settles the turn as soon as the
+ * harness stops reporting work.
+ */
+export const PARKED_IDLE_SLOW_RECHECK_MS = 300_000
+
 /** One idle signal, kept until the driver that parked it lets the turn go. */
 export interface ParkedIdle {
   /** The session whose turn this idle ends, named once so hooks need no cast. */
@@ -90,16 +103,20 @@ export class IdleSignalParking {
     for (const sessionId of [...this.parked.keys()]) this.cancel(sessionId)
   }
 
-  /** One bounded re-check, or give the turn back to the watchdog. */
+  /**
+   * Schedule the next re-check.
+   *
+   * The bounded schedule is a cadence, never a deadline: once it is spent the
+   * checks continue slowly. A registration that outlives it is a driver that
+   * lost its turn, and the only safe way to end one is to keep asking whether
+   * the harness still reports work and settle the moment it stops. Dropping the
+   * signal instead (the old behavior) stranded the turn permanently.
+   */
   private schedule(sessionId: string): void {
     const entry = this.parked.get(sessionId)
     if (!entry) return
-    const delay = PARKED_IDLE_RECHECKS_MS[entry.attempt]
-    if (delay === undefined) {
-      this.parked.delete(sessionId)
-      Logger.dev('Stopped re-checking a parked idle the driver never released', { sessionId })
-      return
-    }
+    const bounded = PARKED_IDLE_RECHECKS_MS[entry.attempt]
+    const delay = bounded ?? PARKED_IDLE_SLOW_RECHECK_MS
     entry.attempt += 1
     const timer = setTimeout(() => void this.recheck(sessionId), delay)
     // A parked idle must never keep the process alive on its own.
@@ -127,8 +144,28 @@ export class IdleSignalParking {
       driverId: entry.driverId,
       ...(entry.sourceDriver ? { sourceDriver: entry.sourceDriver } : {})
     }
+    const spent = entry.attempt > PARKED_IDLE_RECHECKS_MS.length
     if (this.hooks.driverHoldsTurn(idle)) {
-      this.schedule(sessionId)
+      // Past the bounded schedule the driver's registration has stopped being
+      // evidence: a live harness that is genuinely working keeps it, and one
+      // that is not is exactly what this settles. Ask the harness.
+      if (!spent) {
+        this.schedule(sessionId)
+        return
+      }
+      if (await this.hooks.harnessBusy(sessionId, idle)) {
+        if (this.parked.get(sessionId) !== entry) return
+        this.schedule(sessionId)
+        return
+      }
+      if (this.parked.get(sessionId) !== entry) return
+      this.parked.delete(sessionId)
+      Logger.info('Settling a turn whose driver never released it and whose harness is idle', {
+        sessionId,
+        driverId: entry.driverId,
+        rechecks: entry.attempt
+      })
+      this.hooks.settle(idle)
       return
     }
     if (await this.hooks.harnessBusy(sessionId, idle)) {

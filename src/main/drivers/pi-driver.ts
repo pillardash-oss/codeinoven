@@ -1324,9 +1324,20 @@ export class PiDriver extends PersistentCliDriver {
    */
   /** Whether the driver still tracks a live turn for this session. The engine's
    *  watchdog uses this to detect a turn the session settled without the
-   *  driver noticing (pi's auto-compaction / retry gap). */
+   *  driver noticing (pi's auto-compaction / retry gap).
+   *
+   * The registration alone is not the answer: it is cleared by pi's own settle
+   * hook, so a process that died (or a client that was disposed) before that
+   * hook ran would leave it set forever. That read as a turn still in flight to
+   * every caller, which is how a thread could sit "working" with nothing behind
+   * it and a queued message never deliver. With no live client there is no run
+   * that could resume, so the leftover registration is dropped here and the
+   * session answers idle. */
   hasActiveTurn(sessionId: string): boolean {
-    return this.turns.hasActiveTurn(sessionId)
+    if (!this.turns.hasActiveTurn(sessionId)) return false
+    if (this.rpcSessions.client(sessionId)) return true
+    this.turns.removeActiveTurn(sessionId)
+    return false
   }
 
   /**

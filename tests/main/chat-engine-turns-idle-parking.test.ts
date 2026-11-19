@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  PARKED_IDLE_SLOW_RECHECK_MS,
   IdleSignalParking,
   PARKED_IDLE_RECHECKS_MS,
   type ParkedIdle
@@ -125,16 +126,39 @@ describe('IdleSignalParking   an idle the driver still holds', () => {
     expect(harness.settle).not.toHaveBeenCalled()
   })
 
-  it('gives up on a registration that is never released', async () => {
+  it('settles a registration that is never released once the harness is idle', async () => {
+    // A registration nobody releases is a bug, not one of pi's own gaps. Giving
+    // up on it (the old behavior) stranded the turn: the thread read as working
+    // forever and every queued message waited behind a turn that never ended.
     const harness = makeHarness()
+    harness.held.value = true
+    harness.busy.value = false
     harness.parking.park(SESSION, IDLE)
 
     for (const delay of PARKED_IDLE_RECHECKS_MS) await vi.advanceTimersByTimeAsync(delay)
     await harness.flush()
-    await vi.advanceTimersByTimeAsync(60_000)
+    // Still held through the bounded schedule: the signal stays parked.
+    expect(harness.settle).not.toHaveBeenCalled()
+    expect(harness.parking.has(SESSION)).toBe(true)
+
+    // The slow beat past the schedule asks the harness, which reports idle.
+    await vi.advanceTimersByTimeAsync(PARKED_IDLE_SLOW_RECHECK_MS)
+    await harness.flush()
+    expect(harness.settle).toHaveBeenCalledTimes(1)
+    expect(harness.parking.has(SESSION)).toBe(false)
+  })
+
+  it('keeps a turn parked while the harness itself still reports work', async () => {
+    const harness = makeHarness()
+    harness.held.value = true
+    harness.busy.value = true
+    harness.parking.park(SESSION, IDLE)
+
+    for (const delay of PARKED_IDLE_RECHECKS_MS) await vi.advanceTimersByTimeAsync(delay)
+    await vi.advanceTimersByTimeAsync(PARKED_IDLE_SLOW_RECHECK_MS * 2)
     await harness.flush()
 
     expect(harness.settle).not.toHaveBeenCalled()
-    expect(harness.parking.has(SESSION)).toBe(false)
+    expect(harness.parking.has(SESSION)).toBe(true)
   })
 })

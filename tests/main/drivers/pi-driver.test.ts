@@ -671,6 +671,26 @@ describe('PiDriver', () => {
     ])
   })
 
+  it('answers idle when the session has no live client, even if the registration survived', async () => {
+    // The registration is cleared by pi's own settle hook, so a process that
+    // died before that hook ran left the session looking mid-turn forever: the
+    // engine parked every idle, and after its bounded re-checks it dropped the
+    // signal, stranding the turn with a queued message behind it.
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    expect(driver.hasActiveTurn(sessionId)).toBe(true)
+
+    // The process goes away without settling: dropping the mock's client list
+    // is exactly that state, and the registration is left behind by the missing
+    // settle hook. `abort` then finds no live client and clears it.
+    rpcMock.clients.splice(0)
+    await driver.abort(projectPath(), sessionId)
+    expect(driver.hasActiveTurn(sessionId)).toBe(false)
+    // And the stale registration is gone, so the next read agrees.
+    expect(driver.hasActiveTurn(sessionId)).toBe(false)
+  })
+
   it('ignores status records from foreign extension keys', async () => {
     const driver = new PiDriver(await storage())
     const sessionId = await driver.createSession(projectPath(), 'Pi')
