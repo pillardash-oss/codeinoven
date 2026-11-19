@@ -15,6 +15,7 @@
  *   {"id":"3","action":"cards","projectId":"…","threadId":"…"}
  *   {"id":"4","action":"answer","projectId":"…","threadId":"…","requestId":"…","answers":[["Approve"]]}
  *   {"id":"5","action":"move","projectId":"…","threadId":"…"}
+ *   {"id":"6","action":"hosts","projectId":"…","threadId":"…"}
  *
  * The answer is written beside the request as `response-<id>.json`, so a test
  * driver reads the verdict instead of guessing from logs.
@@ -34,6 +35,7 @@ import { readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getConfigRoot } from '../../lib/utils'
 import type { ChatEngine } from '../chat/chat-engine'
+import { piHostSupervisor } from '../agents/pi-host-runtime'
 import type { ThreadTransferService } from '../chat/thread-transfer-service'
 import { Logger } from '../system/logger'
 
@@ -65,6 +67,7 @@ type ProbeControlRequest =
     }
   | { id: string; action: 'move'; projectId: string; threadId: string; targetPid?: number }
   | { id: string; action: 'cards'; projectId: string; threadId: string; targetPid?: number }
+  | { id: string; action: 'hosts'; projectId: string; threadId: string; targetPid?: number }
 
 /** The answer a test driver reads back. */
 interface ProbeControlResponse {
@@ -165,7 +168,7 @@ function parseRequest(text: string): ProbeControlRequest | null {
   const addressed = targetPid === undefined ? {} : { targetPid }
   if (id === '' || projectId === '' || threadId === '') return null
   if (action === 'transfer') return { id, action, projectId, threadId, ...addressed }
-  if (action === 'move' || action === 'cards') {
+  if (action === 'move' || action === 'cards' || action === 'hosts') {
     return { id, action, projectId, threadId, ...addressed }
   }
   if (action === 'answer') {
@@ -251,6 +254,18 @@ async function run(
           }))
         }))
       response.result = [...permissions, ...questions]
+      response.ok = true
+    } else if (request.action === 'hosts') {
+      // Which process each hosted session is on, so a probe can see that a child
+      // session shares its parent's host rather than merely being hosted.
+      const supervisor = piHostSupervisor()
+      response.result = {
+        pids: supervisor.pids(),
+        sessions: supervisor.sessions().map((sessionId) => ({
+          sessionId,
+          hostPid: supervisor.hostOf(sessionId)
+        }))
+      }
       response.ok = true
     } else if (request.action === 'move') {
       response.result = await host.chatEngine.moveSessionToNewHost(
