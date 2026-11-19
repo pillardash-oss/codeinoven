@@ -51,7 +51,7 @@ import {
   PiCioSessionStorages,
   type PiCioFilesStorage
 } from './pi/pi-driver-cio-files'
-import { PiRpcSessions } from './pi/pi-driver-rpc'
+import { PiRpcSessions, type PiRpcLaunch } from './pi/pi-driver-rpc'
 import { PiHostClient } from './pi/pi-host-client'
 import { PiTurnLifecycle } from './pi/pi-driver-turns'
 
@@ -193,7 +193,19 @@ export class PiDriver extends PersistentCliDriver {
     storage: StorageEngine,
     private readonly baseUrlProviders?: BaseUrlProviderService,
     private readonly secretVault?: SecretsService,
-    private readonly accountEnvironment: NodeJS.ProcessEnv = {}
+    private readonly accountEnvironment: NodeJS.ProcessEnv = {},
+    /**
+     * Where this driver's sessions start their Pi peer.
+     *
+     * Absent, every session spawns `pi --mode rpc` here, exactly as it always
+     * has. A driver built to serve one machine (an Oven) carries the launcher
+     * that starts each session's peer there, so the same session bootstrap,
+     * turn handling, RPC protocol and teardown run against a remote peer. The
+     * launcher belongs to the driver, never to one turn: the driver this
+     * machine's local pi turns use must not carry one, or they would be started
+     * somewhere else too.
+     */
+    launch?: PiRpcLaunch
   ) {
     super(storage)
     this.agentDirectory = accountEnvironment['PI_CODING_AGENT_DIR']?.trim() || undefined
@@ -230,6 +242,7 @@ export class PiDriver extends PersistentCliDriver {
       id: this.id,
       agentDirectory: this.agentDirectory,
       accountEnvironment,
+      ...(launch ? { launch } : {}),
       requireSession: (projectPath, sessionId) => this.requireSession(projectPath, sessionId),
       isTitleSession: (sessionId) => this.isTitleSession(sessionId),
       utilityRuntime: (sessionId) => this.utilityRuntime(sessionId),
@@ -279,6 +292,7 @@ export class PiDriver extends PersistentCliDriver {
       baseUrlProviders,
       secretVault,
       storage,
+      storageFor: (sessionId) => this.sessionStorages.storageFor(sessionId),
       authConfig: this.authConfig,
       lastSessionProject: () => this.rpcSessions.lastSessionProject(),
       setProvidersExtensionEnv: (sessionId, env) =>

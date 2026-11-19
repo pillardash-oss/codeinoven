@@ -24,6 +24,7 @@ import { MuseDriver } from '../../drivers/muse-driver'
 import { AcpDriver, configuredAcpAgents } from '../../drivers/acp-driver'
 import { PiDriver } from '../../drivers/pi-driver'
 import { OvenChat } from '../../ovens/oven-chat'
+import { installOvenPiRuntime } from '../../ovens/oven-pi-runtime'
 import { CheckpointManager } from '../../storage/checkpoint-manager'
 import { listHarnesses } from '../../agents/harness-registry'
 import { broadcastThreadDeleted, broadcastThreadUpdate } from '../thread-events'
@@ -324,5 +325,21 @@ export function wireChatEngine(
       driver.setProcessObserver?.(engine.state.agentProcesses)
       driver.onEvent((event) => engine.handleDriverEvent(driver.id, event, driver))
     }
+    // A pi turn on an Oven runs on the same driver machinery a local pi turn
+    // uses, with its process started on the Oven instead of here. The launcher
+    // is chosen per driver, so this has to be a driver of its own: installing it
+    // on the map's pi driver would start this machine's local pi turns remotely
+    // too. One instance serves every Oven thread for the life of the app, so no
+    // turn ever pays for a driver, and its events reach the same handler.
+    const ovenPi = installOvenPiRuntime(engine.state.ovenChat.service)
+    const ovenPiDriver = new PiDriver(
+      storage,
+      engine.state.baseUrlProviders,
+      engine.state.secretVault,
+      {},
+      ovenPi.launch
+    )
+    ovenPiDriver.onEvent((event) => engine.handleDriverEvent(ovenPiDriver.id, event, ovenPiDriver))
+    ovenPi.attachDriver(ovenPiDriver)
   }
 }

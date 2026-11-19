@@ -17,6 +17,7 @@ import type { BaseUrlProviderService } from '../../providers/base-url-provider-s
 import { apiKeyEnvVarFor } from '../../providers/base-url-provider-service'
 import type { SecretsService } from '../../secrets/secrets-service'
 import type { StorageEngine } from '../../storage/storage-engine'
+import type { PiHandoffStorage } from './pi-driver-cio-files'
 import { Logger } from '../../system/logger'
 import {
   prepareHarnessInvocation,
@@ -74,6 +75,14 @@ export interface PiModelCatalogHost {
   readonly baseUrlProviders: BaseUrlProviderService | undefined
   readonly secretVault: SecretsService | undefined
   readonly storage: StorageEngine
+  /**
+   * The file surface for one session's provider module.
+   *
+   * A session routed to an Oven writes its providers extension there, so pi on
+   * that machine loads the same custom providers this app offers; every other
+   * session keeps using this machine's engine.
+   */
+  storageFor?(sessionId: string): PiHandoffStorage
   readonly authConfig: PiAuthConfigService
   /** Last project a live session belonged to, for a caller that omits one. */
   lastSessionProject(): string | undefined
@@ -429,12 +438,10 @@ export class PiModelCatalog {
       const resolved = await this.resolveOverlayProviders()
       if (!resolved) return null
       const extensionRelative = join('runtime', 'cio-providers', sessionId, 'providers.ts')
-      await this.host.storage.writeRaw(
-        extensionRelative,
-        piCustomProvidersExtension(resolved.providers)
-      )
+      const storage = this.host.storageFor?.(sessionId) ?? this.host.storage
+      await storage.writeRaw(extensionRelative, piCustomProvidersExtension(resolved.providers))
       this.host.setProvidersExtensionEnv(sessionId, resolved.env)
-      return this.host.storage.resolve(extensionRelative)
+      return storage.resolve(extensionRelative)
     } catch (error) {
       Logger.dev('Pi providers extension materialization failed:', error)
       return null

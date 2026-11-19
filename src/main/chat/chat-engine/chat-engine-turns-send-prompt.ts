@@ -32,7 +32,8 @@ import type {
   PromptReference,
   SpecActionIntent,
   UserMessagePresentation,
-  ThreadSettings
+  ThreadSettings,
+  Thread
 } from '../../../lib/types'
 import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID, isAssistantSetupThread } from '../../../lib/types'
 import {
@@ -70,6 +71,7 @@ import type {
   QueuedCoordinatorHandoff
 } from './chat-engine-types'
 import { rawErrorDetail, rawErrorMessage } from './chat-engine-errors'
+import { ovenPiRuntime, ovenPiTurnApplies } from '../../ovens/oven-pi-runtime'
 import { withoutTransportParts } from './chat-engine-message-merge'
 import { formatProjectReferenceContext } from './chat-engine-message-text'
 import { firstTurnForkNotice } from './chat-engine-fork-parent'
@@ -123,6 +125,54 @@ export class ChatEngineTurnsSendPrompt {
     this.runScopeGate = new RunScopeGate(host.scopeRoots)
   }
 
+  /**
+   * Prepare one pi turn on the Oven its thread is pinned to, and route its
+   * session there.
+   *
+   * Returns the checkout the turn runs in, or null when the turn is not a pi
+   * turn on an Oven and the one-shot Oven path owns it instead. Everything the
+   * Oven has to put in place first (harness, git, clone, account) is the same
+   * preparation the one-shot path performs, so the two cannot drift; the session
+   * is created before that work starts so the steps it publishes reach the
+   * thread's working trace.
+   */
+  private async bindOvenPiTurn(thread: Thread, settings: ThreadSettings): Promise<string | null> {
+    const runtime = ovenPiRuntime()
+    if (!runtime || !ovenPiTurnApplies(settings, true)) return null
+    const ovenId = settings.ovenId
+    if (!ovenId) return null
+    const account = await this.host.state.accountRegistry.resolveForProvider(
+      settings.harnessId,
+      settings.providerId,
+      settings.accountId
+    )
+    const sessionId = await this.host.ensureSession(thread.projectId, thread.id, 'pi')
+    const startedAt = Date.now()
+    this.host.registerSession(
+      sessionId,
+      thread.projectId,
+      thread.id,
+      thread.settings?.ovenPath ?? '',
+      settings.permissionLevel,
+      'pi'
+    )
+    const prepared = await this.host.state.ovenChat.prepareForTurn(thread, settings, {
+      sessionId,
+      startedAt,
+      account
+    })
+    // The route is what makes this session's `sendPrompt` start its process on
+    // the Oven, and the storage is what makes every handoff file this turn
+    // publishes land beside that process instead of on this machine.
+    await runtime.bind({
+      sessionId,
+      ovenId,
+      prepared,
+      config: () => this.host.storage.getConfig()
+    })
+    return prepared.root
+  }
+
   /** Send a prompt to the agent (non-blocking; the reply streams over events). */
   async sendPrompt(
     projectId: string,
@@ -172,7 +222,15 @@ export class ChatEngineTurnsSendPrompt {
     settings = validateThreadSettings(settings)
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
     const ovenThread = await this.host.threadManager.getThread(projectId, threadId)
-    if (ovenThread && this.host.state.ovenChat.remote(ovenThread, settings)) {
+    const ovenTurn = ovenThread !== null && this.host.state.ovenChat.remote(ovenThread, settings)
+    // A pi turn on an Oven speaks pi's RPC protocol to a process started on that
+    // machine, so it runs through the pi driver path below with the Oven's
+    // checkout as its project path. Binding is the whole Oven difference: every
+    // other harness, and every local thread, takes exactly the path it always
+    // has (`null` here means the one-shot Oven path below owns the turn).
+    const ovenPiRoot =
+      ovenTurn && ovenThread ? await this.bindOvenPiTurn(ovenThread, settings) : null
+    if (ovenTurn && ovenThread && ovenPiRoot === null) {
       await this.host.threadManager.updateSettings(projectId, threadId, settings)
       const sessionId = await this.host.ensureSession(projectId, threadId)
       this.host.registerSession(
@@ -539,12 +597,14 @@ export class ChatEngineTurnsSendPrompt {
       settings.accountId
     )
     settings = { ...settings, accountId: selectedAccount.id }
-    const { driver, projectPath } = await this.host.resolve(
-      projectId,
-      driverId,
-      threadId,
-      selectedAccount.id
-    )
+    const resolved = await this.host.resolve(projectId, driverId, threadId, selectedAccount.id)
+    // An Oven pi turn runs on the pi driver reserved for Oven sessions (the one
+    // whose launcher starts a bound session's process there), and works in the
+    // Oven's checkout: the handoff files, the workspace guard and the session all
+    // name the machine it actually runs on.
+    const driver =
+      ovenPiRoot === null ? resolved.driver : (ovenPiRuntime()?.driver ?? resolved.driver)
+    const projectPath = ovenPiRoot ?? resolved.projectPath
     // Branch metadata must use the same resolved cwd as the harness. Relative
     // thread directories are anchored to the project root by resolveThreadPath.
     // It is a label on the thread row, not an input to the turn, so the git read
@@ -934,8 +994,12 @@ export class ChatEngineTurnsSendPrompt {
     // completed. Attribute the new checkpoint to that user message   label and
     // source id inherited from the thread's latest checkpoint   so the file
     // changes card reports the user's prompt, never the hidden internal text.
+    // An Oven turn's changes are on the other machine, so this device has no
+    // working tree to snapshot for it: the checkout and every file in it are
+    // reachable only through the Oven service, and a rollback card built from a
+    // local read of that path would describe a directory that does not exist.
     const checkpointPromise: Promise<string | undefined> =
-      planningSpecTurn || (isChatThread && !chatFileSystemEnabled)
+      ovenPiRoot !== null || planningSpecTurn || (isChatThread && !chatFileSystemEnabled)
         ? Promise.resolve(undefined)
         : this.host.checkpointManager
             .getLatestCompleted(projectId, threadId)

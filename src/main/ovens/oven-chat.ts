@@ -318,41 +318,17 @@ export class OvenChat {
       )
       await this.threads.setStatus(thread.projectId, thread.id, 'executing')
       // Nothing below this line is supposed to be the first time the Oven hears
-      // that it needs a harness, git, or the checkout: those are prepared here,
-      // and the note this turn shows is the one that preparation publishes. An
-      // Oven that already has everything says nothing at all.
-      await this.prepareOven({
+      // that it needs a harness, git, or the checkout: those are prepared by
+      // `prepareForTurn`, and the note this turn shows is the one that
+      // preparation publishes. An Oven that already has everything says nothing
+      // at all.
+      const turn = await this.prepareForTurn(thread, settings, {
         sessionId: turnSessionId,
         startedAt,
-        thread,
-        settings,
-        ovenId,
+        account,
         ovenLabel
       })
-      const prepared = await resolveOvenThreadRoot(
-        this.service,
-        { ...thread, settings },
-        this.projects,
-        (step) => {
-          // Only a clone is work a reader can act on; a checkout that merely has
-          // to be created (or opened) is not worth a line on every send.
-          if (step !== 'clone') return
-          this.publishNote(turnSessionId, startedAt, `Cloning the repository onto ${ovenLabel}…`)
-        }
-      )
-      const { root, dataRoot, sessionsRoot } = prepared
-      if (prepared.branch && prepared.branch !== thread.branch)
-        await this.threads.setBranch(thread.projectId, thread.id, prepared.branch)
-      await this.threads.bindOvenCheckout(thread.projectId, thread.id, {
-        ...settings,
-        ovenPath: root
-      })
-      if (settings.harnessId === 'pi') {
-        await this.service.workspace(ovenId, { operation: 'ensure', root: sessionsRoot })
-        await this.adoptLegacyPiSessions(ovenId, dataRoot, root)
-      }
-      const environment = await syncOvenAccount(this.service, this.accounts, ovenId, account)
-      if (settings.harnessId === 'cline') environment.CLINE_SESSION_BACKEND_MODE = 'local'
+      const { root, sessionsRoot, environment } = turn
       const previous = await this.storage.read<Binding>(this.path(thread))
       const messages = await this.threads.loadMessages(thread.projectId, thread.id)
       const userId = userMessageId || randomUUID()
@@ -632,6 +608,81 @@ export class OvenChat {
   }
 
   /**
+   * Everything the Oven must have in place before a turn reaches it.
+   *
+   * The one-shot send path and the pi RPC router both call this, so a thread's
+   * checkout, the harness install it needs, the branch it is on and the account
+   * environment it runs with cannot drift between the two ways a remote turn
+   * reaches an Oven. `progress` names the session and the moment the turn
+   * started, which is what lets the preparation publish its steps to the
+   * working trace; a caller with no session yet gets the same work and no notes.
+   */
+  async prepareForTurn(
+    thread: Thread,
+    settings: ThreadSettings,
+    progress: {
+      sessionId?: string
+      startedAt?: number
+      account?: HarnessAccount
+      ovenLabel?: string
+    } = {}
+  ): Promise<{
+    root: string
+    dataRoot: string
+    sessionsRoot: string
+    environment: Record<string, string>
+    account: HarnessAccount
+  }> {
+    const ovenId = settings.ovenId
+    if (!ovenId) throw new Error('This thread is not pinned to an Oven.')
+    const ovenLabel = progress.ovenLabel ?? (await this.nameFor(ovenId))
+    const account =
+      progress.account ??
+      (await this.accounts.resolveForProvider(
+        settings.harnessId,
+        settings.providerId,
+        settings.accountId
+      ))
+    await this.prepareOven({
+      sessionId: progress.sessionId,
+      startedAt: progress.startedAt ?? Date.now(),
+      thread,
+      settings,
+      ovenId,
+      ovenLabel
+    })
+    const prepared = await resolveOvenThreadRoot(
+      this.service,
+      { ...thread, settings },
+      this.projects,
+      (step) => {
+        // Only a clone is work a reader can act on; a checkout that merely has
+        // to be created (or opened) is not worth a line on every send.
+        if (step !== 'clone' || progress.sessionId === undefined) return
+        this.publishNote(
+          progress.sessionId,
+          progress.startedAt ?? Date.now(),
+          `Cloning the repository onto ${ovenLabel}…`
+        )
+      }
+    )
+    const { root, dataRoot, sessionsRoot } = prepared
+    if (prepared.branch && prepared.branch !== thread.branch)
+      await this.threads.setBranch(thread.projectId, thread.id, prepared.branch)
+    await this.threads.bindOvenCheckout(thread.projectId, thread.id, {
+      ...settings,
+      ovenPath: root
+    })
+    if (settings.harnessId === 'pi') {
+      await this.service.workspace(ovenId, { operation: 'ensure', root: sessionsRoot })
+      await this.adoptLegacyPiSessions(ovenId, dataRoot, root)
+    }
+    const environment = await syncOvenAccount(this.service, this.accounts, ovenId, account)
+    if (settings.harnessId === 'cline') environment.CLINE_SESSION_BACKEND_MODE = 'local'
+    return { root, dataRoot, sessionsRoot, environment, account }
+  }
+
+  /**
    * Put whatever the Oven lacks in place before the turn reaches it.
    *
    * A remote turn used to fail outright when the chosen harness was not on the
@@ -646,7 +697,7 @@ export class OvenChat {
    * settles, so the reader can see which one is still working.
    */
   private async prepareOven(input: {
-    sessionId: string
+    sessionId?: string
     startedAt: number
     thread: Thread
     settings: ThreadSettings
@@ -692,6 +743,9 @@ export class OvenChat {
     if (steps.length === 0) return
 
     const publish = (next: OvenPrepareStep[]): void => {
+      // A caller with no session yet (a pi turn that binds its session only
+      // after preparation) still gets the work done, with nowhere to draw it.
+      if (sessionId === undefined) return
       this.publish({
         type: 'session.status',
         sessionId,
