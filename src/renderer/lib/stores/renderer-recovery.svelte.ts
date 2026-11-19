@@ -13,7 +13,7 @@ import {
   flushAllDraftCommits,
   hasPendingDraftCommit,
   publishDraftActivity,
-  publishRemoteDraftCleared,
+  publishSharedDraftApplied,
   scheduleDraftCommit
 } from './draft-activity.svelte'
 import {
@@ -42,6 +42,7 @@ import { uniqueThreadContextReferences, type ThreadContextReference } from '$lib
 
 export type {
   ComposerDraftEntry,
+  ComposerDraftOrigin,
   MainView,
   QueuedMessageEntry,
   QueuedMessageEntryInput,
@@ -60,7 +61,7 @@ export {
 export {
   publishDraftActivity,
   flushAllDraftCommits,
-  onRemoteDraftCleared
+  onSharedDraftApplied
 } from './draft-activity.svelte'
 
 /** How long to wait after the last mutation before writing recovery state to
@@ -68,6 +69,24 @@ export {
  *  collapse into a single write, short enough that state is durable on a quick
  *  navigation/quit (the flush-on-hide path writes immediately regardless). */
 const PERSIST_DEBOUNCE_MS = 400
+
+/**
+ * The drafts worth restoring from local storage.
+ *
+ * Only the words this window authored belong in a snapshot: a mirrored draft is
+ * a copy of the thread's shared slot, which the database already holds and every
+ * sibling can read, so saving it here would give a copy of an already-sent draft
+ * a chance to be restored and shown again after the message was sent elsewhere.
+ */
+function authoredDraftsOnly(
+  drafts: Record<string, ComposerDraftEntry>
+): Record<string, ComposerDraftEntry> {
+  const authored: Record<string, ComposerDraftEntry> = {}
+  for (const [key, entry] of Object.entries(drafts)) {
+    if (entry.origin === 'local') authored[key] = entry
+  }
+  return authored
+}
 
 /**
  * Restart-safe renderer navigation and composer state.
@@ -135,6 +154,7 @@ export class RendererRecoveryStore {
   private entryFor(projectId: string, threadId: string): ComposerDraftEntry {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId))
       return {
+        origin: 'local',
         text: '',
         attachments: [],
         projectReferences: [],
@@ -145,6 +165,7 @@ export class RendererRecoveryStore {
       }
     return (
       this.composerDrafts[recoveryDraftKey(projectId, threadId)] ?? {
+        origin: 'local',
         text: '',
         attachments: [],
         projectReferences: [],
@@ -164,7 +185,11 @@ export class RendererRecoveryStore {
       lastViewBeforeSettings: this.lastViewBeforeSettings,
       selectedProjectId: this.selectedProjectId,
       selectedThread: this.selectedThread ? { ...this.selectedThread } : null,
-      composerDrafts: { ...this.composerDrafts },
+      // Only the words this window authored are worth restoring. A mirrored
+      // draft is a copy of the shared slot, which outlives the window in the
+      // database, so persisting it would only give a stale copy a chance to be
+      // revived after the message it holds was sent somewhere else.
+      composerDrafts: authoredDraftsOnly(this.composerDrafts),
       queuedMessages: { ...this.queuedMessages }, // shallow-copied; arrays shared read-only
       collapsedFolders: [...this.collapsedFolders],
       favoriteModels: [...this.favoriteModels],
@@ -249,16 +274,20 @@ export class RendererRecoveryStore {
   }
 
   /**
-   * Seed a locally-missing composer draft from the DB commit (restart or a
-   * second instance). A thread that already holds any local draft content
-   * wins: local edits are always newer than the 10s-delayed DB snapshot.
+   * Seed this window's draft mirror from the DB commit (restart or a second
+   * instance).
+   *
+   * The database holds the one shared slot, so an import is the slot talking,
+   * never this window's own typing: the entry is marked `mirrored` and replaced
+   * whenever the slot moves. Words typed here (`local`) always win, because they
+   * are newer than the 10s-delayed DB snapshot; a mirror is not knowledge this
+   * window owns, so nothing typed anywhere is lost by keeping the slot current.
    */
   importDbDraft(projectId: string, threadId: string, rawDraftJson: string | null): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId) || !rawDraftJson) {
       return
     }
     const key = recoveryDraftKey(projectId, threadId)
-    if (this.composerDrafts[key]) return
     let parsed: unknown
     try {
       parsed = JSON.parse(rawDraftJson)
@@ -267,10 +296,23 @@ export class RendererRecoveryStore {
     }
     const entry = parseComposerDraftEntry(parsed)
     if (!entry) return
-    this.composerDrafts = { ...this.composerDrafts, [key]: entry }
-    setDraftLabelCookie(threadId, entry.text)
+    const mirrored: ComposerDraftEntry = { ...entry, origin: 'mirrored' }
+    const existing = this.composerDrafts[key]
+    // Typed here and not yet committed: the slot is behind these words, not
+    // ahead of them, and its own debounced commit re-asserts them.
+    if (existing?.origin === 'local') return
+    const content = JSON.stringify(mirrored)
+    if (existing && JSON.stringify({ ...existing, origin: 'mirrored' }) === content) {
+      // The mirror already says exactly this: nothing to repaint.
+      return
+    }
+    this.composerDrafts = { ...this.composerDrafts, [key]: mirrored }
+    setDraftLabelCookie(threadId, mirrored.text)
     this.persist()
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+    // A composer that is already mounted holds the words it was built from, and
+    // only it can show a draft that arrived after it mounted.
+    publishSharedDraftApplied(projectId, threadId)
   }
 
   /**
@@ -282,10 +324,6 @@ export class RendererRecoveryStore {
    * clear, sending a message in one window left every sibling showing the words
    * it had just sent as a draft, indefinitely, because nothing else ever revisits
    * a draft that is already on screen.
-   *
-   * A commit still waiting out this window's debounce is the single exception:
-   * those words were typed after the snapshot being applied, so they win and
-   * their own commit re-asserts them.
    */
   applyCommittedDraft(projectId: string, threadId: string, rawDraftJson: string | null): void {
     if (rawDraftJson !== null) {
@@ -299,6 +337,14 @@ export class RendererRecoveryStore {
    * Drop a thread's local draft because the database's slot no longer holds
    * one.
    *
+   * The slot being empty means the words were sent or thrown away somewhere, so
+   * this window must not keep showing them and must never commit them back. A
+   * mirror is dropped outright: its words were never this window's to keep (a
+   * mirror cannot even owe the slot a commit, because only words typed here are
+   * committed). A draft typed here is dropped too, unless it is still waiting out
+   * its own commit: those words were typed after the slot's last write, so the
+   * slot never carried them and nothing has sent them yet.
+   *
    * Deliberately not routed through `setDraft`/`clearDraft`: those commit, and
    * a commit here would bounce this clear straight back at the window that made
    * it. The label cookie is dropped with the draft because the sidebar reads it
@@ -307,20 +353,51 @@ export class RendererRecoveryStore {
    */
   private dropCommittedAwayDraft(projectId: string, threadId: string): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
-    if (hasPendingDraftCommit(projectId, threadId)) return
     const key = recoveryDraftKey(projectId, threadId)
-    if (!this.composerDrafts[key]) {
+    const local = this.composerDrafts[key]
+    if (!local) {
       // The store holds nothing, but a cookie written before a restart might:
       // a clear must not leave the old label standing behind it.
       clearDraftLabelCookie(threadId)
       return
     }
+    if (local.origin === 'local' && hasPendingDraftCommit(projectId, threadId)) return
     const next = { ...this.composerDrafts }
     delete next[key]
     this.composerDrafts = next
     clearDraftLabelCookie(threadId)
     this.persist()
-    publishRemoteDraftCleared(projectId, threadId)
+    publishSharedDraftApplied(projectId, threadId)
+  }
+
+  /**
+   * Whether a persisted draft still needs the shared slot to vouch for it.
+   *
+   * A snapshot written before drafts recorded where they came from cannot say
+   * whether its words were typed in that window or copied from another
+   * instance. Until the slot answers, such a draft must not be committed back,
+   * so the workspace asks once at startup instead of trusting it.
+   */
+  hasUnvouchedDraft(projectId: string, threadId: string): boolean {
+    return this.composerDrafts[recoveryDraftKey(projectId, threadId)]?.origin === 'legacy'
+  }
+
+  /**
+   * Settle one unvouched draft against the slot the database actually holds.
+   *
+   * The slot is the truth: a draft it still carries becomes this window's
+   * mirror of it, and a slot that is empty means the words were already sent, so
+   * the recovered copy is dropped rather than revived in a composer nothing will
+   * ever send on its own.
+   */
+  reconcileUnvouchedDraft(projectId: string, threadId: string, rawDraftJson: string | null): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    if (!this.hasUnvouchedDraft(projectId, threadId)) return
+    if (rawDraftJson !== null) {
+      this.importDbDraft(projectId, threadId, rawDraftJson)
+      return
+    }
+    this.dropCommittedAwayDraft(projectId, threadId)
   }
 
   /**
@@ -341,23 +418,24 @@ export class RendererRecoveryStore {
   forgetDraftRefs(refs: ReadonlyArray<{ projectId: string; threadId: string }>): void {
     if (refs.length === 0) return
     const next = { ...this.composerDrafts }
-    const forgotten: string[] = []
+    const forgotten: Array<{ projectId: string; threadId: string }> = []
     for (const ref of refs) {
       const key = recoveryDraftKey(ref.projectId, ref.threadId)
       if (!(key in next)) continue
       delete next[key]
-      forgotten.push(ref.threadId)
+      forgotten.push(ref)
     }
     if (forgotten.length === 0) return
     this.composerDrafts = next
-    for (const threadId of forgotten) clearDraftLabelCookie(threadId)
+    for (const ref of forgotten) clearDraftLabelCookie(ref.threadId)
     this.persist()
   }
 
   /** Every thread whose composer holds unsent content, as (projectId, threadId)
-   *  refs. Drafts persist only in renderer storage, never the DB, so main's
-   *  SQL hydration cannot include them — the workspace uses this list to fetch
-   *  draft threads that fall outside the bounded first-paint slice. */
+   *  refs. A draft this window authored exists only in renderer storage until its
+   *  debounced DB commit lands, so main's SQL hydration cannot include it — the
+   *  workspace uses this list to fetch draft threads that fall outside the
+   *  bounded first-paint slice. */
   listDraftThreadRefs(): Array<{ projectId: string; threadId: string }> {
     const refs: Array<{ projectId: string; threadId: string }> = []
     for (const key of Object.keys(this.composerDrafts)) {
@@ -461,6 +539,7 @@ export class RendererRecoveryStore {
 
     const key = recoveryDraftKey(projectId, threadId)
     const current = this.composerDrafts[key] ?? {
+      origin: 'local' as const,
       text: '',
       attachments: [],
       projectReferences: [],
@@ -500,6 +579,10 @@ export class RendererRecoveryStore {
         if (oldestKey) delete next[oldestKey]
       }
       next[key] = {
+        // Whatever changed, it changed here: these words are this window's now,
+        // so they may be committed to the shared slot and may survive a restart
+        // even when the entry arrived as a mirror of another instance's draft.
+        origin: 'local',
         text: draft,
         attachments: nextAttachments,
         projectReferences: nextProjectReferences,

@@ -23,7 +23,7 @@ import {
 import { orchestrationCoordinatorState } from '$lib/stores/orchestration-coordinator.svelte'
 import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
 import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
-import { publishDraftActivity, onRemoteDraftCleared } from '$lib/stores/renderer-recovery.svelte'
+import { publishDraftActivity, onSharedDraftApplied } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
@@ -1177,16 +1177,17 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     })
 
     /**
-     * A draft cleared in another window or instance leaves this conversation too.
+     * The shared draft slot was applied to this window's mirror, by a clear
+     * somewhere else or by a draft this window did not type.
      *
-     * The draft store drops its mirror of the commit, but the mounted composer
-     * holds those words in its own editor and would keep them on screen, so the
-     * composer is remounted from the (now empty) restored draft and the selection
-     * pins the sent message carried are dropped with it. This is the same path a
-     * send takes, just triggered by whoever else sent it.
+     * The draft store holds the applied state, but the mounted composer holds
+     * its words in its own editor, so it is rebuilt from the restored draft: an
+     * empty slot empties the field the words were sent from, and a slot that
+     * moved fills a field that never saw the new draft. The selection pins the
+     * sent message carried are dropped with them.
      */
     $effect(() => {
-      return onRemoteDraftCleared((projectId, threadId) => {
+      return onSharedDraftApplied((projectId, threadId) => {
         if (
           this.root.handleAgentEvent.thread.projectId !== projectId ||
           this.root.handleAgentEvent.thread.id !== threadId

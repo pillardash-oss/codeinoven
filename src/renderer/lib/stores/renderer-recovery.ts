@@ -77,8 +77,25 @@ export interface StartAfterThreadReference {
   title: string
 }
 
+/**
+ * Where a saved composer draft came from.
+ *
+ * A draft is one shared slot on the thread row, and this window keeps a mirror
+ * of it so the composer can paint instantly. Only words typed in this window
+ * (`local`) are knowledge this window owns; a mirror is a copy of the shared
+ * slot and must never be written back, or an instance that merely watched a
+ * message being typed would re-create the draft after the message was sent.
+ *
+ * `legacy` is a draft restored from a snapshot written before this distinction
+ * existed, so its provenance is unknown until it is checked against the slot.
+ */
+export type ComposerDraftOrigin = 'local' | 'mirrored' | 'legacy'
+
 /** A single saved composer draft — text plus any file attachments. */
 export interface ComposerDraftEntry {
+  /** Who owns these words: only a `local` draft may be committed to the shared
+   *  slot, and only a `local` draft survives a restart in local storage. */
+  origin: ComposerDraftOrigin
   text: string
   attachments: PromptAttachment[]
   projectReferences: PromptProjectReference[]
@@ -565,6 +582,11 @@ export function parseComposerDraftEntry(value: unknown): ComposerDraftEntry | nu
   const startAfterThreads = parseStartAfterThreads(value.startAfterThreads)
   const threadReferences = parseThreadContextReferences(value.threadReferences)
   return {
+    // A snapshot written before drafts carried an origin cannot say whether its
+    // words were typed in that window, so it stays unvouched until the shared
+    // slot confirms it. Marking it `local` would let a stale mirror commit itself
+    // back, and marking it `mirrored` would throw away real typing.
+    origin: value.origin === 'mirrored' || value.origin === 'local' ? value.origin : 'legacy',
     text,
     attachments,
     projectReferences,

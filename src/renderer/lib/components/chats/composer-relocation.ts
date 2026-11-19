@@ -250,6 +250,9 @@ function carryInto(
   input: ComposerRelocationInput
 ): { entry: ComposerDraftEntry } {
   const carried: ComposerDraftEntry = {
+    // Carrying words between composers is the user's own action here, whatever
+    // the source draft was, so the destination holds them as its own.
+    origin: 'local',
     text: entry?.text ?? '',
     attachments: entry?.attachments ?? [],
     projectReferences: entry?.projectReferences ?? [],
@@ -309,6 +312,7 @@ function dropFromSource(
 function sourceDraft(input: ComposerRelocationInput): ComposerDraftEntry {
   const { projectId, sourceThreadId } = input
   return {
+    origin: 'local',
     text: rendererRecovery.draftFor(projectId, sourceThreadId),
     attachments: rendererRecovery.attachmentsFor(projectId, sourceThreadId),
     projectReferences: rendererRecovery.projectReferencesFor(projectId, sourceThreadId),
