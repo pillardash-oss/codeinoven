@@ -1,5 +1,6 @@
 import type { PromptAttachment } from '../../../lib/types'
 import { resolveFastModelId } from '../../../lib/fast-inference'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import type { SendPromptOptions } from '../driver.interface'
 import { materializeAttachment } from '../attachment-data-url'
 import {
@@ -122,8 +123,9 @@ const TOOL_ACTION_ALIASES: Record<string, string> = {
  * V2 evaluates the ruleset in order with the LAST matching rule winning, so the
  * restrictions come first and the grants after them.
  *
- *  - `full_access` → a single allow-everything rule: nothing is ever asked or
- *    denied, including `external_directory` reads outside the project.
+ *  - `full_access` and `oven_mode` → a single allow-everything rule: nothing is
+ *    ever asked or denied, including `external_directory` reads outside the
+ *    project.
  *  - no allow-list → only `external_directory` is allowed outright (v1's
  *    behavior), so the harness's own defaults apply to every tool.
  *  - an allow-list → every restrictable tool action is denied, then the listed
@@ -137,7 +139,7 @@ export function buildOpenCodeV2PermissionRuleset(
   opts: Pick<SendPromptOptions, 'settings' | 'allowedTools' | 'readOnly'>
 ): OpenCodeV2PermissionRule[] {
   if (
-    opts.settings.permissionLevel === 'full_access' &&
+    isUnrestrictedLevel(opts.settings.permissionLevel) &&
     opts.allowedTools === undefined &&
     !opts.readOnly
   ) {

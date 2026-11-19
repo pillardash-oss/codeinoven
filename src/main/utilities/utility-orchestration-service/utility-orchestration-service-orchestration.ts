@@ -6,6 +6,7 @@ import type {
   UtilityKind
 } from '../../../lib/types'
 import { UTILITY_KIND_VALUES } from '../../../lib/types'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import { APP_DESIGN_UTILITY_ID, APP_VIDEO_UTILITY_ID } from '../../../lib/utility-ids'
 import { isCuaDaemonTransportFailure } from '../cua-bridge-service'
 import { designGroupBriefing } from '../../design/design-group-service'
@@ -491,7 +492,7 @@ export class UtilityOrchestrationServiceOrchestration {
       const config = entry.utility.config as McpUtilityConfig
       config.environment = {
         ...config.environment,
-        ...(request.permissionLevel === 'full_access'
+        ...(isUnrestrictedLevel(request.permissionLevel)
           ? { CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS: 'true' }
           : { CUA_DRIVER_DISABLE_UNRESTRICTED: 'true' })
       }

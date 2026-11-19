@@ -3,7 +3,8 @@
   import CioShield from '@pdslng/cio-icon/CioShield.svelte'
   import CioShieldAlert from '@pdslng/cio-icon/CioShieldAlert.svelte'
   import { DropdownMenu } from 'bits-ui'
-  import { PERMISSION_LEVELS, permissionLevelLabel } from '$lib/actions'
+  import { permissionLevelLabel, permissionLevelsFor } from '$lib/actions'
+  import { isUnrestrictedLevel } from '$shared/permission-level'
   import type { PermissionLevel } from '$shared/types'
 
   /**
@@ -22,18 +23,23 @@
   let { value, onSelect }: Props = $props()
 
   let label = $derived(permissionLevelLabel(value))
-  let fullAccess = $derived(value === 'full_access')
+  let unrestricted = $derived(isUnrestrictedLevel(value))
+
+  /** A handoff is started from this dialog, never from a thread that targets an
+   *  external Oven, so Oven Mode is not offered here: it would hand a task the
+   *  highest tier with nothing on screen saying which machine it is for. */
+  let levels = $derived(permissionLevelsFor())
 </script>
 
 <DropdownMenu.Root>
   <DropdownMenu.Trigger
-    class="flex min-h-8 min-w-0 items-center gap-1.5 px-2.5 transition-colors {fullAccess
+    class="flex min-h-8 min-w-0 items-center gap-1.5 px-2.5 transition-colors {unrestricted
       ? 'text-warning'
       : 'text-muted hover:text-foreground'}"
     title="Permission level: {label}. Auto review approves each tool call unless it is denied; full access approves everything."
     aria-label="Permission level: {label}"
   >
-    {#if fullAccess}
+    {#if unrestricted}
       <CioShieldAlert size={12} strokeWidth={2.75} class="shrink-0" />
     {:else}
       <CioShield size={12} class="shrink-0" />
@@ -49,16 +55,16 @@
       collisionPadding={8}
       class="z-90 w-64 border bg-surface p-1 shadow-lg"
     >
-      {#each PERMISSION_LEVELS as level (level.id)}
+      {#each levels as level (level.id)}
         <DropdownMenu.Item
           class="flex cursor-pointer items-start gap-2 px-2.5 py-2 outline-none data-highlighted:bg-elevated"
           title={level.description}
           onSelect={() => onSelect(level.id)}
         >
           <span
-            class="mt-0.5 shrink-0 {level.id === 'full_access' ? 'text-warning' : 'text-muted'}"
+            class="mt-0.5 shrink-0 {isUnrestrictedLevel(level.id) ? 'text-warning' : 'text-muted'}"
           >
-            {#if level.id === 'full_access'}
+            {#if isUnrestrictedLevel(level.id)}
               <CioShieldAlert size={12} strokeWidth={2.75} />
             {:else}
               <CioShield size={12} />

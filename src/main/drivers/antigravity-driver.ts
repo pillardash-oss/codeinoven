@@ -13,6 +13,7 @@ import type {
   ThreadSettings
 } from '../../lib/types'
 import { buildProcessEnvironmentAsync } from './cli-environment'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
 import { attachmentReferences } from './attachment-reference'
 import { antigravityModelSlugs } from './antigravity-model-output'
 import type {
@@ -1048,7 +1049,7 @@ export class AntigravityDriver extends PersistentCliDriver {
       )
     }
     if (options.readOnly) args.push('--mode', 'plan')
-    if (options.settings.permissionLevel === 'full_access') {
+    if (isUnrestrictedLevel(options.settings.permissionLevel)) {
       args.push('--dangerously-skip-permissions')
     } else {
       // Print mode cannot display Antigravity's approval cards. Leaving its

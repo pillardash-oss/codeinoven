@@ -1,4 +1,5 @@
 import type { AgentQuestion, PermissionLevel, ThreadSettings } from '../../../lib/types'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import type { CodexServerRequest } from './codex-protocol'
 import { codexGitWritableRoots } from './codex-git-roots'
 import { recordValue, stringValue } from './codex-values'
@@ -213,14 +214,14 @@ export function tomlStringMap(values: Record<string, string>): string {
 
 export function sandboxFor(readOnly: boolean, permissionLevel: PermissionLevel): string {
   if (readOnly) return 'read-only'
-  return permissionLevel === 'full_access' ? 'danger-full-access' : 'workspace-write'
+  return isUnrestrictedLevel(permissionLevel) ? 'danger-full-access' : 'workspace-write'
 }
 
 export function codexApprovalPolicy(
   readOnly: boolean,
   permissionLevel: PermissionLevel
 ): 'never' | 'on-request' {
-  return readOnly || permissionLevel === 'full_access' ? 'never' : 'on-request'
+  return readOnly || isUnrestrictedLevel(permissionLevel) ? 'never' : 'on-request'
 }
 
 export function isCodexPermissionRequest(method: string): boolean {
@@ -290,7 +291,7 @@ export function codexSandboxPolicy(
   permissionLevel: PermissionLevel
 ): Record<string, unknown> {
   if (readOnly) return { type: 'readOnly', networkAccess: false }
-  if (permissionLevel === 'full_access') return { type: 'dangerFullAccess' }
+  if (isUnrestrictedLevel(permissionLevel)) return { type: 'dangerFullAccess' }
   return {
     type: 'workspaceWrite',
     writableRoots: codexWritableRoots(projectPath),
@@ -311,7 +312,7 @@ export function codexSandboxConfigArgs(
   readOnly: boolean,
   permissionLevel: PermissionLevel
 ): string[] {
-  if (readOnly || permissionLevel === 'full_access') return []
+  if (readOnly || isUnrestrictedLevel(permissionLevel)) return []
   return [
     '-c',
     `sandbox_workspace_write.writable_roots=${tomlStringArray(codexWritableRoots(projectPath))}`,

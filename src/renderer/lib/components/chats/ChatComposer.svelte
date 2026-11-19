@@ -12,6 +12,7 @@
   import { scale } from 'svelte/transition'
   import { motionDuration } from '$lib/motion'
   import { DEFAULT_HARNESS } from '$shared/harness-default'
+  import { modelProfilePermissionLevel } from '$shared/model-profiles'
   import StartAfterThreadPicker from './StartAfterThreadPicker.svelte'
   import ProjectFileMentionMenu from './ProjectFileMentionMenu.svelte'
   import ChatComposerAttachmentStrip from './ChatComposerAttachmentStrip.svelte'
@@ -527,6 +528,7 @@
         hidePermissionSelector={board.props.hidePermissionSelector}
         fileSystemMode={board.handleDropData.resolved.fileSystemMode}
         permissionLevel={board.handleDropData.resolved.permissionLevel}
+        oven={board.handleDropData.externalOven}
         working={board.props.working}
         menuOpen={board.handleDropData.permissionMenuOpen}
         onToggle={() => {
@@ -540,7 +542,11 @@
       />
 
       <!-- Shared model selector   model + thinking level in one control, and the
-           saved profiles every other picker offers too. -->
+           saved profiles every other picker offers too. Profiles remember the
+           level the picker may apply, not this thread's live one: Oven Mode
+           belongs to the Oven this composer targets and is clamped to Full
+           Access here, so a saved preset never carries it (see
+           `MODEL_PROFILE_PERMISSION_LEVELS`). -->
       <ModelPicker
         bind:this={board.handleDropData.modelPicker}
         providers={board.props.providers}
@@ -570,7 +576,7 @@
         thinkingPresets={board.handleDropData.thinkingPresets}
         onSelectThinking={(level) =>
           board.handleDropData.selectThinking({ id: level, label: level })}
-        permissionLevel={board.handleDropData.resolved.permissionLevel}
+        permissionLevel={modelProfilePermissionLevel(board.handleDropData.resolved.permissionLevel)}
         onApplyProfile={board.handleDropData.applyProfile}
         showProfiles={!board.props.readOnlyMode}
       />

@@ -142,6 +142,12 @@ describe('IPC structured input validation', () => {
     expect(() => validateThreadSettings({ ...validSettings, permissionLevel: 'all' })).toThrow(
       TypeError
     )
+    // Oven Mode is storable: a thread whose composer is set to an external Oven
+    // has to survive the save and the restore.
+    expect(validateThreadSettings({ ...validSettings, permissionLevel: 'oven_mode' })).toEqual({
+      ...validSettings,
+      permissionLevel: 'oven_mode'
+    })
     // The legacy engineeringMode flag persisted before the scrub is tolerated and dropped.
     expect(validateThreadSettings({ ...validSettings, engineeringMode: true })).toEqual(
       validSettings

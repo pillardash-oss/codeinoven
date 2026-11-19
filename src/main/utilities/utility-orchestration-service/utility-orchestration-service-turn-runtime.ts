@@ -8,6 +8,7 @@ import {
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
 import { APP_BROWSER_UTILITY_ID, APP_SCOPE_UTILITY_ID } from '../utility-registry-service'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -180,7 +181,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
           // from, so it never needs the tag or the full-access tier.
           request.donTurn === true ||
           request.delegationReach === true ||
-          request.permissionLevel === 'full_access' ||
+          isUnrestrictedLevel(request.permissionLevel) ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
       }
@@ -214,13 +215,13 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // a route the turn never received.
       if (isAppControlTool(name)) {
         return (
-          request.permissionLevel === 'full_access' ||
+          isUnrestrictedLevel(request.permissionLevel) ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
       }
       return (
         hasOnDemand ||
-        request.permissionLevel === 'full_access' ||
+        isUnrestrictedLevel(request.permissionLevel) ||
         request.artifactTools === true ||
         request.allowManagement === true ||
         (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
@@ -293,7 +294,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
     // them.
     const sessionToolsAskRequired =
       request.artifactTools === true &&
-      request.permissionLevel !== 'full_access' &&
+      !isUnrestrictedLevel(request.permissionLevel) &&
       (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
     // One batching contract, worded for the tool surface this harness actually
     // has: naming code mode to a harness without a script runner is a rule the

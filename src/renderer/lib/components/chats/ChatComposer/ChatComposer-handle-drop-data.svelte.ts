@@ -1,4 +1,8 @@
-import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
+import {
+  threadSettings as threadSettingsStore,
+  withOvenPermissionFallback
+} from '$lib/stores/thread-settings.svelte'
+import { isRemoteOvenId } from '$shared/ovens'
 import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
 import { posixBasename } from '$shared/paths'
 import { showToastWarning } from '$lib/stores/app-errors.svelte'
@@ -73,15 +77,25 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
 
   /** Resolved settings   chats run with auto permission review until File System
    *  is enabled, so the level stays pinned to `auto_review` while File System is
-   *  off and unlocks (selector visible, up to Full Access) once it is turned on. */
+   *  off and unlocks (selector visible, up to Oven Mode) once it is turned on.
+   *
+   *  Oven Mode is resolved last: it exists only for a turn that runs on an external
+   *  Oven, so a thread pointed back at this computer falls to Full Access instead of
+   *  keeping the highest tier for a machine it no longer targets. */
   resolved = $derived<ThreadSettings>(
-    this.root.props.hidePermissionSelector && this.baseSettings.fileSystemMode !== true
-      ? { ...this.baseSettings, permissionLevel: 'auto_review' as const }
-      : this.baseSettings
+    withOvenPermissionFallback(
+      this.root.props.hidePermissionSelector && this.baseSettings.fileSystemMode !== true
+        ? { ...this.baseSettings, permissionLevel: 'auto_review' as const }
+        : this.baseSettings
+    )
   )
 
   /** The remote Oven this composer targets, or null on this computer. */
   targetOvenId = $derived(this.resolved.ovenId ?? null)
+
+  /** True when this composer sends to an external Oven (a remote machine).
+   *  Oven Mode is offered only there, in every surface that lists levels. */
+  externalOven = $derived(isRemoteOvenId(this.targetOvenId))
 
   /**
    * Harnesses the target Oven does not have installed.
@@ -494,6 +508,7 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     getProfilesPickerVisible: () => !this.root.props.readOnlyMode,
     getShowChatModes: () => this.root.props.showChatModes,
     getFileSystemMode: () => this.resolved.fileSystemMode,
+    getRemoteOven: () => this.externalOven,
     getSupportsThinking: () => this.supportsThinking,
     getAccountPickerVisible: () => this.accountPickerVisible,
     getScopePickerVisible: () => this.root.captureComposerRoot.scopePickerAvailable,

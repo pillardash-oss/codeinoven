@@ -1,4 +1,5 @@
 import type { PermissionLevel } from '../../../lib/types'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import {
   browserActionTargetScript,
   reviewBrowserAction,
@@ -316,7 +317,7 @@ export class BrowserServiceAgentUtility {
       }
     }
     if (
-      context.permissionLevel !== 'full_access' &&
+      !isUnrestrictedLevel(context.permissionLevel) &&
       !context.reviewedWithinRun &&
       ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation) &&
       operation !== 'upload'

@@ -42,6 +42,7 @@
   import ThreadViewComposer from './ThreadView/ThreadViewComposer.svelte'
   import ThreadParentLink from './ThreadParentLink.svelte'
   import { permissionLevelActions } from '$lib/actions'
+  import { isRemoteOvenId } from '$shared/ovens'
 
   let {
     thread: threadProp,
@@ -173,9 +174,14 @@
     }
 
     // Chat mode only surfaces permission levels once File System is enabled:
-    // chats run with auto permission review until the user opts into files.
+    // chats run with auto permission review until the user opts into files. Oven
+    // Mode joins the list only while the thread targets an external Oven.
     if (!board.props.chatMode || board.loadOlderMessages.settings.fileSystemMode === true) {
-      actions.push(...permissionLevelActions(board.state.applicationActionSource))
+      actions.push(
+        ...permissionLevelActions(board.state.applicationActionSource, {
+          oven: isRemoteOvenId(board.loadOlderMessages.settings.ovenId)
+        })
+      )
     }
 
     actions.push({

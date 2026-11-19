@@ -53,7 +53,14 @@ const THINKING_LEVELS = new Set<ThreadSettings['thinkingLevel']>([
 ])
 const INFERENCE_MODES = new Set<InferenceMode>(['normal', 'fast', 'ultrafast'])
 const TITLE_MODES = new Set<NonNullable<ThreadSettings['titleMode']>>(['model', 'deterministic'])
-const PERMISSION_LEVELS = new Set<ThreadSettings['permissionLevel']>(['auto_review', 'full_access'])
+const PERMISSION_LEVELS = new Set<ThreadSettings['permissionLevel']>([
+  'auto_review',
+  'full_access',
+  // Oven Mode, above Full Access: only a thread whose composer is set to an
+  // external Oven runs with it, so it has to be storable here or such a thread
+  // could never be saved or restored.
+  'oven_mode'
+])
 const PROJECT_SOURCES = new Set<NonNullable<CreateProjectInput['source']>>(['local', 'ssh'])
 const CHANGE_TRACKING_MODES = new Set<NonNullable<CreateProjectInput['changeTrackingMode']>>([
   'git',

@@ -1,7 +1,8 @@
 import { sanitizeThreadSettings, type Thread, type ThreadSettings } from '$shared/types'
 import { APP_SLUG } from '$shared/brand'
 import { DEFAULT_HARNESS } from '$shared/harness-default'
-import { LOCAL_OVEN_ID } from '$shared/ovens'
+import { LOCAL_OVEN_ID, isRemoteOvenId } from '$shared/ovens'
+import { isOvenMode } from '$shared/permission-level'
 
 const THREAD_SETTINGS_KEY = `${APP_SLUG}.threadSettings.lastUsed`
 const CHAT_SETTINGS_KEY = `${APP_SLUG}.chatSettings.lastUsed`
@@ -102,9 +103,11 @@ export class ThreadSettingsStore {
 
   /** Initial settings for a thread: its own persisted values, else the last-used ones. */
   initialFor(thread: Thread, fallback?: ThreadSettings): ThreadSettings {
-    return thread.settings
-      ? { ...this.defaults, ...thread.settings }
-      : { ...(fallback ?? this.lastUsed) }
+    return withOvenPermissionFallback(
+      thread.settings
+        ? { ...this.defaults, ...thread.settings }
+        : { ...(fallback ?? this.lastUsed) }
+    )
   }
 
   /** Remember these settings as the default for future threads. */
@@ -126,8 +129,15 @@ export class ThreadSettingsStore {
       ...settings,
       assistantBehaviorSession: undefined
     }
-    if (this.rememberOven) return remembered
-    return { ...remembered, ovenId: undefined, ovenPath: undefined }
+    if (this.rememberOven) return withOvenPermissionFallback(remembered)
+    // The Oven is dropped first, then the level is resolved: a thread that ran on
+    // Oven Mode must not seed the next one with a tier whose only reason to exist
+    // was a machine that no longer applies (see `withOvenPermissionFallback`).
+    return withOvenPermissionFallback({
+      ...remembered,
+      ovenId: undefined,
+      ovenPath: undefined
+    })
   }
 }
 
@@ -191,14 +201,30 @@ function effectiveSettings(
 }
 
 /**
+ * The level a thread may keep, given the machine it now targets.
+ *
+ * Oven Mode is the highest tier and exists for one situation: the turn runs on an
+ * external Oven (a remote machine), where the agent may need to do anything to
+ * finish the task. The moment a thread stops targeting one   the user switches the
+ * Oven back to this computer, or a settings family that never remembers an Oven
+ * seeds the next conversation   the level must fall back to Full Access rather
+ * than silently staying at the highest tier for a machine nobody chose.
+ */
+export function withOvenPermissionFallback(settings: ThreadSettings): ThreadSettings {
+  return isOvenMode(settings.permissionLevel) && !isRemoteOvenId(settings.ovenId)
+    ? { ...settings, permissionLevel: 'full_access' }
+    : settings
+}
+
+/**
  * A chat or an assistant task never runs above auto review until it is granted
- * File System access. Once File System is on, the permission picker unlocks up
- * to Full Access, so the level the user chose is carried through instead of
- * being clobbered back to auto review.
+ * File System access. Once File System is on, the permission picker unlocks
+ * levels above auto review, so the level the user chose is carried through
+ * instead of being clobbered back to auto review.
  */
 export function normalizeChatSettings(settings: ThreadSettings): ThreadSettings {
   return settings.fileSystemMode === true
-    ? settings
+    ? withOvenPermissionFallback(settings)
     : { ...settings, permissionLevel: 'auto_review' }
 }
 

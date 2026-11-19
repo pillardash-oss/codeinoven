@@ -6,6 +6,8 @@ import { trackMenuCloseFocus } from '../chat-composer-menu-focus.svelte'
 import { projectReferenceToken } from '../chat-composer-attachments'
 import { modelRuntime } from '$lib/stores/model-runtime.svelte'
 import { ovens } from '$lib/stores/ovens.svelte'
+import { withOvenPermissionFallback } from '$lib/stores/thread-settings.svelte'
+import { isOvenMode } from '$shared/permission-level'
 import type { ChatComposer } from './ChatComposer-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ChatComposer board. */
@@ -47,6 +49,16 @@ export class ChatComposerEffects extends BoardUnit<ChatComposer> {
       return () => {
         current = false
       }
+    })
+
+    // A thread that ran on Oven Mode and no longer targets an external Oven falls
+    // back to Full Access in the settings themselves, not just on screen: the level
+    // is what the next turn is sent with, so leaving the stored value at the highest
+    // tier would keep it for a machine the thread has left.
+    $effect(() => {
+      const base = this.root.handleDropData.baseSettings
+      if (!isOvenMode(base.permissionLevel) || this.root.handleDropData.externalOven) return
+      this.root.handleDropData.applySettings(withOvenPermissionFallback(base))
     })
 
     // Opening the picker re-probes the Oven's harnesses, so a harness installed on

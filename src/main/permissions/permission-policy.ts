@@ -2,10 +2,15 @@ import { basename, isAbsolute, relative, resolve, sep } from 'path'
 import { toPosixPath } from '../../lib/paths'
 import { tmpdir } from 'os'
 import { CIO_SCRATCH_DIRECTORY } from '../../lib/cio-cleanup'
+import { isOvenMode, type PermissionPolicyMode } from '../../lib/permission-level'
 import { deletionTargets } from './agent-created-files'
 
 export type PermissionRisk = 'low' | 'medium' | 'high' | 'critical'
-export type PermissionPolicyMode = 'auto_review' | 'full_access'
+/** The modes a policy evaluates with. Oven Mode is the highest: it behaves like
+ *  Full Access with every protective check forced off, so no card can ever be
+ *  produced. Declared in `src/lib/permission-level.ts` so the renderer can name
+ *  it too. */
+export type { PermissionPolicyMode }
 export type PermissionDecision = PermissionPolicyMode | 'ask'
 
 export interface PermissionRequest {
@@ -240,22 +245,30 @@ export class PermissionPolicy {
   private readonly agentCreatedPaths: ReadonlySet<string>
   private readonly workspaceRoots: readonly string[]
   private readonly restrictToAllowed: boolean
+  private readonly sensitiveFileProtectionEnabled: boolean
+  private readonly ovenMode: boolean
   private readonly now: () => number
 
   constructor(private readonly options: PermissionPolicyOptions) {
     this.projectRoot = resolve(options.projectRoot)
     this.approvalTtlMs = options.approvalTtlMs ?? DEFAULT_APPROVAL_TTL_MS
-    this.protectedPathPatterns = [
-      ...DEFAULT_PROTECTED_PATTERNS,
-      ...(options.protectedPathPatterns ?? [])
-    ]
+    // Oven Mode is the top level: the agent works on an external Oven the user
+    // handed it, so the protections Full Access still honors are off. Forcing
+    // them here keeps the guarantee even if a caller passes them anyway, and
+    // `evaluate` never reaches a rule that could ask.
+    this.ovenMode = isOvenMode(options.mode)
+    this.protectedPathPatterns = this.ovenMode
+      ? []
+      : [...DEFAULT_PROTECTED_PATTERNS, ...(options.protectedPathPatterns ?? [])]
     this.allowedPaths = (options.allowedPaths ?? []).map((path) => resolve(path))
     this.scratchPaths = (options.scratchPaths ?? []).map((path) => resolve(path))
     this.agentCreatedPaths = new Set(
       (options.agentCreatedPaths ?? []).map((path) => toPosixPath(resolve(path)))
     )
     this.workspaceRoots = (options.workspaceRoots ?? []).map((path) => resolve(path))
-    this.restrictToAllowed = options.restrictToAllowed === true
+    this.restrictToAllowed = !this.ovenMode && options.restrictToAllowed === true
+    this.sensitiveFileProtectionEnabled =
+      !this.ovenMode && options.sensitiveFileProtectionEnabled !== false
     this.now = options.now ?? Date.now
   }
 
@@ -267,8 +280,29 @@ export class PermissionPolicy {
     const paths = rawPaths.map(normalizeNativePath)
     const scope = this.createScope(paths)
 
+    // Oven Mode approves everything, before any rule below can raise a card:
+    // the sensitive-file block list, the bundled-pi file policy, protected path
+    // patterns, `restrictToAllowed`, and the workspace-root rules are all off,
+    // because the machine the agent is working on is the user's own Oven and
+    // the task may need anything on it. A malformed request (an empty
+    // permission name) is approved too: it is a harness payload, not a policy
+    // decision, and parking an Oven turn for it serves nobody. The decision
+    // value stays `oven_mode` so the ledger records which level approved.
+    if (this.ovenMode) {
+      return this.createDecision(
+        'oven_mode',
+        true,
+        'Oven Mode   the agent works on an external Oven, so every operation is auto-approved.',
+        // The risk describes the operation, not the tier: a protected-file
+        // request keeps the critical risk that makes it legible in the ledger,
+        // even though Oven Mode approves it without a card.
+        permission === 'bundled-pi-sensitive-files' ? 'critical' : risk,
+        scope
+      )
+    }
+
     if (permission === 'bundled-pi-sensitive-files') {
-      if (this.options.sensitiveFileProtectionEnabled === false) {
+      if (!this.sensitiveFileProtectionEnabled) {
         return this.createDecision(
           this.options.mode,
           true,

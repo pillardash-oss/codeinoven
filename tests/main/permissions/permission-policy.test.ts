@@ -307,3 +307,105 @@ describe('permission policy', () => {
     })
   })
 })
+
+describe('oven mode', () => {
+  it('approves a protected .env read that full_access still asks about', () => {
+    const request = { permission: 'bundled-pi-sensitive-files', paths: ['.env.local'] }
+    const fullAccess = new PermissionPolicy({ projectRoot, mode: 'full_access' })
+    const ovenMode = new PermissionPolicy({ projectRoot, mode: 'oven_mode' })
+
+    // Full Access still honors the sensitive-file block list: the app's bundled
+    // pi harness asks before touching a protected file in every other tier.
+    expect(fullAccess.evaluate(request)).toMatchObject({
+      decision: 'ask',
+      approved: false,
+      risk: 'critical',
+      approval: { required: true }
+    })
+    expect(ovenMode.evaluate(request)).toMatchObject({
+      decision: 'oven_mode',
+      approved: true,
+      risk: 'critical',
+      approval: { required: false },
+      ledger: { decision: 'oven_mode' }
+    })
+  })
+
+  it('approves a protected .env write that full_access still asks about', () => {
+    const fullAccess = new PermissionPolicy({ projectRoot, mode: 'full_access' })
+    const ovenMode = new PermissionPolicy({ projectRoot, mode: 'oven_mode' })
+    const write = { permission: 'bundled-pi-sensitive-files', path: 'config/.env' }
+
+    expect(fullAccess.evaluate(write)).toMatchObject({ decision: 'ask', approved: false })
+    expect(ovenMode.evaluate(write)).toMatchObject({
+      decision: 'oven_mode',
+      approved: true,
+      approval: { required: false }
+    })
+  })
+
+  it('never asks about a protected path pattern, even when one is supplied', () => {
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'oven_mode',
+      now: () => 1000,
+      protectedPathPatterns: ['internal-only.txt']
+    })
+
+    for (const path of [
+      '.env',
+      '.ssh/id_ed25519',
+      '.git/config',
+      'bun.lock',
+      'internal-only.txt'
+    ]) {
+      expect(policy.evaluate({ permission: 'read', path })).toMatchObject({
+        decision: 'oven_mode',
+        approved: true,
+        approval: { required: false }
+      })
+    }
+    expect(policy.evaluate({ permission: 'delete-file', path: '.git/config' })).toMatchObject({
+      decision: 'oven_mode',
+      approved: true
+    })
+  })
+
+  it('forces the workspace and restriction gates off even when they are passed in', () => {
+    const workspace = resolve('/workspace/assistant-cwd/abc')
+    const policy = new PermissionPolicy({
+      projectRoot: workspace,
+      mode: 'oven_mode',
+      // Every protective option is supplied and must still be ignored: Oven Mode
+      // approves everything on the remote machine it is working on.
+      sensitiveFileProtectionEnabled: true,
+      restrictToAllowed: true,
+      allowedPaths: [resolve(workspace, 'attached.txt')],
+      workspaceRoots: [workspace],
+      scratchPaths: [workspace]
+    })
+
+    // File-System-OFF gating: an unattached read outside the thread's own files.
+    expect(
+      policy.evaluate({ permission: 'read', path: '/Users/me/Documents/notes.md' })
+    ).toMatchObject({ decision: 'oven_mode', approved: true, approval: { required: false } })
+    // The sensitive-file policy inside a workspace root and outside it alike.
+    expect(
+      policy.evaluate({ permission: 'bundled-pi-sensitive-files', paths: ['.env'] })
+    ).toMatchObject({ decision: 'oven_mode', approved: true })
+    // Workspace-root rules: a destructive command aimed outside the workspace.
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf /Users/me/Documents'] })
+    ).toMatchObject({ decision: 'oven_mode', approved: true, approval: { required: false } })
+    // An unclassified tool, which Auto Review would always ask about.
+    expect(
+      policy.evaluate({ permission: 'tool-use', unclassifiedTool: 'cio_util_run' })
+    ).toMatchObject({ decision: 'oven_mode', approved: true })
+    // A shell command the policy cannot prove confined anywhere.
+    expect(policy.evaluate({ permission: 'shell-exec', path: '/Users/me/.zshrc' })).toMatchObject({
+      decision: 'oven_mode',
+      approved: true,
+      approval: { required: false }
+    })
+  })
+})

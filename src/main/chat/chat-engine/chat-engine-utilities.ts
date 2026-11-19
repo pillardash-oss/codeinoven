@@ -1,6 +1,7 @@
 import type { AssistantReportingPatch } from '../../../lib/assistant-authoring'
 import { randomUUID } from 'crypto'
 import { Logger } from '../../system/logger'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import type { HarnessDriver, PreparedUtilityRuntime } from '../../drivers/driver.interface'
 import {
   CIO_UTILITY_REUSE_PROMPT,
@@ -474,14 +475,15 @@ export class ChatEngineUtilities {
       // The orchestration contract is the gate for the workstation tools: it is
       // what tells the agent the tools exist and how to resolve a request to a
       // machine, a model and an account before dispatching real work. A thread
-      // running in full access reaches the tools with no tag, so it carries the
-      // full-access contract on every turn the tag did not open.
+      // running in full access (or Oven Mode, which is above it) reaches the
+      // tools with no tag, so it carries the full-access contract on every turn
+      // the tag did not open.
       const orchestrationContract =
         orchestrationSession === 'start'
           ? CIO_ORCHESTRATE_START_PROMPT
           : orchestrationSession === 'continue'
             ? CIO_ORCHESTRATE_CONTINUE_PROMPT
-            : settings.permissionLevel === 'full_access'
+            : isUnrestrictedLevel(settings.permissionLevel)
               ? CIO_ORCHESTRATE_FULL_ACCESS_PROMPT
               : delegationReach
                 ? CIO_ORCHESTRATE_DELEGATION_PROMPT
