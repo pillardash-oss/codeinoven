@@ -64,7 +64,17 @@ interface LiveHost {
   readonly id: string
   readonly transport: HostTransport
   /** Requests waiting for a response line, by request id. */
-  waiting: Map<string, (response: HostResponseEnvelope) => void>
+  waiting: Map<string, PendingRequest>
+}
+
+/** One request in flight, so a long one can be kept alive by its own activity. */
+interface PendingRequest {
+  resolve(response: HostResponseEnvelope): void
+  /** Push the deadline out by one more window; only a compaction ever does. */
+  touch(): void
+  /** Session the request belongs to, or null for a host-wide command. */
+  readonly sessionId: string | null
+  readonly compaction: boolean
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
@@ -367,8 +377,8 @@ export class PiHostSupervisor {
   }
 
   #onExit(host: LiveHost): void {
-    for (const [id, resolve] of host.waiting) {
-      resolve({ type: 'response', id, ok: false, error: 'Host exited' })
+    for (const [id, pending] of host.waiting) {
+      pending.resolve({ type: 'response', id, ok: false, error: 'Host exited' })
     }
     host.waiting.clear()
     this.#hosts.delete(host.id)
@@ -409,11 +419,22 @@ export class PiHostSupervisor {
   }
 
   #consume(host: LiveHost, line: string): void {
-    let envelope: { type?: string; id?: string }
+    let envelope: { type?: string; id?: string; sessionId?: unknown }
     try {
-      envelope = JSON.parse(line) as { type?: string; id?: string }
+      envelope = JSON.parse(line) as { type?: string; id?: string; sessionId?: unknown }
     } catch {
       return
+    }
+    // A checkpoint summarizes a large transcript page by page, which legitimately
+    // runs for many minutes and reports each step as a status line. Those lines
+    // are the request's liveness: without them a fixed deadline kills a working
+    // compaction at the same age a hung one would reach. Only a compaction is
+    // extended, because every other command answers in milliseconds and a dead
+    // one must still surface as a failure.
+    if (typeof envelope.sessionId === 'string') {
+      for (const pending of host.waiting.values()) {
+        if (pending.compaction && pending.sessionId === envelope.sessionId) pending.touch()
+      }
     }
     if (envelope.type === 'event') {
       const event = envelope as { sessionId?: unknown; event?: unknown }
@@ -449,7 +470,7 @@ export class PiHostSupervisor {
     const waiting = host.waiting.get(response.id)
     if (waiting === undefined) return
     host.waiting.delete(response.id)
-    waiting(response)
+    waiting.resolve(response)
   }
 
   /** Stop one host, answering with the sessions it had to drop. */
@@ -458,8 +479,8 @@ export class PiHostSupervisor {
     if (host === undefined) return []
     this.#hosts.delete(hostId)
     if (this.#primaryId === hostId) this.#primaryId = null
-    for (const [, resolve] of host.waiting) {
-      resolve({ type: 'response', id: 'stopped', ok: false, error: 'Host stopped' })
+    for (const [, pending] of host.waiting) {
+      pending.resolve({ type: 'response', id: 'stopped', ok: false, error: 'Host stopped' })
     }
     host.waiting.clear()
     // A deliberate stop is not a crash: the caller either emptied the host or
@@ -485,14 +506,22 @@ export class PiHostSupervisor {
       command
     }
     return new Promise((resolve, reject) => {
+      const compaction = command.type === 'compact'
       const timer = setTimeout(() => {
         host.waiting.delete(id)
         reject(new Error(`Host did not answer ${command.type} in ${this.#timeoutMs} ms`))
       }, this.#timeoutMs)
       timer.unref?.()
-      host.waiting.set(id, (response) => {
-        clearTimeout(timer)
-        resolve(response)
+      host.waiting.set(id, {
+        sessionId,
+        compaction,
+        touch: () => {
+          if (compaction) timer.refresh()
+        },
+        resolve: (response) => {
+          clearTimeout(timer)
+          resolve(response)
+        }
       })
       host.transport.send(JSON.stringify(request))
     })

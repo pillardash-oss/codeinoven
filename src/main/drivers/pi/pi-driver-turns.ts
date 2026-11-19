@@ -491,6 +491,14 @@ export class PiTurnLifecycle {
   /** Route app-owned extension status records and compaction requests. */
   handleExtensionStatus(record: Record<string, unknown>, sessionId: string): void {
     if (stringValue(record['statusKey']) === PI_COMPACTION_EXTENSION_KEY) {
+      // A checkpoint reports plain 'progress' while it summarizes transcript
+      // pages one call at a time. That is minutes of legitimate work on a large
+      // session, so it belongs in the log: without it a checkpoint in flight and
+      // a hung one look identical.
+      if (stringValue(record['statusText']) === 'progress') {
+        Logger.dev('Pi checkpoint is summarizing transcript pages', { sessionId })
+        return
+      }
       const request = parseRecord(record['statusText'])
       if (request?.['type'] === 'ready') this.host.markCompactionReady(sessionId)
       if (request?.['type'] === 'threshold') {

@@ -12,6 +12,8 @@ class FakeHost {
   stopped = false
   /** Answer `prompt` with a preflight disposition, instead of leaving it in flight. */
   answerPrompts = false
+  /** Leave `compact` in flight, so a checkpoint's timeout behaviour is testable. */
+  holdCompactions = false
   readonly transport: HostTransport
   #listeners: ((line: string) => void)[] = []
   #exitListeners: ((code: number | null) => void)[] = []
@@ -78,6 +80,9 @@ class FakeHost {
         // A prompt answers when the turn preflights; staying silent is how a
         // request that is still in flight looks.
         if (this.answerPrompts) reply({ disposition: 'started' })
+        return
+      case 'compact':
+        if (!this.holdCompactions) reply({})
         return
       case 'list_sessions':
         reply(
@@ -243,6 +248,58 @@ describe('PiHostSupervisor', () => {
       request: { id: 'ui-2', method: 'notify', message: 'x', notifyType: undefined }
     })
     expect(listener).not.toHaveBeenCalled()
+  })
+
+  /**
+   * A checkpoint summarizes a large transcript page by page and reports each
+   * step as a status line, so its request must be measured by silence rather
+   * than by total age: a fixed deadline killed a working compaction at the same
+   * moment a hung one would have been caught.
+   */
+  it('keeps a compaction request alive while its session reports progress', async () => {
+    vi.useFakeTimers()
+    try {
+      const hosts: FakeHost[] = []
+      const own = new PiHostSupervisor(
+        () => {
+          const host = new FakeHost(700 + hosts.length)
+          hosts.push(host)
+          return host.transport
+        },
+        { requestTimeoutMs: 1000 }
+      )
+      await own.createSession({
+        sessionId: 'atlas',
+        command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
+      })
+      hosts[0].holdCompactions = true
+      const pending = own.request('atlas', { type: 'compact' })
+      const outcome = pending.then(
+        () => 'resolved',
+        (error: unknown) => (error instanceof Error ? error.message : String(error))
+      )
+
+      await vi.advanceTimersByTimeAsync(800)
+      hosts[0].emit({
+        type: 'ui_request',
+        sessionId: 'atlas',
+        request: {
+          id: 'ui-progress',
+          method: 'setStatus',
+          statusKey: 'codeinoven-compaction',
+          statusText: 'progress'
+        }
+      })
+      // Past the original deadline, which the progress line restarted.
+      await vi.advanceTimersByTimeAsync(800)
+      await expect(Promise.race([outcome, Promise.resolve('pending')])).resolves.toBe('pending')
+
+      // Silence for one full window after the last line is what fails it.
+      await vi.advanceTimersByTimeAsync(1200)
+      await expect(outcome).resolves.toContain('did not answer compact')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('refuses to move a session it never created', async () => {
