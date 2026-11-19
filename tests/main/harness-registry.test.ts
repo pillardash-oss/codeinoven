@@ -7,6 +7,22 @@ import {
 } from '../../src/main/agents/harness-registry'
 import { OPENCODE_COMMAND_ALIASES } from '../../src/lib/opencode-version'
 
+describe('harness registry CIO Pi entry', () => {
+  it('names the bundled pi harness CIO Pi while keeping its stable id', () => {
+    const cioPi = findHarness('pi')
+    expect(cioPi).toBeDefined()
+    // The id is what accounts, the agent dir, the native provider config and the
+    // host all key on, so the rename is a name and never an id.
+    expect(cioPi?.name).toBe('CIO Pi')
+    expect(cioPi?.command).toBe('pi')
+    expect(cioPi?.integration).toBe('ready')
+  })
+
+  it('ships as the first harness, because nothing has to be installed for it', () => {
+    expect(listHarnesses()[0]?.id).toBe('pi')
+  })
+})
+
 describe('harness registry opencode entry', () => {
   it('registers ONE opencode harness carrying its v2 alias, not two entries', () => {
     const opencode = findHarness('opencode')

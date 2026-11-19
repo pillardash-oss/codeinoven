@@ -39,7 +39,7 @@ const PI_MODEL_CATALOG_REFRESH_TIMEOUT_MS = 20_000
 const PI_FALLBACK_CATALOG: ProviderCatalog[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'CIO Pi',
     harnessId: 'pi',
     models: [
       {
