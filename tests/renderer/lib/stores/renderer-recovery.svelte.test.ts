@@ -436,6 +436,105 @@ describe('RendererRecoveryStore', () => {
     }).not.toThrow()
   })
 
+  /**
+   * A composer annotation is the one piece of composer state the user creates in
+   * a single deliberate action, and a refresh used to be able to swallow it.
+   * These pin the round trip: annotation -> local storage -> new store -> the
+   * same annotation, including the shape `don` had (no text, one annotation).
+   */
+  describe('composer annotations across a refresh', () => {
+    const annotation = {
+      id: 'selection-1',
+      label: 'Selection 1',
+      text: 'A passage the user selected',
+      messageId: 'assistant-1',
+      startOffset: 10,
+      endOffset: 40,
+      comment: 'This should auto reject'
+    }
+
+    it('keeps an annotation on a draft that also holds text', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setDraft('project-1', 'thread-1', 'Draft words')
+      store.setPromptReferences('project-1', 'thread-1', [annotation])
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      expect(reloaded.draftFor('project-1', 'thread-1')).toBe('Draft words')
+      expect(reloaded.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
+      expect(reloaded.draftPromptReferences('project-1', 'thread-1')[0]?.comment).toBe(
+        'This should auto reject'
+      )
+    })
+
+    it('keeps an annotation on a draft that holds nothing else', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setPromptReferences('project-1', 'don', [annotation])
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      expect(reloaded.draftFor('project-1', 'don')).toBe('')
+      expect(reloaded.draftPromptReferences('project-1', 'don')).toHaveLength(1)
+    })
+
+    it('adopts the annotation the shared slot holds when its own mirror lost it', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      // The composer holds the words, but its mirror of the annotations is gone.
+      store.setDraft('project-1', 'don', 'Words the user typed')
+      store.flushPersist()
+
+      const slot = JSON.stringify({
+        text: 'Words the user typed',
+        attachments: [],
+        projectReferences: [],
+        taskReferences: [],
+        promptReferences: [annotation],
+        startAfterThreads: [],
+        threadReferences: []
+      })
+      const reloaded = new RendererRecoveryStore(storage)
+      reloaded.applyCommittedDraft('project-1', 'don', slot)
+
+      expect(reloaded.draftFor('project-1', 'don')).toBe('Words the user typed')
+      expect(reloaded.draftPromptReferences('project-1', 'don')).toHaveLength(1)
+    })
+
+    it('never lets the slot replace an annotation the composer already shows', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setPromptReferences('project-1', 'thread-1', [annotation])
+      store.applyCommittedDraft(
+        'project-1',
+        'thread-1',
+        JSON.stringify({
+          text: '',
+          attachments: [],
+          projectReferences: [],
+          taskReferences: [],
+          promptReferences: [],
+          startAfterThreads: [],
+          threadReferences: []
+        })
+      )
+      expect(store.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
+    })
+
+    it('keeps an annotation when the draft is re-written by the composer', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setPromptReferences('project-1', 'thread-1', [annotation])
+      // What the composer does on the next keystroke: text only, no references.
+      store.setDraft('project-1', 'thread-1', 'Next words')
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      expect(reloaded.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
+    })
+  })
+
   it('treats distinct harness-scoped favorites as separate', () => {
     const storage = new MemoryStorage()
     const store = new RendererRecoveryStore(storage)

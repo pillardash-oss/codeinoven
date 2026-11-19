@@ -252,13 +252,19 @@ export class RendererRecoveryStore {
    * Seed a locally-missing composer draft from the DB commit (restart or a
    * second instance). A thread that already holds any local draft content
    * wins: local edits are always newer than the 10s-delayed DB snapshot.
+   *
+   * Annotations are the one exception, and the reason is that they cost a user
+   * a deliberate selection and a written comment: a local draft that holds none
+   * adopts the ones the shared slot holds, without touching its words. That is
+   * how an annotation that only reached the database comes back to a composer
+   * whose own mirror lost it, and it can never overwrite an annotation this
+   * window already shows.
    */
   importDbDraft(projectId: string, threadId: string, rawDraftJson: string | null): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId) || !rawDraftJson) {
       return
     }
     const key = recoveryDraftKey(projectId, threadId)
-    if (this.composerDrafts[key]) return
     let parsed: unknown
     try {
       parsed = JSON.parse(rawDraftJson)
@@ -267,10 +273,38 @@ export class RendererRecoveryStore {
     }
     const entry = parseComposerDraftEntry(parsed)
     if (!entry) return
+    const existing = this.composerDrafts[key]
+    if (existing) {
+      if (existing.promptReferences.length > 0 || entry.promptReferences.length === 0) return
+      this.composerDrafts = {
+        ...this.composerDrafts,
+        [key]: { ...existing, promptReferences: entry.promptReferences }
+      }
+      this.persist()
+      publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+      return
+    }
     this.composerDrafts = { ...this.composerDrafts, [key]: entry }
     setDraftLabelCookie(threadId, entry.text)
     this.persist()
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+  }
+
+  /**
+   * Write this thread's draft to the shared slot now instead of on the debounce.
+   *
+   * Used for a discrete, deliberate edit (an annotation and its comment): the
+   * ten-second window before a debounced commit is exactly the window a refresh,
+   * a navigation or another instance's clear turns into a lost annotation.
+   */
+  commitDraftNow(projectId: string, threadId: string): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    const entry = this.composerDrafts[recoveryDraftKey(projectId, threadId)]
+    if (!entry) {
+      commitDraftStateNow(projectId, threadId, false, null)
+      return
+    }
+    commitDraftStateNow(projectId, threadId, true, JSON.stringify(entry))
   }
 
   /**
