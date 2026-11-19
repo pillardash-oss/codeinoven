@@ -230,6 +230,11 @@
    *  not any more has settled, whether or not the turn reported its completion.
    *  Plain, not reactive: only the run-state effect below reads it. */
   let sawLiveWork = false
+  /** True once this mount has folded itself for a settled run. The close
+   *  happens once, so a trace the reader opens after it stays open for as long
+   *  as the visit lasts. Plain, not reactive: only the run-state effect writes
+   *  and reads it. */
+  let autoClosedOnSettle = false
   /** Newest activity this trace was already showing (or had already folded) the
    *  last time it decided whether to open.
    *
@@ -572,11 +577,21 @@
     // Settled is decided by the run stopping, not only by the turn reporting its
     // completion: an interrupted turn, and a run the app quit in the middle of,
     // leave `done` false for work that has stopped, and that is exactly the
-    // expanded trace a settled thread must not keep showing. A trace the user
-    // opened is left exactly as they left it.
-    if ((done || sawLiveWork) && isOpen && !userOpened) {
-      foldToHeader()
-      requestFold(false, activity)
+    // expanded trace a settled thread must not keep showing.
+    //
+    // The close happens once, for the first settle this mount sees, even for a
+    // trace the reader opened while it worked: the work is over and the answer
+    // is what they came for. Their next open is theirs and survives every later
+    // settle, so a retry or a steer that ends again never shuts it on them.
+    //
+    // A controlled trace leaves this to its owner, which holds the same rule
+    // across remounts; deciding here as well would also close a trace the
+    // reader had already reopened after the owner's close.
+    if (controlled) return
+    if ((done || sawLiveWork) && !autoClosedOnSettle) {
+      autoClosedOnSettle = true
+      if (isOpen) foldToHeader()
+      setFold(false, false, localUserFolded)
       openedAtActivity = activity
     }
   })
