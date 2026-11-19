@@ -16,6 +16,7 @@ import { LOCAL_OVEN_ID, isRemoteOvenId } from '../../lib/ovens'
 import { MAX_PROMPT_ATTACHMENTS } from '../../lib/types'
 import type { AgentAccountUsage } from '../../lib/types'
 import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
 import type { OvenAppearance, OvenFile, OvenPreflightReport } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { ProjectManager } from '../../lib/engines/project-manager'
@@ -83,6 +84,15 @@ interface Live {
   muse: MuseTurnState
   pending: Map<string, { input: Record<string, unknown>; request: PermissionRequest }>
   questions: Map<string, PendingAgentQuestionRequest>
+  /**
+   * Deadline timers for the permission cards this run raised.
+   *
+   * A turn whose laptop was closed has nobody to answer a card, and the Oven's
+   * harness blocks until the control response arrives. So each card is refused
+   * on the same configurable timeout the question and secret cards use: the
+   * agent stops waiting and finds another way instead of parking the run.
+   */
+  permissionTimers?: Map<string, ReturnType<typeof setTimeout>>
   closedInput: boolean
   /**
    * Milliseconds added to a timestamp the harness stamped with the clock of
@@ -104,6 +114,12 @@ const MISSING_RUN = 'The remote run does not exist.'
 
 /** A package install on the Oven is real work; bound it without pretending it is instant. */
 const GIT_INSTALL_TIMEOUT_MS = 5 * 60_000
+
+/**
+ * Fallback deadline for an unanswered permission card on an Oven, used only
+ * when the configured card timeout is unreadable.
+ */
+const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000
 
 /** Remote turns bypass desktop repository work. Only transcript metadata stays here. */
 export class OvenChat {
@@ -275,6 +291,7 @@ export class OvenChat {
       },
       pending: new Map(),
       questions: new Map(),
+      permissionTimers: new Map(),
       closedInput: false
     }
   }
@@ -483,7 +500,7 @@ export class OvenChat {
     sessionsRoot: string
   ): { command: string; args: string[]; input?: string; closeInput?: boolean } {
     const model = settings.modelId
-    const full = settings.permissionLevel === 'full_access'
+    const full = isUnrestrictedLevel(settings.permissionLevel)
     const native = session.nativeSessionId
     switch (settings.harnessId) {
       case 'codex':
@@ -1044,6 +1061,9 @@ export class OvenChat {
     binding.finished = true
     if (live.timer) clearTimeout(live.timer)
     live.timer = undefined
+    // A finished run has no card left to answer, so nothing should keep a
+    // deadline alive for it.
+    this.clearPermissionTimers(live)
     await this.threads.setStatus(
       binding.projectId,
       binding.threadId,
@@ -1138,6 +1158,7 @@ export class OvenChat {
           input: (metadata?.input as Record<string, unknown>) ?? {},
           request: event.permission
         })
+        this.armPermissionDeadline(live, event.permission.id)
       } else if (event.type === 'question.asked') {
         if (binding.resolved?.includes(event.requestId)) continue
         live.questions.set(event.requestId, {
@@ -1285,6 +1306,7 @@ export class OvenChat {
     if (live) {
       live.binding.finished = true
       if (live.timer) clearTimeout(live.timer)
+      this.clearPermissionTimers(live)
       await live.polling?.catch(() => undefined)
     }
     this.live.delete(threadId)
@@ -1301,38 +1323,114 @@ export class OvenChat {
     for (const live of this.live.values()) {
       const pending = live.pending.get(requestId)
       if (!pending || live.binding.projectId !== projectId) continue
-      const response = {
-        type: 'control_response',
-        response: {
-          subtype: 'success',
-          request_id: requestId,
-          response: {
-            behavior: reply === 'reject' ? 'deny' : 'allow',
-            ...(reply === 'reject' ? {} : { updatedInput: pending.input }),
-            ...(message ? { message } : {})
-          }
-        }
-      }
-      await this.service.write(
-        live.binding.ovenId,
-        live.binding.runId,
-        `${JSON.stringify(response)}\n`
-      )
-      live.pending.delete(requestId)
-      live.binding.resolved = [...(live.binding.resolved ?? []), requestId]
-      await this.storage.write(
-        this.path({ projectId: live.binding.projectId, id: live.binding.threadId }),
-        live.binding
-      )
-      this.publish({
-        type: 'permission.replied',
-        sessionId: live.binding.session.id,
-        requestId,
-        reply
-      })
+      await this.settlePermission(live, requestId, reply, message)
       return true
     }
     return false
+  }
+
+  /** Answer one card on the Oven: deliver the control response and retire it. */
+  private async settlePermission(
+    live: Live,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string
+  ): Promise<void> {
+    const pending = live.pending.get(requestId)
+    if (!pending) return
+    this.clearPermissionTimer(live, requestId)
+    const response = {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: {
+          behavior: reply === 'reject' ? 'deny' : 'allow',
+          ...(reply === 'reject' ? {} : { updatedInput: pending.input }),
+          ...(message ? { message } : {})
+        }
+      }
+    }
+    await this.service.write(
+      live.binding.ovenId,
+      live.binding.runId,
+      `${JSON.stringify(response)}\n`
+    )
+    live.pending.delete(requestId)
+    live.binding.resolved = [...(live.binding.resolved ?? []), requestId]
+    await this.storage.write(
+      this.path({ projectId: live.binding.projectId, id: live.binding.threadId }),
+      live.binding
+    )
+    this.publish({
+      type: 'permission.replied',
+      sessionId: live.binding.session.id,
+      requestId,
+      reply
+    })
+  }
+
+  /**
+   * Arm the deadline of one unanswered card.
+   *
+   * The Oven's harness holds the tool call until a control response arrives, so
+   * a run whose laptop closed would otherwise sit on that call forever. The
+   * deadline is the same configurable timeout the question and secret cards use.
+   */
+  private armPermissionDeadline(live: Live, requestId: string): void {
+    const timers = live.permissionTimers ?? new Map<string, ReturnType<typeof setTimeout>>()
+    live.permissionTimers = timers
+    const armed = timers.get(requestId)
+    if (armed) clearTimeout(armed)
+    void this.storage
+      .getConfig()
+      .then((config) => {
+        if (!live.pending.has(requestId)) return
+        const timeoutMs =
+          Number.isFinite(config.questionTimeoutMs) && config.questionTimeoutMs > 0
+            ? config.questionTimeoutMs
+            : DEFAULT_PERMISSION_TIMEOUT_MS
+        const timer = setTimeout(() => {
+          void this.expirePermission(live, requestId, timeoutMs).catch((error: unknown) =>
+            Logger.error('Could not expire an Oven permission card:', error)
+          )
+        }, timeoutMs)
+        timer.unref?.()
+        timers.set(requestId, timer)
+      })
+      .catch((error: unknown) =>
+        Logger.error('Could not read the card timeout for an Oven permission:', error)
+      )
+  }
+
+  /**
+   * Refuse a card nobody answered, telling the agent to adapt.
+   *
+   * A rejection alone would end the turn, and the instruction riding on it is
+   * what keeps the run alive: the harness fails the one blocked call with this
+   * message and the model continues the same turn another way.
+   */
+  private async expirePermission(live: Live, requestId: string, timeoutMs: number): Promise<void> {
+    if (!live.pending.has(requestId)) return
+    const minutes = Math.max(1, Math.round(timeoutMs / 60_000))
+    const message = [
+      `The permission card for this action was automatically rejected after ${minutes} minute(s) without an answer.`,
+      'Do not retry that exact action.',
+      'Find another way to finish the task without it, and if nothing works, say plainly what is blocked and why.'
+    ].join(' ')
+    await this.settlePermission(live, requestId, 'reject', message)
+  }
+
+  private clearPermissionTimer(live: Live, requestId: string): void {
+    const timer = live.permissionTimers?.get(requestId)
+    if (timer) clearTimeout(timer)
+    live.permissionTimers?.delete(requestId)
+  }
+
+  private clearPermissionTimers(live: Live): void {
+    if (!live.permissionTimers) return
+    for (const timer of live.permissionTimers.values()) clearTimeout(timer)
+    live.permissionTimers.clear()
   }
 
   async permissions(thread: Thread): Promise<PermissionRequest[]> {
@@ -1424,7 +1522,10 @@ export class OvenChat {
 
   dispose(): void {
     this.disposed = true
-    for (const live of this.live.values()) if (live.timer) clearTimeout(live.timer)
+    for (const live of this.live.values()) {
+      if (live.timer) clearTimeout(live.timer)
+      this.clearPermissionTimers(live)
+    }
     this.live.clear()
     // Deliberately leave remote processes and service sockets owned by the Oven.
   }

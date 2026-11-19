@@ -364,6 +364,18 @@ export interface PendingPermissionInfo {
   policy: PermissionDecisionResult
   resumeStatus: Extract<ThreadStatus, 'planning' | 'executing'>
   /**
+   * The card's own deadline timer.
+   *
+   * A permission card is the one gate nothing can answer on the user's behalf:
+   * the decision is theirs, and a wrong automatic approval is not recoverable.
+   * So an unanswered card is refused on the same configurable timeout the
+   * question and secret cards use, which lets the agent stop waiting and find
+   * another way instead of parking the turn forever.
+   */
+  timer?: ReturnType<typeof setTimeout>
+  /** When the untouched card closes, epoch ms. Absent while the user is active. */
+  expiresAt?: number
+  /**
    * Set for an app-owned browser action on the page the user is viewing. The
    * gateway tool call that asked is still open, so it settles here instead of
    * being answered through a harness.

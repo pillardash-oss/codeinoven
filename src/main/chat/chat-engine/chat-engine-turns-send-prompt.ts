@@ -20,6 +20,7 @@ import { isCioUtilityRequest } from '../../utilities/cio-utility-prompt'
 import { isCioDesignRequest } from '../../utilities/cio-design-prompt'
 import { isCioVideoRequest } from '../../utilities/cio-video-prompt'
 import { isCioOrchestrateRequest } from '../../orchestration/cio-orchestrate-prompt'
+import { isOvenMode } from '../../../lib/permission-level'
 import { RunScopeGate } from '../run-scope-gate'
 import type { AuthoredWorkKind } from '../../../lib/ipc/design'
 import type { UtilityTurnBudgetContext } from '../../utilities/utility-orchestration-service'
@@ -1639,8 +1640,10 @@ export class ChatEngineTurnsSendPrompt {
             sessionId,
             // Full Access may skip native permission events. With File System
             // off, retain the native cwd sandbox so external paths still ask.
+            // Oven Mode is the exception: the machine is not the user's, the task
+            // was handed to it whole, and a sandboxed harness could not do it.
             settings:
-              isChatThread && !chatFileSystemEnabled
+              isChatThread && !chatFileSystemEnabled && !isOvenMode(settings.permissionLevel)
                 ? { ...settings, permissionLevel: 'auto_review' }
                 : settings,
             text,

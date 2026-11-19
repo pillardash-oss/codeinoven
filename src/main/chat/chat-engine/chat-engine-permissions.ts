@@ -1,5 +1,6 @@
 import { resolve } from 'path'
 import { existsSync } from 'fs'
+import { ChatEngine } from '../chat-engine'
 import { Logger } from '../../system/logger'
 import { PERMISSION_EVENTS_LOG_FILE, dailyLogRelativePath } from '../../system/log-paths'
 import { PermissionPolicy } from '../../permissions/permission-policy'
@@ -23,7 +24,7 @@ import { chatSkillPaths } from './chat-engine-pure'
 import { agentCreationTargets } from '../../permissions/agent-created-files'
 import { posixDirname } from '../../../lib/paths'
 import type { AgentPart } from '../../../lib/types'
-import type { ChatEngine } from '../chat-engine'
+import { isOvenMode, isUnrestrictedLevel } from '../../../lib/permission-level'
 
 /**
  * The permission kinds that mean "an operation on a file". Every other kind is
@@ -96,12 +97,30 @@ export class ChatEnginePermissions {
       Logger.dev(`Ignoring reply for resolved permission request: ${requestId}`)
       return
     }
+    await this.settlePermissionReply(pending, reply, 'user', alternativeInstruction)
+  }
+
+  /**
+   * The one path from a decided permission card to the harness.
+   *
+   * A user's answer and the card's own deadline both settle here, because both
+   * are the same decision: what changes is who made it (`decidedBy`) and whether
+   * a corrective instruction rides along with the rejection.
+   */
+  private async settlePermissionReply(
+    pending: PendingPermissionInfo,
+    reply: PermissionReply,
+    decidedBy: string,
+    alternativeInstruction?: string
+  ): Promise<void> {
+    if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
+    this.clearPermissionTimer(pending)
 
     if (pending.settleBrowserAction) {
       if (reply === 'always' && pending.policy.risk === 'critical') {
         throw new Error('Critical permissions cannot be approved permanently')
       }
-      await this.replyPermissionRaw(pending, reply, 'user', alternativeInstruction)
+      await this.replyPermissionRaw(pending, reply, decidedBy, alternativeInstruction)
       return
     }
 
@@ -118,14 +137,14 @@ export class ChatEnginePermissions {
     ) {
       await driver.replyPermission(
         pending.session.projectPath,
-        requestId,
+        pending.request.id,
         'reject',
         undefined,
         pending.request.sessionId
       )
       await this.recordPermissionDecision(pending, 'reject', 'policy:expired')
-      this.host.state.pendingPermissions.delete(requestId)
-      throw new Error(`Permission request expired: ${requestId}`)
+      this.dropPendingPermission(pending)
+      throw new Error(`Permission request expired: ${pending.request.id}`)
     }
     if (reply === 'always' && pending.policy.risk === 'critical') {
       throw new Error('Critical permissions cannot be approved permanently')
@@ -141,24 +160,24 @@ export class ChatEnginePermissions {
     try {
       await driver.replyPermission(
         pending.session.projectPath,
-        requestId,
+        pending.request.id,
         resolvedReply,
         alternativeInstruction,
         pending.request.sessionId
       )
     } catch (error) {
       if (!(error instanceof PermissionRequestGoneError)) throw error
-      this.host.state.pendingPermissions.delete(requestId)
-      await this.recordPermissionDecision(pending, resolvedReply, 'user:stale-request')
+      this.dropPendingPermission(pending)
+      await this.recordPermissionDecision(pending, resolvedReply, `${decidedBy}:stale-request`)
       // The decision cannot be delivered after the driver's blocking request
       // disappears. Never pretend the turn resumed: terminate it cleanly so a
       // stale approval or rejection cannot leave a tool call spinning forever.
       await this.interruptRejectedPermission(pending, driver)
-      Logger.dev(`Reconciled resolved permission request: ${requestId}`)
+      Logger.dev(`Reconciled resolved permission request: ${pending.request.id}`)
       return
     }
-    await this.recordPermissionDecision(pending, resolvedReply, 'user')
-    this.host.state.pendingPermissions.delete(requestId)
+    await this.recordPermissionDecision(pending, resolvedReply, decidedBy)
+    this.dropPendingPermission(pending)
     if (reply === 'reject' && alternativeInstruction === undefined) {
       await this.interruptRejectedPermission(pending, driver)
       return
@@ -193,7 +212,10 @@ export class ChatEnginePermissions {
         return
       }
       // Surface the alternative as a visible user message; the harness already
-      // received it as corrective feedback on the permission reply.
+      // received it as corrective feedback on the permission reply. An automatic
+      // deadline refuses for the user here, so the record says the app decided
+      // instead of pretending they typed the instruction.
+      const settledByUser = decidedBy === 'user'
       const alternativeText = [
         `The requested ${pending.request.permission} action was rejected.`,
         `Do not perform the requested ${pending.request.permission} action.`,
@@ -206,7 +228,15 @@ export class ChatEnginePermissions {
         pending.session.threadId,
         alternativeMessageId,
         alternativeInstruction,
-        alternativeText,
+        settledByUser
+          ? alternativeText
+          : [
+              `The requested ${pending.request.permission} action was automatically rejected:`,
+              'nobody answered the permission card before its deadline.',
+              'Find another way to finish the task without that action.',
+              'Automatic instruction:',
+              alternativeInstruction
+            ].join('\n\n'),
         [],
         [],
         [],
@@ -217,6 +247,121 @@ export class ChatEnginePermissions {
         'user'
       )
     }
+  }
+
+  /**
+   * Arm (or re-arm) the deadline of a card waiting for the user.
+   *
+   * The countdown holds while the user is active anywhere in the app, exactly as
+   * the question and secret cards do: a card must never expire under someone who
+   * is still working, and an abandoned one gets a full window of its own rather
+   * than a deadline measured from when it appeared.
+   */
+  async schedulePermissionTimeout(pending: PendingPermissionInfo): Promise<void> {
+    const requestId = pending.request.id
+    if (this.host.state.pendingPermissions.get(requestId) !== pending) return
+    this.clearPermissionTimer(pending)
+    const timeoutMs = await this.cardTimeoutMs()
+    if (this.host.state.pendingPermissions.get(requestId) !== pending) return
+
+    if (this.host.units['turns'].isUserActive()) {
+      pending.expiresAt = undefined
+      pending.timer = setTimeout(
+        () => void this.schedulePermissionTimeout(pending),
+        ChatEngine.INACTIVITY_CHECK_INTERVAL_MS
+      )
+      pending.timer.unref?.()
+      this.reflectDeadline(pending)
+      return
+    }
+
+    if (pending.expiresAt === undefined) pending.expiresAt = Date.now() + timeoutMs
+    const delay = Math.max(0, pending.expiresAt - Date.now())
+    this.reflectDeadline(pending)
+    pending.timer = setTimeout(() => {
+      pending.timer = undefined
+      if (this.host.state.pendingPermissions.get(requestId) !== pending) return
+      // The user came back while this window ran: hold the card instead of
+      // refusing a request under their hands.
+      if (this.host.units['turns'].isUserActive()) {
+        pending.expiresAt = undefined
+        void this.schedulePermissionTimeout(pending)
+        return
+      }
+      void this.expirePermission(pending, timeoutMs).catch((error: unknown) =>
+        Logger.error('Could not expire a permission card:', error)
+      )
+    }, delay)
+    pending.timer.unref?.()
+  }
+
+  /**
+   * Refuse a card at its deadline and let the run continue.
+   *
+   * Nothing can approve a permission on the user's behalf, so the card is
+   * rejected. The instruction riding on the rejection is what keeps the turn
+   * alive: the harness fails the one blocked call with that feedback and the
+   * model continues the same turn looking for another way.
+   */
+  async expirePermission(pending: PendingPermissionInfo, timeoutMs: number): Promise<void> {
+    if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
+    pending.expiresAt = undefined
+    const minutes = Math.max(1, Math.round(timeoutMs / 60_000))
+    const permission = pending.request.permission
+    const instruction = [
+      `The permission card for ${permission} was automatically rejected after ${minutes} minute(s) without an answer.`,
+      'Do not retry that exact action.',
+      'Find another way to finish the task without it, and if nothing works, say plainly what is blocked and why.'
+    ].join(' ')
+    this.host.units['misc'].reportAutoAnswer({
+      id: pending.request.id,
+      kind: 'permission',
+      outcome: 'expired',
+      projectId: pending.session.projectId,
+      threadId: pending.session.threadId,
+      entries: [
+        {
+          prompt: permission,
+          header: 'Permission',
+          options: ['Allow once', 'Allow always', 'Reject'],
+          picked: 'Reject'
+        }
+      ],
+      at: Date.now()
+    })
+    await this.settlePermissionReply(pending, 'reject', 'policy:timeout', instruction)
+  }
+
+  /** Publish the deadline on the card so the UI can show the same countdown. */
+  private reflectDeadline(pending: PendingPermissionInfo): void {
+    const policy = pending.request.policy
+    if (!policy) return
+    pending.request.policy = { ...policy, expiresAt: pending.expiresAt }
+  }
+
+  /** The configured human-card timeout, shared with questions and secret cards. */
+  private async cardTimeoutMs(): Promise<number> {
+    try {
+      const config = await this.host.storage.getConfig()
+      if (Number.isFinite(config.questionTimeoutMs) && config.questionTimeoutMs > 0)
+        return config.questionTimeoutMs
+    } catch (error) {
+      Logger.error('Could not read the card timeout:', error)
+    }
+    return 5 * 60_000
+  }
+
+  private clearPermissionTimer(pending: PendingPermissionInfo): void {
+    if (pending.timer) clearTimeout(pending.timer)
+    pending.timer = undefined
+  }
+
+  /** Retire a settled card: its deadline dies with it. */
+  private dropPendingPermission(pending: PendingPermissionInfo): void {
+    this.clearPermissionTimer(pending)
+    pending.expiresAt = undefined
+    if (this.host.state.pendingPermissions.get(pending.request.id) === pending)
+      this.host.state.pendingPermissions.delete(pending.request.id)
   }
 
   /** Stop a turn after the user plainly rejects its blocked action. */
@@ -414,6 +559,7 @@ export class ChatEnginePermissions {
           continue
         }
         this.host.state.pendingPermissions.delete(entry.request.id)
+        this.clearPermissionTimer(entry)
       }
       if (this.host.state.pendingPermissions.has(entry.request.id)) continue
       this.host.broadcast({
@@ -528,7 +674,10 @@ export class ChatEnginePermissions {
     const agentCreatedPaths = [...(this.host.state.agentCreatedFiles.get(info.sessionId) ?? [])]
     let policy = new PermissionPolicy({
       projectRoot: info.projectPath,
-      mode: restrictToAllowed ? 'auto_review' : level,
+      // Oven Mode is the one level that outranks the file-access restriction:
+      // the whole point of it is that the machine is someone else's and the task
+      // needs everything on it, so the chat clamp must not demote it.
+      mode: !isOvenMode(level) && restrictToAllowed ? 'auto_review' : level,
       sensitiveFileProtectionEnabled,
       ...(allowedPaths.length > 0 ? { allowedPaths } : {}),
       ...(scratchPaths.length > 0 ? { scratchPaths } : {}),
@@ -695,6 +844,10 @@ export class ChatEnginePermissions {
       }
       if (this.host.state.pendingPermissions.get(request.id) !== pending) return
       this.host.broadcast({ ...event, permission: enrichedRequest })
+      // A card nobody answers must not park the turn forever. The deadline is
+      // armed only once the card is actually on screen, and the same timeout the
+      // question and secret cards use applies here.
+      await this.schedulePermissionTimeout(pending)
     }
     if (
       info.projectId === GLOBAL_BROWSER_PROJECT_ID &&
@@ -716,7 +869,7 @@ export class ChatEnginePermissions {
       try {
         await this.replyPermissionRaw(
           pending,
-          level === 'full_access' ? 'always' : 'once',
+          isUnrestrictedLevel(level) ? 'always' : 'once',
           `achievement:${level}`
         )
         return
@@ -772,12 +925,12 @@ export class ChatEnginePermissions {
           remaining ? 'awaiting_approval' : pending.resumeStatus
         )
       } catch (error) {
-        this.host.state.pendingPermissions.delete(pending.request.id)
+        this.dropPendingPermission(pending)
         pending.settleBrowserAction(false)
         throw error
       }
       if (this.host.state.pendingPermissions.get(pending.request.id) !== pending) return
-      this.host.state.pendingPermissions.delete(pending.request.id)
+      this.dropPendingPermission(pending)
       this.host.broadcast({
         type: 'permission.replied',
         sessionId: pending.request.sessionId,
@@ -802,12 +955,13 @@ export class ChatEnginePermissions {
       pending.request.sessionId
     )
     await this.recordPermissionDecision(pending, reply, decidedBy)
-    this.host.state.pendingPermissions.delete(pending.request.id)
+    this.dropPendingPermission(pending)
   }
 
   clearPendingPermissionsForSession(sessionId: string): void {
     for (const [requestId, pending] of this.host.state.pendingPermissions) {
       if (pending.request.sessionId === sessionId) {
+        this.clearPermissionTimer(pending)
         this.host.state.pendingPermissions.delete(requestId)
         pending.settleBrowserAction?.(false)
         this.host.broadcast({ type: 'permission.replied', sessionId, requestId, reply: 'reject' })

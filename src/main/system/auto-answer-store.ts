@@ -26,7 +26,8 @@ const KINDS = new Set<AutoAnswerKind>([
   'question',
   'secret',
   'image-descriptor',
-  'scope-confirmation'
+  'scope-confirmation',
+  'permission'
 ])
 const OUTCOMES = new Set<AutoAnswerOutcome>(['auto-answered', 'expired', 'ignored'])
 

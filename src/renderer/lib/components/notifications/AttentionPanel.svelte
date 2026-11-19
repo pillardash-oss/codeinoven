@@ -29,7 +29,8 @@
     question: 'Question auto-answered',
     secret: 'Secret request expired',
     'image-descriptor': 'Image decision timed out',
-    'scope-confirmation': 'Destructive action auto-cancelled'
+    'scope-confirmation': 'Destructive action auto-cancelled',
+    permission: 'Permission auto-rejected'
   }
 
   let busyId = $state<string | null>(null)
