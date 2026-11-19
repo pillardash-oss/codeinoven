@@ -160,6 +160,14 @@ export class PiHostSupervisor {
     return [...this.#sessionHost.keys()]
   }
 
+  /** How many sessions one host process carries, or 0 for an unknown pid. */
+  sessionsOn(pid: number): number {
+    for (const host of this.#hosts.values()) {
+      if (host.transport.pid === pid) return this.#sessionsOn(host.id).length
+    }
+    return 0
+  }
+
   /** Start the primary host if it is not running. */
   async start(): Promise<number> {
     return this.#ensurePrimary().transport.pid

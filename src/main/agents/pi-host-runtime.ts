@@ -74,10 +74,11 @@ function syncHostServices(host: PiHostSupervisor): void {
     hostServiceIds.delete(pid)
   }
   named.forEach((pid, index) => {
+    const hosted = host.sessionsOn(pid)
+    const carrying =
+      hosted === 0 ? 'No hosted threads' : `${hosted} hosted thread${hosted === 1 ? '' : 's'}`
     const detail =
-      named.length === 1
-        ? 'Hosts every Pi thread on this device'
-        : `Pi host ${index + 1} of ${named.length} on this device`
+      named.length === 1 ? carrying : `Pi host ${index + 1} of ${named.length}, ${carrying}`
     hostServiceIds.set(
       pid,
       appServiceRegistry.register({

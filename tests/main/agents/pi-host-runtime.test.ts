@@ -37,7 +37,13 @@ import { piHostSupervisor, stopPiHost } from '../../../src/main/agents/pi-host-r
 import { appServiceRegistry } from '../../../src/main/system/app-service-registry'
 
 /** Rows this module owns, so another module's rows cannot affect the assertions. */
-function hostRows(): { id: string; pid: number | null; name: string; stoppable: boolean }[] {
+function hostRows(): {
+  id: string
+  pid: number | null
+  name: string
+  detail: string | null
+  stoppable: boolean
+}[] {
   return appServiceRegistry
     .list()
     .filter((row) => row.id.startsWith('pi-host-'))
@@ -45,6 +51,7 @@ function hostRows(): { id: string; pid: number | null; name: string; stoppable: 
       id: row.id,
       pid: row.pid,
       name: row.name,
+      detail: row.detail,
       stoppable: row.stoppable
     }))
 }
@@ -73,7 +80,13 @@ describe('Pi host service rows', () => {
     await vi.advanceTimersByTimeAsync(300)
 
     expect(hostRows()).toEqual([
-      { id: 'pi-host-5123', pid: 5123, name: 'CIO Pi host', stoppable: true }
+      {
+        id: 'pi-host-5123',
+        pid: 5123,
+        name: 'CIO Pi host',
+        detail: 'No hosted threads',
+        stoppable: true
+      }
     ])
   })
 
