@@ -386,3 +386,16 @@ describe('ovenPiRunEnvironment', () => {
     expect(environment).toEqual({})
   })
 })
+
+describe('PiDriver workspace temp environment', () => {
+  it('answers no override instead of throwing for a path that is not on this machine', async () => {
+    // An Oven thread's working directory lives on the Oven. The driver used to
+    // mkdir it locally, which failed with ENOENT on the Oven's home and killed
+    // the send before the turn started.
+    const { PiModelCatalog } = await import('../../../src/main/drivers/pi/pi-driver-models')
+    const catalog = new PiModelCatalog({} as never)
+    await expect(
+      catalog.workspaceTemporaryEnvironment('/home/azureuser/scope/checkout')
+    ).resolves.toEqual({})
+  })
+})
