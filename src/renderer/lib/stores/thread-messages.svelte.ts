@@ -564,7 +564,10 @@ class ThreadMessagesStore {
       // Keep the optimistic user prompt as-is; the card carries the failure.
       return
     }
-    const messageError = error instanceof Error ? error.message : 'Message failed to send.'
+    // The invoke rejection still carries Electron's wrapper, which names the
+    // channel instead of the problem; the shared normalizer strips it so the
+    // card reads as the failure the user has to act on.
+    const messageError = ipcErrorMessage(error, 'Message failed to send.')
     entry.error = messageError
     // Keep the user's prompt when transport fails. Removing it makes a send
     // failure look like the conversation was wiped and loses retry context.

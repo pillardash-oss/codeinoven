@@ -13,6 +13,7 @@ import {
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { readDeviceHold } from '$lib/stores/queued-resource-wait.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import {
   responseReferencesState,
@@ -813,7 +814,7 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     } catch (error) {
       this.root.abortRun.clearLocalTurn()
       agentRuns.setIdle(projectId, id)
-      const failure = error instanceof Error ? error.message : 'The prompt could not be sent.'
+      const failure = ipcErrorMessage(error, 'The prompt could not be sent.')
       this.errorMessage = failure
       // Only when the message never reached the conversation   the agent never
       // started working, so nothing on screen owns the words   is it put back in
