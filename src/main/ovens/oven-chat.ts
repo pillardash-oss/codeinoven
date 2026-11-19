@@ -31,6 +31,7 @@ import { shellForPlatform } from './oven-remote-shell'
 import { remoteArgvCommand } from './oven-remote-command'
 import { findHarness } from '../agents/harness-registry'
 import { OvenService } from './oven-service'
+import { OvenResourceGate } from './oven-resource-gate'
 import { syncOvenAccount } from './oven-accounts'
 import { ovenAccountUsage, readOvenAccountUsage } from './oven-account-usage'
 import { ovenDataRoot } from './remote/oven-root-paths'
@@ -132,7 +133,13 @@ export class OvenChat {
     this.registry = new OvenRegistry(storage, vault)
     this.service = new OvenService(this.registry)
     this.harnesses = new OvenHarnessService(this.service, storage)
+    // The dispatch gate for Oven threads: one shared probe cache per Oven, so
+    // a turn held on an Oven's memory costs one SSH read per TTL window.
+    this.resourceGate = new OvenResourceGate(this.service, this.registry)
   }
+
+  /** Admission for runs this engine is about to start on an Oven. */
+  readonly resourceGate: OvenResourceGate
 
   async nameFor(ovenId: string): Promise<string> {
     if (ovenId === LOCAL_OVEN_ID) return 'Local'

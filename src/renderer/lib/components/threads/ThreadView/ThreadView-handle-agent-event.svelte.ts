@@ -12,7 +12,7 @@ import {
 } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
-import { readDeviceHold } from '$lib/stores/queued-resource-wait.svelte'
+import { readThreadHold } from '$lib/stores/queued-resource-wait.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import {
@@ -512,7 +512,13 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         // The device can hold a turn the thread is ready to start. Parking it
         // puts the message behind the queue card, whose gate says why the turn
         // has not started and re-runs this send once the machine has room.
-        if (!direct && (await readDeviceHold()) !== null) {
+        if (
+          !direct &&
+          (await readThreadHold(
+            this.root.handleAgentEvent.thread.projectId,
+            this.root.handleAgentEvent.thread.id
+          )) !== null
+        ) {
           this.root.steerQueuedMessage.parkComposerSend({
             text: normalizeComposerMessage(text, projectReferences),
             attachments,
@@ -599,7 +605,13 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     // The device can hold a turn this thread is ready to start. Parking the send
     // is the protection: the queue card names the device reading, and the gate
     // re-runs the send when the machine has room again.
-    if (!direct && (await readDeviceHold()) !== null) {
+    if (
+      !direct &&
+      (await readThreadHold(
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )) !== null
+    ) {
       this.root.steerQueuedMessage.parkComposerSend({
         text: msg,
         attachments,

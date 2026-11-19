@@ -15,7 +15,7 @@
 import { invoke } from '$lib/ipc.svelte'
 import { messageId as createMessageId } from '$shared/id'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import { queuedResourceWait, readDeviceHold } from '$lib/stores/queued-resource-wait.svelte'
+import { queuedResourceWait, readThreadHold } from '$lib/stores/queued-resource-wait.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { CHAT_DEFAULT_SETTINGS, DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import {
@@ -206,12 +206,12 @@ export async function sendOrQueueThreadMessage(
  * machine was short does not keep a retry armed after the reading clears.
  */
 async function holdForDevice(projectId: string, threadId: string): Promise<boolean> {
-  const decision = await readDeviceHold()
-  if (decision === null) {
+  const answer = await readThreadHold(projectId, threadId)
+  if (answer === null || answer.wait === null) {
     queuedResourceWait.clear(projectId, threadId)
     return false
   }
-  queuedResourceWait.hold(projectId, threadId, decision, resumeQueuedDelivery)
+  queuedResourceWait.hold(projectId, threadId, answer.wait, answer.target, resumeQueuedDelivery)
   return true
 }
 

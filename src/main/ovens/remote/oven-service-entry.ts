@@ -1,5 +1,10 @@
 /** Standalone Node service. No Electron, desktop paths, or app-owned process markers. */
-import { spawn, type ChildProcess, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import {
+  execFile,
+  spawn,
+  type ChildProcess,
+  type ChildProcessWithoutNullStreams
+} from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer, connect, type Socket } from 'node:net'
 import {
@@ -21,6 +26,7 @@ import { harnessLaunchSpec, launchSpec } from './oven-windows-command'
 import { constants, existsSync, readdirSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
+import { promisify } from 'node:util'
 import type { OvenHarnessInventoryItem, OvenProbe, OvenRun, OvenRunEvent } from '../../../lib/ovens'
 import { ovenHarnessIdForCommand } from '../../../lib/ovens'
 import { listHarnesses } from '../../agents/harness-registry'
@@ -670,6 +676,62 @@ async function probeInventory(force = false): Promise<NonNullable<OvenProbe['inv
   return inventory
 }
 
+/**
+ * Memory this machine can hand to new work right now, or null when the
+ * platform read could not answer.
+ *
+ * The desktop's dispatch gate queues a run when the Oven reports less than its
+ * floor, the same policy the local device uses, so the Oven must report the
+ * number itself: the machine running the app cannot see inside another
+ * computer's memory. Linux answers from `/proc/meminfo`, macOS from `vm_stat`,
+ * and Windows from CIM through PowerShell. Every path is best-effort: a
+ * sampler that cannot answer must never make the Oven look busy.
+ */
+async function availableMemoryBytes(): Promise<number | null> {
+  try {
+    if (process.platform === 'linux') {
+      const meminfo = await readFile('/proc/meminfo', 'utf8')
+      const match = /^MemAvailable:\s+(\d+) kB$/mu.exec(meminfo)
+      return match === null ? null : Number(match[1]) * 1024
+    }
+    if (process.platform === 'darwin') {
+      const { stdout } = await promisifiedExecFile('/usr/bin/vm_stat', [], { timeout: 1000 })
+      let pageSize = 0
+      const pages: Record<string, number> = {}
+      for (const line of stdout.split('\n')) {
+        const sizeLine = /^page size of (\d+) bytes$/u.exec(line.trim())
+        if (sizeLine !== null) {
+          pageSize = Number(sizeLine[1])
+          continue
+        }
+        const parsed = /^(.+):\s+(\d+)\.$/u.exec(line.trim())
+        if (parsed !== null) pages[parsed[1]] = Number(parsed[2])
+      }
+      const free =
+        (pages['Pages free'] ?? 0) +
+        (pages['Pages inactive'] ?? 0) +
+        (pages['Pages speculative'] ?? 0) +
+        (pages['Pages purgeable'] ?? 0)
+      return pageSize === 0 ? null : free * pageSize
+    }
+    if (process.platform === 'win32') {
+      const { stdout } = await promisifiedExecFile(
+        'powershell.exe',
+        ['-NoProfile', '-Command', '(Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory'],
+        { timeout: 5000 }
+      )
+      const kilobytes = Number(stdout.trim())
+      return Number.isFinite(kilobytes) && kilobytes > 0 ? kilobytes * 1024 : null
+    }
+  } catch {
+    return null
+  }
+  return null
+}
+
+/** Promisified `execFile` for the platform memory samplers. */
+const promisifiedExecFile = promisify(execFile)
+
 async function probe(refresh = false): Promise<OvenProbe> {
   const inventory = await probeInventory(refresh)
   const inventoryByCommand = new Map(inventory.map((item) => [item.command, item.executablePath]))
@@ -678,7 +740,7 @@ async function probe(refresh = false): Promise<OvenProbe> {
     path: inventoryByCommand.get(command) ?? null
   }))
   const home = homedir()
-  const disk = await statfs(home)
+  const [disk, memoryAvailable] = await Promise.all([statfs(home), availableMemoryBytes()])
   return {
     protocolVersion: PROTOCOL,
     serviceRevision: revision,
@@ -695,6 +757,7 @@ async function probe(refresh = false): Promise<OvenProbe> {
       architecture: process.arch,
       cpuCount: availableParallelism(),
       memoryBytes: totalmem(),
+      ...(memoryAvailable === null ? {} : { memoryAvailableBytes: memoryAvailable }),
       diskBytes: disk.blocks * disk.bsize,
       diskAvailableBytes: disk.bavail * disk.bsize,
       nodeVersion: process.versions.node,

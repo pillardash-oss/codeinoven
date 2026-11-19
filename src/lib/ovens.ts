@@ -92,6 +92,12 @@ export interface OvenConnectionStatus {
     architecture: string
     cpuCount: number
     memoryBytes: number
+    /**
+     * Memory the Oven says it can hand to new work right now. The service
+     * samples it per platform and omits it only when its sampler cannot answer;
+     * an older service without the field fails open in the dispatch gate.
+     */
+    memoryAvailableBytes?: number
     diskBytes: number
     diskAvailableBytes: number
     nodeVersion: string | null

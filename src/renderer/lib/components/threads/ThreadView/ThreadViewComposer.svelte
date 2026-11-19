@@ -99,7 +99,11 @@
     resourceWait={queuedResourceWait.for(
       board.handleAgentEvent.thread.projectId,
       board.handleAgentEvent.thread.id
-    )}
+    )?.decision ?? null}
+    resourceWaitTarget={queuedResourceWait.for(
+      board.handleAgentEvent.thread.projectId,
+      board.handleAgentEvent.thread.id
+    )?.target ?? null}
     steerModifierLabel={board.state.steerModifierLabel}
     threadId={board.handleAgentEvent.thread.id}
     stackedAbove={board.unmirroredTraceStartTime.stackedAboveSlot('queued')}

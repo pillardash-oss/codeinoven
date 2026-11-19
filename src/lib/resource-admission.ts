@@ -66,7 +66,7 @@ export function holdsAdmission(decision: AdmissionDecision): boolean {
   return decision.action === 'queue'
 }
 
-export type AdmissionReason = 'enough' | 'cpu-short' | 'cpu-and-memory-short'
+export type AdmissionReason = 'enough' | 'cpu-short' | 'cpu-and-memory-short' | 'memory-short'
 
 export interface AdmissionDecision {
   action: AdmissionAction
@@ -82,6 +82,113 @@ export interface AdmissionDecision {
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0
   return Math.min(100, Math.max(0, value))
+}
+
+/**
+ * What a held message is waiting on: this machine, or one named Oven.
+ *
+ * The card says which machine the wait belongs to, so an Oven hold reads as an
+ * Oven hold instead of as this device being busy.
+ */
+export type ResourceWaitTarget = { kind: 'device' } | { kind: 'oven'; ovenId: string; name: string }
+
+/** One thread's gate answer: the reading that holds it, and whose machine. */
+export interface ThreadResourceGateAnswer {
+  wait: AdmissionDecision | null
+  target: ResourceWaitTarget
+}
+
+/**
+ * One Oven's reading, shaped for {@link decideOvenAdmission}.
+ *
+ * `memoryAvailableBytes` is null when the Oven's service revision predates the
+ * field or its sampler could not answer. `activeRuns` is the number of harness
+ * runs the Oven service reports as running, which every revision answers.
+ */
+export interface OvenResourceSample {
+  memoryAvailableBytes: number | null
+  totalMemoryBytes: number
+  activeRuns: number
+}
+
+/** Memory one Oven run is assumed to cost, for the run-cap fallback. */
+export const OVEN_RUN_ASSUMED_BYTES = 8 * 1024 ** 3
+/** Never fewer than one concurrent run on a small Oven. */
+export const OVEN_RUN_CAP_MIN = 1
+/** Never more than this many concurrent runs on one Oven, however large. */
+export const OVEN_RUN_CAP_MAX = 12
+
+/**
+ * How many concurrent runs an Oven's memory plausibly supports.
+ *
+ * The cap is a fallback for services that predate the live memory reading: it
+ * bounds the Oven by its own total memory, so a queued message waits on a
+ * machine the current runs already fill rather than on a number pulled from
+ * nowhere. A live reading always outranks it.
+ */
+export function ovenRunCapacity(totalMemoryBytes: number): number {
+  if (!Number.isFinite(totalMemoryBytes) || totalMemoryBytes <= 0) return OVEN_RUN_CAP_MIN
+  return Math.min(
+    OVEN_RUN_CAP_MAX,
+    Math.max(OVEN_RUN_CAP_MIN, Math.floor(totalMemoryBytes / OVEN_RUN_ASSUMED_BYTES))
+  )
+}
+
+/**
+ * Decide whether one Oven has room for a new run.
+ *
+ * The Oven's own memory is the whole question: the machine running the app is
+ * not the one about to receive the work, so its CPU is irrelevant. A queue
+ * holds the message when the Oven reports less available memory than its floor,
+ * or when its running count has already reached what its total memory supports
+ * and the service cannot report a live reading (a live reading outranks the
+ * run count, because runs vary widely in what they actually hold).
+ */
+export function decideOvenAdmission(
+  sample: OvenResourceSample,
+  sampledAt = Date.now()
+): AdmissionDecision {
+  const totalMemoryBytes = Number.isFinite(sample.totalMemoryBytes)
+    ? Math.max(0, sample.totalMemoryBytes)
+    : 0
+  const floor = memoryFloorBytes(totalMemoryBytes)
+  const memoryAvailableBytes =
+    sample.memoryAvailableBytes === null || !Number.isFinite(sample.memoryAvailableBytes)
+      ? null
+      : Math.max(0, sample.memoryAvailableBytes)
+  const activeRuns = Number.isFinite(sample.activeRuns) ? Math.max(0, sample.activeRuns) : 0
+
+  if (memoryAvailableBytes !== null && memoryAvailableBytes < floor) {
+    return {
+      action: 'queue',
+      reason: 'memory-short',
+      cpuAvailablePercent: 100,
+      memoryAvailableBytes,
+      memoryFloorBytes: floor,
+      totalMemoryBytes,
+      sampledAt
+    }
+  }
+  if (memoryAvailableBytes === null && activeRuns >= ovenRunCapacity(totalMemoryBytes)) {
+    return {
+      action: 'queue',
+      reason: 'memory-short',
+      cpuAvailablePercent: 100,
+      memoryAvailableBytes: 0,
+      memoryFloorBytes: floor,
+      totalMemoryBytes,
+      sampledAt
+    }
+  }
+  return {
+    action: 'proceed',
+    reason: 'enough',
+    cpuAvailablePercent: 100,
+    memoryAvailableBytes: memoryAvailableBytes ?? 0,
+    memoryFloorBytes: floor,
+    totalMemoryBytes,
+    sampledAt
+  }
 }
 
 /**

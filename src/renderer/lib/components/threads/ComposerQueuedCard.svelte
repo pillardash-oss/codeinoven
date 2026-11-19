@@ -14,7 +14,11 @@
   import CardTag from '../shared/CardTag.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import type { StartAfterThreadReference } from '$lib/stores/renderer-recovery'
-  import { CPU_AVAILABLE_FLOOR_PERCENT, type AdmissionDecision } from '$shared/resource-admission'
+  import {
+    CPU_AVAILABLE_FLOOR_PERCENT,
+    type AdmissionDecision,
+    type ResourceWaitTarget
+  } from '$shared/resource-admission'
   import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
   import type { PromptAttachment, UserMessagePresentation } from '$shared/types'
 
@@ -38,8 +42,10 @@
     presentation: UserMessagePresentation | undefined
     /** Threads the queued message waits for before it sends. */
     startAfterThreads: StartAfterThreadReference[]
-    /** The device reading holding this message, when the machine is what waits. */
+    /** The reading holding this message, when a machine is what waits. */
     resourceWait?: AdmissionDecision | null
+    /** Whose machine the wait belongs to, when a machine is what waits. */
+    resourceWaitTarget?: ResourceWaitTarget | null
     /** The steer combo, so the send-now action names the key that does it. */
     steerModifierLabel: string
     /** Thread the queued message belongs to, so its fold state is remembered. */
@@ -70,6 +76,7 @@
     presentation,
     startAfterThreads,
     resourceWait = null,
+    resourceWaitTarget = null,
     steerModifierLabel,
     threadId,
     stackedAbove = false,
@@ -157,7 +164,11 @@ the head's menu. -->
 >
   {#snippet meta()}
     {#if resourceWait}
-      <CardTag text="Waiting on this device" />
+      <CardTag
+        text={resourceWaitTarget?.kind === 'oven'
+          ? `Waiting on ${resourceWaitTarget.name}`
+          : 'Waiting on this device'}
+      />
     {:else if startAfterThreads.length === 0}
       <CardTag text="Sends after this turn" />
     {/if}

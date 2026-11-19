@@ -14,7 +14,11 @@
  */
 import { invoke } from '$lib/ipc.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
-import { holdsAdmission, type AdmissionDecision } from '$shared/resource-admission'
+import {
+  type AdmissionDecision,
+  type ResourceWaitTarget,
+  type ThreadResourceGateAnswer
+} from '$shared/resource-admission'
 
 /** How often a message waiting on the device asks again. */
 const RECHECK_MS = 5_000
@@ -23,6 +27,8 @@ interface ResourceWait {
   projectId: string
   threadId: string
   decision: AdmissionDecision
+  /** Whose machine the wait belongs to: this device, or one named Oven. */
+  target: ResourceWaitTarget
   /** What delivers the message once the device frees up. */
   retry: (() => void) | null
 }
@@ -31,10 +37,13 @@ class QueuedResourceWait {
   #waits = $state<ResourceWait[]>([])
   #timer: ReturnType<typeof setInterval> | null = null
 
-  /** The device reading holding this thread's queued message, if it is held. */
-  for(projectId: string, threadId: string): AdmissionDecision | null {
+  /** The reading holding this thread's queued message, and whose machine. */
+  for(
+    projectId: string,
+    threadId: string
+  ): { decision: AdmissionDecision; target: ResourceWaitTarget } | null {
     const wait = this.#find(projectId, threadId)
-    return wait === undefined ? null : wait.decision
+    return wait === undefined ? null : { decision: wait.decision, target: wait.target }
   }
 
   /** True when this thread's queued message is waiting on the device. */
@@ -46,14 +55,23 @@ class QueuedResourceWait {
    * Park the message on the device. The retry is what re-runs delivery, so the
    * path that queued the message keeps ownership of it.
    */
-  hold(projectId: string, threadId: string, decision: AdmissionDecision, retry?: () => void): void {
+  hold(
+    projectId: string,
+    threadId: string,
+    decision: AdmissionDecision,
+    target: ResourceWaitTarget,
+    retry?: () => void
+  ): void {
     const existing = this.#find(projectId, threadId)
     if (existing !== undefined) {
       this.#waits = this.#waits.map((wait) =>
-        wait === existing ? { ...wait, decision, retry: retry ?? wait.retry } : wait
+        wait === existing ? { ...wait, decision, target, retry: retry ?? wait.retry } : wait
       )
     } else {
-      this.#waits = [...this.#waits, { projectId, threadId, decision, retry: retry ?? null }]
+      this.#waits = [
+        ...this.#waits,
+        { projectId, threadId, decision, target, retry: retry ?? null }
+      ]
     }
     this.#arm()
   }
@@ -86,7 +104,7 @@ class QueuedResourceWait {
     this.#timer = null
   }
 
-  /** One recheck: drop stale waits, read the device, and release when it clears. */
+  /** One recheck: drop stale waits, ask each thread's own gate, release what cleared. */
   async #tick(): Promise<void> {
     const live = this.#waits.filter(
       (wait) => rendererRecovery.queuedMessageFor(wait.projectId, wait.threadId) !== null
@@ -98,33 +116,55 @@ class QueuedResourceWait {
         return
       }
     }
-    let decision: AdmissionDecision
+    // One gate answer per held thread. A device wait reads this machine; an
+    // Oven wait probes its Oven, which main caches briefly so this cadence
+    // costs one SSH probe per Oven, not per thread.
+    const answers = await Promise.all(
+      this.#waits.map(async (wait) => ({
+        wait,
+        answer: await this.#gateFor(wait.projectId, wait.threadId)
+      }))
+    )
+    const stillHeld: ResourceWait[] = []
+    const released: (() => void)[] = []
+    for (const { wait, answer } of answers) {
+      if (answer === null || answer.wait === null) {
+        if (wait.retry !== null) released.push(wait.retry)
+        continue
+      }
+      stillHeld.push({ ...wait, decision: answer.wait, target: answer.target })
+    }
+    if (stillHeld.length === 0) {
+      this.clearAll()
+    } else {
+      this.#waits = stillHeld
+    }
+    for (const retry of released) retry()
+  }
+
+  /** One thread's gate answer, or null when the gate could not be read. */
+  async #gateFor(projectId: string, threadId: string): Promise<ThreadResourceGateAnswer | null> {
     try {
-      decision = await invoke('system:resourceAdmission')
+      return await invoke('system:threadResourceGate', projectId, threadId)
     } catch {
-      return
+      return null
     }
-    if (holdsAdmission(decision)) {
-      this.#waits = this.#waits.map((wait) => ({ ...wait, decision }))
-      return
-    }
-    const retries = this.#waits
-      .map((wait) => wait.retry)
-      .filter((retry): retry is () => void => retry !== null)
-    this.clearAll()
-    for (const retry of retries) retry()
   }
 }
 
 /**
- * The device reading that should hold a new turn, or null when the turn may
- * start. A reading that cannot be taken fails open: an unreachable sampler must
- * never stop the user's work.
+ * The reading that should hold a new turn on this thread, or null when the
+ * turn may start. The gate answers for whichever machine will run it: this
+ * device for a local thread, the named Oven for an Oven thread. A reading that
+ * cannot be taken fails open: an unreachable sampler must never stop the
+ * user's work.
  */
-export async function readDeviceHold(): Promise<AdmissionDecision | null> {
+export async function readThreadHold(
+  projectId: string,
+  threadId: string
+): Promise<ThreadResourceGateAnswer | null> {
   try {
-    const decision = await invoke('system:resourceAdmission')
-    return holdsAdmission(decision) ? decision : null
+    return await invoke('system:threadResourceGate', projectId, threadId)
   } catch {
     return null
   }

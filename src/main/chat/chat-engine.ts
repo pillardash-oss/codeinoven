@@ -3,6 +3,10 @@ import type { DonRuntime } from './chat-engine-don'
 import { ChatEngineState } from './chat-engine/chat-engine-state'
 import type { ThreadTransferRelease } from './thread-transfer-service/thread-transfer-workers'
 import { deviceHoldForNewTurn } from '../system/device-hold'
+import { Logger } from '../system/logger'
+import type { OvenChat } from '../ovens/oven-chat'
+import type { OvenHoldError } from '../ovens/oven-resource-gate'
+
 import type { HandoffReleaseDetails } from '../system/instance-handoff-bus'
 import { ThreadCreationCoordinator } from './thread-creation-coordinator'
 import { ThreadManager } from '../../lib/engines/thread-manager'
@@ -128,6 +132,24 @@ import type {
 } from './chat-engine/chat-engine-types'
 import { buildChatEngineUnits } from './chat-engine/chat-engine-units'
 import type { DirectReplyInput } from './chat-engine/chat-engine-direct-reply'
+
+/**
+ * The Oven gate that mirrors the device gate: a turn aimed at an Oven waits on
+ * that Oven's own memory reading, and the refusal keeps the message the same
+ * way {@link deviceHoldForNewTurn} keeps one for this machine.
+ */
+async function ovenHoldForNewTurn(
+  ovenChat: OvenChat,
+  ovenId: string | undefined
+): Promise<OvenHoldError | null> {
+  if (!ovenId || ovenId === 'local') return null
+  try {
+    return await ovenChat.resourceGate.holdFor(ovenId)
+  } catch (error) {
+    Logger.dev('Oven gate: reading failed, failing open', error)
+    return null
+  }
+}
 
 export {
   CITATION_SYSTEM_INSTRUCTION,
@@ -938,6 +960,8 @@ export class ChatEngine {
     if (origin === 'user') {
       const held = await deviceHoldForNewTurn()
       if (held !== null) throw held
+      const ovenHeld = await ovenHoldForNewTurn(this.state.ovenChat, settings.ovenId)
+      if (ovenHeld !== null) throw ovenHeld
     }
     return this.units['turns-send-prompt'].sendPrompt(
       projectId,
@@ -971,6 +995,8 @@ export class ChatEngine {
     // A temporary chat is still a turn the user asked for, on the same device.
     const held = await deviceHoldForNewTurn()
     if (held !== null) throw held
+    const ovenHeld = await ovenHoldForNewTurn(this.state.ovenChat, settings.ovenId)
+    if (ovenHeld !== null) throw ovenHeld
     return this.units['temporary-chats'].sendTemporaryPrompt(
       projectId,
       threadId,

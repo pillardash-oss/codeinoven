@@ -9,7 +9,7 @@ import {
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
-import { holdsAdmission, type AdmissionDecision } from '$shared/resource-admission'
+import type { ThreadResourceGateAnswer } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import {
   isResponseSelection,
@@ -454,17 +454,19 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
    * queued on the machine, not on the thread, and the watch owns the retry.
    */
   async #holdForResources(projectId: string, threadId: string): Promise<boolean> {
-    let decision: AdmissionDecision
+    let answer: ThreadResourceGateAnswer
     try {
-      decision = await invoke('system:resourceAdmission')
+      answer = await invoke('system:threadResourceGate', projectId, threadId)
     } catch {
       return false
     }
-    if (!holdsAdmission(decision)) {
+    if (answer.wait === null) {
       queuedResourceWait.clear(projectId, threadId)
       return false
     }
-    queuedResourceWait.hold(projectId, threadId, decision, () => this.scheduleIdleAttention())
+    queuedResourceWait.hold(projectId, threadId, answer.wait, answer.target, () =>
+      this.scheduleIdleAttention()
+    )
     return true
   }
 

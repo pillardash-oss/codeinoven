@@ -21,7 +21,7 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
-import { holdsAdmission, type AdmissionDecision } from '$shared/resource-admission'
+import type { ThreadResourceGateAnswer } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import {
@@ -173,17 +173,17 @@ class QueuedMessageDispatcher {
    * holds the message here, and the shared watch re-runs the sweep once it clears.
    */
   async #holdForResources(projectId: string, threadId: string): Promise<boolean> {
-    let decision: AdmissionDecision
+    let answer: ThreadResourceGateAnswer
     try {
-      decision = await invoke('system:resourceAdmission')
+      answer = await invoke('system:threadResourceGate', projectId, threadId)
     } catch {
       return false
     }
-    if (!holdsAdmission(decision)) {
+    if (answer.wait === null) {
       queuedResourceWait.clear(projectId, threadId)
       return false
     }
-    queuedResourceWait.hold(projectId, threadId, decision, () => this.#sweep())
+    queuedResourceWait.hold(projectId, threadId, answer.wait, answer.target, () => this.#sweep())
     return true
   }
 
