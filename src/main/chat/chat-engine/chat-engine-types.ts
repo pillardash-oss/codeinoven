@@ -382,6 +382,19 @@ export interface PendingQuestionInfo {
   resolution?: AgentQuestionResolution
   answers?: string[][]
   /**
+   * The card arrived with a cross-instance transfer.
+   *
+   * Its provider dialog died with the departing instance, so there is no live
+   * request to reply into: the answer continues the persisted session as a new
+   * turn instead (see `resumeAfterInactiveQuestion`).
+   */
+  transferred?: boolean
+  /**
+   * What the move itself has to tell the resumed agent, carried until the answer
+   * finally resumes the session (the worker roster a transfer hands over).
+   */
+  transferNote?: string
+  /**
    * Set for an app-owned `cio_ask_secret` request. The gateway tool call that
    * asked is still open, so it settles here instead of being answered through a
    * harness: the values never travel to a driver.

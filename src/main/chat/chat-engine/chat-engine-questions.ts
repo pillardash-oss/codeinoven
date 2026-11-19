@@ -23,7 +23,12 @@ export class ChatEngineQuestions {
     resolution: Extract<AgentQuestionResolution, 'answered' | 'dismissed' | 'timed_out'>,
     answers?: string[][]
   ): Promise<void> {
-    await this.host.units['turns-sessions'].awaitInactiveResumeIdleFinalization(pending)
+    // A transferred card never had a turn here: the departing instance stopped
+    // and settled it before the hand-off, so there is no session exit to join.
+    // Waiting would only spend the bound on an idle that cannot arrive.
+    if (!pending.transferred) {
+      await this.host.units['turns-sessions'].awaitInactiveResumeIdleFinalization(pending)
+    }
     await this.resolvePendingQuestion(pending, resolution, answers, async () => undefined)
     // The answer starts a new turn, so the turn that asked the question can
     // never resume and its checkpoint would stay active forever. Settle it
@@ -45,11 +50,16 @@ export class ChatEngineQuestions {
       resolution === 'timed_out' ? 'answered' : resolution,
       answers
     )
+    // What the move had to say rides this turn: it is the first turn the adopting
+    // instance runs for this thread, and the note would have no other carrier.
+    const prompt = pending.transferNote
+      ? `${decision.prompt}\n\n${pending.transferNote}`
+      : decision.prompt
     await this.host.sendPrompt(
       pending.request.projectId,
       pending.request.threadId,
       thread.settings,
-      decision.prompt,
+      prompt,
       [],
       undefined,
       undefined,
@@ -304,7 +314,12 @@ export class ChatEngineQuestions {
         pending.driverId,
         this.host.sessionRegistry.get(pending.request.sessionId)?.accountId
       )
-      if (!driver || !this.host.pendingQuestions.has(pending.request.requestId)) {
+      // A transferred card has no provider dialog left to answer, so it needs no
+      // driver here: its deadline settles through the persisted-session resume.
+      if (!this.host.pendingQuestions.has(pending.request.requestId)) {
+        return
+      }
+      if (!driver && !pending.transferred) {
         return
       }
 
@@ -360,6 +375,19 @@ export class ChatEngineQuestions {
         entries: this.host.units['misc'].autoAnswerEntries(pending.request.questions, answers),
         at: Date.now()
       })
+      // A transferred card answers into the persisted session, not into a dialog:
+      // the timer that settles it is the same one that would settle a question
+      // whose provider process exited under it.
+      if (pending.transferred) {
+        void this.resumeAfterInactiveQuestion(pending, 'timed_out', answers).catch(
+          (error: unknown) => {
+            Logger.error('Automatic question resolution failed:', error)
+          }
+        )
+        return
+      }
+      // The deadline of a live card still travels to the provider that holds it.
+      if (!driver) return
       void this.resolvePendingQuestion(pending, 'timed_out', answers, () =>
         driver.replyToQuestion(
           pending.projectPath,

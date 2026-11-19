@@ -40,6 +40,7 @@ import {
 import { join } from 'node:path'
 import type { FSWatcher } from 'node:fs'
 import { getConfigRoot } from '../../lib/utils'
+import type { HandedOffQuestion } from '../chat/thread-transfer-service/thread-transfer-attention'
 import type { HandedOffWorker } from '../chat/thread-transfer-service/thread-transfer-workers'
 import { Logger } from './logger'
 
@@ -101,6 +102,15 @@ export interface HandoffReleaseDetails {
   workers?: readonly HandedOffWorker[]
   /** Pawn threads whose runs were stopped so the adopter can resume them. */
   pawnThreadIds?: readonly string[]
+  /**
+   * Question cards the release was holding for this thread.
+   *
+   * The card lives in the departing process's memory and the stop clears it, so
+   * the ack is the only place it can be handed over: nothing about it reaches the
+   * shared rows, and the adopter would otherwise resume past a question the user
+   * still owes an answer to.
+   */
+  questions?: readonly HandedOffQuestion[]
 }
 
 export interface HandoffAck {

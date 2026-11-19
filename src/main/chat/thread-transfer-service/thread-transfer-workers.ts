@@ -21,6 +21,7 @@
  */
 
 import type { AgentMessage, AgentPart } from '../../../lib/types'
+import type { HandedOffQuestion } from './thread-transfer-attention'
 
 /** One worker a thread was running when it was handed off, with what a resume needs. */
 export interface HandedOffWorker {
@@ -57,6 +58,11 @@ export interface ThreadTransferRelease {
   workers?: HandedOffWorker[]
   /** Pawn threads whose runs were stopped so the adopter can resume them. */
   pawnThreadIds?: string[]
+  /**
+   * Question cards the release was holding, so the adopter can put the decision
+   * back in front of the user instead of resuming past it.
+   */
+  questions?: HandedOffQuestion[]
 }
 
 /**
