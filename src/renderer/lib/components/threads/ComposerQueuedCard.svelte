@@ -252,7 +252,7 @@ the head's menu. -->
     </div>
     <CardButton
       label="Send now"
-      title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end`}
+      title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end or for this device to free up`}
       icon={CioSend}
       size="xs"
       disabled={!hasQueuedPayload}
