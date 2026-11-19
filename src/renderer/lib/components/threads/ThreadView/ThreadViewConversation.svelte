@@ -151,6 +151,13 @@
     if (last < 0) return null
     const closing = getTurnFinalText(messages, last, board.pollStreamParts.isTransparentTurnMessage)
     if (closing) return null
+    // A turn the reader answered is drawn slice by slice at its own mount
+    // points, so the live work has a place on both sides of the answer card and
+    // this single bubble would show all of it again below the answer.
+    if (
+      board.pollStreamParts.turnHasAnswerCuts(board.buildSpecActionPrompt.latestTurnInfo.startIndex)
+    )
+      return null
     return { parts: board.pollStreamParts.latestTurnRenderableParts }
   })
 
@@ -655,6 +662,22 @@
           onCiteFile={board.unmirroredTraceStartTime.openFileCitation}
           formatOutput={conversationTraceOutput}
         />
+      {/snippet}
+      <!-- One slice of a group turn's work, drawn where that slice belongs.
+           The transcript's own answers (a question the reader settled) sit
+           between the slices, so the work that asked reads above the answer and
+           the work the answer unblocked reads below it, under the speaker who
+           did it. -->
+      {#snippet groupTraceBubble(segment: TraceSegmentLayout, traceMsg: AgentMessage)}
+        {@const sliceSpeaker = groupSpeakerFor(traceMsg)}
+        <GroupReplyBubble
+          name={sliceSpeaker?.name ?? board.handleAgentEvent.thread.title}
+          icon={sliceSpeaker?.icon ?? null}
+          color={sliceSpeaker?.color}
+          plate={sliceSpeaker?.plate ?? false}
+        >
+          {@render turnTraceSegment(segment, traceMsg, true)}
+        </GroupReplyBubble>
       {/snippet}
       <!-- One slice of a turn's working trace. A turn the reader answered is cut
            at that answer, so the work that led to the question, the answer card,
@@ -1322,6 +1345,20 @@
               {/if}
             </div>
           {/if}
+          <!-- A slice of group work that the answer unblocked has no assistant
+               row of its own until the harness mirrors one. It reads directly
+               under the answer instead of waiting, so the resumed work appears
+               where it happened rather than at the end of the turn. -->
+          {#if groupThread}
+            {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
+              {#if segment.boundaries.length > 0}
+                {@render groupTraceBubble(
+                  segment,
+                  board.loadOlderMessages.messages[segment.turnStart] ?? msg
+                )}
+              {/if}
+            {/each}
+          {/if}
         {:else}
           <!-- Assistant message   one WorkTrace slice per answer the turn crossed -->
           {@const isTurnEnd = board.pollStreamParts.transcriptIndex.isTurnEnd[absIndex] ?? false}
@@ -1376,6 +1413,12 @@
               {#if !groupThread}
                 {#each traceSegmentsAbove as segment (segment.segmentIndex)}
                   {@render turnTraceSegment(segment, msg)}
+                {/each}
+              {:else}
+                {#each traceSegmentsAbove as segment (segment.segmentIndex)}
+                  {#if segment.boundaries.length > 0}
+                    {@render groupTraceBubble(segment, msg)}
+                  {/if}
                 {/each}
               {/if}
 
@@ -1489,20 +1532,26 @@
                             .slice(turnOpeningIndex, absIndex + 1)
                             .map((message) => message.id)
                         )}
-                        {#each board.pollStreamParts.completedTurnViews.filter( (view) => turnMessageIds.has(view.anchorId) ) as view (view.turn.endTs)}
-                          {@render completedTurnTraceBlock(view.turn)}
-                        {/each}
-                        <!-- One trace per reply. A turn is cut at an answered
-                             question so the work can bracket the answer card, but
-                             a group reply draws the whole turn in one bubble, so
-                             those cuts would stack several trace cards under one
-                             answer and read as duplicated work. -->
-                        {@render turnTraceSegment(
-                          board.pollStreamParts.wholeTurnSegment(turnOpeningIndex),
-                          msg,
-                          true,
-                          pinnedAboveHeldSteer ? (turnClosingText?.id ?? null) : undefined
-                        )}
+                        {@const turnIsCut =
+                          board.pollStreamParts.turnHasAnswerCuts(turnOpeningIndex)}
+                        {#if !turnIsCut}
+                          {#each board.pollStreamParts.completedTurnViews.filter( (view) => turnMessageIds.has(view.anchorId) ) as view (view.turn.endTs)}
+                            {@render completedTurnTraceBlock(view.turn)}
+                          {/each}
+                          <!-- One trace per reply. A turn with no answered
+                               question reads whole inside the bubble that closes
+                               it. A turn the reader answered is cut instead: each
+                               slice draws at its own mount point, so the answer
+                               card sits between the work that asked it and the
+                               work it unblocked, and drawing it whole here would
+                               repeat that work under the answer. -->
+                          {@render turnTraceSegment(
+                            board.pollStreamParts.wholeTurnSegment(turnOpeningIndex),
+                            msg,
+                            true,
+                            pinnedAboveHeldSteer ? (turnClosingText?.id ?? null) : undefined
+                          )}
+                        {/if}
                       {/if}
                       {#if isReadingActiveLine}
                         <!-- The read-along only exists while a turn is being
@@ -1844,6 +1893,15 @@
               segment,
               board.loadOlderMessages.messages[segment.turnStart] ?? msg
             )}
+          {/each}
+        {:else}
+          {#each board.pollStreamParts.segmentsBelow(absIndex) as segment (segment.segmentIndex)}
+            {#if segment.boundaries.length > 0}
+              {@render groupTraceBubble(
+                segment,
+                board.loadOlderMessages.messages[segment.turnStart] ?? msg
+              )}
+            {/if}
           {/each}
         {/if}
       {/each}

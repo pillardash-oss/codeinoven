@@ -123,6 +123,19 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
   })
 
   /**
+   * Whether a turn was cut by an answered question.
+   *
+   * A cut turn draws its work at each slice's own mount point, so the answer
+   * card sits between the work that asked it and the work it unblocked. A turn
+   * with no cut has one slice and is drawn whole.
+   */
+  turnHasAnswerCuts(turnStart: number): boolean {
+    return this.traceSegmentLayout.some(
+      (segment) => segment.turnStart === turnStart && segment.boundaries.length > 0
+    )
+  }
+
+  /**
    * One turn's trace as a single slice.
    *
    * A group reply draws every step of its turn inside the bubble that closes it,
