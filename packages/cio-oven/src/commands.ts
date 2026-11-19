@@ -20,6 +20,7 @@ import {
 } from './service'
 import { askConfirm, askPort, askText, promptsAvailable } from './prompt'
 import { candidateAddresses } from './addresses'
+import { discoverPublicAddress } from './public-address'
 import { blank, code as copyBlock, fail, field, note, out, section, step, warn } from './output'
 
 /** The oldest Node the Oven service runs on, matching the app's own requirement. */
@@ -252,7 +253,8 @@ async function publish(
   inputs: ResolvedInputs,
   serviceRevision: string,
   protocolVersion: number,
-  identity: IdentityResult | null
+  identity: IdentityResult | null,
+  publicAddress: string | undefined
 ): Promise<void> {
   const descriptor = buildDescriptor({
     name: inputs.name,
@@ -260,6 +262,7 @@ async function publish(
     user: currentUser(),
     dataRoot: layout.dataRoot,
     serviceRevision,
+    ...(publicAddress ? { publicAddress } : {}),
     ...(identity
       ? {
           identity: {
@@ -274,6 +277,9 @@ async function publish(
   section('Oven ready')
   field('Name', descriptor.name)
   field('Host', descriptor.hostname)
+  // The field column is 12 wide, so the label stays short enough not to run into
+  // the value; the discovered address also leads the Addresses line below.
+  if (publicAddress) field('Public IP', publicAddress)
   field('Addresses', (descriptor.addresses ?? []).join(', '))
   field('User', descriptor.user)
   field('SSH port', String(descriptor.port))
@@ -287,7 +293,7 @@ async function publish(
     field('Key authorized', identity.verified ? 'verified' : 'needs the step below')
   }
   section('Register it in CodeInOven')
-  note('Open Settings, then Ovens, then Add via agent, and paste this code:')
+  note('Open Settings, then Ovens, then Add via oven service, and paste this code:')
   copyBlock(registrationCode(descriptor))
   note(`A copy is saved at ${layout.registrationFile}`)
   note('Then open the Oven and run its setup to install the harnesses you want.')
@@ -303,6 +309,12 @@ async function publish(
  */
 export async function start(options: StartOptions): Promise<void> {
   requireNode()
+  // Discovery goes to the network, so it starts here and is awaited only where
+  // the summary prints it. The prompts and the service install cover the wait,
+  // so a machine with no route out costs its bounded lookup instead of a
+  // stalled start, and a machine that does have one gets its public address
+  // published first in the candidate list.
+  const publicAddress = discoverPublicAddress()
   const layout = ovenLayout(options.dataRoot)
   const bundle = await readBundle()
   const inputs = await resolveInputs(options)
@@ -355,7 +367,8 @@ export async function start(options: StartOptions): Promise<void> {
         inputs,
         revision,
         before.probe?.protocolVersion ?? OVEN_PROTOCOL_VERSION,
-        existing
+        existing,
+        await publicAddress
       )
       return
     }
@@ -398,7 +411,8 @@ export async function start(options: StartOptions): Promise<void> {
     inputs,
     probe.serviceRevision || bundle.revision,
     probe.protocolVersion || OVEN_PROTOCOL_VERSION,
-    identity
+    identity,
+    await publicAddress
   )
 }
 
