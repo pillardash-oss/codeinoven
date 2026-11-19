@@ -20,7 +20,13 @@ export class DeviceHoldError extends Error {
   readonly decision: AdmissionDecision
 
   constructor(decision: AdmissionDecision) {
-    super('The device is short on CPU and memory, so this turn is waiting for room.')
+    // The window parks a message on its own reading before it ever gets here, so
+    // reaching this refusal means the machine turned short between the two
+    // readings. Nothing is queued by this path, so the message must not promise
+    // that the turn is waiting: it says where the words are and what to do.
+    super(
+      'The device is short on CPU and memory. The message is kept; send it again once the machine has room.'
+    )
     this.name = 'DeviceHoldError'
     this.decision = decision
   }
