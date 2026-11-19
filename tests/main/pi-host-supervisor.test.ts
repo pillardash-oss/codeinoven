@@ -153,6 +153,9 @@ describe('PiHostSupervisor', () => {
       sessionPath: '/agent/sessions/atlas.jsonl'
     })
     expect(moved.nativeSessionId).toBe('native-atlas')
+    // The move has to answer where the session went, or the card that shows the
+    // result has no pid to show.
+    expect(supervisor.hostOf('atlas')).toBe(501)
     expect(supervisor.sessions()).toEqual(['atlas'])
   })
 

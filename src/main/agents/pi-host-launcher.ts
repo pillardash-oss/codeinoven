@@ -55,7 +55,12 @@ export function spawnPiHost(): HostTransport {
   })
 
   return {
-    pid: helper.pid ?? 0,
+    // A getter, not a frozen value: Electron assigns the pid when the utility
+    // process actually starts, so reading it once at fork time reported 0 for
+    // every host the rest of the app then tried to list or show.
+    get pid(): number {
+      return helper.pid ?? 0
+    },
     send: (line) => helper.postMessage(line),
     onLine: (listener) => {
       lineListeners.push(listener)

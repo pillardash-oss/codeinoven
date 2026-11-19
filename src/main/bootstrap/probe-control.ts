@@ -12,6 +12,9 @@
  *
  *   {"id":"1","action":"send","projectId":"…","threadId":"…","text":"…"}
  *   {"id":"2","action":"transfer","projectId":"…","threadId":"…"}
+ *   {"id":"3","action":"cards","projectId":"…","threadId":"…"}
+ *   {"id":"4","action":"answer","projectId":"…","threadId":"…","requestId":"…","answers":[["Approve"]]}
+ *   {"id":"5","action":"move","projectId":"…","threadId":"…"}
  *
  * The answer is written beside the request as `response-<id>.json`, so a test
  * driver reads the verdict instead of guessing from logs.
@@ -51,6 +54,17 @@ type ProbeControlRequest =
       targetPid?: number
     }
   | { id: string; action: 'transfer'; projectId: string; threadId: string; targetPid?: number }
+  | {
+      id: string
+      action: 'answer'
+      projectId: string
+      threadId: string
+      requestId: string
+      answers: string[][]
+      targetPid?: number
+    }
+  | { id: string; action: 'move'; projectId: string; threadId: string; targetPid?: number }
+  | { id: string; action: 'cards'; projectId: string; threadId: string; targetPid?: number }
 
 /** The answer a test driver reads back. */
 interface ProbeControlResponse {
@@ -151,6 +165,17 @@ function parseRequest(text: string): ProbeControlRequest | null {
   const addressed = targetPid === undefined ? {} : { targetPid }
   if (id === '' || projectId === '' || threadId === '') return null
   if (action === 'transfer') return { id, action, projectId, threadId, ...addressed }
+  if (action === 'move' || action === 'cards') {
+    return { id, action, projectId, threadId, ...addressed }
+  }
+  if (action === 'answer') {
+    const requestId = typeof record['requestId'] === 'string' ? record['requestId'] : ''
+    const answers = Array.isArray(record['answers'])
+      ? record['answers'].filter((row): row is string[] => Array.isArray(row))
+      : []
+    if (requestId === '' || answers.length === 0) return null
+    return { id, action, projectId, threadId, requestId, answers, ...addressed }
+  }
   if (action !== 'send') return null
   const prompt = typeof record['text'] === 'string' ? record['text'] : ''
   if (prompt === '') return null
@@ -177,6 +202,60 @@ async function run(
         thread.settings,
         request.text,
         []
+      )
+      response.ok = true
+    } else if (request.action === 'answer') {
+      // The card a hosted session raises is answered through the same entry the
+      // renderer uses, so a probe proves the real path and not a shortcut.
+      const permission = host.chatEngine.state.pendingPermissions.get(request.requestId)
+      if (permission !== undefined) {
+        await host.chatEngine.replyPermission(request.projectId, request.requestId, 'once')
+      } else {
+        await host.chatEngine.answerQuestion(
+          request.projectId,
+          request.threadId,
+          request.requestId,
+          request.answers
+        )
+      }
+      response.ok = true
+    } else if (request.action === 'cards') {
+      // A card waiting for an answer is state, not a transcript row, so a probe
+      // reads it here and then answers it through `answer`. Permission cards and
+      // question cards are separate maps in the engine, and a probe needs both.
+      const permissions = [...host.chatEngine.state.pendingPermissions.values()]
+        .filter(
+          (pending) =>
+            pending.session.projectId === request.projectId &&
+            pending.session.threadId === request.threadId
+        )
+        .map((pending) => ({
+          kind: 'permission' as const,
+          requestId: pending.request.id,
+          permission: pending.request.permission,
+          risk: pending.policy.risk,
+          reason: pending.policy.reason
+        }))
+      const questions = [...host.chatEngine.pendingQuestions.values()]
+        .filter(
+          (pending) =>
+            pending.request.projectId === request.projectId &&
+            pending.request.threadId === request.threadId
+        )
+        .map((pending) => ({
+          kind: 'question' as const,
+          requestId: pending.request.requestId,
+          questions: pending.request.questions.map((question) => ({
+            prompt: question.prompt,
+            options: question.options ?? []
+          }))
+        }))
+      response.result = [...permissions, ...questions]
+      response.ok = true
+    } else if (request.action === 'move') {
+      response.result = await host.chatEngine.moveSessionToNewHost(
+        request.projectId,
+        request.threadId
       )
       response.ok = true
     } else {
