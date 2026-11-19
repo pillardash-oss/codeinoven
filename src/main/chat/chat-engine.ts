@@ -9,6 +9,7 @@ import { CheckpointManager } from '../storage/checkpoint-manager'
 import type { SearchSummaryRequest } from '../search/thread-search-summary'
 import type { ProjectFingerprint } from '../git/change-tracking-service'
 import type { HarnessDriver } from '../drivers/driver.interface'
+import type { HarnessSessionMoveResult } from '../../lib/types'
 import type { Database } from '../database/database'
 import type { TypesafeDecisionService } from '../typesafe/typesafe-decision-service'
 import type { StorageEngine } from '../storage/storage-engine'
@@ -1452,6 +1453,17 @@ export class ChatEngine {
   ): Promise<void> {
     return this.units['runtime-agents'].runCommand(projectId, threadId, commandId, args)
   }
+  /**
+   * Move this thread's session to a host of its own, through the harness that
+   * runs it. A harness that runs one process per session reports that it cannot.
+   */
+  async moveSessionToNewHost(
+    projectId: string,
+    threadId: string
+  ): Promise<HarnessSessionMoveResult> {
+    return this.units['turns-sessions'].moveSessionToNewHost(projectId, threadId)
+  }
+
   async compactSession(projectId: string, threadId: string): Promise<void> {
     return this.units['turns-sessions'].compactSession(projectId, threadId)
   }

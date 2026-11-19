@@ -59,6 +59,9 @@ export class ChatEngineLifecycleBoot {
     ipcMain.handle('agent:compact', (_, projectId: string, threadId: string) =>
       this.host.compactSession(projectId, threadId)
     )
+    ipcMain.handle('agent:moveToNewHost', (_, projectId: string, threadId: string) =>
+      this.host.moveSessionToNewHost(projectId, threadId)
+    )
     ipcMain.handle('agent:listProviders', (_, projectId: string) =>
       this.host.listProviders(projectId)
     )

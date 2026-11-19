@@ -11,6 +11,7 @@ import type {
   AgentProviderIssue,
   AgentSessionStatus,
   AssignmentTaskReport,
+  HarnessSessionMoveResult,
   Thread,
   ThreadSettings
 } from '../../../lib/types'
@@ -876,6 +877,63 @@ export class ChatEngineTurnsSessions {
       })
     }
     void this.host.units['thread-lifecycle'].reconcileWorkingThreadStatus(sessionId)
+  }
+
+  /**
+   * Move this thread's session to a host process of its own.
+   *
+   * The transcript is the session, so a move is a resume on another host: the
+   * thread keeps its history, its native session id, and its place in the
+   * conversation. Used when one host is crowded or when a diagnosis needs the
+   * session isolated, and it is the app-level entry the supervisor's move has.
+   */
+  async moveSessionToNewHost(
+    projectId: string,
+    threadId: string
+  ): Promise<HarnessSessionMoveResult> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    threadId = validateEntityId(threadId, 'Thread ID')
+    const thread = await this.host.threadManager.getThread(projectId, threadId)
+    if (!thread?.sessionId) {
+      throw new Error('No active session for this thread')
+    }
+    const driverId = thread.settings?.harnessId ?? DEFAULT_HARNESS
+    const account = await this.host.state.accountRegistry.resolveForProvider(
+      driverId,
+      thread.settings?.providerId,
+      thread.sessionAccountId ?? thread.settings?.accountId
+    )
+    const { driver, projectPath } = await this.host.resolve(
+      projectId,
+      driverId,
+      threadId,
+      account.id
+    )
+    if (!driver.moveSessionToHost) {
+      return {
+        moved: false,
+        harnessId: driverId,
+        hostPid: null,
+        nativeSessionId: thread.sessionId,
+        detail: `${driver.name} runs a session as one process and cannot move it.`
+      }
+    }
+    if (this.host.state.activeCompactions.has(thread.sessionId)) {
+      return {
+        moved: false,
+        harnessId: driverId,
+        hostPid: null,
+        nativeSessionId: thread.sessionId,
+        detail: 'The session is compacting; move it once the checkpoint finishes.'
+      }
+    }
+    const moved = await driver.moveSessionToHost(projectPath, thread.sessionId)
+    return {
+      moved: true,
+      harnessId: driverId,
+      hostPid: moved.hostPid,
+      nativeSessionId: moved.nativeSessionId
+    }
   }
 
   /** Ask the active harness to summarize and compact this thread's context. */

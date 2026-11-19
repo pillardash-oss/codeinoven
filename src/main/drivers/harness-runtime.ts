@@ -796,18 +796,26 @@ export async function prepareHarnessInvocation(
     }
   }
   if (process.platform !== 'win32') {
-    if (!(await resolveExecutablePathAsync(command, env))) {
-      const bundled = bundledPiRuntime(command, options.bundledEntry)
-      if (bundled) {
-        return {
-          command: bundled.executable,
-          args: [bundled.resolvedPath, ...args],
-          ...(options.cwd ? { cwd: options.cwd } : {}),
-          env: bundledPiEnv(env, bundled),
-          shell: false,
-          runtime: bundled
-        }
+    // Pi is the app's own engine: the bundled runtime IS CIO Pi, so it wins for
+    // `pi` before PATH is consulted. Leaving the choice to PATH made the same
+    // checkout run installed Pi on one machine and the bundled one on another,
+    // which silently switched the transport (RPC child versus shared host) with
+    // no user choice involved. `resolveHarnessRuntime` and
+    // `discoverHarnessRuntimes` already prefer the bundled runtime; this is the
+    // resolver the driver actually launches with, so it has to agree with them.
+    const bundled = command === 'pi' ? bundledPiRuntime(command, options.bundledEntry) : null
+    if (bundled) {
+      return {
+        command: bundled.executable,
+        args: [bundled.resolvedPath, ...args],
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+        env: bundledPiEnv(env, bundled),
+        shell: false,
+        runtime: bundled
       }
+    }
+    if (!(await resolveExecutablePathAsync(command, env))) {
+      throw new Error(`${command} was not found on PATH`)
     }
     return {
       command,

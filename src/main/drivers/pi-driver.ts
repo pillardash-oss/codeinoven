@@ -47,6 +47,7 @@ import { findNativePiSessionFile } from './pi/pi-native-session'
 import { trimPiTranscript } from './pi/pi-transcript-trim'
 import { PiCioRuntimeFiles } from './pi/pi-driver-cio-files'
 import { PiRpcSessions } from './pi/pi-driver-rpc'
+import { PiHostClient } from './pi/pi-host-client'
 import { PiTurnLifecycle } from './pi/pi-driver-turns'
 
 export { isContinuableFinishReasonError, isOversizedRequestError } from './pi/pi-errors'
@@ -1162,6 +1163,22 @@ export class PiDriver extends PersistentCliDriver {
   override restartRuntime(): void {
     this.rpcSessions.restartAll()
     super.restartRuntime()
+  }
+
+  /**
+   * Move one thread's session to a host of its own, resuming the same native
+   * transcript there. Only the bundled CIO Pi host can do this; an installed
+   * Pi has no second host to move to and says so instead of pretending.
+   */
+  async moveSessionToHost(
+    projectPath: string,
+    sessionId: string
+  ): Promise<{ hostPid: number | null; nativeSessionId: string }> {
+    const client = await this.rpcSessions.ensureClient(projectPath, sessionId)
+    if (!(client instanceof PiHostClient)) {
+      throw new Error('Only a hosted Pi session can move to another host')
+    }
+    return this.rpcSessions.moveToNewHost(sessionId)
   }
 
   protected async buildTurnCommand(): Promise<CliTurnCommand> {

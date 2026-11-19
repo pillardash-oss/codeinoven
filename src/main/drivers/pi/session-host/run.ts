@@ -7,7 +7,7 @@
 import { createInterface } from 'node:readline'
 import type { Readable, Writable } from 'node:stream'
 import { PiSessionHost } from './session-host'
-import { parseHostRequestLine } from './protocol'
+import { parseHostLine, type HostResponseEnvelope } from './protocol'
 
 export interface SessionHostRuntime {
   readonly host: PiSessionHost
@@ -23,18 +23,29 @@ export function runSessionHost(input: Readable, output: Writable): SessionHostRu
   reader.on('line', (line) => {
     const trimmed = line.trim()
     if (trimmed.length === 0) return
-    const request = parseHostRequestLine(trimmed)
-    if (request === null) {
+    const parsed = parseHostLine(trimmed)
+    if (parsed.status === 'rejected') {
+      if (parsed.id !== null) {
+        const response: HostResponseEnvelope = {
+          type: 'response',
+          id: parsed.id,
+          ...(parsed.sessionId === null ? {} : { sessionId: parsed.sessionId }),
+          ok: false,
+          error: parsed.error
+        }
+        output.write(`${JSON.stringify(response)}\n`)
+        return
+      }
       output.write(
         `${JSON.stringify({
           type: 'host_notice',
           level: 'error',
-          message: 'Unparseable request line'
+          message: parsed.error
         })}\n`
       )
       return
     }
-    void host.handle(request)
+    void host.handle(parsed.request)
   })
   return { host, stop: () => reader.close() }
 }

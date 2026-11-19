@@ -22,6 +22,7 @@ import type {
   EngineeringSpec,
   EngineeringSpecContent,
   HeartbeatConfig,
+  HarnessSessionMoveResult,
   ImageDescriptorErrorRequest,
   ImageDescriptorReplyAction,
   PendingAgentQuestionRequest,
@@ -81,6 +82,11 @@ export const invokeAgentContract = {
   >,
   'agent:abort': {} as Contract<[projectId: string, threadId: string], void>,
   'agent:compact': {} as Contract<[projectId: string, threadId: string], void>,
+  /** Move one thread's session onto a separate host process, same transcript. */
+  'agent:moveToNewHost': {} as Contract<
+    [projectId: string, threadId: string],
+    HarnessSessionMoveResult
+  >,
   'agent:answerQuestion': {} as Contract<
     [projectId: string, threadId: string, requestId: string, answers: string[][]],
     void

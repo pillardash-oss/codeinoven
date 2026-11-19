@@ -1001,6 +1001,16 @@ export interface HarnessDriver {
     kept: readonly AgentMessage[]
   ): Promise<boolean>
 
+  /**
+   * Move one session to a host process of its own, resuming the same native
+   * transcript there. A harness whose runtime is one shared host implements
+   * this so a busy or crowded host can hand a session off without losing its
+   * history. Harnesses that cannot move sessions simply omit it.
+   */
+  moveSessionToHost?(
+    projectPath: string,
+    sessionId: string
+  ): Promise<{ hostPid: number | null; nativeSessionId: string }>
 
   /**
    * Reconcile harness-side durable state (for example auto-compactions pi
