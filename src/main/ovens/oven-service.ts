@@ -200,6 +200,8 @@ export class OvenService {
    * replacement was not attempted.
    */
   private readonly serviceBlockers = new Map<string, string>()
+  /** Ovens whose abandoned runs this process already cleared. */
+  private readonly reapedOvens = new Set<string>()
 
   constructor(readonly registry: OvenRegistry) {
     this.ssh = new OvenSsh(registry)
@@ -295,6 +297,10 @@ export class OvenService {
   async probe(id: string, refresh = false): Promise<OvenProbe> {
     const input = refresh ? { method: 'probe', refresh: true } : { method: 'probe' }
     const probe = this.parseProbe(await this.request(id, input))
+    // The first answer from an Oven this process has not talked to yet is where
+    // runs a previous turn or a previous app run left behind are cleared, before
+    // a new turn is refused by the Oven's four-run limit.
+    await this.reapOwnRuns(id)
     if (probe.serviceRevision === (await this.ownBundle()).revision) return probe
     if (!(await this.refreshService(id, 'The Oven runs a different service revision.')))
       return probe
@@ -417,6 +423,43 @@ export class OvenService {
   }
 
   /**
+   * Free this client's own runs that no turn here is watching any more.
+   *
+   * A pi RPC session leaves its process on the Oven, and the Oven counts every
+   * live child against its four-run limit. When a turn ends without stopping its
+   * run, or the app restarts mid-turn, those runs stay `running` for good and the
+   * next thread is refused with "This Oven already has four active runs": the
+   * machine looks unable to run more than one conversation while nothing is
+   * actually being done. Runs are stopped only when this same client started
+   * them and this process is not driving them; another client's run is left
+   * alone, exactly as it is during a service update.
+   */
+  private async reapOwnRuns(id: string): Promise<void> {
+    if (this.reapedOvens.has(id)) return
+    this.reapedOvens.add(id)
+    const runs = await attempt(() => this.runs(id))
+    if (!runs.ok || !Array.isArray(runs.value)) {
+      this.reapedOvens.delete(id)
+      return
+    }
+    const started = this.startedRuns.get(id) ?? new Set<string>()
+    const abandoned = runs.value.filter(
+      (run) => run.status === 'running' && run.clientId === this.clientId && !started.has(run.id)
+    )
+    if (abandoned.length === 0) return
+    Logger.info('Stopping runs this client left on the Oven', {
+      ovenId: id,
+      runIds: abandoned.map((run) => run.id)
+    })
+    await this.recordServiceUpdate(
+      id,
+      abandoned,
+      'The turn these runs belonged to is no longer running.'
+    )
+    for (const run of abandoned) await attempt(() => this.stop(id, run.id))
+  }
+
+  /**
    * Stop the runs holding an Oven on a service this app is replacing.
    *
    * Returns false when there is nothing to clear, so the caller reports the
@@ -471,12 +514,16 @@ export class OvenService {
    * entry says which runs, which commands and which owner, so the decision can be
    * read afterwards instead of inferred from a log line that has already rotated.
    */
-  private async recordServiceUpdate(id: string, stopped: OvenRun[]): Promise<void> {
+  private async recordServiceUpdate(
+    id: string,
+    stopped: OvenRun[],
+    reason = 'The Oven service was replaced while these runs held it on the previous one.'
+  ): Promise<void> {
     const entry = {
       at: new Date().toISOString(),
       ovenId: id,
       clientId: this.clientId,
-      reason: 'The Oven service was replaced while these runs held it on the previous one.',
+      reason,
       stopped: stopped.map((run) => ({
         id: run.id,
         command: run.command,

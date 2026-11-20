@@ -144,6 +144,14 @@ export class PiCioRuntimeFiles {
       const storage = this.host.storageFor(sessionId)
       const questionCap = (await storage.getConfig()).agentQuestionCap
       const directory = cioCoreToolsDirectory(sessionId)
+      // The materialization writes the empty seed when the module is new, so the
+      // root it used says whether this session's files belong to this machine or
+      // to the Oven that runs it.
+      Logger.dev('Pi core-tools extension materialized', {
+        sessionId,
+        seeding: !existing,
+        root: storage.resolve(directory)
+      })
       const handoffRelative = join(directory, 'gateway-handoff.json')
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const historyRecapRelative = join(directory, 'history-recap.txt')
@@ -266,6 +274,14 @@ export class PiCioRuntimeFiles {
     }
     try {
       const storage = this.host.storageFor(sessionId)
+      // Which file surface a turn's handoff lands on is the whole difference
+      // between a gateway that works on an Oven and one that silently keeps the
+      // empty seed there, so the publish names the root it wrote to.
+      Logger.dev('Pi utility gateway handoff published', {
+        sessionId,
+        empty: endpoint === null,
+        root: storage.resolve(cioCoreToolsDirectory(sessionId))
+      })
       if (endpoint === null) await storage.remove(handoffPath)
       else {
         await storage.writeRaw(handoffPath, JSON.stringify(endpoint))

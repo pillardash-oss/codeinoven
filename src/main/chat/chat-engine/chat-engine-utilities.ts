@@ -282,6 +282,7 @@ export class ChatEngineUtilities {
      */
     dispatchTimer?: TurnStepTimer
   ): Promise<string> {
+    Logger.dev('Turn utilities preparing', { sessionId, threadId, driverId: driver.id })
     // A new turn begins, so a report declared by an earlier turn that never settled
     // must not be filed under this one, and neither may the work it cited.
     this.host.state.declaredAssistantReports.delete(threadId)

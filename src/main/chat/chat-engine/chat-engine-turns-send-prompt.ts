@@ -381,6 +381,14 @@ export class ChatEngineTurnsSendPrompt {
     // has (`null` here means the one-shot Oven path below owns the turn).
     const ovenPiRoot =
       ovenTurn && ovenThread ? await this.bindOvenPiTurn(ovenThread, settings) : null
+    // Binding resolved the checkout and recorded it on the thread. This turn's
+    // settings still name the empty path the renderer sent, and the settings
+    // write below refuses an Oven change while the thread is busy, so a first
+    // Oven turn on a thread without a checkout failed here with "Stop or finish
+    // the active turn before changing Ovens" for a change the app itself had
+    // just made. Carry the resolved path, so every later write agrees with the
+    // record instead of looking like a switch to another workspace.
+    if (ovenPiRoot !== null) settings = { ...settings, ovenPath: ovenPiRoot }
     if (ovenTurn && ovenThread && ovenPiRoot === null) {
       await this.host.threadManager.updateSettings(projectId, threadId, settings)
       const sessionId = await this.host.ensureSession(projectId, threadId)
