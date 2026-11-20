@@ -50,6 +50,21 @@ export interface OvenUtilityRelayTransport {
   ): Promise<{ child: ChildProcessWithoutNullStreams; dispose: () => Promise<void> }>
 }
 
+/**
+ * What the app must do on the Oven before a relay can register a turn.
+ *
+ * The daemon starts its utility host lazily, on the first request that needs
+ * one, so a relay that only waits for the host's state file waits for something
+ * nothing has asked for yet. It then gave up with "install the current Oven
+ * service" ten seconds later, on an Oven whose service was perfectly current.
+ * Asking the daemon is also what upgrades a service bundle from before the host
+ * existed, so this is the one step that covers both a cold Oven and a stale one.
+ */
+export interface OvenUtilityRelayHostCalls {
+  /** Make sure this Oven's daemon has a utility host listening, starting it if needed. */
+  ensureHost(ovenId: string): Promise<void>
+}
+
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -83,7 +98,8 @@ export class OvenUtilityRelays {
 
   constructor(
     private readonly transport: OvenUtilityRelayTransport,
-    private readonly siteCalls: OvenUtilityRelaySiteCalls
+    private readonly siteCalls: OvenUtilityRelaySiteCalls,
+    private readonly hostCalls: OvenUtilityRelayHostCalls
   ) {}
 
   /**
@@ -127,6 +143,9 @@ export class OvenUtilityRelays {
     // `sessionId` is this app's own bookkeeping for the log lines it writes; the
     // host contract carries the turn only, so it never crosses the pipe.
     const { sessionId, ...input } = turn
+    // The daemon owns the host's lifetime and only starts it when asked, so the
+    // relay is spawned after that answer, never in parallel with it.
+    await this.hostCalls.ensureHost(ovenId)
     const channel = await this.transport.duplex(ovenId, [OVEN_UTILITY_RELAY_MODE])
     const relay = new RelayChild(this.host, {
       ovenId,

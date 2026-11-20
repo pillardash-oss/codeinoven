@@ -13,6 +13,7 @@ import {
   OVEN_UTILITY_RELAY_LIMIT,
   OvenUtilityRelays,
   type OvenUtilityRelayEndpoint,
+  type OvenUtilityRelayHostCalls,
   type OvenUtilityRelaySiteCalls,
   type OvenUtilityRelayTransport
 } from '../../../src/main/ovens/oven-utility-relay'
@@ -149,6 +150,18 @@ class FakeSite implements OvenUtilityRelaySiteCalls {
   }
 }
 
+/** The Oven's daemon, as the relay asks it: recorded, and able to refuse. */
+class FakeHost implements OvenUtilityRelayHostCalls {
+  readonly asked: string[] = []
+  /** Set to fail the way an Oven with no current service does. */
+  failure: Error | null = null
+
+  async ensureHost(ovenId: string): Promise<void> {
+    this.asked.push(ovenId)
+    if (this.failure) throw this.failure
+  }
+}
+
 type EndpointOutcome = { ok: true; value: OvenUtilityRelayEndpoint } | { ok: false; error: unknown }
 
 /** Start one endpoint without ever leaving its rejection unhandled. */
@@ -199,12 +212,18 @@ async function waitForKill(child: FakeChild): Promise<void> {
 
 const opened: OvenUtilityRelays[] = []
 
-function open(): { relays: OvenUtilityRelays; oven: FakeOven; site: FakeSite } {
+function open(): {
+  relays: OvenUtilityRelays
+  oven: FakeOven
+  site: FakeSite
+  host: FakeHost
+} {
   const oven = new FakeOven()
   const site = new FakeSite()
-  const relays = new OvenUtilityRelays(oven, site)
+  const host = new FakeHost()
+  const relays = new OvenUtilityRelays(oven, site, host)
   opened.push(relays)
-  return { relays, oven, site }
+  return { relays, oven, site, host }
 }
 
 /** Start one turn and answer its `ready`, as a healthy relay does. */
@@ -238,6 +257,30 @@ describe('oven utility relay', () => {
     expect(oven.requests).toEqual([{ ovenId: OVEN, argv: [OVEN_UTILITY_RELAY_MODE] }])
     // `start` carries the whole turn, because the client owns the registry.
     expect(result.child.commands()).toEqual([{ kind: 'start', turn: wireTurn('turn-1') }])
+  })
+
+  it('asks the Oven to start its host before it spawns a relay that waits for it', async () => {
+    const { relays, oven, host } = open()
+    await liveTurn(relays, oven, 'turn-1')
+
+    // The daemon starts the host lazily on request, so this call is what the
+    // relay's own ten-second wait for the state file was silently missing.
+    expect(host.asked).toEqual([OVEN])
+    expect(oven.requests).toHaveLength(1)
+  })
+
+  it('fails the turn with the daemon reason when it cannot start the host', async () => {
+    const { relays, oven, host } = open()
+    host.failure = new Error('The Oven utility host did not start.')
+
+    const result = await outcomeOf(relays.endpoint(OVEN, turn('turn-1')))
+
+    expect(result.ok).toBe(false)
+    expect(String((result as { error: unknown }).error)).toContain(
+      'The Oven utility host did not start.'
+    )
+    // No child was spawned to wait for a host that cannot exist.
+    expect(oven.children).toEqual([])
   })
 
   it('answers one forwarded call with the id the host minted', async () => {

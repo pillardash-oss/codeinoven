@@ -136,6 +136,16 @@ export interface OvenUtilityTurnUtility {
 export interface OvenUtilityTurn {
   turnId: string
   token: string
+  /**
+   * The client's thread this turn speaks for, when it has one.
+   *
+   * A turn is minted per turn and per app run, so a client that restarts arrives
+   * with a new id for work that belongs to the same conversation. Naming the
+   * thread is what lets this host keep exactly one live turn per conversation:
+   * the newest registration replaces the one a previous app run left behind,
+   * which would otherwise sit here holding a token nothing can retire.
+   */
+  threadId?: string
   /** Route names this turn may call, as `GATEWAY_TOOLS` spells them. */
   grants: string[]
   /** Utilities this turn may run on the Oven. */
@@ -163,7 +173,7 @@ export interface OvenUtilityTurn {
 /** What one client asks the host to remember about its turn. */
 export type OvenUtilityTurnInput = Pick<
   OvenUtilityTurn,
-  'turnId' | 'token' | 'grants' | 'utilities' | 'relayUrl' | 'client' | 'projectPath'
+  'turnId' | 'token' | 'grants' | 'utilities' | 'relayUrl' | 'client' | 'projectPath' | 'threadId'
 >
 
 /**

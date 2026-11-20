@@ -250,6 +250,40 @@ describe('Oven utility host', () => {
     expect(valueOf(empty)['turns']).toBe(0)
   })
 
+  it('keeps one live turn per client thread, whatever the app did before', async () => {
+    const host = await startHost()
+    const token = await hostToken()
+    // An app that restarted mid-turn arrives with a new turn id for the same
+    // conversation; the abandoned one must not keep answering its old token.
+    await call(
+      host.port,
+      'POST',
+      '/host/turn',
+      turnInput({ turnId: 'turn-old', token: 'token-old', threadId: 'thread-1' }),
+      token
+    )
+    await call(
+      host.port,
+      'POST',
+      '/host/turn',
+      turnInput({ turnId: 'turn-new', token: 'token-new', threadId: 'thread-1' }),
+      token
+    )
+    expect(valueOf(await call(host.port, 'GET', '/host/status', undefined, token))['turns']).toBe(1)
+    expect(
+      (await call(host.port, 'POST', '/invoke', { utilityId: 'utility-1' }, 'token-old')).status
+    ).toBe(401)
+    // A different conversation keeps its own turn.
+    await call(
+      host.port,
+      'POST',
+      '/host/turn',
+      turnInput({ turnId: 'turn-other', token: 'token-other', threadId: 'thread-2' }),
+      token
+    )
+    expect(valueOf(await call(host.port, 'GET', '/host/status', undefined, token))['turns']).toBe(2)
+  })
+
   it('refuses a route the turn was not granted', async () => {
     const host = await startHost()
     await call(host.port, 'POST', '/host/turn', turnInput(), await hostToken())

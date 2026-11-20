@@ -503,6 +503,7 @@ export class OvenPiRuntime {
    */
   async gatewayEndpoint(
     sessionId: string,
+    threadId: string,
     turn: {
       turnId: string
       token: string
@@ -520,6 +521,9 @@ export class OvenPiRuntime {
       grants: [...turn.grants],
       utilities: turn.utilities,
       client: 'codeinoven-app',
+      // The thread this turn speaks for, so the Oven keeps one live turn per
+      // conversation however many times the app restarts mid-thread.
+      threadId,
       // The checkout the harness works in on that machine, which is the only
       // project context its host can read.
       projectPath: session.cwd,

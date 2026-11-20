@@ -175,6 +175,17 @@ export class ChatEngineTurnsSendPrompt {
       prepared,
       config: () => this.host.storage.getConfig()
     })
+    // Say on the session record itself which thread it belongs to. The record
+    // already carries the Oven's own pi session id and survives a restart, so
+    // stamping the thread is what lets the app find this conversation again from
+    // the thread alone   after a harness switch, or when the thread's session
+    // column is no longer the only key it can trust.
+    try {
+      await runtime.driver?.tagSessionThread?.(prepared.root, sessionId, thread.id)
+    } catch (error) {
+      // Best effort: an untagged record only costs relocation, never this turn.
+      Logger.dev('Oven session thread tagging failed:', error)
+    }
     return prepared.root
   }
 
@@ -196,6 +207,100 @@ export class ChatEngineTurnsSendPrompt {
     /** Persist this internal prompt as a visible user turn. Used by the
      *  Assignment worker dispatch so the task that started a worker reads as
      *  the first user prompt in its conversation. */
+    visiblePrompt = false
+  ): Promise<AgentMessage> {
+    try {
+      return await this.dispatchPrompt(
+        projectId,
+        threadId,
+        settings,
+        text,
+        attachments,
+        specAction,
+        userMessageId,
+        promptContext,
+        promptReferences,
+        projectReferences,
+        origin,
+        presentation,
+        taskReferences,
+        visiblePrompt
+      )
+    } catch (error) {
+      await this.settleFailedDispatch(projectId, threadId, error)
+      throw error
+    }
+  }
+
+  /**
+   * End a turn that failed before its own failure handler could run.
+   *
+   * A dispatch marks the thread `executing` and persists the user's message
+   * before it composes utilities, history and the prompt. Everything in that
+   * window used to sit outside the turn's failure contract, so a throw there
+   * (an Oven's capability host that would not start, a secret the vault could
+   * not resolve, a probe that timed out) left the row saying Executing for ever,
+   * with the message persisted, no reply, no error, and nothing to retry from.
+   * The turn's own handlers still own every failure they can catch; this only
+   * settles a row that is still marked as working after the throw has already
+   * escaped them, which is exactly the state nothing else repairs.
+   */
+  private async settleFailedDispatch(
+    projectId: string,
+    threadId: string,
+    error: unknown
+  ): Promise<void> {
+    try {
+      const thread = await this.host.threadManager.getThread(projectId, threadId)
+      if (!thread || (thread.status !== 'planning' && thread.status !== 'executing')) return
+      const message = rawErrorMessage(error)
+      Logger.info('A turn failed before its harness was dispatched', {
+        projectId,
+        threadId,
+        status: thread.status,
+        error: message
+      })
+      await this.host.units['utilities'].cleanupTurnUtilities(thread.sessionId ?? '')
+      await this.host.threadManager.setStatus(projectId, threadId, 'failed', {
+        read: false,
+        error: message,
+        errorDetail: rawErrorDetail(error)
+      })
+      await this.host.units['thread-lifecycle'].broadcastThreadSessionError(
+        projectId,
+        threadId,
+        thread.sessionId ?? '',
+        this.host.units['providers-accounts'].fallbackProviderIssue(
+          thread.sessionHarnessId ?? (thread.settings?.harnessId || DEFAULT_HARNESS),
+          message,
+          rawErrorDetail(error)
+        )
+      )
+    } catch (settleError) {
+      // Settling must never mask the failure the caller is about to report.
+      Logger.error('A failed turn could not be settled on its thread', {
+        projectId,
+        threadId,
+        error: settleError instanceof Error ? settleError.message : String(settleError)
+      })
+    }
+  }
+
+  /** The turn itself, from session setup to the harness call. */
+  private async dispatchPrompt(
+    projectId: string,
+    threadId: string,
+    settings: ThreadSettings,
+    text: string,
+    attachments: PromptAttachment[],
+    specAction?: SpecActionIntent,
+    userMessageId?: string,
+    promptContext?: string,
+    promptReferences?: PromptReference[],
+    projectReferences?: PromptProjectReference[],
+    origin: 'user' | 'internal' = 'user',
+    presentation?: UserMessagePresentation,
+    taskReferences?: PromptAssignmentTaskReference[],
     visiblePrompt = false
   ): Promise<AgentMessage> {
     projectId = validateEntityId(projectId, 'Project ID')

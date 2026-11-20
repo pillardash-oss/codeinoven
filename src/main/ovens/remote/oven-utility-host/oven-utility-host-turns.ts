@@ -59,7 +59,10 @@ export class OvenUtilityTurns {
    *
    * A retried `start` (a reconnecting relay, a client that repeats itself) must
    * leave exactly one turn behind, and two turns must never share a token, so
-   * both collisions are resolved by retiring the older entry.
+   * both collisions are resolved by retiring the older entry. A turn that names
+   * its client's thread also replaces whatever that thread left here: an app
+   * that restarted mid-turn mints a new turn id for the same conversation, and
+   * the abandoned one would otherwise answer its old token until it went idle.
    */
   register(value: unknown, now: number = Date.now()): RegisteredOvenUtilityTurn {
     const input = parseOvenUtilityTurnInput(value)
@@ -67,6 +70,7 @@ export class OvenUtilityTurns {
     this.retire(input.turnId)
     const previous = this.byTokenIndex.get(input.token)
     if (previous !== undefined) this.retire(previous)
+    if (input.threadId !== undefined) this.retireThread(input.threadId)
     const turn: RegisteredOvenUtilityTurn = {
       ...input,
       createdAt: now,
@@ -101,6 +105,16 @@ export class OvenUtilityTurns {
 
   byId(turnId: string): RegisteredOvenUtilityTurn | null {
     return this.turns.get(turnId) ?? null
+  }
+
+  /** Forget every turn one client thread left behind. Answers how many went. */
+  retireThread(threadId: string): number {
+    let retired = 0
+    for (const turn of [...this.turns.values()]) {
+      if (turn.threadId !== threadId) continue
+      if (this.retire(turn.turnId)) retired += 1
+    }
+    return retired
   }
 
   /** Forget one turn. Answers whether it existed. */
@@ -155,6 +169,7 @@ export function parseOvenUtilityTurnInput(value: unknown): OvenUtilityTurnInput 
   const utilities = utilitiesValue.map((entry) => turnUtility(entry))
   const client = text(record['client'], 'client', 200)
   const relayUrl = record['relayUrl'] === undefined ? undefined : relayUrlValue(record['relayUrl'])
+  const threadId = optionalText(record['threadId'], 'threadId', MAX_IDENTIFIER_LENGTH)
   // The checkout the turn works in, which is what search ranks against. It is a
   // path on this machine and nothing more: the host reads project signals from
   // it and never fails when it is absent or unreadable.
@@ -166,6 +181,7 @@ export function parseOvenUtilityTurnInput(value: unknown): OvenUtilityTurnInput 
     utilities,
     client,
     ...(relayUrl ? { relayUrl } : {}),
+    ...(threadId === undefined || threadId.length === 0 ? {} : { threadId }),
     ...(projectPath === undefined || projectPath.length === 0 ? {} : { projectPath })
   }
 }

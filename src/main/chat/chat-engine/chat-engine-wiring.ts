@@ -336,10 +336,21 @@ export function wireChatEngine(
     // A turn that runs on an Oven reaches its gateway through that machine's own
     // host, and whatever the host cannot run itself comes back over this relay
     // and is answered by the very same routes a local turn calls.
-    const ovenUtilityRelays = new OvenUtilityRelays(engine.state.ovenChat.service.ssh, {
-      callRouteForTurn: (turnId, route, input) =>
-        engine.state.utilityOrchestration.callRouteForTurn(turnId, route, input)
-    })
+    const ovenUtilityRelays = new OvenUtilityRelays(
+      engine.state.ovenChat.service.ssh,
+      {
+        callRouteForTurn: (turnId, route, input) =>
+          engine.state.utilityOrchestration.callRouteForTurn(turnId, route, input)
+      },
+      // The Oven's daemon owns its utility host and starts it on request, so the
+      // relay asks before it waits. This is also the step that replaces a service
+      // bundle from before the host existed.
+      {
+        ensureHost: async (ovenId) => {
+          await engine.state.ovenChat.service.utilityHost(ovenId)
+        }
+      }
+    )
     ovenPi.attachUtilityRelays(ovenUtilityRelays)
     engine.state.ovenUtilityRelays = ovenUtilityRelays
     const ovenPiDriver = new PiDriver(

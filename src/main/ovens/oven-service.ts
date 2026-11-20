@@ -563,8 +563,15 @@ export class OvenService {
     this.serviceRepairs.set(id, Date.now())
     const repair = (async () => {
       Logger.info('Installing the current Oven service', { ovenId: id, reason })
+      const startedAt = Date.now()
       try {
         await this.install(id)
+        // A successful install used to log nothing, so a log that ended here
+        // read exactly like a hang. One line closes that gap.
+        Logger.info('Installed the current Oven service', {
+          ovenId: id,
+          durationMs: Date.now() - startedAt
+        })
         return true
       } catch (error) {
         Logger.error('The Oven service could not be installed', {

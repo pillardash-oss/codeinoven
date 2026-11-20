@@ -359,8 +359,8 @@ export class ChatEngineUtilities {
           sessionId,
           threadTitle,
           projectPath,
-          ...(this.ovenGatewayEndpoint(sessionId)
-            ? { resolveGatewayEndpoint: this.ovenGatewayEndpoint(sessionId) }
+          ...(this.ovenGatewayEndpoint(sessionId, threadId)
+            ? { resolveGatewayEndpoint: this.ovenGatewayEndpoint(sessionId, threadId) }
             : {}),
           ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
           nativeCapabilities,
@@ -641,11 +641,12 @@ export class ChatEngineUtilities {
    * undefined rather than an empty resolver.
    */
   private ovenGatewayEndpoint(
-    sessionId: string
+    sessionId: string,
+    threadId: string
   ): UtilityTurnRequest['resolveGatewayEndpoint'] | undefined {
     const runtime = ovenPiRuntime()
     if (!runtime?.hasGatewayEndpoint(sessionId)) return undefined
-    return async (turn) => runtime.gatewayEndpoint(sessionId, turn)
+    return async (turn) => runtime.gatewayEndpoint(sessionId, threadId, turn)
   }
 
   async cleanupTurnUtilities(sessionId: string, expectedGatewayId?: string): Promise<void> {
@@ -741,8 +742,8 @@ export class ChatEngineUtilities {
         threadId,
         sessionId,
         threadTitle: steeringThread?.title,
-        ...(this.ovenGatewayEndpoint(sessionId)
-          ? { resolveGatewayEndpoint: this.ovenGatewayEndpoint(sessionId) }
+        ...(this.ovenGatewayEndpoint(sessionId, threadId)
+          ? { resolveGatewayEndpoint: this.ovenGatewayEndpoint(sessionId, threadId) }
           : {}),
         ...(steeringThread?.scopeBucketId === undefined
           ? {}

@@ -12,22 +12,29 @@ So each Oven hosts its own gateway.
 ## Shape
 
 - **Host** (`src/main/ovens/remote/oven-utility-host.ts`, argv mode
-  `utility-host`): started once per Oven by the Oven service daemon, bound to the
-  Oven's `127.0.0.1:0`. It publishes `utility-host/state.json` under the Oven data
-  root (`~/.config/pillardash/codeinoven/ovens`), mode 0600, holding
+  `utility-host`): started once per Oven by the Oven service daemon when a client
+  asks for it (`{ method: 'utility-host' }`), bound to the Oven's `127.0.0.1:0`.
+  It publishes `utility-host/state.json` under the Oven data root
+  (`~/.config/pillardash/codeinoven/ovens`), mode 0600, holding
   `{ protocolVersion, revision, port, hostToken, pid, startedAt }`. Any process on
   that machine which can read that file is the user, so any of them may mint its
-  own turn.
+  own turn. A bundle from before the host existed answers that request as an
+  unknown method, which is what makes the app install the current service first.
 - **Turn** is a capability: a `turnId`, a bearer token, the granted tool names,
   the utility snapshot the turn may use, the checkout it works in
-  (`projectPath`, which is what a local search ranks against), and optionally the
-  loopback URL of its client's relay. The host answers only routes the grants
-  allow, and retires a turn when its client retires it, its relay disconnects, or
-  it idles out.
+  (`projectPath`, which is what a local search ranks against), the client's
+  `threadId` when it has one, and optionally the loopback URL of its client's
+  relay. The host answers only routes the grants allow, and retires a turn when
+  its client retires it, its relay disconnects, or it idles out. A turn that
+  names its thread replaces whatever that thread left here, so an app that
+  restarted mid-conversation arrives with a new turn id and the abandoned turn
+  does not keep answering its old token.
 - **Relay** (argv mode `utility-relay`, spawned per turn by the client over SSH
-  with a duplex pipe): registers the turn with the host, reports the _host's_
-  port as its first frame, then carries every call the host cannot run itself
-  back to the client and returns its answer.
+  with a duplex pipe): asks the daemon for the host first, then registers the
+  turn, reports the _host's_ port as its first frame, and carries every call the
+  host cannot run itself back to the client and returns its answer. Asking first
+  is not optional: the daemon starts the host lazily, so a relay that only waits
+  for `state.json` waits for something nothing has asked for yet.
 - **The app** publishes the Oven's endpoint for a turn that runs there
   (`resolveGatewayEndpoint` in the turn runtime → `OvenUtilityRelays`), and
   answers relayed calls through the same `callRouteForTurn` a local turn uses, so
