@@ -12,6 +12,7 @@ import {
   windowsEncodedCommand
 } from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
+import { Logger } from '../system/logger'
 import { unreachableHostIssue } from './oven-network-hint'
 import { plainPowerShellStderr } from './oven-powershell-output'
 import { validateIdentityPath } from './oven-validation'
@@ -854,9 +855,17 @@ export class OvenSsh {
           else if (timedOut)
             reject(new Error('The Oven did not respond before the connection timeout.'))
           else if (unknownHost && !changedHost) reject(new OvenHostVerificationRequired(sshIssue))
-          else if (code === 255 || code === null)
+          else if (code === 255 || code === null) {
+            // A refused handshake is the one failure whose reason lives only in
+            // OpenSSH's own words: the fixed sentence below names every possible
+            // cause, so the tail is kept for the log a reader can act on.
+            Logger.dev('Oven SSH connection failed', {
+              ovenId: id,
+              code,
+              stderr: remoteStderr.slice(-600)
+            })
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
-          else if (code !== 0) {
+          } else if (code !== 0) {
             // A command that answered in its own protocol already named the cause,
             // and a fixed sentence about the package manager is not that cause.
             const answer = remoteFailureAnswer(output)
