@@ -64,6 +64,10 @@ export function stopPiHost(): void {
  * creates the utility process asynchronously, so the spawn that announces the
  * host reports none yet, and a row registered then would carry pid 0 and show
  * no CPU or memory for as long as it lived.
+ *
+ * The detail is written from the live session map, so it is only correct for the
+ * moment it is written: this runs again every time a session lands on a host or
+ * leaves it, which is what keeps a running host from claiming it carries none.
  */
 function syncHostServices(host: PiHostSupervisor): void {
   const live = host.pids()
