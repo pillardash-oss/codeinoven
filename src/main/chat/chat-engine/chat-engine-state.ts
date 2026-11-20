@@ -325,6 +325,13 @@ export class ChatEngineState {
 
   activeIndependentAuditorEnsures = new Map<string, Promise<Thread>>()
 
+  /**
+   * Independent audit runs the user stopped, keyed by coordinator thread, with
+   * the time the stop was requested. The run consumes its own request; the
+   * timestamp keeps an old request from cancelling the next audit.
+   */
+  stoppedIndependentAuditRuns = new Map<string, number>()
+
   /** Assignment audits explicitly cancelled by Stop; late provider output must be ignored. */
   stoppedAssignmentAuditRuns = new Set<string>()
 

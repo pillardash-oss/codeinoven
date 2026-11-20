@@ -17,6 +17,7 @@ import {
 } from '$lib/stores/coordinator-dock.svelte'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { modelKey } from '$lib/model-keys'
+import { INDEPENDENT_AUDIT_STOPPED_MESSAGE } from '$shared/audit/audit-stop-request'
 import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID } from '$shared/types'
 import type {
   ComposerProject,
@@ -513,6 +514,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
           recentModels: rendererRecovery.recentModels,
           onRemoveRecent: (key) => rendererRecovery.removeRecentModel(key),
           onOpenAudit: () => void this.generateIndependentAudit(this.auditSettings),
+          onStopAudit: () => this.stopIndependentAudit(),
           onViewReport: this.openAuditStudio,
           onNewAudit: () =>
             this.root.buildSpecActionPrompt.startFreshIndependentAudit(this.auditSettings),
@@ -739,18 +741,48 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       )
     } catch (error) {
       const rawError = error instanceof Error ? error.message : 'The independent audit failed.'
-      // The audit card owns this failure: it carries the error and the model
-      // picker the user needs to change the auditor's account. Pushing it into
-      // the composer's error slot instead put a card over the composer that can
-      // neither explain which audit failed nor offer the fix.
-      this.root.buildSpecActionPrompt.auditError = rawError.replace(
-        /^Error invoking remote method '[^']+': Error:\s*/u,
-        ''
-      )
-      this.root.submitSpecDecision.auditFailed = true
-      this.root.submitSpecDecision.auditState = 'offered'
+      const message = rawError.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      // A deliberate stop is not a failure: the run ends without a report, so
+      // the coordinator goes back to offering the audit instead of showing the
+      // failure card that asks the user to change the auditor's model.
+      if (message.includes(INDEPENDENT_AUDIT_STOPPED_MESSAGE)) {
+        this.root.submitSpecDecision.auditFailed = false
+        this.root.buildSpecActionPrompt.auditError = ''
+        this.root.submitSpecDecision.auditState =
+          this.root.handleAgentEvent.thread.auditState ?? 'offered'
+      } else {
+        // The audit card owns this failure: it carries the error and the model
+        // picker the user needs to change the auditor's account. Pushing it into
+        // the composer's error slot instead put a card over the composer that can
+        // neither explain which audit failed nor offer the fix.
+        this.root.buildSpecActionPrompt.auditError = message
+        this.root.submitSpecDecision.auditFailed = true
+        this.root.submitSpecDecision.auditState = 'offered'
+      }
     } finally {
       this.root.submitSpecDecision.auditBusy = false
+    }
+  }
+
+  /**
+   * Stop the independent audit that is running for this thread.
+   *
+   * The auditor runs on its own durable child thread, so the composer's Stop
+   * (which aborts the open thread's session) never reached it. This only asks
+   * the main process to end the run: the run's own settlement clears `auditBusy`
+   * and restores the coordinator.
+   */
+  async stopIndependentAudit(): Promise<void> {
+    if (!this.root.submitSpecDecision.auditBusy) return
+    try {
+      await invoke(
+        'agent:stopIndependentAudit',
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.submitSpecDecision.auditWorkflowThreadId()
+      )
+    } catch (error) {
+      this.root.buildSpecActionPrompt.auditError =
+        error instanceof Error ? error.message : 'The audit could not be stopped.'
     }
   }
 

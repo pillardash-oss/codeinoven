@@ -1378,6 +1378,9 @@ export class ChatEngine {
   ): Promise<{ report: AuditReport; auditorThread: Thread }> {
     return this.units['audit'].generateIndependentAudit(projectId, threadId, request)
   }
+  async stopIndependentAudit(projectId: string, coordinatorThreadId: string): Promise<void> {
+    return this.units['audit'].stopIndependentAudit(projectId, coordinatorThreadId)
+  }
   async deleteIndependentAuditorThread(
     projectId: string,
     coordinatorThreadId: string

@@ -680,6 +680,11 @@ export class ChatEngineLifecycleBoot {
         this.host.generateIndependentAudit(projectId, threadId, request)
     )
     ipcMain.handle(
+      'agent:stopIndependentAudit',
+      (_, projectId: string, coordinatorThreadId: string) =>
+        this.host.stopIndependentAudit(projectId, coordinatorThreadId)
+    )
+    ipcMain.handle(
       'agent:startFreshIndependentAudit',
       (_, projectId: string, threadId: string, request: AuditGenerationRequest) =>
         this.host.startFreshIndependentAudit(projectId, threadId, request)

@@ -164,6 +164,11 @@ export const invokeAgentContract = {
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     { report: AuditReport; auditorThread: Thread }
   >,
+  /** Stop the independent audit running on this coordinator thread. */
+  'agent:stopIndependentAudit': {} as Contract<
+    [projectId: string, coordinatorThreadId: string],
+    void
+  >,
   'agent:startFreshIndependentAudit': {} as Contract<
     [projectId: string, threadId: string, request: AuditGenerationRequest],
     { report: AuditReport; auditorThread: Thread }
