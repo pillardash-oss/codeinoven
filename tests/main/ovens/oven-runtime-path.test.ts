@@ -19,9 +19,13 @@ const home = '/home/azureuser'
 describe('oven runtime PATH', () => {
   // These paths belong to a POSIX Oven, so their spelling must not depend on the
   // host that composes them: on a Windows runner `join` returned `\\home\\...`.
+  // The platform is stated because it is the Oven's, not the test host's: the
+  // default is `process.platform`, which on a Windows runner is the Windows Oven
+  // branch and legitimately composes Windows paths.
   it('puts the harness shims first and the newest nvm runtime next', () => {
     const dirs = runtimeBinDirs({
       home,
+      platform: 'linux',
       npmPrefix: '.config/pillardash/codeinoven/ovens/harnesses/npm',
       basePath: '/usr/bin:/bin',
       probe: probe(
@@ -45,6 +49,7 @@ describe('oven runtime PATH', () => {
   it('skips directories that are not there and ignores non-version entries', () => {
     const dirs = runtimeBinDirs({
       home,
+      platform: 'linux',
       npmPrefix: 'prefix',
       basePath: '/usr/bin',
       probe: probe(
@@ -58,6 +63,7 @@ describe('oven runtime PATH', () => {
   it('keeps the caller PATH last and never repeats a directory', () => {
     const path = runtimePath({
       home,
+      platform: 'linux',
       npmPrefix: 'prefix',
       basePath: '/home/azureuser/prefix/bin:/usr/local/bin:/usr/bin:/bin',
       probe: probe(['/home/azureuser/prefix/bin', '/usr/local/bin'])

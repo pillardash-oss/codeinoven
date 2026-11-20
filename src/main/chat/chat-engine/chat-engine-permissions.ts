@@ -1,4 +1,4 @@
-import { resolve } from 'path'
+import { posix, resolve } from 'path'
 import { existsSync } from 'fs'
 import { ChatEngine } from '../chat-engine'
 import { Logger } from '../../system/logger'
@@ -489,12 +489,19 @@ export class ChatEnginePermissions {
     // `ls -la` asked for approval of its own working directory. A project
     // thread on an Oven keeps its ordinary scope: that root is the project's
     // checkout, not a scratch folder.
-    const ovenChatHosted = isChat && thread !== null && this.host.state.ovenChat.remote(thread)
+    const ovenHosted = thread !== null && this.host.state.ovenChat.remote(thread)
+    const ovenChatHosted = isChat && ovenHosted
+    /** Keep an Oven's spelling for its own path; resolve only this machine's. */
+    const remoteSessionPath = (path: string): string => (ovenHosted ? path : resolve(path))
     const scratchPaths = isAssistant
       ? []
       : ovenChatHosted
         ? [
-            resolve(info.projectPath),
+            // An Oven's paths are spelled by that machine, so this host's
+            // resolver must never touch them: on a Windows desktop
+            // `resolve('/home/u/x')` became `D:\\home\\u\\x`, a path that exists
+            // on neither machine and that no request from the Oven could match.
+            remoteSessionPath(info.projectPath),
             // That machine's own scratch, which is what a shell there writes to
             // by habit (`/tmp/o.txt` for a probe's output). A local chat's temp
             // is the workspace itself, so the Oven has no equivalent here unless
@@ -515,16 +522,23 @@ export class ChatEnginePermissions {
     // thread that runs in its own scope worktree is the same case as a chat
     // workspace: the `.env` it writes there next to `.env.example` is its own
     // work, so that directory is exempt while the project root stays gated.
-    const workspaceRoots = isAssistant ? [resolve(info.projectPath)] : []
+    const workspaceRoots = isAssistant ? [remoteSessionPath(info.projectPath)] : []
     // A thread in a real project also owns that project's `.cio` scratch folder:
     // it is where the agent stages its own work, so deletes and confined shell
     // commands there never prompt. `.cio/specs` and `.cio/git` stay gated inside
     // the policy, because the platform owns those.
     if (!isChat && !isAssistant) {
-      scratchPaths.push(resolve(info.projectPath, PROJECT_DATA_DIRECTORY))
+      scratchPaths.push(
+        ovenHosted
+          ? posix.join(info.projectPath, PROJECT_DATA_DIRECTORY)
+          : resolve(info.projectPath, PROJECT_DATA_DIRECTORY)
+      )
       const workingDirectory = thread?.workingDirectory
-      if (workingDirectory && resolve(workingDirectory) !== resolve(info.projectPath)) {
-        workspaceRoots.push(resolve(workingDirectory))
+      if (
+        workingDirectory &&
+        remoteSessionPath(workingDirectory) !== remoteSessionPath(info.projectPath)
+      ) {
+        workspaceRoots.push(remoteSessionPath(workingDirectory))
       }
     }
     // Reuse the allowlist until a user message invalidates it; permission
@@ -553,7 +567,7 @@ export class ChatEnginePermissions {
       // A chat owns its workspace only once it may write there: with File
       // System off it is restricted to the attached files, so the workspace
       // earns no exemption from the sensitive-file list either.
-      workspaceRoots: fileSystemMode ? [resolve(info.projectPath)] : [],
+      workspaceRoots: fileSystemMode ? [remoteSessionPath(info.projectPath)] : [],
       restrictToAllowed: !fileSystemMode
     }
   }
