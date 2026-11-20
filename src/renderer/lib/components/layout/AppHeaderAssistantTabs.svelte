@@ -737,12 +737,16 @@
     {/if}
     <!-- The state slot: a thin square that fills with the state's colour while
          work is live or waiting on the user, and keeps only its outline once the
-         thread is done. -->
+         thread is done. A state that names itself with a glyph (a run owned by
+         another instance, a turn blocked on a sub-agent) draws that glyph
+         instead of the square, because the still icon is the whole point of
+         those states. -->
     <StatusBadge
       stage={status.stage}
       tone={status.tone}
       kind={status.kind}
-      variant="square"
+      variant={status.variant === 'icon' ? 'icon' : 'square'}
+      icon={status.icon}
       hollow={status.stage === 'done'}
       title={status.label}
       class="shrink-0"

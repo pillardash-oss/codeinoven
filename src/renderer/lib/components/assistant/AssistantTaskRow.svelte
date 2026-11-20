@@ -269,7 +269,7 @@
       tone: statusBadge.tone,
       kind: statusBadge.kind,
       variant: statusBadge.variant ?? ('dot' as const),
-      icon: null,
+      icon: statusBadge.icon ?? null,
       title: statusBadge.label
     }
   })

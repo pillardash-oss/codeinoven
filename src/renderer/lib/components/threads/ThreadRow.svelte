@@ -68,6 +68,7 @@
   import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
   import { preloadThreadConversation } from '$lib/stores/thread-preload'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { isThreadLiveWorking } from '$lib/thread-status-badge'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
   import { THREAD_DRAG_TYPE } from '$lib/components/chats/chat-composer-drop-source'
@@ -417,6 +418,7 @@
     | 'todo'
     | 'completed'
     | 'working'
+    | 'waiting-subagents'
     | 'working-paused'
     | 'spec'
     | 'approval'
@@ -489,6 +491,18 @@
   /** Another CodeInOven instance owns this thread's in-flight turn, so its live
    *  output and its stop control are there rather than here. */
   let isForeignRun = $derived(foreignRuns.isForeign(thread.projectId, thread.id))
+
+  /** Whether this turn is standing still on delegated work: an inline spawn, or a
+   *  status/output read called with `wait: true`, is still in flight. The row keeps
+   *  saying the thread is live, but with a held spine and the robot above it, so a
+   *  parent waiting on a worker never reads as a parent thinking.
+   *
+   *  Only the turn's own transcript answers this, so a run owned by another
+   *  instance keeps its window mark: this window streams no parts for it and could
+   *  only guess. */
+  let waitsOnSubagents = $derived(
+    isWorking && !isForeignRun && threadMessages.waitsOnSubagents(thread.projectId, thread.id)
+  )
   /** Whether the row wears the working mark on its own account.
    *
    *  The persisted status is deliberately not a second source here. `isWorking`
@@ -630,6 +644,7 @@
       if (!effectiveRead && primarySettledAt > temporaryChatUnreadAt) return 'unread'
       return 'temporary-unread'
     }
+    if (isWorking && waitsOnSubagents) return 'waiting-subagents'
     if (isWorking) return 'working'
     // The confirmed terminal state wins over the busy flag so a finished turn
     // flips straight to done/unread instead of lingering on the spinner.
@@ -820,6 +835,7 @@
 
   /** Human-readable stage label, only meaningful when isWorking is true. */
   let stageLabel = $derived.by((): string => {
+    if (waitsOnSubagents) return 'Waiting on sub-agents'
     switch (thread.status) {
       case 'planning':
         return 'Planning'
@@ -953,7 +969,13 @@
       color?: string
     } | null => {
       // The dot layouts have one visible mark, so a wait takes it, exactly as it
-      // takes the glyph in the detailed row.
+      // takes the glyph in the detailed row. The sub-agent wait is the thread's
+      // own live state, not a second status, so it outranks what is queued
+      // behind it: the clock says a message is waiting, the robot says why the
+      // thread itself is standing still, and only one of those fits a dot.
+      if (threadState === 'waiting-subagents') {
+        return { variant: 'icon', icon: primaryMark.icon, tone: 'working' }
+      }
       if (secondaryMark) {
         return secondaryStatus === 'draft'
           ? { stage: 'todo' }
