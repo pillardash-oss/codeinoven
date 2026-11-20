@@ -48,6 +48,9 @@ function mount(options: { oven?: boolean } = {}): {
     existingState: () => state,
     stateKeyFor: () => 'oven-state-key',
     scopeFor: () => 'oven-scope-key',
+    // No scope root is known here, which the explorer reads as "nothing to
+    // compare", so a cached listing is never reported stale for this mount.
+    scopeRootIdentityFor: () => null,
     threadArg: () => THREAD,
     mountKeyFor: () => 'oven-mount-key',
     openFile: async () => undefined,

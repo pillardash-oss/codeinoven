@@ -1423,10 +1423,12 @@ export class PiDriver extends PersistentCliDriver {
   /** Node uses TEMP/TMP on Windows and TMPDIR on Unix. The runtime boundary
    * translates TMPDIR for WSL and forwards it into the Linux process. Keep
    * output files available across turns under the scope's working directory.
+   * A project path that is not on this machine (an Oven checkout) answers no
+   * override, so every key stays optional.
    */
   private async workspaceTemporaryEnvironment(
     projectPath: string
-  ): Promise<{ TMPDIR: string; TEMP: string; TMP: string }> {
+  ): Promise<{ TMPDIR?: string; TEMP?: string; TMP?: string }> {
     return this.modelCatalog.workspaceTemporaryEnvironment(projectPath)
   }
 
