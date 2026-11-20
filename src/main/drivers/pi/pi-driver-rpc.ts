@@ -641,6 +641,24 @@ export class PiRpcSessions {
     this.host.forgetCioSession(sessionId)
   }
 
+  /**
+   * Release one session's resident process if it is genuinely idle.
+   *
+   * An Oven counts every live harness process against its own run limit, so a
+   * machine with four resident sessions refuses a fifth thread with "This Oven
+   * already has four active runs". Releasing an idle one is how a new conversation
+   * gets the slot: the process comes back on the next turn, from the persisted
+   * native transcript.
+   */
+  releaseIdleSession(sessionId: string): boolean {
+    if (!this.rpcClients.has(sessionId)) return false
+    if (this.host.hasActiveTurn(sessionId)) return false
+    if (this.host.hasLiveChildSession(sessionId)) return false
+    if (this.host.hasPendingUiRequest(sessionId)) return false
+    this.disposeClient(sessionId)
+    return true
+  }
+
   /** Release every idle client of one project (a project closed). */
   releaseProject(projectPath: string): void {
     for (const [sessionId, clientProject] of this.sessionProjects) {

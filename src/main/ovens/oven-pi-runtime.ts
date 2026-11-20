@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { Logger } from '../system/logger'
 import type { OvenRun, StartOvenRunInput } from '../../lib/ovens'
 import { isRemoteOvenId } from '../../lib/ovens'
 import type { ThreadSettings } from '../../lib/types'
@@ -66,6 +67,14 @@ export class OvenPiSessions {
   /** The Oven one session runs on, or undefined when it runs here. */
   get(sessionId: string): OvenPiSession | undefined {
     return this.sessions.get(sessionId)
+  }
+
+  /** The session ids routed to one Oven, newest binding last. */
+  idsForOven(ovenId: string): string[] {
+    const ids: string[] = []
+    for (const [sessionId, session] of this.sessions)
+      if (session.ovenId === ovenId) ids.push(sessionId)
+    return ids
   }
 
   /** Drop one session's route so a reused id never inherits a stale machine. */
@@ -201,6 +210,13 @@ export function createOvenPiLaunch(input: {
    * driver's native-transcript seam reads through it (see `PiDriver`).
    */
   nativeTranscripts?: PiNativeTranscriptSource
+  /**
+   * Free an Oven's idle sessions when it has no run left to give.
+   *
+   * Wired to the runtime so a refused launch can hand back the slots the app is
+   * holding for other threads of the same Oven, then try once more.
+   */
+  releaseIdleSessions?: (ovenId: string) => number
 }): OvenPiLaunch {
   const launch: PiRpcLaunch = async (launchInput: PiRpcLaunchInput): Promise<PiRpcLaunchResult> => {
     const session = input.sessions.get(launchInput.sessionId)
@@ -230,7 +246,20 @@ export function createOvenPiLaunch(input: {
     } catch (error) {
       // The service's own message is the only useful one here: it names what the
       // Oven refused (a missing harness, a missing directory, a dead channel).
-      throw new Error(messageOf(error), { cause: error })
+      // The one refusal this side can answer is a full Oven: its four runs are
+      // held by sessions of this app that are not working on anything, and
+      // giving those slots back starts this turn instead of failing it.
+      if (ovenRunSlotsExhausted(messageOf(error)) && input.releaseIdleSessions?.(session.ovenId)) {
+        run = await input.service.start(session.ovenId, {
+          id: randomUUID(),
+          command: 'pi',
+          args: ovenPiOvenArgs(launchInput.args, session),
+          cwd: session.cwd,
+          environment: ovenPiRunEnvironment(session.environment, launchInput.env),
+          input: '',
+          closeInput: false
+        })
+      } else throw new Error(messageOf(error), { cause: error })
     }
     return {
       transport: ovenRpcTransport({
@@ -244,6 +273,16 @@ export function createOvenPiLaunch(input: {
     launch,
     input.nativeTranscripts ? { nativeTranscripts: input.nativeTranscripts } : {}
   )
+}
+
+/**
+ * The Oven's own refusal to start a run because every run slot is taken.
+ *
+ * Four live harness processes are its limit, and the app keeps sessions resident
+ * for a fast follow-up, so this is the message a fifth conversation meets.
+ */
+function ovenRunSlotsExhausted(message: string): boolean {
+  return /already has four active runs/iu.test(message)
 }
 
 /**
@@ -394,7 +433,8 @@ export class OvenPiRuntime {
     this.launch = createOvenPiLaunch({
       sessions: this.sessions,
       service: this.service,
-      nativeTranscripts: this.nativeTranscripts
+      nativeTranscripts: this.nativeTranscripts,
+      releaseIdleSessions: (ovenId) => this.releaseIdleSessions(ovenId)
     })
   }
 
@@ -425,6 +465,37 @@ export class OvenPiRuntime {
   /** The pi driver this runtime starts sessions on. */
   get driver(): (HarnessDriver & OvenPiDriver) | null {
     return this.piDriver
+  }
+
+  /**
+   * Free one idle session's run on an Oven that has no run left to give.
+   *
+   * An Oven keeps at most four live harness processes. The app keeps a session's
+   * process resident so a follow-up is instant, which means four threads opened
+   * in one sitting leave a fifth refused with "This Oven already has four active
+   * runs" even though nothing is running right now. The idle sessions of that
+   * Oven give their slots back here, and each returns on its next turn from its
+   * persisted transcript.
+   */
+  releaseIdleSessions(ovenId: string): number {
+    const driver = this.piDriver
+    const sessions = this.sessions.idsForOven(ovenId)
+    if (!driver) {
+      Logger.dev('No pi driver to release Oven sessions on', { ovenId, sessions: sessions.length })
+      return 0
+    }
+    let released = 0
+    const held: string[] = []
+    for (const sessionId of sessions) {
+      if (driver.releaseIdleSession(sessionId)) released += 1
+      else held.push(sessionId)
+    }
+    Logger.info('Released idle Oven sessions for a run slot', {
+      ovenId,
+      released,
+      held: held.length
+    })
+    return released
   }
 
   /**
@@ -541,6 +612,8 @@ export class OvenPiRuntime {
 /** The pi driver surface this runtime routes a session into. */
 export interface OvenPiDriver {
   setSessionStorage(sessionId: string, storage: PiCioFilesStorage | null): void
+  /** Release one session's resident harness process when it is idle. */
+  releaseIdleSession(sessionId: string): boolean
   /**
    * Bind the session id the thread already carries to the Oven's checkout.
    *

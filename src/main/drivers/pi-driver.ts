@@ -1258,6 +1258,17 @@ export class PiDriver extends PersistentCliDriver {
   }
 
   /**
+   * Release one idle session's harness process, for an Oven that has no free run.
+   *
+   * The session process is resident so a follow-up is instant; on an Oven that
+   * residency costs one of four live runs, and a fifth thread is refused. The
+   * caller decides when that trade goes the other way.
+   */
+  releaseIdleSession(sessionId: string): boolean {
+    return this.rpcSessions.releaseIdleSession(sessionId)
+  }
+
+  /**
    * Restart every session's RPC process so the next turn spawns the Pi runtime
    * currently on disk. A session's client is long-lived (`pi --mode rpc` keeps
    * the resumed native transcript in memory), so without this an updated Pi
