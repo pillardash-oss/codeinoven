@@ -7,6 +7,7 @@ import { playHistoryArrive } from '$lib/motion'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadHoldsOpenTrace } from '$lib/stores/thread-preload'
+import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import type {
   AgentMessage,
@@ -1099,6 +1100,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
     const { projectId, id } = this.root.handleAgentEvent.thread
 
+    // Register this conversation with the shared attention store and read its
+    // authoritative permission queue before anything else on this pass. A card
+    // the reader opened the thread for must never wait on an unrelated read
+    // (the session status below can be slow or fail) and must never be
+    // cancelled by another view's mount: leaving the thread for a project view
+    // unmounts this view, so the card comes from the store and is reconciled
+    // here instead of from state this mount owns.
+    conversationAttention.track(projectId, id)
+    void this.root.editVideoNote.refreshPendingPermissions()
+
     // Independent extras   each lands as it resolves, none block the paint.
     void this.root.switchProject.loadProjectContext()
     // The durable fold is not what makes a thread readable. The mirror already
@@ -1174,18 +1185,17 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       }
       const liveSessionWorking = this.root.handleAgentEvent.providerStatus?.state === 'working'
       if (liveSessionWorking) {
-        await this.root.editVideoNote.refreshPendingPermissions()
-        if (!this.alive) return
         await this.root.sources.refreshPendingImageDescriptorError()
         if (!this.alive) return
         await this.root.composerScope.refreshPendingQuestions()
         if (!this.alive) return
       } else {
-        // A completed thread has nothing waiting on these: a permission card or
-        // a question only exists while work is in flight. They enrich the opened
-        // thread, so they load after the frame instead of holding the restore.
-        scheduleDeferredWork('thread:restored-session-extras', () => {
-          void this.root.editVideoNote.refreshPendingPermissions()
+        // A completed thread has nothing waiting on these: a question only exists
+        // while work is in flight. They enrich the opened thread, so they load
+        // after the frame instead of holding the restore. The key is per-thread
+        // because this scheduler is latest-wins across the whole renderer: a
+        // shared key let another thread's mount cancel this one's restore.
+        scheduleDeferredWork(`thread:restored-session-extras:${projectId}:${id}`, () => {
           void this.root.sources.refreshPendingImageDescriptorError()
           void this.root.composerScope.refreshPendingQuestions()
         })
@@ -1223,7 +1233,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         this.applyRestoredTrace(await readTraceWindow())
         if (!this.alive) return
       } else {
-        scheduleDeferredWork('thread:restored-trace', () => {
+        scheduleDeferredWork(`thread:restored-trace:${projectId}:${id}`, () => {
           void this.root.pollStreamParts.loadCompletedTurns()
           void readTraceWindow().then((page) => this.applyRestoredTrace(page))
         })

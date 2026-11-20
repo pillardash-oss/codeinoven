@@ -332,30 +332,27 @@ export class ThreadViewEditVideoNote extends BoardUnit<ThreadView> {
   async refreshPendingPermissions(): Promise<void> {
     const { projectId, id } = this.root.handleAgentEvent.thread
     try {
-      if (this.root.props.controller) {
-        // The side chat's own queue is authoritative for its own conversation
-        // the parent thread must never show a card the side chat owns.
-        const knownIds = new SvelteSet(
-          conversationAttention
-            .permissions(
-              this.root.props.controller.projectId,
-              this.root.props.controller.conversationId
-            )
-            .map((request) => request.id)
-        )
-        const pending = await invoke('agent:listPermissions', projectId, id)
-        conversationAttention.reconcile(
-          this.root.props.controller.projectId,
-          this.root.props.controller.conversationId,
-          pending,
-          knownIds
-        )
-        return
-      }
-      this.root.handleAgentEvent.pendingPermissions = await invoke(
-        'agent:listPermissions',
-        projectId,
-        id
+      // Whatever this view already knows stays unless the authoritative list is
+      // newer than it. Writing the read straight over the queue could wipe a
+      // request the live stream filed while the read was in flight, which is
+      // exactly the card the user is about to answer.
+      const target = this.root.props.controller
+        ? {
+            projectId: this.root.props.controller.projectId,
+            conversationId: this.root.props.controller.conversationId
+          }
+        : { projectId, conversationId: id }
+      const knownIds = new SvelteSet(
+        conversationAttention
+          .permissions(target.projectId, target.conversationId)
+          .map((request) => request.id)
+      )
+      const pending = await invoke('agent:listPermissions', projectId, id)
+      conversationAttention.reconcile(
+        target.projectId,
+        target.conversationId,
+        pending,
+        knownIds
       )
     } catch (error) {
       this.root.handleAgentEvent.errorMessage =

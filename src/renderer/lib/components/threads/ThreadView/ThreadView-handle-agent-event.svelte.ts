@@ -11,6 +11,7 @@ import {
   type StartAfterThreadReference
 } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { readThreadHold } from '$lib/stores/queued-resource-wait.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
@@ -57,7 +58,31 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
 
   engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
 
-  pendingPermissions = $state<PermissionRequest[]>([])
+  /**
+   * The conversation whose permission queue this view reads and writes.
+   *
+   * A controller-driven conversation is its own conversation; a thread is the
+   * thread on screen. The queue itself lives in the shared attention store, so
+   * a request raised while this view was unmounted (or still pending across a
+   * switch to a project view and back) is not owned by this mount.
+   */
+  private attentionConversation(): { projectId: string; conversationId: string } {
+    const controller = this.root.props.controller
+    return controller
+      ? { projectId: controller.projectId, conversationId: controller.conversationId }
+      : { projectId: this.thread.projectId, conversationId: this.thread.id }
+  }
+
+  /** The queue the composer's blocking card renders from. */
+  get pendingPermissions(): PermissionRequest[] {
+    const { projectId, conversationId } = this.attentionConversation()
+    return conversationAttention.permissions(projectId, conversationId)
+  }
+
+  set pendingPermissions(requests: PermissionRequest[]) {
+    const { projectId, conversationId } = this.attentionConversation()
+    conversationAttention.set(projectId, conversationId, requests)
+  }
 
   errorMessage = $state('')
 
