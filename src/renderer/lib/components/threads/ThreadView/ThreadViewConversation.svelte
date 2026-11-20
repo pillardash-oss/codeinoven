@@ -891,38 +891,34 @@
                   msg.id
                 )}
                 {@const unsent = Boolean(msg.error) && msg.role === 'user'}
+                {@const recall = steerHeld
+                  ? {
+                      ariaLabel: 'Recall steered message   the agent has not taken it yet',
+                      title: 'Recall   the agent never receives a steered message this is recalled',
+                      run: () => void board.pollStreamParts.undoHeldSteer(msg)
+                    }
+                  : unsent
+                    ? {
+                        ariaLabel: 'Recall message   it never reached the agent',
+                        title: 'Recall   take the words back into the composer and send again',
+                        run: () => void board.pollStreamParts.recallUnsentMessage(msg)
+                      }
+                    : null}
                 <!-- A message the agent has not settled on keeps its recall control
                      visible: it is the one action that matters while the words are
                      still the user's, and hiding it behind hover made the undo
-                     window impossible to find. -->
+                     window impossible to find. The hover actions slide in to its
+                     left instead, so the timestamp never drifts away from it. -->
                 <div
-                  class="mt-1 flex items-center gap-1.5 self-end transition-opacity {steerHeld ||
-                  unsent
+                  class="mt-1 flex items-center gap-1.5 self-end transition-opacity {recall
                     ? 'opacity-100'
                     : 'opacity-0 group-hover:opacity-100'}"
                 >
-                  <div class="flex items-center gap-0.5">
-                    {#if steerHeld}
-                      <button
-                        class="flex h-5 items-center gap-1 px-1.5 text-accent transition-colors hover:bg-elevated"
-                        aria-label="Recall steered message   the agent has not taken it yet"
-                        title="Recall   the agent never receives a steered message this is recalled"
-                        onclick={() => void board.pollStreamParts.undoHeldSteer(msg)}
-                      >
-                        <CioUndo size={12} />
-                        <span class="text-2xs uppercase tracking-wide">Recall</span>
-                      </button>
-                    {:else if unsent}
-                      <button
-                        class="flex h-5 items-center gap-1 px-1.5 text-accent transition-colors hover:bg-elevated"
-                        aria-label="Recall message   it never reached the agent"
-                        title="Recall   take the words back into the composer and send again"
-                        onclick={() => void board.pollStreamParts.recallUnsentMessage(msg)}
-                      >
-                        <CioUndo size={12} />
-                        <span class="text-2xs uppercase tracking-wide">Recall</span>
-                      </button>
-                    {/if}
+                  <div
+                    class="flex items-center gap-0.5 transition-opacity {recall
+                      ? 'opacity-0 group-hover:opacity-100 group-focus-within:opacity-100'
+                      : ''}"
+                  >
                     <button
                       class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
                       aria-label="Copy message"
@@ -956,6 +952,17 @@
                       </button>
                     {/if}
                   </div>
+                  {#if recall}
+                    <button
+                      class="flex h-5 items-center gap-1 border border-accent/30 bg-accent/10 px-1.5 text-[0.625rem] font-medium tracking-wide text-accent transition-colors hover:border-accent/50 hover:bg-accent/20"
+                      aria-label={recall.ariaLabel}
+                      title={recall.title}
+                      onclick={() => void recall.run()}
+                    >
+                      <CioUndo size={12} />
+                      <span class="uppercase">Recall</span>
+                    </button>
+                  {/if}
                   <span class="text-[0.625rem] text-dimmed">·</span>
                   <MessageTimestamp at={msg.createdAt} class="text-[0.625rem] text-dimmed" />
                 </div>
