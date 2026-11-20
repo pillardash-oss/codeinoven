@@ -856,12 +856,19 @@ async function start(raw: unknown): Promise<OvenRun> {
   const input = value.input === undefined ? '' : value.input
   if (typeof input !== 'string' || Buffer.byteLength(input) > MAX_REQUEST)
     throw new Error('Invalid harness input.')
+  // Which client owns this run travels with it, so a later service update can
+  // tell its own runs from another client's and never stop someone else's work.
+  const clientId =
+    typeof value.clientId === 'string' && /^[A-Za-z0-9._@/-]{1,80}$/u.test(value.clientId)
+      ? value.clientId
+      : undefined
   const run: OvenRun = {
     id: runId,
     command: value.command,
     cwd: value.cwd,
     status: 'running',
-    createdAt: Date.now()
+    createdAt: Date.now(),
+    ...(clientId === undefined ? {} : { clientId })
   }
   const job: Job = {
     run,

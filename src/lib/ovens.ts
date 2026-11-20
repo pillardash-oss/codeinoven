@@ -197,6 +197,14 @@ export interface OvenRun {
   createdAt: number
   finishedAt?: number
   exitCode?: number | null
+  /**
+   * The CodeInOven client that started this run.
+   *
+   * One Oven can serve several clients, so a run carries its owner with it: a
+   * client replacing the Oven's service must never stop another client's work,
+   * and a run from before this field existed has no owner to compare.
+   */
+  clientId?: string
 }
 
 export interface OvenRunEvent {
@@ -214,6 +222,8 @@ export interface StartOvenRunInput {
   environment?: Record<string, string>
   input?: string
   closeInput?: boolean
+  /** Which client owns the run, recorded on the Oven beside it. */
+  clientId?: string
 }
 
 /**

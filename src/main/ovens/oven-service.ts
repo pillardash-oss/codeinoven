@@ -1,5 +1,6 @@
 import { app } from 'electron'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
+import { hostname } from 'node:os'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
@@ -134,6 +135,21 @@ function activeRunsBlockUpdate(message: string): boolean {
   return /Finish active runs before updating the Oven service/iu.test(message)
 }
 
+/**
+ * One installation on one machine, as an Oven records a run's owner.
+ *
+ * The hostname makes the owner readable in the Oven's own run record, and the
+ * digest of the data root keeps two installations on one machine distinct.
+ */
+function ovenClientId(dataRoot: string): string {
+  const host =
+    hostname()
+      .replace(/[^A-Za-z0-9._-]/gu, '')
+      .slice(0, 40) || 'client'
+  const digest = createHash('sha256').update(`${host}\u0000${dataRoot}`).digest('hex').slice(0, 8)
+  return `${host}/${digest}`
+}
+
 /** How many runs a probe answer says the Oven is working on. */
 function activeRunsIn(answer: string): number {
   try {
@@ -179,6 +195,11 @@ export class OvenService {
    * inherited from a service it can no longer talk to.
    */
   private readonly startedRuns = new Map<string, Set<string>>()
+  /**
+   * Which other client holds an Oven's service update back, when that is why a
+   * replacement was not attempted.
+   */
+  private readonly serviceBlockers = new Map<string, string>()
 
   constructor(readonly registry: OvenRegistry) {
     this.ssh = new OvenSsh(registry)
@@ -254,6 +275,7 @@ export class OvenService {
         'The Oven kept the service it was running instead of the one just installed. Finish any active runs on it, then install the service again.'
       )
     this.serviceFaults.delete(id)
+    this.serviceBlockers.delete(id)
     return probe
   }
 
@@ -286,7 +308,9 @@ export class OvenService {
   async start(id: string, input: StartOvenRunInput): Promise<OvenRun> {
     const release = beginOvenHarnessRun(id, input.command)
     try {
-      const run = this.decode<OvenRun>(await this.request(id, { method: 'start', input }))
+      const run = this.decode<OvenRun>(
+        await this.request(id, { method: 'start', input: { ...input, clientId: this.clientId } })
+      )
       const started = this.startedRuns.get(id) ?? new Set<string>()
       started.add(input.id)
       this.startedRuns.set(id, started)
@@ -403,12 +427,31 @@ export class OvenService {
     if (!runs.ok || !Array.isArray(runs.value)) return false
     const started = this.startedRuns.get(id) ?? new Set<string>()
     for (const run of runs.value) if (run.status !== 'running') started.delete(run.id)
-    const abandoned = runs.value.filter((run) => run.status === 'running' && !started.has(run.id))
+    const running = runs.value.filter((run) => run.status === 'running')
+    // Another client's run is never stopped. The Oven records the owner beside
+    // every run it starts, and its owner is watching it; the update waits.
+    const foreign = running.filter(
+      (run) => !started.has(run.id) && run.clientId !== undefined && run.clientId !== this.clientId
+    )
+    if (foreign.length > 0) {
+      const owners = [...new Set(foreign.map((run) => run.clientId))].join(', ')
+      this.serviceBlockers.set(
+        id,
+        `This Oven is still working for another CodeInOven client (${owners}), so its service cannot be replaced until those runs finish.`
+      )
+      Logger.info('Left the Oven service update to the client that still owns runs', {
+        ovenId: id,
+        owners,
+        runIds: foreign.map((run) => run.id)
+      })
+    }
+    const abandoned = running.filter((run) => !started.has(run.id) && !foreign.includes(run))
     if (abandoned.length === 0) return false
     Logger.info('Stopping runs that block the Oven service update', {
       ovenId: id,
       runIds: abandoned.map((run) => run.id)
     })
+    await this.recordServiceUpdate(id, abandoned)
     for (const run of abandoned) await attempt(() => this.stop(id, run.id))
     // A stopped run is given a moment to exit before the update is attempted
     // again, because the Oven counts it until its own process is gone.
@@ -420,6 +463,53 @@ export class OvenService {
     }
     return true
   }
+
+  /**
+   * The durable record of an update that stopped runs holding the old service.
+   *
+   * A run is stopped only when this client cannot be the one watching it, and the
+   * entry says which runs, which commands and which owner, so the decision can be
+   * read afterwards instead of inferred from a log line that has already rotated.
+   */
+  private async recordServiceUpdate(id: string, stopped: OvenRun[]): Promise<void> {
+    const entry = {
+      at: new Date().toISOString(),
+      ovenId: id,
+      clientId: this.clientId,
+      reason: 'The Oven service was replaced while these runs held it on the previous one.',
+      stopped: stopped.map((run) => ({
+        id: run.id,
+        command: run.command,
+        cwd: run.cwd,
+        createdAt: run.createdAt,
+        owner: run.clientId ?? null
+      }))
+    }
+    try {
+      await this.registry.storage.appendRaw(
+        'ovens/service-updates.jsonl',
+        `${JSON.stringify(entry)}\n`
+      )
+    } catch (error) {
+      Logger.dev('The Oven service update record could not be written', {
+        ovenId: id,
+        error: messageOf(error)
+      })
+    }
+  }
+
+  /**
+   * This client's identity on any Oven.
+   *
+   * One Oven can serve several CodeInOven clients, so every run carries the client
+   * that started it. The identity is this machine plus this app's data root: it
+   * survives restarts and upgrades, and two installations never share it.
+   */
+  private get clientId(): string {
+    this.clientIdentity ??= ovenClientId(this.registry.storage.resolve('.'))
+    return this.clientIdentity
+  }
+  private clientIdentity: string | undefined
 
   /**
    * Forget a finished run's journal and record.
@@ -659,7 +749,8 @@ export class OvenService {
    */
   private serviceUpdateFailure(id: string, fallback: string, cause: unknown): Error {
     const fault = this.serviceFaults.get(id)
-    return new Error(fault ? `${fallback} The update failed: ${fault}` : fallback, { cause })
+    const detail = this.serviceBlockers.get(id) ?? fallback
+    return new Error(fault ? `${detail} The update failed: ${fault}` : detail, { cause })
   }
 
   /**
