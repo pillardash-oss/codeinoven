@@ -1,7 +1,8 @@
 import { cubicOut } from 'svelte/easing'
 import { fly } from 'svelte/transition'
 import type { TransitionConfig } from 'svelte/transition'
-import { motionDuration, prefersReducedMotion, promptArrive } from '$lib/motion'
+import { CUBIC_OUT_CSS, motionDuration, prefersReducedMotion, promptArrive } from '$lib/motion'
+import type { Attachment } from 'svelte/attachments'
 
 /**
  * Continuity for a prompt the reader just sent: the words leave the composer and
@@ -21,31 +22,45 @@ import { motionDuration, prefersReducedMotion, promptArrive } from '$lib/motion'
  *  the ordinary arrival instead of flying words that no longer mean "just now". */
 const HANDOFF_TTL_MS = 600
 
-/** The flight between the composer and the transcript. The row comes up under it
- *  slightly before the words arrive, so there is never a frame with neither. */
+/** The flight between the composer and the transcript. */
 const FLIGHT_MS = 230
-/** How long the words stay fully painted before they are handed to the row. */
+/** Where in the flight the words stop being fully painted and hand over to the row.
+ *  The row starts fading in under them a little before this, so no frame shows
+ *  neither the words nor the message. */
 const FLIGHT_HOLD = 0.72
 const LAND_DELAY_MS = 150
 const LAND_MS = 120
 
-/** How long the layer keeps the words in the air. */
-export const PROMPT_FLIGHT_MS = FLIGHT_MS
+/** A point in viewport coordinates. */
+type Point = { x: number; y: number }
 
-type Box = { left: number; top: number; width: number }
+/** Where the words land: the ledger row's own box, in viewport coordinates. */
+type LandingBox = { left: number; top: number; width: number }
 
-type PromptDeparture = Box & { text: string; at: number }
+type PromptDeparture = Point & { text: string; at: number }
 
 /** The words in the air: what to draw, where they started, where they land. */
-export type PromptFlight = {
-  id: number
-  text: string
-  from: Box
-  to: Box
-}
+export type PromptFlight = { id: number; text: string; from: Point; to: LandingBox }
 
 /** What an arriving prompt row needs to know about the view it lands in. */
 export type PromptLanding = { createdAt: number; viewAttachedAt: number }
+
+/**
+ * The painted box of what is written in the editor.
+ *
+ * A range rather than the element's own rect: the editor carries padding for its
+ * prompt marker, and starting the flight from the box's edge would snap the words
+ * sideways on the first frame. jsdom reports no box for a range, so the element's
+ * rect is the fallback there.
+ */
+function draftBox(editor: HTMLElement): { left: number; top: number; width: number } {
+  const range = document.createRange()
+  range.selectNodeContents(editor)
+  const box = range.getBoundingClientRect()
+  if (box.width > 0) return { left: box.left, top: box.top, width: box.width }
+  const fallback = editor.getBoundingClientRect()
+  return { left: fallback.left, top: fallback.top, width: fallback.width }
+}
 
 class ChatComposerPromptFlight {
   /** The flight the layer is drawing, or null when nothing is in the air. */
@@ -58,41 +73,44 @@ class ChatComposerPromptFlight {
   /**
    * Remember the words leaving the composer, measured while the draft is still on
    * screen. Called the instant the message is dispatched and before the draft is
-   * cleared, because the editor's box is what the flight starts from.
+   * cleared, because the editor's words are what the flight starts from.
    */
   depart(editorId: string, text: string): void {
     const editor = document.getElementById(editorId)
-    const rect = editor?.getBoundingClientRect()
-    if (!rect || rect.width === 0 || text.trim().length === 0) {
+    if (!editor || text.trim().length === 0) {
       this.departure = null
       return
     }
-    this.departure = {
-      text,
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      at: Date.now()
+    const box = draftBox(editor)
+    if (box.width === 0) {
+      this.departure = null
+      return
     }
+    this.departure = { text, x: box.left, y: box.top, at: Date.now() }
   }
 
   /**
    * Try to give the arriving row the words that just left the composer.
    *
-   * Returns false when there is nothing to hand over   no departure, a stale one,
-   * or reduced motion   and the caller then plays the ordinary arrival.
+   * Returns false when there is nothing to hand over   no departure, a stale one, a
+   * row that landed off screen, or reduced motion   and the caller then plays the
+   * ordinary arrival.
    */
   launch(node: HTMLElement): boolean {
     const departure = this.departure
     this.departure = null
     if (!departure || prefersReducedMotion()) return false
     if (Date.now() - departure.at > HANDOFF_TTL_MS) return false
-    const rect = node.getBoundingClientRect()
-    if (rect.width === 0) return false
+    // The words land on the ledger row itself, not on the block that wraps it with
+    // the action row: the ghost is drawn with that row's own padding, so the two
+    // line up when one hands over to the other.
+    const landing = node.querySelector<HTMLElement>('[data-conversation-searchable]') ?? node
+    const rect = landing.getBoundingClientRect()
+    if (rect.width === 0 || rect.top < 0 || rect.top > window.innerHeight) return false
     this.flight = {
       id: (this.sequence += 1),
       text: departure.text,
-      from: { left: departure.left, top: departure.top, width: departure.width },
+      from: { x: departure.x, y: departure.y },
       to: { left: rect.left, top: rect.top, width: rect.width }
     }
     return true
@@ -131,8 +149,28 @@ export function promptLanding(
 
 /** The offset the words travel, in viewport pixels, from the composer to the row. */
 export function promptFlightTravel(flight: PromptFlight): { x: number; y: number } {
-  return { x: flight.from.left - flight.to.left, y: flight.from.top - flight.to.top }
+  return { x: flight.from.x - flight.to.left, y: flight.from.y - flight.to.top }
 }
 
-/** Where the words stop being fully painted and hand over to the row. */
-export const PROMPT_FLIGHT_HOLD = FLIGHT_HOLD
+/**
+ * The flight itself, as an attachment on the ghost the layer draws.
+ *
+ * The ghost is keyed by the flight's id, so a new send brings a new element and
+ * this runs again for it; a run that finishes tells the store to drop the ghost
+ * rather than leaving it parked over the composer.
+ */
+export function promptFlightAnimation(flight: PromptFlight): Attachment<HTMLElement> {
+  return (node) => {
+    const travel = promptFlightTravel(flight)
+    const animation = node.animate(
+      [
+        { transform: `translate(${travel.x}px, ${travel.y}px)`, opacity: 1 },
+        { transform: 'translate(0px, 0px)', opacity: 1, offset: FLIGHT_HOLD },
+        { transform: 'translate(0px, 0px)', opacity: 0 }
+      ],
+      { duration: FLIGHT_MS, easing: CUBIC_OUT_CSS }
+    )
+    animation.onfinish = () => promptFlight.finish(flight.id)
+    return () => animation.cancel()
+  }
+}
