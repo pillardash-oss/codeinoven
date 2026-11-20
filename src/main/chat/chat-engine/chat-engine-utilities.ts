@@ -321,6 +321,17 @@ export class ChatEngineUtilities {
     // write the thread's secret files for a turn that can never read them.
     const carriesGateway =
       Boolean(publishUtilityEndpoint) || typeof driver.prepareUtilityRuntime === 'function'
+    // A turn that leaves the Oven's gateway unpublished is invisible until a
+    // cio_util_* call fails, so name the transport decision that was taken.
+    Logger.dev('Turn utility transport decided', {
+      sessionId,
+      driverId: driver.id,
+      hasDirectGateway: Boolean(publishUtilityEndpoint),
+      hasPreparedRuntime: typeof driver.prepareUtilityRuntime === 'function',
+      hasApplyRuntime: Boolean(applyRuntime),
+      carriesGateway,
+      skipRuntime
+    })
     if (!applyRuntime || !carriesGateway) return ''
     // Re-expose this thread's stored secrets for the turn that is starting: the
     // hook lands before the transport split so a direct-gateway harness (Pi,
