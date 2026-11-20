@@ -147,6 +147,8 @@ export class OvenService {
   /** Per-Oven guard, so a service that keeps failing cannot be reinstalled in a loop. */
   private readonly serviceRepairs = new Map<string, number>()
   private readonly repairingServices = new Map<string, Promise<boolean>>()
+  /** Why the last automatic service update on an Oven did not happen. */
+  private readonly serviceFaults = new Map<string, string>()
 
   constructor(readonly registry: OvenRegistry) {
     this.ssh = new OvenSsh(registry)
@@ -210,6 +212,7 @@ export class OvenService {
       throw new Error(
         'The Oven kept the service it was running instead of the one just installed. Finish any active runs on it, then install the service again.'
       )
+    this.serviceFaults.delete(id)
     return probe
   }
 
@@ -267,9 +270,10 @@ export class OvenService {
     if (first.ok) return this.utilityHostPort(first.value)
     if (!unknownUtilityHostMethod(messageOf(first.error))) throw first.error
     if (!(await this.refreshService(id, messageOf(first.error), note)))
-      throw new Error(
-        'This Oven runs an older service. Finish its active runs, then install the service again from its settings.',
-        { cause: first.error }
+      throw this.serviceUpdateFailure(
+        id,
+        'This Oven runs an older service. Install the service again from its settings.',
+        first.error
       )
     // The replacement restarted the daemon, and its host is started on the next
     // request. Say so, because that request is the wait the reader is in.
@@ -551,11 +555,12 @@ export class OvenService {
     // A stopped daemon can answer through the SSH process as { ok: false } too.
     // Recover before decode() throws that payload outside this repair boundary.
     if (!(await this.refreshService(id, fault.message, note)))
-      throw new Error(
+      throw this.serviceUpdateFailure(
+        id,
         serviceNotRunning(fault.message)
           ? 'The Oven service is not running and automatic recovery could not start it. Check its service settings.'
-          : 'This Oven runs an older service than this app. Finish its active runs, then install the service again from its settings.',
-        { cause: fault }
+          : 'This Oven runs an older service than this app. Install the service again from its settings.',
+        fault
       )
     const second = await attempt(run)
     if (!second.ok) throw second.error
@@ -567,6 +572,19 @@ export class OvenService {
     const message = result.ok ? failedAnswerError(result.value) : messageOf(result.error)
     if (!message || (!isStaleServiceFault(message) && !serviceNotRunning(message))) return null
     return result.ok ? new Error(message) : toError(result.error)
+  }
+
+  /**
+   * The error a caller raises when the service could not be updated.
+   *
+   * The reason the update itself gave is carried through. It used to be dropped
+   * for "finish its active runs", which sent the reader to stop runs that were
+   * not running while the real cause (a full disk, a service that would not
+   * start, a refused install) went unsaid.
+   */
+  private serviceUpdateFailure(id: string, fallback: string, cause: unknown): Error {
+    const fault = this.serviceFaults.get(id)
+    return new Error(fault ? `${fallback} The update failed: ${fault}` : fallback, { cause })
   }
 
   /**
@@ -596,12 +614,14 @@ export class OvenService {
         await this.install(id)
         // A successful install used to log nothing, so a log that ended here
         // read exactly like a hang. One line closes that gap.
+        this.serviceFaults.delete(id)
         Logger.info('Installed the current Oven service', {
           ovenId: id,
           durationMs: Date.now() - startedAt
         })
         return true
       } catch (error) {
+        this.serviceFaults.set(id, messageOf(error))
         Logger.error('The Oven service could not be installed', {
           ovenId: id,
           error: messageOf(error)
@@ -645,9 +665,10 @@ export class OvenService {
     } catch (error) {
       if (error instanceof OvenServiceOutdated) {
         if (!(await this.refreshService(id, error.message)))
-          throw new Error(
-            'This Oven runs an older service. Finish its active runs, then install the service again from its settings.',
-            { cause: error }
+          throw this.serviceUpdateFailure(
+            id,
+            'This Oven runs an older service. Install the service again from its settings.',
+            error
           )
         return await this.channel.request(id, data, options.timeoutMs)
       }

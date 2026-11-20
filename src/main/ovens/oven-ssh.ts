@@ -94,6 +94,28 @@ function remoteFailureDetail(stderr: string): string {
   return (reportable.length > 0 ? reportable : lines).slice(-3).join(' · ')
 }
 
+/**
+ * The cause a failed command named in its own answer.
+ *
+ * The Oven service reports every failure as `{ ok: false, error }` on stdout and
+ * exits nonzero, so that answer is where its reason lives; its stderr is usually
+ * empty. Reading only stderr replaced a refused service update with "check the
+ * package manager", so an Oven that refused an install reported a package
+ * problem on a machine whose packages were fine.
+ */
+export function remoteFailureAnswer(output: string): string | null {
+  const last = output.trim().split(/\r?\n/u).pop()
+  if (!last || !last.startsWith('{') || last.length > 16_384) return null
+  try {
+    const answer = JSON.parse(last) as { ok?: unknown; error?: unknown }
+    if (answer.ok === false && typeof answer.error === 'string' && answer.error.trim())
+      return answer.error.trim().slice(0, 400)
+  } catch {
+    return null
+  }
+  return null
+}
+
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
 function remoteCommandIssue(rawStderr: string): string {
   // A Windows PowerShell failure arrives as CLIXML, where the reason is one record
@@ -835,12 +857,18 @@ export class OvenSsh {
           else if (code === 255 || code === null)
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
           else if (code !== 0) {
-            const message = `Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`
-            reject(
-              isMissingService(remoteStderr)
-                ? new OvenServiceMissingError(message)
-                : new Error(message)
-            )
+            // A command that answered in its own protocol already named the cause,
+            // and a fixed sentence about the package manager is not that cause.
+            const answer = remoteFailureAnswer(output)
+            if (answer) reject(new Error(answer))
+            else {
+              const message = `Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`
+              reject(
+                isMissingService(remoteStderr)
+                  ? new OvenServiceMissingError(message)
+                  : new Error(message)
+              )
+            }
           } else resolve(output)
         })
         if (!channel) child.stdin.end(input)
