@@ -122,7 +122,7 @@ describe('the Oven utility snapshot', () => {
       id: 'cio:browser',
       kind: 'computer_use',
       name: 'Browser',
-      config: {}
+      config: { backend: 'codeinoven-browser' }
     })
 
     expect(await builder().snapshot(stateOf([resolved(browser)]))).toEqual([])
