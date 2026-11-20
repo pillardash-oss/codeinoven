@@ -3,6 +3,7 @@
   import CioArrowUpRight from '@pdslng/cio-icon/CioArrowUpRight.svelte'
   import CioFind from '@pdslng/cio-icon/CioFind.svelte'
   import CioShieldCheck from '@pdslng/cio-icon/CioShieldCheck.svelte'
+  import CioStop from '@pdslng/cio-icon/CioStop.svelte'
   import CioUndo from '@pdslng/cio-icon/CioUndo.svelte'
   import Modal from '$lib/components/ui/Modal.svelte'
   import ModelPicker from '../shared/ModelPicker.svelte'
@@ -22,6 +23,7 @@
     favoriteModels = [],
     recentModels = [],
     onOpenAudit,
+    onStopAudit,
     onViewReport,
     onNewAudit,
     onDeleteThread,
@@ -47,6 +49,9 @@
   /** The durable auditor records the failure on its own thread, so a failed
    *  run stays visible here until the next run starts. */
   let auditFailed = $derived(!running && auditThread?.status === 'failed')
+  /** The auditor is gone, not failed: the stop ended the run before a report,
+   *  and the same auditor session picks it up on the next run. */
+  let auditStopped = $derived(!running && auditThread?.status === 'interrupted')
   /** The auditor thread is the run: it is created for the first audit and keeps
    *  the report lineage, so its own clock is the run's clock. */
   let runStartedAt = $derived(auditThread?.createdAt)
@@ -73,6 +78,14 @@
         tone: 'text-danger'
       }
     }
+    if (auditStopped) {
+      return {
+        label: 'Audit stopped',
+        description:
+          'The auditor was stopped before delivering a report. Run the audit again when you are ready; it resumes the same auditor session from where it stopped.',
+        tone: 'text-warning'
+      }
+    }
     if (reportAvailable && partialReport) {
       return {
         label: 'Report ready, evidence incomplete',
@@ -96,6 +109,19 @@
   })
 
   let newAuditOpen = $state(false)
+  /** A stop is in flight: the abort has not settled yet, so a second press
+   *  must not fire another one. */
+  let stopping = $state(false)
+
+  async function stopAudit(): Promise<void> {
+    if (stopping || !onStopAudit) return
+    stopping = true
+    try {
+      await onStopAudit()
+    } finally {
+      stopping = false
+    }
+  }
 
   /** A fresh auditor thread only makes sense once one exists: the first audit is
    *  started by "Run audit", and "New audit" replaces the thread after that,
@@ -145,6 +171,18 @@
       the repository with read-only checks.
     </p>
     <div class="mt-3 flex gap-2">
+      {#if running && onStopAudit}
+        <button
+          type="button"
+          class="flex flex-1 items-center justify-center gap-2 border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-semibold text-danger hover:bg-danger/20 disabled:pointer-events-none disabled:opacity-60"
+          disabled={stopping}
+          title="Stop the running audit. No report is saved and the auditor is left where it stopped."
+          onclick={stopAudit}
+        >
+          {stopping ? 'Stopping…' : 'Stop audit'}
+          <CioStop size={13} />
+        </button>
+      {/if}
       {#if !running && onOpenAudit}
         <button
           type="button"
@@ -182,7 +220,7 @@
         class="mt-2 flex w-full items-center justify-center gap-2 border border-border bg-elevated px-3 py-2 text-xs font-semibold text-muted hover:bg-overlay hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
         disabled={running}
         title={running
-          ? 'The auditor is still working. Wait for it to finish before starting a new audit.'
+          ? 'Stop the running audit before starting a new one.'
           : 'Delete this auditor thread and start a fresh audit session'}
         onclick={() => (newAuditOpen = true)}
       >

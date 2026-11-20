@@ -493,7 +493,7 @@ export class ChatEngineTurnsSendPrompt {
     if (text.length === 0 && !hasSendableContext) {
       throw new TypeError('Prompt must be a string between 1 and 200000 characters')
     }
-    this.host.units['turns'].markProjectActive(projectId)
+    this.host.units['turns'].markHarnessActive(projectId, settings.harnessId || undefined)
     let targetThread = await this.host.threadManager.getThread(projectId, threadId)
     if (
       specAction === 'implement' &&

@@ -376,7 +376,63 @@ export class ChatEngineAudit {
     } finally {
       if (this.host.state.activeIndependentAuditRuns.get(key) === run) {
         this.host.state.activeIndependentAuditRuns.delete(key)
+        // A stop request whose run ended before reaching its own check (an
+        // audit that failed while resolving its auditor) must not leak into
+        // the next audit.
+        this.host.state.stoppedIndependentAuditRuns.delete(key)
       }
+    }
+  }
+
+  /**
+   * Stop the independent audit that is running for this coordinator.
+   *
+   * The auditor runs on its own durable child thread, so stopping the
+   * coordinator's session never reaches it: there was no way to end an audit
+   * that was stuck, billing, or simply wrong while it was in progress. The
+   * stop is recorded first so the run never retries past it, then the
+   * auditor's own session is aborted. The run ends without a report and the
+   * auditor thread is left `interrupted`, ready to resume on the next audit.
+   */
+  async stopIndependentAudit(projectId: string, coordinatorThreadId: string): Promise<void> {
+    projectId = validateEntityId(projectId, 'Project ID')
+    coordinatorThreadId = validateEntityId(coordinatorThreadId, 'Coordinator thread ID')
+    const coordinator = await this.host.threadManager.getThread(projectId, coordinatorThreadId)
+    if (!coordinator || coordinator.independentAudit !== true) {
+      throw new Error('Independent audit is not enabled for this thread.')
+    }
+    const key = `${projectId}:${coordinatorThreadId}`
+    const auditor = await this.findIndependentAuditorThread(
+      projectId,
+      coordinatorThreadId,
+      coordinator
+    )
+    // Two paths start an independent audit: the coordinator's own Run audit
+    // (tracked in `activeIndependentAuditRuns`) and `generateAudit`, which
+    // routes an independent thread straight into the run. A tracked run answers
+    // for itself; otherwise the auditor's own `executing` status is the proof
+    // that a run is in flight, so a finished audit can never be marked stopped.
+    const tracked = this.host.state.activeIndependentAuditRuns.has(key)
+    if (!tracked && auditor?.status !== 'executing') {
+      throw new Error('No independent audit is running for this thread.')
+    }
+    // Record the stop before touching the session: a run between attempts (or
+    // still creating its auditor) then stops before its next dispatch instead
+    // of persisting the report the user just cancelled.
+    this.host.state.stoppedIndependentAuditRuns.set(key, Date.now())
+    if (!auditor) return
+    try {
+      await this.host.abort(projectId, auditor.id)
+    } catch (error) {
+      // The session waiter was already rejected by the abort, so the run still
+      // observes the stop request. Report the harness failure to the caller.
+      Logger.error('Independent audit stop could not abort the auditor session', {
+        projectId,
+        coordinatorThreadId,
+        auditorThreadId: auditor.id,
+        error: rawErrorMessage(error)
+      })
+      throw error
     }
   }
 

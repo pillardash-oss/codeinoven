@@ -190,7 +190,7 @@ export class PiHostSupervisor {
       const response = await this.#request(host, request.sessionId, request.command)
       const state = this.#stateOf(response)
       const parentSessionId = request.parentSessionId ?? request.command.parentSessionId
-      this.#sessionHost.set(request.sessionId, host.id)
+      this.#mountSession(request.sessionId, host.id)
       this.#sessions.set(
         request.sessionId,
         this.#transferable(state, {
@@ -228,7 +228,7 @@ export class PiHostSupervisor {
     if (host === null) return
     await this.#request(host, sessionId, { type: 'dispose_session' })
     this.#ownership.release(sessionId, host.id)
-    this.#sessionHost.delete(sessionId)
+    this.#unmountSession(sessionId)
     this.#sessions.delete(sessionId)
     if (this.#sessionsOn(host.id).length === 0) this.#stopHost(host.id)
   }
@@ -364,7 +364,10 @@ export class PiHostSupervisor {
     }
   }
 
-  /** Running hosts changed: a host started, died, or was stopped. */
+  /**
+   * Running hosts changed: a host started, died, or was stopped, or the set of
+   * sessions one of them carries changed.
+   */
   onHostsChanged(listener: () => void): () => void {
     this.#hostsChangedListeners.push(listener)
     return () => {
@@ -516,7 +519,7 @@ export class PiHostSupervisor {
   async #releaseFrom(source: LiveHost, sessionId: string): Promise<void> {
     await this.#request(source, sessionId, { type: 'dispose_session' })
     this.#ownership.release(sessionId, source.id)
-    this.#sessionHost.delete(sessionId)
+    this.#unmountSession(sessionId)
     if (this.#sessionsOn(source.id).length === 0) this.#stopHost(source.id)
   }
 
@@ -534,7 +537,7 @@ export class PiHostSupervisor {
         resumeRequest(record, `resume-${sessionId}`).command
       )
       const state = this.#stateOf(response)
-      this.#sessionHost.set(sessionId, target.id)
+      this.#mountSession(sessionId, target.id)
       this.#sessions.set(sessionId, this.#transferable(state, record))
       return state
     } catch (error) {
@@ -622,6 +625,25 @@ export class PiHostSupervisor {
       this.#sessionHost.delete(sessionId)
     }
     return sessionIds
+  }
+
+  /**
+   * Record which host runs a session, and tell every listener.
+   *
+   * A host's task-manager row carries how many sessions it is carrying, so this
+   * mapping is part of what the row says. The row is written the moment the
+   * process appears, which is before the session that asked for it has landed,
+   * so a change here that nobody hears is a count frozen at zero for the life of
+   * that host.
+   */
+  #mountSession(sessionId: string, hostId: string): void {
+    this.#sessionHost.set(sessionId, hostId)
+    this.#hostsChanged()
+  }
+
+  /** Drop a session's host mapping and tell every listener, if it had one. */
+  #unmountSession(sessionId: string): void {
+    if (this.#sessionHost.delete(sessionId)) this.#hostsChanged()
   }
 
   #hostsChanged(): void {

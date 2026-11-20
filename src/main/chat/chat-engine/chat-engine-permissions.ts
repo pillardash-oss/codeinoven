@@ -847,7 +847,7 @@ export class ChatEnginePermissions {
       resumeStatus
     }
     this.host.state.pendingPermissions.set(request.id, pending)
-    this.host.units['turns'].markProjectActive(info.projectId)
+    this.host.units['turns'].markHarnessActive(info.projectId, info.driverId)
 
     // The refusal is answered before any tier logic below can approve it.
     const refusedCommand = commands.find(

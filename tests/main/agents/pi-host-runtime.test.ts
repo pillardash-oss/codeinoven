@@ -19,12 +19,39 @@ vi.mock('../../../src/main/agents/pi-host-launcher', () => ({
   spawnPiHost: (): HostTransport => {
     const record = { pid: 0, stopped: false }
     spawned.push(record)
+    const lineListeners: ((line: string) => void)[] = []
+    const reply = (sessionId: string | undefined, id: string): void => {
+      const line = JSON.stringify({
+        type: 'response',
+        id,
+        ok: true,
+        data: {
+          sessionId,
+          nativeSessionId: `native-${sessionId}`,
+          sessionFile: `/agent/sessions/${sessionId}.jsonl`,
+          cwd: `/work/${sessionId}`,
+          agentDir: '/agent',
+          isStreaming: false,
+          isCompacting: false,
+          messageCount: 0,
+          pendingMessageCount: 0
+        }
+      })
+      for (const listener of lineListeners) listener(line)
+    }
     return {
       get pid(): number {
         return record.pid
       },
-      send: () => undefined,
-      onLine: () => undefined,
+      send: (line) => {
+        const request = JSON.parse(line) as { id?: unknown; sessionId?: unknown }
+        if (typeof request.id !== 'string') return
+        const sessionId = typeof request.sessionId === 'string' ? request.sessionId : undefined
+        reply(sessionId, request.id)
+      },
+      onLine: (listener) => {
+        lineListeners.push(listener)
+      },
       onExit: () => undefined,
       stop: () => {
         record.stopped = true
@@ -103,5 +130,37 @@ describe('Pi host service rows', () => {
     expect(spawned[0]?.stopped).toBe(true)
     expect(hostRows()).toEqual([])
     expect(supervisor.pids()).toEqual([])
+  })
+
+  /**
+   * The row's count is what a host is carrying right now.
+   *
+   * The row is written when the process appears, which is before the first
+   * session has landed on it, so a count written only then stays at the value
+   * from the host's first instant   zero   for the rest of its life. A host
+   * running the open thread was listed as carrying none for exactly that
+   * reason.
+   */
+  it('counts the threads a host carries as they land and leave', async () => {
+    const supervisor = piHostSupervisor()
+    await supervisor.start()
+    spawned[0]!.pid = 5125
+    await vi.advanceTimersByTimeAsync(300)
+    expect(hostRows()[0]?.detail).toBe('No hosted threads')
+
+    await supervisor.createSession({
+      sessionId: 'atlas',
+      command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
+    })
+    expect(hostRows()[0]?.detail).toBe('1 hosted thread')
+
+    await supervisor.createSession({
+      sessionId: 'ledger',
+      command: { type: 'create_session', cwd: '/work/ledger', agentDir: '/agent' }
+    })
+    expect(hostRows()[0]?.detail).toBe('2 hosted threads')
+
+    await supervisor.disposeSession('ledger')
+    expect(hostRows()[0]?.detail).toBe('1 hosted thread')
   })
 })

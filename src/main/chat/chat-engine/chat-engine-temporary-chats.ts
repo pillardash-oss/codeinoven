@@ -197,7 +197,7 @@ export class ChatEngineTemporaryChats {
     const outboundUserMessageId = userMessageId
       ? validateBoundedString(userMessageId, 'User message ID', 1, 128)
       : createMessageId()
-    this.host.units['turns'].markProjectActive(projectId)
+    this.host.units['turns'].markHarnessActive(projectId)
     // A global-browser tab has no project folder; make sure its reserved scope
     // exists before the ownership and working-directory lookups below need it.
     await this.host.units['misc'].ensureGlobalBrowserScope(projectId)

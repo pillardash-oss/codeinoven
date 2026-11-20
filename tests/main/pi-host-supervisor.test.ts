@@ -139,6 +139,36 @@ describe('PiHostSupervisor', () => {
     expect(supervisor.pid()).toBeNull()
   })
 
+  /**
+   * Where a session runs is part of what a host's row says, so every change of
+   * that mapping has to be published.
+   *
+   * The row is registered the instant the process appears   before the session
+   * that asked for it has landed   and nothing else refreshes it. A change
+   * nobody hears therefore leaves the running host claiming it carries no
+   * threads, which is how a host running the thread on screen was listed as
+   * carrying none.
+   */
+  it('reports a session landing on and leaving a host', async () => {
+    const { supervisor } = harness()
+    const changes: number[] = []
+    supervisor.onHostsChanged(() => changes.push(supervisor.sessionsOn(500)))
+    await supervisor.createSession({
+      sessionId: 'atlas',
+      command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
+    })
+    expect(changes).toContain(1)
+    expect(supervisor.sessionsOn(500)).toBe(1)
+    // A second session on the same host is another count, and it is announced.
+    await supervisor.createSession({
+      sessionId: 'ledger',
+      command: { type: 'create_session', cwd: '/work/ledger', agentDir: '/agent' }
+    })
+    expect(changes).toContain(2)
+    await supervisor.disposeSession('ledger')
+    expect(supervisor.sessionsOn(500)).toBe(1)
+  })
+
   it('moves a session to a host of its own and resumes its transcript', async () => {
     const { supervisor, hosts } = harness()
     await supervisor.createSession({

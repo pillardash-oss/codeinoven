@@ -182,15 +182,18 @@ export class ChatEngineLifecycleShutdown {
   }
 
   /**
-   * Release each harness's in-memory resources for projects that have been
-   * fully idle (no working turns, no pending input, no in-flight work) for the
-   * grace period: pooled servers are stopped, CLI session caches are evicted,
-   * and any agent-spawned processes are released. Sessions persist in each
-   * harness's own store, so they rehydrate the next time the project is used  
-   * the same session ids are simply re-served.
+   * Release the resources a harness holds for a project once that harness has
+   * been quiet for the grace period.
+   *
+   * The clock is per harness, not per project: pooled servers are stopped, CLI
+   * session caches are evicted and any agent-spawned processes are released for
+   * the harness that has nothing in flight, while a different harness working in
+   * the same folder keeps its own runtime. Sessions persist in each harness's own
+   * store, so they rehydrate the next time that harness is used   the same session
+   * ids are simply re-served.
    */
   async reapIdleResources(): Promise<void> {
-    // Session ids that must keep their project's resources alive.
+    // Session ids that must keep their harness's resources alive.
     const protectedSessions = new Set<string>()
     for (const pending of this.host.pendingQuestions.values()) {
       protectedSessions.add(pending.request.sessionId)
@@ -205,58 +208,47 @@ export class ChatEngineLifecycleShutdown {
       protectedSessions.add(sessionId)
     }
 
-    // Seed projects from every driver operation, including probes that run
-    // before a session exists, then merge registered session activity over it.
-    const projects = new Map<string, { projectPaths: Set<string>; active: boolean }>()
-    for (const [projectId, projectPaths] of this.host.state.projectResourcePaths) {
-      projects.set(projectId, { projectPaths: new Set(projectPaths), active: false })
+    const ledger = this.host.state.harnessIdle
+    // Every working directory a harness may hold resources in: the paths driver
+    // operations tracked before any session existed, and the path each
+    // registered session actually works in.
+    for (const info of this.host.sessionRegistry.values()) {
+      ledger.notePath(info.projectId, info.driverId, info.projectPath)
     }
-    for (const [sessionId, info] of this.host.sessionRegistry) {
-      const status = this.host.sessionStatuses.get(sessionId)?.state
-      const active =
-        status === 'working' || status === 'waiting' || protectedSessions.has(sessionId)
-      const existing = projects.get(info.projectId)
-      projects.set(info.projectId, {
-        projectPaths: new Set([...(existing?.projectPaths ?? []), info.projectPath]),
-        active: (existing?.active ?? false) || active
-      })
-    }
-    // A delegated worker keeps its project busy even when the thread that
-    // spawned it looks idle: the worker lives inside its parent harness
-    // process, so releasing that process would silently kill work in flight.
-    for (const [childSessionId, owner] of this.host.state.childSessionOwners) {
-      const status = this.host.sessionStatuses.get(childSessionId)?.state
-      const active = status === 'working' || status === 'waiting'
-      const existing = projects.get(owner.projectId)
-      projects.set(owner.projectId, {
-        projectPaths: new Set([...(existing?.projectPaths ?? []), owner.projectPath]),
-        active: (existing?.active ?? false) || active
-      })
+    // A delegated worker keeps its harness busy even when the thread that
+    // spawned it looks idle: the worker lives inside its parent harness process,
+    // so releasing that process would silently kill work in flight.
+    for (const owner of this.host.state.childSessionOwners.values()) {
+      ledger.notePath(owner.projectId, owner.driverId, owner.projectPath)
     }
 
-    const now = Date.now()
-    for (const [projectId, project] of projects) {
-      if (project.active) {
-        this.host.state.projectIdleSince.delete(projectId)
-        this.host.state.releasedProjects.delete(projectId)
-        continue
+    for (const [sessionId, info] of this.host.sessionRegistry) {
+      const status = this.host.sessionStatuses.get(sessionId)?.state
+      if (status === 'working' || status === 'waiting' || protectedSessions.has(sessionId)) {
+        ledger.markActive(info.projectId, info.driverId)
       }
-      // Already released once this active→idle cycle   do not re-release.
-      if (this.host.state.releasedProjects.has(projectId)) continue
-      const since = this.host.state.projectIdleSince.get(projectId) ?? now
-      if (now - since < ChatEngine.IDLE_PROJECT_GRACE_MS) {
-        this.host.state.projectIdleSince.set(projectId, since)
-        continue
+    }
+    for (const [childSessionId, owner] of this.host.state.childSessionOwners) {
+      const status = this.host.sessionStatuses.get(childSessionId)?.state
+      if (status === 'working' || status === 'waiting') {
+        ledger.markActive(owner.projectId, owner.driverId)
       }
-      this.host.state.projectIdleSince.delete(projectId)
-      this.host.state.releasedProjects.add(projectId)
-      this.host.state.projectResourcePaths.delete(projectId)
-      Logger.info('Releasing idle project harness resources to free memory', {
-        projectId,
-        projectPaths: [...project.projectPaths]
+    }
+
+    const releases = ledger.releaseDue(Date.now(), ChatEngine.IDLE_PROJECT_GRACE_MS)
+    for (const release of releases) {
+      Logger.info('Releasing idle harness resources to free memory', {
+        projectId: release.projectId,
+        driverId: release.driverId,
+        projectPaths: release.paths
       })
-      for (const projectPath of project.projectPaths) {
-        for (const driver of this.host.units['turns'].allDrivers()) {
+      // Only the harness that went quiet: its own instances (one per account),
+      // because another harness's runtime in the same folder is still in use.
+      const drivers = this.host.units['turns']
+        .allDrivers()
+        .filter((driver) => driver.id === release.driverId)
+      for (const projectPath of release.paths) {
+        for (const driver of drivers) {
           try {
             await driver.releaseProjectResources?.(projectPath)
           } catch (error) {
@@ -264,10 +256,11 @@ export class ChatEngineLifecycleShutdown {
           }
         }
       }
-      // Drop the per-session bookkeeping for this project's sessions. The
-      // harness sessions themselves are untouched   they rehydrate from disk.
+      // Drop the per-session bookkeeping for this harness's sessions in this
+      // project. The harness sessions themselves are untouched   they rehydrate
+      // from disk.
       for (const [sessionId, info] of this.host.sessionRegistry) {
-        if (info.projectId !== projectId) continue
+        if (info.projectId !== release.projectId || info.driverId !== release.driverId) continue
         this.host.sessionStatuses.delete(sessionId)
         this.host.state.reasoningTimes.delete(sessionId)
         this.host.state.toolTimes.delete(sessionId)
@@ -290,7 +283,7 @@ export class ChatEngineLifecycleShutdown {
    * The reaper releases the harness resources of idle projects, applies harness
    * restarts that were deferred while a session was busy, and reclaims harness
    * processes from a sibling that died. Every one of those needs something to act
-   * on: a registered session, a project whose resources are still tracked, a queued
+   * on: a registered session, a harness whose resources are still tracked, a queued
    * restart, or a peer instance that could leave an orphan behind. With none of
    * them the pass would only prove there is still nothing to do, once a minute,
    * for as long as the app is open.
@@ -302,7 +295,7 @@ export class ChatEngineLifecycleShutdown {
 
   shouldReap(): boolean {
     if (this.host.sessionRegistry.size > 0) return true
-    if (this.host.state.projectResourcePaths.size > 0) return true
+    if (this.host.state.harnessIdle.pending > 0) return true
     if (this.host.state.deferredHarnessRestarts.size > 0) return true
     // A sibling's harness roots are journaled in the journal this app shares, so
     // only a live peer can leave a process for the periodic sweep to reclaim; a
