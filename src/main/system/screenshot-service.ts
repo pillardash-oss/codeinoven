@@ -56,6 +56,16 @@ let capturing = false
 let lastTriggerAt = 0
 let pending: ScreenshotCapture[] = []
 
+/** macOS answers its own screenshot chords even when Electron reports the
+ *  registration as successful, so main refuses them as well as the renderer. */
+const MAC_SCREENSHOT_ACCELERATORS: ReadonlySet<string> = new Set([
+  'Command+Shift+3',
+  'Command+Shift+4',
+  'Command+Shift+5',
+  'Command+Shift+6',
+  'Command+Shift+7'
+])
+
 function screenshotsDirectory(): string {
   return join(app.getPath('userData'), SCREENSHOT_DIRECTORY)
 }
@@ -168,6 +178,7 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
   const rawPath = join(directory, `.capture-${randomUUID()}.png`)
   try {
     await mkdir(directory, { recursive: true })
+    Logger.dev('Opening the region screenshot selector', { rawPath })
     try {
       await runScreenCapture(rawPath)
     } catch (error) {
@@ -245,6 +256,9 @@ export function setScreenshotShortcut(accelerator: string | null): ScreenshotSho
     activeAccelerator = null
   }
   if (!accelerator) return { registered: false, reason: 'unbound' }
+  if (MAC_SCREENSHOT_ACCELERATORS.has(accelerator)) {
+    return { registered: false, reason: 'reserved' }
+  }
   try {
     const registered = globalShortcut.register(accelerator, () => {
       void captureScreenshotForAgent()
@@ -254,6 +268,7 @@ export function setScreenshotShortcut(accelerator: string | null): ScreenshotSho
       return { registered: false, reason: 'in-use' }
     }
     activeAccelerator = accelerator
+    Logger.dev('The region screenshot chord is registered', { accelerator })
     return { registered: true }
   } catch (error) {
     Logger.error('The screenshot chord is not a valid accelerator:', error)

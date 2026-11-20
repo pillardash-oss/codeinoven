@@ -28,6 +28,8 @@ export interface ApplicationMenuActions {
   checkForUpdates: () => void
   /** Reveal the Settings page in the app window, opening it when parked. */
   openSettings: () => void
+  /** Open the region selector and attach the capture to the active prompt. */
+  captureRegion: () => void
   /** Open a second instance beside this one. */
   newInstance: () => void
   /** Replace the window's renderer while the main process keeps working. */
@@ -56,6 +58,10 @@ function applicationItems(actions: ApplicationMenuActions): MenuItemConstructorO
       accelerator: SETTINGS_ACCELERATOR,
       registerAccelerator: false,
       click: () => actions.openSettings()
+    },
+    {
+      label: 'Capture Region for Agent',
+      click: () => actions.captureRegion()
     },
     { type: 'separator' },
     {

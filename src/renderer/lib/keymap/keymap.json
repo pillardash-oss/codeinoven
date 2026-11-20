@@ -1226,7 +1226,8 @@
       "shortcuts": [
         {
           "id": "screenshot-region",
-          "keys": ["mod", "shift", "7"],
+          "keys": [],
+          "platformKeys": { "mac": ["mod", "shift", "u"] },
           "label": "Capture region for agent",
           "description": "Opens the macOS region selector and attaches an agent-optimized PNG to the active thread's composer. The capture works while another app is focused and is fitted to the 1568px size vision models read, so the text in it stays legible.",
           "scenario": "Anywhere on macOS, including from another app."

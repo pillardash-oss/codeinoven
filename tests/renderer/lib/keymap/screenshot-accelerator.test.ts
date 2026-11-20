@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from 'vitest'
 import { keymapKeys } from '$lib/keymap/keymap'
-import { acceleratorForKeys } from '$lib/keymap/screenshot-accelerator'
+import { acceleratorForKeys, isMacScreenshotAccelerator } from '$lib/keymap/screenshot-accelerator'
 
 /** Pin the platform the way the Electron bridge does, so the accelerator is
  *  resolved for the machine the chord will actually be claimed on. */
@@ -15,7 +15,14 @@ function setPlatform(platform: string): void {
 describe('region screenshot accelerator', () => {
   it('claims the registry default as a system-wide macOS chord', () => {
     setPlatform('darwin')
-    expect(acceleratorForKeys(keymapKeys('screenshot-region'))).toBe('Command+Shift+7')
+    expect(acceleratorForKeys(keymapKeys('screenshot-region'))).toBe('Command+Shift+U')
+  })
+
+  it('recognizes the chords macOS keeps for its own screenshot service', () => {
+    for (const key of ['3', '4', '5', '6', '7']) {
+      expect(isMacScreenshotAccelerator(`Command+Shift+${key}`)).toBe(true)
+    }
+    expect(isMacScreenshotAccelerator('Command+Shift+U')).toBe(false)
   })
 
   it('uses Control outside macOS', () => {

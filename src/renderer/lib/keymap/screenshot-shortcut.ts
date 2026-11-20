@@ -1,7 +1,8 @@
 import { invoke } from '$lib/ipc.svelte'
+import { isMacPlatform } from '$lib/shortcut-display'
 import { showToastWarning } from '$lib/stores/app-errors.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
-import { acceleratorForKeys } from './screenshot-accelerator'
+import { acceleratorForKeys, isMacScreenshotAccelerator } from './screenshot-accelerator'
 
 /**
  * Hand the region-screenshot chord to the main process.
@@ -24,6 +25,21 @@ let warnedReason: string | null = null
  */
 export function publishScreenshotShortcut(keys: readonly string[]): void {
   const accelerator = acceleratorForKeys(keys)
+  if (accelerator && isMacPlatform() && isMacScreenshotAccelerator(accelerator)) {
+    // macOS answers these itself even when Electron reports the registration as
+    // successful, which is exactly the dead shortcut a user reports as "nothing
+    // happens". Release whatever was claimed and say what to change.
+    void invoke('screenshot:setShortcut', null).catch(() => undefined)
+    if (warnedReason === 'mac-screenshot') return
+    warnedReason = 'mac-screenshot'
+    showToastWarning('macOS already owns that screenshot shortcut', {
+      id: 'screenshot-shortcut-mac-owned',
+      description:
+        'Command+Shift+3, 4, 5, 6 and 7 are the system screenshot chords, and the system wins the keypress. Choose a different key for the app in Settings › Keymap.',
+      duration: 10_000
+    })
+    return
+  }
   void invoke('screenshot:setShortcut', accelerator)
     .then((result) => {
       if (
@@ -42,7 +58,9 @@ export function publishScreenshotShortcut(keys: readonly string[]): void {
         description:
           result.reason === 'in-use'
             ? 'Another app already owns this chord. Choose a different one in Settings › Keymap.'
-            : 'This chord cannot be registered system-wide. Choose another one in Settings › Keymap.',
+            : result.reason === 'reserved'
+              ? 'macOS owns this chord for its own screenshots. Choose a different one in Settings › Keymap.'
+              : 'This chord cannot be registered system-wide. Choose another one in Settings › Keymap.',
         duration: 10_000
       })
     })

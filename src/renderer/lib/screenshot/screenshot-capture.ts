@@ -63,7 +63,7 @@ async function offerPath(capture: ScreenshotCapture): Promise<void> {
   } catch (error) {
     logRendererError('The screenshot path could not be copied', error)
   }
-  showToastWarning('Screenshot saved, but no composer is open', {
+  showToastWarning('Screenshot saved, but it could not be attached to a prompt', {
     id: 'screenshot-no-composer',
     description: `The path is on your clipboard: ${capture.path}`,
     duration: 10_000

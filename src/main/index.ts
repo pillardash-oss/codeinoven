@@ -8,6 +8,7 @@ import { isLocalDevelopmentUrl } from '../lib/local-development-url'
 import { hasCaptionOverlay } from '../lib/traffic-light'
 import { Logger } from './system/logger'
 import { installApplicationMenu } from './system/app-menu'
+import { captureScreenshotForAgent } from './system/screenshot-service'
 import { usageAnalytics } from './system/usage-analytics'
 import { LOGS_DIRECTORY } from './system/log-paths'
 import { Database } from './database/database'
@@ -1273,6 +1274,7 @@ void app
       quitApp: quitAppDirectly,
       checkForUpdates: checkForUpdatesFromMenu,
       openSettings: () => revealWindowAndSend('window:openSettings'),
+      captureRegion: () => void captureScreenshotForAgent(),
       newInstance: openNewInstance,
       restartWorkspace
     })

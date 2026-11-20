@@ -77,3 +77,24 @@ export function acceleratorForKeys(
   parts.push(key)
   return parts.join('+')
 }
+
+/**
+ * The chords macOS claims for its own screenshot service.
+ *
+ * `globalShortcut.register` happily answers true for these and the system still
+ * wins the keypress, so the app's action never runs while the user sees the
+ * platform's screenshot UI. They are refused rather than registered, so the
+ * keymap can say why instead of leaving a dead shortcut behind.
+ */
+const MAC_SCREENSHOT_ACCELERATORS: ReadonlySet<string> = new Set([
+  'Command+Shift+3',
+  'Command+Shift+4',
+  'Command+Shift+5',
+  'Command+Shift+6',
+  'Command+Shift+7'
+])
+
+/** Whether macOS owns this chord for a screenshot of its own. */
+export function isMacScreenshotAccelerator(accelerator: string): boolean {
+  return MAC_SCREENSHOT_ACCELERATORS.has(accelerator)
+}
