@@ -40,6 +40,25 @@ So each Oven hosts its own gateway.
   answers relayed calls through the same `callRouteForTurn` a local turn uses, so
   a route has exactly one implementation.
 
+## What the trace says while this happens
+
+A send marks its thread `executing` before any of the work above starts, and every
+round trip that follows replaces the turn's working note rather than leaving the
+trace on the step that already finished (`publishWorkingNote` on the turn's
+session):
+
+| Moment                                               | The note                                        |
+| ---------------------------------------------------- | ----------------------------------------------- |
+| The composer accepts a user prompt on an Oven thread | `Sending to the Oven…`                          |
+| The turn's session exists, before the Oven is read   | `Preparing <oven>…`, then the preparation steps |
+| A relay is opened                                    | `Starting the Oven's capability host…`          |
+| The daemon has to replace its bundle                 | `Reinstalling the Oven service…`                |
+| The replaced service must start its host             | `Starting the Oven's capability host…` again    |
+
+The note travels with the call, not through a global listener: the relay hands
+its `note` sink to the daemon, `OvenService.refreshService` speaks through it
+before it starts an install, and the turn's own resolver publishes each line.
+
 ## Who runs what
 
 | Route                                                                | Runs on the Oven                                       | Forwarded to the app                                           |
