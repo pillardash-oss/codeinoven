@@ -287,6 +287,31 @@ export function registerOvenIpc(
     })
   })
   ipcMain.handle('oven:transfer', (_event, raw: unknown) => transfers.execute(ovenId(raw)))
+  /**
+   * What this Oven can keep at rest, and which utilities it already holds.
+   *
+   * Asked from that machine's own daemon, because its utility host listens on a
+   * loopback this app cannot reach. An unavailable vault is a normal answer.
+   */
+  ipcMain.handle('oven:utilitySecrets', async (_event, raw: unknown) =>
+    service.utilitySecrets(ovenId(raw))
+  )
+  ipcMain.handle('oven:utilitySecretStore', async (_event, raw: unknown, enabled: unknown) => {
+    if (typeof enabled !== 'boolean')
+      throw new Error('Choose whether this Oven may keep credentials.')
+    const id = ovenId(raw)
+    const answer = await service.setUtilitySecretStore(id, enabled)
+    // Turning the store off must leave nothing behind on that machine, which is
+    // a promise the switch makes in words, so it is kept here rather than left
+    // to the host's own bookkeeping.
+    if (!answer.enabled) await service.forgetUtilitySecrets(id)
+    return answer
+  })
+  ipcMain.handle('oven:forgetUtilitySecrets', async (_event, raw: unknown, utilityId: unknown) => {
+    if (utilityId !== undefined && (typeof utilityId !== 'string' || utilityId.length > 256))
+      throw new Error('Invalid utility id.')
+    return service.forgetUtilitySecrets(ovenId(raw), utilityId)
+  })
   ipcMain.handle('oven:previewPort', (_event, raw: unknown, port: unknown) => {
     if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535)
       throw new Error('Choose a valid server port.')

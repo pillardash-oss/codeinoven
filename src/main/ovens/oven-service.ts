@@ -9,6 +9,7 @@ import {
   type OvenRunEvent,
   type StartOvenRunInput
 } from '../../lib/ovens'
+import type { OvenUtilitySecretVault } from '../../lib/oven-utility-host'
 import {
   type OvenRootPeers,
   type OvenWorkspaceRequest,
@@ -270,6 +271,47 @@ export class OvenService {
     if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535)
       throw new Error('The Oven utility host answered an invalid port.')
     return { port: host.port }
+  }
+
+  /**
+   * What this Oven can keep at rest, and which utilities it already holds.
+   *
+   * The host listens on that machine's loopback, which this app cannot reach, so
+   * the question goes through the Oven's daemon. An unavailable vault is an
+   * answer, not a failure: that machine simply runs on the per-turn push.
+   */
+  async utilitySecrets(id: string): Promise<OvenUtilitySecretVault> {
+    const vault = this.decode<OvenUtilitySecretVault>(
+      await this.request(id, { method: 'utility-secrets' })
+    )
+    if (!Array.isArray(vault.stored))
+      throw new Error('The Oven answered an invalid credential store.')
+    return vault
+  }
+
+  /**
+   * Allow, or stop allowing, this Oven to keep utility credentials at rest.
+   *
+   * Turning it on writes nothing by itself: a credential arrives with the turn
+   * that uses it, and is kept from then on. Turning it off forgets everything
+   * that Oven held.
+   */
+  async setUtilitySecretStore(id: string, enabled: boolean): Promise<{ enabled: boolean }> {
+    const answer = this.decode<{ enabled: boolean }>(
+      await this.request(id, { method: 'utility-secrets-enabled', input: { enabled } })
+    )
+    return { enabled: answer.enabled === true }
+  }
+
+  /** Forget one utility's stored credentials on this Oven, or every one of them. */
+  async forgetUtilitySecrets(id: string, utilityId?: string): Promise<{ forgotten: number }> {
+    const forgotten = this.decode<{ forgotten: number }>(
+      await this.request(id, {
+        method: 'utility-secret-forget',
+        input: utilityId === undefined ? {} : { utilityId }
+      })
+    )
+    return { forgotten: Number.isInteger(forgotten.forgotten) ? forgotten.forgotten : 0 }
   }
 
   async events(

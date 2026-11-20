@@ -50,6 +50,8 @@ import { OVEN_UTILITY_HOST_MODE, OVEN_UTILITY_RELAY_MODE } from '../../../lib/ov
 import { startOvenUtilityHost } from './oven-utility-host'
 import { openOvenUtilityHostLog } from './oven-utility-host/oven-utility-host-log'
 import { createOvenUtilityLocalHost } from './oven-utility-host/oven-utility-local'
+import { OvenUtilitySecrets } from './oven-utility-host/oven-utility-secrets'
+import { answerOvenUtilityAdminRequest } from './oven-service-utility-secrets'
 import { runOvenUtilityRelay } from './oven-utility-relay'
 import {
   readOvenUtilityHostState,
@@ -1007,6 +1009,18 @@ async function dispatch(raw: unknown): Promise<unknown> {
   // Additive: a bundle that predates it answers "unknown method", which is how
   // the app already treats a stale Oven service.
   if (request.method === 'utility-host') return utilityHost()
+  // The credential store's administration travels the same way: the app cannot
+  // see this machine's loopback, so the daemon ensures the host and asks it.
+  const adminMethod = request.method
+  if (
+    adminMethod === 'utility-secrets' ||
+    adminMethod === 'utility-secrets-enabled' ||
+    adminMethod === 'utility-secret-forget'
+  )
+    return answerOvenUtilityAdminRequest(adminMethod, request.input, {
+      home: homedir(),
+      ensureHost: utilityHost
+    })
   if (request.method === 'shutdown') {
     if ([...jobs.values()].some((job) => job.child))
       throw new Error('Finish or stop active runs before updating the Oven service.')
@@ -1443,10 +1457,16 @@ async function utilityHostMode(): Promise<void> {
   // every level goes there rather than half of it being written to a stdout
   // nobody holds.
   Logger.useStandardError()
+  const home = homedir()
+  // One store for both halves: the routes write through it and the local
+  // executor reads from it, so a secret kept now is the one the next turn runs
+  // with, and a forgotten one is gone from the next turn.
+  const secrets = new OvenUtilitySecrets({ home })
   const host = await startOvenUtilityHost({
-    home: homedir(),
+    home,
     revision,
-    local: createOvenUtilityLocalHost()
+    secrets,
+    local: createOvenUtilityLocalHost({ credentials: secrets })
   })
   const stop = (): void => {
     void host.close().finally(() => process.exit(0))

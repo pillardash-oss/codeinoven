@@ -2,14 +2,19 @@
  * The routes one Oven's utility host answers.
  *
  * Two kinds of caller share one listener. The machine's own credential (`the
- * host token`, read out of the 0600 state file) mints and retires turns. A turn
- * token minted that way may then call exactly the routes its grants name, and
- * nothing else: the gateway a harness was pointed at is this listener, so a
- * route it calls arrives here as a path, with the call input as the body.
+ * host token`, read out of the 0600 state file) mints and retires turns, and
+ * administers the at-rest credential store. A turn token minted that way may then
+ * call exactly the routes its grants name, and nothing else: the gateway a
+ * harness was pointed at is this listener, so a route it calls arrives here as a
+ * path, with the call input as the body.
  */
 import { timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { OVEN_UTILITY_HOST_PROTOCOL, type OvenUtilityJson } from '../../../../lib/oven-utility-host'
+import {
+  OVEN_UTILITY_HOST_PROTOCOL,
+  type OvenUtilityJson,
+  type OvenUtilityStoredSecret
+} from '../../../../lib/oven-utility-host'
 import { Logger } from '../../../system/logger'
 import {
   OvenUtilityHttpError,
@@ -17,13 +22,19 @@ import {
   readOvenUtilityJson,
   sendOvenUtilityEnvelope
 } from '../oven-utility-http'
+import { ovenUtilityJson } from './oven-utility-appliers'
 import { answerOvenUtilityCall, type OvenUtilityLocalRunner } from './oven-utility-host-forward'
 import { OvenUtilityTurns } from './oven-utility-host-turns'
+import type { OvenUtilitySecrets } from './oven-utility-secrets'
 
 const HOST_STATUS = '/host/status'
 const HOST_TURN = '/host/turn'
 const HOST_TURN_RETIRE = '/host/turn/retire'
 const HOST_TURN_RELAY_GONE = '/host/turn/relay-gone'
+const HOST_SECRETS = '/host/secrets'
+const HOST_SECRETS_ENABLED = '/host/secrets/enabled'
+const HOST_SECRET = '/host/secret'
+const HOST_SECRET_FORGET = '/host/secret/forget'
 const BEARER_PREFIX = 'Bearer '
 
 /** What one host's listener needs to answer: its identity, its turns, its seams. */
@@ -36,6 +47,8 @@ export interface OvenUtilityHostRouteContext {
   turns: OvenUtilityTurns
   /** Answers a call on the Oven; `undefined` forwards it to the turn's relay. */
   localRunner?: OvenUtilityLocalRunner
+  /** This machine's at-rest credentials, opt-in and off by default. */
+  secrets: OvenUtilitySecrets
 }
 
 /** The `createServer` listener for one host. */
@@ -99,7 +112,100 @@ async function answerHostRoute(
     requireMethod(request, 'POST', path)
     return retireTurn(context, await readOvenUtilityJson(request))
   }
+  if (path === HOST_SECRETS) {
+    requireMethod(request, 'GET', path)
+    return ovenUtilityJson(await context.secrets.status())
+  }
+  if (path === HOST_SECRETS_ENABLED) {
+    requireMethod(request, 'POST', path)
+    const enabled = (await requireBodyRecord(request, path))['enabled']
+    if (typeof enabled !== 'boolean')
+      throw new OvenUtilityHttpError(400, 'The secret store needs enabled to be true or false.')
+    return await context.secrets.setEnabled(enabled)
+  }
+  if (path === HOST_SECRET) {
+    requireMethod(request, 'POST', path)
+    return await context.secrets.remember(
+      await storedSecret(await requireBodyRecord(request, path))
+    )
+  }
+  if (path === HOST_SECRET_FORGET) {
+    requireMethod(request, 'POST', path)
+    const body = await requireBodyRecord(request, path)
+    return { forgotten: await context.secrets.forget(optionalUtilityId(body)) }
+  }
   throw new OvenUtilityHttpError(404, `Unknown utility host route: ${path}.`)
+}
+
+/**
+ * The JSON object one administrative call carries.
+ *
+ * A credential write has no optional body: the caller must say what to keep, so
+ * an empty body is a caller mistake rather than an empty bundle.
+ */
+async function requireBodyRecord(
+  request: IncomingMessage,
+  path: string
+): Promise<Record<string, OvenUtilityJson>> {
+  const body = await readOvenUtilityJson(request)
+  if (!body || typeof body !== 'object' || Array.isArray(body))
+    throw new OvenUtilityHttpError(400, `${path} needs a JSON object.`)
+  return body
+}
+
+/** One stored credential bundle, validated before it reaches any backend. */
+function storedSecret(body: Record<string, OvenUtilityJson>): OvenUtilityStoredSecret {
+  const utilityId = body['utilityId']
+  if (!isUtilityId(utilityId))
+    throw new OvenUtilityHttpError(400, 'A stored credential needs a valid utilityId.')
+  const env = credentialMap(body['env'], 'env', true)
+  if (!env) throw new OvenUtilityHttpError(400, 'A stored credential needs an env object.')
+  const headers = credentialMap(body['headers'], 'headers', false)
+  return { utilityId, env, ...(headers ? { headers } : {}) }
+}
+
+/** One map of credential names to string values, bounded like a request body. */
+function credentialMap(
+  value: OvenUtilityJson | undefined,
+  field: string,
+  required: boolean
+): Record<string, string> | undefined {
+  if (value === undefined || value === null) {
+    if (required)
+      throw new OvenUtilityHttpError(400, `A stored credential needs an ${field} object.`)
+    return undefined
+  }
+  if (typeof value !== 'object' || Array.isArray(value))
+    throw new OvenUtilityHttpError(400, `A stored credential's ${field} must be an object.`)
+  const entries = Object.entries(value)
+  if (entries.length > 64)
+    throw new OvenUtilityHttpError(
+      400,
+      `A stored credential's ${field} carries at most 64 entries.`
+    )
+  const map: Record<string, string> = {}
+  for (const [key, entry] of entries) {
+    if (typeof entry !== 'string' || key.includes('\0'))
+      throw new OvenUtilityHttpError(400, `A stored credential's ${field} must map names to text.`)
+    map[key] = entry
+  }
+  return map
+}
+
+/** The utility one forget call names, or every one when it names none. */
+function optionalUtilityId(body: Record<string, OvenUtilityJson>): string | undefined {
+  const utilityId = body['utilityId']
+  if (utilityId === undefined || utilityId === null) return undefined
+  if (!isUtilityId(utilityId))
+    throw new OvenUtilityHttpError(400, 'Forgetting a credential needs a valid utilityId.')
+  return utilityId
+}
+
+/** One utility id as the app and this host spell it. */
+function isUtilityId(value: OvenUtilityJson | undefined): value is string {
+  return (
+    typeof value === 'string' && value.length > 0 && value.length <= 200 && !value.includes('\0')
+  )
 }
 
 /**

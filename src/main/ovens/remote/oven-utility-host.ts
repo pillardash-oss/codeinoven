@@ -29,6 +29,7 @@ import {
 import { closeOvenUtilityServer } from './oven-utility-http'
 import { createOvenUtilityHostListener } from './oven-utility-host/oven-utility-host-routes'
 import { OvenUtilityTurns } from './oven-utility-host/oven-utility-host-turns'
+import { OvenUtilitySecrets } from './oven-utility-host/oven-utility-secrets'
 import type {
   OvenUtilityLocalRunner,
   OvenUtilityLocalHost
@@ -53,6 +54,14 @@ export interface StartOvenUtilityHostOptions {
    * (an MCP server child above all) outlives the capability that started it.
    */
   local?: OvenUtilityLocalHost
+  /**
+   * This machine's at-rest credential store.
+   *
+   * The host owns one when its caller does not hand one in. The caller passes
+   * the same instance to its local executor, so a secret written through a route
+   * is the one the next turn's servers run with, and a forgotten one is gone.
+   */
+  secrets?: OvenUtilitySecrets
 }
 
 export interface OvenUtilityHostHandle {
@@ -81,6 +90,7 @@ export async function startOvenUtilityHost(
   const prune = setInterval(() => turns.pruneStale(), PRUNE_INTERVAL_MS)
   prune.unref()
   const hostToken = randomBytes(32).toString('hex')
+  const secrets = options.secrets ?? new OvenUtilitySecrets({ home: options.home })
   let port = 0
   const server = createServer(
     createOvenUtilityHostListener({
@@ -88,6 +98,7 @@ export async function startOvenUtilityHost(
       revision: options.revision,
       hostToken,
       turns,
+      secrets,
       ...(local ? { localRunner: local.run } : {})
     })
   )

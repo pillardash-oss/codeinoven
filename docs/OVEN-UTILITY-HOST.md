@@ -60,10 +60,32 @@ import Electron, SvelteKit or any app-only module.
 A stdio MCP server on the Oven cannot start without its token, and a remote one
 cannot authenticate without its headers, so the app resolves the turn's
 credential environment and request headers from the vault and sends them with
-the snapshot, for the utilities that turn may reach. The values live in the
-host's memory for the turn, are handed only to the server process or request
-they belong to, and are gone when the turn retires. Nothing is written to the
-Oven's disk.
+the snapshot, for the utilities that turn may reach. By default those values
+live in the host's memory for the turn, are handed only to the server process or
+request they belong to, and are gone when the turn retires: a disposable Oven,
+or a stolen image of it, holds nothing to lift.
+
+### Keeping them on the Oven (opt-in, per Oven)
+
+A client with no app behind it — an Oven-local harness pointed at the host's
+port, the `cio-oven` CLI — would otherwise never receive a credential, so the
+turn's servers could not start. Per Oven, the user may allow that machine to keep
+utility credentials at rest: Ovens → _Keep utility credentials on this Oven_.
+
+- The store uses what the Oven's own operating system offers: the login keychain
+  (`security`), a secret service (`secret-tool`, which needs a session bus), or
+  DPAPI (`ConvertTo-SecureString`). It is probed before it is used; a machine
+  with none of them, or a Linux box with no session bus, reports itself
+  unavailable and keeps running on the per-turn push. The app never asks an
+  unattended launch for a keyring item, exactly as its own `safeStorage` use does.
+- The app's vault stays authoritative. A credential the turn carries wins for
+  that turn and overwrites the stored copy, so a rotated token lands on the Oven
+  on its next turn rather than going stale there.
+- A turn that carries no value for a utility falls back to the stored one, which
+  is the whole point for client-less turns.
+- Values are write-only across the API: no route returns one, and the store's
+  `secrets.json` holds only the enabled flag and the ids it holds, never a value.
+  Turning the switch off forgets everything on that machine.
 
 ## Output and observability
 

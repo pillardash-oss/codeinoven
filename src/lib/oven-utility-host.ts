@@ -68,6 +68,31 @@ export interface OvenUtilityHostState {
 }
 
 /**
+ * The host's routes, in one place so no client has to guess one.
+ *
+ * Responses are the envelope `{ok:true,value}` / `{ok:false,error}`. Every
+ * `hostToken` route is administrative and never accepts a turn token; every
+ * other path is a gateway route and accepts only a turn token whose grants name
+ * it.
+ *
+ * | Route | Credential | Purpose |
+ * | --- | --- | --- |
+ * | `GET /host/status` | hostToken | protocol version, port, revision, live turns |
+ * | `POST /host/turn` | hostToken | register a turn, or retire one |
+ * | `GET /host/secrets` | hostToken | `OvenUtilitySecretVault`: what this machine can store, and what it holds |
+ * | `POST /host/secrets/enabled` | hostToken | `{enabled}`: may this machine keep credentials at rest |
+ * | `POST /host/secret` | hostToken | `OvenUtilityStoredSecret`, write-only |
+ * | `POST /host/secret/forget` | hostToken | `{utilityId?}`; absent means every stored secret |
+ * | any other path | turn token | the gateway route of that name |
+ *
+ * Precedence: the credentials a turn carries are the app's freshly resolved
+ * truth, so they win for that turn and overwrite the stored copy while the store
+ * is enabled. A turn that carries none for a utility falls back to the stored
+ * copy, which is what lets a client with no app behind it (an Oven-local harness,
+ * the `cio-oven` CLI) start a server this machine was trusted with.
+ */
+
+/**
  * One MCP server, resolved on the Oven by its client.
  *
  * The client owns the registry, so it sends exactly the servers this turn may
@@ -140,6 +165,48 @@ export type OvenUtilityTurnInput = Pick<
   OvenUtilityTurn,
   'turnId' | 'token' | 'grants' | 'utilities' | 'relayUrl' | 'client' | 'projectPath'
 >
+
+/**
+ * How an Oven can keep a credential at rest, or why it cannot.
+ *
+ * The app's own vault is Electron's `safeStorage`, which does not exist here, so
+ * an Oven's store is whatever its own operating system offers: a login keychain,
+ * a secret service, or DPAPI. A machine that has none of them is not broken: it
+ * simply runs on the per-turn push, and says so instead of pretending.
+ */
+export type OvenUtilitySecretBackend =
+  'macos-keychain' | 'windows-dpapi' | 'linux-secret-service' | 'unavailable'
+
+/** What this machine can do with a credential it is asked to keep. */
+export interface OvenUtilitySecretVault {
+  backend: OvenUtilitySecretBackend
+  /** True only when a read and a write would work right now. */
+  available: boolean
+  /**
+   * Whether the store is switched on for this Oven.
+   *
+   * It is the user's decision, not a consequence of what is stored: a store that
+   * was just turned on holds nothing yet, and a client must not read that as off.
+   */
+  enabled: boolean
+  /** Why it cannot, in words the app can show once. Absent when it can. */
+  reason?: string
+  /** Utility ids this machine already holds a credential bundle for. */
+  stored: string[]
+}
+
+/**
+ * The credential bundle one utility keeps on an Oven.
+ *
+ * It is the same two maps a turn's snapshot carries, neither of which is ever
+ * returned to a client: a value written here is write-only in both directions.
+ */
+export interface OvenUtilityStoredSecret {
+  utilityId: string
+  env: Record<string, string>
+  /** Remote request headers, for a server that authenticates by header. */
+  headers?: Record<string, string>
+}
 
 /** One tool call a client's gateway received and the host must forward or run. */
 export interface OvenUtilityRelayCall {

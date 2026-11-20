@@ -29,6 +29,8 @@ import { ovenUtilityGatewayResult } from './oven-utility-appliers'
 import { activateOvenUtility, lookupOvenUtilityDocs } from './oven-utility-local-capability'
 import { ovenUtilityCatalogue, type OvenUtilityLocalCall } from './oven-utility-local-context'
 import { invokeOvenUtility } from './oven-utility-local-invoke'
+import { resolveOvenUtilityTurnCredentials } from './oven-utility-local-credentials'
+import type { OvenUtilityCredentialStore } from './oven-utility-secrets'
 import { boundOvenUtilityOutput } from './oven-utility-local-output'
 import { ovenUtilityProjectTerms, searchOvenUtilities } from './oven-utility-local-search'
 import { OvenUtilityLocalTurns } from './oven-utility-local-turns'
@@ -49,7 +51,21 @@ export interface OvenUtilityLocalOptions {
    * simply has no project signals at all, and search still works.
    */
   contextPath?: string
+  /**
+   * This machine's at-rest credentials, when it keeps any.
+   *
+   * A turn's own env and headers always win; this only fills what the turn left
+   * out, and it is read fresh for every call that can open a server, so a secret
+   * forgotten between turns is never handed out again.
+   */
+  credentials?: OvenUtilityCredentialStore
 }
+
+/**
+ * The routes that can open an MCP server, and so the only ones that need a
+ * credential resolved. Search and the app-owned routes never touch the store.
+ */
+const CREDENTIAL_ROUTES = new Set(['activate', 'docs-lookup', 'invoke'])
 
 /**
  * Build the Oven-local executor for one host.
@@ -77,13 +93,20 @@ export function createOvenUtilityLocalHost(
   const run: OvenUtilityLocalRunner = async (turn, route, input) => {
     const handler = ovenUtilityLocalHandler(route)
     if (!handler) return undefined
+    // The credentials this call's servers run with. Only a route that opens one
+    // asks the store, and the answer is never kept for a later call.
+    const credentials = options.credentials
+    const resolved =
+      credentials && CREDENTIAL_ROUTES.has(routeKey(route))
+        ? await resolveOvenUtilityTurnCredentials(turn, credentials)
+        : turn
     const call: OvenUtilityLocalCall = {
-      turn,
-      state: turns.of(turn.turnId),
-      catalogue: ovenUtilityCatalogue(turn),
+      turn: resolved,
+      state: turns.of(resolved.turnId),
+      catalogue: ovenUtilityCatalogue(resolved),
       // The turn's own checkout whenever it named one, so a search ranks what the
       // turn is working on and not whatever directory this daemon started in.
-      projectTerms: () => termsFor(resolve(turn.projectPath ?? contextPath))
+      projectTerms: () => termsFor(resolve(resolved.projectPath ?? contextPath))
     }
     const answer = await handler(call, input)
     // Every local answer leaves through the app's own shape, bounded the way the
@@ -123,7 +146,7 @@ export function createOvenUtilityLocalHost(
  * app-owned and forwarded.
  */
 function ovenUtilityLocalHandler(route: string): OvenUtilityLocalHandler | undefined {
-  switch (route.replace(/^\/+/u, '').replace(/\/+$/u, '').toLocaleLowerCase('en-US')) {
+  switch (routeKey(route)) {
     case 'search':
       return searchOvenUtilities
     case 'docs-lookup':
@@ -135,4 +158,9 @@ function ovenUtilityLocalHandler(route: string): OvenUtilityLocalHandler | undef
     default:
       return undefined
   }
+}
+
+/** One route name without its slashes or case, the way a grant compares. */
+function routeKey(route: string): string {
+  return route.replace(/^\/+/u, '').replace(/\/+$/u, '').toLocaleLowerCase('en-US')
 }
