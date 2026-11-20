@@ -880,6 +880,29 @@ export class ChatEngineTurnsSessions {
   }
 
   /**
+   * Publish one line about the work this app is doing before the harness runs.
+   *
+   * A remote turn spends real time on preparation the harness never sees (an
+   * Oven's capability host, its service bundle, its checkout), and a trace that
+   * stays silent through it reads as a send that did nothing. The note replaces
+   * the previous one instead of opening a turn of its own, and the start time
+   * the running turn already reported is kept, so the trace's clock never
+   * restarts on a note.
+   */
+  publishWorkingNote(sessionId: string, note: string): void {
+    const current = this.host.sessionStatuses.get(sessionId)
+    const status: AgentSessionStatus = {
+      state: 'working',
+      note,
+      ...(current?.state === 'working' && current.startedAt !== undefined
+        ? { startedAt: current.startedAt }
+        : {})
+    }
+    this.host.sessionStatuses.set(sessionId, status)
+    this.host.broadcast({ type: 'session.status', sessionId, status })
+  }
+
+  /**
    * Move this thread's session to a host process of its own.
    *
    * The transcript is the session, so a move is a resume on another host: the

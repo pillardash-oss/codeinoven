@@ -29,8 +29,7 @@ import { isOvenMode, isUnrestrictedLevel } from '../../../lib/permission-level'
 /**
  * The permission kinds that mean "an operation on a file". Every other kind is
  * the chat's own work: its web access and the tools it was given.
- */
-const FILE_SYSTEM_PERMISSIONS = new Set([
+ */ const FILE_SYSTEM_PERMISSIONS = new Set([
   'read',
   'write',
   'edit',
@@ -42,6 +41,16 @@ const FILE_SYSTEM_PERMISSIONS = new Set([
   'files',
   'bundled-pi-sensitive-files'
 ])
+
+/**
+ * A remote Oven's own temp directories, as that machine spells them.
+ *
+ * A chat there writes its throwaway files where any shell on that machine would
+ * (`/tmp/o.txt` for a probe's output), and those are that machine's scratch in
+ * exactly the way `chats-cwd/<threadId>` is a local chat's. Only remote sessions
+ * get them: on this machine the temp directory is not a chat's workspace.
+ */
+const OVEN_SCRATCH_ROOTS = ['/tmp', '/var/tmp', '/private/tmp']
 
 /**
  * The app-owned gateway tool a request would run, if that is what it is.
@@ -484,7 +493,15 @@ export class ChatEnginePermissions {
     const scratchPaths = isAssistant
       ? []
       : ovenChatHosted
-        ? [resolve(info.projectPath)]
+        ? [
+            resolve(info.projectPath),
+            // That machine's own scratch, which is what a shell there writes to
+            // by habit (`/tmp/o.txt` for a probe's output). A local chat's temp
+            // is the workspace itself, so the Oven has no equivalent here unless
+            // this is named: leaving it out asked the user to approve writing a
+            // throwaway file into the Oven's temp directory.
+            ...OVEN_SCRATCH_ROOTS
+          ]
         : info.projectId === GLOBAL_BROWSER_PROJECT_ID
           ? [info.projectPath]
           : [this.host.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]

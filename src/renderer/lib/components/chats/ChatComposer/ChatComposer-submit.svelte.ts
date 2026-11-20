@@ -21,6 +21,7 @@ import {
   type ComposerMentionEntry
 } from '../composer-mentions'
 import RichMarkdownEditor from '../../shared/RichMarkdownEditor.svelte'
+import { promptFlight } from '../chat-composer-prompt-flight.svelte'
 import { speechController } from '../../../speech/speech-controller.svelte'
 import { filterActions, permissionLevelForAction } from '$lib/actions'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -506,6 +507,10 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     }
     const msg = normalizeComposerMessage(this.value, this.projectReferences)
     speechController.observeSent(this.composerEditorId, msg)
+    // The words are about to leave the box they were typed in: measure that box
+    // now, while the draft still holds it, so the transcript can fly them from
+    // there to where the message lands instead of blinking onto the page.
+    promptFlight.depart(this.composerEditorId, msg)
     this.value = ''
     this.root.props.onValueChange?.('')
     // The words the user just sent live in the editor's own DOM, and the editor

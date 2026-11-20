@@ -226,7 +226,11 @@ describe('Oven secret store', () => {
 
     const path = ovenUtilitySecretsPath(home)
     const index = await readFile(path, 'utf8')
-    expect(JSON.parse(index)).toEqual({ enabled: true, stored: ['cio:kitchen'] })
+    expect(JSON.parse(index)).toEqual({
+      enabled: true,
+      stored: ['cio:kitchen'],
+      slots: { 'cio:kitchen': 0 }
+    })
     expect(index).not.toContain(VALUE)
     if (process.platform !== 'win32') expect((await stat(path)).mode & 0o777).toBe(0o600)
 
@@ -287,6 +291,22 @@ describe('Oven secret store', () => {
     await secrets.forgetAll()
     expect(backend.values.size).toBe(0)
     expect(await secrets.status()).toMatchObject({ stored: [] })
+  })
+
+  it('sweeps the whole namespace on disable, including a row the index lost', async () => {
+    const home = await scratch()
+    const backend = new FakeSecretBackend()
+    const secrets = new OvenUtilitySecrets({ home, backend })
+    await secrets.setEnabled(true)
+    await secrets.remember({ utilityId: 'cio:kitchen', env: { KITCHEN_TOKEN: VALUE } })
+    // A credential whose index row was lost: nothing can name it any more, and
+    // the sweep is the only thing that can still find and remove it.
+    await backend.write('cio-slot-7', JSON.stringify({ env: { LOST_TOKEN: VALUE } }))
+
+    await secrets.forgetAll()
+
+    expect(backend.values.size).toBe(0)
+    expect(await secrets.stored('cio:kitchen')).toBeNull()
   })
 })
 

@@ -24,7 +24,7 @@
     groupSpeakerForThread
   } from './ThreadViewConversation/ThreadViewConversation-speakers'
   import { formatDurationMs } from '$lib/format/duration'
-  import { fly } from 'svelte/transition'
+  import { promptLanding } from '../../chats/chat-composer-prompt-flight.svelte'
   import { LOCAL_OVEN_ID } from '$shared/ovens'
   import { CONVERSATION_METADATA_BADGE_CLASS } from '../conversation-metadata-badges'
   import FileTypeIcon from '../../files/FileTypeIcon.svelte'
@@ -71,7 +71,6 @@
   import MessageTimestamp from '$lib/components/shared/MessageTimestamp.svelte'
   import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
   import { modelKey } from '$lib/model-keys'
-  import { promptArrive } from '$lib/motion'
   import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { logRendererDev } from '$lib/system/renderer-logger'
   import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -604,15 +603,19 @@
         {:else if msg.role === 'user'}
           {#if !board.unmirroredTraceStartTime.isAssignmentAuditorThread && !isActivityOnlyUserMessage(msg)}
             <!-- The whole block travels, the ledger row and the action row
-                     that hangs under it: a prompt this view watched arrive rises
-                     the last few pixels into place, while history (and a message
-                     it mounts for a jump) appears where it belongs. The motion is
-                     transform and opacity only, so the reader's scroll position
-                     and the tail lock never wait on it (`promptArrive`). -->
+                     that hangs under it: a prompt the reader just sent flies here
+                     from the box they typed it in, while history (and a message
+                     the view mounts for a jump) appears where it belongs. Both
+                     motions are transform and opacity only, so the reader's scroll
+                     position and the tail lock never wait on them
+                     (`promptLanding`). -->
             <div
               id={`msg-${msg.id}`}
               class="message-block group flex min-w-0 flex-col"
-              in:fly={promptArrive(msg.createdAt, board.state.viewAttachedAt)}
+              in:promptLanding={{
+                createdAt: msg.createdAt,
+                viewAttachedAt: board.state.viewAttachedAt
+              }}
             >
               {#if board.currentWorkingTraceAttribution.editingMessageId === msg.id}
                 <RichMarkdownEditor

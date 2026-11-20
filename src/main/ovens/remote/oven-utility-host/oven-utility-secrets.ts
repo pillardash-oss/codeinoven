@@ -60,15 +60,33 @@ export interface OvenUtilitySecretsOptions {
   env?: NodeJS.ProcessEnv
 }
 
-/** What `secrets.json` holds: the opt-in flag and the ids it remembered. */
+/**
+ * What `secrets.json` holds: the opt-in flag, the ids it remembered, and the
+ * fixed slot each id occupies in the backend.
+ *
+ * The slot exists so this store can be swept without enumerating a keychain:
+ * every key it can ever own is `cio-slot-<n>` for n below the key cap, so a
+ * disable can delete the whole namespace whether or not the index survived.
+ * Without that, a lost index row left a credential in the keychain with nothing
+ * left that could name it again.
+ */
 interface OvenUtilitySecretIndex {
   enabled: boolean
   stored: string[]
+  slots: Record<string, number>
+}
+
+/** The namespace every key this store files under, swept whole on disable. */
+export const OVEN_UTILITY_SECRET_KEY_PREFIX = 'cio-slot-'
+
+/** The backend key one slot owns. */
+export function ovenUtilitySecretSlotKey(slot: number): string {
+  return `${OVEN_UTILITY_SECRET_KEY_PREFIX}${slot}`
 }
 
 /** The plain index of a store that was never enabled. */
 function emptyIndex(): OvenUtilitySecretIndex {
-  return { enabled: false, stored: [] }
+  return { enabled: false, stored: [], slots: {} }
 }
 
 /** The `secrets.json` path under one Oven's data root. */
@@ -124,6 +142,15 @@ function stringRecord(value: unknown): Record<string, string> | null {
     result[key] = entry
   }
   return result
+}
+
+/** The lowest slot this store has not claimed, or the cap when every one is used. */
+function firstFreeSlot(slots: Record<string, number>): number {
+  const taken = new Set(Object.values(slots))
+  for (let slot = 0; slot < OVEN_UTILITY_SECRET_MAX_KEYS; slot += 1) {
+    if (!taken.has(slot)) return slot
+  }
+  return OVEN_UTILITY_SECRET_MAX_KEYS
 }
 
 /**
@@ -222,8 +249,14 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
         throw new Error(
           `This Oven keeps at most ${OVEN_UTILITY_SECRET_MAX_KEYS} utility credentials; forget one before adding another.`
         )
-      await this.backend.write(bundle.utilityId, value)
-      if (!remembered) await this.save({ ...index, stored: [...index.stored, bundle.utilityId] })
+      const slot = index.slots[bundle.utilityId] ?? firstFreeSlot(index.slots)
+      await this.backend.write(ovenUtilitySecretSlotKey(slot), value)
+      if (!remembered)
+        await this.save({
+          ...index,
+          stored: [...index.stored, bundle.utilityId],
+          slots: { ...index.slots, [bundle.utilityId]: slot }
+        })
       Logger.dev(`Oven secret store kept a credential bundle for \`${bundle.utilityId}\`.`)
       return { enabled: true }
     })
@@ -235,7 +268,11 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
     if (!index.enabled || !index.stored.includes(utilityId)) return null
     const probe = await this.probeOnce()
     if (!probe.available) return null
-    const value = await this.backend.read(utilityId)
+    const slot = index.slots[utilityId]
+    const value =
+      slot === undefined
+        ? await this.backend.read(utilityId)
+        : await this.backend.read(ovenUtilitySecretSlotKey(slot))
     if (value === null) return null
     const bundle = secretBundleFrom(utilityId, value)
     if (!bundle)
@@ -251,9 +288,30 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
       const index = await this.index()
       const forgotten =
         utilityId === undefined ? [...index.stored] : index.stored.filter((id) => id === utilityId)
-      for (const id of forgotten) await this.backend.remove(id)
-      const remaining = utilityId === undefined ? [] : index.stored.filter((id) => id !== utilityId)
-      if (remaining.length !== index.stored.length) await this.save({ ...index, stored: remaining })
+      if (utilityId === undefined) {
+        // A disable sweeps the whole namespace, not the ids this index happens to
+        // still name: a credential whose row was lost is exactly the case this
+        // exists for, and it costs one delete per slot the store can ever own.
+        for (let slot = 0; slot < OVEN_UTILITY_SECRET_MAX_KEYS; slot += 1)
+          await this.backend.remove(ovenUtilitySecretSlotKey(slot))
+        // Keys filed by the first release, under the bare utility id.
+        for (const id of forgotten) await this.backend.remove(id)
+        if (index.enabled || index.stored.length > 0 || Object.keys(index.slots).length > 0)
+          await this.save({ ...index, stored: [], slots: {} })
+      } else {
+        for (const id of forgotten) {
+          const slot = index.slots[id]
+          if (slot !== undefined) await this.backend.remove(ovenUtilitySecretSlotKey(slot))
+          await this.backend.remove(id)
+        }
+        const remaining = index.stored.filter((id) => id !== utilityId)
+        if (remaining.length !== index.stored.length) {
+          const slots = Object.fromEntries(
+            Object.entries(index.slots).filter(([id]) => id !== utilityId)
+          )
+          await this.save({ ...index, stored: remaining, slots })
+        }
+      }
       if (forgotten.length > 0)
         Logger.info(
           forgotten.length === 1
@@ -282,8 +340,19 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return emptyIndex()
     const record = parsed as Record<string, unknown>
     const stored = record['stored']
+    const rawSlots = record['slots']
+    const slots: Record<string, number> = {}
+    if (rawSlots && typeof rawSlots === 'object' && !Array.isArray(rawSlots)) {
+      for (const [id, slot] of Object.entries(rawSlots as Record<string, unknown>)) {
+        if (typeof slot !== 'number' || !Number.isInteger(slot)) continue
+        if (slot < 0 || slot >= OVEN_UTILITY_SECRET_MAX_KEYS) continue
+        if (id.length === 0 || id.length > 200 || id.includes('\0')) continue
+        slots[id] = slot
+      }
+    }
     return {
       enabled: record['enabled'] === true,
+      slots,
       stored: Array.isArray(stored)
         ? [
             ...new Set(

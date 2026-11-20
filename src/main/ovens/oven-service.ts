@@ -48,6 +48,15 @@ const ROOT_OPERATION_TIMEOUT_MS = 120_000
 const ROOT_OPERATION_LIMIT_BYTES = 8 * 1024 * 1024
 
 /**
+ * Where service maintenance reports the work it is doing for a caller's turn.
+ *
+ * A caller that has a turn on screen (an Oven turn starting its capability host)
+ * passes one so the wait is named while it happens; every other caller omits it
+ * and keeps its own reporting.
+ */
+export type OvenServiceNote = (note: string) => void
+
+/**
  * True when an Oven has no service listening at all.
  *
  * The socket is a file on a POSIX Oven and a named pipe on Windows, and both
@@ -252,17 +261,20 @@ export class OvenService {
    * answer is treated the same way: the service is replaced once, under the same
    * cooldown, and the same call is sent again.
    */
-  async utilityHost(id: string): Promise<{ port: number }> {
+  async utilityHost(id: string, note?: OvenServiceNote): Promise<{ port: number }> {
     const input = { method: OVEN_UTILITY_HOST_MODE }
-    const first = await attempt(() => this.request(id, input))
+    const first = await attempt(() => this.request(id, input, note))
     if (first.ok) return this.utilityHostPort(first.value)
     if (!unknownUtilityHostMethod(messageOf(first.error))) throw first.error
-    if (!(await this.refreshService(id, messageOf(first.error))))
+    if (!(await this.refreshService(id, messageOf(first.error), note)))
       throw new Error(
         'This Oven runs an older service. Finish its active runs, then install the service again from its settings.',
         { cause: first.error }
       )
-    return this.utilityHostPort(await this.request(id, input))
+    // The replacement restarted the daemon, and its host is started on the next
+    // request. Say so, because that request is the wait the reader is in.
+    note?.("Starting the Oven's capability host…")
+    return this.utilityHostPort(await this.request(id, input, note))
   }
 
   /** The port an Oven's utility host answered with, once it is known to be usable. */
@@ -480,10 +492,14 @@ export class OvenService {
     await this.workspace(id, { operation: 'replace', root, path, staged, mode })
   }
 
-  private async request(id: string, input: Record<string, unknown>): Promise<string> {
+  private async request(
+    id: string,
+    input: Record<string, unknown>,
+    note?: OvenServiceNote
+  ): Promise<string> {
     const data = JSON.stringify({ ...input, protocolVersion: OVEN_PROTOCOL_VERSION })
     if (Buffer.byteLength(data) > 1024 * 1024) throw new Error('The Oven request exceeds 1 MiB.')
-    return await this.withServiceRepair(id, () => this.send(id, data))
+    return await this.withServiceRepair(id, () => this.send(id, data), note)
   }
 
   /**
@@ -521,7 +537,11 @@ export class OvenService {
    * it owns. Every call now goes through the same repair: a stale answer is
    * replaced once, then the same call runs again.
    */
-  private async withServiceRepair(id: string, run: () => Promise<string>): Promise<string> {
+  private async withServiceRepair(
+    id: string,
+    run: () => Promise<string>,
+    note?: OvenServiceNote
+  ): Promise<string> {
     const first = await attempt(run)
     const fault = this.serviceFaultOf(first)
     if (!fault) {
@@ -530,7 +550,7 @@ export class OvenService {
     }
     // A stopped daemon can answer through the SSH process as { ok: false } too.
     // Recover before decode() throws that payload outside this repair boundary.
-    if (!(await this.refreshService(id, fault.message)))
+    if (!(await this.refreshService(id, fault.message, note)))
       throw new Error(
         serviceNotRunning(fault.message)
           ? 'The Oven service is not running and automatic recovery could not start it. Check its service settings.'
@@ -555,13 +575,21 @@ export class OvenService {
    * Returns false when it must not run now, so the caller reports what it
    * already has instead of an install failure the user did not ask for.
    */
-  private async refreshService(id: string, reason: string): Promise<boolean> {
+  private async refreshService(
+    id: string,
+    reason: string,
+    note?: OvenServiceNote
+  ): Promise<boolean> {
     const pending = this.repairingServices.get(id)
     if (pending) return pending
     const last = this.serviceRepairs.get(id) ?? 0
     if (Date.now() - last < SERVICE_REPAIR_COOLDOWN_MS) return false
     this.serviceRepairs.set(id, Date.now())
     const repair = (async () => {
+      // The install is a whole bundle push and a daemon restart, so it is named
+      // before it starts rather than after: this is exactly the wait a send
+      // that showed nothing used to hide.
+      note?.('Reinstalling the Oven service…')
       Logger.info('Installing the current Oven service', { ovenId: id, reason })
       const startedAt = Date.now()
       try {

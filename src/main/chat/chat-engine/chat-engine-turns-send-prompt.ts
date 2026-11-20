@@ -157,15 +157,35 @@ export class ChatEngineTurnsSendPrompt {
       settings.permissionLevel,
       'pi'
     )
+    // Reading the Oven's own state is the first round trip, and it happens
+    // before any preparation step exists to report. Say what the turn is doing
+    // now rather than leaving the trace empty until that answer arrives.
+    const ovenLabel = await this.host.state.ovenChat.nameFor(ovenId)
+    this.host.units['turns-sessions'].publishWorkingNote(sessionId, `Preparing ${ovenLabel}…`)
     const prepared = await this.host.state.ovenChat.prepareForTurn(thread, settings, {
       sessionId,
       startedAt,
-      account
+      account,
+      ovenLabel
     })
     // The session id was minted here, but this turn runs the harness there: bind
     // the record to the Oven's checkout, or the next request rejects a live
     // session as unavailable.
     await runtime.driver?.adoptSessionPath(prepared.root, sessionId, thread.title)
+    // Re-register with the root this turn actually runs in. `ovenPath` is only
+    // known once that root is resolved, and on a chat's first turn it is still
+    // empty, so the registry described the session as working in this app's own
+    // folder. The file-access policy reads its workspace from that record, which
+    // made every command inside the real workspace look like it reached outside
+    // it and asked for approval.
+    this.host.registerSession(
+      sessionId,
+      thread.projectId,
+      thread.id,
+      prepared.root,
+      settings.permissionLevel,
+      'pi'
+    )
     // The route is what makes this session's `sendPrompt` start its process on
     // the Oven, and the storage is what makes every handoff file this turn
     // publishes land beside that process instead of on this machine.
@@ -333,6 +353,27 @@ export class ChatEngineTurnsSendPrompt {
     text = validateBoundedString(text, 'Prompt', 0, 200_000)
     const ovenThread = await this.host.threadManager.getThread(projectId, threadId)
     const ovenTurn = ovenThread !== null && this.host.state.ovenChat.remote(ovenThread, settings)
+    // The thread was still untouched before this turn, which auto-title reads
+    // after the working status below has already moved it on.
+    const threadWasCreated = ovenThread?.status === 'created'
+    // The composer accepted this turn, so every surface says the thread is
+    // working before anything slow begins. Binding an Oven turn is a network
+    // round trip (its session, its checkout, its capability host) that used to
+    // run with the row still reading as idle, which is indistinguishable from a
+    // send that never happened. Only a user's own prompt claims the row here:
+    // an internal turn has its own settling paths and must never strand a
+    // status on a thread it queues behind another one.
+    if (origin === 'user') {
+      await this.host.threadManager.setStatus(projectId, threadId, 'executing')
+      // A running conversation already has a session to draw the trace under;
+      // a first turn gets its first note with the session it creates.
+      if (ovenTurn && ovenThread?.sessionId) {
+        this.host.units['turns-sessions'].publishWorkingNote(
+          ovenThread.sessionId,
+          'Sending to the Oven…'
+        )
+      }
+    }
     // A pi turn on an Oven speaks pi's RPC protocol to a process started on that
     // machine, so it runs through the pi driver path below with the Oven's
     // checkout as its project path. Binding is the whole Oven difference: every
@@ -382,7 +423,7 @@ export class ChatEngineTurnsSendPrompt {
         1
       )
       const shouldAutoTitle =
-        ovenThread.status === 'created' &&
+        threadWasCreated &&
         ovenThread.titleSource !== 'manual' &&
         !isAssistantSetupThread(ovenThread) &&
         mirrorBeforePrompt.messages.length === 0
@@ -648,8 +689,8 @@ export class ChatEngineTurnsSendPrompt {
       1
     )
     const shouldAutoTitle =
-      targetThread?.status === 'created' &&
-      targetThread.titleSource !== 'manual' &&
+      threadWasCreated &&
+      targetThread?.titleSource !== 'manual' &&
       !(targetThread && isAssistantSetupThread(targetThread)) &&
       mirrorBeforePrompt.messages.length === 0
 

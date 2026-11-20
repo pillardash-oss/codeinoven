@@ -646,7 +646,13 @@ export class ChatEngineUtilities {
   ): UtilityTurnRequest['resolveGatewayEndpoint'] | undefined {
     const runtime = ovenPiRuntime()
     if (!runtime?.hasGatewayEndpoint(sessionId)) return undefined
-    return async (turn) => runtime.gatewayEndpoint(sessionId, threadId, turn)
+    return async (turn) =>
+      runtime.gatewayEndpoint(sessionId, threadId, turn, (note) =>
+        // The Oven's host is started, and its service bundle replaced, before
+        // this turn's process exists. Both are round trips the trace would
+        // otherwise spend showing the preparation note that already finished.
+        this.host.units['turns-sessions'].publishWorkingNote(sessionId, note)
+      )
   }
 
   async cleanupTurnUtilities(sessionId: string, expectedGatewayId?: string): Promise<void> {

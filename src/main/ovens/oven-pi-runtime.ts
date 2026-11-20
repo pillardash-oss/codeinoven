@@ -510,25 +510,30 @@ export class OvenPiRuntime {
       grants: readonly string[]
       appBaseUrl: string
       utilities: OvenUtilityTurnUtility[]
-    }
+    },
+    note?: (note: string) => void
   ): Promise<{ url: string; close?: () => void } | null> {
     const session = this.sessions.get(sessionId)
     const relays = this.utilityRelays
     if (!session || !relays) return null
-    const endpoint = await relays.endpoint(session.ovenId, {
-      turnId: turn.turnId,
-      token: turn.token,
-      grants: [...turn.grants],
-      utilities: turn.utilities,
-      client: 'codeinoven-app',
-      // The thread this turn speaks for, so the Oven keeps one live turn per
-      // conversation however many times the app restarts mid-thread.
-      threadId,
-      // The checkout the harness works in on that machine, which is the only
-      // project context its host can read.
-      projectPath: session.cwd,
-      sessionId
-    })
+    const endpoint = await relays.endpoint(
+      session.ovenId,
+      {
+        turnId: turn.turnId,
+        token: turn.token,
+        grants: [...turn.grants],
+        utilities: turn.utilities,
+        client: 'codeinoven-app',
+        // The thread this turn speaks for, so the Oven keeps one live turn per
+        // conversation however many times the app restarts mid-thread.
+        threadId,
+        // The checkout the harness works in on that machine, which is the only
+        // project context its host can read.
+        projectPath: session.cwd,
+        sessionId
+      },
+      note
+    )
     return { url: endpoint.url, close: endpoint.close }
   }
 }

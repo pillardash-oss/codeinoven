@@ -153,11 +153,14 @@ class FakeSite implements OvenUtilityRelaySiteCalls {
 /** The Oven's daemon, as the relay asks it: recorded, and able to refuse. */
 class FakeHost implements OvenUtilityRelayHostCalls {
   readonly asked: string[] = []
+  /** The note sink the relay handed the daemon, so a test can speak through it. */
+  notes: ((note: string) => void) | null = null
   /** Set to fail the way an Oven with no current service does. */
   failure: Error | null = null
 
-  async ensureHost(ovenId: string): Promise<void> {
+  async ensureHost(ovenId: string, note?: (note: string) => void): Promise<void> {
     this.asked.push(ovenId)
+    this.notes = note ?? null
     if (this.failure) throw this.failure
   }
 }
@@ -267,6 +270,27 @@ describe('oven utility relay', () => {
     // relay's own ten-second wait for the state file was silently missing.
     expect(host.asked).toEqual([OVEN])
     expect(oven.requests).toHaveLength(1)
+  })
+
+  it('names the capability host before it waits, and carries the daemon notes', async () => {
+    const { relays, oven, host } = open()
+    const notes: string[] = []
+
+    const pending = outcomeOf(relays.endpoint(OVEN, turn('turn-1'), (note) => notes.push(note)))
+    // The line is published before the daemon answers, because the wait it
+    // describes is the whole thing the reader would otherwise see nothing for.
+    expect(notes).toEqual(["Starting the Oven's capability host…"])
+
+    const child = await childAt(oven, 0)
+    // A daemon that has to replace its service says so through the same sink.
+    host.notes?.('Reinstalling the Oven service…')
+    child.send({ kind: 'ready', port: 43_210, hostProtocolVersion: OVEN_UTILITY_HOST_PROTOCOL })
+
+    expect((await pending).ok).toBe(true)
+    expect(notes).toEqual([
+      "Starting the Oven's capability host…",
+      'Reinstalling the Oven service…'
+    ])
   })
 
   it('fails the turn with the daemon reason when it cannot start the host', async () => {

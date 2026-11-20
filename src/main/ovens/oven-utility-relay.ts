@@ -61,8 +61,12 @@ export interface OvenUtilityRelayTransport {
  * existed, so this is the one step that covers both a cold Oven and a stale one.
  */
 export interface OvenUtilityRelayHostCalls {
-  /** Make sure this Oven's daemon has a utility host listening, starting it if needed. */
-  ensureHost(ovenId: string): Promise<void>
+  /**
+   * Make sure this Oven's daemon has a utility host listening, starting it if
+   * needed. `note` carries the progress the Oven reports back (a service it has
+   * to replace first) to the turn's working trace.
+   */
+  ensureHost(ovenId: string, note?: (note: string) => void): Promise<void>
 }
 
 function messageOf(error: unknown): string {
@@ -108,7 +112,11 @@ export class OvenUtilityRelays {
    * The same turn asking twice gets the relay it already has: a retry after the
    * port is known must not cost another SSH child on the Oven.
    */
-  async endpoint(ovenId: string, turn: OvenUtilityRelayTurn): Promise<OvenUtilityRelayEndpoint> {
+  async endpoint(
+    ovenId: string,
+    turn: OvenUtilityRelayTurn,
+    note?: (note: string) => void
+  ): Promise<OvenUtilityRelayEndpoint> {
     const live = this.relays.get(turn.turnId)
     if (live?.alive()) {
       // A turn id is minted per turn and per app, so a different Oven here means
@@ -118,7 +126,7 @@ export class OvenUtilityRelays {
     }
     // The limit is applied once the child exists, so a start that fails never
     // costs a live relay that another turn is using.
-    const relay = await this.start(ovenId, turn)
+    const relay = await this.start(ovenId, turn, note)
     this.enforceLimit(ovenId)
     return await this.handed(relay)
   }
@@ -139,13 +147,20 @@ export class OvenUtilityRelays {
   }
 
   /** Spawn one relay and register the turn with the Oven's host. */
-  private async start(ovenId: string, turn: OvenUtilityRelayTurn): Promise<RelayChild> {
+  private async start(
+    ovenId: string,
+    turn: OvenUtilityRelayTurn,
+    note?: (note: string) => void
+  ): Promise<RelayChild> {
     // `sessionId` is this app's own bookkeeping for the log lines it writes; the
     // host contract carries the turn only, so it never crosses the pipe.
     const { sessionId, ...input } = turn
     // The daemon owns the host's lifetime and only starts it when asked, so the
-    // relay is spawned after that answer, never in parallel with it.
-    await this.hostCalls.ensureHost(ovenId)
+    // relay is spawned after that answer, never in parallel with it. This is one
+    // round trip on a warm Oven and a service install on a cold or outdated one,
+    // so the trace says which of the two is happening while it happens.
+    note?.("Starting the Oven's capability host…")
+    await this.hostCalls.ensureHost(ovenId, note)
     const channel = await this.transport.duplex(ovenId, [OVEN_UTILITY_RELAY_MODE])
     const relay = new RelayChild(this.host, {
       ovenId,

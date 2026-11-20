@@ -346,8 +346,8 @@ export function wireChatEngine(
       // relay asks before it waits. This is also the step that replaces a service
       // bundle from before the host existed.
       {
-        ensureHost: async (ovenId) => {
-          await engine.state.ovenChat.service.utilityHost(ovenId)
+        ensureHost: async (ovenId, note) => {
+          await engine.state.ovenChat.service.utilityHost(ovenId, note)
         }
       }
     )
