@@ -17,7 +17,7 @@
   import AgentTodoCard from '../AgentTodoCard.svelte'
   import ComposerQueuedCard from '../ComposerQueuedCard.svelte'
   import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
-  import AgentQuestionCard from '../AgentQuestionCard.svelte'
+  import AgentQuestionCard from '../DeferredAgentQuestionCard.svelte'
   import AgentSecretCard from '../AgentSecretCard.svelte'
   import AgentMcpSignInCard from '../AgentMcpSignInCard.svelte'
   import PermissionRequestCard from '../PermissionRequestCard.svelte'
