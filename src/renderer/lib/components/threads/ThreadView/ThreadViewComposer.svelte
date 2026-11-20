@@ -569,6 +569,7 @@
             onRemoveRecent={(key) => rendererRecovery.removeRecentModel(key)}
             busy={board.submitSpecDecision.auditBusy || board.switchProject.busy}
             onRetry={board.buildSpecActionPrompt.startFreshIndependentAudit}
+            onStop={() => board.contextUsage.stopIndependentAudit()}
             onModelChange={board.contextUsage.changeAuditModel}
             onToggleFavorite={(providerId, modelId, harnessId) =>
               rendererRecovery.toggleFavorite(modelKey(harnessId, providerId, modelId))}

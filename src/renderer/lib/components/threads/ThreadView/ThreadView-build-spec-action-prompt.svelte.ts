@@ -380,16 +380,28 @@ export class ThreadViewBuildSpecActionPrompt extends BoardUnit<ThreadView> {
    *
    * An auditor thread's own run state is the audit's state, so its usage limit
    * or provider error belongs on the audit card with the model picker and the
-   * retry, not on a chat status card above it. Undefined means there is nothing
-   * to report yet and the coordinated-thread card is the only surface.
+   * retry, not on a chat status card above it. The run itself belongs there
+   * too: that card is where the audit in progress, and the Stop that ends it,
+   * is reachable from the auditor's own thread. Undefined means there is
+   * nothing to report and the coordinated-thread card is the only surface.
    */
-  auditorThreadCardState = $derived.by<'failed' | 'partial' | 'report_ready' | undefined>(() => {
+  auditorThreadCardState = $derived.by<
+    'offered' | 'running' | 'failed' | 'partial' | 'report_ready' | undefined
+  >(() => {
     if (
       this.root.submitBrainstormDecision.visibleProviderStatus !== null ||
       this.root.handleAgentEvent.errorMessage !== ''
     ) {
       return 'failed'
     }
+    // A live run wins over the previous report: re-checking a half report is
+    // still an audit in progress, not the report it is about to replace.
+    if (this.root.switchProject.busy || this.root.handleAgentEvent.thread.status === 'executing') {
+      return 'running'
+    }
+    // A stopped auditor is not gone silently: the card reports the interrupted
+    // run and offers the retry, which is the only thing left to do with it.
+    if (this.root.handleAgentEvent.thread.status === 'interrupted') return 'offered'
     const report = this.root.contextUsage.auditReport
     if (!report) return undefined
     return report.evidenceValidation === 'partial' ? 'partial' : 'report_ready'

@@ -234,9 +234,22 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
       : this.independentAuditEnabled
   )
 
-  independentAuditRunning = $derived(
-    this.independentAuditEnabled && this.root.submitSpecDecision.auditBusy
-  )
+  /**
+   * Whether an independent audit is running, from every view that can act on
+   * it. The coordinator's own board knows because it started the run; an
+   * auditor's board (and the coordinator's board after navigating away and
+   * back) knows from the auditor thread's live run, so the Stop control never
+   * disappears just because the view that started the audit is gone.
+   */
+  independentAuditRunning = $derived.by(() => {
+    if (!this.independentAuditPanelActive) return false
+    if (this.root.submitSpecDecision.auditBusy) return true
+    const auditor = this.independentAuditorChild
+      ? this.root.handleAgentEvent.thread
+      : this.root.contextUsage.durableAuditThread
+    if (auditor?.status === 'executing') return true
+    return this.independentAuditorChild && this.root.switchProject.busy
+  })
 
   /**
    * Whether the composer must give way to the coordinated-thread card.
