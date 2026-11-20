@@ -37,6 +37,14 @@ export class OvenUtilityTurns {
   private readonly turns = new Map<string, RegisteredOvenUtilityTurn>()
   private readonly byTokenIndex = new Map<string, string>()
 
+  /**
+   * `onRetired` is told about every turn that stops existing, once, in the one
+   * place a turn is removed. Whatever a turn started on this machine (an MCP
+   * server child above all) is closed through it, so no path that ends a turn can
+   * forget to. It is called synchronously and cannot hold retirement up.
+   */
+  constructor(private readonly onRetired?: (turnId: string) => void) {}
+
   get size(): number {
     return this.turns.size
   }
@@ -101,13 +109,13 @@ export class OvenUtilityTurns {
     if (!turn) return false
     this.turns.delete(turnId)
     if (this.byTokenIndex.get(turn.token) === turnId) this.byTokenIndex.delete(turn.token)
+    this.onRetired?.(turnId)
     return true
   }
 
   /** Forget every turn; the host is going away. */
   retireAll(): void {
-    this.turns.clear()
-    this.byTokenIndex.clear()
+    for (const turnId of [...this.turns.keys()]) this.retire(turnId)
   }
 
   /** Retire every turn idle past the TTL. Answers how many went. */
@@ -147,13 +155,18 @@ export function parseOvenUtilityTurnInput(value: unknown): OvenUtilityTurnInput 
   const utilities = utilitiesValue.map((entry) => turnUtility(entry))
   const client = text(record['client'], 'client', 200)
   const relayUrl = record['relayUrl'] === undefined ? undefined : relayUrlValue(record['relayUrl'])
+  // The checkout the turn works in, which is what search ranks against. It is a
+  // path on this machine and nothing more: the host reads project signals from
+  // it and never fails when it is absent or unreadable.
+  const projectPath = optionalText(record['projectPath'], 'projectPath', 4_096)
   return {
     turnId,
     token,
     grants,
     utilities,
     client,
-    ...(relayUrl ? { relayUrl } : {})
+    ...(relayUrl ? { relayUrl } : {}),
+    ...(projectPath === undefined || projectPath.length === 0 ? {} : { projectPath })
   }
 }
 
@@ -248,6 +261,19 @@ function mcpServer(value: unknown): OvenUtilityMcpServer {
       env[key] = text(entry, 'MCP server env value', 32_768)
     }
   }
+  // A remote server carries the credential the client resolved for it as request
+  // headers, because it has no environment to inherit on this machine.
+  const configured = record['headers']
+  const headers: Record<string, string> = {}
+  if (configured !== undefined) {
+    if (!configured || typeof configured !== 'object' || Array.isArray(configured))
+      throw new OvenUtilityHttpError(400, 'An MCP server in a turn needs a plain headers object.')
+    for (const [key, entry] of Object.entries(configured as Record<string, unknown>)) {
+      if (!/^[A-Za-z0-9!#$%&'*+.^_`|~-]+$/u.test(key))
+        throw new OvenUtilityHttpError(400, 'An MCP server in a turn has an invalid header name.')
+      headers[key] = text(entry, 'MCP server header value', 32_768)
+    }
+  }
   const command = optionalText(record['command'], 'MCP server command', 4_096)
   const url = optionalText(record['url'], 'MCP server url', 4_096)
   const cwd = optionalText(record['cwd'], 'MCP server cwd', 4_096)
@@ -259,6 +285,7 @@ function mcpServer(value: unknown): OvenUtilityMcpServer {
     ...(command === undefined ? {} : { command }),
     ...(args === undefined ? {} : { args }),
     ...(url === undefined ? {} : { url }),
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
     ...(Object.keys(env).length > 0 ? { env } : {}),
     ...(cwd === undefined ? {} : { cwd })
   }

@@ -430,7 +430,8 @@ export class UtilityOrchestrationServiceTurnRuntime {
             turnId: state.id,
             token,
             grants: gatewayTools.map(({ name }) => name),
-            appBaseUrl: bridgeUrl
+            appBaseUrl: bridgeUrl,
+            utilities: await this.host.units['oven-utilities'].snapshot(state)
           })
         : Promise.resolve(null)
     )

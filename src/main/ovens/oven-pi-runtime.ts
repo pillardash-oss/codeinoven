@@ -9,6 +9,7 @@ import type { PiNativeTranscriptSource } from '../drivers/pi/pi-native-session'
 import { ovenRpcTransport, type OvenRunService } from './oven-rpc-transport'
 import { OvenPiStorage, type OvenPiStorageService } from './oven-pi-storage'
 import type { OvenUtilityRelays } from './oven-utility-relay'
+import type { OvenUtilityTurnUtility } from '../../lib/oven-utility-host'
 import {
   ovenPiTranscriptSource,
   type OvenPiTranscriptRoute,
@@ -507,6 +508,7 @@ export class OvenPiRuntime {
       token: string
       grants: readonly string[]
       appBaseUrl: string
+      utilities: OvenUtilityTurnUtility[]
     }
   ): Promise<{ url: string; close?: () => void } | null> {
     const session = this.sessions.get(sessionId)
@@ -516,8 +518,11 @@ export class OvenPiRuntime {
       turnId: turn.turnId,
       token: turn.token,
       grants: [...turn.grants],
-      utilities: [],
+      utilities: turn.utilities,
       client: 'codeinoven-app',
+      // The checkout the harness works in on that machine, which is the only
+      // project context its host can read.
+      projectPath: session.cwd,
       sessionId
     })
     return { url: endpoint.url, close: endpoint.close }

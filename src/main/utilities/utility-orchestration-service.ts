@@ -18,6 +18,7 @@ import { type DesignSessionMode } from './cio-design-prompt'
 import { type VideoSessionMode } from './cio-video-prompt'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { type GatewayToolDefinition } from '../../lib/gateway-tools'
+import type { OvenUtilityTurnUtility } from '../../lib/oven-utility-host'
 import { type EngineeringToolOperation } from '../../lib/engineering-tools'
 import { type CuaSnapshotView } from '../../lib/cua-driver'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
@@ -133,6 +134,8 @@ export interface UtilityTurnRequest {
     token: string
     grants: readonly string[]
     appBaseUrl: string
+    /** The turn's catalogue as the machine that runs it can execute it. */
+    utilities: OvenUtilityTurnUtility[]
   }) => Promise<{ url: string; close?: () => void } | null>
   /**
    * Present only for an assistant's Getting started interview; the callback owns

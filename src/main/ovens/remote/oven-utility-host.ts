@@ -11,8 +11,8 @@
  * and the forwarding seam each own one concern in `oven-utility-host/`.
  *
  * Deliberately *not* here: MCP servers. Where a call is served on the Oven is
- * the `localRunner` seam; this host only decides who may call and how the answer
- * travels.
+ * the `local` executor's job; this host only decides who may call, how the answer
+ * travels, and when a turn's local machinery is closed.
  */
 import { randomBytes } from 'node:crypto'
 import { once } from 'node:events'
@@ -29,9 +29,12 @@ import {
 import { closeOvenUtilityServer } from './oven-utility-http'
 import { createOvenUtilityHostListener } from './oven-utility-host/oven-utility-host-routes'
 import { OvenUtilityTurns } from './oven-utility-host/oven-utility-host-turns'
-import type { OvenUtilityLocalRunner } from './oven-utility-host/oven-utility-host-forward'
+import type {
+  OvenUtilityLocalRunner,
+  OvenUtilityLocalHost
+} from './oven-utility-host/oven-utility-host-forward'
 
-export type { OvenUtilityLocalRunner }
+export type { OvenUtilityLocalRunner, OvenUtilityLocalHost }
 
 /** How often the registry sweeps turns left behind by a client that never came back. */
 const PRUNE_INTERVAL_MS = 60_000
@@ -42,12 +45,14 @@ export interface StartOvenUtilityHostOptions {
   /** Revision of the service bundle starting the host, reported to clients. */
   revision: string
   /**
-   * Answers a granted route on the Oven itself.
+   * Answers granted routes on the Oven itself.
    *
-   * The seam the next phase's MCP servers plug into. Returning `undefined`
-   * forwards the call to the turn's relay, which is what every route does today.
+   * Returning `undefined` from `run` forwards the call to the turn's relay, which
+   * is what every app-owned route needs. The host tells this executor whenever a
+   * turn ends and once more when it closes, so nothing a local execution started
+   * (an MCP server child above all) outlives the capability that started it.
    */
-  localRunner?: OvenUtilityLocalRunner
+  local?: OvenUtilityLocalHost
 }
 
 export interface OvenUtilityHostHandle {
@@ -66,7 +71,13 @@ export interface OvenUtilityHostHandle {
 export async function startOvenUtilityHost(
   options: StartOvenUtilityHostOptions
 ): Promise<OvenUtilityHostHandle> {
-  const turns = new OvenUtilityTurns()
+  const local = options.local
+  // Every path that ends a turn ends here, so this is the one place local work is
+  // torn down: a replaced turn, a retired one, an idle one, and the host's own
+  // close all pass through it.
+  const turns = new OvenUtilityTurns((turnId) => {
+    void local?.retireTurn(turnId)
+  })
   const prune = setInterval(() => turns.pruneStale(), PRUNE_INTERVAL_MS)
   prune.unref()
   const hostToken = randomBytes(32).toString('hex')
@@ -77,7 +88,7 @@ export async function startOvenUtilityHost(
       revision: options.revision,
       hostToken,
       turns,
-      ...(options.localRunner ? { localRunner: options.localRunner } : {})
+      ...(local ? { localRunner: local.run } : {})
     })
   )
   // One client, one relay, one host per Oven: a handful of sockets, never a horde.
@@ -115,6 +126,7 @@ export async function startOvenUtilityHost(
       clearInterval(prune)
       turns.retireAll()
       await closeOvenUtilityServer(server)
+      await local?.close()
       await removeOvenUtilityHostState(options.home, hostToken)
     }
   }

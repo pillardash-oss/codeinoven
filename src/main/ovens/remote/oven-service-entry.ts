@@ -23,6 +23,7 @@ import { availableParallelism, hostname, homedir, totalmem, tmpdir, uptime } fro
 import { createInterface } from 'node:readline'
 import { join, isAbsolute } from 'node:path'
 import { harnessLaunchSpec, launchSpec } from './oven-windows-command'
+import { Logger } from '../../system/logger'
 import { constants, existsSync, readdirSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { once } from 'node:events'
@@ -47,6 +48,8 @@ import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
 import { OVEN_UTILITY_HOST_MODE, OVEN_UTILITY_RELAY_MODE } from '../../../lib/oven-utility-host'
 import { startOvenUtilityHost } from './oven-utility-host'
+import { openOvenUtilityHostLog } from './oven-utility-host/oven-utility-host-log'
+import { createOvenUtilityLocalHost } from './oven-utility-host/oven-utility-local'
 import { runOvenUtilityRelay } from './oven-utility-relay'
 import {
   readOvenUtilityHostState,
@@ -970,8 +973,12 @@ async function utilityHost(): Promise<{ port: number }> {
   ) {
     const child = spawn(process.execPath, [process.argv[1], OVEN_UTILITY_HOST_MODE], {
       detached: false,
-      stdio: 'ignore'
+      // The host's stderr is the only place an Oven records why a capability it
+      // was handed could not run here and went back to the app, so it is kept in
+      // a bounded file instead of being discarded with the rest of its output.
+      stdio: ['ignore', 'ignore', 'pipe']
     })
+    child.stderr?.pipe(openOvenUtilityHostLog(home))
     utilityHostChild = child
     const release = (): void => {
       if (utilityHostChild === child) utilityHostChild = undefined
@@ -1425,9 +1432,22 @@ async function attach(): Promise<void> {
  * resolves once the host is published, and the event loop then keeps it alive.
  * A stop signal withdraws the state file before the process goes, so the next
  * `utility-host` request never reads a port nothing is listening on.
+ *
+ * The host runs the utilities a turn carries on this machine rather than
+ * forwarding them to an app that lives on another one, and closes the MCP
+ * servers it started whenever a turn ends.
  */
 async function utilityHostMode(): Promise<void> {
-  const host = await startOvenUtilityHost({ home: homedir(), revision })
+  // The host's stdout carries no protocol, only the lines an operator reads, and
+  // its parent keeps exactly one channel: stderr, into the bounded host log. So
+  // every level goes there rather than half of it being written to a stdout
+  // nobody holds.
+  Logger.useStandardError()
+  const host = await startOvenUtilityHost({
+    home: homedir(),
+    revision,
+    local: createOvenUtilityLocalHost()
+  })
   const stop = (): void => {
     void host.close().finally(() => process.exit(0))
   }

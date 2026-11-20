@@ -82,6 +82,8 @@ export interface OvenUtilityMcpServer {
   command?: string
   args?: string[]
   url?: string
+  /** Remote request headers, already resolved from the vault on the client. */
+  headers?: Record<string, string>
   env?: Record<string, string>
   cwd?: string
 }
@@ -114,6 +116,13 @@ export interface OvenUtilityTurn {
   /** Utilities this turn may run on the Oven. */
   utilities: OvenUtilityTurnUtility[]
   /**
+   * The checkout this turn works in, on the Oven.
+   *
+   * Its `package.json` and `README` are the only project context the host can
+   * read, so a search ranks what the turn is actually working on.
+   */
+  projectPath?: string
+  /**
    * The loopback URL of the turn's relay, when the client has one.
    *
    * A client without a relay (an Oven-local harness, a CLI) leaves this out and
@@ -129,7 +138,7 @@ export interface OvenUtilityTurn {
 /** What one client asks the host to remember about its turn. */
 export type OvenUtilityTurnInput = Pick<
   OvenUtilityTurn,
-  'turnId' | 'token' | 'grants' | 'utilities' | 'relayUrl' | 'client'
+  'turnId' | 'token' | 'grants' | 'utilities' | 'relayUrl' | 'client' | 'projectPath'
 >
 
 /** One tool call a client's gateway received and the host must forward or run. */

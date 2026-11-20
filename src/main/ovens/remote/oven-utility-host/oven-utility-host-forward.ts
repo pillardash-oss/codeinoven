@@ -35,6 +35,25 @@ export type OvenUtilityLocalRunner = (
   input: OvenUtilityJson
 ) => Promise<OvenUtilityJson | undefined>
 
+/**
+ * The Oven-local executor a host runs, with the lifetime the host owes it.
+ *
+ * A local execution starts real machinery on this machine — above all MCP server
+ * children — so whoever answers calls locally must also be told when a turn ends.
+ * Every way a turn can go (its client retires it, its relay disconnects, it goes
+ * idle past the TTL, or the host itself closes) reaches `retireTurn`, which is
+ * the only thing that guarantees no server outlives the capability that started
+ * it.
+ */
+export interface OvenUtilityLocalHost {
+  /** Answers a granted route on this Oven; `undefined` forwards it to the relay. */
+  run: OvenUtilityLocalRunner
+  /** Close everything one ended turn opened. Never throws. */
+  retireTurn(turnId: string): Promise<void>
+  /** Close every turn's local work; the host is going away. Never throws. */
+  close(): Promise<void>
+}
+
 /** What a turn without a relay is told when it calls an app-owned route. */
 export function ovenUtilityNeedsItsApp(route: string): string {
   return `This capability needs its app: ${route} is app-owned and this client has no relay.`
