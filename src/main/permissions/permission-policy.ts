@@ -912,11 +912,19 @@ function shellSegments(command: string): string[][] | undefined {
       endToken()
       continue
     }
+    if (character === '>' && command[index + 1] === '&') {
+      // `<fd>>&<fd>`, written `2>&1` or `>&2`, duplicates a descriptor
+      // without touching the file system. Dropping the descriptor digits and
+      // the duplication keeps the segment whole; treating the `&` as a
+      // separator would split the command and leave an unreadable `2>`.
+      token = token.replace(/\d+$/u, '')
+      index += 1
+      while (/\d/u.test(command[index + 1] ?? '')) index += 1
+      continue
+    }
     if (character === '&' || character === '|' || character === ';') {
       if (character === '&' && command[index + 1] === '>') {
-        // `<fd>>&<fd>` duplicates a descriptor without touching the file
-        // system, so its descriptor digits are dropped instead of splitting
-        // the segment.
+        // `&>file` sends both streams to a file; the target names it below.
         token = token.replace(/\d+$/u, '')
         index += 1
         while (/\d/u.test(command[index + 1] ?? '')) index += 1

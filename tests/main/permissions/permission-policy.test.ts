@@ -128,22 +128,28 @@ describe('permission policy', () => {
       approved: true
     })
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['rm -rf .cio/tmp/cio-oven-pkg'] })
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf .cio/tmp/cio-oven-pkg'] })
     ).toMatchObject({ decision: 'auto_review', approved: true })
     expect(
       policy.evaluate({
-        permission: 'Bash',
+        permission: 'bash',
         commands: ['cd .cio/tmp && rm -rf cio-oven-pkg && mkdir -p cio-oven-pkg']
       })
     ).toMatchObject({ decision: 'auto_review', approved: true })
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['cd .cio/tmp && npm pack --silent 2>&1'] })
+      policy.evaluate({ permission: 'bash', commands: ['cd .cio/tmp && npm pack --silent 2>&1'] })
     ).toMatchObject({ decision: 'auto_review', approved: true })
     // A redirect to the void and a descriptor duplication name no file, so a
-    // command that only inspects its own scratch tree stays confined.
+    // command that only inspects its own scratch tree stays confined. The
+    // duplication has to stay inside its segment: splitting `2>&1` into `2>`
+    // and `1` would leave an unreadable redirection behind.
+    expect(policy.evaluate({ permission: 'bash', commands: ['echo hi 2>&1'] })).toMatchObject({
+      decision: 'auto_review',
+      approved: true
+    })
     expect(
       policy.evaluate({
-        permission: 'Bash',
+        permission: 'bash',
         commands: [
           'cd .cio/tmp && ls node_modules/.bin 2>/dev/null | head; which rsvg-convert inkscape 2>/dev/null; echo "---done"'
         ]
@@ -168,11 +174,46 @@ describe('permission policy', () => {
         ]
       })
     ).toMatchObject({ decision: 'auto_review', approved: true })
+    // A command that names no path at all acts on the workspace directory the
+    // session was handed, so the workspace root itself has to count as
+    // confined. This is the `ls -la` that used to raise a card.
+    expect(policy.evaluate({ permission: 'bash', commands: ['ls -la'] })).toMatchObject({
+      decision: 'auto_review',
+      approved: true
+    })
+    // The diagnostic pipelines a chat runs to inspect its own Oven: process and
+    // port listing, a localhost request, grouping, pipes, `/dev/null`, `2>&1`.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          "(command -v ss >/dev/null && ss -ltnp 2>/dev/null | head -30) ; echo '--- lsof ---'; (command -v lsof >/dev/null && lsof -nP -iTCP:59550 2>/dev/null | head) ; echo '--- curl ---'; curl -sS -m 3 http://127.0.0.1:59550/ 2>&1 | head -5"
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
     // Leaving the workspace still needs an attached input or a card.
     expect(policy.evaluate({ permission: 'bash', commands: ['cat ~/.zshrc'] }).approved).toBe(false)
     expect(policy.evaluate({ permission: 'bash', commands: ['cd /tmp && ls'] }).approved).toBe(
       false
     )
+  })
+
+  it('asks for a bare command when the scratch root is not the session directory', () => {
+    // The shape an Oven chat had before its scope named the Oven's root: the
+    // command starts in the Oven thread root, while the scratch root still
+    // named this machine's `chats-cwd/<threadId>`. Nothing could be proven
+    // confined there, so a plain `ls` asked.
+    const policy = new PermissionPolicy({
+      projectRoot: resolve('/home/azureuser/ovens/scopes/caadbcff/x'),
+      mode: 'auto_review',
+      scratchPaths: [resolve('/Users/me/.config/pillardash/codeinoven/chats-cwd/abc')],
+      restrictToAllowed: true
+    })
+
+    expect(policy.evaluate({ permission: 'bash', commands: ['ls -la'] })).toMatchObject({
+      decision: 'ask',
+      approved: false
+    })
   })
 
   it('still asks when a scratch-rooted request can leave scratch', () => {
@@ -188,19 +229,19 @@ describe('permission policy', () => {
       policy.evaluate({ permission: 'delete', path: '.cio/specs/login/spec.md' }).approved
     ).toBe(false)
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['rm -rf .cio/git/pr/12'] }).approved
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf .cio/git/pr/12'] }).approved
     ).toBe(false)
     // Traversal, absolute paths, and another shell stay gated.
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['cd .cio/tmp && rm -rf ../../src'] })
+      policy.evaluate({ permission: 'bash', commands: ['cd .cio/tmp && rm -rf ../../src'] })
         .approved
     ).toBe(false)
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['rm -rf /Users/me/Documents'] }).approved
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf /Users/me/Documents'] }).approved
     ).toBe(false)
     // A command that acts on its working directory is only scratch-confined once
     // the chain has entered scratch.
-    expect(policy.evaluate({ permission: 'Bash', commands: ['git clean -fdx'] }).approved).toBe(
+    expect(policy.evaluate({ permission: 'bash', commands: ['git clean -fdx'] }).approved).toBe(
       false
     )
     // A wrapper that evaluates another command cannot make a destructive request

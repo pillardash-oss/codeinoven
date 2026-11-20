@@ -471,11 +471,23 @@ export class ChatEnginePermissions {
     // `assistant-cwd/<assistantId>/` root and must never fall back to a chat
     // workspace directory for pre-authorized writes.
     const isAssistant = info.projectId === ASSISTANT_SPACE_ID
+    const thread = await this.host.threadManager.getThread(info.projectId, info.threadId)
+    // A chat on an external Oven works in that Oven's own thread root, not in
+    // this machine's `chats-cwd/<threadId>`: the root the Oven hands the
+    // session is the directory its shell starts in, and it is exactly as
+    // disposable as a local chat workspace. Naming the local chat directory
+    // here instead left every command unprovable on the Oven, so a plain
+    // `ls -la` asked for approval of its own working directory. A project
+    // thread on an Oven keeps its ordinary scope: that root is the project's
+    // checkout, not a scratch folder.
+    const ovenChatHosted = isChat && thread !== null && this.host.state.ovenChat.remote(thread)
     const scratchPaths = isAssistant
       ? []
-      : info.projectId === GLOBAL_BROWSER_PROJECT_ID
-        ? [info.projectPath]
-        : [this.host.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
+      : ovenChatHosted
+        ? [resolve(info.projectPath)]
+        : info.projectId === GLOBAL_BROWSER_PROJECT_ID
+          ? [info.projectPath]
+          : [this.host.storage.resolve(chatThreadWorkspaceDirectory(info.threadId))]
     // An assistant, a standalone chat, and a browser tab's agent chat each own
     // the directory their session runs in (`assistant-cwd/<assistantId>`,
     // `chats-cwd/<threadId>`, `browser-cwd/<threadId>`), so the sensitive-file
@@ -493,8 +505,7 @@ export class ChatEnginePermissions {
     // the policy, because the platform owns those.
     if (!isChat && !isAssistant) {
       scratchPaths.push(resolve(info.projectPath, PROJECT_DATA_DIRECTORY))
-      const projectThread = await this.host.threadManager.getThread(info.projectId, info.threadId)
-      const workingDirectory = projectThread?.workingDirectory
+      const workingDirectory = thread?.workingDirectory
       if (workingDirectory && resolve(workingDirectory) !== resolve(info.projectPath)) {
         workspaceRoots.push(resolve(workingDirectory))
       }
@@ -518,7 +529,6 @@ export class ChatEnginePermissions {
       }
     }
 
-    const thread = await this.host.threadManager.getThread(info.projectId, info.threadId)
     const fileSystemMode = thread?.settings?.fileSystemMode === true
     return {
       allowedPaths: [...attachmentPaths, ...chatSkillPaths(info.driverId)],
