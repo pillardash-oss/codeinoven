@@ -360,13 +360,18 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
   async handleIdleAttention(force = false): Promise<void> {
     const { projectId, id } = this.root.handleAgentEvent.thread
     try {
-      this.root.handleAgentEvent.pendingPermissions = await invoke(
-        'agent:listPermissions',
-        projectId,
-        id
-      )
-      if (!this.root.loadOlderMessages.alive) return
-      if (this.root.handleAgentEvent.pendingPermissions.length > 0) return
+      // A thread's queue is reconciled into the shared attention store, never
+      // written over it, so a request the live stream filed during this read is
+      // kept and the card stays on screen.
+      if (this.root.props.controller) {
+        const pending = await invoke('agent:listPermissions', projectId, id)
+        if (!this.root.loadOlderMessages.alive) return
+        if (pending.length > 0) return
+      } else {
+        await this.root.editVideoNote.refreshPendingPermissions()
+        if (!this.root.loadOlderMessages.alive) return
+        if (this.root.handleAgentEvent.pendingPermissions.length > 0) return
+      }
       const pendingImageDescriptorErrors = await invoke(
         'agent:listImageDescriptorErrors',
         projectId,

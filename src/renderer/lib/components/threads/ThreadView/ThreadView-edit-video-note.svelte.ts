@@ -348,12 +348,7 @@ export class ThreadViewEditVideoNote extends BoardUnit<ThreadView> {
           .map((request) => request.id)
       )
       const pending = await invoke('agent:listPermissions', projectId, id)
-      conversationAttention.reconcile(
-        target.projectId,
-        target.conversationId,
-        pending,
-        knownIds
-      )
+      conversationAttention.reconcile(target.projectId, target.conversationId, pending, knownIds)
     } catch (error) {
       this.root.handleAgentEvent.errorMessage =
         error instanceof Error ? error.message : 'Pending permissions could not be loaded.'
