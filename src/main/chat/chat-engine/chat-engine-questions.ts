@@ -166,7 +166,7 @@ export class ChatEngineQuestions {
     }
     this.host.pendingQuestions.set(request.requestId, pending)
     this.schedulePendingQuestion(pending)
-    this.host.units['turns'].markProjectActive(projectId)
+    this.host.units['turns'].markHarnessActive(projectId, driverId)
     return pending
   }
 

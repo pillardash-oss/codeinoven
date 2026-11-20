@@ -873,11 +873,14 @@ export class ChatEngineLifecycleBoot {
       ephemeral: ephemeral ?? existing?.ephemeral
     })
     this.host.state.agentProcesses.claimSession(sessionId, projectId, threadId)
-    // A session re-registering means the project is in use again   make it
+    // A session re-registering means that harness is in use again   make it
     // eligible for a future idle release. It is also the moment the idle reaper
-    // becomes worth running: there is now a project to release, and possibly a
+    // becomes worth running: there is now a harness to release, and possibly a
     // harness restart waiting for this session to free the harness up.
-    this.host.state.releasedProjects.delete(projectId)
+    this.host.units['turns'].markHarnessActive(
+      projectId,
+      this.host.sessionRegistry.get(sessionId)?.driverId
+    )
     this.host.units['lifecycle-shutdown'].syncIdleReaper()
   }
 }

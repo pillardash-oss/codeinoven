@@ -864,7 +864,10 @@ export class ChatEngineMediaVisual {
     }
     const id = generateId()
     this.host.units['turns-sessions'].clearSessionWatchdog(request.sessionId)
-    this.host.units['turns'].markProjectActive(request.projectId)
+    this.host.units['turns'].markHarnessActive(
+      request.projectId,
+      this.host.sessionRegistry.get(request.sessionId)?.driverId
+    )
     const owningThread = await this.host.threadManager.getThread(
       request.projectId,
       request.threadId

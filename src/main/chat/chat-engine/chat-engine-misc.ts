@@ -118,9 +118,9 @@ export class ChatEngineMisc {
     })
     title = validateBoundedString(title, 'Virtual task title', 1, 512)
     text = validateBoundedString(text, 'Virtual task prompt', 1, 200_000)
-    this.host.units['turns'].markProjectActive(projectId)
 
     const driverId = settings.harnessId || DEFAULT_HARNESS
+    this.host.units['turns'].markHarnessActive(projectId, driverId)
     const { driver, projectPath } = await this.host.resolve(projectId, driverId)
     assertHarnessRequestCapabilities(driver, [], settings.permissionLevel)
     // Isolation is opt-in per caller: a task that must not appear in the user's

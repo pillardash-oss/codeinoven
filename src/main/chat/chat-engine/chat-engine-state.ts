@@ -1,3 +1,4 @@
+import { HarnessIdleLedger } from './chat-engine-harness-idle'
 import { createWorkQueue } from '../../../lib/bounded-work'
 import type { HistoryHandoffSummary } from './chat-engine-message-text'
 import type { CapacityContinueState } from './chat-engine-capacity-continue'
@@ -703,29 +704,18 @@ export class ChatEngineState {
   sessionWatchdogs = new Map<string, ReturnType<typeof setTimeout>>()
 
   /**
-   * Tracks since-when each project has been fully idle, so the idle reaper can
-   * release its harness resources (pooled servers, in-memory session caches)
-   * after the grace period to free memory and any agent-spawned processes.
-   * The harness sessions themselves persist on disk and rehydrate when the
-   * project is next used.
+   * Which harness still holds resources for which project, and how long each has
+   * been quiet.
+   *
+   * The idle reaper releases a harness's runtime for a project (a pooled server,
+   * a resident app-server, an in-memory session cache) after the grace period,
+   * to free memory and any agent-spawned processes. The clock is per harness
+   * because residency is: a thread of one harness working in a folder must not
+   * keep another harness's runtime alive for hours after its own last turn. The
+   * harness sessions themselves persist on disk and rehydrate when the harness is
+   * next used.
    */
-  projectIdleSince = new Map<string, number>()
-
-  /**
-   * Project paths touched by harness operations that may allocate resources
-   * before a session exists. Read-only probes (for example the battery usage
-   * refresh) must remain visible to the idle reaper even when the user never
-   * sends a message and therefore never registers a session.
-   */
-  projectResourcePaths = new Map<string, Set<string>>()
-
-  /**
-   * Projects whose harness resources have already been released. They are not
-   * released again until the project becomes active (a prompt, an event, or a
-   * session re-registration)   otherwise the reaper would re-release every
-   * grace period forever.
-   */
-  releasedProjects = new Set<string>()
+  harnessIdle = new HarnessIdleLedger()
 
   /**
    * Harnesses whose resident transports must be restarted as soon as no thread

@@ -227,18 +227,22 @@ export class ChatEngineTurns {
     return active?.status === 'approved'
   }
 
-  /** A project is doing live work   reset its idle/released state. */
-  markProjectActive(projectId: string): void {
-    this.host.state.projectIdleSince.delete(projectId)
-    this.host.state.releasedProjects.delete(projectId)
+  /**
+   * A harness in a project is doing live work   reset that harness's idle state.
+   *
+   * Naming the harness matters: residency is per harness, so work in one must not
+   * hold another's runtime open. A caller that cannot name the harness passes
+   * none and every harness of the project is marked, which can only delay a
+   * release, never cut one short.
+   */
+  markHarnessActive(projectId: string, driverId?: string): void {
+    this.host.state.harnessIdle.markActive(projectId, driverId)
   }
 
-  /** Record a project path before a driver call can lazily allocate resources. */
-  trackProjectResourcePath(projectId: string, projectPath: string): void {
-    const paths = this.host.state.projectResourcePaths.get(projectId) ?? new Set<string>()
-    paths.add(projectPath)
-    this.host.state.projectResourcePaths.set(projectId, paths)
-    this.markProjectActive(projectId)
+  /** Record a path a driver may lazily allocate resources in before a session. */
+  trackProjectResourcePath(projectId: string, driverId: string, projectPath: string): void {
+    this.host.state.harnessIdle.notePath(projectId, driverId, projectPath)
+    this.markHarnessActive(projectId, driverId)
   }
 
   async validateProjectReferences(
@@ -419,7 +423,7 @@ export class ChatEngineTurns {
       ? await this.host.resolveThreadPath(projectId, threadId)
       : await this.resolveProjectPath(projectId)
     const driver = await this.host.driverForAccount(driverId, accountId)
-    this.trackProjectResourcePath(projectId, projectPath)
+    this.trackProjectResourcePath(projectId, driverId, projectPath)
 
     // Installation/version probes belong to the explicit Settings harness check.
     // Thread operations call the driver directly so a transient probe cannot
@@ -593,8 +597,7 @@ export class ChatEngineTurns {
       )
     }
     if (eventOwner) {
-      this.host.state.projectIdleSince.delete(eventOwner.projectId)
-      this.host.state.releasedProjects.delete(eventOwner.projectId)
+      this.markHarnessActive(eventOwner.projectId, eventOwner.driverId)
       // Live traffic is the only proof of life the silence watchdog has, and its
       // timer is armed once from the session's `working` status. Without this
       // reset the watchdog fires a fixed window later   even while the harness
