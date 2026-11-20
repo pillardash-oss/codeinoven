@@ -576,6 +576,93 @@ describe('RendererRecoveryStore', () => {
     })
   })
 
+  /**
+   * A draft is a cache of what the composer is about to send, and the thread row
+   * is the only place that says whether it still exists. These pin the two
+   * clearing rules: a send clears the slot everywhere, and a window never
+   * restores a draft the row no longer carries.
+   */
+  describe('the shared slot clears a ghost draft', () => {
+    const draftWithAnnotation = (text: string): string =>
+      JSON.stringify({
+        text,
+        attachments: [],
+        projectReferences: [],
+        taskReferences: [],
+        promptReferences: [{ id: 'selection-1', label: 'Selection 1', text: 'Passage' }],
+        startAfterThreads: [],
+        threadReferences: []
+      })
+
+    it('clears the local draft the moment a message is sent', () => {
+      const store = new RendererRecoveryStore(new MemoryStorage())
+      store.setDraft('project-1', 'thread-1', 'Send me')
+      store.setPromptReferences('project-1', 'thread-1', [
+        { id: 'selection-1', label: 'Selection 1', text: 'Passage' }
+      ])
+      expect(store.hasDraftContent('project-1', 'thread-1')).toBe(true)
+
+      store.clearSentDraft('project-1', 'thread-1')
+
+      expect(store.draftFor('project-1', 'thread-1')).toBe('')
+      expect(store.draftPromptReferences('project-1', 'thread-1')).toHaveLength(0)
+      expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
+    })
+
+    it('drops a stored draft whose row no longer holds one', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setDraft('project-1', 'thread-1', 'Already sent elsewhere')
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      // The row answers with nothing, so the draft was sent or cleared.
+      reloaded.reconcileDraftWithSlot('project-1', 'thread-1', null)
+
+      expect(reloaded.draftFor('project-1', 'thread-1')).toBe('')
+      expect(reloaded.hasDraftContent('project-1', 'thread-1')).toBe(false)
+      reloaded.flushPersist()
+      expect(new RendererRecoveryStore(storage).draftFor('project-1', 'thread-1')).toBe('')
+    })
+
+    it('keeps the draft the row still holds', () => {
+      const store = new RendererRecoveryStore(new MemoryStorage())
+      store.setDraft('project-1', 'thread-1', 'Still drafting')
+
+      store.reconcileDraftWithSlot('project-1', 'thread-1', draftWithAnnotation('Still drafting'))
+
+      expect(store.draftFor('project-1', 'thread-1')).toBe('Still drafting')
+      expect(store.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
+    })
+
+    it('keeps a draft whose own commit the row is still owed', () => {
+      const store = new RendererRecoveryStore(new MemoryStorage())
+      // Typing arms the debounced commit, so the row is behind these words.
+      store.setDraft('project-1', 'thread-1', 'Typed a second ago')
+
+      store.reconcileDraftWithSlot('project-1', 'thread-1', null)
+
+      expect(store.draftFor('project-1', 'thread-1')).toBe('Typed a second ago')
+    })
+
+    it('clears the composer cache when the last attachment is removed', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setDraft('project-1', 'thread-1', '', [
+        { mime: 'image/png', url: 'file:///tmp/a.png', filename: 'a.png' }
+      ])
+      expect(store.hasDraftContent('project-1', 'thread-1')).toBe(true)
+
+      store.setDraft('project-1', 'thread-1', '', [])
+      store.flushPersist()
+
+      expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
+      expect(new RendererRecoveryStore(storage).hasDraftContent('project-1', 'thread-1')).toBe(
+        false
+      )
+    })
+  })
+
   it('treats distinct harness-scoped favorites as separate', () => {
     const storage = new MemoryStorage()
     const store = new RendererRecoveryStore(storage)

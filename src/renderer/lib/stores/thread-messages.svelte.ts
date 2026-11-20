@@ -13,9 +13,11 @@ import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { composeMarkAttachments } from '$lib/annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { turnWaitsOnSubagents } from '$lib/subagent-wait'
 import { messageId as createMessageId } from '$shared/id'
 import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
 import { ThreadMessagesCache } from './thread-messages-cache.svelte'
+import { rendererRecovery } from './renderer-recovery.svelte'
 import { threadTraceCache } from './thread-trace-cache.svelte'
 import { ThreadMessagesEvents } from './thread-messages-events.svelte'
 import {
@@ -118,6 +120,18 @@ class ThreadMessagesStore {
   /** Current message list for a thread, safe to use in deriveds/effects. */
   messages(projectId: string, threadId: string): AgentMessage[] {
     return this.cache.messages(projectId, threadId)
+  }
+
+  /**
+   * Whether this thread's live turn is blocked on a sub-agent.
+   *
+   * Read straight off the cached transcript, the same reactive list the trace
+   * renders, so the row's mark and the step card that caused it can never
+   * disagree. A thread with no cached messages has no turn to wait on and
+   * answers false.
+   */
+  waitsOnSubagents(projectId: string, threadId: string): boolean {
+    return turnWaitsOnSubagents(this.cache.messages(projectId, threadId))
   }
 
   /**
@@ -648,6 +662,12 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
+    // The turn now carries this draft, so the composer slot empties here for
+    // every surface at once: the words, the annotations, and the shared row
+    // other instances and windows read. Every delivery path comes through here
+    // (composer, queued card, headless dictation), so no path can leave a draft
+    // behind that another window would restore as a message already sent.
+    rendererRecovery.clearSentDraft(projectId, threadId)
 
     try {
       await prepare?.()
@@ -699,6 +719,8 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
+    // A steered message is also the draft leaving the composer.
+    rendererRecovery.clearSentDraft(projectId, threadId)
     // Hold the steered message optimistically: while the engine waits for the
     // turn's in-flight tool to end, the run stays anchored to the prompt it is
     // steering, so the held message renders under that turn's live working

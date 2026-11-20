@@ -399,10 +399,54 @@ export class WorkspaceCreateThreadInProject extends BoardUnit<Workspace> {
     }
   }
 
+  /**
+   * Settle every stored draft against the row the database holds for its thread.
+   *
+   * A renderer snapshot can outlive the draft it describes: the message was sent,
+   * its turn started, and the tab was refreshed before anything told this window.
+   * The row is the truth on whether a draft still exists, so this asks it for each
+   * stored draft and drops the ones it no longer carries, label cookie included,
+   * which is what stops a cleared draft from being restored as a ghost.
+   *
+   * Nothing is dropped on a failed read, and a draft whose commit this window
+   * still owes is left alone: it is about to be in the row.
+   */
+  private async settleDraftsWithSlot(): Promise<void> {
+    const refs = rendererRecovery.listDraftThreadRefs()
+    if (refs.length === 0) return
+    let next = 0
+    const settleOne = async (): Promise<void> => {
+      while (next < refs.length) {
+        const ref = refs[next]
+        next += 1
+        if (!ref) continue
+        let thread: Thread | null
+        try {
+          thread = await invoke('thread:get', ref.projectId, ref.threadId)
+        } catch {
+          continue
+        }
+        if (!thread) continue
+        rendererRecovery.reconcileDraftWithSlot(
+          ref.projectId,
+          ref.threadId,
+          thread.draftJson ?? null
+        )
+      }
+    }
+    await Promise.all(
+      Array.from(
+        { length: Math.min(this.root.switcherPanelTabs.DRAFT_RESCUE_CONCURRENCY, refs.length) },
+        settleOne
+      )
+    )
+  }
+
   async rescueDraftThreads(): Promise<void> {
     if (this.root.switcherPanelTabs.rescuingDraftThreads) return
     this.root.switcherPanelTabs.rescuingDraftThreads = true
     try {
+      await this.settleDraftsWithSlot()
       const known = new SvelteSet([
         ...this.allThreads.map((thread) => thread.id),
         ...scopeState.allScopeThreads.map((thread) => thread.id)
