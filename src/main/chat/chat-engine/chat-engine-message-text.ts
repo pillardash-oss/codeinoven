@@ -569,6 +569,24 @@ export function isTaskListBookkeepingMessage(message: AgentMessage): boolean {
 }
 
 /**
+ * Whether an assistant message is a compaction marker rather than an answer.
+ *
+ * A harness reports its own compaction as an assistant message holding one
+ * compaction part, and that part may carry no summary at all (pi finishes a
+ * compaction with nothing when the summarizer returns empty). Left in the
+ * answer slot, that marker made a turn that had already answered read as a turn
+ * with no final response: the reader saw the prose on screen while the app told
+ * them the harness ended without one, and then sent its own continuation.
+ * A compaction marker is bookkeeping about context, never the answer.
+ */
+export function isCompactionBookkeepingMessage(message: AgentMessage): boolean {
+  if (message.role !== 'assistant') return false
+  if (message.structuredOutput !== undefined) return false
+  if (assistantText(message).trim().length > 0) return false
+  return message.parts.some((part) => part.type === 'compaction')
+}
+
+/**
  * The assistant message that owns a turn's final answer.
  *
  * A turn whose last assistant message is task-list bookkeeping ended on a
@@ -577,14 +595,19 @@ export function isTaskListBookkeepingMessage(message: AgentMessage): boolean {
  * marker, the completeness check, the report, and the memory context all belong
  * to the answer the user actually read, not to the bookkeeping call that followed
  * it. Reading the empty bookkeeping message instead would flag a finished turn as
- * having no final response and would overwrite the real answer with nothing. Any
- * other turn answers with its last assistant message.
+ * having no final response and would overwrite the real answer with nothing.
+ * A compaction marker is the same kind of non-answer, and is skipped the same
+ * way. Any other turn answers with its last assistant message.
  */
 export function terminalAssistantMessage(
   messages: readonly AgentMessage[],
   turnAssistant: AgentMessage | undefined
 ): AgentMessage | undefined {
-  if (!turnAssistant || !isTaskListBookkeepingMessage(turnAssistant)) return turnAssistant
+  if (
+    !turnAssistant ||
+    !(isTaskListBookkeepingMessage(turnAssistant) || isCompactionBookkeepingMessage(turnAssistant))
+  )
+    return turnAssistant
   const index = messages.findIndex((message) => message.id === turnAssistant.id)
   for (let cursor = (index < 0 ? messages.length : index) - 1; cursor >= 0; cursor--) {
     const candidate = messages[cursor]
