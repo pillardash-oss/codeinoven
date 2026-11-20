@@ -1,4 +1,4 @@
-import { join } from 'node:path'
+import { posix, win32 } from 'node:path'
 
 /** Filesystem facts the path builder needs, injected so the rules stay testable. */
 export interface RuntimePathProbe {
@@ -31,21 +31,24 @@ export interface RuntimePathInput {
  */
 export function runtimeBinDirs(input: RuntimePathInput): string[] {
   const { home, npmPrefix, probe, platform = process.platform } = input
-  if (platform === 'win32') return [join(home, npmPrefix, 'bin')]
-  const versionsRoot = join(home, '.nvm', 'versions', 'node')
+  if (platform === 'win32') return [win32.join(home, npmPrefix, 'bin')]
+  // Every POSIX path here is spelled the way the Oven spells it, so the shape
+  // cannot depend on the machine that builds it: `join` turned `/home/u/bin`
+  // into `\\home\\u\\bin` on a Windows host and broke the PATH it composed.
+  const versionsRoot = posix.join(home, '.nvm', 'versions', 'node')
   const nvmVersions = probe
     .readDir(versionsRoot)
     .filter((entry) => /^v\d+\.\d+\.\d+$/u.test(entry))
     .sort(compareVersions)
     .reverse()
-    .map((entry) => join(versionsRoot, entry, 'bin'))
+    .map((entry) => posix.join(versionsRoot, entry, 'bin'))
   const candidates = [
-    join(home, npmPrefix, 'bin'),
+    posix.join(home, npmPrefix, 'bin'),
     ...nvmVersions,
-    join(home, '.volta', 'bin'),
-    join(home, '.asdf', 'shims'),
-    join(home, '.local', 'share', 'mise', 'shims'),
-    join(home, '.local', 'bin'),
+    posix.join(home, '.volta', 'bin'),
+    posix.join(home, '.asdf', 'shims'),
+    posix.join(home, '.local', 'share', 'mise', 'shims'),
+    posix.join(home, '.local', 'bin'),
     '/opt/homebrew/bin',
     '/usr/local/bin'
   ]

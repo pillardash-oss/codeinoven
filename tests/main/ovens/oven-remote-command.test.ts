@@ -202,7 +202,8 @@ describe('oven remote commands', () => {
     expect(() => remoteInstallServiceCommand('cmd', 'nope', 'token-1')).toThrow()
   })
 
-  it('finds a Node that only a login shell can see', () => {
+  // The snippet is POSIX shell, so it can only be exercised where `/bin/sh` exists.
+  it.skipIf(process.platform === 'win32')('finds a Node that only a login shell can see', () => {
     // The reported failure: an Oven whose Node came from nvm has nothing on the
     // PATH of an SSH exec channel, so every request claimed Node was missing.
     const home = mkdtempSync(join(tmpdir(), 'oven-home-'))

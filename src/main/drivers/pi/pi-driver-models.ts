@@ -29,6 +29,22 @@ import { piCustomProvidersExtension } from '../pi-providers-extension'
 import type { TitleModelCandidate } from '../persistent-cli-driver'
 import { numberValue, record, stringValue } from './pi-values'
 
+/** A drive-letter or UNC path, which only Windows can address. */
+const WINDOWS_ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/])/u
+/**
+ * Whether a workspace path belongs to the other platform.
+ *
+ * An Oven thread's working directory is written by the Oven, so a POSIX host
+ * receives `/home/azureuser/scope/checkout` while a Windows host receives
+ * `C:\\Users\\...`. Windows treats a leading `/` as drive-rooted, so a POSIX path
+ * looked local there and every filesystem call succeeded in the wrong place.
+ */
+function isForeignWorkspacePath(path: string): boolean {
+  const windowsAbsolute = WINDOWS_ABSOLUTE_PATH.test(path)
+  if (process.platform === 'win32') return !windowsAbsolute && path.startsWith('/')
+  return windowsAbsolute
+}
+
 const THINKING_PRESETS = PI_THINKING_PRESETS
 const PI_CHEAP_MODEL_DISCOVERY_TIMEOUT_MS = 10_000
 /** Hard cap on the explicit `pi update --models` catalog refresh. Pi aborts its
@@ -361,6 +377,13 @@ export class PiModelCatalog {
   async workspaceTemporaryEnvironment(
     projectPath: string
   ): Promise<{ TMPDIR?: string; TEMP?: string; TMP?: string }> {
+    // A path written for the other platform is not a path on this machine, and
+    // Windows resolves a POSIX path against the current drive, so asking `mkdir`
+    // created `\home\azureuser\...` here instead of failing.
+    if (isForeignWorkspacePath(projectPath)) {
+      Logger.dev('Pi workspace temp directory belongs to another machine:', { projectPath })
+      return {}
+    }
     const directory = join(projectPath, '.cio', 'tmp', 'pi')
     try {
       await mkdir(directory, { recursive: true })
@@ -373,7 +396,6 @@ export class PiModelCatalog {
     }
     return { TMPDIR: directory, TEMP: directory, TMP: directory }
   }
-
   private async buildProviderOverlay(projectPath: string): Promise<ProviderOverlay> {
     const args: string[] = []
     const env: Record<string, string> = {}

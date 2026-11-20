@@ -17,6 +17,8 @@ function probe(dirs: readonly string[], versions: readonly string[] = []): Runti
 const home = '/home/azureuser'
 
 describe('oven runtime PATH', () => {
+  // These paths belong to a POSIX Oven, so their spelling must not depend on the
+  // host that composes them: on a Windows runner `join` returned `\\home\\...`.
   it('puts the harness shims first and the newest nvm runtime next', () => {
     const dirs = runtimeBinDirs({
       home,
@@ -65,12 +67,15 @@ describe('oven runtime PATH', () => {
 
   it('leaves Windows alone: no POSIX runtime directories are invented', () => {
     const dirs = runtimeBinDirs({
-      home: '/Users/oven',
+      home: 'C:\\Users\\oven',
       npmPrefix: 'prefix',
       basePath: 'C:\\Windows',
-      probe: probe(['/Users/oven/prefix/bin', '/Users/oven/.nvm/versions/node/v22.0.0/bin']),
+      probe: probe([
+        'C:\\Users\\oven\\prefix\\bin',
+        'C:\\Users\\oven\\.nvm\\versions\\node\\v22.0.0\\bin'
+      ]),
       platform: 'win32'
     })
-    expect(dirs).toEqual(['/Users/oven/prefix/bin'])
+    expect(dirs).toEqual(['C:\\Users\\oven\\prefix\\bin'])
   })
 })
