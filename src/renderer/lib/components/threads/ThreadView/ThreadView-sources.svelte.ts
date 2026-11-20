@@ -519,7 +519,9 @@ export class ThreadViewSources extends BoardUnit<ThreadView> {
    */
   sources = $derived.by((): AgentSource[] => {
     const projectPath = this.root.contextUsage.project?.path?.trim()
-    return collectAgentSources(this.root.loadOlderMessages.messages)
+    // The coarse snapshot, not the per-flush array: this fold walks the
+    // whole transcript and only the Sources panel reads it.
+    return collectAgentSources(this.root.loadOlderMessages.scanMessages)
       .filter((source) => {
         if (source.kind !== 'file-citation') return true
         return (

@@ -8,6 +8,7 @@ import {
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
 import { APP_BROWSER_UTILITY_ID, APP_SCOPE_UTILITY_ID } from '../utility-registry-service'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import {
   ASK_SECRET_TOOL_NAME,
   GATEWAY_TOOLS,
@@ -180,7 +181,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
           // from, so it never needs the tag or the full-access tier.
           request.donTurn === true ||
           request.delegationReach === true ||
-          request.permissionLevel === 'full_access' ||
+          isUnrestrictedLevel(request.permissionLevel) ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
       }
@@ -214,13 +215,13 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // a route the turn never received.
       if (isAppControlTool(name)) {
         return (
-          request.permissionLevel === 'full_access' ||
+          isUnrestrictedLevel(request.permissionLevel) ||
           (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
         )
       }
       return (
         hasOnDemand ||
-        request.permissionLevel === 'full_access' ||
+        isUnrestrictedLevel(request.permissionLevel) ||
         request.artifactTools === true ||
         request.allowManagement === true ||
         (request.orchestrationSession !== undefined && request.orchestrationSession !== 'off')
@@ -293,7 +294,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
     // them.
     const sessionToolsAskRequired =
       request.artifactTools === true &&
-      request.permissionLevel !== 'full_access' &&
+      !isUnrestrictedLevel(request.permissionLevel) &&
       (request.orchestrationSession === undefined || request.orchestrationSession === 'off')
     // One batching contract, worded for the tool surface this harness actually
     // has: naming code mode to a harness without a script runner is a rule the
@@ -307,7 +308,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
       `App-managed utilities are available as first-class tools in this session: call ${UTILITY_SEARCH_TOOL_NAME} to search, ${UTILITY_ACTIVATE_TOOL_NAME} to activate, and ${UTILITY_INVOKE_TOOL_NAME} to invoke. The tools hold the turn-scoped gateway credentials internally   never call the gateway through the shell, and never print or persist tokens.`,
       `Never ask the user to paste a secret into chat. When you need one (an API key, token, or password), call ${ASK_SECRET_TOOL_NAME} with one entry per secret and a short title; you receive the environment variable name   and, for a value you interpolate in a shell command, a 0600 secret_path you read with \`"$(cat secret_path)"\`   never the value itself.`,
       `When a needed capability is missing, check first whether your own tools already cover the work: text, code, SVG and HTML are yours to author, and a missing generator is not a missing capability when the request is vector or written work. That covers documents and assets only: an interface, a screen, a prototype or a set of design variations is not one of them and is never hand-written here, it is designed in the app's design session. Only what you genuinely cannot produce yourself earns an installation card: load ${UTILITY_SUGGEST_TOOL_NAME} through cio:gateway and offer it. Claim it is connected only after accepted. Keep credentials out of bundles and collect them with ${ASK_SECRET_TOOL_NAME}.`,
-      `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
+      `Read-only app diagnostics are available with ${UTILITY_DIAGNOSTICS_TOOL_NAME} (lookup_thread, search_threads, list_groups, read_messages, read_log, list_schema, query_sql). When the user reports a problem with the app, a thread, an assistant, or a log line, look the evidence up yourself with it instead of asking them to re-send the request with a tag: it reads threads across projects, mirrored conversation pages, log tails, the app schema, and read-only SELECTs, and it never writes, deletes, or reconfigures anything.`,
       ...(gatewayTools.some(({ name }) => isPawnTool(name))
         ? [
             `A pawn agent (${PAWN_AGENT_TOOL_NAME}) is an independent worker thread that answers only to you: it is how you do real work without spending your own context. Spawn one for a long implementation, a broad refactor, independent verification, or research that would otherwise flood this conversation, and give it the complete task, the files it owns, and how to check its own work. It runs on the user's pawn default model when one is configured, otherwise on your model at the lowest thinking level, and it never commits: read its report, inspect the files it touched, and commit them yourself. You keep directing it: when the user corrects or redirects a pawn's work, call the tool again with that pawn's pawn_id and their instruction, and it reaches the work in progress instead of starting over. Do not spawn a second pawn to change direction. It is not extra sub-agent capacity: ${CIO_SPAWN_AGENT_TOOL_NAME} runs at most four workers at once, so a pawn is the way past that ceiling only when the work genuinely needs five or more worker runs in flight at the same time and waiting for a free slot would stall it, or when the user explicitly asks for pawns   and then it is one pawn carrying the overflow, never a fan-out of pawns you decided on yourself.`
@@ -417,13 +418,31 @@ export class UtilityOrchestrationServiceTurnRuntime {
       cleanupPromise ??= this.cleanupTurn(id)
       await cleanupPromise
     }
+    // A turn that runs its harness somewhere else reaches the gateway through
+    // that machine's own listener, because this app's loopback means nothing
+    // there. The endpoint is decided here, where the turn's token and grants
+    // exist, and the machine's side registers exactly those grants.
+    const sharedEndpoint = await this.host.units['orchestration'].timed(
+      request,
+      'gatewayEndpoint',
+      request.resolveGatewayEndpoint
+        ? request.resolveGatewayEndpoint({
+            turnId: state.id,
+            token,
+            grants: gatewayTools.map(({ name }) => name),
+            appBaseUrl: bridgeUrl,
+            utilities: await this.host.units['oven-utilities'].snapshot(state)
+          })
+        : Promise.resolve(null)
+    )
+    if (sharedEndpoint?.close) state.closeGatewayEndpoint = sharedEndpoint.close
     return {
       id,
       resolvedUtilities: [...always, gateway],
       instructions: toolInstructions,
       directInstructions: toolInstructions,
       directEndpoint: {
-        url: bridgeUrl,
+        url: sharedEndpoint?.url ?? bridgeUrl,
         token,
         toolNames: initialGatewayTools(gatewayTools).map(({ name }) => name),
         timeoutMs: gatewayHarnessTimeoutMs((await this.host.storage.getConfig()).questionTimeoutMs)
@@ -438,6 +457,13 @@ export class UtilityOrchestrationServiceTurnRuntime {
     if (!turn) return
     this.host.turns.delete(id)
     this.host.turnIdsByToken.delete(turn.token)
+    // Before the clients go: an Oven's relay and its host hold the turn's
+    // capability, and a turn that is never retired keeps answering there.
+    try {
+      turn.state.closeGatewayEndpoint?.()
+    } catch (error) {
+      Logger.dev('Could not close the turn gateway endpoint:', error)
+    }
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
     // Last, so the claim covers the clients it was taken for: an unrestricted

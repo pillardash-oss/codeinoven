@@ -112,7 +112,7 @@
     const approved = await appConfirm.request({
       title: 'Remove protected file pattern?',
       body: [
-        `Remove ${pattern} from bundled Pi's block list?`,
+        `Remove ${pattern} from CIO Pi's block list?`,
         patterns.length === 1
           ? 'Secret-tool files stay listed.'
           : 'Other entries remain protected. Removing a pattern does not remove any files.'
@@ -133,11 +133,11 @@
 <section
   id="settings-block-general-bundled-pi-files"
   class="border bg-surface p-4"
-  aria-label="Bundled Pi sensitive file protection"
+  aria-label="CIO Pi sensitive file protection"
 >
   <div class="mb-3 flex items-center justify-between gap-3 border-b border-border pb-2">
     <h3 class="text-[0.625rem] font-semibold tracking-wide text-dimmed uppercase">
-      Sensitive files · Bundled Pi only
+      Sensitive files · CIO Pi only
     </h3>
     <div class="flex shrink-0 items-center gap-3">
       <Switch
@@ -229,8 +229,8 @@
         <button
           type="button"
           class="shrink-0 p-1 text-muted hover:text-danger disabled:opacity-40"
-          title={`Remove ${pattern} from bundled Pi's block list`}
-          aria-label={`Remove ${pattern} from bundled Pi's block list`}
+          title={`Remove ${pattern} from CIO Pi's block list`}
+          aria-label={`Remove ${pattern} from CIO Pi's block list`}
           disabled={!settingsReady || saving}
           onclick={() => void removePattern(pattern)}
         >

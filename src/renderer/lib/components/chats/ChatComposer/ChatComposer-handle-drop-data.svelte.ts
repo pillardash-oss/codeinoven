@@ -1,4 +1,8 @@
-import { threadSettings as threadSettingsStore } from '$lib/stores/thread-settings.svelte'
+import {
+  threadSettings as threadSettingsStore,
+  withOvenPermissionFallback
+} from '$lib/stores/thread-settings.svelte'
+import { isRemoteOvenId } from '$shared/ovens'
 import { STANDARD_THINKING_PRESETS } from '$shared/thinking-presets'
 import { posixBasename } from '$shared/paths'
 import { showToastWarning } from '$lib/stores/app-errors.svelte'
@@ -73,15 +77,25 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
 
   /** Resolved settings   chats run with auto permission review until File System
    *  is enabled, so the level stays pinned to `auto_review` while File System is
-   *  off and unlocks (selector visible, up to Full Access) once it is turned on. */
+   *  off and unlocks (selector visible, up to Oven Mode) once it is turned on.
+   *
+   *  Oven Mode is resolved last: it exists only for a turn that runs on an external
+   *  Oven, so a thread pointed back at this computer falls to Full Access instead of
+   *  keeping the highest tier for a machine it no longer targets. */
   resolved = $derived<ThreadSettings>(
-    this.root.props.hidePermissionSelector && this.baseSettings.fileSystemMode !== true
-      ? { ...this.baseSettings, permissionLevel: 'auto_review' as const }
-      : this.baseSettings
+    withOvenPermissionFallback(
+      this.root.props.hidePermissionSelector && this.baseSettings.fileSystemMode !== true
+        ? { ...this.baseSettings, permissionLevel: 'auto_review' as const }
+        : this.baseSettings
+    )
   )
 
   /** The remote Oven this composer targets, or null on this computer. */
   targetOvenId = $derived(this.resolved.ovenId ?? null)
+
+  /** True when this composer sends to an external Oven (a remote machine).
+   *  Oven Mode is offered only there, in every surface that lists levels. */
+  externalOven = $derived(isRemoteOvenId(this.targetOvenId))
 
   /**
    * Harnesses the target Oven does not have installed.
@@ -97,29 +111,15 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     return ovens.unavailableHarnesses(ovenId)
   })
 
-  unavailableHarnessReason = $derived.by((): string | null => {
-    const ovenId = this.targetOvenId
-    if (!ovenId || ovenId === 'local') return null
-    const identity = ovens.identity(ovenId)
-    return identity ? `Not installed on ${identity.name}` : 'Not installed on this Oven'
-  })
-
   /**
    * True when the selected model's harness is not installed on the target Oven.
    *
-   * The picker omits those harnesses, so the selection has to be treated as
-   * empty: the composer shows no model and holds the turn until the user picks
-   * one that exists on the Oven. Sending anyway is what dispatched a run the
-   * Oven could not start.
+   * It never blocks the turn: the app installs the harness on the Oven and sends
+   * the message, and a send that lands here parks on the composer's setup card
+   * so the user can confirm the work first. It only says which case the send is
+   * in.
    */
   ovenModelUnavailable = $derived(this.unavailableHarnessIds?.has(this.resolved.harnessId) === true)
-
-  /** Why the send is held, shown above the composer while it is. */
-  ovenModelNotice = $derived(
-    this.ovenModelUnavailable
-      ? `${this.unavailableHarnessReason ?? 'That model is not installed on this Oven'}. Choose a model that is available there to send this turn.`
-      : ''
-  )
 
   preview = createComposerAttachmentPreview()
 
@@ -508,6 +508,7 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     getProfilesPickerVisible: () => !this.root.props.readOnlyMode,
     getShowChatModes: () => this.root.props.showChatModes,
     getFileSystemMode: () => this.resolved.fileSystemMode,
+    getRemoteOven: () => this.externalOven,
     getSupportsThinking: () => this.supportsThinking,
     getAccountPickerVisible: () => this.accountPickerVisible,
     getScopePickerVisible: () => this.root.captureComposerRoot.scopePickerAvailable,
@@ -596,6 +597,28 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
 
   async addFileAttachment(filePath: string, file?: File): Promise<void> {
     await this.addFileAttachments([{ path: filePath, file }])
+  }
+
+  /**
+   * Take one of the app's system-wide region captures into this prompt.
+   *
+   * The capture file is published by the main process, so it is copied into this
+   * thread's attachment storage before attaching: the screenshot folder is the
+   * app's own scratch space and is pruned, while a sent prompt's attachment has
+   * to outlive it.
+   */
+  async attachScreenshot(path: string): Promise<boolean> {
+    if (this.root.props.readOnlyMode && !this.root.props.allowAttachments) return false
+    if (this.selectedHarnessLacksAttachments) {
+      this.attachmentBlockedNotice = true
+      return false
+    }
+    const scope = this.root.props.attachmentStorage
+    if (!scope) return false
+    const retained = await invoke('screenshot:retain', scope, path)
+    if (!retained) return false
+    await this.addFileAttachments([{ path: retained }])
+    return true
   }
 
   async addPastedTextAttachment(text: string): Promise<void> {

@@ -48,10 +48,28 @@ import { turnStreamPath } from './chat-engine-pure'
 import { toolActionLabelForPart } from '../../../lib/tool-action-label'
 import { displayDeviceAttention } from '../../display/display-device-attention'
 import { ChatEngine, isTurnBoundaryPrompt } from '../chat-engine'
+import { IdleSignalParking, type ParkedIdle } from './chat-engine-turns-idle-parking'
 
 /** ChatEngine turns: one concern, moved verbatim from the composition root. */
 export class ChatEngineTurns {
-  constructor(private readonly host: ChatEngine) {}
+  /**
+   * Idle signals parked because their driver still registered the turn.
+   *
+   * In memory only: a parked signal is a live instruction for one turn, and a
+   * restart has no turn left to settle.
+   */
+  private readonly parkedIdles: IdleSignalParking
+
+  constructor(private readonly host: ChatEngine) {
+    this.parkedIdles = new IdleSignalParking({
+      driverHoldsTurn: (idle) =>
+        this.driverHoldsTurn(idle.sessionId, idle.driverId, idle.sourceDriver),
+      harnessBusy: (sessionId, idle) => this.sessionStillBusy(sessionId, idle),
+      settle: (idle) => {
+        this.handleDriverEvent(idle.driverId, idle.event, idle.sourceDriver)
+      }
+    })
+  }
 
   /**
    * Join the OpenCode install probe and converge the driver map on its result.
@@ -553,6 +571,7 @@ export class ChatEngineTurns {
     if (event.type === 'message.part.updated' && event.part.type === 'tool') {
       event.part = toolActionLabelForPart(event.part)
     }
+    if (!isIdleSignalEvent(event)) this.parkedIdles.cancel(event.sessionId)
     // Any live harness activity means the session's project is doing work
     // keep its idle-server clock reset until the stream goes quiet.
     const eventOwner = this.host.sessionRegistry.get(event.sessionId)
@@ -797,12 +816,24 @@ export class ChatEngineTurns {
     // fails the session when the process is gone).
     const idleEvent = isIdleSignalEvent(event)
     if (idleEvent && this.driverHoldsTurn(event.sessionId, driverId, sourceDriver)) {
-      Logger.dev('Ignored an idle from a driver that still holds the turn:', {
+      Logger.dev('Parking an idle from a driver that still holds the turn:', {
         sessionId: event.sessionId,
         driverId
       })
+      // Parked, not dropped: the driver's terminal idle is supposed to follow
+      // once it releases the registration, and when the two cross nothing ever
+      // settles the turn. Re-checking a few times over is what closes that
+      // window without ever settling a turn the driver still owns.
+      this.parkedIdles.park(event.sessionId, {
+        event,
+        driverId,
+        ...(sourceDriver ? { sourceDriver } : {})
+      })
       return
     }
+    // An idle that is honoured makes any parked copy of this session's end
+    // redundant: delivering it later would settle the same turn twice.
+    if (idleEvent) this.parkedIdles.cancel(event.sessionId)
     this.host.units['runtime-connectivity'].updateCompletionWaiter(event)
     this.host.units['assignment-workers'].observeChildSession(driverId, event)
 
@@ -1462,6 +1493,23 @@ export class ChatEngineTurns {
         error: rawErrorMessage(error)
       })
       return { text: nudge, attachments: [] }
+    }
+  }
+
+  /** Whether the harness itself still reports the session as busy. */
+  private async sessionStillBusy(sessionId: string, parked: ParkedIdle): Promise<boolean> {
+    const info = this.host.sessionRegistry.get(sessionId)
+    if (!info) return false
+    const driver =
+      parked.sourceDriver ??
+      this.host.units['turns-dispatch'].driverForRuntime(parked.driverId, info.accountId)
+    // Without a probe the driver's released registration is the only answer we
+    // have, which is the same bargain every other caller of the probe makes.
+    if (!driver?.isSessionBusy) return false
+    try {
+      return await driver.isSessionBusy(info.projectPath, sessionId)
+    } catch {
+      return false
     }
   }
 

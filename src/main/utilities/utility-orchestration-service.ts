@@ -18,6 +18,7 @@ import { type DesignSessionMode } from './cio-design-prompt'
 import { type VideoSessionMode } from './cio-video-prompt'
 import type { AuthoredWorkKind } from '../../lib/ipc/design'
 import { type GatewayToolDefinition } from '../../lib/gateway-tools'
+import type { OvenUtilityTurnUtility } from '../../lib/oven-utility-host'
 import { type EngineeringToolOperation } from '../../lib/engineering-tools'
 import { type CuaSnapshotView } from '../../lib/cua-driver'
 import { CioDiagnosticsService } from './cio-diagnostics-service'
@@ -33,6 +34,7 @@ import { type UtilitySuggestionResolution } from '../../lib/utility-suggestion'
 import type { AgentMcpSignInResolution } from '../../lib/mcp-sign-in'
 import type { McpOAuthService } from './mcp-oauth/mcp-oauth-service'
 import { buildUtilityOrchestrationServiceUnits } from './utility-orchestration-service/utility-orchestration-service-units'
+import type { ThreadSearchOptions } from '../database/repositories/thread-repo'
 
 export const CUA_UTILITY_ID = 'cio:cua-driver'
 
@@ -117,6 +119,24 @@ export interface UtilityTurnRequest {
   artifactTools?: boolean
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
+  /**
+   * Where a turn that does not run on this machine reaches its gateway.
+   *
+   * A turn whose harness runs on an Oven cannot use this app's loopback
+   * endpoint: on that machine `127.0.0.1` is a different loopback, with nothing
+   * listening. The caller that knows the machine supplies the endpoint it can
+   * actually reach (the Oven's own utility host) together with the closer for
+   * the relay that carries app-bound calls back here. Returning null keeps this
+   * app's own endpoint, which is what every local turn gets.
+   */
+  resolveGatewayEndpoint?: (turn: {
+    turnId: string
+    token: string
+    grants: readonly string[]
+    appBaseUrl: string
+    /** The turn's catalogue as the machine that runs it can execute it. */
+    utilities: OvenUtilityTurnUtility[]
+  }) => Promise<{ url: string; close?: () => void } | null>
   /**
    * Present only for an assistant's Getting started interview; the callback owns
    * the checkpoint path and replaces its content.
@@ -483,6 +503,11 @@ export interface TurnState {
   grantedTools: GatewayToolDefinition[]
   id: string
   request: UtilityTurnRequest
+  /**
+   * Releases what placed this turn's endpoint, when it was not this app's own
+   * listener (an Oven's utility host). Runs once, as the turn is cleaned up.
+   */
+  closeGatewayEndpoint?: () => void
   eligible: Map<string, ResolvedUtility>
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
@@ -635,14 +660,25 @@ export class UtilityOrchestrationService {
    * is how an agent reaches the user's other conversations: keyword and semantic
    * matching over titles and content, bounded by the caller's own timeout.
    */
-  threadSearch: ((query: string) => Promise<ThreadSearchResult[]>) | null = null
+  threadSearch:
+    ((query: string, options: ThreadSearchOptions) => Promise<ThreadSearchResult[]>) | null = null
   setThreadSearchProvider(
-    provider: ((query: string) => Promise<ThreadSearchResult[]>) | null
+    provider:
+      ((query: string, options: ThreadSearchOptions) => Promise<ThreadSearchResult[]>) | null
   ): void {
     return this.units['capability-invoke'].setThreadSearchProvider(provider)
   }
   buildBridgeHandlers(): ReadonlyMap<string, GatewayBridgeHandler> {
     return this.units['orchestration'].buildBridgeHandlers()
+  }
+  /**
+   * Run one granted route for a turn, wherever the call arrived from.
+   *
+   * The app's own loopback listener and an Oven's utility host both reach the
+   * same turns, so both go through one implementation of a route.
+   */
+  async callRouteForTurn(turnId: string, route: string, input: unknown): Promise<unknown> {
+    return this.units['orchestration'].callRouteForTurn(turnId, route, input)
   }
   buildStructuredRoutes(): ReadonlySet<string> {
     return this.units['orchestration'].buildStructuredRoutes()

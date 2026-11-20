@@ -140,6 +140,11 @@ const CHANNEL_ARG_HINTS: Readonly<Record<string, string>> = {
   'cloudDeploy:containerLog':
     'projectId, providerKind, containerId, deploymentId?, accountId?, serviceName? (a logSources id, for one compose container)',
   'browser:loadTabs': 'no arguments',
+  'taskManager:list':
+    'no arguments. Returns the processes CodeInOven started, with pid, command, cwd, project, thread and listening ports.',
+  'taskManager:killProcess':
+    'pid (number), force (boolean). Only a process the app owns can be stopped; main refuses any other pid. This is destructive, so ask the user before setting destructiveConfirmed.',
+  'taskManager:stopService': 'id (string, from taskManager:list)',
   'providers:getStatus': 'no arguments',
   'project:list': 'no arguments',
   'thread:listRecentPerProject': 'no arguments',

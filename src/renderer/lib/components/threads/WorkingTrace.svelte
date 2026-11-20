@@ -5,7 +5,7 @@
   import { foldSlide } from '$lib/components/shared/card-motion'
   import ActionSheet from '../ui/ActionSheet.svelte'
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
-  import type { AgentPart, ThinkingLevel } from '$shared/types'
+  import type { AgentPart, OvenPrepareStep, ThinkingLevel } from '$shared/types'
   import type { TraceSpan } from '$shared/working-trace-span'
   import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
@@ -47,6 +47,9 @@
     /** What the app is doing before the harness streams, e.g. preparing a remote
      *  checkout or cloning a repository. */
     note?: string | null
+    /** The parallel preparation steps behind that note: install the harness,
+     *  install git, clone the checkout. Each reports its own state. */
+    steps?: OvenPrepareStep[] | null
     /** What this trace is, in the header. Defaults to "Working Trace". A trace
      *  that belongs to another session   an Assignment draft offshoot bubbled
      *  up into its coordinator thread   names itself here, so it never reads as
@@ -169,6 +172,7 @@
     rehydrated = false,
     foreignRun = false,
     note = null,
+    steps = null,
     headerLabel = 'Working Trace',
     initialOpen = false,
     folded,
@@ -230,6 +234,11 @@
    *  not any more has settled, whether or not the turn reported its completion.
    *  Plain, not reactive: only the run-state effect below reads it. */
   let sawLiveWork = false
+  /** True once this mount has folded itself for a settled run. The close
+   *  happens once, so a trace the reader opens after it stays open for as long
+   *  as the visit lasts. Plain, not reactive: only the run-state effect writes
+   *  and reads it. */
+  let autoClosedOnSettle = false
   /** Newest activity this trace was already showing (or had already folded) the
    *  last time it decided whether to open.
    *
@@ -278,6 +287,19 @@
   let traceHeaderHeight = $state(0)
   /** How far below the scroller's top the oldest mounted work counts as the top. */
   const pagingTopInset = $derived(bodyMaxHeightRem === undefined ? traceHeaderHeight : 0)
+  /**
+   * Whether the height-bounded body is following the live tail.
+   *
+   * A group reply's trace is a small scroller of its own, and a run appends a
+   * row at a time to it. Without this the newest step always landed below the
+   * fold, so the work could not be watched as it arrived and every attempt to
+   * follow it meant chasing the scrollbar. Latched from the reader's own
+   * position: at the bottom of the box it keeps the newest entry in view, and
+   * the moment they scroll up it stops and leaves them where they are.
+   */
+  let followingTail = true
+  /** How close to the bottom still counts as following. */
+  const TRACE_TAIL_REACH = 24
   /** The turn's trace as chains of thought, grouped from the mounted steps.
    *  A chain that produced an output is keyed by that output, which is the
    *  boundary that defines it, so paging older steps in above never remounts a
@@ -390,6 +412,38 @@
     }
     root.addEventListener('scroll', onScroll, { passive: true })
     return () => root.removeEventListener('scroll', onScroll)
+  })
+
+  // Watch the bounded body's own scroll position, so following the tail is the
+  // reader's choice and not a guess: at the bottom it follows, and one scroll up
+  // hands the position back to them.
+  $effect(() => {
+    const body = traceBodyEl
+    if (!body || bodyMaxHeightRem === undefined) return
+    const nearBottom = (): boolean =>
+      body.scrollHeight - body.scrollTop - body.clientHeight <= TRACE_TAIL_REACH
+    followingTail = nearBottom()
+    const onScroll = (): void => {
+      followingTail = nearBottom()
+    }
+    body.addEventListener('scroll', onScroll, { passive: true })
+    return () => body.removeEventListener('scroll', onScroll)
+  })
+
+  // A new step while the reader is at the bottom of the box: keep the newest
+  // entry in view instead of appending it below the fold. The scroll waits a
+  // frame, after the new row has been laid out.
+  $effect(() => {
+    void visibleParts.length
+    void chains.length
+    const body = traceBodyEl
+    if (!body || bodyMaxHeightRem === undefined || !followingTail) return
+    const frame = requestAnimationFrame(() => {
+      if (!followingTail) return
+      const el = traceBodyEl
+      if (el) el.scrollTop = el.scrollHeight
+    })
+    return () => cancelAnimationFrame(frame)
   })
 
   // A trace whose work fits the transcript leaves older steps behind no scroll
@@ -527,11 +581,21 @@
     // Settled is decided by the run stopping, not only by the turn reporting its
     // completion: an interrupted turn, and a run the app quit in the middle of,
     // leave `done` false for work that has stopped, and that is exactly the
-    // expanded trace a settled thread must not keep showing. A trace the user
-    // opened is left exactly as they left it.
-    if ((done || sawLiveWork) && isOpen && !userOpened) {
-      foldToHeader()
-      requestFold(false, activity)
+    // expanded trace a settled thread must not keep showing.
+    //
+    // The close happens once, for the first settle this mount sees, even for a
+    // trace the reader opened while it worked: the work is over and the answer
+    // is what they came for. Their next open is theirs and survives every later
+    // settle, so a retry or a steer that ends again never shuts it on them.
+    //
+    // A controlled trace leaves this to its owner, which holds the same rule
+    // across remounts; deciding here as well would also close a trace the
+    // reader had already reopened after the owner's close.
+    if (controlled) return
+    if ((done || sawLiveWork) && !autoClosedOnSettle) {
+      autoClosedOnSettle = true
+      if (isOpen) foldToHeader()
+      setFold(false, false, localUserFolded)
       openedAtActivity = activity
     }
   })
@@ -677,8 +741,8 @@
           {onOpenSubagent}
         />
       {/each}
-      {#if busy && (foreignRun || rehydrated || note)}
-        <WorkingTraceStatus {rehydrated} {foreignRun} {note} />
+      {#if busy && (foreignRun || rehydrated || note || (steps?.length ?? 0) > 0)}
+        <WorkingTraceStatus {rehydrated} {foreignRun} {note} {steps} />
       {/if}
     </div>
   {/if}

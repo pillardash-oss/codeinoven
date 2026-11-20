@@ -29,8 +29,6 @@ export class WorkspaceBrowserController {
   private readonly getSelectedThreadId: () => string | null
   private readonly closeThreadBrowser: () => void
 
-  /** Whether the message-history jump menu's browser context menu is open. */
-  menuOpen = $state(false)
   clearDataConfirmOpen = $state(false)
   clearDataProjectId = $state<string | null>(null)
   clearing = $state(false)
@@ -43,19 +41,18 @@ export class WorkspaceBrowserController {
   }
 
   /**
-   * Close every tab the conversation's browser owns, then leave one blank page
+   * Close every tab the conversation's browser shows, then leave one blank page
    * so the address bar still has somewhere to navigate.
    *
    * This is the rail menu's escape hatch for a browser that has accumulated
    * pages: destroying the views is what gives the renderer processes back.
    */
   async closeAllTabs(): Promise<void> {
-    this.menuOpen = false
     const projectId = this.getSelectedProjectId()
     const threadId = this.getSelectedThreadId()
     if (!projectId || !threadId) return
     try {
-      await contextSidebarState.closeBrowserTabsForThread(projectId, threadId)
+      await contextSidebarState.closeActiveBrowserTabs()
       const blank = contextSidebarState.openBrowserForContext(
         '',
         projectId,
@@ -71,12 +68,11 @@ export class WorkspaceBrowserController {
 
   /** Close every tab and put the thread browser away for this thread. */
   async closeBrowser(): Promise<void> {
-    this.menuOpen = false
     const projectId = this.getSelectedProjectId()
     const threadId = this.getSelectedThreadId()
     if (projectId && threadId) {
       try {
-        await contextSidebarState.closeBrowserTabsForThread(projectId, threadId)
+        await contextSidebarState.closeActiveBrowserTabs()
       } catch (error: unknown) {
         reportError(error, 'The thread browser could not be closed.')
       }
@@ -119,9 +115,10 @@ export class WorkspaceBrowserController {
           bookmarkAvailable: Boolean(tab.url),
           bookmarked: browserBookmarks.isBookmarked(tab.url, tab.boxId),
           pinned: false,
-          // A thread's browser tabs are never hibernated (the whole surface goes
-          // with its thread), so the menu's sleep item is off for them either way.
-          hibernated: false,
+          // A thread tab sleeps on the same clock as a global one, so the menu's
+          // sleep item is live for it too, and it is off only while the page is
+          // already asleep or is the page on screen.
+          hibernated: tab.hibernated,
           active: contextSidebarState.activeBrowserTabId === tabId,
           groupId: null,
           boxId: tab.boxId,
@@ -156,6 +153,12 @@ export class WorkspaceBrowserController {
         contextSidebarState.setBrowserTabBox(tabId, choice.boxId)
         return
       }
+      if (choice.action === 'sleep') {
+        // The store refuses a page a surface is showing, so the row can never be
+        // left saying it is asleep while its page is still on screen.
+        contextSidebarState.hibernateBrowserTab(tabId)
+        return
+      }
       if (!['duplicate', 'newBefore', 'newTab', 'newPlaced'].includes(choice.action)) return
       const boxId = choice.action === 'newPlaced' ? choice.boxId : tab.boxId
       const finalId = contextSidebarState.openBrowserForContext(
@@ -177,19 +180,33 @@ export class WorkspaceBrowserController {
     }
   }
 
-  openContextMenu(event: MouseEvent): void {
+  /** Show the rail's native menu above the thread browser page. */
+  async openContextMenu(event: MouseEvent): Promise<void> {
     event.preventDefault()
-    this.menuOpen = true
-  }
-
-  closeMenu(): void {
-    this.menuOpen = false
+    try {
+      const choice = await invoke('browser:railContextMenu', event.clientX, event.clientY)
+      if (!choice) return
+      switch (choice.action) {
+        case 'closeAllTabs':
+          await this.closeAllTabs()
+          return
+        case 'closeBrowser':
+          await this.closeBrowser()
+          return
+        case 'downloads':
+          this.openDownloads()
+          return
+        case 'clearData':
+          this.requestDataClear()
+      }
+    } catch (error: unknown) {
+      reportError(error, 'The browser menu could not be opened.')
+    }
   }
 
   requestDataClear(): void {
     const projectId = this.getSelectedProjectId()
     if (!projectId) return
-    this.menuOpen = false
     this.clearDataProjectId = projectId
     this.clearDataConfirmOpen = true
   }
@@ -216,7 +233,6 @@ export class WorkspaceBrowserController {
   }
 
   openDownloads(): void {
-    this.menuOpen = false
     this.downloadsOpen = true
     const projectId = this.getSelectedProjectId()
     if (!projectId) return

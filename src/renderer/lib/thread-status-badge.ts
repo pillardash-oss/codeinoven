@@ -1,4 +1,5 @@
 import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
 import {
   isGroupDispatchedRun,
   isThreadAwaitingUser,
@@ -9,6 +10,7 @@ import {
 import { threadStatusPolicy } from '$shared/thread-status-policy'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
+import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import type { ActionStatusBadge } from '$lib/actions/types'
 
 /**
@@ -66,6 +68,20 @@ export function statusBadgeForThread(
   isWorking: boolean,
   queued = false
 ): ActionStatusBadge {
+  // A live turn that is blocked on a worker produces nothing of its own, so its
+  // badge is the robot rather than a spinner: still, in the working colour, so
+  // the state still reads as live work on every surface. Queued work rides
+  // along in the label, because a message waiting behind the turn is still the
+  // second fact and not the state.
+  if (isWorking && threadMessages.waitsOnSubagents(thread.projectId, thread.id)) {
+    return {
+      label: queued ? 'Waiting on sub-agents · Queued' : 'Waiting on sub-agents',
+      tone: 'working',
+      variant: 'icon',
+      icon: CioSubagent
+    }
+  }
+
   if (queued && !['failed', 'awaiting_approval', 'spec'].includes(thread.status)) {
     return {
       label: isWorking

@@ -11,8 +11,10 @@ import {
   type StartAfterThreadReference
 } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
-import { readDeviceHold } from '$lib/stores/queued-resource-wait.svelte'
+import { readThreadHold } from '$lib/stores/queued-resource-wait.svelte'
+import { ipcErrorMessage } from '$lib/ipc-errors'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import {
   responseReferencesState,
@@ -56,7 +58,31 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
 
   engineeringLifecycle = $state<EngineeringLifecycleState | null>(null)
 
-  pendingPermissions = $state<PermissionRequest[]>([])
+  /**
+   * The conversation whose permission queue this view reads and writes.
+   *
+   * A controller-driven conversation is its own conversation; a thread is the
+   * thread on screen. The queue itself lives in the shared attention store, so
+   * a request raised while this view was unmounted (or still pending across a
+   * switch to a project view and back) is not owned by this mount.
+   */
+  private attentionConversation(): { projectId: string; conversationId: string } {
+    const controller = this.root.props.controller
+    return controller
+      ? { projectId: controller.projectId, conversationId: controller.conversationId }
+      : { projectId: this.thread.projectId, conversationId: this.thread.id }
+  }
+
+  /** The queue the composer's blocking card renders from. */
+  get pendingPermissions(): PermissionRequest[] {
+    const { projectId, conversationId } = this.attentionConversation()
+    return conversationAttention.permissions(projectId, conversationId)
+  }
+
+  set pendingPermissions(requests: PermissionRequest[]) {
+    const { projectId, conversationId } = this.attentionConversation()
+    conversationAttention.set(projectId, conversationId, requests)
+  }
 
   errorMessage = $state('')
 
@@ -511,7 +537,13 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         // The device can hold a turn the thread is ready to start. Parking it
         // puts the message behind the queue card, whose gate says why the turn
         // has not started and re-runs this send once the machine has room.
-        if (!direct && (await readDeviceHold()) !== null) {
+        if (
+          !direct &&
+          (await readThreadHold(
+            this.root.handleAgentEvent.thread.projectId,
+            this.root.handleAgentEvent.thread.id
+          )) !== null
+        ) {
           this.root.steerQueuedMessage.parkComposerSend({
             text: normalizeComposerMessage(text, projectReferences),
             attachments,
@@ -598,7 +630,13 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     // The device can hold a turn this thread is ready to start. Parking the send
     // is the protection: the queue card names the device reading, and the gate
     // re-runs the send when the machine has room again.
-    if (!direct && (await readDeviceHold()) !== null) {
+    if (
+      !direct &&
+      (await readThreadHold(
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )) !== null
+    ) {
       this.root.steerQueuedMessage.parkComposerSend({
         text: msg,
         attachments,
@@ -813,7 +851,7 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     } catch (error) {
       this.root.abortRun.clearLocalTurn()
       agentRuns.setIdle(projectId, id)
-      const failure = error instanceof Error ? error.message : 'The prompt could not be sent.'
+      const failure = ipcErrorMessage(error, 'The prompt could not be sent.')
       this.errorMessage = failure
       // Only when the message never reached the conversation   the agent never
       // started working, so nothing on screen owns the words   is it put back in
@@ -828,6 +866,10 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
           projectReferences,
           taskReferences
         )
+        // The restored draft is now the only durable copy of words the
+        // database never saw, and the debounce can lose it to a crash or
+        // force-quit. Write it through at once.
+        rendererRecovery.persistQueuedNow()
         this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
       }
       if (promptReferences.length > 0) {

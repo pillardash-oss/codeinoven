@@ -14,7 +14,11 @@
   import CardTag from '../shared/CardTag.svelte'
   import { threadCardFold } from '$lib/stores/thread-card-fold.svelte'
   import type { StartAfterThreadReference } from '$lib/stores/renderer-recovery'
-  import type { AdmissionDecision } from '$shared/resource-admission'
+  import {
+    CPU_AVAILABLE_FLOOR_PERCENT,
+    type AdmissionDecision,
+    type ResourceWaitTarget
+  } from '$shared/resource-admission'
   import type { ResponseReferenceAnchor } from '$lib/stores/response-references.svelte'
   import type { PromptAttachment, UserMessagePresentation } from '$shared/types'
 
@@ -38,8 +42,12 @@
     presentation: UserMessagePresentation | undefined
     /** Threads the queued message waits for before it sends. */
     startAfterThreads: StartAfterThreadReference[]
-    /** The device reading holding this message, when the machine is what waits. */
+    /** The reading holding this message, when a machine is what waits. */
     resourceWait?: AdmissionDecision | null
+    /** Whose machine the wait belongs to, when a machine is what waits. */
+    resourceWaitTarget?: ResourceWaitTarget | null
+    /** True while this message is being handed to the conversation. */
+    delivering?: boolean
     /** The steer combo, so the send-now action names the key that does it. */
     steerModifierLabel: string
     /** Thread the queued message belongs to, so its fold state is remembered. */
@@ -70,6 +78,8 @@
     presentation,
     startAfterThreads,
     resourceWait = null,
+    resourceWaitTarget = null,
+    delivering = false,
     steerModifierLabel,
     threadId,
     stackedAbove = false,
@@ -156,8 +166,14 @@ the head's menu. -->
   bind:folded={foldState.folded}
 >
   {#snippet meta()}
-    {#if resourceWait}
-      <CardTag text="Waiting on this device" />
+    {#if delivering}
+      <CardTag text="Sending" />
+    {:else if resourceWait}
+      <CardTag
+        text={resourceWaitTarget?.kind === 'oven'
+          ? `Waiting on ${resourceWaitTarget.name}`
+          : 'Waiting on this device'}
+      />
     {:else if startAfterThreads.length === 0}
       <CardTag text="Sends after this turn" />
     {/if}
@@ -241,7 +257,7 @@ the head's menu. -->
     </div>
     <CardButton
       label="Send now"
-      title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end`}
+      title={`Send this message to the agent now (${steerModifierLabel}Enter) without waiting for the turn to end or for this device to free up`}
       icon={CioSend}
       size="xs"
       disabled={!hasQueuedPayload}
@@ -254,12 +270,13 @@ the head's menu. -->
       {#if resourceWait}
         <div class="border border-warning/40 bg-warning/10 px-2 py-1.5">
           <p class="text-[0.75rem] text-foreground">
-            Thread will start as soon as there is enough resource for it.
+            Resumes when free CPU &gt; {formatPercent(CPU_AVAILABLE_FLOOR_PERCENT)} and free RAM &gt;
+            {formatMemory(resourceWait.memoryFloorBytes)}.
           </p>
           <p class="pt-1 text-[0.6875rem] text-muted">
-            CPU {formatPercent(resourceWait.cpuAvailablePercent)} free · Memory {formatMemory(
+            Now {formatPercent(resourceWait.cpuAvailablePercent)} CPU free · {formatMemory(
               resourceWait.memoryAvailableBytes
-            )} free
+            )} RAM free
           </p>
         </div>
       {/if}

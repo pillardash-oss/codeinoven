@@ -9,19 +9,33 @@ import type {
   PermissionReply,
   HarnessAccount,
   PermissionRequest,
-  PendingAgentQuestionRequest
+  PendingAgentQuestionRequest,
+  OvenPrepareStep
 } from '../../lib/types'
 import { LOCAL_OVEN_ID, isRemoteOvenId } from '../../lib/ovens'
 import { MAX_PROMPT_ATTACHMENTS } from '../../lib/types'
-import type { OvenAppearance, OvenFile } from '../../lib/ovens'
+import type { AgentAccountUsage } from '../../lib/types'
+import { isCodeInOvenCustomProviderId } from '../../lib/custom-provider-id'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
+import type { OvenAppearance, OvenFile, OvenPreflightReport } from '../../lib/ovens'
 import type { ThreadManager } from '../../lib/engines/thread-manager'
 import type { ProjectManager } from '../../lib/engines/project-manager'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { HarnessAccountRegistry } from '../providers/harness-account-registry'
 import { OvenRegistry } from './oven-registry'
-import { resolveOvenThreadRoot } from './oven-thread-root'
+import { ovenCheckoutExists, planOvenThreadRoot, resolveOvenThreadRoot } from './oven-thread-root'
+import { planOvenPrepare, runOvenPrepare } from './oven-prepare'
+import { OvenHarnessService } from './oven-harness-service'
+import { collectPreflight } from './oven-setup-bootstrap'
+import { toolInstallCommands } from './remote/oven-setup-script'
+import { shellForPlatform } from './oven-remote-shell'
+import { remoteArgvCommand } from './oven-remote-command'
+import { findHarness } from '../agents/harness-registry'
 import { OvenService } from './oven-service'
+import { OvenResourceGate } from './oven-resource-gate'
 import { syncOvenAccount } from './oven-accounts'
+import { ovenAccountUsage, readOvenAccountUsage } from './oven-account-usage'
+import { ovenDataRoot } from './remote/oven-root-paths'
 import type { SecretsService } from '../secrets/secrets-service'
 import type {
   PersistentCliSession,
@@ -70,6 +84,15 @@ interface Live {
   muse: MuseTurnState
   pending: Map<string, { input: Record<string, unknown>; request: PermissionRequest }>
   questions: Map<string, PendingAgentQuestionRequest>
+  /**
+   * Deadline timers for the permission cards this run raised.
+   *
+   * A turn whose laptop was closed has nobody to answer a card, and the Oven's
+   * harness blocks until the control response arrives. So each card is refused
+   * on the same configurable timeout the question and secret cards use: the
+   * agent stops waiting and finds another way instead of parking the run.
+   */
+  permissionTimers?: Map<string, ReturnType<typeof setTimeout>>
   closedInput: boolean
   /**
    * Milliseconds added to a timestamp the harness stamped with the clock of
@@ -89,10 +112,28 @@ interface Live {
  */
 const MISSING_RUN = 'The remote run does not exist.'
 
+/** A package install on the Oven is real work; bound it without pretending it is instant. */
+const GIT_INSTALL_TIMEOUT_MS = 5 * 60_000
+
+/**
+ * Fallback deadline for an unanswered permission card on an Oven, used only
+ * when the configured card timeout is unreadable.
+ */
+const DEFAULT_PERMISSION_TIMEOUT_MS = 5 * 60_000
+
 /** Remote turns bypass desktop repository work. Only transcript metadata stays here. */
 export class OvenChat {
   readonly service: OvenService
   private readonly registry: OvenRegistry
+  /**
+   * Harness install and inventory for the Oven being prepared.
+   *
+   * The send path owns the install it needs rather than waiting for the setup
+   * dialog, so a first turn on a fresh Oven is not a dead end. The per-Oven and
+   * per-harness mutation locks are process-wide, so this instance cannot race the
+   * one the Ovens page uses.
+   */
+  private readonly harnesses: OvenHarnessService
   private readonly live = new Map<string, Live>()
   private readonly starting = new Set<string>()
   private disposed = false
@@ -107,7 +148,14 @@ export class OvenChat {
   ) {
     this.registry = new OvenRegistry(storage, vault)
     this.service = new OvenService(this.registry)
+    this.harnesses = new OvenHarnessService(this.service, storage)
+    // The dispatch gate for Oven threads: one shared probe cache per Oven, so
+    // a turn held on an Oven's memory costs one SSH read per TTL window.
+    this.resourceGate = new OvenResourceGate(this.service, this.registry)
   }
+
+  /** Admission for runs this engine is about to start on an Oven. */
+  readonly resourceGate: OvenResourceGate
 
   async nameFor(ovenId: string): Promise<string> {
     if (ovenId === LOCAL_OVEN_ID) return 'Local'
@@ -126,6 +174,93 @@ export class OvenChat {
 
   remote(thread: Thread, settings = thread.settings): boolean {
     return isRemoteOvenId(settings?.ovenId)
+  }
+
+  /**
+   * One account's quota as the Oven this surface is bound to reports it.
+   *
+   * This machine is always asked first (see the providers catalog): quota is
+   * provider-level account state, so the same credential container answers the
+   * same question wherever the harness runs, and the local read costs no round
+   * trip. The Oven is the fallback for the one case this machine cannot answer
+   * - it has no such harness installed - and it answers through the harness it
+   * does have, primed with the credentials this app syncs for that account.
+   *
+   * `ovenId` names the thread's own Oven, and naming this device means no
+   * other machine is asked. The Accounts settings page has no thread, so the
+   * registry's default Oven answers there instead.
+   */
+  async readAccountUsage(target: {
+    ovenId?: string
+    harnessId: string
+    providerId: string
+    accountId?: string
+  }): Promise<AgentAccountUsage | null> {
+    try {
+      const ovenId = await this.usageOven(target.ovenId)
+      if (!ovenId) return null
+      const probe = await this.service.probe(ovenId)
+      // A harness the Oven does not have is not a machine to ask, and a missing
+      // inventory row is the same answer as a `missing` one: the Oven lists
+      // every harness it can host. `unknown` health is never treated as absent,
+      // because a version probe that timed out says nothing about the install.
+      // An older service that reports no inventory at all is asked anyway.
+      if (probe.inventory) {
+        const item = probe.inventory.find((entry) => entry.harnessId === target.harnessId)
+        if (!item || item.health === 'missing' || item.health === 'unsupported') return null
+      }
+      const account = await this.accounts.resolveForProvider(
+        target.harnessId,
+        target.providerId,
+        target.accountId
+      )
+      const environment = await syncOvenAccount(this.service, this.accounts, ovenId, account)
+      // A custom base-URL provider has no authenticated account row, so several
+      // custom providers in one harness would answer under one id and overwrite
+      // each other's reading. The provider id is the identity the battery hover
+      // and the Accounts rows both match.
+      const accountId = isCodeInOvenCustomProviderId(target.providerId)
+        ? target.providerId
+        : account.id
+      const telemetry = await readOvenAccountUsage(this.service, {
+        ovenId,
+        harnessId: target.harnessId,
+        providerId: target.providerId,
+        accountId,
+        cwd: `${ovenDataRoot(probe.home)}/accounts/${account.id}`,
+        environment
+      })
+      if (!telemetry) return null
+      return ovenAccountUsage(
+        { harnessId: target.harnessId, providerId: target.providerId, accountId },
+        telemetry
+      )
+    } catch (error) {
+      Logger.dev('Oven account usage read unavailable:', error)
+      return null
+    }
+  }
+
+  /**
+   * The Oven an account reading falls back to.
+   *
+   * A thread's own Oven answers for that thread, and a thread on this device
+   * answers nowhere else: this machine has no harness, and pinning a thread to
+   * Local means another machine's quota would describe work this thread never
+   * does. A surface with no thread at all (the Accounts settings page) uses the
+   * default Oven, and a remote id the registry no longer lists is not a target
+   * either, since the probe would only fail.
+   */
+  private async usageOven(requested: string | undefined): Promise<string | null> {
+    if (requested === LOCAL_OVEN_ID) return null
+    const state = await this.registry.state()
+    const listed = (ovenId: string | undefined): ovenId is string =>
+      ovenId !== undefined &&
+      isRemoteOvenId(ovenId) &&
+      state.ovens.some((oven) => oven.id === ovenId)
+    if (listed(requested)) return requested
+    if (requested !== undefined) return null
+    return listed(state.defaultOvenId) ? state.defaultOvenId : null
   }
 
   private path(thread: Pick<Thread, 'projectId' | 'id'>): string {
@@ -156,6 +291,7 @@ export class OvenChat {
       },
       pending: new Map(),
       questions: new Map(),
+      permissionTimers: new Map(),
       closedInput: false
     }
   }
@@ -205,33 +341,18 @@ export class OvenChat {
         account.id
       )
       await this.threads.setStatus(thread.projectId, thread.id, 'executing')
-      this.publishNote(turnSessionId, startedAt, `Preparing the project on ${ovenLabel}…`)
-      const prepared = await resolveOvenThreadRoot(
-        this.service,
-        { ...thread, settings },
-        this.projects,
-        (step) =>
-          this.publishNote(
-            turnSessionId,
-            startedAt,
-            step === 'clone'
-              ? `Cloning the repository onto ${ovenLabel}…`
-              : `Opening the checkout on ${ovenLabel}…`
-          )
-      )
-      const { root, dataRoot, sessionsRoot } = prepared
-      if (prepared.branch && prepared.branch !== thread.branch)
-        await this.threads.setBranch(thread.projectId, thread.id, prepared.branch)
-      await this.threads.bindOvenCheckout(thread.projectId, thread.id, {
-        ...settings,
-        ovenPath: root
+      // Nothing below this line is supposed to be the first time the Oven hears
+      // that it needs a harness, git, or the checkout: those are prepared by
+      // `prepareForTurn`, and the note this turn shows is the one that
+      // preparation publishes. An Oven that already has everything says nothing
+      // at all.
+      const turn = await this.prepareForTurn(thread, settings, {
+        sessionId: turnSessionId,
+        startedAt,
+        account,
+        ovenLabel
       })
-      if (settings.harnessId === 'pi') {
-        await this.service.workspace(ovenId, { operation: 'ensure', root: sessionsRoot })
-        await this.adoptLegacyPiSessions(ovenId, dataRoot, root)
-      }
-      const environment = await syncOvenAccount(this.service, this.accounts, ovenId, account)
-      if (settings.harnessId === 'cline') environment.CLINE_SESSION_BACKEND_MODE = 'local'
+      const { root, sessionsRoot, environment } = turn
       const previous = await this.storage.read<Binding>(this.path(thread))
       const messages = await this.threads.loadMessages(thread.projectId, thread.id)
       const userId = userMessageId || randomUUID()
@@ -379,7 +500,7 @@ export class OvenChat {
     sessionsRoot: string
   ): { command: string; args: string[]; input?: string; closeInput?: boolean } {
     const model = settings.modelId
-    const full = settings.permissionLevel === 'full_access'
+    const full = isUnrestrictedLevel(settings.permissionLevel)
     const native = session.nativeSessionId
     switch (settings.harnessId) {
       case 'codex':
@@ -508,6 +629,225 @@ export class OvenChat {
       sessionId,
       status: { state: 'working', startedAt, note }
     })
+  }
+
+  /**
+   * Everything the Oven must have in place before a turn reaches it.
+   *
+   * The one-shot send path and the pi RPC router both call this, so a thread's
+   * checkout, the harness install it needs, the branch it is on and the account
+   * environment it runs with cannot drift between the two ways a remote turn
+   * reaches an Oven. `progress` names the session and the moment the turn
+   * started, which is what lets the preparation publish its steps to the
+   * working trace; a caller with no session yet gets the same work and no notes.
+   */
+  async prepareForTurn(
+    thread: Thread,
+    settings: ThreadSettings,
+    progress: {
+      sessionId?: string
+      startedAt?: number
+      account?: HarnessAccount
+      ovenLabel?: string
+    } = {}
+  ): Promise<{
+    root: string
+    dataRoot: string
+    sessionsRoot: string
+    environment: Record<string, string>
+    account: HarnessAccount
+  }> {
+    const ovenId = settings.ovenId
+    if (!ovenId) throw new Error('This thread is not pinned to an Oven.')
+    const ovenLabel = progress.ovenLabel ?? (await this.nameFor(ovenId))
+    const account =
+      progress.account ??
+      (await this.accounts.resolveForProvider(
+        settings.harnessId,
+        settings.providerId,
+        settings.accountId
+      ))
+    await this.prepareOven({
+      sessionId: progress.sessionId,
+      startedAt: progress.startedAt ?? Date.now(),
+      thread,
+      settings,
+      ovenId,
+      ovenLabel
+    })
+    const prepared = await resolveOvenThreadRoot(
+      this.service,
+      { ...thread, settings },
+      this.projects,
+      (step) => {
+        // Only a clone is work a reader can act on; a checkout that merely has
+        // to be created (or opened) is not worth a line on every send.
+        if (step !== 'clone' || progress.sessionId === undefined) return
+        this.publishNote(
+          progress.sessionId,
+          progress.startedAt ?? Date.now(),
+          `Cloning the repository onto ${ovenLabel}…`
+        )
+      }
+    )
+    const { root, dataRoot, sessionsRoot } = prepared
+    if (prepared.branch && prepared.branch !== thread.branch)
+      await this.threads.setBranch(thread.projectId, thread.id, prepared.branch)
+    await this.threads.bindOvenCheckout(thread.projectId, thread.id, {
+      ...settings,
+      ovenPath: root
+    })
+    if (settings.harnessId === 'pi') {
+      await this.service.workspace(ovenId, { operation: 'ensure', root: sessionsRoot })
+      await this.adoptLegacyPiSessions(ovenId, dataRoot, root)
+    }
+    const environment = await syncOvenAccount(this.service, this.accounts, ovenId, account)
+    if (settings.harnessId === 'cline') environment.CLINE_SESSION_BACKEND_MODE = 'local'
+    return { root, dataRoot, sessionsRoot, environment, account }
+  }
+
+  /**
+   * Put whatever the Oven lacks in place before the turn reaches it.
+   *
+   * A remote turn used to fail outright when the chosen harness was not on the
+   * Oven, and it assumed git was there and the checkout could be cloned the
+   * moment the run asked for it. Both are ordinary states for a new Oven, so the
+   * three facts that decide the work are read first, without mutating anything,
+   * and only what is missing is installed or cloned.
+   *
+   * The three pieces do not depend on each other, so `runOvenPrepare` starts them
+   * together: a slow clone must not queue behind a harness download. The working
+   * trace gets the whole plan, then a fresh snapshot as each step starts and
+   * settles, so the reader can see which one is still working.
+   */
+  private async prepareOven(input: {
+    sessionId?: string
+    startedAt: number
+    thread: Thread
+    settings: ThreadSettings
+    ovenId: string
+    ovenLabel: string
+  }): Promise<void> {
+    const { sessionId, startedAt, thread, settings, ovenId, ovenLabel } = input
+    const target = { ...thread, settings }
+    // One probe answers both questions it can: which harnesses answer on the Oven
+    // (the same list the Oven itself checks before it starts a run), and where
+    // this thread's checkout belongs.
+    const probe = await this.service.probe(ovenId)
+    const plan = await planOvenThreadRoot(this.service, target, this.projects, probe)
+    const harness = findHarness(settings.harnessId)
+    const accepted = harness ? [harness.command, ...(harness.commandAliases ?? [])] : []
+    // A harness the registry does not know (an ACP agent) has no install channel
+    // here, so it is never scheduled for an install it could not perform.
+    const harnessInstalled =
+      !harness || probe.harnesses.some((entry) => !!entry.path && accepted.includes(entry.command))
+    const checkoutPresent = await ovenCheckoutExists(this.service, ovenId, plan.root)
+    // Git is only read when something else is already missing: an Oven that runs
+    // the harness against an existing checkout needs no clone, so it owes nothing
+    // to a package install and the extra SSH read would be wasted.
+    const report =
+      harnessInstalled && checkoutPresent ? null : await collectPreflight(this.service.ssh, ovenId)
+    const project = await this.projects.getProject(thread.projectId)
+    const harnessName = harness?.name ?? settings.harnessId
+    // A chat has no project to name, so it says what it is actually doing to the
+    // machine instead of claiming to prepare one.
+    const note = project ? `Preparing the project on ${ovenLabel}…` : `Preparing ${ovenLabel}…`
+    const steps = planOvenPrepare({
+      harnessInstalled,
+      gitInstalled: report?.git.installed ?? true,
+      checkoutPresent,
+      cloneExpected: Boolean(plan.origin),
+      ovenLabel,
+      harnessName,
+      projectName: project?.name ?? 'the project'
+    })
+    // An Oven that already has the harness, git and the checkout is not preparing
+    // anything, so the turn shows no note at all rather than repeating one on
+    // every follow-up.
+    if (steps.length === 0) return
+
+    const publish = (next: OvenPrepareStep[]): void => {
+      // A caller with no session yet (a pi turn that binds its session only
+      // after preparation) still gets the work done, with nowhere to draw it.
+      if (sessionId === undefined) return
+      this.publish({
+        type: 'session.status',
+        sessionId,
+        status: { state: 'working', startedAt, note, steps: next }
+      })
+    }
+    publish(steps)
+    const outcome = await runOvenPrepare({
+      steps,
+      publish,
+      actions: {
+        harness: async () => {
+          await this.harnesses.installHarness(ovenId, settings.harnessId)
+        },
+        git: async () => {
+          await this.installGitOnOven(
+            ovenId,
+            report ?? (await collectPreflight(this.service.ssh, ovenId))
+          )
+        },
+        checkout: async () => {
+          await this.service.workspace(
+            ovenId,
+            plan.origin
+              ? { operation: 'clone', root: plan.root, url: plan.origin }
+              : { operation: 'ensure', root: plan.root },
+            plan.localRepository
+          )
+        }
+      }
+    })
+    if (outcome.failures.length === 0) return
+    // Name the step and its reason: "preparing the Oven failed" leaves the user
+    // with nothing to act on, while the step that broke names what to install by
+    // hand, or what to fix before the next send.
+    const descriptions: Record<OvenPrepareStep['id'], string> = {
+      harness: `Installing ${harnessName} on ${ovenLabel}`,
+      git: `Installing git on ${ovenLabel}`,
+      checkout: `Cloning ${project?.name ?? 'the project'} onto ${ovenLabel}`
+    }
+    throw new Error(
+      outcome.failures
+        .map((failure) => `${descriptions[failure.id]} failed: ${failure.message}`)
+        .join(' ')
+    )
+  }
+
+  /**
+   * Install git on the Oven with the commands oven setup already uses.
+   *
+   * The package manager, platform and privilege come from the preflight report,
+   * and the command list comes from the shared setup script, so a turn never
+   * invents a package-manager invocation setup would not run.
+   */
+  private async installGitOnOven(ovenId: string, report: OvenPreflightReport): Promise<void> {
+    if (report.git.installed) return
+    const commands = toolInstallCommands(
+      'git',
+      report.platform,
+      report.packageManager,
+      report.privilege
+    )
+    if (commands.length === 0)
+      throw new Error(
+        `CodeInOven cannot install git with ${report.packageManager} on this Oven. Install it on the Oven itself.`
+      )
+    const shell = shellForPlatform(report.platform)
+    if (shell !== 'posix' && commands.some((entry) => entry.elevated))
+      throw new Error(
+        'Installing git needs administrator rights, which CodeInOven does not request on a Windows Oven. Install git on the Oven itself.'
+      )
+    for (const entry of commands)
+      await this.service.ssh.execute(
+        ovenId,
+        remoteArgvCommand(shell, [entry.command, ...entry.args], { elevated: entry.elevated }),
+        '',
+        GIT_INSTALL_TIMEOUT_MS
+      )
   }
 
   /**
@@ -721,6 +1061,9 @@ export class OvenChat {
     binding.finished = true
     if (live.timer) clearTimeout(live.timer)
     live.timer = undefined
+    // A finished run has no card left to answer, so nothing should keep a
+    // deadline alive for it.
+    this.clearPermissionTimers(live)
     await this.threads.setStatus(
       binding.projectId,
       binding.threadId,
@@ -815,6 +1158,7 @@ export class OvenChat {
           input: (metadata?.input as Record<string, unknown>) ?? {},
           request: event.permission
         })
+        this.armPermissionDeadline(live, event.permission.id)
       } else if (event.type === 'question.asked') {
         if (binding.resolved?.includes(event.requestId)) continue
         live.questions.set(event.requestId, {
@@ -962,6 +1306,7 @@ export class OvenChat {
     if (live) {
       live.binding.finished = true
       if (live.timer) clearTimeout(live.timer)
+      this.clearPermissionTimers(live)
       await live.polling?.catch(() => undefined)
     }
     this.live.delete(threadId)
@@ -978,38 +1323,114 @@ export class OvenChat {
     for (const live of this.live.values()) {
       const pending = live.pending.get(requestId)
       if (!pending || live.binding.projectId !== projectId) continue
-      const response = {
-        type: 'control_response',
-        response: {
-          subtype: 'success',
-          request_id: requestId,
-          response: {
-            behavior: reply === 'reject' ? 'deny' : 'allow',
-            ...(reply === 'reject' ? {} : { updatedInput: pending.input }),
-            ...(message ? { message } : {})
-          }
-        }
-      }
-      await this.service.write(
-        live.binding.ovenId,
-        live.binding.runId,
-        `${JSON.stringify(response)}\n`
-      )
-      live.pending.delete(requestId)
-      live.binding.resolved = [...(live.binding.resolved ?? []), requestId]
-      await this.storage.write(
-        this.path({ projectId: live.binding.projectId, id: live.binding.threadId }),
-        live.binding
-      )
-      this.publish({
-        type: 'permission.replied',
-        sessionId: live.binding.session.id,
-        requestId,
-        reply
-      })
+      await this.settlePermission(live, requestId, reply, message)
       return true
     }
     return false
+  }
+
+  /** Answer one card on the Oven: deliver the control response and retire it. */
+  private async settlePermission(
+    live: Live,
+    requestId: string,
+    reply: PermissionReply,
+    message?: string
+  ): Promise<void> {
+    const pending = live.pending.get(requestId)
+    if (!pending) return
+    this.clearPermissionTimer(live, requestId)
+    const response = {
+      type: 'control_response',
+      response: {
+        subtype: 'success',
+        request_id: requestId,
+        response: {
+          behavior: reply === 'reject' ? 'deny' : 'allow',
+          ...(reply === 'reject' ? {} : { updatedInput: pending.input }),
+          ...(message ? { message } : {})
+        }
+      }
+    }
+    await this.service.write(
+      live.binding.ovenId,
+      live.binding.runId,
+      `${JSON.stringify(response)}\n`
+    )
+    live.pending.delete(requestId)
+    live.binding.resolved = [...(live.binding.resolved ?? []), requestId]
+    await this.storage.write(
+      this.path({ projectId: live.binding.projectId, id: live.binding.threadId }),
+      live.binding
+    )
+    this.publish({
+      type: 'permission.replied',
+      sessionId: live.binding.session.id,
+      requestId,
+      reply
+    })
+  }
+
+  /**
+   * Arm the deadline of one unanswered card.
+   *
+   * The Oven's harness holds the tool call until a control response arrives, so
+   * a run whose laptop closed would otherwise sit on that call forever. The
+   * deadline is the same configurable timeout the question and secret cards use.
+   */
+  private armPermissionDeadline(live: Live, requestId: string): void {
+    const timers = live.permissionTimers ?? new Map<string, ReturnType<typeof setTimeout>>()
+    live.permissionTimers = timers
+    const armed = timers.get(requestId)
+    if (armed) clearTimeout(armed)
+    void this.storage
+      .getConfig()
+      .then((config) => {
+        if (!live.pending.has(requestId)) return
+        const timeoutMs =
+          Number.isFinite(config.questionTimeoutMs) && config.questionTimeoutMs > 0
+            ? config.questionTimeoutMs
+            : DEFAULT_PERMISSION_TIMEOUT_MS
+        const timer = setTimeout(() => {
+          void this.expirePermission(live, requestId, timeoutMs).catch((error: unknown) =>
+            Logger.error('Could not expire an Oven permission card:', error)
+          )
+        }, timeoutMs)
+        timer.unref?.()
+        timers.set(requestId, timer)
+      })
+      .catch((error: unknown) =>
+        Logger.error('Could not read the card timeout for an Oven permission:', error)
+      )
+  }
+
+  /**
+   * Refuse a card nobody answered, telling the agent to adapt.
+   *
+   * A rejection alone would end the turn, and the instruction riding on it is
+   * what keeps the run alive: the harness fails the one blocked call with this
+   * message and the model continues the same turn another way.
+   */
+  private async expirePermission(live: Live, requestId: string, timeoutMs: number): Promise<void> {
+    if (!live.pending.has(requestId)) return
+    const minutes = Math.max(1, Math.round(timeoutMs / 60_000))
+    const message = [
+      `The permission card for this action was automatically rejected after ${minutes} minute(s) without an answer.`,
+      'Do not retry that exact action.',
+      'Find another way to finish the task without it, and if nothing works, say plainly what is blocked and why.'
+    ].join(' ')
+    await this.settlePermission(live, requestId, 'reject', message)
+  }
+
+  private clearPermissionTimer(live: Live, requestId: string): void {
+    const timer = live.permissionTimers?.get(requestId)
+    if (timer) clearTimeout(timer)
+    live.permissionTimers?.delete(requestId)
+  }
+
+  private clearPermissionTimers(live: Live): void {
+    if (!live.permissionTimers) return
+    for (const timer of live.permissionTimers.values()) clearTimeout(timer)
+    live.permissionTimers.clear()
   }
 
   async permissions(thread: Thread): Promise<PermissionRequest[]> {
@@ -1101,7 +1522,10 @@ export class OvenChat {
 
   dispose(): void {
     this.disposed = true
-    for (const live of this.live.values()) if (live.timer) clearTimeout(live.timer)
+    for (const live of this.live.values()) {
+      if (live.timer) clearTimeout(live.timer)
+      this.clearPermissionTimers(live)
+    }
     this.live.clear()
     // Deliberately leave remote processes and service sockets owned by the Oven.
   }

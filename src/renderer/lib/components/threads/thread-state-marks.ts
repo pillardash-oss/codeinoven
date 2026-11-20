@@ -5,6 +5,7 @@ import CioInbox from '@pdslng/cio-icon/CioInbox.svelte'
 import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
 import CioRefresh from '@pdslng/cio-icon/CioRefresh.svelte'
 import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
 import CioTemporaryChat from '@pdslng/cio-icon/CioTemporaryChat.svelte'
 import CioTools from '@pdslng/cio-icon/CioTools.svelte'
 import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
@@ -63,13 +64,15 @@ export interface ThreadStateMark {
    * one whole dash at a time, from the bottom to the top, and starts again, for as
    * long as the state holds. Only work that is running right now carries it.
    *
-   * `standing` is a spine that stands full: every dash lit, nothing moving. Two
+   * `standing` is a spine that stands full: every dash lit, nothing moving. Three
    * states wear it. Work another instance is driving is live but not here, and this
    * window holds neither its stream nor its stop control, so a climbing light would
    * promise the reader a turn running in front of them with live output to watch and
    * a control to press. A draft waiting on a settled thread is not running at all:
    * the spine is there to say the thread is asking for the user again, and a light
-   * climbing it would say work was happening.
+   * climbing it would say work was happening. A thread blocked on a sub-agent is
+   * running, but producing nothing of its own until the worker reports, so it shows
+   * the same held spine under the robot that names the wait.
    *
    * Every other state is something to notice once and act on, so it carries no
    * light at all: its rail is the colour and the shape its own mark names, and the
@@ -169,6 +172,19 @@ export const THREAD_STATE_MARKS = {
     dash: 'dashed',
     railLight: 'climbing',
     glyph: false
+  },
+  'waiting-subagents': {
+    icon: CioSubagent,
+    label: 'Waiting on sub-agents',
+    tone: 'working',
+    colour: 'var(--color-thread-working)',
+    // The same dashed spine a running thread wears, held still. Nothing is being
+    // produced while the parent awaits a worker, so a light climbing the dashes
+    // would claim work that is not happening: the spine stands full and the robot
+    // above it says what the thread is waiting for. The glyph stays because the
+    // robot is the whole difference from ordinary work.
+    dash: 'dashed',
+    railLight: 'standing'
   },
   'working-paused': {
     icon: CioRefresh,

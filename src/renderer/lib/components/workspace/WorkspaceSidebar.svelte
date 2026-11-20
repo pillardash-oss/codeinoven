@@ -196,6 +196,37 @@
    * the element it hands over and nothing else.
    */
   let panelProgress = $state(0)
+
+  /**
+   * Whether the reader has reached the end of the timeline's list.
+   *
+   * The older-history control is the list's own ending, not a doorway into it:
+   * painted above the rows it belongs to, it read as a way to open the done
+   * group it sits under, which is not what it does. It is therefore only offered
+   * once the reader is at the bottom, where the tail of the loaded history is
+   * what they are looking at. No thread is lost by waiting: the rows above are
+   * the loaded history itself.
+   *
+   * The two ends are different distances on purpose. Revealing the control adds
+   * its own height below the last row, which moves the end of the list away by
+   * exactly that height; a single threshold would hide it again in the same
+   * frame and flap forever. The reveal distance is inside the hiding distance by
+   * far more than the control's height, so the strip settles instead of
+   * oscillating.
+   */
+  const TAIL_REVEAL_DISTANCE = 48
+  const TAIL_HIDE_DISTANCE = 200
+  let listTailRevealed = $state(true)
+
+  function measureListTail(element: HTMLElement): void {
+    const fromEnd = element.scrollHeight - (element.scrollTop + element.clientHeight)
+    if (listTailRevealed) {
+      if (fromEnd > TAIL_HIDE_DISTANCE) listTailRevealed = false
+    } else if (fromEnd <= TAIL_REVEAL_DISTANCE) {
+      listTailRevealed = true
+    }
+  }
+
   $effect(() => {
     const element = scroller
     if (!element) return
@@ -211,6 +242,7 @@
       if (atTop) panelProgress = 0
       else if (atEnd) panelProgress = 1
       else panelProgress = Math.min(1, element.scrollTop / 160)
+      measureListTail(element)
     }
     element.addEventListener('scroll', onScroll, { passive: true })
     onScroll()
@@ -484,6 +516,9 @@
     key: string
     /** The status group this section heads, or null for the ungrouped list. */
     group: (typeof threadGroups)[number] | null
+    /** Whether this group is folded, so only its heading (and the thread being
+     *  worked in) is drawn. Always false for the ungrouped list. */
+    folded: boolean
     threads: Thread[]
   }
 
@@ -494,13 +529,14 @@
         : settledTimelineThreads
       // No section at all when there is nothing to show, so the list's own empty
       // state still fires for an ungrouped view with no threads.
-      return threads.length > 0 ? [{ key: 'flat', group: null, threads }] : []
+      return threads.length > 0 ? [{ key: 'flat', group: null, folded: false, threads }] : []
     }
     return threadGroups
       .filter((group) => threadGroupingState.isVisible(group.label))
       .map((group) => ({
         key: `group:${group.label}`,
         group,
+        folded: threadGroupingState.isFolded(group.label),
         // A folded group keeps its heading and drops its rows   except the thread
         // the user is on: the group holding the active thread stays temporarily
         // open by that one row, so folding can never take the thread being worked
@@ -510,6 +546,44 @@
           : group.threads
       }))
   })
+
+  /**
+   * The sections as they are drawn: the expanded groups in the user's order
+   * first, then every folded group, also in that order, against the end of the
+   * list.
+   *
+   * This is where a folded group belongs. Left in place, folding the group above
+   * the one being read left its heading in the middle of the list with the
+   * expanded rows it continues passing underneath it, and it read as a stray
+   * entry rather than a group the reader put away. Sunk to the end, the folded
+   * groups queue up together before the panel's own controls, and the group the
+   * reader is actually working in owns the top of the list with its rows. Doing
+   * it the other way round   floating a folded group above its expanded
+   * neighbours   is what would make the order look arranged: the statuses keep
+   * exactly the order the user gave them, folding only decides which side of the
+   * expanded block a group lands on.
+   */
+  const drawnThreadSections = $derived.by((): ThreadSection[] => {
+    if (threadSections.length < 2) return threadSections
+    const expanded: ThreadSection[] = []
+    const folded: ThreadSection[] = []
+    for (const section of threadSections) {
+      if (section.folded) folded.push(section)
+      else expanded.push(section)
+    }
+    return [...expanded, ...folded]
+  })
+
+  /**
+   * The section that owns the tail of the loaded history: the last group in the
+   * order the user gave the statuses, which is where the older threads continue.
+   *
+   * The control belongs there and nowhere else. Hung off the last group that
+   * happened to draw rows, it appeared under Working with Done folded beneath it,
+   * which is not the group the older rows continue, so it read as a stray link at
+   * the bottom of an unrelated section.
+   */
+  const historyTailSectionKey = $derived(threadSections.at(-1)?.key ?? null)
 
   /**
    * Rows the threads timeline mounts per section before its "Show more".
@@ -541,7 +615,7 @@
    */
   const threadRowArrangement = $derived(
     rowArrangement(
-      threadSections.map((section) => ({
+      drawnThreadSections.map((section) => ({
         key: section.key,
         rowKeys: section.threads.map((thread) => thread.id)
       }))
@@ -552,8 +626,23 @@
     threadsRowReflow.capture(threadsListElement, scroller ?? null, threadRowArrangement)
   })
 
+  /**
+   * Re-reads the end of the list whenever the rows it holds, or the pane drawing
+   * them, change.
+   *
+   * A scroll event fires only when the reader moves: paging older history in,
+   * folding a group or a filter narrowing the list all change where the end is
+   * without a single scroll, and the scroller is shared by every pane, so the
+   * pane coming back on screen has to be measured too. The arrangement this
+   * effect already follows is exactly that signal, and an effect runs after the
+   * DOM update, so the measurement reads the layout the reader is looking at.
+   */
   $effect(() => {
+    const threadsPaneVisible = !loading && mode === 'threads'
+    const element = scroller
     threadsRowReflow.play(threadsListElement, scroller ?? null, threadRowArrangement)
+    if (!threadsPaneVisible || !element) return
+    measureListTail(element)
   })
 
   /** When this list first painted. A row that lands because the app just created
@@ -1094,26 +1183,32 @@
       {/if}
     </SidebarListPane>
     <SidebarListPane name="threads" visible={!loading && mode === 'threads'}>
-      {#if !searchPanelActive}
-        <PinnedSection
-          sectionKey="threads"
-          label="Pinned Threads"
-          threads={pinnedTimelineThreads}
-          detailed
-          sticky
-          trailingClass={threadGroupingState.enabled ? 'pb-5' : 'mb-3 pb-3'}
-          activeThreadId={activeThreadId ?? null}
-          getRowIcon={(t) => getThreadIcon(t)}
-          onOpen={onOpenThread}
-          {onRename}
-          {onTogglePin}
-          {onDelete}
-          {onFork}
-          onMovePinnedThread={(draggedId, targetId, pos) =>
-            onTimelinePinnedMove(draggedId, targetId, pos)}
-        />
-      {/if}
-      <!-- One section per status group: the heading and its own rows, so the
+      <!-- The pane is a column that fills the scroller, so the folded groups at
+           the end of the list can be held against the panel's foot instead of
+           stopping wherever the last expanded row happens to end. The list
+           inside still takes its own height from its rows (`flex-auto`), so a
+           full list scrolls exactly as before. -->
+      <div class="flex min-h-full flex-col">
+        {#if !searchPanelActive}
+          <PinnedSection
+            sectionKey="threads"
+            label="Pinned Threads"
+            threads={pinnedTimelineThreads}
+            detailed
+            sticky
+            trailingClass={threadGroupingState.enabled ? 'pb-5' : 'mb-3 pb-3'}
+            activeThreadId={activeThreadId ?? null}
+            getRowIcon={(t) => getThreadIcon(t)}
+            onOpen={onOpenThread}
+            {onRename}
+            {onTogglePin}
+            {onDelete}
+            {onFork}
+            onMovePinnedThread={(draggedId, targetId, pos) =>
+              onTimelinePinnedMove(draggedId, targetId, pos)}
+          />
+        {/if}
+        <!-- One section per status group: the heading and its own rows, so the
              heading has a containing block to stick inside and is pushed out by
              the next group as that group takes the top. The section must stay a
              real block: `display: contents` would drop its box, leaving the
@@ -1122,9 +1217,9 @@
              keyed list per group, so a row changing group is a different element
              in a different list and travels with the reflow pair above instead
              of Svelte's FLIP. -->
-      <div bind:this={threadsListElement}>
-        {#each threadSections as section, sectionIndex (section.key)}
-          <!-- The section spans the heading and its rows, so `position: sticky`
+        <div bind:this={threadsListElement} class="flex flex-auto flex-col">
+          {#each drawnThreadSections as section, sectionIndex (section.key)}
+            <!-- The section spans the heading and its rows, so `position: sticky`
                  keeps the heading put while its own rows pass underneath and the
                  next section pushes it out as that section reaches the top. Three
                  things make that work, and the middle one was measured rather than
@@ -1148,7 +1243,7 @@
                       heading sits 8px below the app header: the heading is held to
                       its containing block's padding box, and the scroller's own
                       top padding is inside it. -->
-          <!-- The timeline mounts one page per section; the rest of a
+            <!-- The timeline mounts one page per section; the rest of a
                  group's rows are one click away. Mounting every loaded row is
                  what makes changing the arrangement expensive: a regroup, a
                  project filter or a search re-mounts each row it moves, so the
@@ -1156,158 +1251,174 @@
 
                  Search results are never budgeted: they are the rows the user
                  just asked for, already capped by the search itself. -->
-          {@const sectionThreads =
-            searchPanelActive || section.threads.length <= TIMELINE_PAGE_SIZE
-              ? section.threads
-              : sidebar.visibleThreads(
+            {@const sectionThreads =
+              searchPanelActive || section.threads.length <= TIMELINE_PAGE_SIZE
+                ? section.threads
+                : sidebar.visibleThreads(
+                    section.key,
+                    section.threads,
+                    activeThreadId,
+                    TIMELINE_PAGE_SIZE
+                  )}
+            {@const hiddenSectionCount = searchPanelActive
+              ? 0
+              : sidebar.hiddenThreadCount(
                   section.key,
                   section.threads,
-                  activeThreadId,
+                  sectionThreads,
                   TIMELINE_PAGE_SIZE
                 )}
-          {@const hiddenSectionCount = searchPanelActive
-            ? 0
-            : sidebar.hiddenThreadCount(
-                section.key,
-                section.threads,
-                sectionThreads,
-                TIMELINE_PAGE_SIZE
-              )}
-          <!-- Older history is the tail of this list, so its control belongs to
-               the last section, inside the fold that holds the tail's rows. Left
-               as a sibling of the sections it floated under a folded group with
-               no visible tie to it; nested here it reads as the section's own
-               ending and folds away with the group it continues. -->
-          {@const isLastSection = sectionIndex === threadSections.length - 1}
-          {@const showLoadOlder = isLastSection && !searchPanelActive && hasMoreHistory}
-          <section>
-            {#if section.group}
-              {@const group = section.group}
-              <div
-                class="sticky -top-2 z-10 bg-surface"
-                in:fade={{ duration: prefersReducedMotion.current ? 0 : 120 }}
-              >
-                <PinnedSection
-                  sectionKey="threads"
-                  label={group.label}
-                  threads={group.threads}
-                  headerOnly
-                  icon={THREAD_GROUP_ICONS[group.label]}
-                  accent={THREAD_GROUP_COLORS[group.label]}
-                  folded={threadGroupingState.isFolded(group.label)}
-                  onToggleFold={() => threadGroupingState.toggleFold(group.label)}
-                  activeThreadId={activeThreadId ?? null}
-                  onOpen={onOpenThread}
-                  {onRename}
-                  {onTogglePin}
-                  {onDelete}
-                  {onFork}
-                />
-              </div>
-            {/if}
-            <div class="space-y-px {section.group && !isLastSection ? 'pb-5' : ''}" role="list">
-              {#each sectionThreads as thread, threadIndex (thread.id)}
-                {@const result = searchPanelActive ? searchResultsById.get(thread.id) : undefined}
-                {@const dayLabel = !section.group
-                  ? threadDayLabel(thread.lastActivity, Date.now())
-                  : null}
-                {@const prevDayLabel =
-                  !section.group && threadIndex > 0
-                    ? threadDayLabel(sectionThreads[threadIndex - 1].lastActivity, Date.now())
-                    : null}
-                {#if dayLabel && dayLabel !== prevDayLabel}
-                  <p
-                    class="px-2 pb-0.5 pt-3 text-[0.625rem] font-semibold uppercase tracking-wider text-dimmed"
-                  >
-                    {dayLabel}
-                  </p>
-                {/if}
-                <SidebarListRow
-                  rowKey={thread.id}
-                  createdAt={thread.createdAt}
-                  attachedAt={threadsListAttachedAt}
+            <!-- Older history is the tail of this list, so its control belongs to
+               the last group in the user's order, inside the fold that holds the
+               tail's rows. Left as a sibling of the sections it floated under a
+               folded group with no visible tie to it; nested here it reads as
+               the section's own ending and folds away with the group it
+               continues. A folded tail draws no control at all: the rows it
+               would continue are not on screen, and the button under a folded
+               heading read as a way to open that heading instead. -->
+            {@const isLastSection = sectionIndex === drawnThreadSections.length - 1}
+            {@const ownsHistoryTail = section.key === historyTailSectionKey && !section.folded}
+            {@const showLoadOlder = ownsHistoryTail && !searchPanelActive && hasMoreHistory}
+            <!-- The first folded group takes the rest of the column's height with
+               it, so the folded stack sits against the foot of the panel when the
+               expanded rows end high up the list, and falls back to following
+               them normally once the rows fill the pane. -->
+            {@const leadsFoldedStack =
+              section.folded &&
+              (sectionIndex === 0 || !drawnThreadSections[sectionIndex - 1].folded)}
+            <section class={leadsFoldedStack ? 'mt-auto' : ''}>
+              {#if section.group}
+                {@const group = section.group}
+                <div
+                  class="sticky -top-2 z-10 bg-surface"
+                  in:fade={{ duration: prefersReducedMotion.current ? 0 : 120 }}
                 >
-                  {#if result}
-                    <ThreadSearchResultRow
-                      {result}
-                      selected={activeThreadId === thread.id}
-                      onOpen={onOpenThread}
-                    />
-                  {:else}
-                    <ThreadRow
-                      {thread}
-                      detailed
-                      projectIconUrl={getThreadIcon(thread)}
-                      selected={activeThreadId === thread.id}
-                      onOpen={onOpenThread}
-                      {onRename}
-                      {onTogglePin}
-                      {onDelete}
-                      {onFork}
-                      onMoveThread={(draggedId, targetId, pos) => {
-                        // The Threads view spans projects, so the anchor belongs
-                        // to the dragged row's project, not the row it was
-                        // dropped on.
-                        const dragged = settledTimelineThreads.find((t) => t.id === draggedId)
-                        const ordered = timelineDropOrder(draggedId, targetId, pos)
-                        if (dragged && ordered) {
-                          void onThreadDrop(dragged.projectId, ordered, draggedId)
-                        }
-                      }}
-                    />
+                  <PinnedSection
+                    sectionKey="threads"
+                    label={group.label}
+                    threads={group.threads}
+                    headerOnly
+                    icon={THREAD_GROUP_ICONS[group.label]}
+                    accent={THREAD_GROUP_COLORS[group.label]}
+                    folded={threadGroupingState.isFolded(group.label)}
+                    onToggleFold={() => threadGroupingState.toggleFold(group.label)}
+                    activeThreadId={activeThreadId ?? null}
+                    onOpen={onOpenThread}
+                    {onRename}
+                    {onTogglePin}
+                    {onDelete}
+                    {onFork}
+                  />
+                </div>
+              {/if}
+              <div class="space-y-px {section.group && !isLastSection ? 'pb-5' : ''}" role="list">
+                {#each sectionThreads as thread, threadIndex (thread.id)}
+                  {@const result = searchPanelActive ? searchResultsById.get(thread.id) : undefined}
+                  {@const dayLabel = !section.group
+                    ? threadDayLabel(thread.lastActivity, Date.now())
+                    : null}
+                  {@const prevDayLabel =
+                    !section.group && threadIndex > 0
+                      ? threadDayLabel(sectionThreads[threadIndex - 1].lastActivity, Date.now())
+                      : null}
+                  {#if dayLabel && dayLabel !== prevDayLabel}
+                    <p
+                      class="px-2 pb-0.5 pt-3 text-[0.625rem] font-semibold uppercase tracking-wider text-dimmed"
+                    >
+                      {dayLabel}
+                    </p>
                   {/if}
-                </SidebarListRow>
-              {/each}
-            </div>
-            {#if hiddenSectionCount > 0}
-              <button
-                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                onclick={() =>
-                  sidebar.showMoreThreads(section.key, section.threads.length, TIMELINE_PAGE_SIZE)}
-              >
-                Show {hiddenSectionCount} more
-              </button>
-            {:else if sidebar.getVisibleCount(section.key, TIMELINE_PAGE_SIZE) > TIMELINE_PAGE_SIZE}
-              <button
-                class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
-                onclick={() => sidebar.showLessThreads(section.key, TIMELINE_PAGE_SIZE)}
-              >
-                Show less
-              </button>
+                  <SidebarListRow
+                    rowKey={thread.id}
+                    createdAt={thread.createdAt}
+                    attachedAt={threadsListAttachedAt}
+                  >
+                    {#if result}
+                      <ThreadSearchResultRow
+                        {result}
+                        selected={activeThreadId === thread.id}
+                        onOpen={onOpenThread}
+                      />
+                    {:else}
+                      <ThreadRow
+                        {thread}
+                        detailed
+                        projectIconUrl={getThreadIcon(thread)}
+                        selected={activeThreadId === thread.id}
+                        onOpen={onOpenThread}
+                        {onRename}
+                        {onTogglePin}
+                        {onDelete}
+                        {onFork}
+                        onMoveThread={(draggedId, targetId, pos) => {
+                          // The Threads view spans projects, so the anchor belongs
+                          // to the dragged row's project, not the row it was
+                          // dropped on.
+                          const dragged = settledTimelineThreads.find((t) => t.id === draggedId)
+                          const ordered = timelineDropOrder(draggedId, targetId, pos)
+                          if (dragged && ordered) {
+                            void onThreadDrop(dragged.projectId, ordered, draggedId)
+                          }
+                        }}
+                      />
+                    {/if}
+                  </SidebarListRow>
+                {/each}
+              </div>
+              {#if hiddenSectionCount > 0}
+                <button
+                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+                  onclick={() =>
+                    sidebar.showMoreThreads(
+                      section.key,
+                      section.threads.length,
+                      TIMELINE_PAGE_SIZE
+                    )}
+                >
+                  Show {hiddenSectionCount} more
+                </button>
+              {:else if sidebar.getVisibleCount(section.key, TIMELINE_PAGE_SIZE) > TIMELINE_PAGE_SIZE}
+                <button
+                  class="flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
+                  onclick={() => sidebar.showLessThreads(section.key, TIMELINE_PAGE_SIZE)}
+                >
+                  Show less
+                </button>
+              {/if}
+              {#if showLoadOlder && listTailRevealed}
+                <button
+                  class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait {section.group
+                    ? 'pb-5'
+                    : ''}"
+                  disabled={historyLoading}
+                  onclick={() => void onLoadHistoryPage()}
+                >
+                  {historyLoading ? 'Loading history…' : 'Show more'}
+                </button>
+              {/if}
+            </section>
+          {:else}
+            {#if searchPanelActive || pinnedTimelineThreads.length === 0}
+              <EmptyState
+                class="h-full"
+                icon={CioThreads}
+                title={threadsEmpty.title}
+                description={threadsEmpty.description}
+              />
             {/if}
-            {#if showLoadOlder}
+            <!-- No section owns the tail here, so the older-history control falls
+               back to the pane itself. -->
+            {#if !searchPanelActive && hasMoreHistory && listTailRevealed}
               <button
-                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait {section.group
-                  ? 'pb-5'
-                  : ''}"
+                class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
                 disabled={historyLoading}
                 onclick={() => void onLoadHistoryPage()}
               >
                 {historyLoading ? 'Loading history…' : 'Show more'}
               </button>
             {/if}
-          </section>
-        {:else}
-          {#if searchPanelActive || pinnedTimelineThreads.length === 0}
-            <EmptyState
-              class="h-full"
-              icon={CioThreads}
-              title={threadsEmpty.title}
-              description={threadsEmpty.description}
-            />
-          {/if}
-          <!-- No section owns the tail here, so the older-history control falls
-               back to the pane itself. -->
-          {#if !searchPanelActive && hasMoreHistory}
-            <button
-              class="mt-2 flex w-full items-center justify-center gap-1 px-3 py-1.5 text-[0.6875rem] text-dimmed transition-colors hover:text-foreground disabled:cursor-wait"
-              disabled={historyLoading}
-              onclick={() => void onLoadHistoryPage()}
-            >
-              {historyLoading ? 'Loading history…' : 'Show more'}
-            </button>
-          {/if}
-        {/each}
+          {/each}
+        </div>
       </div>
     </SidebarListPane>
     <SidebarListPane name="projects" visible={!loading && projectsTreeVisible}>

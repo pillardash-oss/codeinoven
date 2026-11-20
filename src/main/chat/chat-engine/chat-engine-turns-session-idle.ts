@@ -327,6 +327,21 @@ export class ChatEngineTurnsSessionIdle {
         (!terminalAssistant ||
           (!assistantText(terminalAssistant).trim() &&
             terminalAssistant.structuredOutput === undefined))
+      // A turn that answered and was still recorded as unanswered is the one bug
+      // a reader cannot see from the card alone: name the message the finalizer
+      // actually read, and what it carried, at the moment it decided.
+      if (missingFinalResponse)
+        Logger.dev('Turn finalize found no closing answer', {
+          sessionId,
+          projectId: info.projectId,
+          threadId: info.threadId,
+          turnAssistantId: turnAssistant?.id ?? null,
+          terminalAssistantId: terminalAssistant?.id ?? null,
+          terminalPartTypes: terminalAssistant?.parts.map((part) => part.type).join(',') ?? null,
+          assistantCount: messages.filter((message) => message.role === 'assistant').length,
+          lastMessageRole: messages.at(-1)?.role ?? null,
+          lastMessageId: messages.at(-1)?.id ?? null
+        })
       const contractContinuationRequired =
         engineeringContractActive &&
         !userAborted &&
@@ -1343,10 +1358,18 @@ export class ChatEngineTurnsSessionIdle {
                 info.threadId
               )
             : null
+        // An Achievement the agent started without an approved specification
+        // works toward the goal captured on the thread, and the achievement
+        // audit already judges that goal. Requiring the specification here is
+        // what ended such a loop with its first turn: the audit was never
+        // offered, `continueLoop` was never called, and a thread told to keep
+        // going settled `completed`.
+        const capturedGoalLoop =
+          thread?.settings?.loopMode === true && (thread.achievementGoal ?? '').trim().length > 0
         if (
           thread?.settings &&
           (await this.host.units['audit'].implementationAuditEligible(thread)) &&
-          (activeSpec?.status === 'approved' || finalizedBrainstorm !== null) &&
+          (activeSpec?.status === 'approved' || finalizedBrainstorm !== null || capturedGoalLoop) &&
           (!thread.settings.loopMode || !loopAssignment || loopAssignment.status === 'completed') &&
           thread.auditState !== 'running' &&
           thread.auditState !== 'report_ready'

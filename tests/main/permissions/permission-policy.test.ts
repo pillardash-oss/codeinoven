@@ -128,22 +128,28 @@ describe('permission policy', () => {
       approved: true
     })
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['rm -rf .cio/tmp/cio-oven-pkg'] })
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf .cio/tmp/cio-oven-pkg'] })
     ).toMatchObject({ decision: 'auto_review', approved: true })
     expect(
       policy.evaluate({
-        permission: 'Bash',
+        permission: 'bash',
         commands: ['cd .cio/tmp && rm -rf cio-oven-pkg && mkdir -p cio-oven-pkg']
       })
     ).toMatchObject({ decision: 'auto_review', approved: true })
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['cd .cio/tmp && npm pack --silent 2>&1'] })
+      policy.evaluate({ permission: 'bash', commands: ['cd .cio/tmp && npm pack --silent 2>&1'] })
     ).toMatchObject({ decision: 'auto_review', approved: true })
     // A redirect to the void and a descriptor duplication name no file, so a
-    // command that only inspects its own scratch tree stays confined.
+    // command that only inspects its own scratch tree stays confined. The
+    // duplication has to stay inside its segment: splitting `2>&1` into `2>`
+    // and `1` would leave an unreadable redirection behind.
+    expect(policy.evaluate({ permission: 'bash', commands: ['echo hi 2>&1'] })).toMatchObject({
+      decision: 'auto_review',
+      approved: true
+    })
     expect(
       policy.evaluate({
-        permission: 'Bash',
+        permission: 'bash',
         commands: [
           'cd .cio/tmp && ls node_modules/.bin 2>/dev/null | head; which rsvg-convert inkscape 2>/dev/null; echo "---done"'
         ]
@@ -168,11 +174,46 @@ describe('permission policy', () => {
         ]
       })
     ).toMatchObject({ decision: 'auto_review', approved: true })
+    // A command that names no path at all acts on the workspace directory the
+    // session was handed, so the workspace root itself has to count as
+    // confined. This is the `ls -la` that used to raise a card.
+    expect(policy.evaluate({ permission: 'bash', commands: ['ls -la'] })).toMatchObject({
+      decision: 'auto_review',
+      approved: true
+    })
+    // The diagnostic pipelines a chat runs to inspect its own Oven: process and
+    // port listing, a localhost request, grouping, pipes, `/dev/null`, `2>&1`.
+    expect(
+      policy.evaluate({
+        permission: 'bash',
+        commands: [
+          "(command -v ss >/dev/null && ss -ltnp 2>/dev/null | head -30) ; echo '--- lsof ---'; (command -v lsof >/dev/null && lsof -nP -iTCP:59550 2>/dev/null | head) ; echo '--- curl ---'; curl -sS -m 3 http://127.0.0.1:59550/ 2>&1 | head -5"
+        ]
+      })
+    ).toMatchObject({ decision: 'auto_review', approved: true })
     // Leaving the workspace still needs an attached input or a card.
     expect(policy.evaluate({ permission: 'bash', commands: ['cat ~/.zshrc'] }).approved).toBe(false)
     expect(policy.evaluate({ permission: 'bash', commands: ['cd /tmp && ls'] }).approved).toBe(
       false
     )
+  })
+
+  it('asks for a bare command when the scratch root is not the session directory', () => {
+    // The shape an Oven chat had before its scope named the Oven's root: the
+    // command starts in the Oven thread root, while the scratch root still
+    // named this machine's `chats-cwd/<threadId>`. Nothing could be proven
+    // confined there, so a plain `ls` asked.
+    const policy = new PermissionPolicy({
+      projectRoot: resolve('/home/azureuser/ovens/scopes/caadbcff/x'),
+      mode: 'auto_review',
+      scratchPaths: [resolve('/Users/me/.config/pillardash/codeinoven/chats-cwd/abc')],
+      restrictToAllowed: true
+    })
+
+    expect(policy.evaluate({ permission: 'bash', commands: ['ls -la'] })).toMatchObject({
+      decision: 'ask',
+      approved: false
+    })
   })
 
   it('still asks when a scratch-rooted request can leave scratch', () => {
@@ -188,19 +229,19 @@ describe('permission policy', () => {
       policy.evaluate({ permission: 'delete', path: '.cio/specs/login/spec.md' }).approved
     ).toBe(false)
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['rm -rf .cio/git/pr/12'] }).approved
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf .cio/git/pr/12'] }).approved
     ).toBe(false)
     // Traversal, absolute paths, and another shell stay gated.
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['cd .cio/tmp && rm -rf ../../src'] })
+      policy.evaluate({ permission: 'bash', commands: ['cd .cio/tmp && rm -rf ../../src'] })
         .approved
     ).toBe(false)
     expect(
-      policy.evaluate({ permission: 'Bash', commands: ['rm -rf /Users/me/Documents'] }).approved
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf /Users/me/Documents'] }).approved
     ).toBe(false)
     // A command that acts on its working directory is only scratch-confined once
     // the chain has entered scratch.
-    expect(policy.evaluate({ permission: 'Bash', commands: ['git clean -fdx'] }).approved).toBe(
+    expect(policy.evaluate({ permission: 'bash', commands: ['git clean -fdx'] }).approved).toBe(
       false
     )
     // A wrapper that evaluates another command cannot make a destructive request
@@ -304,6 +345,108 @@ describe('permission policy', () => {
         scope: { projectRoot, paths: [resolve(projectRoot, 'internal-only.txt')] },
         expiresAt: 46_000
       }
+    })
+  })
+})
+
+describe('oven mode', () => {
+  it('approves a protected .env read that full_access still asks about', () => {
+    const request = { permission: 'bundled-pi-sensitive-files', paths: ['.env.local'] }
+    const fullAccess = new PermissionPolicy({ projectRoot, mode: 'full_access' })
+    const ovenMode = new PermissionPolicy({ projectRoot, mode: 'oven_mode' })
+
+    // Full Access still honors the sensitive-file block list: the app's bundled
+    // pi harness asks before touching a protected file in every other tier.
+    expect(fullAccess.evaluate(request)).toMatchObject({
+      decision: 'ask',
+      approved: false,
+      risk: 'critical',
+      approval: { required: true }
+    })
+    expect(ovenMode.evaluate(request)).toMatchObject({
+      decision: 'oven_mode',
+      approved: true,
+      risk: 'critical',
+      approval: { required: false },
+      ledger: { decision: 'oven_mode' }
+    })
+  })
+
+  it('approves a protected .env write that full_access still asks about', () => {
+    const fullAccess = new PermissionPolicy({ projectRoot, mode: 'full_access' })
+    const ovenMode = new PermissionPolicy({ projectRoot, mode: 'oven_mode' })
+    const write = { permission: 'bundled-pi-sensitive-files', path: 'config/.env' }
+
+    expect(fullAccess.evaluate(write)).toMatchObject({ decision: 'ask', approved: false })
+    expect(ovenMode.evaluate(write)).toMatchObject({
+      decision: 'oven_mode',
+      approved: true,
+      approval: { required: false }
+    })
+  })
+
+  it('never asks about a protected path pattern, even when one is supplied', () => {
+    const policy = new PermissionPolicy({
+      projectRoot,
+      mode: 'oven_mode',
+      now: () => 1000,
+      protectedPathPatterns: ['internal-only.txt']
+    })
+
+    for (const path of [
+      '.env',
+      '.ssh/id_ed25519',
+      '.git/config',
+      'bun.lock',
+      'internal-only.txt'
+    ]) {
+      expect(policy.evaluate({ permission: 'read', path })).toMatchObject({
+        decision: 'oven_mode',
+        approved: true,
+        approval: { required: false }
+      })
+    }
+    expect(policy.evaluate({ permission: 'delete-file', path: '.git/config' })).toMatchObject({
+      decision: 'oven_mode',
+      approved: true
+    })
+  })
+
+  it('forces the workspace and restriction gates off even when they are passed in', () => {
+    const workspace = resolve('/workspace/assistant-cwd/abc')
+    const policy = new PermissionPolicy({
+      projectRoot: workspace,
+      mode: 'oven_mode',
+      // Every protective option is supplied and must still be ignored: Oven Mode
+      // approves everything on the remote machine it is working on.
+      sensitiveFileProtectionEnabled: true,
+      restrictToAllowed: true,
+      allowedPaths: [resolve(workspace, 'attached.txt')],
+      workspaceRoots: [workspace],
+      scratchPaths: [workspace]
+    })
+
+    // File-System-OFF gating: an unattached read outside the thread's own files.
+    expect(
+      policy.evaluate({ permission: 'read', path: '/Users/me/Documents/notes.md' })
+    ).toMatchObject({ decision: 'oven_mode', approved: true, approval: { required: false } })
+    // The sensitive-file policy inside a workspace root and outside it alike.
+    expect(
+      policy.evaluate({ permission: 'bundled-pi-sensitive-files', paths: ['.env'] })
+    ).toMatchObject({ decision: 'oven_mode', approved: true })
+    // Workspace-root rules: a destructive command aimed outside the workspace.
+    expect(
+      policy.evaluate({ permission: 'bash', commands: ['rm -rf /Users/me/Documents'] })
+    ).toMatchObject({ decision: 'oven_mode', approved: true, approval: { required: false } })
+    // An unclassified tool, which Auto Review would always ask about.
+    expect(
+      policy.evaluate({ permission: 'tool-use', unclassifiedTool: 'cio_util_run' })
+    ).toMatchObject({ decision: 'oven_mode', approved: true })
+    // A shell command the policy cannot prove confined anywhere.
+    expect(policy.evaluate({ permission: 'shell-exec', path: '/Users/me/.zshrc' })).toMatchObject({
+      decision: 'oven_mode',
+      approved: true,
+      approval: { required: false }
     })
   })
 })

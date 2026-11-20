@@ -16,7 +16,7 @@
   import { scopeState } from '$lib/stores/scope.svelte'
   import { openThreadById } from '$lib/threads/open-thread-by-id'
   import ThreadMessageSpeaker from './ThreadMessageSpeaker.svelte'
-  import AgentQuestionCard from './AgentQuestionCard.svelte'
+  import AgentQuestionCard from './DeferredAgentQuestionCard.svelte'
   import AgentSecretCard from './AgentSecretCard.svelte'
   import PermissionRequestCard from './PermissionRequestCard.svelte'
   import DelegatedRetryNotice from './DelegatedRetryNotice.svelte'

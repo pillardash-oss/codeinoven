@@ -582,6 +582,15 @@ export class AppOnKeydown extends BoardUnit<App> {
   /** Global application shortcuts. */
   onKeydown(e: KeyboardEvent): void {
     const isMac = window.api?.windowInfo?.platform === 'darwin'
+    if (keymapState.matches('screenshot-region', e)) {
+      // The normal path is the system-wide chord claimed by main. This is the
+      // fallback for the one state where that claim could not be made (another
+      // app owns the chord), and main debounces a duplicate trigger.
+      e.preventDefault()
+      if (e.repeat) return
+      void invoke('screenshot:capture').catch(() => undefined)
+      return
+    }
     if (keymapState.matches('app-quit-direct', e)) {
       // Quit for real, bypassing background mode's park to the menu bar. Main
       // runs the shutdown pipeline, so a turn still running settles as a

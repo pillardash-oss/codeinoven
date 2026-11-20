@@ -1,4 +1,5 @@
 import { createWorkQueue } from '../../lib/bounded-work'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
 import { type ChildProcess } from 'child_process'
 import {
   type AgentBankedResets,
@@ -324,7 +325,7 @@ export class CodexDriver extends PersistentCliDriver {
   ): Promise<CliTurnCommand> {
     const nativeSessionId = session.nativeSessionId
     const fullAccess =
-      options.settings.permissionLevel === 'full_access' && options.readOnly !== true
+      isUnrestrictedLevel(options.settings.permissionLevel) && options.readOnly !== true
     const args = fullAccess ? ['--dangerously-bypass-approvals-and-sandbox', 'exec'] : ['exec']
     if (nativeSessionId) args.push('resume', nativeSessionId)
     const sandbox = sandboxFor(options.readOnly === true, options.settings.permissionLevel)

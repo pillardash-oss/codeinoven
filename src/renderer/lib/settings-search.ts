@@ -91,9 +91,9 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   {
     id: 'general-bundled-pi-files',
     section: 'general',
-    title: 'Sensitive files · Bundled Pi only',
+    title: 'Sensitive files · CIO Pi only',
     description:
-      'Protected file block list and per-tool approval for bundled Pi, including Full Access.',
+      'Protected file block list and per-tool approval for CIO Pi, including Full Access.',
     keywords: ['sensitive', 'files', 'env', 'pub', 'secrets', 'blocklist', 'permissions', 'pi'],
     icon: CioShieldCheck,
     blockId: 'general-bundled-pi-files'
@@ -173,8 +173,7 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'design',
     group: 'agents',
     title: 'Design and video',
-    description:
-      'Where design and video work is saved, and who does each kind of it.',
+    description: 'Where design and video work is saved, and who does each kind of it.',
     keywords: [
       'design',
       'video',

@@ -12,11 +12,12 @@
     activeModelProfile,
     isUsableModelProfile,
     modelProfileDisplay,
+    modelProfilePermissionLevel,
     modelProfileSummary,
     type ModelProfileDisplay,
     type ModelProfileSettings
   } from '$shared/model-profiles'
-  import type { ModelProfile, ProviderCatalog } from '$shared/types'
+  import type { ModelProfile, PermissionLevel, ProviderCatalog } from '$shared/types'
   import ModelPickerVendorIcons from './ModelPickerVendorIcons.svelte'
   import { harnessName } from './model-picker-helpers'
 
@@ -98,6 +99,18 @@
     return modelProfileDisplay(profile, catalogs)
   }
 
+  /**
+   * The level a row reads as.
+   *
+   * A profile may only store Auto Review or Full Access; a stored level outside
+   * that set (Oven Mode, which exists for one thread's target machine and never
+   * for a preset) is shown as the highest level a profile may name, so the row
+   * never surfaces it as something this profile can apply.
+   */
+  function levelFor(profile: ModelProfile): PermissionLevel {
+    return modelProfilePermissionLevel(profile.permissionLevel)
+  }
+
   function summaryFor(profile: ModelProfile): string {
     return modelProfileSummary(profile, catalogs)
   }
@@ -115,7 +128,7 @@
       display.modelName,
       display.thinkingLabel,
       display.inferenceLabel,
-      permissionLevelLabel(profile.permissionLevel)
+      permissionLevelLabel(levelFor(profile))
     ].filter((part): part is string => Boolean(part))
     return `Apply the ${profile.name} profile: ${detail.join(' · ')}`
   }
@@ -325,7 +338,7 @@
                   >
                     {profile.name}
                   </span>
-                  {#if profile.permissionLevel === 'full_access'}
+                  {#if levelFor(profile) === 'full_access'}
                     <!--
                       The one setting a profile can carry that the row would otherwise
                       hide: applying it hands the harness unrestricted permissions.

@@ -4,6 +4,9 @@ import { invoke, subscribe } from '$lib/ipc.svelte'
 import type { BrowserPageState, BrowserThreadBrowserPage } from '$shared/ipc-contract'
 import { isStorableBrowserFavicon } from '$shared/browser/global-browser-tabs'
 import { reportError } from './app-errors.svelte'
+import { appConfigState } from './app-config.svelte'
+import { browserAgentClaims } from './browser-agent-claims.svelte'
+import { browserVisibility } from './browser-visibility.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
 import { loadPersistedBrowserTabs, persistBrowserTabs } from './context-sidebar-persistence'
 import { browserHistory } from './browser-history.svelte'
@@ -13,6 +16,11 @@ import type { BrowserContextTab } from './context-sidebar-types'
 import { MAX_REOPENED_BROWSER_TABS, browserTabLoadingTitle } from './global-browser-types'
 import { IDLE_BROWSER_TAB_RUNTIME, type BrowserTabRuntime } from './browser-tab-status'
 import { browserAudio } from './browser-audio.svelte'
+import {
+  canSleepThreadTab,
+  isThreadTabIdlePastWindow,
+  THREAD_HIBERNATION_SWEEP_INTERVAL_MS
+} from './thread-browser-hibernation'
 
 const EMPTY_BROWSER_TABS: BrowserContextTab[] = []
 
@@ -141,6 +149,9 @@ export class SidebarBrowserTabs {
   /** The coalesced write still waiting to leave, or null. */
   private saveTimer: number | null = null
 
+  /** The idle clock's timer, or null while no page is awake to keep an eye on. */
+  private sweepTimer: number | null = null
+
   /** Restore the stored tabs and wire the runtime's subscription. Idempotent.
    *
    * The stored list only lands while the strip is still empty: a tab the user
@@ -160,6 +171,8 @@ export class SidebarBrowserTabs {
     subscribe('browser:state', (state) => this.applyPageState(state))
     // A quit is the one moment the coalesced write cannot wait any longer.
     subscribe('window:beforeQuit', () => this.flushPersist())
+    // The clock only runs while there is a page it could release.
+    this.syncSweep()
   }
 
   /** Browser tabs for the active conversation.
@@ -306,6 +319,9 @@ export class SidebarBrowserTabs {
     if (existing) {
       existing.url = url
       existing.threadId = threadId
+      // Being pointed at an address is a use, and a tab that is navigated is not
+      // asleep the moment it is shown again.
+      existing.lastUsedAt = Date.now()
       this.persist()
       if (reveal && this.isShownConversation(projectId, threadId)) {
         this.focus(id)
@@ -335,7 +351,9 @@ export class SidebarBrowserTabs {
       boxId:
         requestedBoxId !== undefined
           ? requestedBoxId
-          : this.boxForScope(this.host.threadScopeId(projectId, threadId))
+          : this.boxForScope(this.host.threadScopeId(projectId, threadId)),
+      lastUsedAt: Date.now(),
+      hibernated: false
     }
     // A tab a page asked for (a link, an image, a popup) belongs beside the page
     // that asked, exactly as a browser places it: next to the tab in use, not at
@@ -395,7 +413,11 @@ export class SidebarBrowserTabs {
       threadId: tab.threadId,
       url: tab.url,
       favicon: tab.favicon,
-      boxId
+      boxId,
+      // The replacement is about to be shown in the box the user picked, so it
+      // starts awake and on the clock like any page they just asked for.
+      lastUsedAt: Date.now(),
+      hibernated: false
     }
     const tabs = [...this.tabs]
     tabs.splice(index, 1, replacement)
@@ -509,10 +531,21 @@ export class SidebarBrowserTabs {
   applyPageState(state: BrowserPageState): void {
     const tab = this.tabs.find((candidate) => candidate.id === state.tabId)
     if (tab) {
+      // A live page proves the tab awake: a show, an agent reviving the page it
+      // was given and a restart's restore all report one, and none of them go
+      // through `focus`.
+      if (tab.hibernated) {
+        tab.hibernated = false
+        this.persist()
+      }
       // Only a tab this store owns has a strip slot to draw the state in, so a
       // global profile tab's load is left to the global store's own strip.
-      if (state.loading) this.loading.set(state.tabId, true)
-      else this.loading.delete(state.tabId)
+      if (state.loading) {
+        this.loading.set(state.tabId, true)
+        // Loading is a use, which keeps a tab the user is navigating from being
+        // put to sleep mid-load.
+        tab.lastUsedAt = Date.now()
+      } else this.loading.delete(state.tabId)
       browserAudio.reportCapture(state.tabId, tab.threadId, tab.projectId, state.capturing, state)
       // A document with no committed URL yet (a fresh tab, an about:blank
       // popup) reports an empty URL and must not erase the address on screen.
@@ -601,6 +634,84 @@ export class SidebarBrowserTabs {
         muted ? 'Tab audio could not be muted.' : 'Tab audio could not be unmuted.'
       )
     })
+  }
+
+  /**
+   * Put one tab's page to sleep now, keeping its row.
+   *
+   * The idle sweep's own move, available on demand from the tab's menu. Which
+   * tabs may be released is `canSleepThreadTab`'s answer and nobody else's, so
+   * the menu, this method and the sweep can never disagree about it.
+   */
+  hibernate(tabId: string): boolean {
+    const tab = this.tabs.find((candidate) => candidate.id === tabId)
+    if (!tab || !canSleepThreadTab(tab, browserVisibility.isDisplayedByAnyone(tabId))) return false
+    this.releasePage(tab)
+    return true
+  }
+
+  /**
+   * Take a tab's page away and write the change down.
+   *
+   * Only the page goes. The row keeps its title, its icon, its address and its
+   * box; main writes the tab's Back/Forward stack down before the view closes;
+   * and the next visit reloads the address the tab was left on, which is exactly
+   * what the page main keeps bound to the conversation is for. An agent reaching
+   * for the page revives it the same way.
+   */
+  private releasePage(tab: BrowserContextTab): void {
+    tab.hibernated = true
+    this.runtime.delete(tab.id)
+    browserAudio.forget(tab.id)
+    void invoke('browser:destroy', tab.id, 'hibernated').catch(() => {})
+    this.persist()
+  }
+
+  /**
+   * Put the page of every tab nobody is using to sleep.
+   *
+   * Three things count as use, and a page past all of them is released: a surface
+   * displaying it right now, its own audio or capture, and an agent that worked
+   * on it. The agent's use is main's own record (`browser:agentTabClaims`), so
+   * this never polls for it.
+   */
+  sweepIdleTabs(now: number = Date.now()): void {
+    if (!this.started) return
+    const windowMs = appConfigState.browserHibernationMinutes * 60_000
+    for (const tab of this.tabs) {
+      const onScreen = browserVisibility.isDisplayedByAnyone(tab.id)
+      if (!canSleepThreadTab(tab, onScreen)) continue
+      const runtime = this.runtimeFor(tab.id)
+      if (runtime.audible && !runtime.muted) continue
+      if (runtime.capturing) continue
+      const agentUsedAt = browserAgentClaims.lastUsedAtFor(tab.id)
+      if (!isThreadTabIdlePastWindow({ tab, now, windowMs, agentUsedAt, onScreen })) continue
+      this.releasePage(tab)
+    }
+    this.syncSweep()
+  }
+
+  /**
+   * Keep the idle clock armed only while there is a page it could release.
+   *
+   * A strip whose every tab is asleep has nothing to check once a minute, so the
+   * timer stops until the user or an agent wakes a page again. That is what keeps
+   * this clock off the app's back between uses.
+   */
+  private syncSweep(): void {
+    if (!this.started) return
+    const awake = this.tabs.some((tab) => !tab.hibernated && tab.url !== '')
+    if (awake && this.sweepTimer === null) {
+      this.sweepTimer = window.setInterval(
+        () => this.sweepIdleTabs(),
+        THREAD_HIBERNATION_SWEEP_INTERVAL_MS
+      )
+      return
+    }
+    if (!awake && this.sweepTimer !== null) {
+      window.clearInterval(this.sweepTimer)
+      this.sweepTimer = null
+    }
   }
 
   removeForProject(projectId: string): string[] {
@@ -728,6 +839,10 @@ export class SidebarBrowserTabs {
     this.activeTabId = id
     this.visible = true
     this.host.clearNotifications()
+    // Showing a tab is a use: it resets its idle clock and wakes a page the app
+    // put to sleep, which the panel then shows (main reloads it from its address).
+    tab.lastUsedAt = Date.now()
+    tab.hibernated = false
     // Recency is what a Ctrl+Tab inside the full screen browser walks, so it is
     // recorded here, at the one place a tab becomes the one in use.
     threadBrowserTabs.record(id)
@@ -768,6 +883,9 @@ export class SidebarBrowserTabs {
    */
   private persist(): void {
     if (!this.started) return
+    // Every change to the strip is a chance for the clock to be needed or not, so
+    // this is the one place it is armed and disarmed.
+    this.syncSweep()
     if (this.saveTimer !== null) return
     this.saveTimer = window.setTimeout(() => this.flushPersist(), TAB_SAVE_COALESCE_MS)
   }

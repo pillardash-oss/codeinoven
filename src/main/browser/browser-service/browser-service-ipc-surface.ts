@@ -20,6 +20,7 @@ import {
 import { showBrowserBoxMenu } from './browser-box-menu'
 import { showBrowserTabSelectionMenu } from './browser-tab-selection-menu'
 import { showBrowserTabContextMenu } from './browser-tab-context-menu'
+import { showBrowserRailContextMenu } from './browser-rail-context-menu'
 import { showBrowserAgentTabMenu } from './browser-agent-tab-menu'
 import {
   showBrowserExtensionMenu,
@@ -888,6 +889,11 @@ export class BrowserServiceIpcSurface {
       // caller reopens the tab in the box it names, so the popup's promise is
       // what carries the choice back.
       return showBrowserBoxMenu(this.host.window, input, x, y)
+    })
+    replaceHandler('browser:railContextMenu', (_event, rawX, rawY) => {
+      const x = validateSiteMenuPoint(rawX, 'x coordinate')
+      const y = validateSiteMenuPoint(rawY, 'y coordinate')
+      return showBrowserRailContextMenu(this.host.window, x, y)
     })
     replaceHandler('browser:tabSelectionMenu', (_event, rawInput, rawX, rawY) => {
       const input = validateBrowserTabSelectionMenuInput(rawInput)

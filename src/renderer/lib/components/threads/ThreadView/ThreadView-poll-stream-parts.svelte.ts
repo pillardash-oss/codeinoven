@@ -123,6 +123,19 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
   })
 
   /**
+   * Whether a turn was cut by an answered question.
+   *
+   * A cut turn draws its work at each slice's own mount point, so the answer
+   * card sits between the work that asked it and the work it unblocked. A turn
+   * with no cut has one slice and is drawn whole.
+   */
+  turnHasAnswerCuts(turnStart: number): boolean {
+    return this.traceSegmentLayout.some(
+      (segment) => segment.turnStart === turnStart && segment.boundaries.length > 0
+    )
+  }
+
+  /**
    * One turn's trace as a single slice.
    *
    * A group reply draws every step of its turn inside the bubble that closes it,
@@ -609,6 +622,51 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
     } catch (error) {
       this.root.handleAgentEvent.errorMessage =
         error instanceof Error ? error.message : 'The steer could not be undone.'
+    }
+  }
+
+  /**
+   * Recall a user message that never reached the agent.
+   *
+   * A failed send leaves the words on screen carrying their error, which is the
+   * right place to see them and the wrong place to keep them: this pulls them
+   * back into the composer so they can be edited and sent again, and removes the
+   * row so the conversation stops showing a message the agent never received. It
+   * is the same promise as undoing a held steer, applied to a send that failed
+   * outright, and the words are never dropped: they are moved, not deleted.
+   */
+  async recallUnsentMessage(msg: AgentMessage): Promise<void> {
+    const projectId = this.root.handleAgentEvent.thread.projectId
+    const conversationId = this.conversationId
+    const text = msg.parts
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n\n')
+    const attachments: PromptAttachment[] = msg.parts
+      .filter((part) => part.type === 'file')
+      .map((part) => ({ mime: part.mime, url: part.url, filename: part.filename }))
+    try {
+      // Temporary side chats own no durable thread: their row is dropped and the
+      // words go back to the composer of the thread the user is looking at.
+      if (conversationId === this.root.handleAgentEvent.thread.id) {
+        threadMessages.removeUnsentMessage(projectId, conversationId, msg.id)
+      } else {
+        threadMessages.removeUnsentMessage(projectId, conversationId, msg.id)
+      }
+      rendererRecovery.setDraft(
+        projectId,
+        this.root.handleAgentEvent.thread.id,
+        text,
+        attachments,
+        [],
+        []
+      )
+      rendererRecovery.persistQueuedNow()
+      this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+      this.root.handleAgentEvent.errorMessage = ''
+    } catch (error) {
+      this.root.handleAgentEvent.errorMessage =
+        error instanceof Error ? error.message : 'The message could not be recalled.'
     }
   }
 

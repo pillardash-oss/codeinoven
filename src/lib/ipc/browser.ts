@@ -201,6 +201,15 @@ export interface BrowserAgentTabClaim {
   projectId: string
   /** The thread whose agent holds this tab. */
   threadId: string
+  /**
+   * When an agent last worked on this tab, or 0 when none has in this process.
+   *
+   * A page an agent is using is a page nobody may put to sleep, and this is the
+   * only side that knows when the agent last touched it. It rides the claim so
+   * the strip learns about an agent's use from the update it already receives
+   * instead of polling main for it.
+   */
+  lastUsedAt: number
 }
 
 /** Navigation state mirrored from an app-scoped browser WebContentsView. */

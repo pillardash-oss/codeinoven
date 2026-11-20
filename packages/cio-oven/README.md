@@ -75,11 +75,25 @@ CodeInOven closes. `npx @pdslng/cio-oven stop` is what stops it.
 ## Registration
 
 `start` prints a code that starts with `codeinoven-oven-agent-v1:`. Paste it into
-CodeInOven at **Settings → Ovens → Add via agent**. The same dialog shows the
+CodeInOven at **Settings → Ovens → Add via oven service**. The same dialog shows the
 machine, the SSH account, and the key fingerprint before anything is saved.
 
 Treat the code and the saved `agent-registration.json` as secrets: the dedicated
 private key is inside them.
+
+A machine behind NAT — an Azure, AWS or GCP VM, a container — sees only its
+private interface, so `start` asks an echo service (api.ipify.org, then
+ifconfig.me, then icanhazip.com, each with a short timeout) for the address the
+rest of the internet sees it on and lists that answer first in the code. The
+dialog dials it before the private addresses, so a cloud VM registers with
+nothing typed. The answer is checked to be routable, so a proxy's block page or
+an address that only exists inside another network is never offered.
+
+When the lookup finds nothing — an IP-only egress behind a corporate proxy, or a
+network with no route out — the code carries private addresses only, the dialog
+has no address it can dial, and the test times out with exit 255. Type the public
+address (and the forwarding port, when SSH is forwarded) into **Address this
+computer uses**; the dialog says so when every address it received is private.
 
 ## Requirements
 

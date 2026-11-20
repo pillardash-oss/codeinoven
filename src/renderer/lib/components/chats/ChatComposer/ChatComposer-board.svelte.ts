@@ -3,6 +3,7 @@ import { ChatComposerHandleDropData } from './ChatComposer-handle-drop-data.svel
 import { ChatComposerCaptureComposerRoot } from './ChatComposer-capture-composer-root.svelte'
 import { ChatComposerClearDropState } from './ChatComposer-clear-drop-state.svelte'
 import { ChatComposerHandleDropAnchorChange } from './ChatComposer-handle-drop-anchor-change.svelte'
+import { ChatComposerOvenSetup } from './ChatComposer-oven-setup.svelte'
 import { ChatComposerState } from './ChatComposer-state.svelte'
 import { ChatComposerEffects } from './ChatComposer-effects.svelte'
 import type { ChatComposerSurfaceProps } from './ChatComposer-types'
@@ -20,6 +21,7 @@ export class ChatComposer extends BoardState<ChatComposerSurfaceProps> {
   readonly captureComposerRoot = new ChatComposerCaptureComposerRoot(this)
   readonly clearDropState = new ChatComposerClearDropState(this)
   readonly handleDropAnchorChange = new ChatComposerHandleDropAnchorChange(this)
+  readonly ovenSetup = new ChatComposerOvenSetup(this)
   readonly state = new ChatComposerState(this)
   readonly effects = new ChatComposerEffects(this)
   constructor(readProps: () => ChatComposerSurfaceProps) {

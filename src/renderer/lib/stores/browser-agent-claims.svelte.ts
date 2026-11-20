@@ -40,6 +40,15 @@ class BrowserAgentClaimsState {
     return this.claims.find((claim) => claim.tabId === tabId) ?? null
   }
 
+  /** When an agent last worked on one tab, or 0 when none has in this process.
+   *
+   * Main stamps every operation on a page, including the page a conversation was
+   * handed, so this is the agent half of the answer "is anybody using this tab?"
+   * that the thread browser's idle clock asks before it puts a page to sleep. */
+  lastUsedAtFor(tabId: string): number {
+    return this.claimFor(tabId)?.lastUsedAt ?? 0
+  }
+
   dispose: (() => void) | null = null
 }
 

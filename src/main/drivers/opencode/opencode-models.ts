@@ -1,5 +1,6 @@
 import type { ProviderCatalog, ProviderModel, ThinkingPreset } from '../../../lib/types'
 import type { SendPromptOptions } from '../driver.interface'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import { numberValue, recordValue, stringValue } from './opencode-values'
 
 export const STANDARD_THINKING_VARIANTS: ReadonlyArray<{ id: string; label: string }> = [
@@ -20,8 +21,8 @@ export const STANDARD_THINKING_VARIANTS: ReadonlyArray<{ id: string; label: stri
  * reads (e.g. `/tmp/...`) before the engine's `permission.asked` auto-replies
  * can approve them. Mirror the permission modes of the other drivers:
  *
- *  - `full_access` → dangerously skip: `{"*": true}` allows every tool and
- *    permission, so nothing is ever asked or denied.
+ *  - `full_access` and `oven_mode` → dangerously skip: `{"*": true}` allows
+ *    every tool and permission, so nothing is ever asked or denied.
  *  - `auto_review` → auto-approve: the app's tool allow-list stays a hard deny
  *    for non-listed tools, but `external_directory` is allowed outright so
  *    external reads are auto-approved unless the turn is read-only.
@@ -33,7 +34,7 @@ export function opencodePermissionTools(
   opts: Pick<SendPromptOptions, 'settings' | 'allowedTools' | 'readOnly'>
 ): Record<string, boolean> | undefined {
   if (
-    opts.settings.permissionLevel === 'full_access' &&
+    isUnrestrictedLevel(opts.settings.permissionLevel) &&
     opts.allowedTools === undefined &&
     !opts.readOnly
   ) {

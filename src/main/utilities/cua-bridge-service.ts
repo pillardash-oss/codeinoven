@@ -16,6 +16,7 @@ import type {
   ResolvedUtility,
   UtilityDefinitionFor
 } from '../../lib/types'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
 import type { StorageEngine } from '../storage/storage-engine'
 import { Logger } from '../system/logger'
 
@@ -727,7 +728,7 @@ export class CuaBridgeService {
   ): Promise<ResolvedUtility | null> {
     const status = await this.statusForTurn()
     if (!status || !status.ready || !status.binaryPath) return null
-    const fullAccess = permissionLevel === 'full_access'
+    const fullAccess = isUnrestrictedLevel(permissionLevel)
     const now = Date.now()
     const binding: HarnessUtilityBinding = {
       harnessId,
@@ -1792,7 +1793,7 @@ export function isCuaDaemonTransportFailure(message: string): boolean {
 
 /** The daemon mode one permission tier requires. */
 function daemonModeForPermission(permissionLevel: PermissionLevel): CuaDaemonPermissionMode {
-  return permissionLevel === 'full_access' ? 'unrestricted' : 'standard'
+  return isUnrestrictedLevel(permissionLevel) ? 'unrestricted' : 'standard'
 }
 
 /**

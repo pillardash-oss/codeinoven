@@ -77,18 +77,36 @@ export class DatabaseMaintenance {
    * Stop the worker gracefully: hand the write-ahead log back, then send the
    * typed shutdown and await the clean exit.
    *
-   * The handle is cleared before the wait, so nothing can queue a request onto a
-   * worker this call is closing. The checkpoint is best effort by design: one
-   * that cannot finish must never hold teardown open. A truncating checkpoint
-   * here is the last thing that writes to the database, costs nothing when the
-   * log is already small, and saves the next launch from replaying an inherited
-   * log against a database it has not opened yet.
+   * The handle stays published for the whole checkpoint and is cleared only
+   * once that checkpoint has landed, because the checkpoint is one request on
+   * the worker's own serialized queue: the worker is still alive and serving
+   * while it runs, which on a large log is several seconds of shutdown. Clearing
+   * the handle first made every read that arrived in that window look like "no
+   * worker" and run its statement synchronously on the main thread of a process
+   * that was already quitting (the durable log carries those as "Slow
+   * synchronous SQLite operation on Electron main" right after the first
+   * shutdown line), and it hard-failed the reads that deliberately refuse a
+   * primary fallback. A request queued while the checkpoint runs is answered
+   * before the shutdown request behind it, and clearing the handle before that
+   * request is sent keeps a later caller from queueing onto a closing worker.
+   *
+   * The checkpoint is best effort by design: one that cannot finish must never
+   * hold teardown open. A truncating checkpoint here is the last thing that
+   * writes to the database, costs nothing when the log is already small, and
+   * saves the next launch from replaying an inherited log against a database it
+   * has not opened yet.
    */
   async stop(): Promise<void> {
     const worker = this.worker
-    this.worker = null
-    if (!worker?.isRunning()) return
+    if (!worker?.isRunning()) {
+      this.worker = null
+      return
+    }
     const checkpoint = await worker.truncateCheckpoint()
+    // Cleared in the same tick that queues the shutdown, so the requests that
+    // arrived during the checkpoint are already ahead of it in the queue and no
+    // later caller can add one behind it.
+    this.worker = null
     if (!checkpoint.ok) {
       Logger.dev('WAL checkpoint at shutdown did not complete', checkpoint.error ?? '')
     }

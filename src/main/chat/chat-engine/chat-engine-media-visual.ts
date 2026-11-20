@@ -1,5 +1,5 @@
 import { validateModelRuntimeSettings } from '../../../lib/model-runtime-settings'
-import { attachmentScratchDirectory } from '../../drivers/attachment-data-url'
+import { ImageSourceError, attachmentScratchDirectory } from '../../drivers/attachment-data-url'
 import { Logger } from '../../system/logger'
 import { supportsIsolatedSessions } from '../../drivers/isolated-session'
 import {
@@ -66,6 +66,17 @@ import type { ChatEngine } from '../chat-engine'
 /** What a cancelled descriptor reports to the model that requested it. */
 const IMAGE_DESCRIPTOR_CANCELLED_MESSAGE =
   'The image descriptor was cancelled because the turn was stopped.'
+
+/**
+ * What the user already decided while this request was running. A request that
+ * carries several images must not ask once per image: the answer the user gave
+ * for the first one applies to the rest of the same run, and only a fresh tool
+ * call may raise the card again.
+ */
+interface ImageDescriptorRunDecision {
+  action?: 'retry' | 'ignore'
+  selection?: AgentModelSelection
+}
 
 /**
  * Where an embedded image payload is written before dispatch. It sits in the
@@ -361,10 +372,14 @@ export class ChatEngineMediaVisual {
       }))
     }
     const config = await this.host.storage.getConfig()
-    // A thread-level pick (e.g. a model chosen on the error card) always wins,
-    // then the utility pin, then the global default. The pin is read fresh at
-    // invoke time so re-pinning mid-turn affects later descriptor calls.
+    // The model the user chose on a vision card wins over everything else: it
+    // was their explicit answer for this conversation, and it is read from the
+    // engine's own record so a request that started before the thread settings
+    // write landed still runs the model they picked. Then the thread-level pick,
+    // the utility pin, and the global default. The pin is read fresh at invoke
+    // time so re-pinning mid-turn affects later descriptor calls.
     let selection =
+      this.rememberedImageDescriptorSelection(request) ??
       thread?.settings?.imageDescriptor ??
       request.pinnedSelection ??
       config.agentDefaults.imageDescriptor ??
@@ -386,8 +401,9 @@ export class ChatEngineMediaVisual {
           'No vision model was selected to describe the image.'
         )
       }
+      // The reply handler already recorded and persisted this choice before
+      // answering the decision, so it is only adopted here.
       selection = decision.selection
-      await this.persistImageDescriptorSelection(request.projectId, request.threadId, selection)
     }
     // The selection is shared with the recovery path so a model chosen while
     // resolving one image is reused for the remaining images in the same run.
@@ -403,6 +419,10 @@ export class ChatEngineMediaVisual {
       // Try the whole request as one candidate run against the currently
       // selected model; a failed batch retries once on the fallback before
       // degrading to one safe call per image.
+      // One answer covers the whole request: a decision made while describing
+      // one image is reused for the remaining images instead of opening a card
+      // for each of them.
+      const runDecision: ImageDescriptorRunDecision = {}
       const runBatch = async (): Promise<ImageDescriptorBatchRun> => {
         const currentCapability = await this.host.imageDescriptorBatchCapability(
           request,
@@ -425,7 +445,8 @@ export class ChatEngineMediaVisual {
               selectionRef,
               fallback,
               image,
-              parentTurnId
+              parentTurnId,
+              runDecision
             )
         )
       }
@@ -458,7 +479,8 @@ export class ChatEngineMediaVisual {
               selectionRef,
               fallback,
               image,
-              parentTurnId
+              parentTurnId,
+              runDecision
             )
           )
         }
@@ -645,7 +667,8 @@ export class ChatEngineMediaVisual {
     selection: { current: AgentModelSelection },
     fallback: AgentModelSelection | undefined,
     image: ResolvedImageEntry,
-    parentTurnId?: string
+    parentTurnId?: string,
+    runDecision?: ImageDescriptorRunDecision
   ): Promise<ImageDescriptorResult> {
     let next: AgentModelSelection = selection.current
     let usedFallback = false
@@ -693,6 +716,19 @@ export class ChatEngineMediaVisual {
           description
         }
       } catch (error) {
+        // A source the app cannot read or download is a problem with the
+        // request, not with the vision model: retrying another model cannot fix
+        // it and the user has nothing to choose. Report it on this image's own
+        // result so the model that asked can correct the source instead.
+        if (error instanceof ImageSourceError) {
+          return {
+            id: currentImage.id,
+            source: currentImage.source,
+            type: currentImage.type,
+            description: '',
+            error: error.message
+          }
+        }
         const message = imageDescriptorFailureMessage(error)
         const kind: AgentProviderIssueKind =
           error instanceof ImageDescriptorInactivityError
@@ -707,6 +743,34 @@ export class ChatEngineMediaVisual {
         const attributedMessage = `The vision model (${this.host.units[
           'runtime-agents'
         ].visionModelLabel(request.projectId, active)}) failed: ${message}`
+        // The user already answered this request's card while an earlier image
+        // was being described: apply that same answer here instead of asking
+        // again for every image in one tool call. Only a new tool call, after
+        // the user has answered, may raise the card again.
+        if (runDecision?.action === 'ignore') {
+          return {
+            id: currentImage.id,
+            source: currentImage.source,
+            type: currentImage.type,
+            description: '',
+            error: `${attributedMessage} You chose to continue without descriptions for this request.`
+          }
+        }
+        if (runDecision?.action === 'retry') {
+          const retrySelection = runDecision.selection ?? active
+          if (!isSameImageDescriptorModel(retrySelection, active)) {
+            next = retrySelection
+            selection.current = retrySelection
+            continue
+          }
+          return {
+            id: currentImage.id,
+            source: currentImage.source,
+            type: currentImage.type,
+            description: '',
+            error: `${attributedMessage} The model you chose also failed for this image.`
+          }
+        }
         // Automatic fallback: switch to the configured fallback model and
         // retry silently, before interrupting the user with a decision card.
         if (!usedFallback && fallback && !isSameImageDescriptorModel(fallback, active)) {
@@ -735,19 +799,26 @@ export class ChatEngineMediaVisual {
           }
         }
         if (decision.action === 'retry') {
+          // Remember the answer so the other images in this request reuse it
+          // instead of raising another card.
+          if (runDecision) {
+            runDecision.action = 'retry'
+            runDecision.selection = decision.selection ?? active
+          }
           if (decision.selection) {
+            // The reply handler already recorded this choice (memory and thread
+            // settings) before the decision resolved, so persisting again here
+            // could overwrite a newer answer from another card.
             selection.current = decision.selection
-            await this.persistImageDescriptorSelection(
-              request.projectId,
-              request.threadId,
-              selection.current
-            )
             next = decision.selection
           } else {
             next = active
           }
           continue
         }
+        // Anything else is a stop: `ignore` and the false-positive report both
+        // mean the remaining images in this request are not described.
+        if (runDecision) runDecision.action = 'ignore'
         if (decision.action === 'pick_image') {
           // The user picked a replacement image from the error card: describe
           // it instead of the source that is missing/unreadable.
@@ -816,6 +887,12 @@ export class ChatEngineMediaVisual {
     const requestingModel = this.host.units['runtime-agents'].visionReportModel(
       owningThread?.settings
     )
+    // One card answers every call this session is waiting on. Parallel tool
+    // calls (a code-mode batch, for example) all block on the same question, so
+    // the first card stays the only card on screen and the user's one answer is
+    // applied to all of them. A call the agent makes after that answer is a new
+    // request and raises its own card.
+    const alreadyWaiting = this.pendingImageDescriptorDecisionsForSession(request.sessionId)
     return new Promise<ImageDescriptorUserDecision>((resolve) => {
       // The card blocks the turn on user input, exactly like the question tool:
       // park the thread on "Needs attention" and restore the working status
@@ -835,7 +912,9 @@ export class ChatEngineMediaVisual {
         ...(owningThread?.assignmentRole === 'worker' ? { workerTitle: owningThread.title } : {}),
         error,
         kind,
-        selection,
+        // Pre-fill the picker with the model the user chose last time, never
+        // with a default they already replaced.
+        selection: this.rememberedImageDescriptorSelection(request) ?? selection,
         ...(imageId ? { imageId } : {}),
         ...(requestingModel ? { requestingModel } : {}),
         partialOutput: '',
@@ -869,35 +948,43 @@ export class ChatEngineMediaVisual {
             ],
             at: Date.now()
           })
-          // Never leave the card behind when this decision auto-resolves: a
-          // card whose request is gone is a card the user cannot dismiss.
-          this.settleImageDescriptorDecision(pending)
+          // Never leave a card behind when the decision auto-resolves: every
+          // call waiting on this session's question is answered at once, so no
+          // card survives that would answer itself with "no longer pending".
+          const waiting = this.pendingImageDescriptorDecisionsForSession(request.sessionId)
+          for (const other of waiting) this.settleImageDescriptorDecision(other)
           this.host.units['lifecycle'].startSessionWatchdog(request.sessionId)
           void this.host.threadManager
             .setStatus(request.projectId, request.threadId, resumeStatus)
             .catch(() => undefined)
         }, IMAGE_DESCRIPTOR_DECISION_TIMEOUT_MS)
       }
-      // One blocked session can only receive one answer, so a newer request
-      // supersedes every older one for the same session: the older cards are
-      // settled as `ignore` immediately instead of staying on screen as
-      // unanswerable cards that report themselves as no longer pending.
-      for (const [supersededId, superseded] of this.host.state.pendingImageDescriptorDecisions) {
-        if (superseded.sessionId !== request.sessionId || supersededId === id) continue
-        this.settleImageDescriptorDecision(superseded)
-      }
       this.host.state.pendingImageDescriptorDecisions.set(id, pending)
       void this.host.threadManager
         .setStatus(request.projectId, request.threadId, 'awaiting_approval', { read: false })
         .catch(() => undefined)
-      this.host.broadcast({
-        type: 'imageDescriptor.error',
-        sessionId: request.sessionId,
-        projectId: request.projectId,
-        threadId: surfaceThreadId,
-        request: requestForCard
-      })
+      // A card already on screen for this session is the one the user answers;
+      // this request joins that answer instead of replacing the card with its
+      // own and consuming a second click.
+      if (alreadyWaiting.length === 0) {
+        this.host.broadcast({
+          type: 'imageDescriptor.error',
+          sessionId: request.sessionId,
+          projectId: request.projectId,
+          threadId: surfaceThreadId,
+          request: requestForCard
+        })
+      }
     })
+  }
+
+  /** Every decision still waiting for an answer on one session, in the order
+   *  they were raised. Parallel tool calls all land in this list and share the
+   *  single card the session shows. */
+  pendingImageDescriptorDecisionsForSession(sessionId: string): PendingImageDescriptorDecision[] {
+    return [...this.host.state.pendingImageDescriptorDecisions.values()].filter(
+      (pending) => pending.sessionId === sessionId
+    )
   }
 
   /**
@@ -920,6 +1007,23 @@ export class ChatEngineMediaVisual {
       action: 'ignore'
     })
     pending.resolve({ action: 'ignore' })
+  }
+
+  /** The vision model the user last chose for this conversation, if any. */
+  private rememberedImageDescriptorSelection(
+    request: Pick<ImageDescriptorExecutorRequest, 'projectId' | 'threadId'>
+  ): AgentModelSelection | undefined {
+    return this.host.state.imageDescriptorSelections.get(`${request.projectId}:${request.threadId}`)
+  }
+
+  /** Record the user's vision-model answer immediately, before any settings
+   *  write can race it, so later requests and in-flight cards use it. */
+  private rememberImageDescriptorSelection(
+    projectId: string,
+    threadId: string,
+    selection: AgentModelSelection
+  ): void {
+    this.host.state.imageDescriptorSelections.set(`${projectId}:${threadId}`, selection)
   }
 
   /** Persist the image-descriptor vision model to the thread so retries and
@@ -1221,6 +1325,14 @@ export class ChatEngineMediaVisual {
       Logger.dev(`Ignoring reply for settled image descriptor request: ${requestId}`)
       return
     }
+    if (action === 'retry' && selection !== undefined) {
+      // Record the pick before anything else can ask: the very next request, and
+      // any card already in flight, must run and show the model the user chose
+      // rather than the default they replaced. Persisting the thread settings is
+      // the durable copy; this write is the immediate one.
+      this.rememberImageDescriptorSelection(pending.projectId, pending.threadId, selection)
+      void this.persistImageDescriptorSelection(pending.projectId, pending.threadId, selection)
+    }
     // A replacement image picked from the error card is validated here (it must
     // be a readable file) and keeps the failed image's id so its description
     // still maps to the same slot in the per-image result set.
@@ -1232,30 +1344,42 @@ export class ChatEngineMediaVisual {
       }
       replacement = await buildImageDescriptorReplacement(failedImageId, imagePath)
     }
-    if (pending.timer !== undefined) {
-      clearTimeout(pending.timer)
+    // One answer covers every call this session is holding on the same card:
+    // parallel calls that failed together are answered together, so the user
+    // never pays a second click for the same decision. A call made after this
+    // reply is a fresh request with its own card.
+    const group = this.pendingImageDescriptorDecisionsForSession(pending.sessionId)
+    for (const waiting of group) {
+      if (waiting.timer !== undefined) clearTimeout(waiting.timer)
+      this.host.state.pendingImageDescriptorDecisions.delete(waiting.request.id)
     }
-    this.host.state.pendingImageDescriptorDecisions.delete(requestId)
     this.host.units['lifecycle'].startSessionWatchdog(pending.sessionId)
     // The decision resolved the user-input block: restore the thread's working
     // status (same contract as the question tool's resolution path).
     void this.host.threadManager
       .setStatus(pending.projectId, pending.threadId, pending.resumeStatus)
       .catch(() => undefined)
-    this.host.broadcast({
-      type: 'imageDescriptor.resolved',
-      sessionId: pending.sessionId,
-      projectId,
-      threadId: pending.request.surfaceThreadId,
-      requestId,
-      action
-    })
-    if (action === 'retry') {
-      pending.resolve({ action: 'retry', selection: selection ?? undefined })
-    } else if (action === 'pick_image' && replacement) {
-      pending.resolve({ action: 'pick_image', entry: replacement })
-    } else {
-      pending.resolve({ action: 'ignore' })
+    for (const waiting of group) {
+      // Only the card the user answered carries the picked replacement image:
+      // a replacement is bound to the one failed image it stands in for. Any
+      // other call waiting alongside it keeps its own error and continues.
+      const memberAction =
+        action === 'pick_image' && waiting.request.id !== requestId ? 'ignore' : action
+      this.host.broadcast({
+        type: 'imageDescriptor.resolved',
+        sessionId: waiting.sessionId,
+        projectId,
+        threadId: waiting.request.surfaceThreadId,
+        requestId: waiting.request.id,
+        action: memberAction
+      })
+      if (memberAction === 'retry') {
+        waiting.resolve({ action: 'retry', selection: selection ?? undefined })
+      } else if (memberAction === 'pick_image' && replacement) {
+        waiting.resolve({ action: 'pick_image', entry: replacement })
+      } else {
+        waiting.resolve({ action: 'ignore' })
+      }
     }
   }
 

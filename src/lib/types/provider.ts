@@ -303,8 +303,23 @@ export interface HarnessRuntimeRestartResult {
   detail?: string
 }
 
-/** A provider a harness offers for connection, surfaced from its catalog. */
-export interface OfferedProvider {
+/**
+ * A session moved from one resident host process to another.
+ *
+ * The app's session key and the harness's native session id both survive the
+ * move: the target resumes the same transcript, so the thread keeps its history
+ * and its place. `hostPid` is the process now running it.
+ */
+export interface HarnessSessionMoveResult {
+  moved: boolean
+  harnessId: string
+  hostPid: number | null
+  nativeSessionId: string
+  /** Present when nothing moved, explaining why. */
+  detail?: string
+}
+
+/** A provider a harness offers for connection, surfaced from its catalog. */export interface OfferedProvider {
   id: string
   name: string
   /** Number of models the harness exposes for this provider (when known). */

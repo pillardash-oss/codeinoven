@@ -1,5 +1,6 @@
 <script lang="ts">
   import CioClock from '@pdslng/cio-icon/CioClock.svelte'
+  import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
   import CioTabGit from '@pdslng/cio-icon/CioTabGit.svelte'
   import CioWindow from '@pdslng/cio-icon/CioWindow.svelte'
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
@@ -13,6 +14,7 @@
   import { ovens } from '$lib/stores/ovens.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { threadNotesState } from '$lib/stores/thread-notes.svelte'
+  import { threadMessages } from '$lib/stores/thread-messages.svelte'
   import { followUpsState } from '$lib/stores/follow-ups.svelte'
   import { threadScopeBucket } from '$lib/threads/thread-scope'
   import { formatDateTime, formatDateTimeWithWeekday } from '$shared/date-time-format'
@@ -44,6 +46,7 @@
       | 'todo'
       | 'completed'
       | 'working'
+      | 'waiting-subagents'
       | 'working-paused'
       | 'spec'
       | 'approval'
@@ -73,6 +76,13 @@
   let remoteOriginUrl = $derived(project ? (projectRemotes.get(project.id) ?? null) : null)
 
   let scopeBucket = $derived(threadScopeBucket(thread))
+
+  /** Whether the live turn is standing still on delegated work. A run owned by
+   *  another instance keeps its own stage row: this window streams no parts for
+   *  it, so the wait can only be read from a transcript it has. */
+  let waitsOnSubagents = $derived(
+    isWorking && !isForeignRun && threadMessages.waitsOnSubagents(thread.projectId, thread.id)
+  )
 
   /** Wakes this thread has armed, soonest first. The row badges the soonest one;
    *  the card is where the schedule behind that badge is readable. */
@@ -254,6 +264,20 @@
           title="Running in another instance"
         />
         Running in another instance
+      </dd>
+    </div>
+  {:else if waitsOnSubagents}
+    <div class="flex gap-2">
+      <dt class="w-16 shrink-0 text-dimmed">Stage</dt>
+      <dd class="flex items-center gap-1 text-muted">
+        <StatusBadge
+          stage="working"
+          variant="icon"
+          icon={CioSubagent}
+          size="sm"
+          title="Waiting on sub-agents"
+        />
+        Waiting on sub-agents
       </dd>
     </div>
   {:else if isWorking}

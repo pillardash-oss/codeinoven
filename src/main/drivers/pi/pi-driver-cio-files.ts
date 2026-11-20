@@ -5,7 +5,6 @@ import { BUNDLED_PI_FILE_POLICY } from '../../../lib/bundled-pi-file-protection'
 import { AGENT_SECRET_ROOT } from '../../../lib/secret-request'
 import type { CompactionFallbackContext, HandoffWorkerSession } from '../driver.interface'
 import { piCioCoreToolsExtension } from '../pi-cio-core-tools-extension'
-import type { StorageEngine } from '../../storage/storage-engine'
 import { Logger } from '../../system/logger'
 import { emptyStopRequest } from './pi-values'
 
@@ -20,13 +19,69 @@ export function cioCoreToolsDirectory(sessionId: string): string {
   return join('runtime', 'cio-core-tools', sessionId)
 }
 
+/** The file surface a pi session's handoff files need. */
+export interface PiHandoffStorage {
+  resolve(relativePath: string): string
+  readRaw(relativePath: string): Promise<string | null>
+  writeRaw(relativePath: string, content: string): Promise<void>
+  remove(relativePath: string): Promise<void>
+}
+
+/**
+ * Handoff files plus the app setting the materialized module embeds.
+ *
+ * The setting is this device's own (the user's question cap); only the files can
+ * live on an Oven, so a remote session composes this from an Oven-backed file
+ * store and the local configuration. `StorageEngine` satisfies both halves.
+ */
+export interface PiCioFilesStorage extends PiHandoffStorage {
+  getConfig(): Promise<{ agentQuestionCap: number }>
+}
+
 /** Everything the per-session runtime files need from the driver. */
 export interface PiCioFilesHost {
-  readonly storage: StorageEngine
+  /** The file surface for one session's handoff files. */
+  storageFor(sessionId: string): PiCioFilesStorage
   /** Whether the session is an auxiliary one-shot (title, grading, lessons). */
   isTitleSession(sessionId: string): boolean
   /** Register the materialized sub-agent watch file for the session. */
   registerWatchPath(sessionId: string, watchFlagPath: string): void
+}
+
+/**
+ * Which file surface each session's handoff files land on.
+ *
+ * One driver instance serves many threads, and a thread whose machine is an
+ * Oven publishes its handoff files there while a local thread keeps the app's
+ * own engine. The choice is per session, never per driver, so a session that
+ * was never routed (or whose route was dropped) always reads and writes the
+ * local engine exactly as before.
+ */
+export class PiCioSessionStorages {
+  private readonly remotes = new Map<string, PiCioFilesStorage>()
+
+  constructor(private readonly local: PiCioFilesStorage) {}
+
+  /** The file surface for one session's handoff files. */
+  storageFor(sessionId: string): PiCioFilesStorage {
+    return this.remotes.get(sessionId) ?? this.local
+  }
+
+  /** Route one session's handoff files to a remote machine; `null` restores local. */
+  set(sessionId: string, storage: PiCioFilesStorage | null): void {
+    if (storage) this.remotes.set(sessionId, storage)
+    else this.remotes.delete(sessionId)
+  }
+
+  /** Drop one session's route so a reused session id never inherits a stale machine. */
+  forget(sessionId: string): void {
+    this.remotes.delete(sessionId)
+  }
+
+  /** Drop every route (driver disposal). */
+  clear(): void {
+    this.remotes.clear()
+  }
 }
 
 /**
@@ -86,8 +141,17 @@ export class PiCioRuntimeFiles {
     // bundled and external executables, so a cached module cannot decide scope.
     const existing = this.cioCoreToolsExtensionPaths.get(sessionId)
     try {
-      const questionCap = (await this.host.storage.getConfig()).agentQuestionCap
+      const storage = this.host.storageFor(sessionId)
+      const questionCap = (await storage.getConfig()).agentQuestionCap
       const directory = cioCoreToolsDirectory(sessionId)
+      // The materialization writes the empty seed when the module is new, so the
+      // root it used says whether this session's files belong to this machine or
+      // to the Oven that runs it.
+      Logger.dev('Pi core-tools extension materialized', {
+        sessionId,
+        seeding: !existing,
+        root: storage.resolve(directory)
+      })
       const handoffRelative = join(directory, 'gateway-handoff.json')
       const systemPromptRelative = join(directory, 'system-prompt.txt')
       const historyRecapRelative = join(directory, 'history-recap.txt')
@@ -105,19 +169,23 @@ export class PiCioRuntimeFiles {
       // Empty endpoint values: the gateway tools surface a clear gateway-inactive
       // error until the first direct-gateway turn publishes the real { url, token }.
       if (!existing) {
-        await this.host.storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
-        await this.host.storage.writeRaw(systemPromptRelative, '')
-        await this.host.storage.writeRaw(historyRecapRelative, '')
-        await this.host.storage.writeRaw(allowedToolsRelative, '[]')
-        await this.host.storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
+        await storage.writeRaw(handoffRelative, JSON.stringify({ url: '', token: '' }))
+        await storage.writeRaw(systemPromptRelative, '')
+        await storage.writeRaw(historyRecapRelative, '')
+        await storage.writeRaw(allowedToolsRelative, '[]')
+        await storage.writeRaw(oversizedFlagRelative, JSON.stringify({ armed: false }))
         // A session that moved between instances shares this directory with the
         // process that just released it. Seeding would erase a transfer's own
         // stop request and the live worker roster before the adopting instance
         // reads them, so a file that already exists is left exactly as it is.
-        await this.seedIfMissing(stopFlagRelative, JSON.stringify(emptyStopRequest()))
-        await this.seedIfMissing(watchFlagRelative, JSON.stringify({ childSessionIds: [] }))
+        await this.seedIfMissing(sessionId, stopFlagRelative, JSON.stringify(emptyStopRequest()))
+        await this.seedIfMissing(
+          sessionId,
+          watchFlagRelative,
+          JSON.stringify({ childSessionIds: [] })
+        )
       }
-      await this.host.storage.writeRaw(
+      await storage.writeRaw(
         extensionRelative,
         piCioCoreToolsExtension({
           // One-shot sessions (title, grading, lessons) are pure text turns:
@@ -128,23 +196,23 @@ export class PiCioRuntimeFiles {
           questionCap,
           ...(bundledRuntime
             ? {
-                sensitiveFilePolicyPath: this.host.storage.resolve(BUNDLED_PI_FILE_POLICY),
-                sensitiveSecretRoot: this.host.storage.resolve(AGENT_SECRET_ROOT)
+                sensitiveFilePolicyPath: storage.resolve(BUNDLED_PI_FILE_POLICY),
+                sensitiveSecretRoot: storage.resolve(AGENT_SECRET_ROOT)
               }
             : {}),
-          gatewayHandoffPath: this.host.storage.resolve(handoffRelative),
-          systemPromptPath: this.host.storage.resolve(systemPromptRelative),
-          historyRecapPath: this.host.storage.resolve(historyRecapRelative),
-          allowedToolsPath: this.host.storage.resolve(allowedToolsRelative),
-          oversizedFlagPath: this.host.storage.resolve(oversizedFlagRelative),
-          stopFlagPath: this.host.storage.resolve(stopFlagRelative),
-          handoffWorkersPath: this.host.storage.resolve(handoffWorkersRelative),
-          liveSubagentsPath: this.host.storage.resolve(liveSubagentsRelative),
-          subagentWatchPath: this.host.storage.resolve(watchFlagRelative),
+          gatewayHandoffPath: storage.resolve(handoffRelative),
+          systemPromptPath: storage.resolve(systemPromptRelative),
+          historyRecapPath: storage.resolve(historyRecapRelative),
+          allowedToolsPath: storage.resolve(allowedToolsRelative),
+          oversizedFlagPath: storage.resolve(oversizedFlagRelative),
+          stopFlagPath: storage.resolve(stopFlagRelative),
+          handoffWorkersPath: storage.resolve(handoffWorkersRelative),
+          liveSubagentsPath: storage.resolve(liveSubagentsRelative),
+          subagentWatchPath: storage.resolve(watchFlagRelative),
           // Never seeded by this materialization: the engine publishes the
           // thread's plan and progress before the module exists on the first
           // turn, and a seed written here would overwrite it.
-          compactionContextPath: this.host.storage.resolve(compactionContextRelative),
+          compactionContextPath: storage.resolve(compactionContextRelative),
           // The primary agent's composed instructions ride the per-turn system
           // prompt handoff, which only the root session's hook reads. A worker
           // gets this distilled contract instead, so it can never be left with
@@ -162,14 +230,14 @@ export class PiCioRuntimeFiles {
       this.cioOversizedFlagPaths.set(sessionId, oversizedFlagRelative)
       this.cioStopFlagPaths.set(sessionId, stopFlagRelative)
       this.host.registerWatchPath(sessionId, watchFlagRelative)
-      const extensionAbsolute = this.host.storage.resolve(extensionRelative)
+      const extensionAbsolute = storage.resolve(extensionRelative)
       this.cioCoreToolsExtensionPaths.set(sessionId, extensionAbsolute)
       // Flush an endpoint that arrived before this materialization (first turn
       // of a fresh session); the handoff file still holds the empty seed otherwise.
       const pendingEndpoint = this.pendingGatewayEndpoints.get(sessionId)
       if (pendingEndpoint) {
         this.pendingGatewayEndpoints.delete(sessionId)
-        await this.host.storage.writeRaw(handoffRelative, JSON.stringify(pendingEndpoint))
+        await storage.writeRaw(handoffRelative, JSON.stringify(pendingEndpoint))
       }
       return extensionAbsolute
     } catch (error) {
@@ -205,9 +273,18 @@ export class PiCioRuntimeFiles {
       return
     }
     try {
-      if (endpoint === null) await this.host.storage.removeRaw(handoffPath)
+      const storage = this.host.storageFor(sessionId)
+      // Which file surface a turn's handoff lands on is the whole difference
+      // between a gateway that works on an Oven and one that silently keeps the
+      // empty seed there, so the publish names the root it wrote to.
+      Logger.dev('Pi utility gateway handoff published', {
+        sessionId,
+        empty: endpoint === null,
+        root: storage.resolve(cioCoreToolsDirectory(sessionId))
+      })
+      if (endpoint === null) await storage.remove(handoffPath)
       else {
-        await this.host.storage.writeRaw(handoffPath, JSON.stringify(endpoint))
+        await storage.writeRaw(handoffPath, JSON.stringify(endpoint))
       }
     } catch (error) {
       throw new Error('Pi utility gateway handoff update failed', { cause: error })
@@ -226,12 +303,14 @@ export class PiCioRuntimeFiles {
   ): Promise<void> {
     const relative = join(cioCoreToolsDirectory(sessionId), 'compaction-context.json')
     try {
-      await this.host.storage.writeRaw(
-        relative,
-        JSON.stringify(
-          context ?? { plan: null, progress: null, planPath: null, progressPath: null }
+      await this.host
+        .storageFor(sessionId)
+        .writeRaw(
+          relative,
+          JSON.stringify(
+            context ?? { plan: null, progress: null, planPath: null, progressPath: null }
+          )
         )
-      )
     } catch (error) {
       // Rebuild context is a fallback, never a reason to fail a turn.
       Logger.dev('Pi compaction context publish failed:', error)
@@ -251,7 +330,7 @@ export class PiCioRuntimeFiles {
     if (!path) return
     this.stopRequestSeq += 1
     try {
-      await this.host.storage.writeRaw(
+      await this.host.storageFor(sessionId).writeRaw(
         path,
         JSON.stringify({
           token: `${Date.now()}-${this.stopRequestSeq}`,
@@ -266,9 +345,10 @@ export class PiCioRuntimeFiles {
   }
 
   /** Write a seed flag file only when nothing wrote it first. */
-  private async seedIfMissing(relative: string, content: string): Promise<void> {
-    if ((await this.host.storage.readRaw(relative)) !== null) return
-    await this.host.storage.writeRaw(relative, content)
+  private async seedIfMissing(sessionId: string, relative: string, content: string): Promise<void> {
+    const storage = this.host.storageFor(sessionId)
+    if ((await storage.readRaw(relative)) !== null) return
+    await storage.writeRaw(relative, content)
   }
 
   /**
@@ -285,7 +365,7 @@ export class PiCioRuntimeFiles {
   ): Promise<void> {
     const relative = join(cioCoreToolsDirectory(sessionId), 'handoff-workers.json')
     try {
-      await this.host.storage.writeRaw(relative, JSON.stringify({ workers }))
+      await this.host.storageFor(sessionId).writeRaw(relative, JSON.stringify({ workers }))
     } catch (error) {
       Logger.dev('Pi handed-off worker publication failed:', error)
     }
@@ -299,7 +379,7 @@ export class PiCioRuntimeFiles {
     const path = this.cioStopFlagPaths.get(sessionId)
     if (!path) return
     try {
-      await this.host.storage.writeRaw(path, JSON.stringify(emptyStopRequest()))
+      await this.host.storageFor(sessionId).writeRaw(path, JSON.stringify(emptyStopRequest()))
     } catch (error) {
       Logger.dev('Pi stop-request reset failed:', error)
     }
@@ -312,7 +392,7 @@ export class PiCioRuntimeFiles {
     const path = this.cioOversizedFlagPaths.get(sessionId)
     if (!path) return
     try {
-      await this.host.storage.writeRaw(path, JSON.stringify({ armed }))
+      await this.host.storageFor(sessionId).writeRaw(path, JSON.stringify({ armed }))
     } catch (error) {
       Logger.dev('Pi core-tools oversized-recovery flag update failed:', error)
     }
@@ -326,7 +406,7 @@ export class PiCioRuntimeFiles {
     const path = this.cioSystemPromptPaths.get(sessionId)
     if (!path) return
     try {
-      await this.host.storage.writeRaw(path, systemPrompt)
+      await this.host.storageFor(sessionId).writeRaw(path, systemPrompt)
     } catch (error) {
       Logger.dev('Pi core-tools system-prompt handoff update failed:', error)
     }
@@ -342,7 +422,7 @@ export class PiCioRuntimeFiles {
     const path = this.cioHistoryRecapPaths.get(sessionId)
     if (!path) return
     try {
-      await this.host.storage.writeRaw(path, recap.trim())
+      await this.host.storageFor(sessionId).writeRaw(path, recap.trim())
     } catch (error) {
       Logger.dev('Pi core-tools history-recap handoff update failed:', error)
     }
@@ -360,7 +440,7 @@ export class PiCioRuntimeFiles {
       // onto pi's built-in tool names so the gate matches intent.
       const aliases: Record<string, string> = { glob: 'find', list: 'ls' }
       const names = (allowedTools ?? []).map((tool) => aliases[tool] ?? tool)
-      await this.host.storage.writeRaw(path, JSON.stringify(names))
+      await this.host.storageFor(sessionId).writeRaw(path, JSON.stringify(names))
     } catch (error) {
       Logger.dev('Pi core-tools allowed-tools handoff update failed:', error)
     }
@@ -376,7 +456,7 @@ export class PiCioRuntimeFiles {
     this.gatewayHandoffPaths.delete(sessionId)
     this.pendingGatewayEndpoints.delete(sessionId)
     try {
-      await this.host.storage.removeRaw(handoffPath)
+      await this.host.storageFor(sessionId).remove(handoffPath)
     } catch (error) {
       Logger.dev('Pi utility gateway handoff removal failed:', error)
     }

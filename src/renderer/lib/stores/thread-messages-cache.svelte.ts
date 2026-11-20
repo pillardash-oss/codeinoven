@@ -216,6 +216,21 @@ export class ThreadMessagesCache {
     return this.threads.get(threadKey(projectId, threadId))?.heldSteerIds.has(messageId) ?? false
   }
 
+  /**
+   * Remove one message the agent never received.
+   *
+   * Used by recall: the words go back to the composer, so the row that carried
+   * the failure must not stay behind as a message the harness has no record of.
+   */
+  removeUnsentMessage(projectId: string, threadId: string, messageId: string): void {
+    const entry = this.threads.get(threadKey(projectId, threadId))
+    if (!entry) return
+    if (!entry.messages.some((message) => message.id === messageId)) return
+    entry.messages = entry.messages.filter((message) => message.id !== messageId)
+    entry.heldSteerIds.delete(messageId)
+    this.notify(projectId, threadId)
+  }
+
   clearLoadError(projectId: string, threadId: string): void {
     const entry = this.entry(projectId, threadId)
     if (!entry.error) return

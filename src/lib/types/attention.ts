@@ -10,13 +10,24 @@
  */
 
 /** Which kind of gate resolved without the user. */
-export type AutoAnswerKind = 'question' | 'secret' | 'image-descriptor' | 'scope-confirmation'
+export type AutoAnswerKind =
+  | 'question'
+  | 'secret'
+  | 'image-descriptor'
+  | 'scope-confirmation'
+  /**
+   * A permission card whose deadline passed. The request is auto-rejected so the
+   * agent stops waiting and finds another way to finish the task, so an
+   * unanswered gate is a decision the user has to be able to see afterwards.
+   */
+  | 'permission'
 
 /**
  * How a gate settled on its own.
  *
  * `auto-answered`   the timer picked the recommended option.
- * `expired`         the deadline closed the card; nothing could answer it.
+ * `expired`         the deadline closed the card; nothing could answer it
+ *                   (a permission card is refused so the agent can adapt).
  * `ignored`         the decision timed out and defaulted to taking no action.
  */
 export type AutoAnswerOutcome = 'auto-answered' | 'expired' | 'ignored'

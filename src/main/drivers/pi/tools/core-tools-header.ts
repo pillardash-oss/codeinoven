@@ -31,7 +31,7 @@ export function piCoreToolsHeaderSource(
   return `import { spawn } from 'node:child_process'
 import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { open, readdir, rm, stat } from 'node:fs/promises'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
@@ -528,6 +528,61 @@ function isSafeNetworkCurl(toolName, input) {
   if (/(?:^|\\s)(?:-o|-O|--output|--remote-name|--remote-header-name|--output-dir|-T|--upload-file|-K|--config|--unix-socket|--netrc-file|--cookie|--cookie-jar|--cert|--key|--cacert|--capath)(?:\\s|=|$)/u.test(command)) return false
   return !/(?:^|\\s)(?:-d|--data|--data-ascii|--data-binary|--data-raw|--data-urlencode|--json|--form|-F)(?:\\s|=)["']?[^\\s"']*@/u.test(command)
 }
+
+// <cio-network-command-policy>
+// A network request is not file access, so a curl must not raise a card: not the
+// bare one-liner above, and not the probe loop an agent writes by habit
+// ('for p in 3000 5173; do curl -s -o /tmp/o.txt http://127.0.0.1:$p/; head -c 300 /tmp/o.txt; done').
+//
+// What still decides is what the command *writes*: every output path a download
+// names must land inside the session's own workspace or that machine's temp
+// directory, which is exactly the scratch the app already pre-authorised. A
+// download to anywhere else keeps its ordinary gate, and so does everything this
+// cannot prove: uploads, config reads, local file inputs, redirections, command
+// substitution, and every destructive verb.
+function isSafeNetworkCommand(command, cwd) {
+  if (typeof command !== 'string') return false
+  const text = command.trim()
+  if (!text) return false
+  if (text.charCodeAt(0) === 96 || text.includes('$(') || text.includes(String.fromCharCode(96)))
+    return false
+  if (/(?:^|[;&|]\\s*)(?:rm|rmdir|mv|chmod|chown|dd|mkfs|sudo|doas|tee|xargs|eval|exec|shutdown|reboot|poweroff|launchctl|systemctl|scp|rsync|nc|netcat)(?:\\s|$)/u.test(text)) return false
+  if (/[<>]/u.test(text)) return false
+  if (!/https?:\\/\\//iu.test(text) || /file:\\/\\//iu.test(text)) return false
+  if (/(?:^|\\s)(?:-T|--upload-file|-K|--config|--unix-socket|--netrc-file|--cookie|--cookie-jar|--cert|--key|--cacert|--capath)(?:\\s|=|$)/u.test(text)) return false
+  if (/(?:^|\\s)(?:-d|--data|--data-ascii|--data-binary|--data-raw|--data-urlencode|--json|--form|-F)(?:\\s|=)["']?[^\\s"']*@/u.test(text)) return false
+  for (const outputPath of networkOutputPaths(text)) {
+    if (!isScratchPath(outputPath, cwd)) return false
+  }
+  return true
+}
+
+// Every path a download in this command would write to.
+function networkOutputPaths(command) {
+  const paths = []
+  const pattern = /(?:^|\\s)(?:-o|--output|--output-dir)(?:\\s+|=)(?:"([^"]*)"|'([^']*)'|([^\\s"';&|]+))/gu
+  let match = pattern.exec(command)
+  while (match !== null) {
+    const value = match[1] ?? match[2] ?? match[3]
+    if (value) paths.push(value)
+    match = pattern.exec(command)
+  }
+  return paths
+}
+
+// The session's workspace and the machine's temp directory: the scratch the app
+// pre-authorises, named the same way a chat's own workspace is.
+function isScratchPath(candidate, cwd) {
+  // A leading tilde is the shell's home, not a path this can resolve, so it is
+  // never assumed to be scratch.
+  if (candidate.startsWith('~')) return false
+  const resolved = isAbsolute(candidate) ? resolve(candidate) : resolve(cwd, candidate)
+  const roots = [cwd, tmpdir(), '/tmp', '/private/tmp', '/var/tmp']
+  return roots.some(function (root) {
+    return isWithinPath(resolved, root)
+  })
+}
+// </cio-network-command-policy>
 
 function isProtectedPath(candidatePath) {
   return PROTECTED_PATH_PATTERNS.some((pattern) => pattern.test(candidatePath)) ||

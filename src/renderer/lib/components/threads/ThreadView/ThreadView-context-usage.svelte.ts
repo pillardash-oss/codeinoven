@@ -5,6 +5,7 @@ import { getProjectIcon } from '$lib/project-icons'
 import { normalizeFastInference } from '$shared/fast-inference'
 import { invoke } from '$lib/ipc.svelte'
 import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
+import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { clearIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
 import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
@@ -143,7 +144,9 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       total: 0
     }
 
-    for (const message of this.root.loadOlderMessages.messages) {
+    // The coarse snapshot, not the per-flush array: the meter is a header
+    // value, and mid-stream updates at the snapshot cadence are indistinguishable.
+    for (const message of this.root.loadOlderMessages.scanMessages) {
       if (message.role !== 'assistant') continue
       // Usage belongs to the harness/provider that reported it. Do not carry
       // cost, context, tokens, or quota across a harness switch; records with
@@ -319,18 +322,22 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
    * empty rather than adopt a live session's system-prompt baseline.
    */
   private describesConversation(): boolean {
-    return this.root.loadOlderMessages.messages.some((message) => message.role === 'assistant')
+    return this.root.loadOlderMessages.scanMessages.some((message) => message.role === 'assistant')
   }
 
   async refreshAccountUsageOnDemand(): Promise<void> {
     // Drop a response for a harness selection the user already moved away
     // from   an out-of-order resolve must not clobber the current selection.
-    const refreshKey = `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}`
+    const refreshKey = `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}:${this.root.loadOlderMessages.settings.ovenId ?? ''}`
     const usageList = await this.accountUsageCache.refresh(
       {
         harnessId: this.root.loadOlderMessages.settings.harnessId,
         providerId: this.root.loadOlderMessages.settings.providerId,
         accountId: this.root.loadOlderMessages.settings.accountId,
+        // The Oven this thread runs on. It answers only when this machine has
+        // no such harness installed; a local reading always wins over it, and a
+        // thread on this device asks no other machine at all.
+        ovenId: this.root.loadOlderMessages.settings.ovenId ?? LOCAL_OVEN_ID,
         // Name the thread so the reading can only be answered by this thread's
         // own session. Account quota ignores it; context occupancy must never
         // come from another conversation's live process.
@@ -339,7 +346,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
       },
       () =>
         refreshKey !==
-        `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}`
+        `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}:${this.root.loadOlderMessages.settings.ovenId ?? ''}`
     )
     const currentUsage = usageList.find(
       (usage) =>
@@ -450,20 +457,25 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
     }
     if (kind === 'achievement') {
       const activeSpec = this.root.submitBrainstormDecision.spec
-      if (!activeSpec) return null
+      const coordinator = this.root.handleAgentEvent.thread
+      // Without a specification the contract is the goal captured when Achievement
+      // was enabled, and the board reports that goal exactly as it reports an
+      // approved specification. Requiring the specification here left a running
+      // Achievement with no coordinator docked at all.
+      const capturedGoal = (coordinator.achievementGoal ?? '').trim()
+      if (!activeSpec && !capturedGoal) return null
       return {
         component: 'achievement',
         props: {
-          specTitle: this.root.handleAgentEvent.thread.title,
+          specTitle: coordinator.title,
           runStartedAt: activeSpec?.approvedAt ?? this.durableAuditThread?.createdAt,
-          specSummary: activeSpec.content.resolutionSummary,
+          specSummary: activeSpec ? activeSpec.content.resolutionSummary : capturedGoal,
           auditThread: this.durableAuditThread,
           auditState: this.root.submitSpecDecision.auditState,
           reportAvailable: this.auditReport !== null,
           achievementReached:
-            this.root.handleAgentEvent.thread.status === 'completed' &&
-            (this.root.handleAgentEvent.thread.loopIteration ?? 0) > 0,
-          selectedThreadId: this.root.handleAgentEvent.thread.id,
+            coordinator.status === 'completed' && (coordinator.loopIteration ?? 0) > 0,
+          selectedThreadId: coordinator.id,
           auditorSettings: this.auditSettings,
           providers: this.root.currentWorkingTraceAttribution.providers,
           projectId: this.root.handleAgentEvent.thread.projectId,

@@ -23,7 +23,6 @@ import { logRendererDev } from '$lib/system/renderer-logger'
 import { focusVisibleComposer } from '$lib/focus/composer-focus-registry'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { foreignRuns } from '$lib/stores/foreign-runs.svelte'
-import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
 import {
   responseReferencesState,
   type ResponseReferenceAnchor
@@ -40,7 +39,6 @@ import type {
   AgentProviderIssue,
   AgentSecretSubmission,
   AgentSecretDraft,
-  PermissionRequest,
   ProjectFileEntry,
   CapturableSpecContextType,
   BrainstormDocument,
@@ -60,9 +58,6 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
     super(root)
   }
-  /** Stable empty queue so a controller-driven view never allocates per read. */
-  EMPTY_PERMISSION_REQUESTS: PermissionRequest[] = []
-
   /** Minimum first paint: only the newest few messages mount on the first
    *  frame, so a long thread paints instantly on switch. */
   INITIAL_PAINT_MESSAGES = 4
@@ -141,27 +136,14 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
   }
 
   /**
-   * Permission requests of a controller-driven conversation come from the shared
-   * attention store instead: a temporary side chat's card has to appear in the
-   * side chat's own window, and its tab has to keep saying it needs attention
-   * while the transcript is not mounted (the sidebar mounts only the active
-   * tab). Threads keep their request queue in this view.
+   * The queue the composer's blocking card renders from.
+   *
+   * It comes from the shared attention store for both a thread and a
+   * controller-driven conversation: the store survives this view's unmount, so
+   * leaving the thread for a project view and coming back cannot lose a card the
+   * turn is still blocked on.
    */
-  controllerPermissions = $derived(
-    this.root.props.controller
-      ? conversationAttention.permissions(
-          this.root.props.controller.projectId,
-          this.root.props.controller.conversationId
-        )
-      : this.EMPTY_PERMISSION_REQUESTS
-  )
-
-  /** The queue the composer's blocking card renders from. */
-  visiblePermissions = $derived(
-    this.root.props.controller
-      ? this.controllerPermissions
-      : this.root.handleAgentEvent.pendingPermissions
-  )
+  visiblePermissions = $derived(this.root.handleAgentEvent.pendingPermissions)
 
   activeTodo = $derived(latestAgentTodo(this.root.pollStreamParts.todoMessages))
 
@@ -298,6 +280,10 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
     this.workflowReady &&
       !this.conversationAssignmentDismissed &&
       this.root.loadOlderMessages.settings.assignmentMode === true &&
+      // An Achievement loop is not waiting for an Assignment: the loop owns the
+      // thread and works toward its goal, and echoing an Assignment entry here
+      // offered to decompose work the goal already describes.
+      this.root.loadOlderMessages.settings.loopMode !== true &&
       this.root.submitBrainstormDecision.spec === null &&
       this.root.submitSpecDecision.assignment === null &&
       !this.root.harnessUsage.specFormulating &&

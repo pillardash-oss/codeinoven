@@ -14,6 +14,7 @@ import type {
   ComputerUsePipState,
   CuaUpdateProgress,
   ProviderConnectionInfo,
+  ScreenshotCapture,
   Thread,
   TypesafeStatus
 } from '../types'
@@ -115,6 +116,15 @@ export const IPC_EVENT_CONTRACT = {
   'browser:overlay:failed': [] as [],
   /** Post-paint feature IPC, chat, and harness registration completed. */
   'app:featuresReady': [] as [],
+  /**
+   * A region capture finished and is waiting to be attached to a prompt.
+   *
+   * The chord is claimed by main, so the window cannot be the thing that takes
+   * the picture; it receives the finished, agent-sized file instead and puts it
+   * in the active composer. Captures taken while no window exists are held by
+   * main and read with `screenshot:pending` when one opens.
+   */
+  'screenshot:captured': [] as unknown as [capture: ScreenshotCapture],
   /**
    * Terminal sessions the app is ending on purpose (an update install stopping
    * work, or a kill from the task manager). Sent before the shell is killed so
@@ -400,6 +410,16 @@ export const IPC_EVENT_CONTRACT = {
   'browser:state': [] as unknown as [state: BrowserPageState],
   /** The set of browser tabs agents are working on changed. */
   'browser:agentTabClaimsChanged': [] as unknown as [claims: BrowserAgentTabClaim[]],
+  /**
+   * Agent pages main is letting go of, so the strip drops their rows.
+   *
+   * Main decides when a conversation's page has been idle long enough to release,
+   * but the row lives in the browser strip. A destroy that only happened in main
+   * would leave a row that opens nothing, which is the same clutter it was meant to
+   * remove, so the close travels through the strip's own path: it removes the row and
+   * destroys the tab.
+   */
+  'browser:releaseTabs': [] as unknown as [tabIds: string[]],
   /** Live provider connection health/status snapshot. */
   'providers:status': [] as unknown as [payload: ProviderConnectionInfo[]],
   /** DevTools open state changed for a browser tab (open/closed). */

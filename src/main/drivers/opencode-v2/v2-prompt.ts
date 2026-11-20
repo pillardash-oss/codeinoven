@@ -1,7 +1,8 @@
 import type { PromptAttachment } from '../../../lib/types'
 import { resolveFastModelId } from '../../../lib/fast-inference'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import type { SendPromptOptions } from '../driver.interface'
-import { materializeDataUrlAttachment } from '../attachment-data-url'
+import { materializeAttachment } from '../attachment-data-url'
 import {
   formatDocumentAsText,
   isDocumentAttachment,
@@ -24,9 +25,9 @@ export interface OpenCodeV2PromptFile {
  * its decoder cannot rasterize SVG and some providers reject media types they
  * do not support (e.g. `application/json`). Those attachments are inlined as
  * text, exactly as the V1 driver does, so the model still receives them. An
- * embedded `data:` payload is written to `scratchDirectory` and sent as a file
- * URI, because the server opens a file URI as a path and a data URL fails with
- * ENOENT.
+ * embedded `data:` payload or a remote `http(s)` source is staged in
+ * `scratchDirectory` and sent as a file URI, because the server opens a file URI
+ * as a path and both a data URL and an http URL fail with ENOENT.
  */
 export async function buildOpenCodeV2PromptPayload(
   text: string,
@@ -36,31 +37,31 @@ export async function buildOpenCodeV2PromptPayload(
   const inlined: string[] = []
   const files: OpenCodeV2PromptFile[] = []
   for (const attachment of attachments) {
-    if (isSvgAttachment(attachment)) {
-      const content = await readSvgAttachmentText(attachment)
-      if (content !== null) {
-        inlined.push(formatSvgAsText(attachment, content))
-        continue
-      }
-    }
-    if (isTextAttachment(attachment)) {
-      const content = await readTextAttachment(attachment)
-      if (content !== null) {
-        inlined.push(formatTextAsText(attachment, content))
-        continue
-      }
-    }
-    if (isDocumentAttachment(attachment)) {
-      const content = await readDocumentText(attachment)
-      if (content !== null) {
-        inlined.push(formatDocumentAsText(attachment, content))
-        continue
-      }
-    }
     const resolved =
-      scratchDirectory === undefined || !attachment.url.startsWith('data:')
+      scratchDirectory === undefined
         ? attachment
-        : await materializeDataUrlAttachment(attachment, scratchDirectory)
+        : await materializeAttachment(attachment, scratchDirectory)
+    if (isSvgAttachment(resolved)) {
+      const content = await readSvgAttachmentText(resolved)
+      if (content !== null) {
+        inlined.push(formatSvgAsText(resolved, content))
+        continue
+      }
+    }
+    if (isTextAttachment(resolved)) {
+      const content = await readTextAttachment(resolved)
+      if (content !== null) {
+        inlined.push(formatTextAsText(resolved, content))
+        continue
+      }
+    }
+    if (isDocumentAttachment(resolved)) {
+      const content = await readDocumentText(resolved)
+      if (content !== null) {
+        inlined.push(formatDocumentAsText(resolved, content))
+        continue
+      }
+    }
     files.push({
       uri: resolved.url,
       ...(resolved.filename ? { name: resolved.filename } : {})
@@ -122,8 +123,9 @@ const TOOL_ACTION_ALIASES: Record<string, string> = {
  * V2 evaluates the ruleset in order with the LAST matching rule winning, so the
  * restrictions come first and the grants after them.
  *
- *  - `full_access` → a single allow-everything rule: nothing is ever asked or
- *    denied, including `external_directory` reads outside the project.
+ *  - `full_access` and `oven_mode` → a single allow-everything rule: nothing is
+ *    ever asked or denied, including `external_directory` reads outside the
+ *    project.
  *  - no allow-list → only `external_directory` is allowed outright (v1's
  *    behavior), so the harness's own defaults apply to every tool.
  *  - an allow-list → every restrictable tool action is denied, then the listed
@@ -137,7 +139,7 @@ export function buildOpenCodeV2PermissionRuleset(
   opts: Pick<SendPromptOptions, 'settings' | 'allowedTools' | 'readOnly'>
 ): OpenCodeV2PermissionRule[] {
   if (
-    opts.settings.permissionLevel === 'full_access' &&
+    isUnrestrictedLevel(opts.settings.permissionLevel) &&
     opts.allowedTools === undefined &&
     !opts.readOnly
   ) {

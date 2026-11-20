@@ -3,10 +3,15 @@ import {
   CPU_AVAILABLE_FLOOR_PERCENT,
   LARGE_MACHINE_MEMORY_FLOOR_BYTES,
   LARGE_MACHINE_TOTAL_BYTES,
+  OVEN_RUN_CAP_MAX,
+  OVEN_RUN_CAP_MIN,
   SMALL_MACHINE_MEMORY_FLOOR_RATIO,
   decideAdmission,
+  decideOvenAdmission,
   holdsAdmission,
   memoryFloorBytes,
+  ovenRunCapacity,
+  type OvenResourceSample,
   type ResourceSample
 } from '../../src/lib/resource-admission'
 
@@ -144,5 +149,60 @@ describe('holdsAdmission', () => {
   it('holds a short machine regardless of its size', () => {
     expect(holdsAdmission(decideAdmission(sample(0, 0, 8 * GB)))).toBe(true)
     expect(holdsAdmission(decideAdmission(sample(0, 0, 64 * GB)))).toBe(true)
+  })
+})
+
+describe('decideOvenAdmission', () => {
+  const oven = (memory: number | null, total: number, runs: number): OvenResourceSample => ({
+    memoryAvailableBytes: memory,
+    totalMemoryBytes: total,
+    activeRuns: runs
+  })
+
+  it('holds a turn when the Oven reports less than its floor', () => {
+    const decision = decideOvenAdmission(oven(0.2 * GB, 32 * GB, 0))
+    expect(decision.action).toBe('queue')
+    expect(decision.reason).toBe('memory-short')
+    expect(holdsAdmission(decision)).toBe(true)
+  })
+
+  it('proceeds when the Oven has room', () => {
+    const decision = decideOvenAdmission(oven(6 * GB, 32 * GB, 4))
+    expect(decision.action).toBe('proceed')
+    expect(decision.reason).toBe('enough')
+  })
+
+  it('falls back to the run cap when the live reading is missing', () => {
+    // 32 GB supports 4 assumed runs; the fifth holds the message.
+    expect(decideOvenAdmission(oven(null, 32 * GB, 3)).action).toBe('proceed')
+    expect(decideOvenAdmission(oven(null, 32 * GB, 4)).action).toBe('queue')
+  })
+
+  it('never lets a live reading be overridden by the run count', () => {
+    // Plenty of memory with many runs running: the live number outranks the cap.
+    expect(decideOvenAdmission(oven(20 * GB, 64 * GB, 16)).action).toBe('proceed')
+  })
+
+  it('fails open when nothing about the Oven can be read', () => {
+    expect(decideOvenAdmission(oven(null, 0, 0)).action).toBe('proceed')
+  })
+
+  it('uses the shared floor, so a small Oven holds earlier than a large one', () => {
+    // 0.55 GB clears the 32 GB floor (500 MB) but not the 8 GB floor (10%).
+    expect(decideOvenAdmission(oven(0.55 * GB, 8 * GB, 0)).action).toBe('queue')
+    expect(decideOvenAdmission(oven(0.55 * GB, 32 * GB, 0)).action).toBe('proceed')
+  })
+})
+
+describe('ovenRunCapacity', () => {
+  it('scales with the Oven total, one assumed run per 8 GB', () => {
+    expect(ovenRunCapacity(8 * GB)).toBe(1)
+    expect(ovenRunCapacity(32 * GB)).toBe(4)
+    expect(ovenRunCapacity(64 * GB)).toBe(8)
+  })
+
+  it('stays inside its bounds', () => {
+    expect(ovenRunCapacity(0)).toBe(OVEN_RUN_CAP_MIN)
+    expect(ovenRunCapacity(1024 * GB)).toBe(OVEN_RUN_CAP_MAX)
   })
 })

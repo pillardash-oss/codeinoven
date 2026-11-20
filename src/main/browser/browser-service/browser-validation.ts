@@ -610,6 +610,42 @@ export function validateThreadId(value: unknown): string {
   return value
 }
 
+/**
+ * The id of the one page a conversation owns.
+ *
+ * It is derived from the conversation rather than minted per call because the
+ * browser strip writes its tab list down and restores it after a restart, while the
+ * map naming each conversation's page lives in memory. A random id therefore came
+ * back as a *second* row for the same conversation after every restart, with the old
+ * row left in the strip forever, which is how a project's browser filled with
+ * duplicates of the same page. A derived id makes the restored row the row the next
+ * open reuses.
+ */
+export function agentTabIdFor(projectId: string, threadId: string): string {
+  return `browser:agent:${projectId}:${threadId}`
+}
+
+/**
+ * Whether two addresses name the same page, for the decision to reuse a tab.
+ *
+ * The fragment is a position inside a page, and a trailing slash is the same
+ * directory, so neither makes one page two.
+ */
+export function samePageUrl(left: string, right: string): boolean {
+  const normalise = (value: string): string => {
+    try {
+      const url = new URL(value)
+      url.hash = ''
+      const path = url.pathname.replace(/\/+$/u, '') || '/'
+      return `${url.origin}${path}${url.search}`
+    } catch {
+      return value.trim()
+    }
+  }
+  if (left.length === 0 || right.length === 0) return false
+  return normalise(left) === normalise(right)
+}
+
 export function browserContextKey(projectId: string, threadId: string): string {
   return `${projectId}:${threadId}`
 }

@@ -13,27 +13,31 @@ function conversationKey(projectId: string, conversationId: string): string {
  * Permission requests that block a conversation until the user answers them,
  * keyed by `projectId:conversationId`.
  *
- * Thread conversations keep their queue inside the visible ThreadView, which
- * owns the card lifecycle for the thread the user is looking at. This store
- * exists for the conversations a view cannot cover on its own: a temporary
- * side chat blocks on a permission request while the user is looking
- * somewhere else, its transcript is not mounted (the sidebar only mounts the
- * active tab), and its tab still has to say that it needs attention.
+ * The queue lives here, beside the conversation, instead of inside whichever
+ * view happens to be mounted. A permission request blocks work whether or not
+ * the user is looking at it: leaving a thread for a project view unmounts its
+ * ThreadView, and a request raised (or still pending) across that switch used
+ * to exist only in that view's local state, so coming back to a thread whose
+ * row said "needs attention" could show no card and no way to answer it. The
+ * store keeps the request across the unmount, and the event stream files it
+ * even while nothing is mounted, so the card is there the moment the thread is
+ * opened again.
  *
  * Requests are routed by the session the request arrived on, using the same
  * session → conversation table the streaming path uses, so a side chat and
  * its parent thread can never be confused for each other.
+ *
+ * A conversation is filed for only once a view has registered it (a thread on
+ * mount, a side chat when its session comes up). Mounting also reconciles the
+ * queue against the authoritative list the main process holds, which is what
+ * repairs a request raised while this renderer was not running at all.
  */
 class ConversationAttentionState {
   #pendingPermissions = new SvelteMap<string, PermissionRequest[]>()
   /**
-   * Conversations whose blocking requests this store files. A side chat is
-   * registered by the event that brings its session up (or by the view that
-   * hydrates it), so the stream never files anything for a thread: threads own
-   * their queue inside ThreadView, and keeping a second copy here would leave
-   * answers that stream no `permission.replied` behind forever.
-   *
-   * Non-reactive bookkeeping: only read inside the event handler.
+   * Conversations whose blocking requests this store files, registered by the
+   * view that mounts them or by the event that brings a side chat's session
+   * up. Non-reactive bookkeeping: only read inside the event handler.
    */
   #trackedConversations = new Set<string>()
 
@@ -56,6 +60,21 @@ class ConversationAttentionState {
     return this.permissions(projectId, conversationId).length > 0
   }
 
+  /**
+   * File this conversation's requests from now on, even while no view of it is
+   * mounted. Called by a view on mount, before (or beside) its first read of
+   * the authoritative queue.
+   */
+  track(projectId: string, conversationId: string): void {
+    this.#trackedConversations.add(conversationKey(projectId, conversationId))
+  }
+
+  /** Replace a conversation's queue with the queue a view just applied. */
+  set(projectId: string, conversationId: string, requests: PermissionRequest[]): void {
+    this.#trackedConversations.add(conversationKey(projectId, conversationId))
+    this.#set(conversationKey(projectId, conversationId), requests)
+  }
+
   /** Drop a request the user just answered. */
   resolve(projectId: string, conversationId: string, requestId: string): void {
     const key = conversationKey(projectId, conversationId)
@@ -74,8 +93,8 @@ class ConversationAttentionState {
    * A view hydrating on mount cannot simply overwrite: the store is fed by the
    * live event stream, so a request raised during the IPC round trip is newer
    * than the list it carries and must survive (`knownIds` is what this view
-   * already had before it asked). Losing it would strand the side chat's turn
-   * with no card and no other way to answer.
+   * already had before it asked). Losing it would strand the turn with no card
+   * and no other way to answer.
    */
   reconcile(
     projectId: string,

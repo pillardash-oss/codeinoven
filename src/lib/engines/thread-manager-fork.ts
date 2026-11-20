@@ -6,6 +6,8 @@ import { featureSlugFromTitle } from '../project-artifacts'
 import { ProjectRepo } from '../../main/database/repositories/project-repo'
 import type { Database } from '../../main/database/database'
 import { EngineeringLifecycleEngine } from './engineering-lifecycle-engine'
+import { DON_ASSISTANT_ID } from '../types/assistant'
+import { Logger } from '../../main/system/logger'
 import {
   ASSISTANT_SPACE_ID,
   isOrchestrationChildThread,
@@ -47,6 +49,8 @@ export function remapCopiedMessages(messages: AgentMessage[]): AgentMessage[] {
  */
 export interface ThreadForkHost {
   createThread(input: CreateThreadInput): Promise<Thread>
+  /** Pin a fork that has to survive the automatic capacity sweep. */
+  setPinned?(projectId: string, threadId: string, pinned: boolean): Promise<Thread>
   setStatus(
     projectId: string,
     threadId: string,
@@ -233,6 +237,21 @@ export class ThreadForkService {
             scheduled: parent.scheduled
           }
         : {}
+    /**
+     * A group conversation forks as a group conversation.
+     *
+     * The participants are who can speak in it, so a copy that lost them would
+     * render as a single assistant's thread with every speaker gone. The group
+     * title travels with the fork's own name, because the copy is a new
+     * conversation and never a rename of the one it came from.
+     */
+    const groupFork =
+      destinationProjectId === projectId && (parent.groupParticipants?.length ?? 0) > 0
+        ? {
+            groupParticipants: [...(parent.groupParticipants ?? [])],
+            groupTitle: title
+          }
+        : {}
     // A fork of an Engineering thread is an Engineering thread. An Engineering
     // thread stays one for its lifetime, even with every switch off (a parked,
     // completed or cancelled run), so the marker must travel from the durable
@@ -262,8 +281,17 @@ export class ThreadForkService {
       scopeBucketId: forkScopeBucketId,
       workingDirectory:
         destinationProjectId === projectId ? parent.workingDirectory : destinationPath,
-      ...assistantFork
+      ...assistantFork,
+      ...groupFork
     })
+    // The orchestrator's conversations are pinned so the automatic capacity
+    // sweep can never take the front door, and a fork of one is another of the
+    // same kind: it has to survive the next sweep exactly like its parent.
+    if (parent.assistantId === DON_ASSISTANT_ID && forked.projectId === ASSISTANT_SPACE_ID) {
+      await this.host
+        .setPinned?.(forked.projectId, forked.id, true)
+        .catch((error: unknown) => Logger.dev('Forked Don conversation pin failed:', error))
+    }
     // Same-scope forks re-resolve their compatibility directory from the
     // destination scope inside `createThread`, so a stale parent directory
     // can never override the authoritative root.
@@ -312,14 +340,15 @@ export class ThreadForkService {
               id, thread_id, role, origin, visibility, parts, search_text,
               model_id, provider_id, harness_id, thinking_level,
               references_json, project_references_json, created_at, completed_at,
-              generation_ms
+              generation_ms, author
             ) SELECT ?, ?, role, origin, visibility,
               (SELECT json_group_array(json(CASE WHEN json_type(value, '$.messageID') IS NULL
                 THEN value ELSE json_set(value, '$.messageID', ?, '$.id', ? || ':' || json_extract(value, '$.id')) END))
                 FROM json_each(parts)), search_text,
               model_id, provider_id, harness_id, thinking_level,
               references_json, project_references_json, created_at, completed_at,
-              generation_ms
+              generation_ms,
+              author
               FROM agent_messages WHERE thread_id = ? AND id = ?`,
             params: [id, forked.id, id, id, threadId, row.id]
           }

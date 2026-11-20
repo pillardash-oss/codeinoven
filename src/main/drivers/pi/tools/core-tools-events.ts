@@ -277,9 +277,11 @@ export function piCoreToolsEventsSource(): string {
     // this through a permission card that could auto-approve the bypass.
     const cuaBypass = unmanagedCuaShellReason(event.toolName, input)
     if (cuaBypass) return { block: true, reason: cuaBypass }
-    // Same invariant for processes: a kill that resolves its target at run time
-    // can only reach something this session did not start. Never a card, so no
-    // permission mode can approve it.
+    // Same invariant for processes, in every form: no shell command may stop a
+    // process by pid, port, name, pattern, signal, interpreter or script, since
+    // it can only ever reach something this session did not start. Never a card,
+    // so no permission mode can approve it; the reason names the app-owned
+    // taskManager path instead.
     const processKillBypass = unmanagedProcessKillReason(event.toolName, input)
     if (processKillBypass) return { block: true, reason: processKillBypass }
     const contaminated = findContaminatedToolArg(input)
@@ -338,6 +340,18 @@ export function piCoreToolsEventsSource(): string {
           ['read', 'write', 'edit', 'grep', 'find', 'ls', 'bash', 'powershell', 'cmd'].includes(event.toolName)))
     ) {
       if (isSafeNetworkCurl(event.toolName, input)) return undefined
+      // A network request never earns the user's approval for its own sake, and a
+      // download is judged by where it lands: inside the workspace or that
+      // machine's temp directory it is scratch, anywhere else the policy above
+      // already raised its own card. This is what stops a probe loop from asking.
+      if (
+        event.toolName === 'bash' &&
+        isSafeNetworkCommand(
+          typeof input['command'] === 'string' ? input['command'] : undefined,
+          ctx.cwd
+        )
+      )
+        return undefined
       const command = typeof input['command'] === 'string' ? input['command'] : undefined
       const path = firstString(input['path'], input['file_path'], input['filePath'], input['filename']) ?? ctx.cwd
       const payload = {

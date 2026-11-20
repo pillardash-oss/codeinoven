@@ -251,20 +251,30 @@ class ScopeState {
     return this.boards.has(projectId)
   }
 
+  /** Boards a lookup-only warm-up is already fetching. Read-only callers are
+   *  per-row now (every search result whose thread has a scope), so a result list
+   *  spanning projects would otherwise ask for the same board once per row. */
+  private lookupFetches = new Set<string>()
+
   /**
    * Cache one project's scope board for a read-only lookup (the cross-project
    * thread search resolves a thread's scope badge from it) without touching the
    * active board, the shared loading flag, or the visible error. Safe to call
-   * concurrently for different projects: each call owns its own cache entry.
+   * concurrently: each project has one fetch in flight, and a second caller for
+   * the same project returns without a second read.
    */
   async cacheBoardForLookup(projectId: string): Promise<void> {
     if (!isRealProjectId(projectId)) return
     if (this.boards.has(projectId)) return
+    if (this.lookupFetches.has(projectId)) return
+    this.lookupFetches.add(projectId)
     try {
       const board = await invoke('scope:get', projectId)
       this.boards.set(projectId, cloneBoard(board))
     } catch {
       // Lookup-only warm-up: a failure here must never surface as a scope error.
+    } finally {
+      this.lookupFetches.delete(projectId)
     }
   }
 

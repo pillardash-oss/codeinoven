@@ -18,6 +18,7 @@ import {
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { OvenFile, OvenWorkspaceRequest, OvenWorkspaceResult } from '../../../lib/ovens'
+import { OVEN_UNSUPPORTED_WORKSPACE_OPERATION } from '../../../lib/ovens'
 
 const CHUNK = 128 * 1024
 const cloneLocks = new Map<string, Promise<void>>()
@@ -433,6 +434,20 @@ export async function ovenWorkspace(raw: unknown): Promise<OvenWorkspaceResult> 
     return { root }
   }
   if (input.operation === 'stat') return { root, file: await fileInfo(root, path) }
+  if (input.operation === 'remove') {
+    const entry = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+      // A file that is already gone is done, not a failure: discarding a turn
+      // can run twice, and the caller only cares that nothing is there.
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (!entry) return { root }
+    if (entry.isDirectory())
+      throw new Error('Only a file or symbolic link can be deleted on the Oven.')
+    // A symbolic link is removed as the link, never as what it points at.
+    await unlink(path)
+    return { root }
+  }
   if (input.operation === 'list') {
     const entries: string[] = []
     for await (const entry of await opendir(path)) {
@@ -477,7 +492,7 @@ export async function ovenWorkspace(raw: unknown): Promise<OvenWorkspaceResult> 
     return { root }
   }
   if (input.operation !== 'read' && input.operation !== 'write')
-    throw new Error('Unsupported workspace operation.')
+    throw new Error(OVEN_UNSUPPORTED_WORKSPACE_OPERATION)
   if (!Number.isSafeInteger(input.offset) || input.offset < 0)
     throw new Error('Invalid file offset.')
   const file = await open(

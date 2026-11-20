@@ -215,8 +215,10 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
     getSelectedProjectId: () => this.root.openThreadFromSwitcher.selectedThread?.projectId ?? null,
     getSelectedThreadId: () => this.root.openThreadFromSwitcher.selectedThread?.id ?? null,
     closeThreadBrowser: () => {
-      if (this.dockKindActive('browser'))
-        this.toggleDockPanel('browser', this.root.state.focusBrowser)
+      // Closing must never toggle the browser open when another context tool is
+      // current: the menu item says "Close browser", so an invisible browser
+      // has nothing left to do.
+      if (this.dockKindActive('browser')) contextSidebarState.hide()
     }
   })
 

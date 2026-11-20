@@ -27,6 +27,7 @@ export interface LifecycleHost {
   readonly agentReveals: BrowserService['agentReveals']
   readonly agentTabClaimOwners: BrowserService['agentTabClaimOwners']
   readonly agentTabIds: BrowserService['agentTabIds']
+  readonly agentTabLastUsed: BrowserService['agentTabLastUsed']
   readonly capture: BrowserService['capture']
   readonly clearStatusDelay: BrowserService['clearStatusDelay']
   readonly configuredSessions: BrowserService['configuredSessions']
@@ -153,6 +154,7 @@ export class BrowserServiceLifecycle {
     this.host.tabs.clear()
     this.host.agentTabIds.clear()
     this.host.agentTabClaimOwners.clear()
+    this.host.agentTabLastUsed.clear()
     // Downloads belong to the session, not to this window: a download keeps
     // running while the window is parked, so teardown only stops this window's
     // tab lookup from being consulted. The manager survives and keeps the

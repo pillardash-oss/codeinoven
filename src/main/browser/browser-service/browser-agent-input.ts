@@ -90,6 +90,17 @@ function delay(ms: number): Promise<void> {
 }
 
 /**
+ * Where the pointer last was, per page.
+ *
+ * A press that arrives out of nowhere is the one thing a page can tell apart from a
+ * hand: nothing hovered, nothing moved, and a control that only reveals itself on
+ * hover never had the chance. Remembering the last point lets a click travel there
+ * in one intermediate move, which is a real movement trail that still ends exactly
+ * on the point the caller asked for.
+ */
+const lastAgentPoint = new WeakMap<WebContents, { x: number; y: number }>()
+
+/**
  * The accelerator key code for one named key.
  *
  * A single printable character is its own key code, which is how a caret appends
@@ -200,11 +211,25 @@ export async function sendAgentMouse(
     return
   }
   if (request.action === 'move' || request.action === 'hover') {
+    lastAgentPoint.set(contents, point)
     contents.sendInputEvent({ type: 'mouseMove', ...point, modifiers })
     await delay(INPUT_SETTLE_MS)
     return
   }
   if (request.action === 'down' || request.action === 'click') {
+    const previous = lastAgentPoint.get(contents)
+    if (previous && (previous.x !== point.x || previous.y !== point.y)) {
+      // One intermediate move, so the page sees a pointer that travelled and hover
+      // state settles before the press lands.
+      contents.sendInputEvent({
+        type: 'mouseMove',
+        x: Math.round((previous.x + point.x) / 2),
+        y: Math.round((previous.y + point.y) / 2),
+        modifiers
+      })
+      await delay(INPUT_SETTLE_MS)
+    }
+    lastAgentPoint.set(contents, point)
     contents.sendInputEvent({ type: 'mouseMove', ...point, modifiers })
     await delay(INPUT_SETTLE_MS)
     contents.sendInputEvent({

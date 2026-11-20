@@ -259,7 +259,11 @@ export class DesignBoardGallery extends BoardUnit<DesignBoard> {
       threadId: this.root.props.threadId,
       url: live.url,
       favicon: null,
-      boxId: live.boxId
+      boxId: live.boxId,
+      // This descriptor stands for a live board view, never for a row in a strip,
+      // so the idle clock has nothing to read on it.
+      lastUsedAt: 0,
+      hibernated: false
     }
   })
 

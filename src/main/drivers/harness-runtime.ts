@@ -504,6 +504,16 @@ export async function discoverHarnessRuntimes(
       result.set(command, cached.value)
       continue
     }
+    // Pi is the app's own engine: the bundled runtime IS CIO Pi, so it wins over
+    // whatever `pi` happens to sit on PATH. A build without the bundled entry
+    // still falls back to the native install below, and the harness page keeps
+    // showing it as bundled Pi.
+    const bundled = command === 'pi' ? bundledPiRuntime(command) : null
+    if (bundled) {
+      runtimeCache.set(key, { value: bundled, checkedAt: Date.now() })
+      result.set(command, bundled)
+      continue
+    }
     const native = preferredDistribution ? null : await nativeRuntime(command, env)
     if (native) result.set(command, native)
     else missing.push(command)
@@ -786,19 +796,28 @@ export async function prepareHarnessInvocation(
     }
   }
   if (process.platform !== 'win32') {
-    if (!(await resolveExecutablePathAsync(command, env))) {
-      const bundled = bundledPiRuntime(command, options.bundledEntry)
-      if (bundled) {
-        return {
-          command: bundled.executable,
-          args: [bundled.resolvedPath, ...args],
-          ...(options.cwd ? { cwd: options.cwd } : {}),
-          env: bundledPiEnv(env, bundled),
-          shell: false,
-          runtime: bundled
-        }
+    // Pi is the app's own engine: the bundled runtime IS CIO Pi, so it wins for
+    // `pi` before PATH is consulted. Leaving the choice to PATH made the same
+    // checkout run installed Pi on one machine and the bundled one on another,
+    // which silently switched the transport (RPC child versus shared host) with
+    // no user choice involved. `resolveHarnessRuntime` and
+    // `discoverHarnessRuntimes` already prefer the bundled runtime; this is the
+    // resolver the driver actually launches with, so it has to agree with them.
+    const bundled = command === 'pi' ? bundledPiRuntime(command, options.bundledEntry) : null
+    if (bundled) {
+      return {
+        command: bundled.executable,
+        args: [bundled.resolvedPath, ...args],
+        ...(options.cwd ? { cwd: options.cwd } : {}),
+        env: bundledPiEnv(env, bundled),
+        shell: false,
+        runtime: bundled
       }
     }
+    // A command this resolver cannot find is still returned: the harness layer
+    // reports a missing install as its own, actionable failure (and a fixture
+    // driver degrades to its fallback), while throwing here turned every one of
+    // those into a hard error in a place that never owned the message.
     return {
       command,
       args,

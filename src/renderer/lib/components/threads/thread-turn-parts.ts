@@ -287,7 +287,19 @@ function resolveCheckpointOwners(
     // this turn's work: its card belongs at the end of the run it owns, not
     // above the prompt that interrupted the accounting. That is exactly the
     // shape where the finished turn drew no card at all.
-    if (transcriptFinished && lastOwnedEnd >= turnEnd && closesTurn[lastOwnedEnd]) {
+    //
+    // It may only adopt an answer that closed before the turn settled. A run
+    // still working has no finished checkpoint of its own in this list yet (the
+    // list is read when a turn settles, so the in-flight row is absent), which
+    // makes its live assistants look exactly like a continuation. Adopting them
+    // put the previous turn's files under a trace that had produced nothing, and
+    // moved that card down with every streamed segment.
+    const continuedAnswer = lastOwnedEnd >= turnEnd ? messages[lastOwnedEnd] : undefined
+    const closedBeforeSettlement =
+      continuedAnswer?.completedAt !== undefined &&
+      checkpoint.completedAt !== undefined &&
+      continuedAnswer.completedAt <= checkpoint.completedAt
+    if (transcriptFinished && closedBeforeSettlement && closesTurn[lastOwnedEnd]) {
       cardIndex = lastOwnedEnd
     }
     if (cardIndex >= 0 && closesTurn[cardIndex]) card[cardIndex] = true

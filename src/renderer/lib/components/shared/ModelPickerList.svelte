@@ -58,15 +58,6 @@
     profiles?: ModelPickerProfilesGroup | null
     /** Restricts the list to one harness. Unset shows every harness as today. */
     harnessFilter?: string | null
-    /**
-     * Harnesses the current execution target does not have installed (a remote
-     * Oven without them). A model can only run where its harness exists, so
-     * those harnesses are omitted from the picker entirely: no chip, no model
-     * row, and no favorite or recent entry pointing at one.
-     */
-    unavailableHarnessIds?: ReadonlySet<string> | null
-    /** Why those harnesses are unavailable, shown as the chip's and row's title. */
-    unavailableHarnessReason?: string | null
     favoriteModels: string[]
     recentModels: string[]
     visionOnly: boolean
@@ -95,8 +86,6 @@
     cachedProviders,
     profiles = null,
     harnessFilter = null,
-    unavailableHarnessIds = null,
-    unavailableHarnessReason = null,
     favoriteModels,
     recentModels,
     visionOnly,
@@ -162,7 +151,6 @@
     new Set(
       [...displayProviders, ...cachedProviders]
         .filter((provider) => passesPropHarnessFilter(provider.harnessId))
-        .filter((provider) => !isUnavailableHarness(provider.harnessId))
         .flatMap((provider) =>
           provider.models.map((model) => modelKey(provider.harnessId, provider.id, model.id))
         )
@@ -177,7 +165,6 @@
         return { modelKey: key, ...parsed }
       })
       .filter((favorite): favorite is NonNullable<typeof favorite> => favorite !== null)
-      .filter((favorite) => !isUnavailableHarness(favorite.harnessId))
   )
   /**
    * Favorite models this picker can actually render: the stored keys that
@@ -205,7 +192,6 @@
           )
           return entry &&
             passesPropHarnessFilter(entry.provider.harnessId) &&
-            !isUnavailableHarness(entry.provider.harnessId) &&
             passesVisionFilter(entry.model, visionOnly)
             ? entry
             : null
@@ -231,7 +217,6 @@
             )
             return entry &&
               passesPropHarnessFilter(entry.provider.harnessId) &&
-              !isUnavailableHarness(entry.provider.harnessId) &&
               passesVisionFilter(entry.model, visionOnly)
               ? entry
               : null
@@ -247,7 +232,6 @@
     return modelPickerProviderOrder.orderProviders(
       displayProviders
         .filter((provider) => passesPropHarnessFilter(provider.harnessId))
-        .filter((provider) => !isUnavailableHarness(provider.harnessId))
         .filter((provider) => passesRailHarness(provider.harnessId))
         .map((provider) => ({
           ...provider,
@@ -278,21 +262,11 @@
       new Map(
         displayProviders
           .filter((provider) => passesPropHarnessFilter(provider.harnessId))
-          .filter((provider) => !isUnavailableHarness(provider.harnessId))
           .map((provider) => provider.harnessId)
           .map((entryHarnessId) => [entryHarnessId, harnessName(entryHarnessId)])
       )
     )
-      .map(([id, name]) => ({
-        id,
-        name,
-        ...(isUnavailableHarness(id)
-          ? {
-              unavailable: true,
-              ...(unavailableHarnessReason ? { reason: unavailableHarnessReason } : {})
-            }
-          : {})
-      }))
+      .map(([id, name]) => ({ id, name }))
       .sort((left, right) => harnessOrder(left.id) - harnessOrder(right.id))
   )
   /**
@@ -392,7 +366,6 @@
   const pickerModelKeys = $derived(
     pickerLayout.items
       .filter((item): item is Extract<PickerListItem, { kind: 'model' }> => item.kind === 'model')
-      .filter((item) => !isUnavailableHarness(item.entry.provider.harnessId))
       .map((item) => item.key)
   )
   const pickerVisibleItems = $derived(
@@ -409,15 +382,6 @@
   /** Restrict to the caller-supplied harness. Unset/null is a no-op. */
   function passesPropHarnessFilter(candidateHarnessId: string): boolean {
     return !harnessFilter || candidateHarnessId === harnessFilter
-  }
-
-  /** True when the current target cannot run this harness's models. */
-  function isUnavailableHarness(candidateHarnessId: string): boolean {
-    return unavailableHarnessIds?.has(candidateHarnessId) === true
-  }
-
-  function unavailableHarnessTitle(candidateHarnessId: string): string {
-    return unavailableHarnessReason ?? `${harnessName(candidateHarnessId)} is not available here`
   }
 
   /** Select a rail section without stealing focus from its button. */
@@ -656,9 +620,9 @@
    * harness's providers, which is the list it shows.
    */
   function reorderScope(): ProviderCatalog[] {
-    const allowed = displayProviders
-      .filter((provider) => passesPropHarnessFilter(provider.harnessId))
-      .filter((provider) => !isUnavailableHarness(provider.harnessId))
+    const allowed = displayProviders.filter((provider) =>
+      passesPropHarnessFilter(provider.harnessId)
+    )
     const view = effectiveView
     return view.kind === 'harness'
       ? allowed.filter((provider) => provider.harnessId === view.harnessId)
@@ -1101,20 +1065,14 @@
     { id: entry.model.id, name: entry.model.name },
     entry.provider.id
   )}
-  {@const unavailable = isUnavailableHarness(entry.provider.harnessId)}
   {@const providerLabel = providerDisplayName(entry.provider.name)}
   <button
-    class={`model-row-btn group/row ml-4 flex h-full w-[calc(100%-1rem)] flex-col justify-center px-2 py-1.5 text-left transition-colors ${unavailable ? 'cursor-not-allowed opacity-50' : 'hover:bg-elevated focus:bg-elevated focus:outline-none'} ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
-    title={unavailable
-      ? unavailableHarnessTitle(entry.provider.harnessId)
-      : `Use ${entry.model.name}`}
+    class={`model-row-btn group/row ml-4 flex h-full w-[calc(100%-1rem)] flex-col justify-center px-2 py-1.5 text-left transition-colors hover:bg-elevated focus:bg-elevated focus:outline-none ${isSelectedModel(entry) ? 'bg-elevated' : ''} ${keyboardNavActive ? 'pointer-events-none' : ''}`}
+    title={`Use ${entry.model.name}`}
     data-model-id={entry.model.id}
     data-model-key={rowKey}
     onfocus={() => (lastFocusedModelKey = rowKey)}
-    disabled={unavailable}
-    onclick={() => {
-      if (!unavailable) onChoose(entry)
-    }}
+    onclick={() => onChoose(entry)}
     onkeydown={(event: KeyboardEvent) => {
       if (keymapState.matches('palette-model-nav', event)) {
         event.preventDefault()
@@ -1145,7 +1103,7 @@
       }
       if (keymapState.matches('palette-model-select', event)) {
         event.preventDefault()
-        if (!unavailable) onChoose(entry)
+        onChoose(entry)
         return
       }
       if (event.key === 'Backspace') {

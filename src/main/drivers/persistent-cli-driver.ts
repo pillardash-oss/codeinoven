@@ -225,8 +225,49 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return id
   }
 
+  /**
+   * Bind an existing session id to the path the harness actually runs in.
+   *
+   * A session record hashes the directory its harness runs in, and every later
+   * request must name that same directory. A turn on an Oven runs the harness on
+   * the other machine, while the id the thread carries was minted here: without
+   * this the next dispatch rejects a perfectly live session with "CLI session is
+   * unavailable". The record keeps its messages and native binding; only the
+   * path it belongs to is re-stamped.
+   */
+  async adoptSessionPath(projectPath: string, sessionId: string, title: string): Promise<void> {
+    const existing =
+      this.sessionCache.get(sessionId) ??
+      (await this.storage.read<PersistentCliSession>(this.sessionPath(sessionId)).catch(() => null))
+    const now = Date.now()
+    const session: PersistentCliSession = existing
+      ? { ...existing, projectPathHash: cliProjectPathHash(projectPath), updatedAt: now }
+      : {
+          id: sessionId,
+          title,
+          projectPathHash: cliProjectPathHash(projectPath),
+          messages: [],
+          createdAt: now,
+          updatedAt: now
+        }
+    await this.persistSession(session)
+    this.deletedSessions.delete(sessionId)
+    this.sessionCache.set(sessionId, session)
+  }
+
   async deleteSession(projectPath: string, sessionId: string): Promise<void> {
-    const session = await this.requireSession(projectPath, sessionId)
+    let session: PersistentCliSession
+    try {
+      session = await this.requireSession(projectPath, sessionId)
+    } catch (error) {
+      // A record that is already gone satisfies the deletion. The caller is
+      // discarding a stale session, and a session with no record (an Oven
+      // session, whose record lives on the Oven, or one already cleaned) has
+      // nothing left to destroy: failing here only turned best-effort cleanup
+      // into an error for work that was already done.
+      if (error instanceof Error && error.message.startsWith('CLI session is unavailable:')) return
+      throw error
+    }
     this.deletedSessions.add(session.id)
     this.releaseSessionRuntime(session.id)
     await this.deleteNativeTranscript(projectPath, session)

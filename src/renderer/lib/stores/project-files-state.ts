@@ -77,6 +77,10 @@ export interface ProjectFilesState {
    *  or `null` while nothing is loaded. Used to tell a mounted file tree that
    *  it is still showing another scope's root after a thread switch. */
   listingMountKey: string | null
+  /** Scope bucket that owned the cached listing, when it was a scope mount. */
+  listingScopeBucketId: string | null
+  /** Root identity captured when the cached listing was read from a scope. */
+  listingScopeRootIdentity: string | null
   /** Whether the root listing on screen is the last-known read kept for this
    *  Oven, painted before the live read answers. The tree dims it and the
    *  surface overlay marks it stale, so a cached tree is never mistaken for the
@@ -141,6 +145,8 @@ export function createProjectFilesState(projectId: string): ProjectFilesState {
     sessions: {},
     activeScope: DEFAULT_SCOPE_BUCKET_ID,
     listingMountKey: null,
+    listingScopeBucketId: null,
+    listingScopeRootIdentity: null,
     listingFromCache: false,
     mountThreadId: null,
     lastTurnOnly: false,

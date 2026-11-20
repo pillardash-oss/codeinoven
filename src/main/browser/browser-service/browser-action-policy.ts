@@ -1,5 +1,9 @@
-/** Conservative, app-owned review of browser actions. Page labels are evidence,
- * never permission: only recognizable browsing controls get the fast path. */
+import { pageRuntimeSource } from './browser-agent-page/page-toolkit'
+
+/**
+ * Conservative, app-owned review of browser actions. Page labels are evidence,
+ * never permission: only recognizable browsing controls get the fast path.
+ */
 export interface BrowserActionTarget {
   tag: string
   type: string
@@ -55,6 +59,15 @@ export function reviewBrowserAction(
   })
   if (operation === 'viewport' || operation === 'reload' || operation === 'scroll') {
     return allow('Assistant browser presentation, reload, or scroll action.')
+  }
+  if (operation === 'query') {
+    return allow('Reading one element of the page describes it and changes nothing.')
+  }
+  if (operation === 'run') {
+    // A run is several actions behind one decision, so the card has to show all of
+    // them. It is never fast-pathed: the point of the review is that a person sees
+    // the whole sequence before any of it happens.
+    return ask('This runs a sequence of actions in the page, one after another.', 'high')
   }
   if (operation === 'mouse') {
     const action = typeof input.action === 'string' ? input.action : ''
@@ -147,24 +160,42 @@ export function reviewBrowserAction(
   return ask('The effect of this browser control is not known.')
 }
 
-/** Read only the selected control, never scan a whole page for each action. */
+/**
+ * Read only the selected control, never scan a whole page for each action.
+ *
+ * The read goes through the same deep resolver every action uses, so the control a
+ * review is about is the control that will be acted on: an element inside a shadow
+ * root, an SVG icon, and a node a redraw replaced are all readable here for the same
+ * reason they are actionable. A read that answered "not found" for those was a review
+ * that could not see what it was approving.
+ */
 export function browserActionTargetScript(selector: string): string {
   return `(() => {
-    const selected = document.querySelector(${JSON.stringify(selector)});
-    if (!(selected instanceof HTMLElement)) return null;
-    const element = selected.closest('a, button, input, textarea, select, [role="button"], [role="tab"], [role="searchbox"]') || selected;
-    const form = element.form || element.closest('form');
+    ${pageRuntimeSource()}
+    const selected = resolveElement(${JSON.stringify(selector)});
+    if (!isElement(selected)) return null;
+    const element = selected.closest('a, button, input, textarea, select, [role="button"], [role="tab"], [role="searchbox"], [role="combobox"]') || selected;
+    const tag = element.tagName ? element.tagName.toLowerCase() : '';
+    const form = element.form || (element.closest ? element.closest('form') : null);
+    // One label, not three spellings of it: the accessible name already answers with
+    // the aria-label, so only a placeholder it does not carry is added.
+    const name = accessibleNameOf(element);
+    const placeholder = element.getAttribute('placeholder') || '';
+    const label = [name, placeholder && name.indexOf(placeholder) < 0 ? placeholder : '']
+      .filter(Boolean)
+      .join(' ')
+      .trim();
     return {
-      tag: element.tagName.toLowerCase(),
+      tag,
       type: element.type || '',
-      role: element.getAttribute('role') || '',
-      label: [element.getAttribute('aria-label'), element.innerText || element.textContent, element.getAttribute('placeholder'), element instanceof HTMLInputElement && ['submit', 'button'].includes(element.type) ? element.value : ''].filter(Boolean).join(' ').trim().slice(0, 300),
+      role: (element.getAttribute('role') || '').toLowerCase(),
+      label: label.slice(0, 300),
       name: element.getAttribute('name') || '',
       href: element.href || '',
       download: element.hasAttribute('download'),
       expanded: element.hasAttribute('aria-expanded'),
-      formMethod: element.hasAttribute('formmethod') ? element.formMethod : form?.method || '',
-      formAction: element.hasAttribute('formaction') ? element.formAction : form?.action || ''
+      formMethod: element.hasAttribute('formmethod') ? element.formMethod : (form && form.method) || '',
+      formAction: element.hasAttribute('formaction') ? element.formAction : (form && form.action) || ''
     };
   })()`
 }

@@ -236,6 +236,13 @@ export interface PostPaintBootContext {
 export async function bootPostPaintServices(context: PostPaintBootContext): Promise<void> {
   const { state, storage, database } = context
   if (state.chatEngine || state.featuresReady) return
+  // The data gate can release this boot after recovery or shutdown has already
+  // begun: a launcher that gave up on a dead renderer, or a quit that started
+  // while the gate was still pending. Everything below is imported, constructed
+  // and queried before the graph reaches its own shutdown checks, so refuse here
+  // instead of building a service graph the process is already tearing down.
+  if (state.startupRecovery || state.quitCleanupStarted)
+    throw new Error('Feature startup was cancelled during shutdown')
   // Windows Git preparation is deliberately NOT started at boot. Its first
   // step is a GitHub lookup, then a ~50 MB PortableGit download and extract,
   // and a fresh install with no projects needs none of it. On a low-end

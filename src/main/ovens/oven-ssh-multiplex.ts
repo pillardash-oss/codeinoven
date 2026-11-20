@@ -33,6 +33,30 @@ const IDLE_PERSIST_SECONDS = 300
 
 const CONTROL_DIRECTORY = 'ovens/control'
 
+/**
+ * The longest control-socket path this platform accepts.
+ *
+ * A UNIX socket address is bounded (104 bytes on macOS, 108 on Linux) and `ssh`
+ * binds its listener under a temporary suffix of one dot and fifteen characters,
+ * so the configured path has to leave room for both. A data root deep enough to
+ * cross that bound sends `ssh` to a path it cannot bind, and every command then
+ * fails with a handshake error that names nothing relevant.
+ */
+const SOCKET_PATH_LIMIT = process.platform === 'darwin' ? 103 : 107
+const SOCKET_BIND_SUFFIX = 16
+
+/**
+ * A control-socket directory short enough for any data root.
+ *
+ * Only used when the data root itself is too deep. It is keyed to that root and
+ * to the user, and created private, so two installs never share a master.
+ */
+function shortControlDirectory(storage: MultiplexStorage): string {
+  const digest = createHash('sha256').update(storage.resolve('.')).digest('hex').slice(0, 8)
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0
+  return join('/tmp', `cio-oven-ssh-${uid}-${digest}`)
+}
+
 /** The connection facts that make two Ovens share (or not share) one socket. */
 export interface MultiplexIdentity {
   id: string
@@ -72,7 +96,10 @@ export function multiplexControlPath(storage: MultiplexStorage, oven: MultiplexI
     )
     .digest('hex')
     .slice(0, 16)
-  return join(storage.resolve(CONTROL_DIRECTORY), `${digest}.sock`)
+  const name = `${digest}.sock`
+  const inDataRoot = join(storage.resolve(CONTROL_DIRECTORY), name)
+  if (inDataRoot.length + SOCKET_BIND_SUFFIX <= SOCKET_PATH_LIMIT) return inDataRoot
+  return join(shortControlDirectory(storage), name)
 }
 
 /** The `-o` options that make one invocation join (or become) the shared master. */
@@ -87,7 +114,10 @@ export function multiplexOptions(controlPath: string): string[] {
   ]
 }
 
-/** Create the private directory the control sockets live in. */
+/** Create the private directories the control sockets live in. */
 export async function ensureMultiplexDirectory(storage: MultiplexStorage): Promise<void> {
   await mkdir(storage.resolve(CONTROL_DIRECTORY), { recursive: true, mode: 0o700 })
+  // Created alongside the data root one, whichever branch the path takes, so a
+  // deep root never has to discover its fallback at the moment ssh needs it.
+  await mkdir(shortControlDirectory(storage), { recursive: true, mode: 0o700 })
 }

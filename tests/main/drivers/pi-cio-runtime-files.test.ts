@@ -33,7 +33,7 @@ async function fixture(): Promise<{ storage: StorageEngine; files: PiCioRuntimeF
   const storage = new StorageEngine(root)
   await storage.initialize()
   const files = new PiCioRuntimeFiles({
-    storage,
+    storageFor: () => storage,
     isTitleSession: () => false,
     registerWatchPath: () => undefined
   })

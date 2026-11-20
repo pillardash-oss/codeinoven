@@ -6,13 +6,15 @@ import type { AgentMessage, TurnCheckpointSummary } from '$shared/types'
 function msg(
   role: AgentMessage['role'],
   createdAt: number,
-  id = `${role}-${createdAt}`
+  id = `${role}-${createdAt}`,
+  completedAt?: number
 ): AgentMessage {
   return {
     id,
     role,
     createdAt,
-    parts: []
+    parts: [],
+    ...(completedAt === undefined ? {} : { completedAt })
   } as AgentMessage
 }
 
@@ -166,6 +168,37 @@ describe('checkpoint card placement', () => {
     const index = buildTranscriptIndex(messages, checkpoints)
     expect(index.checkpoint[1]?.id).toBe('cp-2')
     expect(cardIndices(messages, checkpoints)).toEqual([1])
+  })
+
+  // Regression: the checkpoint list a card is drawn from is read when a turn
+  // settles, so while the next turn runs the list still holds only the previous
+  // finished checkpoint and the new turn's own row is absent. The finished
+  // turn's window then ran to the end of the transcript, adopted the live
+  // turn's streamed answers as its own continuation, and its file card slid
+  // down under a trace that had changed nothing yet.
+  it('keeps a finished turn card off a live turn the list has not seen', () => {
+    const messages = [
+      msg('user', 1000, 'p1'),
+      msg('assistant', 1100, 'a1', 1200),
+      msg('user', 5000, 'p2'),
+      msg('assistant', 5100, 'live-1', 5150),
+      msg('assistant', 5200, 'live-2', 5250)
+    ]
+    const cp = checkpoint('cp-1', 900, 1300, { changes: 1, sourceMessageId: 'p1' })
+    expect(cardIndices(messages, [cp])).toEqual([1])
+  })
+
+  // The continuation the adoption rule exists for: a nudge that carries the
+  // same user prompt, whose answers all closed before the turn settled.
+  it('cards a continuation that was written before the turn settled', () => {
+    const messages = [
+      msg('user', 100, 'p1'),
+      msg('assistant', 110, 'a1', 120),
+      msg('user', 130, 'nudge'),
+      msg('assistant', 140, 'a2', 150)
+    ]
+    const cp = checkpoint('cp-1', 105, 160, { changes: 1, sourceMessageId: 'p1' })
+    expect(cardIndices(messages, [cp])).toEqual([3])
   })
 
   // Regression: a turn's prompt normally follows the previous turn's assistant

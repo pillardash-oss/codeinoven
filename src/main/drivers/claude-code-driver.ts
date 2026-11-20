@@ -8,6 +8,7 @@ import type {
   ThreadSettings
 } from '../../lib/types'
 import { fastSelectionModelId, resolveFastModelId } from '../../lib/fast-inference'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
 import type { StorageEngine } from '../storage/storage-engine'
 import { BaseUrlProviderService } from '../providers/base-url-provider-service'
 import { CLAUDE_CREDENTIAL_LOCK_NAME, CrossProcessMutex } from '../system/cross-process-mutex'
@@ -643,7 +644,7 @@ export class ClaudeCodeDriver extends PersistentCliDriver {
     else if (options.readOnly) args.push('--tools', 'Read,Glob,Grep,WebFetch,WebSearch')
     if (options.structuredOutput)
       args.push('--json-schema', JSON.stringify(options.structuredOutput.schema))
-    if (options.settings.permissionLevel === 'full_access')
+    if (isUnrestrictedLevel(options.settings.permissionLevel))
       args.push('--permission-mode', 'bypassPermissions')
     else args.push('--permission-mode', 'manual')
     const env = await this.customProviderEnv(options.settings.providerId)

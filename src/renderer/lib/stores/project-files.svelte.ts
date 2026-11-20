@@ -15,6 +15,8 @@ import { contextSidebarState, type FilesContextTab } from '$lib/stores/context-s
 import { fileExplorerStore } from '$lib/stores/file-explorer.svelte'
 import { gitState } from '$lib/stores/git.svelte'
 import { workspaceState } from '$lib/stores/workspace.svelte'
+import { scopeState } from '$lib/stores/scope.svelte'
+import { scopeRootIdentity } from '$shared/types'
 import {
   isDocumentPreviewMime,
   isImageMime,
@@ -63,6 +65,8 @@ class ProjectFilesWorkspace {
     existingState: (projectId) => this.projects[this.cacheKey(projectId)],
     stateKeyFor: (projectId) => this.cacheKey(projectId),
     scopeFor: (projectId) => this.scopeFor(projectId),
+    scopeRootIdentityFor: (projectId, scopeBucketId) =>
+      scopeRootIdentity(scopeState.bucketFor(projectId, scopeBucketId)?.root),
     threadArg: (projectId) => this.threadArg(projectId),
     mountKeyFor: (projectId) => this.mountKeyFor(projectId),
     openFile: (projectId, path) => this.openFile(projectId, path),

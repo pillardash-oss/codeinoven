@@ -13,6 +13,7 @@ import { AssignmentEngine } from '../../../lib/engines/assignment-engine'
 import { PrdEngine } from '../../../lib/engines/prd-engine'
 import { EngineeringLifecycleEngine } from '../../../lib/engines/engineering-lifecycle-engine'
 import { OvenChat } from '../../ovens/oven-chat'
+import type { OvenUtilityRelays } from '../../ovens/oven-utility-relay'
 import { MemoryService } from '../memory-service'
 import { PromptAssembler } from '../prompt-assembler'
 import type { AcpAgent } from '../../../lib/acp'
@@ -52,7 +53,8 @@ import type {
   Thread,
   ThreadTransferResult,
   ThinkingLevel,
-  AssistantAgents
+  AssistantAgents,
+  AgentModelSelection
 } from '../../../lib/types'
 import { OpenUsageClient } from '../../usage/openusage-client'
 import { CustomProviderUsageClient } from '../../providers/custom-provider-usage-client'
@@ -90,6 +92,14 @@ export class ChatEngineState {
   constructor(private readonly host: ChatEngine) {}
 
   ovenChat!: OvenChat
+
+  /**
+   * The relays that carry an Oven turn's app-bound gateway calls back here.
+   *
+   * One relay per live Oven turn, owned here so app quit can retire them all:
+   * a relay left behind keeps the host holding a dead turn's capability.
+   */
+  ovenUtilityRelays: OvenUtilityRelays | null = null
 
   readonly catalogProbeQueue = createWorkQueue(2)
 
@@ -155,6 +165,16 @@ export class ChatEngineState {
   pendingToolCreations = new Map<string, string[]>()
 
   pendingImageDescriptorDecisions = new Map<string, PendingImageDescriptorDecision>()
+
+  /**
+   * The vision model the user last chose on a vision card, keyed by
+   * `<projectId>:<threadId>`. The answer is recorded here the moment it is
+   * given, so the next descriptor request in this conversation and any card
+   * still in flight use the model the user actually picked instead of falling
+   * back to the default while the thread settings write catches up (or after it
+   * is replaced by an older copy of the thread's settings).
+   */
+  imageDescriptorSelections = new Map<string, AgentModelSelection>()
 
   /**
    * The disposable vision sessions the image descriptor is running right now,

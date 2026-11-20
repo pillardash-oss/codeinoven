@@ -21,6 +21,7 @@ import {
   type ComposerMentionEntry
 } from '../composer-mentions'
 import RichMarkdownEditor from '../../shared/RichMarkdownEditor.svelte'
+import { promptFlight } from '../chat-composer-prompt-flight.svelte'
 import { speechController } from '../../../speech/speech-controller.svelte'
 import { filterActions, permissionLevelForAction } from '$lib/actions'
 import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
@@ -489,16 +490,27 @@ export class ChatComposerSubmit extends BoardUnit<ChatComposer> {
     this.performSend(direct)
   }
 
-  performSend(direct?: boolean): void {
-    // The chosen model's harness is not on the Oven, so this turn cannot run.
-    // Hold the draft instead of dispatching a run the Oven would fail.
-    if (this.root.handleDropData.ovenModelUnavailable) return
+  performSend(direct?: boolean, ovenSetupApproved = false): void {
+    // A remote Oven without the chosen harness is prepared instead of refused:
+    // the send parks on the setup card and the draft stays in the composer, so
+    // proceeding is what installs, clones and dispatches it.
+    if (this.root.handleDropData.ovenModelUnavailable && !ovenSetupApproved) {
+      this.root.ovenSetup.park(direct === true)
+      return
+    }
+    // Anything that reaches dispatch has passed the card, so a held send from an
+    // earlier attempt is stale whether the user changed the model or confirmed.
+    this.root.ovenSetup.clear()
     if (this.root.handleDropData.selectedHarnessLacksAttachments && this.attachments.length > 0) {
       this.root.handleDropData.attachmentBlockedNotice = true
       return
     }
     const msg = normalizeComposerMessage(this.value, this.projectReferences)
     speechController.observeSent(this.composerEditorId, msg)
+    // The words are about to leave the box they were typed in: measure that box
+    // now, while the draft still holds it, so the transcript can fly them from
+    // there to where the message lands instead of blinking onto the page.
+    promptFlight.depart(this.composerEditorId, msg)
     this.value = ''
     this.root.props.onValueChange?.('')
     // The words the user just sent live in the editor's own DOM, and the editor

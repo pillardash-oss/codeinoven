@@ -6,6 +6,7 @@ import type {
   UtilityKind
 } from '../../../lib/types'
 import { UTILITY_KIND_VALUES } from '../../../lib/types'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import { APP_DESIGN_UTILITY_ID, APP_VIDEO_UTILITY_ID } from '../../../lib/utility-ids'
 import { isCuaDaemonTransportFailure } from '../cua-bridge-service'
 import { designGroupBriefing } from '../../design/design-group-service'
@@ -491,7 +492,7 @@ export class UtilityOrchestrationServiceOrchestration {
       const config = entry.utility.config as McpUtilityConfig
       config.environment = {
         ...config.environment,
-        ...(request.permissionLevel === 'full_access'
+        ...(isUnrestrictedLevel(request.permissionLevel)
           ? { CUA_DRIVER_DANGEROUSLY_BYPASS_APPROVALS: 'true' }
           : { CUA_DRIVER_DISABLE_UNRESTRICTED: 'true' })
       }
@@ -725,7 +726,7 @@ export class UtilityOrchestrationServiceOrchestration {
       const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : ''
       const turnId = this.host.turnIdsByToken.get(token)
       const state = turnId ? this.host.turns.get(turnId)?.state : undefined
-      if (request.method !== 'POST' || !state || !request.url) {
+      if (request.method !== 'POST' || !state || !turnId || !request.url) {
         this.respond(response, 404, { error: 'Not found' })
         return
       }
@@ -735,37 +736,60 @@ export class UtilityOrchestrationServiceOrchestration {
         this.respond(response, 404, { error: 'Not found' })
         return
       }
-      const direct = GATEWAY_TOOLS.find((tool) => tool.route === request.url)
-      if (!direct || !state.grantedTools.some((tool) => tool.name === direct.name))
-        throw new Error('Tool is not granted to this turn')
-      const result = await handler(state, input)
-      // A tool that declares an output schema is answered with the payload both
-      // ways: content parts for a model, the same data for a script. Every other
-      // route keeps the exact body it has always returned.
-      let measurement: GatewayOutputMeasurement | undefined
-      const prepared = await budgetGatewayOutput(
-        this.host.structuredRoutes.has(request.url) ? gatewayStructuredResult(result) : result,
-        state.request.projectPath,
-        (value) => {
-          measurement = value
-        }
-      )
-      if (measurement) {
-        await this.audit(state, 'gateway.output_budgeted', {
-          ...measurement,
-          route: request.url,
-          stage: 'gateway_text_preview',
-          nativeModelInputCharacters: null
-        }).catch((error: unknown) => {
-          Logger.error('Could not record gateway output measurement:', error)
-        })
-      }
+      const prepared = await this.callRouteForTurn(turnId, request.url, input)
       this.respond(response, 200, prepared)
     } catch (error) {
       this.respond(response, 400, {
         error: error instanceof Error ? error.message : 'Utility gateway request failed'
       })
     }
+  }
+
+  /**
+   * Run one granted route for one turn, wherever the call arrived from.
+   *
+   * The app's own loopback listener and an Oven's utility host both reach the
+   * same turn state, so a route has exactly one implementation and its callers
+   * only own how the bytes arrived: an HTTP request here, or a frame over the
+   * Oven relay (see `handleRequest` above and the app-side relay client). The
+   * grant is re-checked here because an Oven host holds the turn's token and
+   * must not be able to widen it.
+   */
+  async callRouteForTurn(turnId: string, route: string, input: unknown): Promise<unknown> {
+    const state = this.host.turns.get(turnId)?.state
+    if (!state) throw new Error('This turn is no longer active')
+    const handler = this.host.bridgeHandlers.get(route)
+    if (!handler) throw new Error(`The gateway has no route ${route}`)
+    const direct = GATEWAY_TOOLS.find((tool) => tool.route === route)
+    if (!direct || !state.grantedTools.some((tool) => tool.name === direct.name))
+      throw new Error('Tool is not granted to this turn')
+    const body =
+      typeof input === 'object' && input !== null && !Array.isArray(input)
+        ? (input as Record<string, unknown>)
+        : {}
+    const result = await handler(state, body)
+    // A tool that declares an output schema is answered with the payload both
+    // ways: content parts for a model, the same data for a script. Every other
+    // route keeps the exact body it has always returned.
+    let measurement: GatewayOutputMeasurement | undefined
+    const prepared = await budgetGatewayOutput(
+      this.host.structuredRoutes.has(route) ? gatewayStructuredResult(result) : result,
+      state.request.projectPath,
+      (value) => {
+        measurement = value
+      }
+    )
+    if (measurement) {
+      await this.audit(state, 'gateway.output_budgeted', {
+        ...measurement,
+        route,
+        stage: 'gateway_text_preview',
+        nativeModelInputCharacters: null
+      }).catch((error: unknown) => {
+        Logger.error('Could not record gateway output measurement:', error)
+      })
+    }
+    return prepared
   }
 
   /**

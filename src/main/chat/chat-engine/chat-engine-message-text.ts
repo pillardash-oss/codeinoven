@@ -356,7 +356,7 @@ export function formatHistoryRecap(
 const HANDOFF_QUERY_GUIDE = [
   'Everything older than the recent tail is still in the app database, so query it instead of guessing or redoing the work:',
   '- cio_util_diagnose {"action":"read_messages","thread_id":"<the thread id above>","limit":40} returns a bounded page of this thread conversation, newest page first.',
-  '- cio_util_diagnose {"action":"search_threads","query":"<what you need>"} ranks every thread by keyword and by meaning and returns the matching passages, which is how you find where an earlier step stopped and what was already tried or verified.',
+  '- cio_util_diagnose {"action":"search_threads","query":"<what you need>"} ranks every thread by keyword and by meaning and returns the matching passages, which is how you find where an earlier step stopped and what was already tried or verified. Add project_id, scope_id or assistant_id to keep it inside this work, and {"action":"list_groups"} returns those ids.',
   '- cio_util_diagnose {"action":"read_log"} reads recent app logs, {"action":"list_schema"} lists the app database schema, and {"action":"query_sql"} runs a read-only SELECT.',
   'Those tools only read. Use them whenever a decision depends on what happened earlier: a command already run, a file already changed, an error already seen, a preference already stated.'
 ].join('\n')
@@ -569,6 +569,24 @@ export function isTaskListBookkeepingMessage(message: AgentMessage): boolean {
 }
 
 /**
+ * Whether an assistant message is a compaction marker rather than an answer.
+ *
+ * A harness reports its own compaction as an assistant message holding one
+ * compaction part, and that part may carry no summary at all (pi finishes a
+ * compaction with nothing when the summarizer returns empty). Left in the
+ * answer slot, that marker made a turn that had already answered read as a turn
+ * with no final response: the reader saw the prose on screen while the app told
+ * them the harness ended without one, and then sent its own continuation.
+ * A compaction marker is bookkeeping about context, never the answer.
+ */
+export function isCompactionBookkeepingMessage(message: AgentMessage): boolean {
+  if (message.role !== 'assistant') return false
+  if (message.structuredOutput !== undefined) return false
+  if (assistantText(message).trim().length > 0) return false
+  return message.parts.some((part) => part.type === 'compaction')
+}
+
+/**
  * The assistant message that owns a turn's final answer.
  *
  * A turn whose last assistant message is task-list bookkeeping ended on a
@@ -577,14 +595,19 @@ export function isTaskListBookkeepingMessage(message: AgentMessage): boolean {
  * marker, the completeness check, the report, and the memory context all belong
  * to the answer the user actually read, not to the bookkeeping call that followed
  * it. Reading the empty bookkeeping message instead would flag a finished turn as
- * having no final response and would overwrite the real answer with nothing. Any
- * other turn answers with its last assistant message.
+ * having no final response and would overwrite the real answer with nothing.
+ * A compaction marker is the same kind of non-answer, and is skipped the same
+ * way. Any other turn answers with its last assistant message.
  */
 export function terminalAssistantMessage(
   messages: readonly AgentMessage[],
   turnAssistant: AgentMessage | undefined
 ): AgentMessage | undefined {
-  if (!turnAssistant || !isTaskListBookkeepingMessage(turnAssistant)) return turnAssistant
+  if (
+    !turnAssistant ||
+    !(isTaskListBookkeepingMessage(turnAssistant) || isCompactionBookkeepingMessage(turnAssistant))
+  )
+    return turnAssistant
   const index = messages.findIndex((message) => message.id === turnAssistant.id)
   for (let cursor = (index < 0 ? messages.length : index) - 1; cursor >= 0; cursor--) {
     const candidate = messages[cursor]

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte'
   import { invoke } from '$lib/ipc.svelte'
   import type { PendingAgentQuestionRequest } from '$shared/types'
-  import AgentQuestionCard from '../threads/AgentQuestionCard.svelte'
+  import AgentQuestionCard from '../threads/DeferredAgentQuestionCard.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
 
   interface Props {

@@ -818,6 +818,15 @@ export class WorkspaceEffects extends BoardUnit<Workspace> {
     })
 
     $effect(() => {
+      return subscribe('browser:releaseTabs', (tabIds) => {
+        // Main releases an agent page that no conversation has used for a while. The
+        // row is the strip's, so the strip closes it: that removes the row and asks
+        // main to destroy the tab, in the one order that cannot leave either behind.
+        for (const tabId of tabIds) this.root.openThreadFromSwitcher.closeContextTab(tabId)
+      })
+    })
+
+    $effect(() => {
       return subscribe('browser:panelShortcut', (tabId, action) => {
         // Focusing the address bar is the panel's own: it owns the input, and it
         // is the surface (sidebar or full screen) that decides whether it shows it.

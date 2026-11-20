@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises'
 import { join } from 'path'
+import { handedOffQuestions } from '../thread-transfer-service/thread-transfer-attention'
 import { handedOffWorkersNote } from '../thread-transfer-service/thread-transfer-workers'
 import type {
   HandedOffWorker,
@@ -530,6 +531,13 @@ export class ChatEngineThreadsTitle {
       threadId
     )
     const ownerPid = await this.host.checkpointManager.activeTurnOwnerPid(projectId, threadId)
+    // The card the user owes an answer to is the one thing the stop below would
+    // destroy: it lives in this process's memory, so it is read before the abort
+    // clears the queue and travels with the release.
+    const questions = handedOffQuestions(this.host.pendingQuestions.values(), {
+      projectId,
+      threadId
+    })
     // A pawn agent runs on a thread of its own, so this thread's own turn can be
     // idle while a pawn it spawned is still working here.
     const pawns = await this.host.units['assignment-workers'].runningPawnThreads(
@@ -605,16 +613,18 @@ export class ChatEngineThreadsTitle {
       pawnThreadIds.push(pawn.id)
     }
     if (pawnThreadIds.length > 0) instanceRegistry.publishTurnActivity()
-    Logger.info('Transfer release read its worker roster', {
+    Logger.info('Transfer release read its attention and worker roster', {
       projectId,
       threadId,
       workers: workers.length,
-      pawns: pawnThreadIds.length
+      pawns: pawnThreadIds.length,
+      questions: questions.length
     })
     return {
       released: true,
       ...(workers.length > 0 ? { workers } : {}),
-      ...(pawnThreadIds.length > 0 ? { pawnThreadIds } : {})
+      ...(pawnThreadIds.length > 0 ? { pawnThreadIds } : {}),
+      ...(questions.length > 0 ? { questions } : {})
     }
   }
 
@@ -770,6 +780,38 @@ export class ChatEngineThreadsTitle {
       await this.publishHandedOffWorkers(pawn, pawnWorkers)
     }
     try {
+      // A card the departure was holding is the user's to answer before anything
+      // runs here: the move stopped the turn that asked, so resuming now would
+      // spend the continuation on a question nobody can answer any more. The card
+      // is re-raised instead, and the answer starts the turn that carries the
+      // worker note below.
+      let cardIsWaiting = false
+      try {
+        cardIsWaiting = await this.host.units['questions-ask'].adoptTransferredQuestions(
+          thread,
+          released?.questions,
+          note || undefined
+        )
+      } catch (error) {
+        // A card that cannot be re-raised must not fail the transfer: the thread
+        // is already here, and the plain resume is the fallback it had before.
+        Logger.error('A transferred question card could not be re-raised:', {
+          projectId,
+          threadId,
+          error: rawErrorMessage(error)
+        })
+      }
+      if (cardIsWaiting) {
+        // A pawn is a thread of its own with its own turn, so it continues here
+        // even while the thread that spawned it waits on the user.
+        await this.host.units['assignment-workers'].resumeTransferredPawns(
+          projectId,
+          threadId,
+          released?.pawnThreadIds ?? []
+        )
+        instanceRegistry.publishTurnActivity()
+        return { ok: true }
+      }
       let resumed = await this.host.units['thread-lifecycle'].resumeThreadFromPersistedSession(
         thread,
         {
@@ -779,9 +821,10 @@ export class ChatEngineThreadsTitle {
       )
       if (!resumed && thread.settings.loopMode === true) {
         // An Achievement loop resumes through its own driver, not a plain
-        // Continue; mirror the loop branch restart recovery uses.
+        // Continue; mirror the loop branch restart recovery uses, including the
+        // goal an Achievement started without an approved specification carries.
         const activeSpec = await this.host.units['spec'].getActiveSpec(projectId, threadId)
-        if (activeSpec?.status === 'approved') {
+        if (activeSpec?.status === 'approved' || (thread.achievementGoal ?? '').trim().length > 0) {
           void this.host.units['misc'].continueLoop(projectId, threadId)
           resumed = true
         }

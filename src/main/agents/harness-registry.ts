@@ -63,11 +63,16 @@ function manifest(behaviors: Record<HarnessManifestBehavior, boolean>): HarnessM
   return { schemaVersion: HARNESS_MANIFEST_SCHEMA_VERSION, behaviors }
 }
 
-/** The canonical ordered harness manifest. Pi first because it is bundled and doesn't need a cli */
+/**
+ * The canonical ordered harness manifest. CIO Pi first: it is the app's own
+ * build of pi, ships with the app, and needs no CLI. The id stays `pi` because
+ * the accounts, the agent dir, the native provider config and the host all key
+ * on it; only the name the user picks says whose harness it is.
+ */
 const HARNESSES: readonly HarnessDescriptor[] = [
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'CIO Pi',
     command: 'pi',
     versionArgs: ['--version'],
     integration: 'ready',
@@ -151,7 +156,7 @@ const HARNESSES: readonly HarnessDescriptor[] = [
     supportsCustomProviders: false,
     // Muse compacts via a local summary checkpoint for its stateless transport.
     manifest: manifest({ loadsAgentsMd: true, manualCompaction: true, multipleAccounts: false })
-  },
+  }
 ]
 
 /** The canonical ordered harness list   the single source of truth. */

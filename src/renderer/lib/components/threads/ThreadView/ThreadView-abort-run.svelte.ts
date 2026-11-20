@@ -638,9 +638,8 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
   }
 
   /**
-   * Drop an answered request from whichever queue owns it: a controller-driven
-   * conversation publishes through the shared attention store, threads keep the
-   * queue in this view.
+   * Drop an answered request from the shared attention store, which is the one
+   * queue a conversation has whether it is a thread or a controller-driven chat.
    */
   resolvePendingPermission(requestId: string): void {
     if (this.root.props.controller) {

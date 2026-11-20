@@ -277,7 +277,7 @@ export const AUTH_DEFINITIONS: AuthDefinition[] = [
   },
   {
     id: 'pi',
-    name: 'Pi',
+    name: 'CIO Pi',
     command: 'pi',
     readStatus: readPiStatus,
     // No terminal handoff: connecting happens in-app   the provider's own

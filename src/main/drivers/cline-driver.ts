@@ -2,6 +2,7 @@ import { chmod, mkdir, readdir, readFile, rm, unlink, writeFile } from 'fs/promi
 import { join } from 'path'
 import type { BaseUrlProvider, ProviderCatalog, ProviderModel } from '../../lib/types'
 import { isQuestionToolName } from '../../lib/agent-interactions'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
 import type {
   CliLineParseContext,
   CliLineParseResult,
@@ -340,7 +341,7 @@ export class ClineDriver extends PersistentCliDriver {
       ? await this.prepareWebOnlyHook(session.id, options)
       : undefined
 
-    if (options.settings.permissionLevel === 'full_access' || webOnlyTurn) {
+    if (isUnrestrictedLevel(options.settings.permissionLevel) || webOnlyTurn) {
       args.push('--auto-approve', 'true')
     } else {
       args.push('--auto-approve', 'false')
@@ -369,7 +370,7 @@ export class ClineDriver extends PersistentCliDriver {
     env['CLINE_SESSION_BACKEND_MODE'] = 'local'
 
     let onProcessExit: (() => void) | undefined
-    if (options.settings.permissionLevel !== 'full_access' && !webOnlyTurn) {
+    if (!isUnrestrictedLevel(options.settings.permissionLevel) && !webOnlyTurn) {
       const bridge = await this.startApprovalBridge(
         session.id,
         projectPath,

@@ -13,6 +13,7 @@
   import TooltipHost from '$lib/components/ui/TooltipHost.svelte'
   import AppConfirmDialog from '$lib/components/ui/AppConfirmDialog.svelte'
   import TextSelectionContextMenu from '$lib/components/shared/TextSelectionContextMenu.svelte'
+  import PromptFlightLayer from '$lib/components/chats/PromptFlightLayer.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import {
     isSettingsView,
@@ -243,6 +244,10 @@
        question outlives the surface that asked it. -->
   <AppConfirmDialog />
   <TextSelectionContextMenu />
+  <!-- The words a reader just sent, crossing from the composer into the
+       transcript. It floats over every view because the send happens in a thread
+       and the words must keep their bearings while the column settles. -->
+  <PromptFlightLayer />
   <TooltipHost />
   {#if scopeConfirmations.current}
     <!-- An agent's destructive scope action is parked in main until this dialog

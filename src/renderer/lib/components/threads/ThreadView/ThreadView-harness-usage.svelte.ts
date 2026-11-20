@@ -131,7 +131,8 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
 
   harnessUsage = $derived.by((): AgentHarnessUsage[] => {
     const byHarness: Record<string, AgentHarnessUsage> = {}
-    for (const message of this.root.loadOlderMessages.messages) {
+    // The coarse snapshot, not the per-flush array: usage is a header value.
+    for (const message of this.root.loadOlderMessages.scanMessages) {
       if (message.role !== 'assistant') continue
       const harnessId = message.harnessId ?? this.root.loadOlderMessages.settings.harnessId
       const providerId = message.providerId ?? this.root.loadOlderMessages.settings.providerId

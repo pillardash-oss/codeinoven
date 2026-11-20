@@ -364,6 +364,18 @@ export interface PendingPermissionInfo {
   policy: PermissionDecisionResult
   resumeStatus: Extract<ThreadStatus, 'planning' | 'executing'>
   /**
+   * The card's own deadline timer.
+   *
+   * A permission card is the one gate nothing can answer on the user's behalf:
+   * the decision is theirs, and a wrong automatic approval is not recoverable.
+   * So an unanswered card is refused on the same configurable timeout the
+   * question and secret cards use, which lets the agent stop waiting and find
+   * another way instead of parking the turn forever.
+   */
+  timer?: ReturnType<typeof setTimeout>
+  /** When the untouched card closes, epoch ms. Absent while the user is active. */
+  expiresAt?: number
+  /**
    * Set for an app-owned browser action on the page the user is viewing. The
    * gateway tool call that asked is still open, so it settles here instead of
    * being answered through a harness.
@@ -381,6 +393,19 @@ export interface PendingQuestionInfo {
   timer?: ReturnType<typeof setTimeout>
   resolution?: AgentQuestionResolution
   answers?: string[][]
+  /**
+   * The card arrived with a cross-instance transfer.
+   *
+   * Its provider dialog died with the departing instance, so there is no live
+   * request to reply into: the answer continues the persisted session as a new
+   * turn instead (see `resumeAfterInactiveQuestion`).
+   */
+  transferred?: boolean
+  /**
+   * What the move itself has to tell the resumed agent, carried until the answer
+   * finally resumes the session (the worker roster a transfer hands over).
+   */
+  transferNote?: string
   /**
    * Set for an app-owned `cio_ask_secret` request. The gateway tool call that
    * asked is still open, so it settles here instead of being answered through a

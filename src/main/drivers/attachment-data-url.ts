@@ -8,24 +8,46 @@ import { toPosixPath } from '../../lib/paths'
 import { CIO_SCRATCH_DIRECTORY } from '../../lib/cio-cleanup'
 
 /** Extensions every harness's image decoder recognizes by file name. */
-const DATA_URL_EXTENSIONS: Record<string, string> = {
+const IMAGE_EXTENSIONS: Record<string, string> = {
   'image/png': '.png',
   'image/jpeg': '.jpg',
   'image/gif': '.gif',
   'image/webp': '.webp',
   'image/bmp': '.bmp',
   'image/avif': '.avif',
-  'image/tiff': '.tiff'
+  'image/tiff': '.tiff',
+  'image/svg+xml': '.svg'
 }
 
+/** Largest image payload the app will stage for one attachment. */
+const MAX_MATERIALIZED_BYTES = 16 * 1024 * 1024
+
+/** How long a remote image may take to answer before the descriptor gives up. */
+const REMOTE_FETCH_TIMEOUT_MS = 20_000
+
 /**
- * Where an embedded attachment payload is written before dispatch: the
- * conversation's own scratch directory, the same `.cio/tmp/attachments` folder
- * the composer stages pasted files in, so the file is gitignored and removed
- * with the thread rather than left in system temp.
+ * Where an embedded or remote attachment payload is written before dispatch:
+ * the conversation's own scratch directory, the same `.cio/tmp/attachments`
+ * folder the composer stages pasted files in, so the file is gitignored and
+ * removed with the thread rather than left in system temp.
  */
 export function attachmentScratchDirectory(projectPath: string): string {
   return join(projectPath, CIO_SCRATCH_DIRECTORY, 'tmp', 'attachments')
+}
+
+/**
+ * A source the app cannot turn into an image: an unmatchable URL, a page instead
+ * of an image, an oversized payload, or a malformed embedded payload.
+ *
+ * This is a problem with the request, never with the vision model, so callers
+ * report it on that image's own result instead of retrying another model or
+ * interrupting the user with a model-choice card.
+ */
+export class ImageSourceError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ImageSourceError'
+  }
 }
 
 /** Whether an attachment carries its bytes inline instead of naming a file. */
@@ -33,28 +55,43 @@ export function isDataUrlAttachment(attachment: PromptAttachment): boolean {
   return attachment.url.startsWith('data:')
 }
 
+/** Whether an attachment names a resource the app has to download itself. */
+export function isRemoteAttachment(attachment: PromptAttachment): boolean {
+  return /^https?:\/\//iu.test(attachment.url)
+}
+
 /**
- * Write an embedded `data:` attachment into a real file inside `directory` and
- * answer the same attachment pointing at that file.
+ * Resolve every attachment whose bytes are not already a local file into a real
+ * file inside `directory`, and answer the same attachment pointing at it.
  *
- * Not every harness can open a data URL: the OpenCode backend resolves a prompt
- * file part through `Bun.file`, which treats the whole `data:...` string as a
- * filesystem path and fails with ENOENT, killing the turn before the model ever
- * sees the image. Decoding the payload once here gives every harness a plain
- * file path, keeps megabytes of base64 out of the prompt, and names the file
- * after its own bytes so a retry of the same image reuses the file it already
- * wrote.
- *
- * A non-data attachment is returned unchanged.
+ * Not every harness can open a data URL or fetch a URL: the OpenCode backend
+ * resolves a prompt file part through `Bun.file`, which treats the whole
+ * `data:...` or `http://...` string as a filesystem path and fails with ENOENT
+ * before the model ever sees the image. Decoding or downloading the payload
+ * once here gives every harness a plain file path and keeps megabytes of
+ * base64 out of the prompt. A local attachment is returned unchanged.
+ */
+export async function materializeAttachment(
+  attachment: PromptAttachment,
+  directory: string
+): Promise<PromptAttachment> {
+  if (isDataUrlAttachment(attachment)) return materializeDataUrlAttachment(attachment, directory)
+  if (isRemoteAttachment(attachment)) return materializeRemoteAttachment(attachment, directory)
+  return attachment
+}
+
+/**
+ * Write an embedded `data:` attachment into a real file inside `directory`.
+ * The decoded file is named after its own bytes, so a retry of the same image
+ * reuses the file it already wrote instead of staging another copy.
  */
 export async function materializeDataUrlAttachment(
   attachment: PromptAttachment,
   directory: string
 ): Promise<PromptAttachment> {
-  if (!isDataUrlAttachment(attachment)) return attachment
   const comma = attachment.url.indexOf(',')
   if (comma === -1) {
-    throw new Error('Image data URL is malformed: the payload separator is missing.')
+    throw new ImageSourceError('Image data URL is malformed: the payload separator is missing.')
   }
   const header = attachment.url.slice(5, comma)
   const base64 = header.split(';').includes('base64')
@@ -66,15 +103,85 @@ export async function materializeDataUrlAttachment(
       ? Buffer.from(payload, 'base64')
       : Buffer.from(decodeURIComponent(payload), 'utf8')
   } catch {
-    throw new Error('Image data URL is malformed: the payload could not be decoded.')
+    throw new ImageSourceError('Image data URL is malformed: the payload could not be decoded.')
   }
   if (bytes.byteLength === 0) {
-    throw new Error('Image data URL is empty: there is nothing to describe.')
+    throw new ImageSourceError('Image data URL is empty: there is nothing to describe.')
   }
   const mime = declaredMime.startsWith('image/')
     ? declaredMime
     : (sniffImageMagic(bytes) ?? 'image/png')
-  const extension = DATA_URL_EXTENSIONS[mime] ?? '.png'
+  return writeStagedAttachment(bytes, mime, directory, attachment.filename)
+}
+
+/**
+ * Download a remote `http(s)` attachment into a real file inside `directory`.
+ *
+ * A vision call is handed a URL that is a page rather than an image far more
+ * often than one would hope (a dev-server route, a route the model guessed), so
+ * anything that does not answer with image bytes is refused here with a message
+ * that names the actual problem. Passing the URL through would only move the
+ * failure into the harness, where it surfaces as a path error that says nothing
+ * about the cause.
+ */
+export async function materializeRemoteAttachment(
+  attachment: PromptAttachment,
+  directory: string
+): Promise<PromptAttachment> {
+  let response: Response
+  try {
+    response = await fetch(attachment.url, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS)
+    })
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new ImageSourceError(
+      `Image source could not be downloaded: ${attachment.url} (${reason}). Pass a local image file path instead.`
+    )
+  }
+  if (!response.ok) {
+    throw new ImageSourceError(
+      `Image source could not be downloaded: ${attachment.url} answered HTTP ${response.status}. Pass a local image file path instead.`
+    )
+  }
+  const contentLength = Number(response.headers.get('content-length') ?? '0')
+  if (contentLength > MAX_MATERIALIZED_BYTES) {
+    throw new ImageSourceError(
+      `Image source is larger than the 16 MiB limit: ${attachment.url}. Pass the image file itself instead.`
+    )
+  }
+  const bytes = Buffer.from(await response.arrayBuffer())
+  if (bytes.byteLength > MAX_MATERIALIZED_BYTES) {
+    throw new ImageSourceError(
+      `Image source is larger than the 16 MiB limit: ${attachment.url}. Pass the image file itself instead.`
+    )
+  }
+  const declaredMime = (response.headers.get('content-type') ?? '')
+    .split(';')[0]
+    ?.trim()
+    .toLowerCase()
+  const mime = declaredMime?.startsWith('image/') ? declaredMime : sniffImageMagic(bytes)
+  if (!mime) {
+    throw new ImageSourceError(
+      `Image source is not an image: ${attachment.url} answered ${declaredMime || 'an unknown content type'}. Capture it as an image (for example a browser screenshot) and pass that file path.`
+    )
+  }
+  return writeStagedAttachment(bytes, mime, directory, attachment.filename)
+}
+
+/**
+ * Stage bytes as one file in `directory`. The name is derived from the content,
+ * so the same payload staged twice maps to the same file and a retry does not
+ * litter the scratch directory.
+ */
+async function writeStagedAttachment(
+  bytes: Buffer,
+  mime: string,
+  directory: string,
+  filename?: string
+): Promise<PromptAttachment> {
+  const extension = IMAGE_EXTENSIONS[mime] ?? '.png'
   await mkdir(directory, { recursive: true })
   const digest = createHash('sha256').update(bytes).digest('hex').slice(0, 32)
   const path = join(directory, `attachment-${digest}${extension}`)
@@ -86,12 +193,12 @@ export async function materializeDataUrlAttachment(
   return {
     mime,
     url: fileUrlFor(path),
-    filename: attachment.filename ?? basename(path)
+    filename: filename ?? basename(path)
   }
 }
 
 /** Portable file URL for a native path, matching how path attachments arrive. */
-function fileUrlFor(path: string): string {
+export function fileUrlFor(path: string): string {
   const normalized = toPosixPath(path)
   return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
 }

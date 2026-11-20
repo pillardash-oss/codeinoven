@@ -15,6 +15,8 @@
   import Modal from '$lib/components/ui/Modal.svelte'
   import FullscreenPanelDialog from '$lib/components/workspace/FullscreenPanelDialog.svelte'
   import StalePanelNotice from '$lib/components/ui/StalePanelNotice.svelte'
+  import { scopeState } from '$lib/stores/scope.svelte'
+  import { scopeRootIdentity } from '$shared/types'
   import Switch from '$lib/components/ui/Switch.svelte'
   import ColorSwatches from '$lib/components/shared/ColorSwatches.svelte'
   import ActionTerminal from './ActionTerminal.svelte'
@@ -50,6 +52,7 @@
 
   $effect(() => {
     void projectActionsState.load(projectId)
+    void scopeState.ensureBoardLoaded(projectId)
   })
   let actions = $derived(projectActionsState.actions(projectId))
 
@@ -147,7 +150,12 @@
   let scopeStale = $derived(
     actions.some((action) => {
       const run = projectActionsState.run(action.id)
-      return run?.running === true && run.scopeBucketId !== scopeBucketId
+      if (!run?.running) return false
+      const previousRoot =
+        run.scopeRootIdentity ??
+        scopeRootIdentity(scopeState.bucketFor(projectId, run.scopeBucketId)?.root)
+      const currentRoot = scopeRootIdentity(scopeState.bucketFor(projectId, scopeBucketId)?.root)
+      return previousRoot !== null && currentRoot !== null && previousRoot !== currentRoot
     })
   )
 
@@ -186,7 +194,13 @@
   }
   function requestRun(action: ProjectAction): void {
     if (action.variables.length === 0) {
-      projectActionsState.start(projectId, action, {}, scopeBucketId)
+      projectActionsState.start(
+        projectId,
+        action,
+        {},
+        scopeBucketId,
+        scopeRootIdentity(scopeState.bucketFor(projectId, scopeBucketId)?.root)
+      )
       return
     }
     runValues = Object.fromEntries(action.variables.map((variable) => [variable.name, '']))
@@ -194,7 +208,13 @@
   }
   function startRun(): void {
     if (!runTarget) return
-    projectActionsState.start(projectId, runTarget, runValues, scopeBucketId)
+    projectActionsState.start(
+      projectId,
+      runTarget,
+      runValues,
+      scopeBucketId,
+      scopeRootIdentity(scopeState.bucketFor(projectId, scopeBucketId)?.root)
+    )
     runTarget = null
   }
   function duplicate(action: ProjectAction): void {

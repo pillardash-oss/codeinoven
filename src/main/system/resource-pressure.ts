@@ -9,12 +9,16 @@
  *
  * CPU comes from `os.cpus()` deltas rather than a load average, because a load
  * average is a minute of history and the question here is "is there room right
- * now". Memory comes from `process.getSystemMemoryInfo().free` in main, which on
- * macOS already reports what can be handed out, not the tiny raw free-page count
- * that would queue work on a perfectly healthy machine.
+ * now". Memory is what the machine can actually hand out: `MemAvailable` on
+ * Linux, and free plus inactive, speculative and purgeable pages on macOS. The
+ * raw free-page count is far too small to judge a healthy Mac by (a 16 GB machine
+ * idling at 56 MB free still has about 2.9 GB available), and reading it made the
+ * gate hold work on a machine with plenty of room.
  */
 import { cpus, freemem, totalmem } from 'node:os'
 import { readFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
 import { app } from 'electron'
 import { decideAdmission, type AdmissionDecision } from '../../lib/resource-admission'
 import { Logger } from './logger'
@@ -72,11 +76,73 @@ function readableSystemMemory(): SystemMemoryInfo | null {
 }
 
 /**
- * Bytes new work can use. Electron reports the machine's own free memory in
- * kilobytes, which is the number that already accounts for reclaimable cache;
- * the Node figure is only a fallback for a platform that cannot answer.
+ * Bytes macOS says can be handed out, from `vm_stat`.
+ *
+ * Free pages alone are not availability: the kernel keeps most idle memory in
+ * inactive, speculative and purgeable pages, which it reclaims on demand. The
+ * page size is printed in the same output, so nothing has to assume 4 KB pages
+ * on Apple silicon.
  */
-function availableMemoryBytes(): number {
+export function darwinAvailableBytes(vmStat: string): number | null {
+  const pageSize = /page size of (\d+) bytes/u.exec(vmStat)
+  if (!pageSize) return null
+  const size = Number(pageSize[1])
+  if (!Number.isFinite(size) || size <= 0) return null
+  const pages = (label: string): number => {
+    const match = new RegExp(`^${label}:\\s+(\\d+)\\.`, 'mu').exec(vmStat)
+    return match ? Number(match[1]) : 0
+  }
+  const availablePages =
+    pages('Pages free') +
+    pages('Pages inactive') +
+    pages('Pages speculative') +
+    pages('Pages purgeable')
+  return Math.max(0, availablePages * size)
+}
+
+/** Bytes Linux says can be handed out, from `/proc/meminfo`'s `MemAvailable`. */
+export function linuxAvailableBytes(meminfo: string): number | null {
+  const match = /^MemAvailable:\s+(\d+) kB$/mu.exec(meminfo)
+  if (!match) return null
+  return Math.max(0, Number(match[1]) * 1024)
+}
+
+/** Longest the darwin read waits for `vm_stat` before it is treated as no answer. */
+const VM_STAT_TIMEOUT_MS = 1_000
+
+const execFileAsync = promisify(execFile)
+
+/** What the platform reports as available, or null when nothing can be read.
+ *
+ * The darwin read spawns a child process, so it is asynchronous: `vm_stat` on a
+ * busy machine can take longer than the answer is worth, and this sampler runs
+ * on the Electron main thread, where a synchronous spawn froze the UI. A
+ * failure or a timeout is one caught rejection, never a rejected sampler. The
+ * Linux read stays synchronous: `/proc/meminfo` is a small in-memory file whose
+ * read is cheaper than the promise that would wrap it.
+ */
+async function platformAvailableBytes(): Promise<number | null> {
+  try {
+    if (process.platform === 'darwin') {
+      const { stdout } = await execFileAsync('/usr/bin/vm_stat', {
+        encoding: 'utf8',
+        timeout: VM_STAT_TIMEOUT_MS
+      })
+      return darwinAvailableBytes(stdout)
+    }
+    if (process.platform === 'linux') {
+      return linuxAvailableBytes(readFileSync('/proc/meminfo', 'utf8'))
+    }
+  } catch (error) {
+    Logger.dev('Resource pressure: available memory reading failed', error)
+  }
+  return null
+}
+
+/** Bytes new work can use, falling back to raw free memory when nothing answers. */
+async function availableMemoryBytes(): Promise<number> {
+  const available = await platformAvailableBytes()
+  if (available !== null) return available
   const info = readableSystemMemory()
   if (info) return Math.max(0, info.free * 1024)
   return Math.max(0, freemem())
@@ -156,7 +222,7 @@ class ResourcePressureSampler {
     this.#armIdleDisarm()
     return decideAdmission({
       cpuAvailablePercent: this.#averageIdlePercent(),
-      memoryAvailableBytes: availableMemoryBytes(),
+      memoryAvailableBytes: await availableMemoryBytes(),
       totalMemoryBytes: totalMemoryBytes()
     })
   }

@@ -9,6 +9,7 @@ import { PAWN_DEFAULT_THINKING_LEVEL } from '../../../lib/pawn-tools'
 import { PAWN_AGENT_CONTRACT } from '../../../lib/agent-behavior'
 import { AssignmentEngineError } from '../../../lib/engines/assignment-engine'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
+import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import { broadcastThreadUpdate, updateRetryWakeWindow } from '../thread-events'
 import { validateEntityId, validateThreadSettings } from '../../ipc/ipc-validation'
 import type { HarnessDriver } from '../../drivers/driver.interface'
@@ -655,7 +656,9 @@ export class ChatEngineAssignmentWorkers {
         // A terminal event gets one fresh attempt even if the earlier snapshot failed.
       }
     }
-    await this.captureChildSession(owner, sessionId)
+    // The child is done, so its transcript is already on disk: nothing to wait
+    // for, and on an Oven waiting would poll for a flush that already happened.
+    await this.captureChildSession(owner, sessionId, undefined, { waitForFlush: false })
   }
 
   /**
@@ -1414,7 +1417,7 @@ export class ChatEngineAssignmentWorkers {
       `You are a CodeInOven pawn agent: an independent worker thread spawned by the agent working on thread ${threadId}, and you answer to that agent alone.`,
       purpose ? `Purpose: ${purpose}.` : '',
       'The user cannot prompt you and does not answer you. Work autonomously, do not ask the user questions, and do not commit: the agent that spawned you reviews your work and commits it.',
-      settings.permissionLevel === 'full_access'
+      isUnrestrictedLevel(settings.permissionLevel)
         ? 'You have full access to this project.'
         : 'Destructive actions need approval, which is surfaced on the thread that spawned you.',
       PAWN_AGENT_CONTRACT,
@@ -1773,9 +1776,12 @@ export class ChatEngineAssignmentWorkers {
             Logger.dev('Sub-agent transcript capture unavailable:', error)
           )
         } else if (!alreadyTracked) {
-          void this.captureChildSession(owner, childSessionId).catch((error) =>
-            Logger.dev('Sub-agent transcript capture unavailable:', error)
-          )
+          // A capture nobody opened must not wait on the harness to flush: on an
+          // Oven that wait is a polling read, and the mirror and live activity
+          // already cover a worker whose view is closed.
+          void this.captureChildSession(owner, childSessionId, undefined, {
+            waitForFlush: false
+          }).catch((error) => Logger.dev('Sub-agent transcript capture unavailable:', error))
         }
       }
     }

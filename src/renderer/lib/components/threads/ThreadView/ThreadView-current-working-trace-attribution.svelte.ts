@@ -162,7 +162,9 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
   composerUsage = $derived(
     composerContextUsage(
       this.root.contextUsage.contextUsageDisplay,
-      this.root.loadOlderMessages.messages,
+      // The coarse snapshot: `displayed` already recomputes at that cadence,
+      // and the walk below is O(transcript) until it finds usage.
+      this.root.loadOlderMessages.scanMessages,
       this.root.handleAgentEvent.thread.contextUsage,
       {
         harnessId: this.root.loadOlderMessages.settings.harnessId,

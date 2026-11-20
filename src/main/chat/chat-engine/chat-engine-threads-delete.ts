@@ -70,13 +70,40 @@ export class ChatEngineThreadsDelete {
       // Forget the old session so its idle sync cannot resurrect the
       // truncated messages into the mirror.
       this.host.units['turns-steer'].clearHeldSteers(thread.sessionId)
-      this.host.sessionRegistry.delete(thread.sessionId)
       this.host.state.reasoningTimes.delete(thread.sessionId)
       this.host.state.toolTimes.delete(thread.sessionId)
+      this.host.state.outboundMessageIdsBySession.delete(thread.sessionId)
+      const sessionOwner = this.host.sessionRegistry.get(thread.sessionId)
+      const driver = this.host.units['turns-dispatch'].driverForRuntime(
+        sessionOwner?.driverId ??
+          thread.sessionHarnessId ??
+          thread.settings?.harnessId ??
+          DEFAULT_HARNESS,
+        sessionOwner?.accountId ?? thread.sessionAccountId
+      )
+      const projectPath = await this.host.units['turns']
+        .resolveProjectPath(projectId)
+        .catch(() => null)
+      // A harness that can edit its own history keeps the session: the removed
+      // messages become records in the native transcript and the live session
+      // reloads it, so a display edit never costs the thread its engine state,
+      // its transcript identity, or the context that was not trimmed.
+      let trimmedNatively = false
+      if (projectPath && driver?.trimSessionHistory) {
+        try {
+          trimmedNatively = await driver.trimSessionHistory(projectPath, thread.sessionId, kept)
+        } catch (error) {
+          Logger.dev('Native history trim failed; discarding the session instead:', error)
+        }
+      }
+      if (trimmedNatively) return presentableMessages(kept)
+      // Everything below is the fallback for a harness without native history
+      // editing: the session is discarded and the next turn replays the edited
+      // mirror into a fresh one.
+      this.host.sessionRegistry.delete(thread.sessionId)
       this.host.sessionStatuses.delete(thread.sessionId)
       this.host.state.planningSessions.delete(thread.sessionId)
       this.host.state.preparedImplementationSessions.delete(thread.sessionId)
-      this.host.state.outboundMessageIdsBySession.delete(thread.sessionId)
       // A handoff pointer prepared for the discarded session describes a tail
       // that no longer exists in the thread, so it must never reach a later
       // session.
@@ -86,17 +113,8 @@ export class ChatEngineThreadsDelete {
       // binding   so the pre-edit conversation can never be restored onto a
       // later session. The next turn seeds a fresh native transcript from the
       // edited mirror (see ensureSession's prefill).
-      const sessionOwner = this.host.sessionRegistry.get(thread.sessionId)
-      const driver = this.host.units['turns-dispatch'].driverForRuntime(
-        sessionOwner?.driverId ??
-          thread.sessionHarnessId ??
-          thread.settings?.harnessId ??
-          DEFAULT_HARNESS,
-        sessionOwner?.accountId ?? thread.sessionAccountId
-      )
       try {
-        const projectPath = await this.host.units['turns'].resolveProjectPath(projectId)
-        await driver?.deleteSession?.(projectPath, thread.sessionId)
+        if (projectPath) await driver?.deleteSession?.(projectPath, thread.sessionId)
       } catch (error) {
         Logger.dev('Stale session cleanup after message deletion failed:', error)
       }
@@ -260,6 +278,7 @@ export class ChatEngineThreadsDelete {
     this.host.state.activeLoopRuns.delete(`${projectId}:${threadId}`)
     this.host.state.activeAchievementAuditorEnsures.delete(`${projectId}:${threadId}`)
     this.host.state.activeAchievementAuditRuns.delete(`${projectId}:${threadId}`)
+    this.host.state.imageDescriptorSelections.delete(`${projectId}:${threadId}`)
 
     // The thread's own workspace directory (the directory its session ran in
     // and the mount root of its file tree) is per-thread app data, as are the

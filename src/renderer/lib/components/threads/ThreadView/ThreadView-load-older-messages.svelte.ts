@@ -7,8 +7,14 @@ import { playHistoryArrive } from '$lib/motion'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadHoldsOpenTrace } from '$lib/stores/thread-preload'
+import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
-import type { ThreadMessageCursor, ThreadSettings, TurnStreamPartsPage } from '$shared/types'
+import type {
+  AgentMessage,
+  ThreadMessageCursor,
+  ThreadSettings,
+  TurnStreamPartsPage
+} from '$shared/types'
 import {
   hasRenderableWorkingParts,
   isActivityOnlyUserMessage,
@@ -19,6 +25,9 @@ import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { DEFAULT_SETTINGS } from '$lib/stores/thread-settings.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+/** Longest the expensive whole-transcript scans may lag a live stream. */
+const MESSAGE_SCAN_CADENCE_MS = 250
+
 /** One concern of the ThreadView board. */
 export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
@@ -39,6 +48,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
    * built, so the board asks for it right after construction.
    */
   bind(): void {
+    this.bindScanCadence()
     const mounted = this.root.unmirroredTraceStartTime.mountedThread
     this.userScrolledAway =
       this.root.unmirroredTraceStartTime.savedScrollState?.awayFromBottom ?? false
@@ -46,6 +56,34 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       threadMessages.messages(mounted.projectId, mounted.id).length,
       this.root.composerScope.INITIAL_PAINT_MESSAGES
     )
+  }
+
+  /**
+   * Own the snapshot cadence, from `bind()` so the effect is created inside
+   * the component's setup like every other board effect.
+   */
+  private bindScanCadence(): void {
+    $effect(() => {
+      const messages = this.messages
+      if (messages.length !== this.#scanLength) {
+        // Shape changed: publish now, so counts and boundaries stay exact.
+        this.#scanLength = messages.length
+        this.#scanLastAt = Date.now()
+        this.scanMessages = messages
+        return
+      }
+      if (this.#scanTimer !== null) return
+      // Same shape with a new array identity: only the tail moved. One refresh
+      // per cadence is plenty for a header or a panel nobody reads per token.
+      const wait = Math.max(0, MESSAGE_SCAN_CADENCE_MS - (Date.now() - this.#scanLastAt))
+      this.#scanTimer = setTimeout(() => {
+        this.#scanTimer = null
+        if (!this.alive) return
+        this.#scanLastAt = Date.now()
+        this.#scanLength = this.messages.length
+        this.scanMessages = this.messages
+      }, wait)
+    })
   }
   /** True when this view is driven by an external controller (e.g. temporary chat). */
   hasController = $derived(this.root.props.controller !== undefined)
@@ -59,6 +97,35 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         this.root.handleAgentEvent.thread.id
       )
   )
+
+  /**
+   * Coarse transcript snapshot for the expensive whole-list scans: the Sources
+   * panel fold, the context meter, the harness usage scan, and the history
+   * previews. The live `messages` array is republished on every 16 ms stream
+   * flush, and each republish re-runs those full-transcript walks even though
+   * only the streaming tail actually changed. This snapshot follows the same
+   * array, republished immediately when the transcript's shape changes (a
+   * message added or removed) and at most once per cadence while a stream
+   * runs, so the scans drop off the per-flush frame entirely and a settled
+   * transcript is never stale: with nothing streaming there is no flush, and
+   * the snapshot is the live array's exact content.
+   */
+  // Raw, not deep state: this holds the transcript array the cache already owns,
+  // and wrapping it in a proxy made every consumer read proxies instead of the
+  // real messages. Svelte warned about exactly that identity mismatch
+  // (state_proxy_equality_mismatch), and any `===` against the store's own
+  // array then answered wrong, which is how a freshly sent message could
+  // vanish from the view it had just been added to.
+  scanMessages = $state.raw<AgentMessage[]>([])
+
+  /** When the snapshot last republished, for the streaming cadence. */
+  #scanLastAt = 0
+  /** Pending cadence refresh, armed only while a stream keeps publishing. */
+  #scanTimer: ReturnType<typeof setTimeout> | null = null
+
+  /** Length of the last snapshot, tracked outside reactivity to keep the
+   *  effect above from reading the state it writes. */
+  #scanLength = 0
 
   /** Set by `bind()`: whether the conversation was left scrolled away. */
   userScrolledAway = $state(false)
@@ -1033,6 +1100,16 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
     const { projectId, id } = this.root.handleAgentEvent.thread
 
+    // Register this conversation with the shared attention store and read its
+    // authoritative permission queue before anything else on this pass. A card
+    // the reader opened the thread for must never wait on an unrelated read
+    // (the session status below can be slow or fail) and must never be
+    // cancelled by another view's mount: leaving the thread for a project view
+    // unmounts this view, so the card comes from the store and is reconciled
+    // here instead of from state this mount owns.
+    conversationAttention.track(projectId, id)
+    void this.root.editVideoNote.refreshPendingPermissions()
+
     // Independent extras   each lands as it resolves, none block the paint.
     void this.root.switchProject.loadProjectContext()
     // The durable fold is not what makes a thread readable. The mirror already
@@ -1108,18 +1185,17 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       }
       const liveSessionWorking = this.root.handleAgentEvent.providerStatus?.state === 'working'
       if (liveSessionWorking) {
-        await this.root.editVideoNote.refreshPendingPermissions()
-        if (!this.alive) return
         await this.root.sources.refreshPendingImageDescriptorError()
         if (!this.alive) return
         await this.root.composerScope.refreshPendingQuestions()
         if (!this.alive) return
       } else {
-        // A completed thread has nothing waiting on these: a permission card or
-        // a question only exists while work is in flight. They enrich the opened
-        // thread, so they load after the frame instead of holding the restore.
-        scheduleDeferredWork('thread:restored-session-extras', () => {
-          void this.root.editVideoNote.refreshPendingPermissions()
+        // A completed thread has nothing waiting on these: a question only exists
+        // while work is in flight. They enrich the opened thread, so they load
+        // after the frame instead of holding the restore. The key is per-thread
+        // because this scheduler is latest-wins across the whole renderer: a
+        // shared key let another thread's mount cancel this one's restore.
+        scheduleDeferredWork(`thread:restored-session-extras:${projectId}:${id}`, () => {
           void this.root.sources.refreshPendingImageDescriptorError()
           void this.root.composerScope.refreshPendingQuestions()
         })
@@ -1157,7 +1233,7 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
         this.applyRestoredTrace(await readTraceWindow())
         if (!this.alive) return
       } else {
-        scheduleDeferredWork('thread:restored-trace', () => {
+        scheduleDeferredWork(`thread:restored-trace:${projectId}:${id}`, () => {
           void this.root.pollStreamParts.loadCompletedTurns()
           void readTraceWindow().then((page) => this.applyRestoredTrace(page))
         })

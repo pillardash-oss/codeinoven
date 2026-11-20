@@ -18,6 +18,7 @@ import {
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
 import { FOLLOW_UP_OPERATIONS } from '../../../lib/follow-up'
+import type { ThreadSearchOptions } from '../../database/repositories/thread-repo'
 import {
   APP_BROWSER_UTILITY_ID,
   APP_SCOPE_UTILITY_ID,
@@ -146,7 +147,8 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
 
   /** Attach the hybrid thread search used by the diagnostics `search_threads` action. */
   setThreadSearchProvider(
-    provider: ((query: string) => Promise<ThreadSearchResult[]>) | null
+    provider:
+      ((query: string, options: ThreadSearchOptions) => Promise<ThreadSearchResult[]>) | null
   ): void {
     this.host.threadSearch = provider
   }

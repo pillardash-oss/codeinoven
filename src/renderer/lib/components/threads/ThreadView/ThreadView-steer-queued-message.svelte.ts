@@ -9,7 +9,7 @@ import {
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
 import { claimQueuedMessage, releaseQueuedMessage } from '$lib/stores/queued-message-claim'
 import { queuedResourceWait } from '$lib/stores/queued-resource-wait.svelte'
-import { holdsAdmission, type AdmissionDecision } from '$shared/resource-admission'
+import type { ThreadResourceGateAnswer } from '$shared/resource-admission'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import {
   isResponseSelection,
@@ -347,16 +347,31 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
 
   idleAttentionHandled = false
 
-  async handleIdleAttention(): Promise<void> {
+  /**
+   * Deliver the thread's queued message once the thread is idle and the machine
+   * allows it.
+   *
+   * `force` is the card's Send now: the user overrules the two holds that park a
+   * message on an otherwise idle thread, the device reading and a Starts after
+   * dependency, and the message leaves as the next turn instead of waiting. The
+   * claim below is still taken, so this can never race the background dispatcher
+   * into sending the same message twice.
+   */
+  async handleIdleAttention(force = false): Promise<void> {
     const { projectId, id } = this.root.handleAgentEvent.thread
     try {
-      this.root.handleAgentEvent.pendingPermissions = await invoke(
-        'agent:listPermissions',
-        projectId,
-        id
-      )
-      if (!this.root.loadOlderMessages.alive) return
-      if (this.root.handleAgentEvent.pendingPermissions.length > 0) return
+      // A thread's queue is reconciled into the shared attention store, never
+      // written over it, so a request the live stream filed during this read is
+      // kept and the card stays on screen.
+      if (this.root.props.controller) {
+        const pending = await invoke('agent:listPermissions', projectId, id)
+        if (!this.root.loadOlderMessages.alive) return
+        if (pending.length > 0) return
+      } else {
+        await this.root.editVideoNote.refreshPendingPermissions()
+        if (!this.root.loadOlderMessages.alive) return
+        if (this.root.handleAgentEvent.pendingPermissions.length > 0) return
+      }
       const pendingImageDescriptorErrors = await invoke(
         'agent:listImageDescriptorErrors',
         projectId,
@@ -403,7 +418,7 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     const pendingTaskReferences = this.queuedTaskReferences
     const pendingStartAfterThreads = this.queuedStartAfterThreads
     if (!pending && !this.queuedHasContent) return
-    if (pendingStartAfterThreads.length > 0) {
+    if (!force && pendingStartAfterThreads.length > 0) {
       const dependencies = await Promise.all(
         pendingStartAfterThreads.map((reference) => invoke('thread:get', projectId, reference.id))
       )
@@ -420,14 +435,19 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     // The device can hold a turn the thread is otherwise ready to start. The
     // message stays queued, its card says why, and the shared watch re-runs this
     // idle attention once the machine has room again.
-    if (await this.#holdForResources(projectId, id)) {
+    if (!force && (await this.#holdForResources(projectId, id))) {
       this.idleAttentionHandled = false
       return
     }
+    // The message is leaving on the user's own click, so the wait that held it
+    // goes with it: left in place, its recheck would keep reading the machine for
+    // a message that is already on its way.
+    if (force) queuedResourceWait.clear(projectId, id)
     // Claim synchronously before sending so the background dispatcher (or any
     // concurrent path) cannot also deliver this same queued message. If we lose
     // the race, whoever claimed it will send it   never send here.
     if (!claimQueuedMessage(projectId, id)) return
+    this.queuedDelivering = true
     try {
       // Dequeue only the head   remaining queued messages stay FIFO for the
       // following idle transitions (one message per turn).
@@ -436,15 +456,25 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
         pending,
         pendingAttachments,
         undefined,
-        undefined,
+        force ? true : undefined,
         pendingPromptContext,
         pendingPromptReferences,
         pendingProjectReferences,
         pendingPresentation,
         pendingTaskReferences,
-        true
+        // Not restorable: a failed send already leaves the message on screen
+        // with its error, so restoring a draft as well would show the same
+        // words twice and invite a double send.
+        false
       )
     } finally {
+      // The attempt owns this message from here on. A send that finds the
+      // thread busy parks itself back into the queue, and without this the card
+      // reappeared a frame after it left: the queue visibly thrashing while the
+      // message never moved. Whatever the outcome, the queue does not take it
+      // back; a failure stays on screen with its error and can be recalled.
+      this.clearQueuedState()
+      this.queuedDelivering = false
       releaseQueuedMessage(projectId, id)
     }
   }
@@ -454,17 +484,19 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
    * queued on the machine, not on the thread, and the watch owns the retry.
    */
   async #holdForResources(projectId: string, threadId: string): Promise<boolean> {
-    let decision: AdmissionDecision
+    let answer: ThreadResourceGateAnswer
     try {
-      decision = await invoke('system:resourceAdmission')
+      answer = await invoke('system:threadResourceGate', projectId, threadId)
     } catch {
       return false
     }
-    if (!holdsAdmission(decision)) {
+    if (answer.wait === null) {
       queuedResourceWait.clear(projectId, threadId)
       return false
     }
-    queuedResourceWait.hold(projectId, threadId, decision, () => this.scheduleIdleAttention())
+    queuedResourceWait.hold(projectId, threadId, answer.wait, answer.target, () =>
+      this.scheduleIdleAttention()
+    )
     return true
   }
 
@@ -555,6 +587,14 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
 
   queuedMessage = $state('')
 
+  /**
+   * True while a queued message is being handed to the conversation.
+   *
+   * The card reads this so it can say it is sending instead of disappearing and
+   * reappearing, which is what made the queue look like it was thrashing.
+   */
+  queuedDelivering = $state(false)
+
   queuedAttachments = $state<PromptAttachment[]>([])
 
   queuedPromptContext = $state<string | undefined>()
@@ -631,7 +671,16 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     void this.handleIdleAttention()
   }
 
-  /** Steer   send the queued message immediately as an intervention while the agent is working. */
+  /**
+   * Send the queued message now.
+   *
+   * Two different parked states share this one button. A message queued behind a
+   * running turn is a steer: it joins the live turn. A message parked while the
+   * thread is idle, held by the device gate or waiting on a Starts after
+   * dependency, has no turn to steer at all, so the click has to deliver it as
+   * the thread's next turn and over the hold that is keeping it back. Without
+   * that second path the button did nothing on a low-resource card.
+   */
   async steerQueuedMessage(): Promise<void> {
     const msg = this.queuedMessage
     const attachments = this.queuedAttachments
@@ -640,12 +689,12 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     const projectReferences = this.queuedProjectReferences
     const presentation = this.queuedPresentation
     const taskReferences = this.queuedTaskReferences
-    if (
-      (!msg && !this.queuedHasContent) ||
-      !this.root.switchProject.busy ||
-      this.root.harnessUsage.specFormulating
-    )
+    if ((!msg && !this.queuedHasContent) || this.root.harnessUsage.specFormulating) return
+
+    if (!this.root.switchProject.busy) {
+      await this.handleIdleAttention(true)
       return
+    }
 
     if (this.root.props.controller) {
       this.clearQueuedState()

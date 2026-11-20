@@ -13,9 +13,11 @@ import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { ipcErrorMessage } from '$lib/ipc-errors'
 import { composeMarkAttachments } from '$lib/annotation-composite'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { turnWaitsOnSubagents } from '$lib/subagent-wait'
 import { messageId as createMessageId } from '$shared/id'
 import { classifyProviderIssue, parseUsageResetAt } from '$shared/provider-issue'
 import { ThreadMessagesCache } from './thread-messages-cache.svelte'
+import { rendererRecovery } from './renderer-recovery.svelte'
 import { threadTraceCache } from './thread-trace-cache.svelte'
 import { ThreadMessagesEvents } from './thread-messages-events.svelte'
 import {
@@ -121,6 +123,18 @@ class ThreadMessagesStore {
   }
 
   /**
+   * Whether this thread's live turn is blocked on a sub-agent.
+   *
+   * Read straight off the cached transcript, the same reactive list the trace
+   * renders, so the row's mark and the step card that caused it can never
+   * disagree. A thread with no cached messages has no turn to wait on and
+   * answers false.
+   */
+  waitsOnSubagents(projectId: string, threadId: string): boolean {
+    return turnWaitsOnSubagents(this.cache.messages(projectId, threadId))
+  }
+
+  /**
    * Hold a thread's transcript as read by a mounted view.
    *
    * Returns the release. A streaming thread nobody is watching publishes on a
@@ -211,6 +225,11 @@ class ThreadMessagesStore {
   }
 
   /** Ask the engine to drop a held steer before it reaches the harness. */
+  /** Drop a message the agent never received, after recall put it back in the composer. */
+  removeUnsentMessage(projectId: string, threadId: string, messageId: string): void {
+    this.cache.removeUnsentMessage(projectId, threadId, messageId)
+  }
+
   async discardSteer(projectId: string, threadId: string, messageId: string): Promise<void> {
     await invoke('agent:discardSteer', projectId, threadId, messageId)
   }
@@ -564,7 +583,10 @@ class ThreadMessagesStore {
       // Keep the optimistic user prompt as-is; the card carries the failure.
       return
     }
-    const messageError = error instanceof Error ? error.message : 'Message failed to send.'
+    // The invoke rejection still carries Electron's wrapper, which names the
+    // channel instead of the problem; the shared normalizer strips it so the
+    // card reads as the failure the user has to act on.
+    const messageError = ipcErrorMessage(error, 'Message failed to send.')
     entry.error = messageError
     // Keep the user's prompt when transport fails. Removing it makes a send
     // failure look like the conversation was wiped and loses retry context.
@@ -640,6 +662,12 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
+    // The turn now carries this draft, so the composer slot empties here for
+    // every surface at once: the words, the annotations, and the shared row
+    // other instances and windows read. Every delivery path comes through here
+    // (composer, queued card, headless dictation), so no path can leave a draft
+    // behind that another window would restore as a message already sent.
+    rendererRecovery.clearSentDraft(projectId, threadId)
 
     try {
       await prepare?.()
@@ -691,6 +719,8 @@ class ThreadMessagesStore {
       projectReferences,
       presentation
     )
+    // A steered message is also the draft leaving the composer.
+    rendererRecovery.clearSentDraft(projectId, threadId)
     // Hold the steered message optimistically: while the engine waits for the
     // turn's in-flight tool to end, the run stays anchored to the prompt it is
     // steering, so the held message renders under that turn's live working

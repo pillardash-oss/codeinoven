@@ -16,9 +16,9 @@ Harness install steps show live download/install progress in the setup panel and
 
 Linux system package commands run directly as root or through sudo for other users. Password-authenticated Oven connections use the vaulted login password through SSH stdin when sudo requires authentication. The elevated command receives no password input. Other connections require passwordless sudo. Remote command failures are reported separately from SSH connection and trust errors.
 
-## Add a machine with the Oven agent
+## Add a machine with the Oven service
 
-**Settings → Ovens → Add via agent** registers a machine that prepared itself, without this computer reaching it first. The first step shows the one command to run on the machine:
+**Settings → Ovens → Add via oven service** registers a machine that prepared itself, without this computer reaching it first. The first step shows the one command to run on the machine:
 
 ```sh
 npx @pdslng/cio-oven start
@@ -28,15 +28,17 @@ The command needs Node.js 22 or later already installed. It writes the same serv
 
 Paste the printed code into the second step of the same dialog. **Check code** shows the machine, the SSH account, the key fingerprint, and whether the machine already runs this app's service, all before anything is saved.
 
-A machine cannot know which of its own addresses this computer can reach: that depends on the network between them. So the code carries every address the machine answers on, ranked with its private LAN addresses first and its host name last, and the dialog dials them and uses the first that connects. The **Address this computer uses** field is prefilled with that answer, and the machine's other candidates sit below it as chips to pick from; nothing needs typing unless you reach the machine under a name it does not know, such as an SSH config alias or a forwarded port. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
+A machine cannot know which of its own addresses this computer can reach: that depends on the network between them. So the code carries every address the machine answers on, ranked with a discovered public address first, then its private LAN addresses, and its host name last, and the dialog dials them and uses the first that connects. The **Address this computer uses** field is prefilled with that answer, and the machine's other candidates sit below it as chips to pick from; nothing needs typing unless you reach the machine under a name it does not know, such as an SSH config alias or a forwarded port. **Register Oven** then stores the descriptor and, when one was provisioned, the key in the encrypted vault, and adds the Oven. An Oven registered from an agent is an ordinary Oven: it gets the same probe, harness inventory, checkout, and run operations as any other.
 
 The SSH port is settled where the truth is available. A port you name, either with `--port` or at the command's prompt, is honoured: it is published only when SSH answers on it, and when nothing does the command refuses with the configuration file and restart command to fix, instead of quietly saving a port you never chose. A port the command detected on its own is only a guess, so it is corrected to the port that answers and the dialog says which was replaced.
+
+**A machine behind NAT cannot see how it is reached.** An Azure, AWS or GCP VM sees only its private interface, so `start` asks an echo service (api.ipify.org, then ifconfig.me, then icanhazip.com, each with a short timeout) for the address the rest of the internet sees it on, and lists that answer first in the code: the dialog dials it before the private addresses, so a cloud VM registers with nothing typed. That answer is only a hint, and it is checked to be routable before it is offered. When the lookup finds nothing — an IP-only egress behind a corporate proxy, or a network with no route out — the code carries private addresses only, and the test times out with exit 255. That is the one case the dialog cannot fill in for you: put the address you reach the machine on into **Address this computer uses** — the public IP, or the IP and port of whatever forwards SSH to it — and leave the port at the machine's own sshd port when they match. Nothing else changes; the key, the descriptor, and the registration stay hands-off. The dialog says so directly when every address it was given is private.
 
 **Check code** shows what will be saved. **Test connection**, at the bottom left of the dialog, then opens a real SSH session using the identity from the code and the host and port in the fields, so authentication, host trust, and the remote shell are all confirmed before **Register Oven** stores anything.
 
 The app reaches the machine the same way it reaches any Oven: over SSH to the durable service. Host keys are still trusted through OpenSSH on this computer, so a machine this computer has never connected to needs its host key trusted before the app can reach it. The registration code carries no login password. Treat the printed code and the saved descriptor file as secrets: the dedicated private key is inside them.
 
-**New Oven** is unchanged. Add a machine, test the connection, and install the service from this app. Both paths produce the same Oven.
+**Add manually** is unchanged. Add a machine, test the connection, and install the service from this app. Both paths produce the same Oven.
 
 ## Add a machine with one command
 
@@ -46,7 +48,7 @@ The published `@pdslng/cio-oven` CLI prepares a machine from its own shell, with
 npx @pdslng/cio-oven start
 ```
 
-It asks for the Oven name, the SSH port to publish, and whether to provision a dedicated key, then starts the service in the background and prints a code for **Settings → Ovens → Add via agent**. Every question has a flag, so it also runs unattended: `npx @pdslng/cio-oven start --yes`, or `npx @pdslng/cio-oven start --port 2222 --yes --no-identity`. A port you name, with `--port` or at the prompt, is honoured: it is published only when SSH answers on it, and refused with the fix instructions when it does not, rather than being switched to a different port. A port it detected on its own is corrected to the one that answers.
+It asks for the Oven name, the SSH port to publish, and whether to provision a dedicated key, then starts the service in the background and prints a code for **Settings → Ovens → Add via oven service**. Every question has a flag, so it also runs unattended: `npx @pdslng/cio-oven start --yes`, or `npx @pdslng/cio-oven start --port 2222 --yes --no-identity`. A port you name, with `--port` or at the prompt, is honoured: it is published only when SSH answers on it, and refused with the fix instructions when it does not, rather than being switched to a different port. A port it detected on its own is corrected to the one that answers.
 
 ## Windows Ovens
 
@@ -118,6 +120,8 @@ Each remote thread has an **Oven** panel in the workspace rail. The rail item ca
 Preparing a checkout is visible while it happens. The first send on a remote thread publishes what the Oven is doing into the working trace: preparing the project, opening the checkout, or cloning the repository. The harness's own stream replaces that note once it starts producing output.
 
 Harness session transcripts live with the Oven's app state, at `~/.config/pillardash/codeinoven/ovens/sessions/<session>.jsonl`, never inside the checkout. A transcript an older release left in the project root as `.cio-pi-<session>.jsonl` is moved into that directory the next time its thread runs, so the session keeps resuming and the working tree stays clean.
+
+Account quota is read on this computer first, always, because it is account-level provider state and the credential container is the same wherever the harness runs. Only when this computer has no such harness installed does the Oven that does answer instead: the battery hover on a thread asks that thread's own Oven, and the Accounts settings page (which has no thread) asks the default Oven. The read reuses the run channel a turn uses, primed with the credentials this app already syncs for that account, and it starts the harness there only for as long as the answer takes. Harnesses whose quota lives behind a resident local server rather than a stdio protocol report nothing from an Oven; a harness installed on neither side is offered by neither model picker.
 
 Thread rows carry the Oven's own mark and the checkout's branch beside the row's status indicator; a branch longer than four characters is shortened there. The hover card names the Oven, the branch, and the checkout path, and the search results name the Oven and branch too. Switching branches through the remote Changes panel updates the thread's recorded branch.
 

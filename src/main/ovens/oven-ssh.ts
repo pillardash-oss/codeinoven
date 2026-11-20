@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -12,6 +12,7 @@ import {
   windowsEncodedCommand
 } from './oven-remote-shell'
 import type { OvenRegistry } from './oven-registry'
+import { Logger } from '../system/logger'
 import { unreachableHostIssue } from './oven-network-hint'
 import { plainPowerShellStderr } from './oven-powershell-output'
 import { validateIdentityPath } from './oven-validation'
@@ -92,6 +93,28 @@ function remoteFailureDetail(stderr: string): string {
     .map((line) => line.replace(/\/(?:home|Users)\/[A-Za-z0-9._-]+/gu, '~').slice(0, 240))
   const reportable = lines.filter((line) => REPORTABLE_ERROR.test(line))
   return (reportable.length > 0 ? reportable : lines).slice(-3).join(' · ')
+}
+
+/**
+ * The cause a failed command named in its own answer.
+ *
+ * The Oven service reports every failure as `{ ok: false, error }` on stdout and
+ * exits nonzero, so that answer is where its reason lives; its stderr is usually
+ * empty. Reading only stderr replaced a refused service update with "check the
+ * package manager", so an Oven that refused an install reported a package
+ * problem on a machine whose packages were fine.
+ */
+export function remoteFailureAnswer(output: string): string | null {
+  const last = output.trim().split(/\r?\n/u).pop()
+  if (!last || !last.startsWith('{') || last.length > 16_384) return null
+  try {
+    const answer = JSON.parse(last) as { ok?: unknown; error?: unknown }
+    if (answer.ok === false && typeof answer.error === 'string' && answer.error.trim())
+      return answer.error.trim().slice(0, 400)
+  } catch {
+    return null
+  }
+  return null
 }
 
 /** Translate bounded stderr into actionable diagnostics without exposing remote secrets. */
@@ -247,6 +270,65 @@ export class OvenSsh {
       .map(sshQuote)
       .join(' ')
     return this.execute(id, command, `${password}\n`, timeoutMs, onOutput)
+  }
+
+  /**
+   * One channel that stays open and keeps talking to the Oven in both directions.
+   *
+   * `execute` is the wrong shape for that: it writes one payload, collects one
+   * answer and ends the process, which is right for a request and wrong for a
+   * conversation. The Oven's utility relay is a conversation — frames go out on
+   * stdin and calls come back on stdout for as long as a turn runs — so this
+   * spawns exactly the invocation `execute` would build (same shell detection,
+   * same quoting, same authentication and host-trust verification, because it is
+   * the same SSH call) and hands back the live child with its stdin left open.
+   *
+   * The caller owns the child: it must call `dispose` exactly once when the
+   * channel is over, because `prepare` wrote this connection's private
+   * credentials and only `dispose` removes them.
+   */
+  async duplex(
+    id: string,
+    argv: string[]
+  ): Promise<{ child: ChildProcessWithoutNullStreams; dispose: () => Promise<void> }> {
+    if (argv.length === 0) throw new TypeError('A duplex channel needs a service mode.')
+    this.signal?.throwIfAborted()
+    // Loaded on demand: the command builders quote their arguments through this
+    // module's `sshQuote`, so a top-level import of them here would be a cycle.
+    const { remoteServiceCommand } = await import('./oven-remote-command')
+    // Asking for the shell runs a command through `execute`, so host trust is
+    // verified (and prompted for) while a trust failure can still be retried,
+    // exactly as a tunnel does before it opens its streaming socket.
+    const prepared = await this.prepare(id, remoteServiceCommand(await remoteShell(this, id), argv))
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawn(prepared.executable, prepared.args, {
+        env: prepared.env,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+    } catch (error) {
+      await prepared.dispose()
+      throw error
+    }
+    // A channel that outlives the app's own lifetime must not survive an abort:
+    // nothing else would ever end this child.
+    const abort = (): void => {
+      child.kill('SIGKILL')
+    }
+    this.signal?.addEventListener('abort', abort, { once: true })
+    let released = false
+    return {
+      child,
+      dispose: async () => {
+        if (released) return
+        released = true
+        this.signal?.removeEventListener('abort', abort)
+        child.stdin.end()
+        child.kill('SIGTERM')
+        await prepared.dispose()
+      }
+    }
   }
 
   /**
@@ -773,15 +855,29 @@ export class OvenSsh {
           else if (timedOut)
             reject(new Error('The Oven did not respond before the connection timeout.'))
           else if (unknownHost && !changedHost) reject(new OvenHostVerificationRequired(sshIssue))
-          else if (code === 255 || code === null)
+          else if (code === 255 || code === null) {
+            // A refused handshake is the one failure whose reason lives only in
+            // OpenSSH's own words: the fixed sentence below names every possible
+            // cause, so the tail is kept for the log a reader can act on.
+            Logger.dev('Oven SSH connection failed', {
+              ovenId: id,
+              code,
+              stderr: remoteStderr.slice(-600)
+            })
             reject(new Error(`SSH connection failed (${code ?? 'disconnected'}). ${sshIssue}`))
-          else if (code !== 0) {
-            const message = `Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`
-            reject(
-              isMissingService(remoteStderr)
-                ? new OvenServiceMissingError(message)
-                : new Error(message)
-            )
+          } else if (code !== 0) {
+            // A command that answered in its own protocol already named the cause,
+            // and a fixed sentence about the package manager is not that cause.
+            const answer = remoteFailureAnswer(output)
+            if (answer) reject(new Error(answer))
+            else {
+              const message = `Remote command failed (${code}). ${remoteCommandIssue(remoteStderr)}`
+              reject(
+                isMissingService(remoteStderr)
+                  ? new OvenServiceMissingError(message)
+                  : new Error(message)
+              )
+            }
           } else resolve(output)
         })
         if (!channel) child.stdin.end(input)

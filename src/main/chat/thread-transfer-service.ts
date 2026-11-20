@@ -347,12 +347,15 @@ export class ThreadTransferService {
         request.threadId
       )
       // What the release stopped travels with the verdict: the adopting instance
-      // cannot read it from the shared rows once those workers are settled.
+      // cannot read it from the shared rows once those workers are settled. A
+      // question card the release was holding rides the same verdict, for the
+      // same reason: it exists nowhere else once the stop clears it.
       const details: HandoffReleaseDetails | undefined =
-        result.workers || result.pawnThreadIds
+        result.workers || result.pawnThreadIds || result.questions
           ? {
               ...(result.workers ? { workers: result.workers } : {}),
-              ...(result.pawnThreadIds ? { pawnThreadIds: result.pawnThreadIds } : {})
+              ...(result.pawnThreadIds ? { pawnThreadIds: result.pawnThreadIds } : {}),
+              ...(result.questions ? { questions: result.questions } : {})
             }
           : undefined
       await this.bus.respond(

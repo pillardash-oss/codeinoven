@@ -252,13 +252,19 @@ export class RendererRecoveryStore {
    * Seed a locally-missing composer draft from the DB commit (restart or a
    * second instance). A thread that already holds any local draft content
    * wins: local edits are always newer than the 10s-delayed DB snapshot.
+   *
+   * Annotations are the one exception, and the reason is that they cost a user
+   * a deliberate selection and a written comment: a local draft that holds none
+   * adopts the ones the shared slot holds, without touching its words. That is
+   * how an annotation that only reached the database comes back to a composer
+   * whose own mirror lost it, and it can never overwrite an annotation this
+   * window already shows.
    */
   importDbDraft(projectId: string, threadId: string, rawDraftJson: string | null): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId) || !rawDraftJson) {
       return
     }
     const key = recoveryDraftKey(projectId, threadId)
-    if (this.composerDrafts[key]) return
     let parsed: unknown
     try {
       parsed = JSON.parse(rawDraftJson)
@@ -267,10 +273,97 @@ export class RendererRecoveryStore {
     }
     const entry = parseComposerDraftEntry(parsed)
     if (!entry) return
+    const existing = this.composerDrafts[key]
+    if (existing) {
+      if (existing.promptReferences.length > 0 || entry.promptReferences.length === 0) return
+      this.composerDrafts = {
+        ...this.composerDrafts,
+        [key]: { ...existing, promptReferences: entry.promptReferences }
+      }
+      this.persist()
+      publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+      return
+    }
     this.composerDrafts = { ...this.composerDrafts, [key]: entry }
     setDraftLabelCookie(threadId, entry.text)
     this.persist()
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+  }
+
+  /**
+   * Clear this thread's composer slot because a turn started on it.
+   *
+   * The moment a message is sent the draft is no longer pending anything: it is
+   * what the turn is carrying. So the slot is emptied everywhere in the same
+   * breath — this window's draft (words and annotations), its label cookie, and
+   * the shared row every other window and instance reads. A window that restored
+   * a draft after this point would be restoring a message that has already been
+   * sent, which is exactly the ghost this prevents.
+   *
+   * Committed rather than debounced: the shared row is cleared for every
+   * instance, and a clear that waits ten seconds is a window for another window
+   * to re-create it.
+   */
+  clearSentDraft(projectId: string, threadId: string): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    const key = recoveryDraftKey(projectId, threadId)
+    if (key in this.composerDrafts) {
+      const next = { ...this.composerDrafts }
+      delete next[key]
+      this.composerDrafts = next
+      this.persist()
+    }
+    clearDraftLabelCookie(threadId)
+    commitDraftStateNow(projectId, threadId, false, null)
+  }
+
+  /**
+   * Settle this window's stored draft against the row the database actually
+   * holds for the thread.
+   *
+   * The shared row is the truth on whether a draft still exists: a row that
+   * carries one seeds or refreshes this window's copy, and a row that carries
+   * none means the draft was sent or cleared somewhere, so this window drops its
+   * copy and its label instead of restoring words nobody is waiting for. A commit
+   * this window still owes the row is the one exception, because it is about to
+   * put those words there.
+   *
+   * A failed read never settles anything: "could not ask" is not "no draft".
+   */
+  reconcileDraftWithSlot(projectId: string, threadId: string, rawDraftJson: string | null): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    if (rawDraftJson !== null) {
+      this.importDbDraft(projectId, threadId, rawDraftJson)
+      return
+    }
+    if (hasPendingDraftCommit(projectId, threadId)) return
+    const key = recoveryDraftKey(projectId, threadId)
+    if (!(key in this.composerDrafts)) {
+      clearDraftLabelCookie(threadId)
+      return
+    }
+    const next = { ...this.composerDrafts }
+    delete next[key]
+    this.composerDrafts = next
+    clearDraftLabelCookie(threadId)
+    this.persist()
+  }
+
+  /**
+   * Write this thread's draft to the shared slot now instead of on the debounce.
+   *
+   * Used for a discrete, deliberate edit (an annotation and its comment): the
+   * ten-second window before a debounced commit is exactly the window a refresh,
+   * a navigation or another instance's clear turns into a lost annotation.
+   */
+  commitDraftNow(projectId: string, threadId: string): void {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return
+    const entry = this.composerDrafts[recoveryDraftKey(projectId, threadId)]
+    if (!entry) {
+      commitDraftStateNow(projectId, threadId, false, null)
+      return
+    }
+    commitDraftStateNow(projectId, threadId, true, JSON.stringify(entry))
   }
 
   /**
@@ -473,6 +566,15 @@ export class RendererRecoveryStore {
     const nextProjectReferences = projectReferences ?? current.projectReferences
     const nextTaskReferences = taskReferences ?? current.taskReferences
     const nextPromptReferences = promptReferences ?? current.promptReferences
+    // Text arrives one keystroke at a time and waits out the debounce; anything
+    // else (a file added or removed, a tag, an annotation, clearing the
+    // composer) is a finished action on the slot, so it commits at once and no
+    // refresh, other window or instance can read a draft state that has moved.
+    const deliberate =
+      attachments !== undefined ||
+      projectReferences !== undefined ||
+      taskReferences !== undefined ||
+      promptReferences !== undefined
     // No-op writes must not reassign state — callers may run inside effects.
     if (
       current.text === draft &&
@@ -517,9 +619,12 @@ export class RendererRecoveryStore {
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
     // Persist to the DB: an emptied draft flushes immediately so a sent or
     // cleared composer never leaves a stale draft behind; a non-empty draft
-    // commits 10s after the last edit (debounced).
+    // commits 10s after the last edit (debounced), unless the edit was a
+    // deliberate one, which commits now.
     if (key in next) {
-      scheduleDraftCommit(projectId, threadId, true, JSON.stringify(next[key]))
+      const content = JSON.stringify(next[key])
+      if (deliberate) commitDraftStateNow(projectId, threadId, true, content)
+      else scheduleDraftCommit(projectId, threadId, true, content)
     } else {
       commitDraftStateNow(projectId, threadId, false, null)
     }
@@ -584,6 +689,7 @@ export class RendererRecoveryStore {
     }
     this.composerDrafts = next
     this.persist()
+    this.commitDraftNow(projectId, threadId)
   }
 
   clearStartAfterThreads(projectId: string, threadId: string): void {
@@ -644,6 +750,7 @@ export class RendererRecoveryStore {
     this.composerDrafts = next
     this.persist()
     publishDraftActivity(projectId, threadId, this.hasDraftContent(projectId, threadId))
+    this.commitDraftNow(projectId, threadId)
   }
 
   clearThreadReferences(projectId: string, threadId: string): void {
@@ -762,7 +869,7 @@ export class RendererRecoveryStore {
     }
     next[key] = [...(queue ?? []), persistedEntry]
     this.queuedMessages = next
-    this.persist()
+    this.persistQueuedNow()
   }
 
   /** Rewrite the oldest queued message in place (e.g. editing its "starts
@@ -805,7 +912,7 @@ export class RendererRecoveryStore {
       delete next[key]
     }
     this.queuedMessages = next
-    this.persist()
+    this.persistQueuedNow()
   }
 
   /** Drop every queued message for a thread (Delete all). */
@@ -816,7 +923,7 @@ export class RendererRecoveryStore {
     const next = { ...this.queuedMessages }
     delete next[key]
     this.queuedMessages = next
-    this.persist()
+    this.persistQueuedNow()
   }
 
   reset(): void {
@@ -1042,6 +1149,24 @@ export class RendererRecoveryStore {
       this.persistTimer = undefined
       persistRendererRecoveryState(this.storage, this.snapshot())
     }, PERSIST_DEBOUNCE_MS)
+  }
+
+  /**
+   * Write the recovery snapshot synchronously, bypassing the debounce.
+   *
+   * A queued message and a failure-restored draft are the only durable copies
+   * of words the database has never seen. The trailing debounce exists for
+   * keystroke-scale mutations; a queue or restore mutation is rare and is
+   * exactly the moment a crash or force-quit must not be able to eat: without
+   * this, a failed dispatch cleared the queue entry, restored only a draft in
+   * memory, and a restart before the debounce fired lost the words entirely.
+   */
+  persistQueuedNow(): void {
+    if (this.persistTimer !== undefined) {
+      clearTimeout(this.persistTimer)
+      this.persistTimer = undefined
+    }
+    persistRendererRecoveryState(this.storage, this.snapshot())
   }
 
   /** Write any pending state immediately (used on window hide/shutdown). */

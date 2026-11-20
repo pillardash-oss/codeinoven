@@ -261,4 +261,45 @@ describe('InstanceEventBus', () => {
     await waitFor(() => received.length > 0)
     expect(received[0]?.event).toEqual(deltaEvent())
   })
+
+  it('paces the filesystem probe the publish path makes while alone', async () => {
+    const directory = await busDirectory()
+    const live = membership(PEER_A)
+    let probes = 0
+    const alone = new InstanceEventBus({
+      directory,
+      localPid: PEER_A,
+      liveInstancePids: () => {
+        probes += 1
+        return live.pids
+      },
+      subscribeToMembership: (listener) => {
+        live.listeners.add(listener)
+        return () => live.listeners.delete(listener)
+      },
+      // Long enough that no paced redial can add a probe during the assertion.
+      redial: { baseDelayMs: 60_000, maxDelayMs: 60_000 }
+    })
+    directories.push(directory)
+    buses.push(alone)
+    alone.start()
+
+    // The start reconciliation probes once, the first published frame probes
+    // once more, and the gate holds the whole burst off the filesystem: before
+    // it, every streamed frame re-read the registry for nothing.
+    for (let i = 0; i < 50; i++) alone.publishAgentEvent(deltaEvent())
+    expect(probes).toBe(2)
+
+    // A membership notification clears the gate and reconciles at once, so a
+    // genuinely new sibling is still discovered immediately.
+    live.pids = [PEER_A, PEER_B]
+    live.announce()
+    expect(alone.isServing).toBe(true)
+    const discovered = probes
+
+    // With a sibling registered, dial pacing owns recovery, so publishing again
+    // never touches the filesystem either.
+    alone.publishAgentEvent(deltaEvent())
+    expect(probes).toBe(discovered)
+  })
 })

@@ -204,6 +204,47 @@ describe('RendererRecoveryStore', () => {
     })
   })
 
+  it('writes a queued message to storage immediately, without the debounce', () => {
+    // A queued message can be the only durable copy of words the database
+    // never saw. The trailing debounce could lose it to a crash or force-quit
+    // between park and flush, which is exactly the restart that ate a user's
+    // message: no timer advances here, so the write must already have happened.
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    store.setQueuedMessage('project-1', 'thread-1', {
+      text: 'the words that must survive a force-quit',
+      attachments: [],
+      promptContext: undefined,
+      promptReferences: [],
+      projectReferences: [],
+      presentation: undefined,
+      taskReferences: [],
+      startAfterThreads: []
+    })
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.queuedMessageFor('project-1', 'thread-1')?.text).toBe(
+      'the words that must survive a force-quit'
+    )
+  })
+
+  it('writes a cleared queue immediately, so a crash cannot resurrect a sent message', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    store.setQueuedMessage('project-1', 'thread-1', {
+      text: 'about to be delivered',
+      attachments: [],
+      promptContext: undefined,
+      promptReferences: [],
+      projectReferences: [],
+      presentation: undefined,
+      taskReferences: [],
+      startAfterThreads: []
+    })
+    store.clearQueuedMessage('project-1', 'thread-1')
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.queuedMessageFor('project-1', 'thread-1')).toBeNull()
+  })
+
   it('keeps the design page a comment belongs to across a restart', () => {
     const storage = new MemoryStorage()
     const store = new RendererRecoveryStore(storage)
@@ -434,6 +475,192 @@ describe('RendererRecoveryStore', () => {
       persistRendererRecoveryState(new UnavailableStorage(), emptyRendererRecoverySnapshot())
       removeRendererRecoveryState(new UnavailableStorage())
     }).not.toThrow()
+  })
+
+  /**
+   * A composer annotation is the one piece of composer state the user creates in
+   * a single deliberate action, and a refresh used to be able to swallow it.
+   * These pin the round trip: annotation -> local storage -> new store -> the
+   * same annotation, including the shape `don` had (no text, one annotation).
+   */
+  describe('composer annotations across a refresh', () => {
+    const annotation = {
+      id: 'selection-1',
+      label: 'Selection 1',
+      text: 'A passage the user selected',
+      messageId: 'assistant-1',
+      startOffset: 10,
+      endOffset: 40,
+      comment: 'This should auto reject'
+    }
+
+    it('keeps an annotation on a draft that also holds text', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setDraft('project-1', 'thread-1', 'Draft words')
+      store.setPromptReferences('project-1', 'thread-1', [annotation])
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      expect(reloaded.draftFor('project-1', 'thread-1')).toBe('Draft words')
+      expect(reloaded.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
+      expect(reloaded.draftPromptReferences('project-1', 'thread-1')[0]?.comment).toBe(
+        'This should auto reject'
+      )
+    })
+
+    it('keeps an annotation on a draft that holds nothing else', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setPromptReferences('project-1', 'don', [annotation])
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      expect(reloaded.draftFor('project-1', 'don')).toBe('')
+      expect(reloaded.draftPromptReferences('project-1', 'don')).toHaveLength(1)
+    })
+
+    it('adopts the annotation the shared slot holds when its own mirror lost it', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      // The composer holds the words, but its mirror of the annotations is gone.
+      store.setDraft('project-1', 'don', 'Words the user typed')
+      store.flushPersist()
+
+      const slot = JSON.stringify({
+        text: 'Words the user typed',
+        attachments: [],
+        projectReferences: [],
+        taskReferences: [],
+        promptReferences: [annotation],
+        startAfterThreads: [],
+        threadReferences: []
+      })
+      const reloaded = new RendererRecoveryStore(storage)
+      reloaded.applyCommittedDraft('project-1', 'don', slot)
+
+      expect(reloaded.draftFor('project-1', 'don')).toBe('Words the user typed')
+      expect(reloaded.draftPromptReferences('project-1', 'don')).toHaveLength(1)
+    })
+
+    it('never lets the slot replace an annotation the composer already shows', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setPromptReferences('project-1', 'thread-1', [annotation])
+      store.applyCommittedDraft(
+        'project-1',
+        'thread-1',
+        JSON.stringify({
+          text: '',
+          attachments: [],
+          projectReferences: [],
+          taskReferences: [],
+          promptReferences: [],
+          startAfterThreads: [],
+          threadReferences: []
+        })
+      )
+      expect(store.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
+    })
+
+    it('keeps an annotation when the draft is re-written by the composer', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setPromptReferences('project-1', 'thread-1', [annotation])
+      // What the composer does on the next keystroke: text only, no references.
+      store.setDraft('project-1', 'thread-1', 'Next words')
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      expect(reloaded.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
+    })
+  })
+
+  /**
+   * A draft is a cache of what the composer is about to send, and the thread row
+   * is the only place that says whether it still exists. These pin the two
+   * clearing rules: a send clears the slot everywhere, and a window never
+   * restores a draft the row no longer carries.
+   */
+  describe('the shared slot clears a ghost draft', () => {
+    const draftWithAnnotation = (text: string): string =>
+      JSON.stringify({
+        text,
+        attachments: [],
+        projectReferences: [],
+        taskReferences: [],
+        promptReferences: [{ id: 'selection-1', label: 'Selection 1', text: 'Passage' }],
+        startAfterThreads: [],
+        threadReferences: []
+      })
+
+    it('clears the local draft the moment a message is sent', () => {
+      const store = new RendererRecoveryStore(new MemoryStorage())
+      store.setDraft('project-1', 'thread-1', 'Send me')
+      store.setPromptReferences('project-1', 'thread-1', [
+        { id: 'selection-1', label: 'Selection 1', text: 'Passage' }
+      ])
+      expect(store.hasDraftContent('project-1', 'thread-1')).toBe(true)
+
+      store.clearSentDraft('project-1', 'thread-1')
+
+      expect(store.draftFor('project-1', 'thread-1')).toBe('')
+      expect(store.draftPromptReferences('project-1', 'thread-1')).toHaveLength(0)
+      expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
+    })
+
+    it('drops a stored draft whose row no longer holds one', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setDraft('project-1', 'thread-1', 'Already sent elsewhere')
+      store.flushPersist()
+
+      const reloaded = new RendererRecoveryStore(storage)
+      // The row answers with nothing, so the draft was sent or cleared.
+      reloaded.reconcileDraftWithSlot('project-1', 'thread-1', null)
+
+      expect(reloaded.draftFor('project-1', 'thread-1')).toBe('')
+      expect(reloaded.hasDraftContent('project-1', 'thread-1')).toBe(false)
+      reloaded.flushPersist()
+      expect(new RendererRecoveryStore(storage).draftFor('project-1', 'thread-1')).toBe('')
+    })
+
+    it('keeps the draft the row still holds', () => {
+      const store = new RendererRecoveryStore(new MemoryStorage())
+      store.setDraft('project-1', 'thread-1', 'Still drafting')
+
+      store.reconcileDraftWithSlot('project-1', 'thread-1', draftWithAnnotation('Still drafting'))
+
+      expect(store.draftFor('project-1', 'thread-1')).toBe('Still drafting')
+      expect(store.draftPromptReferences('project-1', 'thread-1')).toHaveLength(1)
+    })
+
+    it('keeps a draft whose own commit the row is still owed', () => {
+      const store = new RendererRecoveryStore(new MemoryStorage())
+      // Typing arms the debounced commit, so the row is behind these words.
+      store.setDraft('project-1', 'thread-1', 'Typed a second ago')
+
+      store.reconcileDraftWithSlot('project-1', 'thread-1', null)
+
+      expect(store.draftFor('project-1', 'thread-1')).toBe('Typed a second ago')
+    })
+
+    it('clears the composer cache when the last attachment is removed', () => {
+      const storage = new MemoryStorage()
+      const store = new RendererRecoveryStore(storage)
+      store.setDraft('project-1', 'thread-1', '', [
+        { mime: 'image/png', url: 'file:///tmp/a.png', filename: 'a.png' }
+      ])
+      expect(store.hasDraftContent('project-1', 'thread-1')).toBe(true)
+
+      store.setDraft('project-1', 'thread-1', '', [])
+      store.flushPersist()
+
+      expect(store.hasDraftContent('project-1', 'thread-1')).toBe(false)
+      expect(new RendererRecoveryStore(storage).hasDraftContent('project-1', 'thread-1')).toBe(
+        false
+      )
+    })
   })
 
   it('treats distinct harness-scoped favorites as separate', () => {

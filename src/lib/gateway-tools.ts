@@ -411,7 +411,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
   {
     name: UTILITY_DIAGNOSTICS_TOOL_NAME,
     description:
-      "Read-only CodeInOven app diagnostics: search every project's threads for context by keyword and by meaning (search_threads includes matching passages for content hits), look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.",
+      "Read-only CodeInOven app diagnostics: search every project's threads for context by keyword and by meaning (search_threads includes matching passages for content hits), look up any thread by id or exact title across projects, read a bounded page of its mirrored conversation, list the projects, scopes and assistants a search can be narrowed to, read recent app log entries (logs/<YYYY-MM-DD>/main.jsonl, error.log, permission-events.jsonl), inspect the app SQLite schema, and run read-only SELECT statements when the structured actions cannot answer the question. All output is redacted and bounded. Available on every turn that carries the gateway, so use it whenever the user reports a problem with the app, a thread, an assistant, or a log line instead of asking them to re-send the request with @cio-utility. Never write, delete, or configure anything with it.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -420,6 +420,7 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
           enum: [
             'lookup_thread',
             'search_threads',
+            'list_groups',
             'read_messages',
             'read_log',
             'list_schema',
@@ -433,6 +434,27 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
             'For lookup_thread: thread id or exact thread title. For search_threads: what the conversation was about, in words; it ranks titles and content, including by meaning.'
         },
         thread_id: { type: 'string', description: 'For read_messages: the thread id to inspect.' },
+        project_id: {
+          type: 'string',
+          description:
+            'For search_threads: narrow to one project (an id from list_groups), or to the hidden inbox ("inbox"), assistant space ("assistant"), or browser container. For list_groups: show only that project.'
+        },
+        scope_id: {
+          type: 'string',
+          description:
+            'For search_threads: narrow to one scope bucket (sidebar group) inside the searched project, as listed by list_groups.'
+        },
+        assistant_id: {
+          type: 'string',
+          description:
+            'For search_threads: narrow to the threads one assistant scheduled, as listed by list_groups. Narrows any family, and never needs family "assistant".'
+        },
+        family: {
+          type: 'string',
+          enum: ['projects', 'chats', 'assistant'],
+          description:
+            'For search_threads: which thread family to search. projects covers engineering project threads, chats the standalone inbox conversations, assistant the assistant space.'
+        },
         limit: {
           type: 'number',
           description:

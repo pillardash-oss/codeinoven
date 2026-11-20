@@ -257,12 +257,39 @@ export class ChatEngineProvidersCatalog {
     const harnessId = overrides?.harnessId
     if (!harnessId) return []
     const providerId = overrides?.providerId ?? harnessId
-    const conversationSessionId = await this.conversationSessionId(overrides)
     const account = await this.host.state.accountRegistry.resolveForProvider(
       harnessId,
       providerId,
       overrides?.accountId
     )
+    const accountEnvironment = this.host.state.accountRegistry.environment(account)
+    // This machine answers first, always. Only a harness the registry knows as
+    // a CLI and this machine does not have sends the question to the Oven,
+    // where the same account's harness can answer it. A reading the local
+    // harness reports as empty stays empty: being signed out here is not a
+    // reason to ask a different machine, and a harness this app does not know
+    // as a CLI (an ACP agent) has no Oven counterpart to ask. The install
+    // check resolves a command on this machine's PATH, so the account's own
+    // HOME-style overrides are layered onto the process environment rather
+    // than replacing it.
+    const localEnvironment = {
+      ...(await buildProcessEnvironmentAsync()),
+      ...accountEnvironment
+    }
+    const descriptor = findHarness(harnessId)
+    const installedHere =
+      descriptor === undefined ||
+      (await isHarnessAvailableAsync(harnessId, descriptor.command, localEnvironment))
+    if (!installedHere) {
+      const remote = await this.host.state.ovenChat.readAccountUsage({
+        ...(overrides?.ovenId ? { ovenId: overrides.ovenId } : {}),
+        harnessId,
+        providerId,
+        accountId: account.id
+      })
+      return remote ? [remote] : []
+    }
+    const conversationSessionId = await this.conversationSessionId(overrides)
     const driver = await this.host.driverForAccount(harnessId, account.id).catch(() => undefined)
     if (!driver) {
       Logger.dev(`On-demand account usage refresh: unknown harness "${harnessId}"`)
@@ -286,7 +313,7 @@ export class ChatEngineProvidersCatalog {
       // id and clobber each other's cached quota. Key the read by the provider
       // id instead, which the battery hover and the Accounts rows both match.
       accountId: isCodeInOvenCustomProviderId(providerId) ? providerId : account.id,
-      accountEnvironment: this.host.state.accountRegistry.environment(account),
+      accountEnvironment,
       driver,
       projectPath,
       // The thread the hover belongs to, so a driver can state THAT thread's

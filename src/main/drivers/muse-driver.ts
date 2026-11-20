@@ -46,6 +46,7 @@ import type {
   ThinkingLevel
 } from '../../lib/types'
 import { THINKING_LEVEL_ORDER } from '../../lib/thinking-presets'
+import { isUnrestrictedLevel } from '../../lib/permission-level'
 import { COMPACT_LINE_SHARE } from '../../lib/prompt-budget'
 import { attachmentReference, attachmentTarget } from './attachment-reference'
 import { buildProcessEnvironmentAsync } from './cli-environment'
@@ -327,8 +328,9 @@ export class MuseDriver extends PersistentCliDriver {
     if (options.readOnly) {
       // Inspection chats must not mutate the workspace.
       args.push('--disable-write')
-    } else if (options.settings.permissionLevel === 'full_access') {
-      // Full Access trusts the workspace and bypasses approval and the sandbox.
+    } else if (isUnrestrictedLevel(options.settings.permissionLevel)) {
+      // Full Access and Oven Mode trust the machine and bypass approval and the
+      // sandbox.
       args.push('--yolo')
     } else {
       args.push('--disable-approval')
@@ -420,7 +422,7 @@ export class MuseDriver extends PersistentCliDriver {
         const payload = record(envelope?.['payload'])
 
         if (
-          options.settings.permissionLevel !== 'full_access' &&
+          !isUnrestrictedLevel(options.settings.permissionLevel) &&
           payloadType === 'task.lifecycle.proposed'
         ) {
           const event = record(payload?.['event'])
