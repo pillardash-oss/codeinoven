@@ -66,12 +66,13 @@ slot becomes: the reason, and the one control that actually moves the work on. -
     >
       {#if kind === 'auditor'}
         <p>
-          This thread is the {subject} that {owner} runs. Its audit is started, retried and re-checked
-          from that thread's audit card, and the auditor's model and account are chosen there too.
+          This thread is the {subject} that {owner} runs. Its audit is started and re-checked from that
+          thread's audit coordinator, and the auditor's model and account are chosen there too.
         </p>
         <p>
           Nothing is typed into this thread: a message here would start a second run beside the
-          audit the coordinator is driving.
+          audit the coordinator is driving. While the audit runs, its card above is where it is
+          stopped.
         </p>
       {:else if kind === 'pawn'}
         <p>

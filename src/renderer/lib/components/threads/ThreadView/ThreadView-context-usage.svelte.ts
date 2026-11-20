@@ -503,7 +503,12 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         component: 'independent-audit',
         props: {
           running: this.root.currentWorkingTraceAttribution.independentAuditRunning,
-          auditThread: this.durableAuditThread,
+          // On the auditor's own thread, that thread is the audit: showing the
+          // coordinator's copy left this view claiming no audit existed while
+          // the user was looking straight at the run.
+          auditThread: this.root.currentWorkingTraceAttribution.independentAuditorChild
+            ? this.root.handleAgentEvent.thread
+            : this.durableAuditThread,
           reportAvailable: this.auditReport !== null,
           partialReport: this.auditReport?.evidenceValidation === 'partial',
           selectedThreadId: this.root.handleAgentEvent.thread.id,
@@ -773,7 +778,6 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
    * and restores the coordinator.
    */
   async stopIndependentAudit(): Promise<void> {
-    if (!this.root.submitSpecDecision.auditBusy) return
     try {
       await invoke(
         'agent:stopIndependentAudit',

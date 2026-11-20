@@ -3,6 +3,7 @@
   import CioExternalLink from '@pdslng/cio-icon/CioExternalLink.svelte'
   import CioEye from '@pdslng/cio-icon/CioEye.svelte'
   import CioFileCheck from '@pdslng/cio-icon/CioFileCheck.svelte'
+  import CioStop from '@pdslng/cio-icon/CioStop.svelte'
   import { slide } from 'svelte/transition'
   import CardButton from '../shared/CardButton.svelte'
   import CardFoot from '../shared/CardFoot.svelte'
@@ -42,6 +43,9 @@
       position: 'before' | 'after'
     ) => void
     onViewTrace?: () => void
+    /** Stop the audit that is running. Present on the surface where the run is
+     *  visible, so it can end the run where the user is looking at it. */
+    onStop?: () => void | Promise<void>
     onViewReport: () => void
   }
 
@@ -66,10 +70,24 @@
     onRemoveRecent,
     onReorderFavorite,
     onViewTrace,
+    onStop,
     onViewReport
   }: Props = $props()
 
   let folded = $state(false)
+  /** A stop is in flight: the abort has not settled yet, so a second press
+   *  must not fire another one. */
+  let stopping = $state(false)
+
+  async function stopAudit(): Promise<void> {
+    if (stopping || !onStop) return
+    stopping = true
+    try {
+      await onStop()
+    } finally {
+      stopping = false
+    }
+  }
   let failed = $derived(auditState === 'failed')
   /** A report was generated, but some verification facts could not be matched
    *  to executed evidence in the auditor transcript. */
@@ -281,14 +299,27 @@
                 variant="primary"
                 onclick={onViewReport}
               />
-            {:else if auditState === 'running' && onViewTrace}
-              <CardButton
-                label="View trace"
-                title="Open the durable auditor thread and its live working trace"
-                icon={CioEye}
-                variant="secondary"
-                onclick={onViewTrace}
-              />
+            {:else if auditState === 'running' && (onViewTrace || onStop)}
+              {#if onViewTrace}
+                <CardButton
+                  label="View trace"
+                  title="Open the durable auditor thread and its live working trace"
+                  icon={CioEye}
+                  variant="secondary"
+                  onclick={onViewTrace}
+                />
+              {/if}
+              {#if onStop}
+                <CardButton
+                  label={stopping ? 'Stopping…' : 'Stop audit'}
+                  title="Stop the running audit. No report is saved and the auditor is left where it stopped."
+                  icon={CioStop}
+                  variant="danger"
+                  disabled={stopping}
+                  loading={stopping}
+                  onclick={stopAudit}
+                />
+              {/if}
             {:else if version !== undefined}
               <CardButton
                 label={reworking ? 'View source report' : 'View report'}
