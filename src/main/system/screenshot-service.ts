@@ -1,11 +1,4 @@
-import {
-  BrowserWindow,
-  app,
-  globalShortcut,
-  nativeImage,
-  systemPreferences,
-  type NativeImage
-} from 'electron'
+import { BrowserWindow, app, globalShortcut, nativeImage, type NativeImage } from 'electron'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
@@ -19,6 +12,7 @@ import type {
 import { broadcastAppToast } from '../ipc/app-toast'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from './logger'
+import { ensureScreenshotPermission, screenshotPermissionState } from './screenshot-permission'
 
 /**
  * Region screenshots for agents.
@@ -70,29 +64,24 @@ function screenshotsDirectory(): string {
   return join(app.getPath('userData'), SCREENSHOT_DIRECTORY)
 }
 
-function isScreenRecordingAllowed(): boolean {
-  if (process.platform !== 'darwin') return false
-  try {
-    const status = systemPreferences.getMediaAccessStatus('screen')
-    return status !== 'denied' && status !== 'restricted'
-  } catch {
-    return true
-  }
-}
-
-function failed(reason: string): ScreenshotCaptureOutcome {
-  broadcastAppToast({ message: 'Screenshot could not be captured', type: 'error', details: reason })
+/** A failure is always a toast with the reason kept readable behind Copy. */
+function failed(
+  reason: string,
+  title = 'Screenshot could not be captured'
+): ScreenshotCaptureOutcome {
+  broadcastAppToast({ message: title, type: 'error', details: reason })
   return { status: 'failed', reason }
 }
 
-/** Run the platform selector; it answers when the user releases the selection. */
-function runScreenCapture(path: string): Promise<void> {
+/** Run the platform selector; it answers when the user releases the selection,
+ *  and with its exit code, because a refused capture also exits without a file. */
+function runScreenCapture(path: string): Promise<number> {
   return new Promise((resolveCapture, rejectCapture) => {
     const child = spawn(SCREEN_CAPTURE_BIN, ['-i', '-x', '-o', '-t', 'png', path], {
       stdio: 'ignore'
     })
     child.once('error', rejectCapture)
-    child.once('close', () => resolveCapture())
+    child.once('close', (code) => resolveCapture(code ?? 0))
   })
 }
 
@@ -167,9 +156,19 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
   const now = Date.now()
   if (capturing || now - lastTriggerAt < TRIGGER_DEBOUNCE_MS) return { status: 'busy' }
   lastTriggerAt = now
-  if (!isScreenRecordingAllowed()) {
+
+  // The grant is the operating system's to give: ask it the way it answers, and
+  // when it has already refused, put the person in front of the pane instead of
+  // opening a selector that would silently capture nothing.
+  Logger.dev('Region screenshot permission checked', { state: screenshotPermissionState() })
+  const permission = await ensureScreenshotPermission()
+  if (!permission.granted) {
+    Logger.dev('Region screenshot refused: screen recording is not granted', {
+      state: permission.state
+    })
     return failed(
-      'Screen Recording is off for this app. Allow it in System Settings › Privacy & Security › Screen Recording, then take the screenshot again.'
+      permission.message ?? 'Screen Recording is not allowed for this app.',
+      'Screenshot needs Screen Recording permission'
     )
   }
 
@@ -179,8 +178,9 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
   try {
     await mkdir(directory, { recursive: true })
     Logger.dev('Opening the region screenshot selector', { rawPath })
+    let exitCode = 0
     try {
-      await runScreenCapture(rawPath)
+      exitCode = await runScreenCapture(rawPath)
     } catch (error) {
       return failed(
         `The macOS screenshot selector could not start: ${error instanceof Error ? error.message : String(error)}`
@@ -190,7 +190,18 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
     const rawInfo = await stat(rawPath).catch(() => null)
     if (!rawInfo || rawInfo.size === 0) {
       await rm(rawPath, { force: true }).catch(() => undefined)
-      // The selector exits with no file when the user presses Escape.
+      Logger.dev('The region screenshot selector wrote no file', { exitCode })
+      // A selector that wrote nothing is either a cancelled selection or a
+      // capture the system quietly refused. The permission state, read again
+      // rather than assumed, is what tells the two apart.
+      const state = screenshotPermissionState()
+      if (state !== 'granted' && state !== 'not-required') {
+        const refused = await ensureScreenshotPermission()
+        return failed(
+          refused.message ?? 'Screen Recording is not allowed for this app.',
+          'Screenshot needs Screen Recording permission'
+        )
+      }
       return { status: 'cancelled' }
     }
 
@@ -198,7 +209,7 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
     if (source.isEmpty()) {
       await rm(rawPath, { force: true }).catch(() => undefined)
       return failed(
-        'The screenshot file was empty. Check Screen Recording permission for this app and try again.'
+        'The screenshot file was empty. Allow Screen Recording for this app, quit and reopen the app, then take the screenshot again.'
       )
     }
 
