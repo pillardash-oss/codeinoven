@@ -14,6 +14,7 @@ import {
   type OvenWorkspaceRequest,
   type OvenWorkspaceResult
 } from '../../lib/ovens'
+import { OVEN_UTILITY_HOST_MODE } from '../../lib/oven-utility-host'
 import { mirrorLocalGitIdentity, OVEN_GIT_NETWORK_CHANNELS } from './oven-local-git-identity'
 import { syncLocalGitHostTrust } from './oven-local-git-trust'
 import {
@@ -100,6 +101,17 @@ const SERVICE_REPAIR_COOLDOWN_MS = 60_000
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * A bundle from before the Oven's utility host answers that request this way.
+ *
+ * Its service knows the method list it shipped with, so anything newer is an
+ * unknown method — the same shape `staleChannelAnswer` recognises for the
+ * operations the warm channel carries.
+ */
+function unknownUtilityHostMethod(message: string): boolean {
+  return /Unknown Oven request method/iu.test(message)
 }
 
 function toError(error: unknown): Error {
@@ -224,6 +236,40 @@ export class OvenService {
     } finally {
       release()
     }
+  }
+
+  /**
+   * Where this Oven's own utility host listens.
+   *
+   * A turn that runs on an Oven runs on that machine, so this app's loopback
+   * gateway is not reachable from it and the Oven hosts its own. This is how the
+   * app learns the port that host answers on before it opens a relay to it.
+   *
+   * A bundle from before the host existed answers this request as an unknown
+   * method rather than with one of the stale answers `withServiceRepair` already
+   * recognises. The Oven's service file is this app's own artifact, so that
+   * answer is treated the same way: the service is replaced once, under the same
+   * cooldown, and the same call is sent again.
+   */
+  async utilityHost(id: string): Promise<{ port: number }> {
+    const input = { method: OVEN_UTILITY_HOST_MODE }
+    const first = await attempt(() => this.request(id, input))
+    if (first.ok) return this.utilityHostPort(first.value)
+    if (!unknownUtilityHostMethod(messageOf(first.error))) throw first.error
+    if (!(await this.refreshService(id, messageOf(first.error))))
+      throw new Error(
+        'This Oven runs an older service. Finish its active runs, then install the service again from its settings.',
+        { cause: first.error }
+      )
+    return this.utilityHostPort(await this.request(id, input))
+  }
+
+  /** The port an Oven's utility host answered with, once it is known to be usable. */
+  private utilityHostPort(answer: string): { port: number } {
+    const host = this.decode<{ port: number }>(answer)
+    if (!Number.isInteger(host.port) || host.port < 1 || host.port > 65535)
+      throw new Error('The Oven utility host answered an invalid port.')
+    return { port: host.port }
   }
 
   async events(

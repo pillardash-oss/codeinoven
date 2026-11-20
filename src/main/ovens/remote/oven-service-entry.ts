@@ -45,6 +45,14 @@ import {
 } from '../oven-wsl'
 import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
+import { OVEN_UTILITY_HOST_MODE, OVEN_UTILITY_RELAY_MODE } from '../../../lib/oven-utility-host'
+import { startOvenUtilityHost } from './oven-utility-host'
+import { runOvenUtilityRelay } from './oven-utility-relay'
+import {
+  readOvenUtilityHostState,
+  removeOvenUtilityHostState,
+  waitForOvenUtilityHostState
+} from './oven-utility-host/oven-utility-host-state'
 import {
   WINDOWS_LAUNCHER_FILE,
   enableWindowsTask,
@@ -276,6 +284,11 @@ async function forceStopDaemon(): Promise<void> {
 }
 const jobs = new Map<string, Job>()
 let shutDownServer: (() => void) | undefined
+/**
+ * The one utility host this daemon started, kept so a repeated ask reuses it
+ * instead of leaving a second listener and a second state file behind.
+ */
+let utilityHostChild: ChildProcess | undefined
 let requestTail: Promise<unknown> = Promise.resolve()
 const MAX_REQUEST = 1024 * 1024
 const MAX_RUNS = 64
@@ -932,12 +945,61 @@ async function events(job: Job, after: unknown): Promise<{ run: OvenRun; events:
   return { run: job.run, events: result }
 }
 
+/**
+ * Start this Oven's utility host, once, and report the port it published.
+ *
+ * The host is an ordinary child of this daemon rather than a second daemon: it
+ * is only reachable over the Oven's own loopback, holds nothing worth surviving
+ * a service restart, and its state file is read by the relay the app spawns.
+ * Every attempt re-reads the state file, so a host that was still starting when
+ * it was asked, or one this daemon lost track of, is found rather than doubled.
+ */
+async function utilityHost(): Promise<{ port: number }> {
+  // The host lives under the account's own app data root, where a client looks
+  // for it, which is not necessarily a daemon started with an overridden root.
+  const home = homedir()
+  const published = await readOvenUtilityHostState(home)
+  if (published && processAlive(published.pid)) return { port: published.port }
+  // A state file whose host is gone names a port nothing listens on, so it is
+  // withdrawn before a new host publishes over it.
+  if (published) await removeOvenUtilityHostState(home, published.hostToken)
+  if (
+    !utilityHostChild ||
+    utilityHostChild.exitCode !== null ||
+    utilityHostChild.signalCode !== null
+  ) {
+    const child = spawn(process.execPath, [process.argv[1], OVEN_UTILITY_HOST_MODE], {
+      detached: false,
+      stdio: 'ignore'
+    })
+    utilityHostChild = child
+    const release = (): void => {
+      if (utilityHostChild === child) utilityHostChild = undefined
+    }
+    child.once('exit', release)
+    child.once('error', release)
+  }
+  const started = await waitForOvenUtilityHostState(home)
+  if (!started) throw new Error('The Oven utility host did not start.')
+  return { port: started.port }
+}
+
+/** Stop the utility host this daemon started, if it is still its own. */
+function stopUtilityHost(): void {
+  const child = utilityHostChild
+  utilityHostChild = undefined
+  child?.kill('SIGTERM')
+}
+
 async function dispatch(raw: unknown): Promise<unknown> {
   const request = record(raw)
   if (request.protocolVersion !== PROTOCOL) throw new Error('Oven protocol version mismatch.')
   if (request.method === 'probe') return probe(request.refresh === true)
   if (request.method === 'runs') return [...jobs.values()].map((job) => job.run)
   if (request.method === 'workspace') return ovenWorkspace(request.input)
+  // Additive: a bundle that predates it answers "unknown method", which is how
+  // the app already treats a stale Oven service.
+  if (request.method === 'utility-host') return utilityHost()
   if (request.method === 'shutdown') {
     if ([...jobs.values()].some((job) => job.child))
       throw new Error('Finish or stop active runs before updating the Oven service.')
@@ -1256,6 +1318,7 @@ async function daemon(): Promise<void> {
   )
   server.maxConnections = 8
   shutDownServer = () => {
+    stopUtilityHost()
     server.close(() => {
       void unlink(socketPath)
         .catch(() => undefined)
@@ -1267,6 +1330,8 @@ async function daemon(): Promise<void> {
   await once(server, 'listening')
   // A named pipe on Windows carries no file mode to restrict.
   if (process.platform !== 'win32') await chmod(socketPath, 0o600)
+  // The host is this daemon's child, so it must never outlive it.
+  process.once('exit', stopUtilityHost)
 }
 
 function request(data: string): Promise<string> {
@@ -1353,7 +1418,32 @@ async function attach(): Promise<void> {
   }
 }
 
+/**
+ * Run this Oven's utility host until the daemon stops it.
+ *
+ * The listening server is the long-lived handle: `startOvenUtilityHost`
+ * resolves once the host is published, and the event loop then keeps it alive.
+ * A stop signal withdraws the state file before the process goes, so the next
+ * `utility-host` request never reads a port nothing is listening on.
+ */
+async function utilityHostMode(): Promise<void> {
+  const host = await startOvenUtilityHost({ home: homedir(), revision })
+  const stop = (): void => {
+    void host.close().finally(() => process.exit(0))
+  }
+  process.once('SIGTERM', stop)
+  process.once('SIGINT', stop)
+}
+
+/** Run one client's relay until its pipe closes or the client retires it. */
+async function utilityRelayMode(): Promise<void> {
+  const relay = await runOvenUtilityRelay({ home: homedir() })
+  if (!relay.ok) process.exitCode = 1
+}
+
 async function main(): Promise<void> {
+  if (process.argv[2] === OVEN_UTILITY_HOST_MODE) return utilityHostMode()
+  if (process.argv[2] === OVEN_UTILITY_RELAY_MODE) return utilityRelayMode()
   if (process.argv[2] === 'daemon') return daemon()
   if (process.argv[2] === 'attach') return attach()
   if (process.argv[2] === 'ensure') {

@@ -418,13 +418,30 @@ export class UtilityOrchestrationServiceTurnRuntime {
       cleanupPromise ??= this.cleanupTurn(id)
       await cleanupPromise
     }
+    // A turn that runs its harness somewhere else reaches the gateway through
+    // that machine's own listener, because this app's loopback means nothing
+    // there. The endpoint is decided here, where the turn's token and grants
+    // exist, and the machine's side registers exactly those grants.
+    const sharedEndpoint = await this.host.units['orchestration'].timed(
+      request,
+      'gatewayEndpoint',
+      request.resolveGatewayEndpoint
+        ? request.resolveGatewayEndpoint({
+            turnId: state.id,
+            token,
+            grants: gatewayTools.map(({ name }) => name),
+            appBaseUrl: bridgeUrl
+          })
+        : Promise.resolve(null)
+    )
+    if (sharedEndpoint?.close) state.closeGatewayEndpoint = sharedEndpoint.close
     return {
       id,
       resolvedUtilities: [...always, gateway],
       instructions: toolInstructions,
       directInstructions: toolInstructions,
       directEndpoint: {
-        url: bridgeUrl,
+        url: sharedEndpoint?.url ?? bridgeUrl,
         token,
         toolNames: initialGatewayTools(gatewayTools).map(({ name }) => name),
         timeoutMs: gatewayHarnessTimeoutMs((await this.host.storage.getConfig()).questionTimeoutMs)
@@ -439,6 +456,13 @@ export class UtilityOrchestrationServiceTurnRuntime {
     if (!turn) return
     this.host.turns.delete(id)
     this.host.turnIdsByToken.delete(turn.token)
+    // Before the clients go: an Oven's relay and its host hold the turn's
+    // capability, and a turn that is never retired keeps answering there.
+    try {
+      turn.state.closeGatewayEndpoint?.()
+    } catch (error) {
+      Logger.dev('Could not close the turn gateway endpoint:', error)
+    }
     await this.endComputerUseSessions(turn.state)
     await Promise.allSettled([...turn.state.clients.values()].map((client) => client.close()))
     // Last, so the claim covers the clients it was taken for: an unrestricted

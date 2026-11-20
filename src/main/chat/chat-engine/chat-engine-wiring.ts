@@ -25,6 +25,7 @@ import { AcpDriver, configuredAcpAgents } from '../../drivers/acp-driver'
 import { PiDriver } from '../../drivers/pi-driver'
 import { OvenChat } from '../../ovens/oven-chat'
 import { installOvenPiRuntime } from '../../ovens/oven-pi-runtime'
+import { OvenUtilityRelays } from '../../ovens/oven-utility-relay'
 import { CheckpointManager } from '../../storage/checkpoint-manager'
 import { listHarnesses } from '../../agents/harness-registry'
 import { broadcastThreadDeleted, broadcastThreadUpdate } from '../thread-events'
@@ -332,6 +333,15 @@ export function wireChatEngine(
     // too. One instance serves every Oven thread for the life of the app, so no
     // turn ever pays for a driver, and its events reach the same handler.
     const ovenPi = installOvenPiRuntime(engine.state.ovenChat.service)
+    // A turn that runs on an Oven reaches its gateway through that machine's own
+    // host, and whatever the host cannot run itself comes back over this relay
+    // and is answered by the very same routes a local turn calls.
+    const ovenUtilityRelays = new OvenUtilityRelays(engine.state.ovenChat.service.ssh, {
+      callRouteForTurn: (turnId, route, input) =>
+        engine.state.utilityOrchestration.callRouteForTurn(turnId, route, input)
+    })
+    ovenPi.attachUtilityRelays(ovenUtilityRelays)
+    engine.state.ovenUtilityRelays = ovenUtilityRelays
     const ovenPiDriver = new PiDriver(
       storage,
       engine.state.baseUrlProviders,

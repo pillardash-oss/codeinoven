@@ -8,6 +8,7 @@ import type { PiCioFilesStorage } from '../drivers/pi/pi-driver-cio-files'
 import type { PiNativeTranscriptSource } from '../drivers/pi/pi-native-session'
 import { ovenRpcTransport, type OvenRunService } from './oven-rpc-transport'
 import { OvenPiStorage, type OvenPiStorageService } from './oven-pi-storage'
+import type { OvenUtilityRelays } from './oven-utility-relay'
 import {
   ovenPiTranscriptSource,
   type OvenPiTranscriptRoute,
@@ -386,6 +387,7 @@ export class OvenPiRuntime {
   readonly launch: OvenPiLaunch
   private piDriver: (HarnessDriver & OvenPiDriver) | null = null
   private transcriptSource: PiNativeTranscriptSource | null = null
+  private utilityRelays: OvenUtilityRelays | null = null
 
   constructor(readonly service: OvenPiRuntimeService) {
     this.launch = createOvenPiLaunch({
@@ -467,6 +469,58 @@ export class OvenPiRuntime {
   forget(sessionId: string): void {
     this.sessions.forget(sessionId)
     this.piDriver?.setSessionStorage(sessionId, null)
+  }
+
+  /**
+   * Hand the runtime the relays that carry a turn's gateway back to this app.
+   *
+   * Built by the wiring because they need both halves: the Oven's transport to
+   * open a child on the machine, and the app's gateway to answer the calls that
+   * machine cannot run itself.
+   */
+  attachUtilityRelays(relays: OvenUtilityRelays): void {
+    this.utilityRelays = relays
+  }
+
+  /**
+   * Whether one session's turns reach their gateway somewhere other than here.
+   *
+   * A session bound to no Oven runs on this machine and keeps the app's own
+   * loopback endpoint, which needs no relay and no remote host.
+   */
+  hasGatewayEndpoint(sessionId: string): boolean {
+    return this.utilityRelays !== null && this.sessions.get(sessionId) !== undefined
+  }
+
+  /**
+   * Where one turn on an Oven reaches its gateway, and the closer for its relay.
+   *
+   * The harness on that machine posts to the Oven's own utility host; anything
+   * app-owned that host cannot answer comes back here over the same relay. A
+   * local session has no such address and answers null, so the caller keeps the
+   * app's endpoint untouched.
+   */
+  async gatewayEndpoint(
+    sessionId: string,
+    turn: {
+      turnId: string
+      token: string
+      grants: readonly string[]
+      appBaseUrl: string
+    }
+  ): Promise<{ url: string; close?: () => void } | null> {
+    const session = this.sessions.get(sessionId)
+    const relays = this.utilityRelays
+    if (!session || !relays) return null
+    const endpoint = await relays.endpoint(session.ovenId, {
+      turnId: turn.turnId,
+      token: turn.token,
+      grants: [...turn.grants],
+      utilities: [],
+      client: 'codeinoven-app',
+      sessionId
+    })
+    return { url: endpoint.url, close: endpoint.close }
   }
 }
 

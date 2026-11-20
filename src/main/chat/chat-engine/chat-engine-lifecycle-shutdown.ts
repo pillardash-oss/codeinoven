@@ -78,6 +78,10 @@ export class ChatEngineLifecycleShutdown {
       pending.settleBrowserAction(false)
     }
     this.host.state.ovenChat.dispose()
+    // Before the Oven channels close: a live relay would otherwise leave the
+    // Oven's host holding a capability for a client that is already gone.
+    this.host.state.ovenUtilityRelays?.retireAll()
+    this.host.state.ovenUtilityRelays = null
     if (this.host.state.streamBroadcastTimer) {
       clearTimeout(this.host.state.streamBroadcastTimer)
       this.host.state.streamBroadcastTimer = null

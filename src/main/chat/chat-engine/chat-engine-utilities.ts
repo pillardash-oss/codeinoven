@@ -35,8 +35,10 @@ import type {
   UtilitySuggestionContext,
   UtilityResultAttribution,
   UtilityTurnBudgetContext,
-  UtilityTurnGateway
+  UtilityTurnGateway,
+  UtilityTurnRequest
 } from '../../utilities/utility-orchestration-service'
+import { ovenPiRuntime } from '../../ovens/oven-pi-runtime'
 import {
   utilitySuggestionQuestion,
   type UtilitySuggestionResolution
@@ -357,6 +359,9 @@ export class ChatEngineUtilities {
           sessionId,
           threadTitle,
           projectPath,
+          ...(this.ovenGatewayEndpoint(sessionId)
+            ? { resolveGatewayEndpoint: this.ovenGatewayEndpoint(sessionId) }
+            : {}),
           ...(scopeBucketId === undefined ? {} : { scopeBucketId }),
           nativeCapabilities,
           permissionLevel: settings.permissionLevel,
@@ -627,6 +632,22 @@ export class ChatEngineUtilities {
     }
   }
 
+  /**
+   * The gateway endpoint a turn must publish for the machine it runs on.
+   *
+   * A turn whose pi process runs on an Oven cannot reach this app's loopback,
+   * so the Oven's own utility host is what gets published; a turn that runs
+   * here has no such endpoint and keeps the app's, which is why this returns
+   * undefined rather than an empty resolver.
+   */
+  private ovenGatewayEndpoint(
+    sessionId: string
+  ): UtilityTurnRequest['resolveGatewayEndpoint'] | undefined {
+    const runtime = ovenPiRuntime()
+    if (!runtime?.hasGatewayEndpoint(sessionId)) return undefined
+    return async (turn) => runtime.gatewayEndpoint(sessionId, turn)
+  }
+
   async cleanupTurnUtilities(sessionId: string, expectedGatewayId?: string): Promise<void> {
     const turn = this.host.state.utilityTurns.get(sessionId)
     if (!turn || (expectedGatewayId !== undefined && turn.gateway.id !== expectedGatewayId)) return
@@ -720,6 +741,9 @@ export class ChatEngineUtilities {
         threadId,
         sessionId,
         threadTitle: steeringThread?.title,
+        ...(this.ovenGatewayEndpoint(sessionId)
+          ? { resolveGatewayEndpoint: this.ovenGatewayEndpoint(sessionId) }
+          : {}),
         ...(steeringThread?.scopeBucketId === undefined
           ? {}
           : { scopeBucketId: steeringThread.scopeBucketId }),

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createServer, type Socket } from 'node:net'
 import { mkdir, mkdtemp, writeFile, rm, readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -247,6 +247,65 @@ export class OvenSsh {
       .map(sshQuote)
       .join(' ')
     return this.execute(id, command, `${password}\n`, timeoutMs, onOutput)
+  }
+
+  /**
+   * One channel that stays open and keeps talking to the Oven in both directions.
+   *
+   * `execute` is the wrong shape for that: it writes one payload, collects one
+   * answer and ends the process, which is right for a request and wrong for a
+   * conversation. The Oven's utility relay is a conversation — frames go out on
+   * stdin and calls come back on stdout for as long as a turn runs — so this
+   * spawns exactly the invocation `execute` would build (same shell detection,
+   * same quoting, same authentication and host-trust verification, because it is
+   * the same SSH call) and hands back the live child with its stdin left open.
+   *
+   * The caller owns the child: it must call `dispose` exactly once when the
+   * channel is over, because `prepare` wrote this connection's private
+   * credentials and only `dispose` removes them.
+   */
+  async duplex(
+    id: string,
+    argv: string[]
+  ): Promise<{ child: ChildProcessWithoutNullStreams; dispose: () => Promise<void> }> {
+    if (argv.length === 0) throw new TypeError('A duplex channel needs a service mode.')
+    this.signal?.throwIfAborted()
+    // Loaded on demand: the command builders quote their arguments through this
+    // module's `sshQuote`, so a top-level import of them here would be a cycle.
+    const { remoteServiceCommand } = await import('./oven-remote-command')
+    // Asking for the shell runs a command through `execute`, so host trust is
+    // verified (and prompted for) while a trust failure can still be retried,
+    // exactly as a tunnel does before it opens its streaming socket.
+    const prepared = await this.prepare(id, remoteServiceCommand(await remoteShell(this, id), argv))
+    let child: ChildProcessWithoutNullStreams
+    try {
+      child = spawn(prepared.executable, prepared.args, {
+        env: prepared.env,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+    } catch (error) {
+      await prepared.dispose()
+      throw error
+    }
+    // A channel that outlives the app's own lifetime must not survive an abort:
+    // nothing else would ever end this child.
+    const abort = (): void => {
+      child.kill('SIGKILL')
+    }
+    this.signal?.addEventListener('abort', abort, { once: true })
+    let released = false
+    return {
+      child,
+      dispose: async () => {
+        if (released) return
+        released = true
+        this.signal?.removeEventListener('abort', abort)
+        child.stdin.end()
+        child.kill('SIGTERM')
+        await prepared.dispose()
+      }
+    }
   }
 
   /**

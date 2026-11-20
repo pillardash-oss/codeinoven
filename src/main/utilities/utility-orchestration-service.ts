@@ -119,6 +119,22 @@ export interface UtilityTurnRequest {
   /** Present only for an active interview; the callback owns the exact note path/version. */
   saveBrainstormNotes?: (markdown: string) => Promise<{ path: string; version: number }>
   /**
+   * Where a turn that does not run on this machine reaches its gateway.
+   *
+   * A turn whose harness runs on an Oven cannot use this app's loopback
+   * endpoint: on that machine `127.0.0.1` is a different loopback, with nothing
+   * listening. The caller that knows the machine supplies the endpoint it can
+   * actually reach (the Oven's own utility host) together with the closer for
+   * the relay that carries app-bound calls back here. Returning null keeps this
+   * app's own endpoint, which is what every local turn gets.
+   */
+  resolveGatewayEndpoint?: (turn: {
+    turnId: string
+    token: string
+    grants: readonly string[]
+    appBaseUrl: string
+  }) => Promise<{ url: string; close?: () => void } | null>
+  /**
    * Present only for an assistant's Getting started interview; the callback owns
    * the checkpoint path and replaces its content.
    */
@@ -484,6 +500,11 @@ export interface TurnState {
   grantedTools: GatewayToolDefinition[]
   id: string
   request: UtilityTurnRequest
+  /**
+   * Releases what placed this turn's endpoint, when it was not this app's own
+   * listener (an Oven's utility host). Runs once, as the turn is cleaned up.
+   */
+  closeGatewayEndpoint?: () => void
   eligible: Map<string, ResolvedUtility>
   activated: Map<string, ResolvedUtility>
   clients: Map<string, McpClient>
@@ -646,6 +667,15 @@ export class UtilityOrchestrationService {
   }
   buildBridgeHandlers(): ReadonlyMap<string, GatewayBridgeHandler> {
     return this.units['orchestration'].buildBridgeHandlers()
+  }
+  /**
+   * Run one granted route for a turn, wherever the call arrived from.
+   *
+   * The app's own loopback listener and an Oven's utility host both reach the
+   * same turns, so both go through one implementation of a route.
+   */
+  async callRouteForTurn(turnId: string, route: string, input: unknown): Promise<unknown> {
+    return this.units['orchestration'].callRouteForTurn(turnId, route, input)
   }
   buildStructuredRoutes(): ReadonlySet<string> {
     return this.units['orchestration'].buildStructuredRoutes()

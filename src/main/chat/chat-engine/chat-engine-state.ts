@@ -13,6 +13,7 @@ import { AssignmentEngine } from '../../../lib/engines/assignment-engine'
 import { PrdEngine } from '../../../lib/engines/prd-engine'
 import { EngineeringLifecycleEngine } from '../../../lib/engines/engineering-lifecycle-engine'
 import { OvenChat } from '../../ovens/oven-chat'
+import type { OvenUtilityRelays } from '../../ovens/oven-utility-relay'
 import { MemoryService } from '../memory-service'
 import { PromptAssembler } from '../prompt-assembler'
 import type { AcpAgent } from '../../../lib/acp'
@@ -91,6 +92,14 @@ export class ChatEngineState {
   constructor(private readonly host: ChatEngine) {}
 
   ovenChat!: OvenChat
+
+  /**
+   * The relays that carry an Oven turn's app-bound gateway calls back here.
+   *
+   * One relay per live Oven turn, owned here so app quit can retire them all:
+   * a relay left behind keeps the host holding a dead turn's capability.
+   */
+  ovenUtilityRelays: OvenUtilityRelays | null = null
 
   readonly catalogProbeQueue = createWorkQueue(2)
 
