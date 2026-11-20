@@ -599,6 +599,28 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     await this.addFileAttachments([{ path: filePath, file }])
   }
 
+  /**
+   * Take one of the app's system-wide region captures into this prompt.
+   *
+   * The capture file is published by the main process, so it is copied into this
+   * thread's attachment storage before attaching: the screenshot folder is the
+   * app's own scratch space and is pruned, while a sent prompt's attachment has
+   * to outlive it.
+   */
+  async attachScreenshot(path: string): Promise<boolean> {
+    if (this.root.props.readOnlyMode && !this.root.props.allowAttachments) return false
+    if (this.selectedHarnessLacksAttachments) {
+      this.attachmentBlockedNotice = true
+      return false
+    }
+    const scope = this.root.props.attachmentStorage
+    if (!scope) return false
+    const retained = await invoke('screenshot:retain', scope, path)
+    if (!retained) return false
+    await this.addFileAttachments([{ path: retained }])
+    return true
+  }
+
   async addPastedTextAttachment(text: string): Promise<void> {
     if (!this.root.props.attachmentStorage)
       throw new Error('Attachment storage is unavailable for this chat.')

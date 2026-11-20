@@ -22,6 +22,12 @@ import {
 } from '../ipc-validation'
 import { isMissingFilesystemError, requireString, validateAttachmentStorageScope } from './shared'
 import { rememberLocalDownloadName } from '../../system/local-download-names'
+import {
+  captureScreenshotForAgent,
+  retainScreenshot,
+  setScreenshotShortcut,
+  takePendingScreenshots
+} from '../../system/screenshot-service'
 import type { SaveCopyInput, SaveFileInput } from '../../../lib/ipc/invoke-app'
 import type { ProjectFilesService } from '../../editor/project-files-service'
 import { trustedIpcMain as ipcMain } from '../trusted-ipc-main'
@@ -113,6 +119,31 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
   })
 
   ipcMain.handle('clipboard:readText', () => clipboard.readText())
+
+  /** Claim the system-wide region-screenshot chord the keymap resolved. */
+  privileged('screenshot:setShortcut', (_event, rawAccelerator: unknown) => {
+    if (rawAccelerator === null || rawAccelerator === undefined) return setScreenshotShortcut(null)
+    const accelerator = requireString(rawAccelerator, 'Screenshot accelerator')
+    if (accelerator.length > 80 || /[\r\n\0]/u.test(accelerator)) {
+      throw new TypeError('Screenshot accelerator is not a single chord')
+    }
+    return setScreenshotShortcut(accelerator)
+  })
+
+  /** The in-app fallback for a chord the system refused to give the app. */
+  privileged('screenshot:capture', () => captureScreenshotForAgent())
+
+  /** Captures taken while the window was parked in the menu bar. */
+  privileged('screenshot:pending', () => takePendingScreenshots())
+
+  /** Copy one of the app's captures into the thread it will be sent from. */
+  privileged('screenshot:retain', async (_event, rawScope: unknown, rawPath: unknown) => {
+    const scope = validateAttachmentStorageScope(rawScope)
+    const sourcePath = requireString(rawPath, 'Screenshot path')
+    const retained = await retainScreenshot(sourcePath, await attachmentStorageDirectory(scope))
+    if (retained) await privilegedIpc.registerUserSelectedFile(retained)
+    return retained
+  })
 
   ipcMain.handle('spellcheck:addWord', (event, rawWord: unknown) => {
     const word = requireString(rawWord, 'word')

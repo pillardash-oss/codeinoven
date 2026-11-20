@@ -8,6 +8,7 @@ import { modelRuntime } from '$lib/stores/model-runtime.svelte'
 import { ovens } from '$lib/stores/ovens.svelte'
 import { withOvenPermissionFallback } from '$lib/stores/thread-settings.svelte'
 import { isOvenMode } from '$shared/permission-level'
+import { registerScreenshotTarget } from '$lib/screenshot/screenshot-capture'
 import type { ChatComposer } from './ChatComposer-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
 /** One concern of the ChatComposer board. */
@@ -22,6 +23,15 @@ export class ChatComposerEffects extends BoardUnit<ChatComposer> {
    * so every effect here is owned by the component.
    */
   init(): void {
+    // The composer is the prompt a system-wide capture lands in. Only one thread
+    // surface is mounted at a time, so the newest registration is the visible one,
+    // and the cleanup leaves captures to the next composer when this remounts.
+    onMount(() =>
+      registerScreenshotTarget({
+        attachScreenshot: (path) => this.root.handleDropData.attachScreenshot(path)
+      })
+    )
+
     $effect(() => {
       const ovenId = this.root.handleDropData.targetOvenId
       if (!ovenId || ovenId === 'local') return
