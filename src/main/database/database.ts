@@ -385,9 +385,21 @@ export class Database {
   async executeViaWorker(
     sql: string,
     params: unknown[],
-    options: { allowPrimaryFallback?: boolean } = {}
+    options: { allowPrimaryFallback?: boolean; lane?: WorkerLane } = {}
   ): Promise<{ ok: boolean; error?: string }> {
     return this.writes.executeViaWorker(sql, params, options)
+  }
+
+  /**
+   * Resolve once no interactive worker request has arrived or answered for
+   * `quietMs`, or after `deadlineMs` whatever the traffic.
+   *
+   * For a one-time background job that holds the worker for seconds (an index
+   * build over a large table): it starts while nothing is waiting on the worker,
+   * and the deadline makes sure it still starts on a machine that never idles.
+   */
+  async waitForInteractiveQuiet(quietMs: number, deadlineMs: number): Promise<void> {
+    await this.maintenance.getWorker()?.waitForInteractiveQuiet(quietMs, deadlineMs)
   }
 
   /** Atomic batch: all statements run in one transaction on the worker's connection. */

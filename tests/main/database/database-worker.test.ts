@@ -288,6 +288,92 @@ describe('DatabaseWorker production wrapper', () => {
     await worker.shutdown()
   }, 60_000)
 
+  it('runs an interactive read ahead of a queued background write', async () => {
+    // A one-time index build is a write, and it holds the worker for as long as
+    // it takes. It must therefore be able to take the background lane too, or a
+    // launch that needs one would still answer a click's read last.
+    const dir = makeDir()
+    const worker = new DatabaseWorker(
+      {
+        dbPath: join(dir, 'app.db'),
+        backupDir: join(dir, 'backups'),
+        maintenanceEnabled: false,
+        ...DATABASE_WORKER_DEFAULTS
+      },
+      Logger,
+      realWorkerFactory
+    )
+    worker.start()
+    await expect(worker.ping()).resolves.toMatchObject({ kind: 'ping', ok: true })
+
+    const order: string[] = []
+    const blocker = worker
+      .query(
+        `WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c WHERE x < 4_000_000)
+         SELECT count(*) AS n FROM c`,
+        [],
+        1
+      )
+      .then((result) => {
+        order.push('blocker')
+        return result
+      })
+    const build = worker
+      .execute('CREATE TABLE IF NOT EXISTS probe_table(x INTEGER)', [], 'background')
+      .then((result) => {
+        order.push('background-write')
+        return result
+      })
+    const read = worker.query('SELECT 1 AS n', [], 1).then((result) => {
+      order.push('interactive')
+      return result
+    })
+
+    const [first, second, third] = await Promise.all([blocker, build, read])
+    expect(first).toMatchObject({ kind: 'query', ok: true })
+    expect(second).toMatchObject({ kind: 'execute', ok: true })
+    expect(third).toMatchObject({ kind: 'query', ok: true })
+    expect(order).toEqual(['blocker', 'interactive', 'background-write'])
+
+    await worker.shutdown()
+  }, 60_000)
+
+  it('waits for a quiet queue before background work, and gives up waiting at the deadline', async () => {
+    const dir = makeDir()
+    const worker = new DatabaseWorker(
+      {
+        dbPath: join(dir, 'app.db'),
+        backupDir: join(dir, 'backups'),
+        maintenanceEnabled: false,
+        ...DATABASE_WORKER_DEFAULTS
+      },
+      Logger,
+      realWorkerFactory
+    )
+    worker.start()
+    await expect(worker.ping()).resolves.toMatchObject({ kind: 'ping', ok: true })
+
+    // A start counts as activity, so the quiet window is served, not skipped.
+    const quietStartedAt = Date.now()
+    await worker.waitForInteractiveQuiet(200, 5_000)
+    expect(Date.now() - quietStartedAt).toBeGreaterThanOrEqual(150)
+
+    // A machine that is never quiet must still get the work: the deadline, not
+    // the quiet window, is what ends the wait.
+    const ticker = setInterval(() => void worker.ping(), 20)
+    try {
+      const deadlineStartedAt = Date.now()
+      await worker.waitForInteractiveQuiet(10_000, 300)
+      const waited = Date.now() - deadlineStartedAt
+      expect(waited).toBeGreaterThanOrEqual(250)
+      expect(waited).toBeLessThan(2_000)
+    } finally {
+      clearInterval(ticker)
+    }
+
+    await worker.shutdown()
+  }, 60_000)
+
   it('syncs transcript deltas on the worker and detects in-place edits', async () => {
     const dir = makeDir()
     const db = await openDatabase(dir)

@@ -91,8 +91,12 @@ export type DatabaseWorkerRequest =
       maxRows: number
       lane?: WorkerLane
     }
-  | { kind: 'execute'; sql: string; params: unknown[] }
-  | { kind: 'transaction'; statements: Array<{ sql: string; params: unknown[] }> }
+  | { kind: 'execute'; sql: string; params: unknown[]; lane?: WorkerLane }
+  | {
+      kind: 'transaction'
+      statements: Array<{ sql: string; params: unknown[] }>
+      lane?: WorkerLane
+    }
   | {
       kind: 'history-append'
       id: string
@@ -272,6 +276,9 @@ const UNAVAILABLE =
 /** A worker job at or above this many milliseconds is reported as slow. */
 const SLOW_WORKER_JOB_MS = 500
 
+/** How often a background job re-checks whether the queue has gone quiet. */
+const QUIET_POLL_MS = 250
+
 /** Bounded forced-termination window for a shutdown that does not exit cleanly. */
 export const WORKER_SHUTDOWN_TIMEOUT_MS = 2000
 
@@ -301,6 +308,8 @@ const ALWAYS_BACKGROUND_KINDS: ReadonlySet<DatabaseWorkerRequest['kind']> = new 
 interface QueuedWorkerRequest {
   id: number
   request: DatabaseWorkerRequest
+  /** The lane this request joined when it arrived, fixed for its whole life. */
+  lane: WorkerLane
   resolve: (result: DatabaseWorkerResult) => void
 }
 
@@ -317,7 +326,9 @@ function laneFor(request: DatabaseWorkerRequest): WorkerLane {
     request.kind === 'query' ||
     request.kind === 'query-messages' ||
     request.kind === 'query-user-messages' ||
-    request.kind === 'checkpoint-summaries'
+    request.kind === 'checkpoint-summaries' ||
+    request.kind === 'execute' ||
+    request.kind === 'transaction'
   ) {
     return request.lane ?? 'interactive'
   }
@@ -333,6 +344,15 @@ export class DatabaseWorker {
   private readonly background: QueuedWorkerRequest[] = []
   /** The request the worker is executing right now, if any. */
   private inFlight: QueuedWorkerRequest | null = null
+  /**
+   * When an interactive request last arrived or answered.
+   *
+   * Background work uses this to stay out of a person's way: a one-time index
+   * build that holds the worker for seconds should start while nothing is
+   * waiting on it, not between a click and the read that answers it. Seeded at
+   * start so a launch counts as activity too.
+   */
+  private lastInteractiveActivityAt = 0
   private readonly pending = new Map<
     number,
     { kind: DatabaseWorkerRequest['kind']; resolve: (result: DatabaseWorkerResult) => void }
@@ -366,6 +386,7 @@ export class DatabaseWorker {
         this.rejectAll()
       })
       this.worker = worker
+      this.lastInteractiveActivityAt = Date.now()
       this.logger.dev('Database maintenance worker started', { path: this.config.dbPath })
     } catch (error) {
       this.worker = null
@@ -564,15 +585,20 @@ export class DatabaseWorker {
   }
 
   /** Single write statement on the worker's connection (serialized). */
-  async execute(sql: string, params: unknown[]): Promise<ResultForRequest<'execute'>> {
-    return this.request({ kind: 'execute', sql, params })
+  async execute(
+    sql: string,
+    params: unknown[],
+    lane?: WorkerLane
+  ): Promise<ResultForRequest<'execute'>> {
+    return this.request({ kind: 'execute', sql, params, ...(lane ? { lane } : {}) })
   }
 
   /** Atomic batch: all statements run in one transaction (serialized). */
   async transaction(
-    statements: Array<{ sql: string; params: unknown[] }>
+    statements: Array<{ sql: string; params: unknown[] }>,
+    lane?: WorkerLane
   ): Promise<ResultForRequest<'transaction'>> {
-    return this.request({ kind: 'transaction', statements })
+    return this.request({ kind: 'transaction', statements, ...(lane ? { lane } : {}) })
   }
 
   /**
@@ -681,11 +707,39 @@ export class DatabaseWorker {
       } as ResultForRequest<K>)
     }
     return new Promise<DatabaseWorkerResult>((resolve) => {
-      const queued: QueuedWorkerRequest = { id: this.nextId++, request, resolve }
-      if (laneFor(request) === 'background') this.background.push(queued)
-      else this.interactive.push(queued)
+      const lane = laneFor(request)
+      const queued: QueuedWorkerRequest = { id: this.nextId++, request, lane, resolve }
+      if (lane === 'background') this.background.push(queued)
+      else {
+        this.lastInteractiveActivityAt = Date.now()
+        this.interactive.push(queued)
+      }
       this.pump()
     }) as Promise<ResultForRequest<K>>
+  }
+
+  /**
+   * Resolve once no interactive request has arrived or answered for `quietMs`,
+   * or once `deadlineMs` has passed whatever the traffic.
+   *
+   * The deadline is what keeps this honest: a one-time background job that waits
+   * for a quiet moment must still happen on a machine that is never quiet, so the
+   * wait is bounded and the job runs anyway. Answers immediately when no worker
+   * is running, because then there is nothing to protect.
+   */
+  async waitForInteractiveQuiet(quietMs: number, deadlineMs: number): Promise<void> {
+    const startedAt = Date.now()
+    for (;;) {
+      if (!this.worker) return
+      const now = Date.now()
+      const busy = this.interactive.length > 0 || this.inFlight?.lane === 'interactive'
+      if (!busy && now - this.lastInteractiveActivityAt >= quietMs) return
+      if (now - startedAt >= deadlineMs) return
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, QUIET_POLL_MS)
+        timer.unref?.()
+      })
+    }
   }
 
   /**
@@ -714,6 +768,7 @@ export class DatabaseWorker {
       resolve: (outcome) => {
         this.reportSlowJob(queued.request, performance.now() - startedAt)
         this.inFlight = null
+        if (queued.lane === 'interactive') this.lastInteractiveActivityAt = Date.now()
         queued.resolve(outcome)
         this.pump()
       }
