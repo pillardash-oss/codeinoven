@@ -71,10 +71,17 @@
    * the text is what the reader came for, and the text stays visible either way.
    * The newest chain that has not produced its output yet stays open so the work
    * is watchable while it happens. A reader who toggles a chain keeps that
-   * choice for as long as the chain lives.
+   * choice for as long as the chain lives, and so does a reader who works inside
+   * an open chain (expands a reasoning block or a tool card): the settle fold
+   * would otherwise unmount what they are reading and pull it out from under the
+   * scroll position.
    */
   let userChoice = $state<boolean | null>(null)
   const open = $derived(userChoice ?? (active && chain.output === null))
+
+  function keepOpenForReader(): void {
+    if (userChoice === null) userChoice = true
+  }
 
   const span = $derived(traceChainSpan(chain))
   const durationStart = $derived(span?.start)
@@ -111,7 +118,12 @@
 
 <div class="min-w-0">
   {#snippet stepList()}
-    <div transition:slide={foldSlide()} class="flex min-w-0 flex-col gap-1.5">
+    <div
+      transition:slide={foldSlide()}
+      class="flex min-w-0 flex-col gap-1.5"
+      onclickcapture={keepOpenForReader}
+      onkeydowncapture={keepOpenForReader}
+    >
       {#each chain.steps as step (step.id)}
         <WorkingTraceRow
           part={step}
