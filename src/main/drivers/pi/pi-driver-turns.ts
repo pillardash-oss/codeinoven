@@ -86,6 +86,11 @@ export interface PiTurnLifecycleHost {
   /** Clear the mid-turn usage-refresh throttle at turn end. */
   clearUsageThrottle(sessionId: string): void
   markCompactionReady(sessionId: string): void
+  /**
+   * Report a turn starting or settling, so a host's task-manager row can tell
+   * work in flight from a session kept warm for the next prompt.
+   */
+  noteTurnBusy?(sessionId: string, busy: boolean): void
   handleUsageStatus(record: Record<string, unknown>, sessionId: string): Promise<void>
   handleSubagentStreamStatus(record: Record<string, unknown>, sessionId: string): void
 }
@@ -134,10 +139,12 @@ export class PiTurnLifecycle {
 
   addActiveTurn(sessionId: string): void {
     this.activeTurns.add(sessionId)
+    this.host.noteTurnBusy?.(sessionId, true)
   }
 
   removeActiveTurn(sessionId: string): void {
     this.activeTurns.delete(sessionId)
+    this.host.noteTurnBusy?.(sessionId, false)
   }
 
   /**
@@ -203,7 +210,7 @@ export class PiTurnLifecycle {
 
   /** Forget every turn mark of a deleted or parked session. */
   deleteSessionState(sessionId: string): void {
-    this.activeTurns.delete(sessionId)
+    this.removeActiveTurn(sessionId)
     this.turnStates.delete(sessionId)
     this.silentContinues.delete(sessionId)
     this.checkpointStalls.delete(sessionId)
@@ -212,7 +219,7 @@ export class PiTurnLifecycle {
 
   /** Drop every session's turn marks (driver disposal). */
   clearAll(): void {
-    this.activeTurns.clear()
+    for (const sessionId of [...this.activeTurns]) this.removeActiveTurn(sessionId)
     this.turnStates.clear()
     this.reconcileAnswers.clear()
     this.silentContinues.clear()
@@ -404,7 +411,7 @@ export class PiTurnLifecycle {
           if (this.turnStates.get(session.id)?.compacting) return
           if (record['aborted'] === true) this.silentContinues.delete(session.id)
           else if (this.beginSilentContinue(session)) return
-          this.activeTurns.delete(session.id)
+          this.removeActiveTurn(session.id)
           void this.host.refreshSessionUsage(session).finally(() => {
             void this.finishTurn(session)
           })
@@ -435,7 +442,7 @@ export class PiTurnLifecycle {
       ),
       compacting: true
     })
-    this.activeTurns.add(sessionId)
+    this.addActiveTurn(sessionId)
     // pi's `compact` RPC aborts any active run before compacting. When a turn
     // was live (or a steer/follow-up was queued into the compaction window),
     // the work must resume after the checkpoint instead of silently dying:
@@ -477,7 +484,7 @@ export class PiTurnLifecycle {
       const state = this.turnStates.get(sessionId)
       if (state) this.turnStates.set(sessionId, { ...state, compacting: false })
       if (!continuationStarted && this.activeTurns.has(sessionId)) {
-        this.activeTurns.delete(sessionId)
+        this.removeActiveTurn(sessionId)
         await this.host.refreshSessionUsage(session).finally(() => void this.finishTurn(session))
       }
     }
@@ -554,7 +561,7 @@ export class PiTurnLifecycle {
     const ticket = { resume }
     this.pageCompactions.set(sessionId, ticket)
     this.turnStates.set(sessionId, { ...turn, compacting: true })
-    this.activeTurns.add(sessionId)
+    this.addActiveTurn(sessionId)
     // A checkpoint that runs into another checkpoint, with no assistant text in
     // between, is compacting the session without making progress. Each round is
     // a full summarization billed to the user, so a repeated one ends the turn
@@ -564,7 +571,7 @@ export class PiTurnLifecycle {
     if (stalls > CHECKPOINT_STALL_LIMIT) {
       this.pageCompactions.delete(sessionId)
       this.turnStates.set(sessionId, { ...turn, compacting: false })
-      this.activeTurns.delete(sessionId)
+      this.removeActiveTurn(sessionId)
       this.checkpointStalls.delete(sessionId)
       const session = await this.host.requireSession(projectPath, sessionId).catch(() => null)
       if (session) {
@@ -604,7 +611,7 @@ export class PiTurnLifecycle {
         )
       } else {
         const session = await this.host.requireSession(projectPath, sessionId)
-        this.activeTurns.delete(sessionId)
+        this.removeActiveTurn(sessionId)
         await this.host.refreshSessionUsage(session)
         await this.finishTurn(session)
       }
@@ -923,7 +930,7 @@ export class PiTurnLifecycle {
       error
     })
     this.silentContinues.delete(session.id)
-    this.activeTurns.delete(session.id)
+    this.removeActiveTurn(session.id)
     this.host.emitEvent({
       type: 'session.error',
       sessionId: session.id,
