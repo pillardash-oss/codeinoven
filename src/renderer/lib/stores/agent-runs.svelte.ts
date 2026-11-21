@@ -313,13 +313,18 @@ class AgentRunsStore {
    * Fold the trace a settled turn left open.
    *
    * Work that finished shows its answer, so the log closes by itself once and
-   * stays closed. That close is unconditional for the first settle of a turn,
-   * including a trace the reader opened while the work was still running: the
-   * run is over, and the answer is what the turn produced. Only an open from
-   * AFTER that close is the reader's to keep, so a retry or a steered turn that
-   * settles again never slams a reopened trace shut.
+   * stays closed. That close is the default, never the reader's choice: a trace
+   * the reader opened themselves while the work was still running stays open
+   * when the work ends, because they are in the middle of reading the steps and
+   * a decision of theirs is not the app's to undo. Only the visit's own open is
+   * forgotten when they leave the thread (`resetTraceView`).
+   *
+   * A trace the reader never opened closes once on the first settle.
    */
   private foldSettledTrace(entry: AgentRunEntry): void {
+    // The reader asked for this trace. Adding the turn's last work and its
+    // answer must not slam it shut under them.
+    if (entry.traceUserOpened) return
     if (!entry.traceAutoClosed) {
       entry.traceOpen = false
       entry.traceAutoClosed = true

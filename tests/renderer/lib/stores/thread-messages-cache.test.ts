@@ -107,3 +107,31 @@ describe('ThreadMessagesCache.applyRemoval', () => {
     expect(ids(cache)).toEqual(['m1', 'm2'])
   })
 })
+
+describe('ThreadMessagesCache.latestUserMessageId', () => {
+  let cache: ThreadMessagesCache
+
+  beforeEach(() => {
+    cache = new ThreadMessagesCache()
+  })
+
+  it('anchors a run to the prompt that opened its turn', () => {
+    seed(cache, [message('m1'), message('m2', { role: 'assistant', origin: 'assistant' })])
+
+    expect(cache.latestUserMessageId(PROJECT, THREAD)).toBe('m1')
+  })
+
+  it('skips rows written into the running turn, so streaming never looks like a new turn', () => {
+    // An app continuation prompt and a transparent steer both ride the turn
+    // they arrived under. Counting one as the turn's prompt made the next
+    // streamed part read as a brand-new turn, and a new turn resets the working
+    // trace's fold: the trace the reader had just opened closed under them.
+    seed(cache, [
+      message('m1'),
+      message('m2', { origin: 'orchestrator' }),
+      message('m3', { turnTransparent: true })
+    ])
+
+    expect(cache.latestUserMessageId(PROJECT, THREAD)).toBe('m1')
+  })
+})

@@ -583,15 +583,16 @@
     // leave `done` false for work that has stopped, and that is exactly the
     // expanded trace a settled thread must not keep showing.
     //
-    // The close happens once, for the first settle this mount sees, even for a
-    // trace the reader opened while it worked: the work is over and the answer
-    // is what they came for. Their next open is theirs and survives every later
-    // settle, so a retry or a steer that ends again never shuts it on them.
+    // The close happens once, for the first settle this mount sees, and it is
+    // the app's default rather than the reader's decision: a trace they opened
+    // themselves stays open when the work ends, because they are reading it.
+    // Only leaving the thread forgets it (the view remounts folded).
     //
     // A controlled trace leaves this to its owner, which holds the same rule
     // across remounts; deciding here as well would also close a trace the
     // reader had already reopened after the owner's close.
     if (controlled) return
+    if (localUserOpened) return
     if ((done || sawLiveWork) && !autoClosedOnSettle) {
       autoClosedOnSettle = true
       if (isOpen) foldToHeader()

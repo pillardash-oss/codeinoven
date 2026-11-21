@@ -95,15 +95,25 @@ export function latestWorkingTraceParts(parts: AgentPart[]): AgentPart[] {
  */
 export interface TraceChain {
   /**
-   * Stable key for the chain. A chain that produced an output is keyed by that
-   * output's id, because the text is the boundary that defines it and older
-   * entries can only ever be added before it. A trailing chain with no output
-   * yet is keyed by its first step.
+   * Stable key for the chain, and the identity the reader's fold is kept
+   * against.
    *
-   * The first step is deliberately not the key for an output chain: paging an
-   * older page into the window prepends steps to the chain the window starts
-   * inside, which would change a first-step key and remount the chain  and
-   * replay its fold  for nothing.
+   * A chain with steps is keyed by the step that opened it, which is the only
+   * part that exists both before and after it produces its output: the work is
+   * appended to a chain, and the text that closes it arrives last. Keying an
+   * output chain by that text instead remounted every live chain the moment the
+   * agent spoke, which destroyed the reader's own state inside it   an open
+   * reasoning block, an expanded tool card, a chain they folded   at exactly
+   * the moment they were reading it. Appending work to a live turn must never
+   * take away what the reader opened.
+   *
+   * A chain with no steps (two text records in a row) is keyed by its text.
+   *
+   * The one identity change left is the chain the mounted window starts inside:
+   * paging an older page prepends steps to it, so it is now opened by an older
+   * step and remounts once, replaying its own fold. That is a page the reader
+   * asked for and it costs that one chain, where the output-keyed identity cost
+   * every live chain on every message.
    */
   id: string
   /** Reasoning, tool, sub-agent, compaction and file entries behind the output. */
@@ -140,7 +150,7 @@ export function groupTraceIntoChains(parts: readonly AgentPart[]): TraceChain[] 
         if (steps.length === 0) continue
         if (previous.steps.length === 0) chains.pop()
       }
-      chains.push({ id: part.id, steps, output: part })
+      chains.push({ id: steps[0]?.id ?? part.id, steps, output: part })
       steps = []
       continue
     }
