@@ -6,6 +6,8 @@ export interface IdeFloatingResults {
   selectedIndex: number
   title: string
   anchor: { x: number; y: number }
+  /** An open project text or file search, which outlives the remount with its query. */
+  search?: { mode: 'grep' | 'files'; query: string; truncated: boolean; pending: boolean }
 }
 const snapshots = new Map<string, IdeFloatingResults>()
 export function rememberIdeResults(key: string, value: IdeFloatingResults): void {
