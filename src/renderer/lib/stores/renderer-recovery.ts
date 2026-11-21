@@ -15,6 +15,7 @@ export const RENDERER_RECOVERY_STORAGE_KEY = `${APP_SLUG}.rendererRecovery.v1`
 
 /** A settings section — each is its own dedicated page in the app navigation. */
 export type SettingsSection =
+  | 'account'
   | 'profile'
   | 'general'
   | 'browser'
@@ -46,6 +47,7 @@ export type MainView =
   | 'scope'
   | 'threads'
   | 'settings'
+  | 'settings-account'
   | 'settings-profile'
   | 'settings-browser'
   | 'settings-memory'
@@ -230,6 +232,7 @@ const MAIN_VIEWS: readonly MainView[] = [
 ]
 const SETTINGS_SECTIONS: readonly SettingsSection[] = [
   'ovens',
+  'account',
   'profile',
   'general',
   'browser',
