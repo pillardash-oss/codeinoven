@@ -633,260 +633,292 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
       return
     }
 
-    // The device can hold a turn this thread is ready to start. Parking the send
-    // is the protection: the queue card names the device reading, and the gate
-    // re-runs the send when the machine has room again.
-    if (
-      !direct &&
-      (await readThreadHold(
-        this.root.handleAgentEvent.thread.projectId,
-        this.root.handleAgentEvent.thread.id
-      )) !== null
-    ) {
-      this.root.steerQueuedMessage.parkComposerSend({
-        text: msg,
-        attachments,
-        promptContext,
-        promptReferences,
-        projectReferences,
-        presentation,
-        taskReferences,
-        startAfterThreads: dependencyThreads
-      })
-      return
-    }
-
-    const selectedAssignment =
-      this.engineeringLifecycle?.activeStage === 'assignment' ||
-      this.engineeringLifecycle?.humanGate === 'assignment_approval'
-    if (selectedAssignment && specAction === undefined) {
-      // A Spec that exists but is not approved still owns the Assignment, so ask
-      // for approval first. Only while no Assignment exists yet: once the board
-      // is there, the message belongs to the Assignment conversation.
-      if (
-        this.root.submitBrainstormDecision.spec &&
-        this.root.submitBrainstormDecision.spec.status !== 'approved' &&
-        this.root.submitSpecDecision.assignment === null
-      ) {
-        this.root.submitSpecDecision.assignmentError =
-          'Approve the Spec before generating an Assignment from it.'
-        return
-      }
-      if (this.engineeringLifecycle?.activeStage === undefined) {
-        this.engineeringLifecycle = (
-          await invoke('engineeringLifecycle:start', this.thread.projectId, this.thread.id)
-        ).state
-      }
-      // Fall through on purpose: an Assignment-stage message is the Assignment
-      // interview. The Sr. Engineer either submits the task graph or asks the
-      // questions the thread and the message together cannot settle.
-    }
-
-    const lifecycleStarted =
-      this.engineeringLifecycle !== null &&
-      this.engineeringLifecycle !== undefined &&
-      this.engineeringLifecycle.startedAt !== undefined
-    const selectedPrd =
-      this.engineeringLifecycle?.activeStage === 'prd' ||
-      (hasSelectedStage(this.engineeringLifecycle, 'prd') &&
-        this.engineeringLifecycle?.activeStage === undefined &&
-        !lifecycleStarted)
-    // Read once: the entry card below and the PRD branch further down both need
-    // the persisted PRD workflow stage.
-    const selectedPrdWorkflow = selectedPrd
-      ? await invoke('prd:ensureWorkflow', this.thread.projectId, this.thread.id)
-      : null
-
-    // PRD/Spec need context: show the "Brainstorm first | Jump directly into…"
-    // card at SEND time, never when the Toolbox switch is toggled. Jumping in
-    // still lets the Sr. Engineer align   it just skips the Brainstorm document.
-    const entryPrd = hasSelectedStage(this.engineeringLifecycle, 'prd')
-    const entrySpec = hasSelectedStage(this.engineeringLifecycle, 'spec')
-    if (
-      this.engineeringLifecycle &&
-      this.engineeringLifecycle.activeStage === undefined &&
-      !hasSelectedStage(this.engineeringLifecycle, 'brainstorm') &&
-      !hasSelectedStage(this.engineeringLifecycle, 'assignment') &&
-      !hasSelectedStage(this.engineeringLifecycle, 'achievement') &&
-      (entryPrd || entrySpec)
-    ) {
-      // A resolved entry choice, not a produced document, is what makes the
-      // message routable. Asking for documents reopened the card on every later
-      // send, because both choices leave them absent for a while: "Start PRD"
-      // moves the PRD workflow to `drafting` and "Brainstorm first" saves the
-      // entry on the Brainstorm workflow.
-      const contextReady = entryPrd
-        ? !selectedPrd || selectedPrdWorkflow?.stage !== 'choice_pending'
-        : Boolean(
-            this.root.editVideoNote.brainstorm?.status === 'finalized' ||
-            this.root.harnessUsage.prd !== null ||
-            this.root.submitBrainstormDecision.spec !== null ||
-            this.root.submitBrainstormDecision.brainstormWorkflow?.entryChoice !== undefined
-          )
-      if (!contextReady) {
-        // Park the send and hand its draft back while the card is up. Returning
-        // without this dropped both: the composer had already cleared its
-        // buffer, and nothing resent the message once the choice resolved.
-        this.root.editVideoNote.pendingEntrySend = {
-          text,
-          attachments,
-          ...(direct ? { direct } : {}),
-          ...(promptContext ? { promptContext } : {}),
-          ...(specAction ? { specAction } : {}),
-          ...(presentation ? { presentation } : {}),
-          promptReferences,
-          projectReferences,
-          taskReferences,
-          startAfterThreads
-        }
-        rendererRecovery.setDraft(
-          this.thread.projectId,
-          this.thread.id,
-          text,
-          attachments,
-          projectReferences,
-          taskReferences
-        )
-        if (promptReferences.length > 0) {
-          responseReferencesState.setForThread(
-            this.thread.projectId,
-            this.thread.id,
-            promptReferences
-          )
-          this.root.steerQueuedMessage.scheduleResponseHighlightRestore(promptReferences)
-        }
-        this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
-        if (this.root.editVideoNote.pendingEngineeringEntry === null) {
-          this.root.editVideoNote.pendingEngineeringEntry = entryPrd ? 'prd' : 'spec'
-        }
-        return
-      }
-    }
-
-    if (selectedPrd && selectedPrdWorkflow?.stage !== 'brainstorming' && specAction === undefined) {
-      if (selectedPrdWorkflow?.stage === 'choice_pending') {
-        this.root.harnessUsage.prdError =
-          'Choose Brainstorm first or Start PRD before sending the requirements.'
-        return
-      }
-      // The PRD stage is conversational: this message becomes an ordinary turn
-      // under the PRD prompt, and the agent either writes the document or asks the
-      // product questions the document still needs. The document itself arrives
-      // through the `prd.ready` broadcast once the agent submits it.
-      this.root.harnessUsage.prdError = ''
-      if (this.engineeringLifecycle?.activeStage === undefined) {
-        this.engineeringLifecycle = (
-          await invoke('engineeringLifecycle:start', this.thread.projectId, this.thread.id)
-        ).state
-      }
-    }
-
-    this.root.sources.recordModelUse()
-
-    // Follow the new message only when the reader is already at the tail. A
-    // reader scrolled up into history keeps their position: the optimistic
-    // message lands at the tail off-screen, and on-screen messages must never
-    // unmount   releasing the tail lock here would re-window and hide them.
-    this.root.steerQueuedMessage.idleAttentionHandled = false
-
-    // Persist settings as last-used. Each family seeds its own store, so the
-    // next chat or assistant task inherits this thread's model, thinking level
-    // and File System state, never another family's configuration.
-    this.root.sources.commitSettings(this.root.loadOlderMessages.settings)
-
-    this.errorMessage = ''
-    this.providerStatus = null
-
-    // Use a stable UUIDv7 for the optimistic message and the persisted mirror
-    // message so they merge cleanly across thread switches. Mark the run busy
-    // before waiting for a slow first connection so the initial send is
-    // acknowledged immediately and cannot be submitted again. An edit brings
-    // its own id (the row it rewrote) so the transcript keeps that message
-    // instead of gaining a second copy of the same prompt.
-    const turnUserMessageId = userMessageId ?? messageId()
-    const { projectId, id } = this.thread
-    this.root.buildSpecActionPrompt.beginLocalTurn(turnUserMessageId)
-    this.root.currentWorkingTraceAttribution.captureLiveWorkingSelection()
-    agentRuns.setBusy(projectId, id, true, turnUserMessageId)
-    // Nothing has reported this turn yet: the harness session still has to be
-    // bound (and, after a provider or harness switch, created and spawned while
-    // the orphaned one is released). The persisted row keeps the previous turn's
-    // settled status for that whole window, and the session binding is published
-    // as a thread update, so the settle repair has to know this turn is waiting
-    // on its first live state instead of reading that row as its end.
-    agentRuns.beginDispatch(projectId, id)
-
-    // Set the moment the dispatch settles: from that instant the prompt is the
-    // agent's, and everything the rest of this block does (the scroll, the
-    // Engineering reconciliation) is bookkeeping around a turn that is already
-    // running. A failure in that bookkeeping must never hand the message back to
-    // the composer   the buffer the user just emptied would refill with the
-    // words the agent is already answering, which reads as "the send did nothing"
-    // even though the work started.
-    let dispatched = false
-    try {
-      const sendPromise = threadMessages.send(
-        projectId,
-        id,
-        this.root.loadOlderMessages.settings,
+    // The words left the composer on submit, so they enter the transcript now,
+    // before the gate reading and the Engineering lookups below go to the main
+    // process. Waiting for those first left the screen empty for a round-trip,
+    // which on a slow machine reads as the message being lost. An edit already
+    // owns its row, so only a fresh send is staged.
+    const stagedMessageId = userMessageId ? undefined : messageId()
+    if (stagedMessageId) {
+      threadMessages.stage(
+        this.thread.projectId,
+        this.thread.id,
+        stagedMessageId,
         msg,
         attachments,
-        specAction,
-        turnUserMessageId,
-        this.root.currentWorkingTraceAttribution.prepareSessionForSend,
-        promptContext,
         promptReferences,
         projectReferences,
-        presentation,
-        taskReferences
+        presentation
       )
-      // Wait for the DOM to reflect the optimistic message, then follow it.
-      // A send is the reader acting on the conversation, so it always returns
-      // them to the tail: the view may have opened anchored on the previous
-      // prompt (a restore), and leaving the message they just sent below the
-      // fold would read as the send doing nothing.
-      await tick()
-      this.root.loadOlderMessages.scrollToLatest()
-      await sendPromise
-      dispatched = true
-      if (this.root.submitBrainstormDecision.engineeringOn) {
-        await this.root.submitBrainstormDecision.reconcileReadySpec()
-        if (this.root.submitBrainstormDecision.brainstormWorkflow?.stage === 'choice_pending') {
-          this.root.abortRun.clearLocalTurn()
-          agentRuns.setIdle(projectId, id)
+    }
+    let handedOff = false
+    try {
+      // The device can hold a turn this thread is ready to start. Parking the send
+      // is the protection: the queue card names the device reading, and the gate
+      // re-runs the send when the machine has room again.
+      if (
+        !direct &&
+        (await readThreadHold(
+          this.root.handleAgentEvent.thread.projectId,
+          this.root.handleAgentEvent.thread.id
+        )) !== null
+      ) {
+        this.root.steerQueuedMessage.parkComposerSend({
+          text: msg,
+          attachments,
+          promptContext,
+          promptReferences,
+          projectReferences,
+          presentation,
+          taskReferences,
+          startAfterThreads: dependencyThreads
+        })
+        return
+      }
+
+      const selectedAssignment =
+        this.engineeringLifecycle?.activeStage === 'assignment' ||
+        this.engineeringLifecycle?.humanGate === 'assignment_approval'
+      if (selectedAssignment && specAction === undefined) {
+        // A Spec that exists but is not approved still owns the Assignment, so ask
+        // for approval first. Only while no Assignment exists yet: once the board
+        // is there, the message belongs to the Assignment conversation.
+        if (
+          this.root.submitBrainstormDecision.spec &&
+          this.root.submitBrainstormDecision.spec.status !== 'approved' &&
+          this.root.submitSpecDecision.assignment === null
+        ) {
+          this.root.submitSpecDecision.assignmentError =
+            'Approve the Spec before generating an Assignment from it.'
+          return
+        }
+        if (this.engineeringLifecycle?.activeStage === undefined) {
+          this.engineeringLifecycle = (
+            await invoke('engineeringLifecycle:start', this.thread.projectId, this.thread.id)
+          ).state
+        }
+        // Fall through on purpose: an Assignment-stage message is the Assignment
+        // interview. The Sr. Engineer either submits the task graph or asks the
+        // questions the thread and the message together cannot settle.
+      }
+
+      const lifecycleStarted =
+        this.engineeringLifecycle !== null &&
+        this.engineeringLifecycle !== undefined &&
+        this.engineeringLifecycle.startedAt !== undefined
+      const selectedPrd =
+        this.engineeringLifecycle?.activeStage === 'prd' ||
+        (hasSelectedStage(this.engineeringLifecycle, 'prd') &&
+          this.engineeringLifecycle?.activeStage === undefined &&
+          !lifecycleStarted)
+      // Read once: the entry card below and the PRD branch further down both need
+      // the persisted PRD workflow stage.
+      const selectedPrdWorkflow = selectedPrd
+        ? await invoke('prd:ensureWorkflow', this.thread.projectId, this.thread.id)
+        : null
+
+      // PRD/Spec need context: show the "Brainstorm first | Jump directly into…"
+      // card at SEND time, never when the Toolbox switch is toggled. Jumping in
+      // still lets the Sr. Engineer align   it just skips the Brainstorm document.
+      const entryPrd = hasSelectedStage(this.engineeringLifecycle, 'prd')
+      const entrySpec = hasSelectedStage(this.engineeringLifecycle, 'spec')
+      if (
+        this.engineeringLifecycle &&
+        this.engineeringLifecycle.activeStage === undefined &&
+        !hasSelectedStage(this.engineeringLifecycle, 'brainstorm') &&
+        !hasSelectedStage(this.engineeringLifecycle, 'assignment') &&
+        !hasSelectedStage(this.engineeringLifecycle, 'achievement') &&
+        (entryPrd || entrySpec)
+      ) {
+        // A resolved entry choice, not a produced document, is what makes the
+        // message routable. Asking for documents reopened the card on every later
+        // send, because both choices leave them absent for a while: "Start PRD"
+        // moves the PRD workflow to `drafting` and "Brainstorm first" saves the
+        // entry on the Brainstorm workflow.
+        const contextReady = entryPrd
+          ? !selectedPrd || selectedPrdWorkflow?.stage !== 'choice_pending'
+          : Boolean(
+              this.root.editVideoNote.brainstorm?.status === 'finalized' ||
+              this.root.harnessUsage.prd !== null ||
+              this.root.submitBrainstormDecision.spec !== null ||
+              this.root.submitBrainstormDecision.brainstormWorkflow?.entryChoice !== undefined
+            )
+        if (!contextReady) {
+          // Park the send and hand its draft back while the card is up. Returning
+          // without this dropped both: the composer had already cleared its
+          // buffer, and nothing resent the message once the choice resolved.
+          this.root.editVideoNote.pendingEntrySend = {
+            text,
+            attachments,
+            ...(direct ? { direct } : {}),
+            ...(promptContext ? { promptContext } : {}),
+            ...(specAction ? { specAction } : {}),
+            ...(presentation ? { presentation } : {}),
+            promptReferences,
+            projectReferences,
+            taskReferences,
+            startAfterThreads
+          }
+          rendererRecovery.setDraft(
+            this.thread.projectId,
+            this.thread.id,
+            text,
+            attachments,
+            projectReferences,
+            taskReferences
+          )
+          if (promptReferences.length > 0) {
+            responseReferencesState.setForThread(
+              this.thread.projectId,
+              this.thread.id,
+              promptReferences
+            )
+            this.root.steerQueuedMessage.scheduleResponseHighlightRestore(promptReferences)
+          }
+          this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+          if (this.root.editVideoNote.pendingEngineeringEntry === null) {
+            this.root.editVideoNote.pendingEngineeringEntry = entryPrd ? 'prd' : 'spec'
+          }
+          return
         }
       }
-    } catch (error) {
-      this.root.abortRun.clearLocalTurn()
-      agentRuns.setIdle(projectId, id)
-      const failure = ipcErrorMessage(error, 'The prompt could not be sent.')
-      this.errorMessage = failure
-      // Only when the message never reached the conversation   the agent never
-      // started working, so nothing on screen owns the words   is it put back in
-      // the composer. Once `dispatched` is set the optimistic user message is
-      // that copy, and a later failure has to leave the composer empty.
-      if (restorable && !dispatched) {
-        rendererRecovery.setDraft(
+
+      if (
+        selectedPrd &&
+        selectedPrdWorkflow?.stage !== 'brainstorming' &&
+        specAction === undefined
+      ) {
+        if (selectedPrdWorkflow?.stage === 'choice_pending') {
+          this.root.harnessUsage.prdError =
+            'Choose Brainstorm first or Start PRD before sending the requirements.'
+          return
+        }
+        // The PRD stage is conversational: this message becomes an ordinary turn
+        // under the PRD prompt, and the agent either writes the document or asks the
+        // product questions the document still needs. The document itself arrives
+        // through the `prd.ready` broadcast once the agent submits it.
+        this.root.harnessUsage.prdError = ''
+        if (this.engineeringLifecycle?.activeStage === undefined) {
+          this.engineeringLifecycle = (
+            await invoke('engineeringLifecycle:start', this.thread.projectId, this.thread.id)
+          ).state
+        }
+      }
+
+      this.root.sources.recordModelUse()
+
+      // Follow the new message only when the reader is already at the tail. A
+      // reader scrolled up into history keeps their position: the optimistic
+      // message lands at the tail off-screen, and on-screen messages must never
+      // unmount   releasing the tail lock here would re-window and hide them.
+      this.root.steerQueuedMessage.idleAttentionHandled = false
+
+      // Persist settings as last-used. Each family seeds its own store, so the
+      // next chat or assistant task inherits this thread's model, thinking level
+      // and File System state, never another family's configuration.
+      this.root.sources.commitSettings(this.root.loadOlderMessages.settings)
+
+      this.errorMessage = ''
+      this.providerStatus = null
+
+      // Use a stable UUIDv7 for the optimistic message and the persisted mirror
+      // message so they merge cleanly across thread switches. Mark the run busy
+      // before waiting for a slow first connection so the initial send is
+      // acknowledged immediately and cannot be submitted again. An edit brings
+      // its own id (the row it rewrote) so the transcript keeps that message
+      // instead of gaining a second copy of the same prompt.
+      const turnUserMessageId = userMessageId ?? stagedMessageId ?? messageId()
+      const { projectId, id } = this.thread
+      this.root.buildSpecActionPrompt.beginLocalTurn(turnUserMessageId)
+      this.root.currentWorkingTraceAttribution.captureLiveWorkingSelection()
+      agentRuns.setBusy(projectId, id, true, turnUserMessageId)
+      // Nothing has reported this turn yet: the harness session still has to be
+      // bound (and, after a provider or harness switch, created and spawned while
+      // the orphaned one is released). The persisted row keeps the previous turn's
+      // settled status for that whole window, and the session binding is published
+      // as a thread update, so the settle repair has to know this turn is waiting
+      // on its first live state instead of reading that row as its end.
+      agentRuns.beginDispatch(projectId, id)
+
+      // Set the moment the dispatch settles: from that instant the prompt is the
+      // agent's, and everything the rest of this block does (the scroll, the
+      // Engineering reconciliation) is bookkeeping around a turn that is already
+      // running. A failure in that bookkeeping must never hand the message back to
+      // the composer   the buffer the user just emptied would refill with the
+      // words the agent is already answering, which reads as "the send did nothing"
+      // even though the work started.
+      let dispatched = false
+      try {
+        handedOff = true
+        const sendPromise = threadMessages.send(
           projectId,
           id,
+          this.root.loadOlderMessages.settings,
           msg,
           attachments,
+          specAction,
+          turnUserMessageId,
+          this.root.currentWorkingTraceAttribution.prepareSessionForSend,
+          promptContext,
+          promptReferences,
           projectReferences,
+          presentation,
           taskReferences
         )
-        // The restored draft is now the only durable copy of words the
-        // database never saw, and the debounce can lose it to a crash or
-        // force-quit. Write it through at once.
-        rendererRecovery.persistQueuedNow()
-        this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+        // Wait for the DOM to reflect the optimistic message, then follow it.
+        // A send is the reader acting on the conversation, so it always returns
+        // them to the tail: the view may have opened anchored on the previous
+        // prompt (a restore), and leaving the message they just sent below the
+        // fold would read as the send doing nothing.
+        await tick()
+        this.root.loadOlderMessages.scrollToLatest()
+        await sendPromise
+        dispatched = true
+        if (this.root.submitBrainstormDecision.engineeringOn) {
+          await this.root.submitBrainstormDecision.reconcileReadySpec()
+          if (this.root.submitBrainstormDecision.brainstormWorkflow?.stage === 'choice_pending') {
+            this.root.abortRun.clearLocalTurn()
+            agentRuns.setIdle(projectId, id)
+          }
+        }
+      } catch (error) {
+        this.root.abortRun.clearLocalTurn()
+        agentRuns.setIdle(projectId, id)
+        const failure = ipcErrorMessage(error, 'The prompt could not be sent.')
+        this.errorMessage = failure
+        // Only when the message never reached the conversation   the agent never
+        // started working, so nothing on screen owns the words   is it put back in
+        // the composer. Once `dispatched` is set the optimistic user message is
+        // that copy, and a later failure has to leave the composer empty.
+        if (restorable && !dispatched) {
+          rendererRecovery.setDraft(
+            projectId,
+            id,
+            msg,
+            attachments,
+            projectReferences,
+            taskReferences
+          )
+          // The restored draft is now the only durable copy of words the
+          // database never saw, and the debounce can lose it to a crash or
+          // force-quit. Write it through at once.
+          rendererRecovery.persistQueuedNow()
+          this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
+        }
+        if (promptReferences.length > 0) {
+          responseReferencesState.setForThread(projectId, id, promptReferences)
+          this.root.steerQueuedMessage.scheduleResponseHighlightRestore(promptReferences)
+        }
+        void this.root.abortRun.refreshCheckpoints()
+        if (specAction === 'request') {
+          throw error instanceof Error ? error : new Error(failure)
+        }
       }
-      if (promptReferences.length > 0) {
-        responseReferencesState.setForThread(projectId, id, promptReferences)
-        this.root.steerQueuedMessage.scheduleResponseHighlightRestore(promptReferences)
-      }
-      void this.root.abortRun.refreshCheckpoints()
-      if (specAction === 'request') {
-        throw error instanceof Error ? error : new Error(failure)
+    } finally {
+      // Parked, refused or failed before the send took the row: the queue card
+      // or the restored draft owns the words now, never a second transcript copy.
+      if (stagedMessageId && !handedOff) {
+        threadMessages.unstage(this.thread.projectId, this.thread.id, stagedMessageId)
       }
     }
   }
