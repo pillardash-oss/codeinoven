@@ -29,6 +29,15 @@ import type {
   LocalUsageClearInput,
   LocalUsageRecordCounts
 } from '../../../lib/types'
+
+/**
+ * A single action save is a small JSON read and a small JSON write, so a save
+ * that reaches this budget spent the time somewhere other than the work: a
+ * blocked main thread before entry, a stalled filesystem during the write, or a
+ * renderer that could not take the reply. The save path used to record nothing,
+ * which left a report of "saving took a minute" with no way to tell those apart.
+ */
+const SLOW_PROJECT_ACTION_SAVE_MS = 1000
 import type { IpcHandlerContext } from './context'
 
 const AGENT_ROLES = new Set<AgentRole>(['seniorEngineer', 'worker', 'auditor'])
@@ -177,8 +186,10 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       value: unknown,
       insertAfterId?: string | null
     ) => {
+      const startedAt = performance.now()
       const input = validateProjectActionInput(value)
       const actions = await readProjectActions(projectId)
+      const readMs = performance.now() - startedAt
       const now = Date.now()
       const existing = actionId ? actions.find((action) => action.id === actionId) : undefined
       const action: ProjectAction = {
@@ -201,7 +212,22 @@ export function registerConfigHandlers(ctx: IpcHandlerContext): void {
       } else {
         next = [...actions, action]
       }
+      const writeStartedAt = performance.now()
       await storage.write(projectActionsPath(projectId), { actions: next })
+      const writeMs = performance.now() - writeStartedAt
+      const totalMs = performance.now() - startedAt
+      // Only the slow path reports, and only timing: the action's name and
+      // script are the user's content and never belong in a diagnostic.
+      if (totalMs >= SLOW_PROJECT_ACTION_SAVE_MS) {
+        Logger.info('Project action save was slow', {
+          projectId,
+          actionId: action.id,
+          created: !existing,
+          readMs: Math.round(readMs),
+          writeMs: Math.round(writeMs),
+          totalMs: Math.round(totalMs)
+        })
+      }
       broadcastProjectActionsChanged(projectId, next)
       return action
     }
