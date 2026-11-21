@@ -4,6 +4,7 @@ import { invoke } from '$lib/ipc.svelte'
 
 import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
 import { playHistoryArrive } from '$lib/motion'
+import { scrollDetachesFromLatest } from '$lib/scroll-anchor'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadHoldsOpenTrace } from '$lib/stores/thread-preload'
@@ -359,10 +360,15 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // follower grabbed the viewport back on the next content resize and the
     // reader could not scroll away at all. A downward scroll onto the bottom
     // still re-attaches them, and so does an explicit jump to the latest.
+    // The true bottom always re-attaches, whatever moved the viewport there:
+    // content that shrinks above a bottom-pinned reader is clamped upward by
+    // the browser, and that clamp is not travel. Reading it as an upward
+    // scroll is what left a reader who had just scrolled back to the latest
+    // message detached from a tail that never followed again.
     const previousTop = this.lastScrollTop
     this.lastScrollTop = this.scrollEl.scrollTop
     const movedUp = this.scrollEl.scrollTop < previousTop - 0.5
-    const away = movedUp || !this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)
+    const away = scrollDetachesFromLatest(movedUp, this.scrollEl)
     // Pin the window to what the reader is reading the moment they leave the
     // tail, and release it back to the tail-relative window when they return.
     // While pinned, a streaming turn grows the window instead of sliding it
@@ -874,6 +880,23 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     } finally {
       this.loadingOlderMessages = false
     }
+  }
+
+  /** Re-attach the tail follow without moving the viewport.
+   *
+   *  Used when something other than a scroll event proves the reader is on the
+   *  true bottom (a browser clamp after content above them shrank): they are
+   *  reading the latest message, so the tail must follow again instead of
+   *  holding a viewport that is already where the new content lands. */
+  reattachToLatest(): void {
+    if (!this.userScrolledAway) return
+    this.userScrolledAway = false
+    const el = this.scrollEl
+    if (!el) return
+    threadScrollPositions.set(this.root.handleAgentEvent.thread.id, {
+      top: el.scrollTop,
+      awayFromBottom: false
+    })
   }
 
   scrollToLatest(): void {
