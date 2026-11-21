@@ -56,9 +56,10 @@ const MAX_EPHEMERAL_NOTIFICATIONS = 20
 const BADGE_STATE_PATH = 'state/notification-badge.json'
 const PERMISSION_STATE_PATH = 'state/notification-permission.json'
 /**
- * Cooldown between background permission re-verifications: when the Settings
- * panel is opened while the app thinks notifications are blocked, one silent
- * verification delivery is attempted so the OS can confirm or clear the state.
+ * Cooldown between background permission requests: while the app believes
+ * notifications are still undecided or blocked, a delivery is attempted so the
+ * OS can prompt or confirm the state. Never used for a state already known to
+ * be granted, because that delivery is a visible banner.
  */
 const PERMISSION_VERIFY_DEDUP_MS = 15_000
 /** How long a background verification delivery may take before it is dropped. */
@@ -336,15 +337,15 @@ export class NotificationService {
     void this.inboxReady()
     void this.hydrateBadge()
     void this.hydratePermissionStatus().then(() => {
-      // Ask the OS for authorization at launch, before anything needs a card.
-      // macOS has no authorization query, so a delivery attempt is the only way
-      // to ask: a 'prompt' state gets the OS permission prompt while the user is
-      // looking at a freshly opened app, a 'denied' or 'granted' state is
-      // confirmed against the OS itself (a rebuilt bundle can lose its
-      // authorization record while the persisted state still says 'granted'),
-      // and the whole check rides one fixed notification id, so it replaces its
-      // own Notification Center entry instead of stacking one per launch.
+      // Ask the OS for authorization only while its answer is still unknown or
+      // known to be blocked. A delivery attempt is the only request macOS
+      // offers, and macOS presents every accepted request as a real banner: a
+      // probe we already know will succeed draws a "CodeInOven notifications"
+      // card on every launch for no reason. A stale 'granted' stays honest
+      // anyway, because the first refused real delivery flips the state to
+      // 'denied' and surfaces the block to the user.
       if (process.platform !== 'darwin') return
+      if (this.macosNotificationPermission === 'granted') return
       this.requestPermissionDelivery()
     })
   }
@@ -542,14 +543,20 @@ export class NotificationService {
 
   /**
    * The permission status used by the Settings panel: returns the current
-   * state and always asks the OS to confirm it with one silent delivery, so a
-   * stale 'granted' left behind by a rebuilt bundle or a switched-off setting
-   * cannot make the panel claim notifications work while they do not. Deduped,
-   * and the answer arrives over the `notification:permissionStatus` event.
+   * state and, while that state is still unknown or blocked, asks the OS to
+   * confirm it with one delivery so the panel cannot claim notifications work.
+   *
+   * A permission query never probes a state the app already believes is
+   * 'granted': the probe is itself a delivered notification, so macOS draws it
+   * as a banner, and probing on every Settings visit and window focus put a
+   * stray "CodeInOven notifications" card on screen over and over. A stale
+   * 'granted' is still corrected by the refusal path on the next real delivery.
+   * Deduped, and the answer arrives over the `notification:permissionStatus`
+   * event.
    */
   async getVerifiedPermissionStatus(): Promise<SystemNotificationPermissionStatus> {
     const status = this.getPermissionStatus()
-    if (status.platform === 'darwin') {
+    if (status.platform === 'darwin' && status.status !== 'granted') {
       this.requestPermissionDelivery()
     }
     return status
@@ -864,7 +871,6 @@ export class NotificationService {
     } else {
       void this.inboxReady().then(() => this.inbox.add(entry))
     }
-    const subtitle = payload.source === 'chat' ? 'Chat' : payload.projectName
     // The one focus verdict for this notification, taken once here and carried
     // to the renderer with the card. The renderer must never decide focus for
     // itself: its `document.hasFocus()` is false while an embedded browser view
@@ -892,7 +898,9 @@ export class NotificationService {
     this.showNativeNotification({
       id: payload.id,
       title: payload.title,
-      subtitle,
+      // No OS subtitle. The card's body is the full sentence that already names
+      // the thread and its project, so setting the project name as a third line
+      // repeated it   "milogs Done" / "milogs" / "milogs finished in milogs."
       body: payload.body,
       urgency: payload.kind === 'error' ? 'critical' : 'normal',
       silent: this.appManagesSound(windows),
@@ -912,7 +920,6 @@ export class NotificationService {
   private showNativeNotification(options: {
     id: string
     title: string
-    subtitle?: string
     body: string
     urgency: 'normal' | 'critical'
     silent: boolean
@@ -936,7 +943,6 @@ export class NotificationService {
         // A unique group per notification prevents Notification Center from stacking alerts.
         groupId: APP_ID,
         title: options.title,
-        ...(options.subtitle === undefined ? {} : { subtitle: options.subtitle }),
         body: options.body,
         urgency: options.urgency,
         silent: options.silent
@@ -1252,6 +1258,11 @@ export class NotificationService {
         : errorHeadline.length > 240
           ? `${errorHeadline.slice(0, 240).trimEnd()}…`
           : errorHeadline
+    // A thread is usually named after its own project, and naming it again in
+    // the sentence ("milogs finished in milogs.") reads as a mistake. Only a
+    // thread title that adds something is said; otherwise the project alone is.
+    const threadTitle = thread.title.trim()
+    const threadSubject = threadTitle && threadTitle !== projectName ? threadTitle : ''
     // An assistant run names its own thread: naming the hidden assistant space as
     // the project it "finished in" would read as a project thread, and the title
     // is already the assistant or task name, so the body carries the thread the
@@ -1259,20 +1270,28 @@ export class NotificationService {
     const body =
       kind === 'completed'
         ? isAssistant
-          ? thread.title.trim()
-          : `${thread.title} finished in ${projectName}.`
+          ? threadTitle
+          : threadSubject
+            ? `${threadSubject} finished in ${projectName}.`
+            : `Finished in ${projectName}.`
         : kind === 'attention'
           ? isAssistant
-            ? `${thread.title} is waiting for your input.`
-            : `${thread.title} is waiting for your input in ${projectName}.`
+            ? `${threadTitle} is waiting for your input.`
+            : threadSubject
+              ? `${threadSubject} is waiting for your input in ${projectName}.`
+              : `Waiting for your input in ${projectName}.`
           : kind === 'spec'
             ? isAssistant
-              ? `${thread.title} has a reviewable engineering artifact ready.`
-              : `${thread.title} has a reviewable engineering artifact ready in ${projectName}.`
+              ? `${threadTitle} has a reviewable engineering artifact ready.`
+              : threadSubject
+                ? `${threadSubject} has a reviewable engineering artifact ready in ${projectName}.`
+                : `A reviewable engineering artifact is ready in ${projectName}.`
             : (errorBody ??
               (isAssistant
-                ? `${assistantName || thread.title} stopped with an error.`
-                : `${thread.title} stopped with an error in ${projectName}.`))
+                ? `${assistantName || threadTitle} stopped with an error.`
+                : threadSubject
+                  ? `${threadSubject} stopped with an error in ${projectName}.`
+                  : `Stopped with an error in ${projectName}.`))
 
     return {
       id: `${APP_SLUG}-${thread.projectId}-${thread.id}-${thread.status}-${thread.updatedAt}`,
