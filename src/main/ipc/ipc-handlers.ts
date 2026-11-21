@@ -88,6 +88,7 @@ import { registerAssistantHandlers } from './handlers/assistant-handlers'
 import { registerCioCleanupHandlers } from './handlers/cio-cleanup-handlers'
 import { registerStorageManagerHandlers } from './handlers/storage-manager-handlers'
 import { registerOrchestrationHandlers } from './handlers/orchestration-handlers'
+import { registerCodeInOvenAccountHandlers } from './handlers/codeinoven-account-handlers'
 import type { Database } from '../database/database'
 import type { StorageEngine } from '../storage/storage-engine'
 import type { UpdaterService } from '../notifications/updater-service'
@@ -556,4 +557,5 @@ export function registerIpcHandlers(
   registerCioCleanupHandlers(ctx)
   registerStorageManagerHandlers(ctx)
   registerOrchestrationHandlers(ctx)
+  registerCodeInOvenAccountHandlers(ctx)
 }

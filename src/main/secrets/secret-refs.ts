@@ -11,6 +11,7 @@ export type SecretScope =
   | 'agent'
   | 'project-env'
   | 'base-url-provider'
+  | 'codeinoven-account'
   | 'unknown'
 
 /**

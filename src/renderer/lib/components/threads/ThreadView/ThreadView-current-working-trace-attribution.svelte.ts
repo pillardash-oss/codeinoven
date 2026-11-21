@@ -34,6 +34,7 @@ import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
 import { modelKey } from '$lib/model-keys'
 import { catalogModelEntry, providerModel, resolveModelProvider } from '$shared/provider-identity'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import { toast } from 'svelte-sonner'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { isOrchestrationChildThread } from '$shared/types'
@@ -741,49 +742,90 @@ export class ThreadViewCurrentWorkingTraceAttribution extends BoardUnit<ThreadVi
   /**
    * Send the edited message with the currently selected model   history from
    * the edited message downwards is replaced by the new exchange.
+   *
+   * The edit is applied to the conversation before any IPC happens: the message
+   * the reader is editing keeps its id, its position and its bubble, takes the
+   * new words in the same publish, and the turn reads as working at that same
+   * instant. Editing never removes the reader's own message from the screen,
+   * not for a frame and not while the mirror is truncated and the session is
+   * rebound. Everything slow (the truncation, the session) happens afterwards,
+   * with the message already where it belongs.
    */
   async submitEditedMessage(msg: AgentMessage): Promise<void> {
     const text = this.editingText.trim()
     if (!text || this.root.switchProject.busy) return
+    // A send that the view would silently refuse (a spec still formulating)
+    // must not leave the edited bubble reading as working.
+    if (this.root.harnessUsage.specFormulating) return
+    const { projectId, id: threadId } = this.root.handleAgentEvent.thread
+    const conversationId = this.root.props.controller?.conversationId ?? threadId
+    const attachments = this.editingMessageAttachments
+    const projectReferences = this.editingMessageProjectReferences
+    const controller = this.root.props.controller
     this.root.handleAgentEvent.errorMessage = ''
+    // Leave edit mode with the new words already in the message: the bubble
+    // goes from the editor to the edited text, never through the old text and
+    // never through no message at all.
+    this.editingMessageId = null
+    this.editingText = ''
+    this.editingMessageAttachments = []
+    this.editingMessageProjectReferences = []
+    threadMessages.beginEdit(
+      projectId,
+      conversationId,
+      msg.id,
+      text,
+      attachments,
+      projectReferences
+    )
+    // The turn is running from this instant: the working state, its clock and
+    // the tail follow are all armed synchronously, before the truncation and
+    // the session binding the backend still has to do.
+    this.root.buildSpecActionPrompt.beginLocalTurn(msg.id)
+    agentRuns.setBusy(projectId, conversationId, true, msg.id)
+    agentRuns.beginDispatch(projectId, conversationId)
+    // The edited message is the tail now, so the reader lands on it and keeps
+    // following the turn it starts.
+    this.root.loadOlderMessages.scrollToLatest()
+    speechController.observeSent(`message-edit-${threadId}-${msg.id}`, text)
     try {
-      if (this.root.props.controller?.truncateBefore) {
+      if (controller?.truncateBefore) {
         // Controller-driven conversations (temporary chats) truncate against
-        // their own backend; the thread mirror does not know them.
-        await this.root.props.controller.truncateBefore(msg.id)
+        // their own backend and keep the message the edit rewrote.
+        const edited = threadMessages
+          .messages(projectId, conversationId)
+          .find((message) => message.id === msg.id)
+        await controller.truncateBefore(msg.id, edited)
       } else {
-        await threadMessages.truncate(
-          this.root.handleAgentEvent.thread.projectId,
-          this.root.handleAgentEvent.thread.id,
-          msg.id
-        )
+        await threadMessages.truncateForEdit(projectId, threadId, msg.id)
         // Truncation discarded the harness session   bind to the fresh one so
         // the resend's streamed events are not filtered out.
         await this.prepareSessionForSend()
       }
     } catch (error) {
+      agentRuns.setIdle(projectId, conversationId)
+      this.root.abortRun.clearLocalTurn()
       this.root.handleAgentEvent.errorMessage =
         error instanceof Error ? error.message : 'The message could not be edited.'
       return
     }
-    const attachments = this.editingMessageAttachments
-    const projectReferences = this.editingMessageProjectReferences
-    this.editingMessageId = null
-    this.editingText = ''
-    this.editingMessageAttachments = []
-    this.editingMessageProjectReferences = []
-    speechController.observeSent(
-      `message-edit-${this.root.handleAgentEvent.thread.id}-${msg.id}`,
-      text
-    )
+    // Direct: the edit replaces the running history, so it must dispatch now
+    // instead of parking behind a turn whose history it just replaced. The
+    // message keeps its id, so the send rewrites that row rather than
+    // appending a second copy of the same prompt.
     await this.root.handleAgentEvent.sendMessage(
       text,
       attachments,
       undefined,
-      undefined,
+      true,
       undefined,
       [],
-      projectReferences
+      projectReferences,
+      undefined,
+      [],
+      false,
+      [],
+      msg.id
     )
   }
 

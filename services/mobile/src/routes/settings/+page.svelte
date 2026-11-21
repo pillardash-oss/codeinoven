@@ -13,6 +13,7 @@
     THEME_OPTIONS,
     ZOOM_LEVEL_OPTIONS
   } from '#shared/app-appearance'
+  import AccountSecurity from '#lib/components/AccountSecurity.svelte'
   import PanelBar from '#lib/components/PanelBar.svelte'
   import { api, ApiError } from '#lib/api/client'
   import { formatAge } from '#lib/api/status'
@@ -53,6 +54,7 @@
   let savingName = $state(false)
   let identityError = $state<string | null>(null)
   let confirmingSignOut = $state(false)
+  let security = $state<AccountSecurity>()
 
   /**
    * The panel this screen was opened from, so the crumb and the chevron agree. A
@@ -205,6 +207,7 @@
   function refresh(): void {
     void loadOvens()
     void loadDevices()
+    void security?.loadSessions()
   }
 
   onMount(() => {
@@ -218,8 +221,8 @@
     <button
       class="icon-btn"
       type="button"
-      aria-label="Refresh ovens and devices"
-      title="Refresh ovens and devices"
+      aria-label="Refresh ovens, devices and sessions"
+      title="Refresh ovens, devices and sessions"
       onclick={refresh}
     >
       <CioRefresh size={20} />
@@ -420,6 +423,8 @@
       <button class="btn" type="button" onclick={loadDevices}>Retry</button>
     </div>
   {/if}
+
+  <AccountSecurity bind:this={security} />
 
   <p class="set-head">Session</p>
 

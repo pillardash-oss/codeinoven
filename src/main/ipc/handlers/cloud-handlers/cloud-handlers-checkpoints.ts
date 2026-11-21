@@ -8,19 +8,28 @@ import type { IpcHandlerContext } from '../context'
 export function registerCheckpointHandlers(ctx: IpcHandlerContext): void {
   const { chatEngine, checkpointManager } = ctx
 
-  ipcMain.handle('checkpoint:list', async (_, projectId: unknown, threadId: unknown) => {
-    const project = validateEntityId(projectId, 'Project ID')
-    const thread = validateEntityId(threadId, 'Thread ID')
-    // Opening or refreshing a thread is the one moment a stuck turn is provable:
-    // a checkpoint still `active` with no ledger row can never be finalized, and
-    // leaving it there hides the turn's file card and keeps a sibling instance
-    // reading the thread as work in progress. Settle it before listing so the
-    // card the reader is owed appears in the same pass.
-    await checkpointManager.settleOrphanedThreadCheckpoints(project, thread).catch((error) => {
-      Logger.error('Orphaned checkpoint settlement failed (non-fatal):', error)
-    })
-    return checkpointManager.listSummaries(project, thread)
-  })
+  ipcMain.handle(
+    'checkpoint:list',
+    async (_, projectId: unknown, threadId: unknown, limit: unknown) => {
+      const project = validateEntityId(projectId, 'Project ID')
+      const thread = validateEntityId(threadId, 'Thread ID')
+      // Opening or refreshing a thread is the one moment a stuck turn is provable:
+      // a checkpoint still `active` with no ledger row can never be finalized, and
+      // leaving it there hides the turn's file card and keeps a sibling instance
+      // reading the thread as work in progress. Settle it before listing so the
+      // card the reader is owed appears in the same pass.
+      await checkpointManager.settleOrphanedThreadCheckpoints(project, thread).catch((error) => {
+        Logger.error('Orphaned checkpoint settlement failed (non-fatal):', error)
+      })
+      // The caller names the newest window it can draw cards from; the manager
+      // clamps it, so an absent or hostile value can only narrow the read.
+      return checkpointManager.listSummaries(
+        project,
+        thread,
+        typeof limit === 'number' ? limit : undefined
+      )
+    }
+  )
   ipcMain.handle('checkpoint:activeSummary', async (_, projectId: string, threadId: string) => {
     if (!chatEngine?.activeTurnChangeSummary) return null
     return chatEngine.activeTurnChangeSummary(projectId, threadId)

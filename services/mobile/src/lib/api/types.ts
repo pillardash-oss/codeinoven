@@ -43,6 +43,8 @@ export interface StoreSummary {
 
 export interface AccountUser extends User {
   store: StoreSummary | null
+  /** False for an account made through a provider, which has no password yet. */
+  hasPassword?: boolean
 }
 
 export interface Device {

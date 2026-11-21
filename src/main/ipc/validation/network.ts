@@ -293,16 +293,24 @@ export class PrivilegedIpcValidator {
   isTrustedSenderFrame(frame: TrustedFrameCandidate | null | undefined): boolean {
     if (!frame || typeof frame.url !== 'string' || frame.url.length === 0) return false
     if (frame.parent != null) return false
-    return this.#isTrustedRendererUrl(frame.url)
+    return this.#isTrustedSenderUrl(frame.url)
   }
 
   /** Reject a privileged IPC call whose sender frame is not trusted. */
   assertTrustedSender(
     event: { senderFrame?: TrustedFrameCandidate | null } | null | undefined
   ): void {
-    if (!this.isTrustedSenderFrame(event?.senderFrame)) {
-      throw new Error('Privileged IPC rejected: sender frame is not trusted')
-    }
+    if (this.isTrustedSenderFrame(event?.senderFrame)) return
+    // A rejected sender is not a small failure: every privileged call from that
+    // document is refused from then on, so the window keeps painting and answers
+    // nothing, and the only trace is the renderer's own error toast. Record the
+    // document that was turned away so the next occurrence is diagnosable.
+    const frame = event?.senderFrame
+    Logger.error('Privileged IPC rejected: sender frame is not trusted', {
+      url: typeof frame?.url === 'string' ? frame.url.slice(0, 512) : '',
+      subframe: frame?.parent != null
+    })
+    throw new Error('Privileged IPC rejected: sender frame is not trusted')
   }
 
   /**
@@ -355,14 +363,32 @@ export class PrivilegedIpcValidator {
     return normalized !== null && this.#navigationTargets.has(normalized)
   }
 
-  #normalizeUrl(url: string): string | null {
+  /**
+   * Whether a sender document is one of the app's own, ignoring its fragment.
+   *
+   * A fragment never loads another document: `index.html#step-2` *is* the
+   * document `index.html` that is already trusted, because a hash change is a
+   * same-document navigation. Reading the hash into the sender check therefore
+   * separates nothing an attacker can reach, while it costs the app everything
+   * when it happens: every privileged call from that window is refused, and the
+   * window goes on painting while it answers nothing, which is the whole app
+   * appearing broken until it is restarted. Navigation stays strict (see
+   * `isTrustedNavigation`): a hash is still part of an address a document may
+   * never be navigated to.
+   */
+  #isTrustedSenderUrl(url: string): boolean {
+    const normalized = this.#normalizeUrl(url, true)
+    return normalized !== null && this.#navigationTargets.has(normalized)
+  }
+
+  #normalizeUrl(url: string, dropFragment = false): string | null {
     try {
       const parsed = new URL(url)
       // First-party documents are identified by their path; a query string
-      // (e.g. the permission popup's ?theme= hint) must never make a trusted
-      // sender untrustworthy. Fragments stay significant (hash routing can
-      // change what a document renders).
+      // (e.g. the permission popup's ?theme= hint) and, for a sender, its hash
+      // must never make a trusted document untrustworthy.
       parsed.search = ''
+      if (dropFragment) parsed.hash = ''
       return parsed.href
     } catch {
       return null

@@ -239,6 +239,34 @@
       })
     }
 
+    // The device preview: the panel that otherwise docks by itself only once an
+    // agent starts mirroring a device it booted or attached to. Asking for it
+    // here is the user's own way in, so it takes no arguments and runs on
+    // selection   there is never anything to type after it. Offered where a
+    // conversation owns a panel of its own, the same places the browser is.
+    if (!board.loadOlderMessages.hasController) {
+      actions.push({
+        id: 'command:monitor',
+        title: '/monitor',
+        description: 'Open the device preview: mirror an emulator, simulator or connected phone',
+        category: 'command',
+        source: board.state.applicationActionSource,
+        keywords: [
+          'monitor',
+          'display',
+          'preview',
+          'device',
+          'emulator',
+          'simulator',
+          'screen',
+          'mirror',
+          'android',
+          'ios',
+          'phone'
+        ]
+      })
+    }
+
     for (const command of board.switchProject.commands) {
       actions.push({
         id: board.switchProject.actionId(command.id),

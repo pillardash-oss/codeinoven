@@ -8,7 +8,7 @@ import { onVoiceComposerReset, onVoiceDraftLanded } from '../../../speech/voice-
 import { findNavState } from '$lib/stores/find-nav.svelte'
 import { appQuitState } from '$lib/stores/app-quit.svelte'
 import { isImageMime, isVideoMime, isAudioMime } from '$lib/mime'
-import { mayReanchorToLatest } from '$lib/scroll-anchor'
+import { isAtTrueLatest, mayReanchorToLatest } from '$lib/scroll-anchor'
 import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { chatDraft } from '$lib/stores/chat-draft'
@@ -757,6 +757,15 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
       const observer = new ResizeObserver(() => {
         const scroller = this.root.loadOlderMessages.scrollEl
         if (!scroller) return
+        // A viewport resting on the true bottom is reading the latest message
+        // whatever an earlier scroll event concluded, so re-attach here rather
+        // than waiting for another scroll: a browser clamp (content shrinking
+        // above a bottom-pinned reader) or a stale gesture must never leave a
+        // reader who scrolled back to the latest message untailed from a tail
+        // that keeps growing below them.
+        if (this.root.loadOlderMessages.userScrolledAway && isAtTrueLatest(scroller)) {
+          this.root.loadOlderMessages.reattachToLatest()
+        }
         if (!mayReanchorToLatest(this.root.loadOlderMessages.userScrolledAway)) {
           // The reader owns the viewport here. Hold the block they are reading
           // where it was, so work that mounts, folds, reveals or measures above

@@ -21,6 +21,9 @@ import { Logger } from '../../system/logger'
  * - restart recovery finds turns still marked active;
  * - a finishing turn finds the files other threads in its project completed
  *   since it started.
+ *
+ * These are launch-critical: recovery reads through the first one, so it must
+ * exist before recovery runs.
  */
 const CHECKPOINT_INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_active_created
@@ -31,14 +34,74 @@ const CHECKPOINT_INDEXES = [
 ] as const
 
 /**
- * Build the checkpoint indexes on the worker, never in the startup schema: the
- * first build parses every checkpoint once, which on a large install takes
- * seconds, and the schema runs on the Electron main thread. Every later launch
- * finds them in place and pays nothing.
+ * The index the historical-map trim reads its candidates through.
+ *
+ * That pass (launch, and every thirty minutes after) finds the over-sized rows
+ * of finished turns, and its candidate predicate is exactly `length(data)` plus
+ * the row's age, which no table scan can avoid: without this index the trim read
+ * every checkpoint on every pass (107 MB and ~1 s on a real install, once
+ * 32.9 s) and every interactive read queued behind it. The index answers it from
+ * 264 KB of sorted keys instead, and its columns make it covering, so the pass
+ * touches no checkpoint row until it has a candidate.
+ *
+ * It is NOT a launch-critical index, unlike the two above: building it over a
+ * large table holds the worker for seconds (9.1 s measured on a 1.4 GB
+ * database), so it is built as background work, after the launch has settled.
+ */
+const CHECKPOINT_BACKGROUND_INDEXES: ReadonlyArray<{ name: string; sql: string }> = [
+  {
+    name: 'idx_turn_checkpoints_trim_candidates',
+    sql: `CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_trim_candidates
+     ON turn_checkpoints(length(data), created_at, turn_id, project_id, thread_id)
+     WHERE json_extract(data, '$.status') != 'active'`
+  }
+]
+
+/**
+ * Build the launch-critical checkpoint indexes on the worker, never in the
+ * startup schema: the first build parses every checkpoint once, which on a large
+ * install takes seconds, and the schema runs on the Electron main thread. Every
+ * later launch finds them in place and pays nothing.
  */
 export async function prepareCheckpointIndexes(database: Database): Promise<void> {
   for (const sql of CHECKPOINT_INDEXES) {
     const result = await database.executeViaWorker(sql, [], { allowPrimaryFallback: false })
+    if (!result.ok) Logger.error('Checkpoint index could not be built (non-fatal)', result.error)
+  }
+}
+
+/** How long the queue must be quiet before an expensive index build starts. */
+const INDEX_BUILD_QUIET_MS = 2_000
+/** How long the build waits for quiet at most, so a busy machine still gets it. */
+const INDEX_BUILD_DEADLINE_MS = 20_000
+
+/**
+ * Build the checkpoint indexes that are too expensive to build on the launch
+ * path, as background work.
+ *
+ * Each is checked first (a sub-millisecond `sqlite_master` lookup, on the
+ * interactive lane because it *is* fast), so a launch that already has them —
+ * every launch after the first — costs nothing and never waits. A build that is
+ * actually needed waits for the worker's queue to go quiet and then runs on the
+ * background lane, so it starts while nothing is waiting on the database instead
+ * of between a click and the read that answers it. The wait is bounded: on a
+ * machine that is never quiet the build runs anyway after the deadline.
+ */
+export async function prepareBackgroundCheckpointIndexes(database: Database): Promise<void> {
+  for (const index of CHECKPOINT_BACKGROUND_INDEXES) {
+    const existing = await database
+      .queryViaWorker(
+        'SELECT name FROM sqlite_master WHERE type = ? AND name = ?',
+        ['index', index.name],
+        1
+      )
+      .catch(() => null)
+    if (existing?.ok && existing.rows.length > 0) continue
+    await database.waitForInteractiveQuiet(INDEX_BUILD_QUIET_MS, INDEX_BUILD_DEADLINE_MS)
+    const result = await database.executeViaWorker(index.sql, [], {
+      allowPrimaryFallback: false,
+      lane: 'background'
+    })
     if (!result.ok) Logger.error('Checkpoint index could not be built (non-fatal)', result.error)
   }
 }

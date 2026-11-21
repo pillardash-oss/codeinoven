@@ -10,7 +10,7 @@
   import { fade } from 'svelte/transition'
   import { invoke } from '$lib/ipc.svelte'
   import { ListRowReflow, rowArrangement } from '$lib/motion'
-  import type { SvelteMap } from 'svelte/reactivity'
+  import { SvelteSet, type SvelteMap } from 'svelte/reactivity'
   import CollapsibleSidebar from '$lib/components/layout/CollapsibleSidebar.svelte'
   import type { ScopeActionsController } from '$lib/components/scope/ScopeActionsController.svelte'
   import ProjectIdentity from '$lib/components/shared/ProjectIdentity.svelte'
@@ -519,7 +519,47 @@
     /** Whether this group is folded, so only its heading (and the thread being
      *  worked in) is drawn. Always false for the ungrouped list. */
     folded: boolean
+    /** Whether this section belongs to the docked block at the foot of the
+     *  list: it is folded, or it was unfolded there and the reader has not
+     *  stepped into one of its threads yet. See {@link footHeldSections}.
+     *  Always false for the ungrouped list. */
+    docked: boolean
     threads: Thread[]
+  }
+
+  /**
+   * Groups the reader unfolded out of the docked block, still drawn at the foot
+   * of the list until they step into one of their threads.
+   *
+   * Folding a group sinks it to the end of the list, and unfolding it must not
+   * slide it back up: the reader opened it to reach its rows, and the rows have
+   * to appear where the heading they just clicked was, not somewhere above the
+   * list they were reading. The group only returns to its own slot in the status
+   * order once a thread inside it is the one being worked in, which is the only
+   * moment its place in that order matters again.
+   */
+  const footHeldSections = new SvelteSet<string>()
+
+  /** The section key a thread is grouped under, or null when it is not listed. */
+  function sectionKeyForThread(threadId: string): string | null {
+    for (const group of threadGroups) {
+      if (group.threads.some((thread) => thread.id === threadId)) return `group:${group.label}`
+    }
+    return null
+  }
+
+  /**
+   * Fold or unfold one heading.
+   *
+   * An unfolded group joins {@link footHeldSections} so it stays at the foot, and
+   * a group being folded leaves it: its fold state already puts it there.
+   */
+  function toggleSectionFold(section: ThreadSection): void {
+    if (!section.group) return
+    const wasFolded = threadGroupingState.isFolded(section.group.label)
+    threadGroupingState.toggleFold(section.group.label)
+    if (wasFolded) footHeldSections.add(section.key)
+    else footHeldSections.delete(section.key)
   }
 
   const threadSections = $derived.by((): ThreadSection[] => {
@@ -529,49 +569,75 @@
         : settledTimelineThreads
       // No section at all when there is nothing to show, so the list's own empty
       // state still fires for an ungrouped view with no threads.
-      return threads.length > 0 ? [{ key: 'flat', group: null, folded: false, threads }] : []
+      return threads.length > 0
+        ? [{ key: 'flat', group: null, folded: false, docked: false, threads }]
+        : []
     }
     return threadGroups
       .filter((group) => threadGroupingState.isVisible(group.label))
-      .map((group) => ({
-        key: `group:${group.label}`,
-        group,
-        folded: threadGroupingState.isFolded(group.label),
-        // A folded group keeps its heading and drops its rows   except the thread
-        // the user is on: the group holding the active thread stays temporarily
-        // open by that one row, so folding can never take the thread being worked
-        // in off screen. Unfolding reveals the rest of the group.
-        threads: threadGroupingState.isFolded(group.label)
-          ? foldedSectionRows(group.threads, activeThreadId)
-          : group.threads
-      }))
+      .map((group) => {
+        const key = `group:${group.label}`
+        const folded = threadGroupingState.isFolded(group.label)
+        // A group the reader is working in is never docked: stepping into one of
+        // its threads is exactly what returns it to its own slot, and the frame
+        // that opens the thread must not draw the group twice on the way there.
+        const holdsActiveThread =
+          activeThreadId !== null && group.threads.some((thread) => thread.id === activeThreadId)
+        return {
+          key,
+          group,
+          folded,
+          docked: folded || (footHeldSections.has(key) && !holdsActiveThread),
+          // A folded group keeps its heading and drops its rows   except the
+          // thread the user is on: the group holding the active thread stays
+          // temporarily open by that one row, so folding can never take the
+          // thread being worked in off screen. Unfolding reveals the rest.
+          threads: folded ? foldedSectionRows(group.threads, activeThreadId) : group.threads
+        }
+      })
   })
 
   /**
-   * The sections as they are drawn: the expanded groups in the user's order
-   * first, then every folded group, also in that order, against the end of the
-   * list.
+   * Lets go of a foot-held group once the reader is inside it, and of the ones
+   * that are no longer drawn at all (grouping off, the group filtered out).
    *
-   * This is where a folded group belongs. Left in place, folding the group above
+   * The hold is state the docked block has already drawn, and only the reader
+   * moving back into a group may undo it; that has no derived form, so this is
+   * where the set is trimmed rather than read.
+   */
+  $effect(() => {
+    if (footHeldSections.size === 0) return
+    const listedSectionKeys = new Set(threadSections.map((section) => section.key))
+    const activeSectionKey = activeThreadId ? sectionKeyForThread(activeThreadId) : null
+    for (const key of [...footHeldSections]) {
+      if (!listedSectionKeys.has(key) || key === activeSectionKey) footHeldSections.delete(key)
+    }
+  })
+
+  /**
+   * The sections as they are drawn: the groups keeping their own slot in the
+   * user's order first, then the docked block at the end of the list, also in
+   * that order.
+   *
+   * A folded group belongs at the foot. Left in place, folding the group above
    * the one being read left its heading in the middle of the list with the
    * expanded rows it continues passing underneath it, and it read as a stray
-   * entry rather than a group the reader put away. Sunk to the end, the folded
-   * groups queue up together before the panel's own controls, and the group the
-   * reader is actually working in owns the top of the list with its rows. Doing
-   * it the other way round   floating a folded group above its expanded
-   * neighbours   is what would make the order look arranged: the statuses keep
-   * exactly the order the user gave them, folding only decides which side of the
-   * expanded block a group lands on.
+   * entry rather than a group the reader put away. Docked at the end, the
+   * groups the reader put away queue up together before the panel's own
+   * controls, and the group they are actually working in owns the top of the
+   * list with its rows. A group they just unfolded stays down there for the same
+   * reason: it is the list they are reading, and it may not jump out from under
+   * the heading they clicked.
    */
   const drawnThreadSections = $derived.by((): ThreadSection[] => {
     if (threadSections.length < 2) return threadSections
-    const expanded: ThreadSection[] = []
-    const folded: ThreadSection[] = []
+    const placed: ThreadSection[] = []
+    const docked: ThreadSection[] = []
     for (const section of threadSections) {
-      if (section.folded) folded.push(section)
-      else expanded.push(section)
+      if (section.docked) docked.push(section)
+      else placed.push(section)
     }
-    return [...expanded, ...folded]
+    return [...placed, ...docked]
   })
 
   /**
@@ -1183,9 +1249,9 @@
       {/if}
     </SidebarListPane>
     <SidebarListPane name="threads" visible={!loading && mode === 'threads'}>
-      <!-- The pane is a column that fills the scroller, so the folded groups at
+      <!-- The pane is a column that fills the scroller, so the docked groups at
            the end of the list can be held against the panel's foot instead of
-           stopping wherever the last expanded row happens to end. The list
+           stopping wherever the last placed row happens to end. The list
            inside still takes its own height from its rows (`flex-auto`), so a
            full list scrolls exactly as before. -->
       <div class="flex min-h-full flex-col">
@@ -1279,14 +1345,14 @@
             {@const isLastSection = sectionIndex === drawnThreadSections.length - 1}
             {@const ownsHistoryTail = section.key === historyTailSectionKey && !section.folded}
             {@const showLoadOlder = ownsHistoryTail && !searchPanelActive && hasMoreHistory}
-            <!-- The first folded group takes the rest of the column's height with
-               it, so the folded stack sits against the foot of the panel when the
-               expanded rows end high up the list, and falls back to following
-               them normally once the rows fill the pane. -->
-            {@const leadsFoldedStack =
-              section.folded &&
-              (sectionIndex === 0 || !drawnThreadSections[sectionIndex - 1].folded)}
-            <section class={leadsFoldedStack ? 'mt-auto' : ''}>
+            <!-- The first docked group takes the rest of the column's height with
+               it, so the docked block sits against the foot of the panel when the
+               placed rows end high up the list, and falls back to following them
+               normally once the rows fill the pane. -->
+            {@const leadsDockedStack =
+              section.docked &&
+              (sectionIndex === 0 || !drawnThreadSections[sectionIndex - 1].docked)}
+            <section class={leadsDockedStack ? 'mt-auto' : ''}>
               {#if section.group}
                 {@const group = section.group}
                 <div
@@ -1300,8 +1366,8 @@
                     headerOnly
                     icon={THREAD_GROUP_ICONS[group.label]}
                     accent={THREAD_GROUP_COLORS[group.label]}
-                    folded={threadGroupingState.isFolded(group.label)}
-                    onToggleFold={() => threadGroupingState.toggleFold(group.label)}
+                    folded={section.folded}
+                    onToggleFold={() => toggleSectionFold(section)}
                     activeThreadId={activeThreadId ?? null}
                     onOpen={onOpenThread}
                     {onRename}

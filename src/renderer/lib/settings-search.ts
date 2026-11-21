@@ -17,6 +17,7 @@ import CioSparkles from '@pdslng/cio-icon/CioSparkles.svelte'
 import CioTabInfo from '@pdslng/cio-icon/CioTabInfo.svelte'
 import CioTabSettings from '@pdslng/cio-icon/CioTabSettings.svelte'
 import CioTeam from '@pdslng/cio-icon/CioTeam.svelte'
+import CioUserCheck from '@pdslng/cio-icon/CioUserCheck.svelte'
 import CioVolume from '@pdslng/cio-icon/CioVolume.svelte'
 import { feature } from '$lib/feature-registry'
 import type { Component } from 'svelte'
@@ -313,6 +314,15 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     description: 'Timed pings that keep a model’s usage window warm.',
     keywords: ['ping', 'pong', 'usage window', 'reset', 'schedule'],
     icon: CioHeartPulse
+  },
+  {
+    id: 'account',
+    section: 'account',
+    group: 'data',
+    title: 'Account',
+    description: 'Sign in to the service so your phone can reach this machine.',
+    keywords: ['account', 'sign in', 'login', 'mobile', 'phone', 'service', 'oven'],
+    icon: CioUserCheck
   },
   {
     id: 'secrets',

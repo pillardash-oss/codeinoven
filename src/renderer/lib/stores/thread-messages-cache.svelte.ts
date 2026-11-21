@@ -403,16 +403,58 @@ export class ThreadMessagesCache {
     this.#notifyByKey(key)
   }
 
-  /** Replace the cached messages of a conversation after a removal. */
-  applyRemoval(projectId: string, threadId: string, kept: AgentMessage[]): void {
+  /**
+   * Replace the cached messages of a conversation after a removal.
+   *
+   * `keep` is the message an edit is rewriting: it belongs at the end of the
+   * kept prefix because an edit replaces the history *below* it, never the
+   * message itself. Dropping it here is what made the message the user was
+   * editing vanish from the conversation until its replacement was persisted.
+   */
+  applyRemoval(
+    projectId: string,
+    threadId: string,
+    kept: AgentMessage[],
+    keep?: AgentMessage
+  ): void {
     const key = threadKey(projectId, threadId)
     this.#cancelReveal(key)
     const entry = this.entry(projectId, threadId)
-    entry.messages = kept
+    entry.messages = keep ? [...kept.filter((message) => message.id !== keep.id), keep] : kept
     entry.loaded = true
     entry.error = ''
     this.#sessionIds.delete(key)
     this.notify(projectId, threadId)
+  }
+
+  /**
+   * Rewrite one message in place and drop everything after it, in a single
+   * publish.
+   *
+   * The edited message keeps its id and its position, so the bubble the reader
+   * is looking at is never unmounted: they see their own words take the new
+   * text at the instant they submit the edit, not after the mirror has been
+   * truncated and the turn has been re-persisted.
+   */
+  applyEdit(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    rewrite: (message: AgentMessage) => AgentMessage
+  ): AgentMessage | null {
+    const key = threadKey(projectId, threadId)
+    this.#cancelReveal(key)
+    const entry = this.entry(projectId, threadId)
+    const index = entry.messages.findIndex((message) => message.id === messageId)
+    if (index < 0) return null
+    const current = entry.messages[index]
+    if (!current) return null
+    const edited = rewrite(current)
+    entry.messages = [...entry.messages.slice(0, index), edited]
+    entry.loaded = true
+    entry.error = ''
+    this.notify(projectId, threadId)
+    return edited
   }
 
   /** Clear the cache for a thread (e.g. on deletion). */

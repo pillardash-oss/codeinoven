@@ -66,6 +66,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/auth/email/resend", s.handleResendVerification)
 	mux.HandleFunc("POST /v1/auth/email/reset/request", s.handleResetRequest)
 	mux.HandleFunc("POST /v1/auth/email/reset/confirm", s.handleResetConfirm)
+	mux.HandleFunc("GET /v1/auth/email/reset", s.handleResetPasswordPage)
+	mux.HandleFunc("POST /v1/auth/email/reset", s.handleResetPasswordForm)
 	mux.HandleFunc("GET /v1/auth/{provider}/start", s.handleOAuthStart)
 	mux.HandleFunc("GET /v1/auth/{provider}/callback", s.handleOAuthCallback)
 	mux.HandleFunc("GET /v1/auth/oauth/done", s.handleOAuthDone)
@@ -80,6 +82,8 @@ func (s *Server) Handler() http.Handler {
 	// Account.
 	mux.Handle("GET /v1/me", s.requireSession(http.HandlerFunc(s.handleMe)))
 	mux.Handle("PATCH /v1/me", s.requireSession(http.HandlerFunc(s.handleUpdateMe)))
+	mux.Handle("DELETE /v1/me", s.requireSession(http.HandlerFunc(s.handleDeleteMe)))
+	mux.Handle("POST /v1/me/password", s.requireSession(http.HandlerFunc(s.handleChangePassword)))
 	mux.Handle("GET /v1/me/devices", s.requireSession(http.HandlerFunc(s.handleListDevices)))
 	mux.Handle("DELETE /v1/me/devices/{id}", s.requireSession(http.HandlerFunc(s.handleRevokeDevice)))
 

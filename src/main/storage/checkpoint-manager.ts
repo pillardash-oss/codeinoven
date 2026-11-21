@@ -12,6 +12,7 @@ import type {
   TurnCheckpointSummary
 } from '../../lib/types'
 import type { Database } from '../database/database'
+import type { WorkerLane } from '../database/database-worker'
 import { CrossProcessMutex } from '../system/cross-process-mutex'
 import { Logger } from '../system/logger'
 import {
@@ -66,8 +67,20 @@ const APP_CLOSED_TURN_MESSAGE = `${APP_NAME} closed before this turn finished.`
 /** Wording for a turn the user deliberately stopped from the Stop control. */
 const USER_STOPPED_TURN_MESSAGE = `${APP_NAME} stopped this turn at your request.`
 
-/** Row bound for one thread's checkpoint list (the read used to cap at 10 000). */
-const CHECKPOINT_LIST_MAX_ROWS = 10_000
+/**
+ * Newest checkpoints one thread list reads when the caller names no window.
+ *
+ * A turn card is drawn only for a checkpoint anchored to a message the
+ * transcript holds, so a reader can only ever use the newest window: the list
+ * is not a browsable archive. Reading the whole set parsed and diffed every
+ * checkpoint the thread had ever written (one live thread held 427 of them and
+ * 5 MB of snapshot JSON) on every open, on the single database worker every
+ * interactive read queues behind.
+ */
+const CHECKPOINT_LIST_DEFAULT_ROWS = 200
+
+/** Ceiling on a caller-named window, so no caller can turn the list into a whole-thread decode. */
+const CHECKPOINT_LIST_MAX_ROWS = 2_000
 
 /** Bound on the paths one completion re-reads to keep its own writes on the card. */
 const MAX_EVIDENCE_RESCUES = 100
@@ -1186,10 +1199,14 @@ export class CheckpointManager {
       save: (checkpoint) => this.save(checkpoint),
       saveTrimmed: (checkpoint) => this.writeCheckpoint(checkpoint),
       tracker: (projectId) => this.tracker(projectId),
-      queryRows: (sql, params, maxRows) => this.queryRows(sql, params, maxRows),
+      queryRows: (sql, params, maxRows) =>
+        this.queryRows(sql, params, maxRows, { lane: 'background' }),
       queryRowsStrict: async (sql, params, maxRows) => {
         const result = await this.db.queryViaWorker(sql, params, maxRows, {
-          allowPrimaryFallback: false
+          allowPrimaryFallback: false,
+          // A maintenance pass scans the whole project and nobody is waiting on
+          // it, so it must never sit in the queue ahead of a click's read.
+          lane: 'background'
         })
         if (!result.ok) throw new Error(result.error ?? 'checkpoint read failed')
         return (result.rows ?? []) as Record<string, unknown>[]
@@ -1274,19 +1291,35 @@ export class CheckpointManager {
     return pruneUnusedBlobs(this.maintenanceHost(), projectId)
   }
 
-  async listSummaries(projectId: string, threadId: string): Promise<TurnCheckpointSummary[]> {
+  /**
+   * Summaries of a thread's newest turn checkpoints, newest first.
+   *
+   * `limit` is the newest window to decode, not a page: the rows embed two
+   * whole-project snapshots each, so decoding them and recomputing the diff of a
+   * turn that stored none is the expensive half of this read. The caller names
+   * the window it can actually use (the transcript holds N messages, so at most
+   * N turns are on screen); the worker decodes exactly that many and hands back
+   * only the summaries. The default is wide enough that a caller which does not
+   * know still gets every checkpoint its transcript can show.
+   */
+  async listSummaries(
+    projectId: string,
+    threadId: string,
+    limit?: number
+  ): Promise<TurnCheckpointSummary[]> {
     assertId(projectId)
     assertId(threadId)
-    // The rows embed two whole-project snapshots each, so decoding them and
-    // recomputing the diff of a turn that stored none is the expensive half of
-    // this read. The maintenance worker does that and hands back only the
-    // summaries; the local path below is for a database without a worker
-    // (in-memory tests) or one that just failed.
+    const requested =
+      typeof limit === 'number' && Number.isFinite(limit) ? limit : CHECKPOINT_LIST_DEFAULT_ROWS
+    const rows = Math.min(CHECKPOINT_LIST_MAX_ROWS, Math.max(1, Math.floor(requested)))
+    // The maintenance worker does the decode and the diff; the local path below
+    // is for a database without a worker (in-memory tests) or one that just
+    // failed.
     const viaWorker = await this.db
       .queryCheckpointSummariesViaWorker(
         'SELECT data FROM turn_checkpoints WHERE project_id = ? AND thread_id = ? ORDER BY created_at DESC',
         [projectId, threadId],
-        CHECKPOINT_LIST_MAX_ROWS
+        rows
       )
       .catch(() => null)
     if (viaWorker?.ok) {
@@ -1299,9 +1332,9 @@ export class CheckpointManager {
       }
       return viaWorker.summaries
     }
-    return (await this.list(projectId, threadId)).map((checkpoint) =>
-      toTurnCheckpointSummary(checkpoint)
-    )
+    return (await this.list(projectId, threadId))
+      .slice(0, rows)
+      .map((checkpoint) => toTurnCheckpointSummary(checkpoint))
   }
 
   /**
@@ -1745,13 +1778,15 @@ export class CheckpointManager {
   private async queryRows<Row = Record<string, unknown>>(
     sql: string,
     params: unknown[],
-    maxRows: number
+    maxRows: number,
+    options: { lane?: WorkerLane } = {}
   ): Promise<Row[]> {
     // `allowPrimaryFallback: false` because `queryViaWorker` otherwise answers a
     // failed worker read from the primary connection itself, and the retry below
     // would then run the identical statement on the main thread a second time.
     const result = await this.db.queryViaWorker(sql, params, maxRows, {
-      allowPrimaryFallback: false
+      allowPrimaryFallback: false,
+      ...(options.lane ? { lane: options.lane } : {})
     })
     if (!result.ok) {
       return this.db.all<Row>(sql, ...params)

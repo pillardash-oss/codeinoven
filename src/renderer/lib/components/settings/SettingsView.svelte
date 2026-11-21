@@ -79,6 +79,7 @@
   import SeekBar from '../ui/SeekBar.svelte'
   import ArchivesSettingsTab from './ArchivesSettingsTab.svelte'
   import SecretsSettingsTab from './SecretsSettingsTab.svelte'
+  import AccountSettingsTab from './AccountSettingsTab.svelte'
   import AboutChangelog from './AboutChangelog.svelte'
   import AboutCommunity from './AboutCommunity.svelte'
   import AuditSettingsTab from './AuditSettingsTab.svelte'
@@ -1552,6 +1553,8 @@
       <ArchivesSettingsTab />
     {:else if section === 'secrets'}
       <SecretsSettingsTab />
+    {:else if section === 'account'}
+      <AccountSettingsTab />
     {:else if section === 'about'}
       <div class="px-6 pb-8 pt-2">
         <!-- Identity: icon, version, copyright -->

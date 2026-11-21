@@ -38,6 +38,12 @@ import { HISTORY_WINDOW_SIZE } from '../thread-history'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { SvelteSet } from 'svelte/reactivity'
 import { BoardUnit } from '$lib/components/board-unit'
+
+/** Fewest newest checkpoints a thread list reads, so a young thread is never short. */
+const CHECKPOINT_LIST_MIN_ROWS = 60
+/** Extra newest checkpoints past the loaded transcript, for retried and resumed turns. */
+const CHECKPOINT_LIST_SLACK_ROWS = 40
+
 /** One concern of the ThreadView board. */
 export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
@@ -233,6 +239,22 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
     }
   }
 
+  /**
+   * How many of the newest checkpoints this thread's list should read.
+   *
+   * A card is drawn only for a checkpoint anchored to a message the transcript
+   * holds, so the newest window of checkpoints is everything this view can use:
+   * reading the whole set decoded and diffed every checkpoint the thread had
+   * ever written on every open. One checkpoint per turn is the floor and the
+   * loaded transcript is the honest ceiling, so the window follows the
+   * transcript as the reader scrolls back instead of being fixed at the thread's
+   * whole history.
+   */
+  private checkpointListLimit(): number {
+    const loaded = this.root.loadOlderMessages.messages.length
+    return Math.max(CHECKPOINT_LIST_MIN_ROWS, loaded + CHECKPOINT_LIST_SLACK_ROWS)
+  }
+
   async refreshCheckpoints(): Promise<void> {
     const request = this.checkpointRefreshGuard.begin()
     const { projectId, id } = this.root.handleAgentEvent.thread
@@ -241,7 +263,12 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
         this.lastCheckpointThreadId = id
         this.checkpoints = []
       }
-      const nextCheckpoints = await invoke('checkpoint:list', projectId, id)
+      const nextCheckpoints = await invoke(
+        'checkpoint:list',
+        projectId,
+        id,
+        this.checkpointListLimit()
+      )
       if (!this.root.loadOlderMessages.alive || !this.checkpointRefreshGuard.isCurrent(request))
         return
       this.checkpoints = await this.withNewestTurnCheckpoint(
@@ -272,7 +299,7 @@ export class ThreadViewAbortRun extends BoardUnit<ThreadView> {
       try {
         await waitForFeatures()
         if (!this.root.loadOlderMessages.alive) return
-        const retried = await invoke('checkpoint:list', projectId, id)
+        const retried = await invoke('checkpoint:list', projectId, id, this.checkpointListLimit())
         if (!this.root.loadOlderMessages.alive || !this.checkpointRefreshGuard.isCurrent(request))
           return
         this.checkpoints = await this.withNewestTurnCheckpoint(projectId, id, retried, request)
