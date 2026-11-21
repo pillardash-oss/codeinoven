@@ -34,7 +34,8 @@
     title: string
     label: string
     elapsedFor: (part: SubagentPart) => number
-    /** Attribution for the model working on this trace, shown at the far right. */
+    /** Attribution for the model working on this trace, shown at the far right
+     *  only while the trace is live. */
     modelLabel: string | null
     /**
      * True inside a group conversation, where a reply's trace belongs to the
@@ -176,7 +177,9 @@
       </span>
     {/if}
   </div>
-  {#if modelLabel && !compact}
+  <!-- The attribution belongs to the turn that is running: a finished trace
+       keeps its steps and time, never the model chips. -->
+  {#if modelLabel && !compact && live}
     <div
       class="pointer-events-none relative ml-auto inline-flex min-w-0 items-center self-stretch border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong"
     >

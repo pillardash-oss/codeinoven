@@ -17,15 +17,20 @@
     traceParts: AgentPart[]
     traceBusy: boolean
     inGroupBubble?: boolean
+    /** Above a held steer the trace shows only its latest step, so the steered
+     *  message stays where the reader is looking instead of below the whole run. */
+    latestOnly?: boolean
   }
 
-  let { board, traceParts, traceBusy, inGroupBubble = false }: Props = $props()
+  let { board, traceParts, traceBusy, inGroupBubble = false, latestOnly = false }: Props = $props()
+
+  const shownParts = $derived(latestOnly ? traceParts.slice(-1) : traceParts)
 
   const formatOutput = conversationTraceOutput(() => board)
 </script>
 
 <WorkingTrace
-  parts={traceParts}
+  parts={shownParts}
   open
   compact={inGroupBubble}
   flat={inGroupBubble}
@@ -35,7 +40,7 @@
   note={traceBusy ? board.unmirroredTraceStartTime.workingStatusNote : null}
   steps={traceBusy ? board.unmirroredTraceStartTime.workingStatusSteps : null}
   active={board.props.active}
-  olderPartsAvailable={board.pollStreamParts.streamTrace.hasOlder}
+  olderPartsAvailable={!latestOnly && board.pollStreamParts.streamTrace.hasOlder}
   onLoadOlderParts={board.pollStreamParts.loadOlderStreamParts}
   totalSteps={board.pollStreamParts.streamTrace.totalSteps}
   turnSubagentParts={board.pollStreamParts.streamTrace.subagentParts}

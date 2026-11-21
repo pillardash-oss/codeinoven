@@ -539,6 +539,7 @@
             {board}
             traceParts={board.composerScope.unmirroredTraceParts}
             traceBusy
+            latestOnly
           />
         {/if}
         {@const citedParts = msg.parts.filter(
