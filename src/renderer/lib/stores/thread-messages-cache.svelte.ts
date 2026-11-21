@@ -1,5 +1,6 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { AgentMessage, AgentProviderIssue } from '$shared/types'
+import { isTurnTransparentUserMessage } from '../components/threads/thread-turn-parts'
 import {
   EMPTY_MESSAGES,
   mergePageMessages,
@@ -528,6 +529,14 @@ export class ThreadMessagesCache {
       // turn: the run stays anchored to the prompt it is steering, and the
       // held message renders under that turn's live working trace.
       if (entry.heldSteerIds.has(message.id)) continue
+      // A row written into the running turn   a compaction notice, a sub-agent
+      // envelope, an app continuation, the record of an answered question
+      // rides the turn it arrived under instead of opening one. Anchoring the
+      // run to it made every later streamed part look like a brand-new turn,
+      // and opening a new turn resets the working trace's fold: the trace the
+      // reader had just opened closed itself again while the work they were
+      // reading kept arriving.
+      if (isTurnTransparentUserMessage(message)) continue
       return { index, message, value: message.id }
     }
     return { index: -1, message: undefined, value: undefined }
