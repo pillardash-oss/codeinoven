@@ -12,8 +12,10 @@ import { loadBrowser } from '$lib/stores/browser-access.svelte'
 import { layoutPanelState } from '$lib/stores/layout-panel.svelte'
 import { keymapState } from '$lib/keymap/keymap-state.svelte'
 import { installBrowserShortcutPublishing } from '$lib/keymap/browser-shortcuts'
-import { publishScreenshotShortcut } from '$lib/keymap/screenshot-shortcut'
-import { installScreenshotCapture } from '$lib/screenshot/screenshot-capture'
+import {
+  installScreenshotCapture,
+  setScreenshotShortcutKeys
+} from '$lib/screenshot/screenshot-capture'
 import { visionModels } from '$lib/stores/vision-models.svelte'
 import { standaloneFiles } from '$lib/stores/standalone-files.svelte'
 import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
@@ -75,7 +77,7 @@ export class AppEffects extends BoardUnit<App> {
      * which republishes it when the config loads and when the user rebinds it.
      */
     $effect(() => {
-      publishScreenshotShortcut(keymapState.keysFor('screenshot-region'))
+      setScreenshotShortcutKeys(keymapState.keysFor('screenshot-region'))
     })
 
     /**
