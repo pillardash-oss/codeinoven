@@ -16,6 +16,7 @@ import type {
   WorkerFtsResult,
   WorkerHealthResult,
   WorkerIntegrityResult,
+  WorkerLane,
   WorkerRecoverResult,
   WorkerRestoreResult,
   WorkerRetentionResult,
@@ -331,7 +332,7 @@ export class Database {
     sql: string,
     params: unknown[],
     maxRows: number,
-    options: { allowPrimaryFallback?: boolean; deadlineMs?: number } = {}
+    options: { allowPrimaryFallback?: boolean; deadlineMs?: number; lane?: WorkerLane } = {}
   ): Promise<{
     ok: boolean
     rows: Record<string, unknown>[]

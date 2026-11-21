@@ -2,10 +2,20 @@
  * Device readings for the admission policy.
  *
  * The sampler is a background service, so it follows the app's rule for one: it
- * only runs while somebody is asking. The first read primes a short CPU delta and
- * starts a one second loop that fills a five sample window, and thirty seconds
- * after the last read the loop stops and everything it held is dropped. No
- * consumer, no timer.
+ * only runs while somebody is asking. A read takes a CPU delta from the last
+ * snapshot the sampler holds and answers from a five sample window without
+ * waiting for anything; the one second loop keeps that window fresh while a
+ * consumer is asking, and stops thirty seconds after the last read. No consumer,
+ * no timer.
+ *
+ * The window and the last snapshot survive the stop. A delta measured across the
+ * idle gap answers the same question (is there room right now) and is if
+ * anything the longer average, so the first read after a pause answers from what
+ * the sampler already knew instead of paying for a warm-up. Only the very first
+ * read after the process starts has no snapshot to subtract, and it answers
+ * immediately while that one delta is taken in the background: this read is on
+ * the click path, so it may never hold a message and may never report an
+ * unanswered reading as a machine that is short.
  *
  * CPU comes from `os.cpus()` deltas rather than a load average, because a load
  * average is a minute of history and the question here is "is there room right
@@ -23,16 +33,21 @@ import { app } from 'electron'
 import { decideAdmission, type AdmissionDecision } from '../../lib/resource-admission'
 import { Logger } from './logger'
 
-/** How long the first read waits before it has one CPU delta to average. */
-const PRIME_WINDOW_MS = 250
+/**
+ * How long the first read's background delta takes before the window has one
+ * CPU reading behind it. Nothing waits on it: the read that starts it answers
+ * immediately, and the window it fills is what later reads average.
+ */
+export const PRIME_WINDOW_MS = 250
 /** How often the armed sampler takes a CPU reading. */
 const SAMPLE_INTERVAL_MS = 1_000
 /** How many readings the window averages over, which is the five second span. */
 const WINDOW_SAMPLES = 5
 /** How long an armed sampler stays alive after the last read. */
-const IDLE_DISARM_MS = 30_000
+export const IDLE_DISARM_MS = 30_000
 
-interface CpuSnapshot {
+/** CPU times since boot, in the ticks `os.cpus()` reports. */
+export interface CpuSnapshot {
   idle: number
   total: number
 }
@@ -207,46 +222,103 @@ function forcedDecision(): AdmissionDecision | null {
   })
 }
 
-class ResourcePressureSampler {
+/**
+ * The device readings a sampler works from.
+ *
+ * One small interface rather than three module imports, so a test can script a
+ * machine (and its clock) instead of reading the one it runs on. The singleton
+ * below is the real device.
+ */
+export interface DeviceReadings {
+  /** CPU times since boot, for the delta between two reads. */
+  cpu: () => CpuSnapshot
+  /** Bytes new work can use, which the platform reports asynchronously. */
+  memoryAvailableBytes: () => Promise<number>
+  /** Total physical memory, so the floor can scale with the machine. */
+  totalMemoryBytes: () => number
+}
+
+/** The machine the app is running on. */
+const deviceReadings: DeviceReadings = {
+  cpu: cpuSnapshot,
+  memoryAvailableBytes: () => availableMemoryBytes(),
+  totalMemoryBytes
+}
+
+export class ResourcePressureSampler {
+  #readings: DeviceReadings
   #previous: CpuSnapshot | null = null
   #window: number[] = []
   #ticker: NodeJS.Timeout | null = null
   #idleTimer: NodeJS.Timeout | null = null
-  #priming: Promise<void> | null = null
+  #primeTimer: NodeJS.Timeout | null = null
 
-  /** Read the device. Arms the sampler, and answers from the current window. */
+  constructor(readings: DeviceReadings = deviceReadings) {
+    this.#readings = readings
+  }
+
+  /** Read the device. Arms the sampler, and answers without waiting for it. */
   async read(): Promise<AdmissionDecision> {
     const forced = forcedDecision()
     if (forced !== null) return forced
-    if (this.#window.length === 0) await this.#prime()
+    const cpuAvailablePercent = this.#refreshCpu()
     this.#armIdleDisarm()
     return decideAdmission({
-      cpuAvailablePercent: this.#averageIdlePercent(),
-      memoryAvailableBytes: await availableMemoryBytes(),
-      totalMemoryBytes: totalMemoryBytes()
+      cpuAvailablePercent,
+      memoryAvailableBytes: await this.#readings.memoryAvailableBytes(),
+      totalMemoryBytes: this.#readings.totalMemoryBytes()
     })
   }
 
-  #averageIdlePercent(): number {
-    if (this.#window.length === 0) return 100
+  /**
+   * The idle share now, from the delta against the last snapshot held.
+   *
+   * Zero means "nothing is known to be idle", never "the machine is short".
+   * The policy maps a busy CPU to `offload`, which starts the work on a process
+   * of its own rather than holding the message, so an unanswered CPU reading can
+   * only ever cost a small extra process and never the user's turn. That is why
+   * the first read after the process starts answers 0 and takes its delta to
+   * fill the window in the background: this read answers the send click, and an
+   * unanswered first reading must never be reported as a machine with no room
+   * and must never hold work. Memory comes back real in that same answer, and a
+   * genuine memory shortage may still hold the message, because that number is
+   * read and not unknown.
+   */
+  #refreshCpu(): number {
+    const next = this.#readings.cpu()
+    const previous = this.#previous
+    this.#previous = next
+    if (previous === null) {
+      this.#prime()
+      return 0
+    }
+    this.#push(idlePercent(previous, next))
+    this.#startTicker()
+    return this.#averageIdlePercent() ?? 0
+  }
+
+  #averageIdlePercent(): number | null {
+    if (this.#window.length === 0) return null
     let sum = 0
     for (const value of this.#window) sum += value
     return sum / this.#window.length
   }
 
-  /** One short delta so the first answer has a reading behind it. */
-  #prime(): Promise<void> {
-    this.#priming ??= (async () => {
-      const previous = cpuSnapshot()
-      await new Promise((resolve) => setTimeout(resolve, PRIME_WINDOW_MS))
-      const next = cpuSnapshot()
-      this.#push(idlePercent(previous, next))
-      this.#previous = next
+  /**
+   * The one short delta the first answer could not wait for.
+   *
+   * It runs off the caller's path: the read that starts it has already answered,
+   * and the window it fills is what later reads average. It is unref'd, like the
+   * loop it starts, so a pending prime never keeps the process alive.
+   */
+  #prime(): void {
+    if (this.#primeTimer) return
+    this.#primeTimer = setTimeout(() => {
+      this.#primeTimer = null
+      this.#sample()
       this.#startTicker()
-    })().finally(() => {
-      this.#priming = null
-    })
-    return this.#priming
+    }, PRIME_WINDOW_MS)
+    this.#primeTimer.unref()
   }
 
   #startTicker(): void {
@@ -255,8 +327,9 @@ class ResourcePressureSampler {
     this.#ticker.unref()
   }
 
+  /** One reading into the window, from the snapshot taken last. */
   #sample(): void {
-    const next = cpuSnapshot()
+    const next = this.#readings.cpu()
     if (this.#previous) this.#push(idlePercent(this.#previous, next))
     this.#previous = next
   }
@@ -273,15 +346,22 @@ class ResourcePressureSampler {
     this.#idleTimer.unref()
   }
 
-  /** No reads for a while: stop the loop and drop every reading it held. */
+  /**
+   * No reads for a while: stop the loop, and keep what it learned.
+   *
+   * Dropping the snapshot and the window was what made the first send after a
+   * pause pay for a fresh warm-up. They stay instead: a delta taken across the
+   * idle gap is a legitimate reading of the same question, and the next read
+   * measures it without sleeping. Only the timers stop, which is all "no
+   * consumer, no timer" ever meant.
+   */
   #disarm(): void {
     if (this.#ticker) clearInterval(this.#ticker)
     if (this.#idleTimer) clearTimeout(this.#idleTimer)
+    if (this.#primeTimer) clearTimeout(this.#primeTimer)
     this.#ticker = null
     this.#idleTimer = null
-    this.#previous = null
-    this.#window = []
-    this.#priming = null
+    this.#primeTimer = null
   }
 }
 

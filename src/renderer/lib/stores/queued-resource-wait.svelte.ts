@@ -153,26 +153,9 @@ class QueuedResourceWait {
 }
 
 /**
- * The reading that should hold a new turn on this thread, or null when the
- * turn may start. The gate answers for whichever machine will run it: this
- * device for a local thread, the named Oven for an Oven thread. A reading that
- * cannot be taken fails open: an unreachable sampler must never stop the
- * user's work.
+ * The send gate's reader, kept here so every existing import path still works.
+ * The reading itself lives in a plain module: it is a cache, not reactive state.
  */
-export async function readThreadHold(
-  projectId: string,
-  threadId: string
-): Promise<ThreadResourceGateAnswer | null> {
-  try {
-    const answer = await invoke('system:threadResourceGate', projectId, threadId)
-    // Null means "may send". The gate answers for every thread, so returning the
-    // answer itself would read as a hold for a perfectly idle machine, and every
-    // send would park instead of leaving: a message that slides up the screen and
-    // never arrives.
-    return answer.wait === null ? null : answer
-  } catch {
-    return null
-  }
-}
+export { readThreadHold, warmThreadHold } from './thread-hold-reading'
 
 export const queuedResourceWait = new QueuedResourceWait()

@@ -169,4 +169,58 @@ describe('queuedResourceWait', () => {
     expect(answer?.wait?.action).toBe('queue')
     expect(answer?.target).toEqual({ kind: 'oven', ovenId: 'o1', name: 'Az' })
   })
+
+  it('answers a send that follows a recent read without asking again', async () => {
+    // The gate sits between the click and the message appearing. A reading a few
+    // seconds old is the same answer (the device sample is a five second
+    // average), so a send that follows typing must not start a round-trip it
+    // already has the answer to.
+    const { readThreadHold } = await loadStore()
+    invoke.mockResolvedValue(gate(null))
+    await readThreadHold('p', 't')
+    await readThreadHold('p', 't')
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks the gate again once the reading is older than its window', async () => {
+    const { readThreadHold } = await loadStore()
+    invoke.mockResolvedValue(gate(null))
+    await readThreadHold('p', 't')
+    await vi.advanceTimersByTimeAsync(9_000)
+    await readThreadHold('p', 't')
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
+
+  it('asks the gate once for two reads in the same tick', async () => {
+    const { readThreadHold } = await loadStore()
+    let release: (answer: ThreadResourceGateAnswer) => void = () => undefined
+    invoke.mockImplementation(
+      () => new Promise<ThreadResourceGateAnswer>((resolve) => (release = resolve))
+    )
+    const first = readThreadHold('p', 't')
+    const second = readThreadHold('p', 't')
+    release(gate(null))
+    await expect(first).resolves.toBeNull()
+    await expect(second).resolves.toBeNull()
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('warmed on open, a thread answers its own send from memory', async () => {
+    const { readThreadHold, warmThreadHold } = await loadStore()
+    invoke.mockResolvedValue(gate(null))
+    warmThreadHold('p', 't')
+    await Promise.resolve()
+    await expect(readThreadHold('p', 't')).resolves.toBeNull()
+    expect(invoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not remember a failed read, so the next send asks again', async () => {
+    const { readThreadHold } = await loadStore()
+    invoke.mockRejectedValueOnce(new Error('ipc down'))
+    await expect(readThreadHold('p', 't')).resolves.toBeNull()
+    invoke.mockResolvedValue(gate(decision('queue')))
+    const answer = await readThreadHold('p', 't')
+    expect(answer?.wait?.action).toBe('queue')
+    expect(invoke).toHaveBeenCalledTimes(2)
+  })
 })

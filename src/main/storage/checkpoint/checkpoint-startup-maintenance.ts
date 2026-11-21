@@ -20,14 +20,25 @@ import { Logger } from '../../system/logger'
  *
  * - restart recovery finds turns still marked active;
  * - a finishing turn finds the files other threads in its project completed
- *   since it started.
+ *   since it started;
+ * - the historical-map trim (launch, and every thirty minutes after) finds the
+ *   over-sized rows of finished turns, whose candidate predicate is exactly
+ *   `length(data)` plus the row's age, which no table scan can avoid: the trim
+ *   read every checkpoint on every pass (107 MB and ~1 s on a real install,
+ *   once 32.9 s) and every interactive read queued behind it. The index answers
+ *   that query from 264 KB of sorted keys instead, and the same columns make it
+ *   covering, so the pass touches no checkpoint row at all until it has a
+ *   candidate.
  */
 const CHECKPOINT_INDEXES = [
   `CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_active_created
      ON turn_checkpoints(json_extract(data, '$.createdAt'))
      WHERE json_extract(data, '$.status') = 'active'`,
   `CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_project_completed
-     ON turn_checkpoints(project_id, json_extract(data, '$.completedAt'))`
+     ON turn_checkpoints(project_id, json_extract(data, '$.completedAt'))`,
+  `CREATE INDEX IF NOT EXISTS idx_turn_checkpoints_trim_candidates
+     ON turn_checkpoints(length(data), created_at, turn_id, project_id, thread_id)
+     WHERE json_extract(data, '$.status') != 'active'`
 ] as const
 
 /**

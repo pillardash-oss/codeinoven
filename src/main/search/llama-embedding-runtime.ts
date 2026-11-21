@@ -263,10 +263,11 @@ export class LlamaEmbeddingRuntime implements EmbeddingRuntime {
         '0',
         '--prio',
         '-1',
-        '--poll',
-        '0',
-        '--poll-batch',
-        '0',
+        // No `--poll` argument on purpose. A zero poll interval replaces
+        // llama.cpp's wait between dequeue attempts with a spin, so an idle
+        // embedding server held a whole core (measured: 5.76 s of CPU in 6 s of
+        // wall clock while serving nothing). Without the flag the runtime keeps
+        // its own default wait, so an idle embedding server costs no CPU.
         '--threads',
         '1',
         '--threads-batch',

@@ -67,7 +67,13 @@ export const invokeThreadContract = {
     ],
     Checklist | null
   >,
-  'checkpoint:list': {} as Contract<[projectId: string, threadId: string], TurnCheckpointSummary[]>,
+  // `limit` is the newest window of checkpoints to read, not a page: a card is
+  // drawn only for a checkpoint anchored to a message the transcript holds, so a
+  // caller can only use the newest window and the main process clamps it.
+  'checkpoint:list': {} as Contract<
+    [projectId: string, threadId: string, limit?: number],
+    TurnCheckpointSummary[]
+  >,
   'checkpoint:activeSummary': {} as Contract<
     [projectId: string, threadId: string],
     TurnCheckpointSummary | null

@@ -9,6 +9,7 @@ import { scheduleDeferredWork } from '$lib/deferred-work'
 import { THREAD_MESSAGE_PRELOAD_WINDOW, threadMessages } from '$lib/stores/thread-messages.svelte'
 import { threadHoldsOpenTrace } from '$lib/stores/thread-preload'
 import { conversationAttention } from '$lib/stores/conversation-attention.svelte'
+import { warmThreadHold } from '$lib/stores/queued-resource-wait.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
 import type {
   AgentMessage,
@@ -1040,6 +1041,11 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
       this.root.studioTemporaryChatContext.seedContextUsageSnapshot(threadData?.contextUsage)
       this.root.steerQueuedMessage.restoreQueuedMessage()
       this.root.composerScope.restoreResponseReferences()
+      // The reader is now in the thread and the next thing they may do is type
+      // and send. Read the device gate off the open path so that send finds an
+      // answer instead of paying the round-trip between the click and the
+      // message appearing.
+      warmThreadHold(projectId, id)
     } catch {
       // A single transient failure must not silently drop the settings, mirror,
       // and status restore   retry once, then degrade gracefully. Anything the

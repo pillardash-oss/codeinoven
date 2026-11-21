@@ -7,6 +7,7 @@ import {
   type ProviderDeltaSyncResult
 } from '../repositories/agent-message-repo'
 import { raceWorkerQuery, runLocalBoundedQuery } from './database-sql-fallbacks'
+import type { WorkerLane } from '../database-worker'
 
 /** Everything a worker-backed read needs from the database it belongs to. */
 export interface DatabaseQueriesHost {
@@ -50,12 +51,16 @@ export class DatabaseQueries {
    * with what it already has. A deadline never falls back to the primary
    * connection, because answering "slowly" on the main thread is exactly the
    * freeze the deadline exists to prevent.
+   *
+   * `lane` is the queue the read joins. A whole-project maintenance scan names
+   * itself `background` so it runs only while nothing interactive is waiting;
+   * everything a person can cause stays on the default interactive lane.
    */
   async queryViaWorker(
     sql: string,
     params: unknown[],
     maxRows: number,
-    options: { allowPrimaryFallback?: boolean; deadlineMs?: number } = {}
+    options: { allowPrimaryFallback?: boolean; deadlineMs?: number; lane?: WorkerLane } = {}
   ): Promise<{
     ok: boolean
     rows: Record<string, unknown>[]
@@ -65,7 +70,10 @@ export class DatabaseQueries {
   }> {
     const worker = this.host.getWorker()
     if (worker?.isRunning()) {
-      const response = await raceWorkerQuery(worker.query(sql, params, maxRows), options.deadlineMs)
+      const response = await raceWorkerQuery(
+        worker.query(sql, params, maxRows, options.lane),
+        options.deadlineMs
+      )
       if (response === null)
         return {
           ok: false,
