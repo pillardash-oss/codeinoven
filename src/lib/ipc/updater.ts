@@ -18,6 +18,12 @@ export interface UpdaterStatus {
    * stays installable by hand.
    */
   blockedReason?: string
+  /**
+   * Set on an install error whose verified payload is still cached, so the
+   * update can be installed again without downloading it. The rail turns this
+   * into a retry instead of a dead end that only opens About.
+   */
+  installRetryable?: boolean
 }
 
 /** Release notes of the newest published release for the configured channel. */

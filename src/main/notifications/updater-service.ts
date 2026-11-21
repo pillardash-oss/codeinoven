@@ -321,7 +321,8 @@ export class UpdaterService {
       this.updateState({
         state: 'available',
         availableVersion: info.version,
-        blockedReason: undefined
+        blockedReason: undefined,
+        installRetryable: undefined
       })
       void this.handleAutoDownload()
     })
@@ -349,7 +350,9 @@ export class UpdaterService {
       this.updateState({
         state: 'downloaded',
         availableVersion: info.version,
-        downloadProgress: 100
+        downloadProgress: 100,
+        errorMessage: undefined,
+        installRetryable: undefined
       })
       void this.handleAutoInstall()
     })
@@ -371,6 +374,11 @@ export class UpdaterService {
       // reveal it: macOS ShipIt, the NSIS installer, and the AppImage runtime
       // all fail silently from our side.
       const failedDispatch = this.installDispatched
+      // Read before the failure is recorded, because recording it counts the
+      // attempt: a payload stays retryable only while that count is under the
+      // limit, since the final attempt sweeps it off the disk.
+      const payloadKept =
+        cancelledLocalTransfer || this.installPayloadSurvivesFailure(this._status.availableVersion)
       if (failedDispatch) {
         this.installDispatched = false
         this.clearInstallQuitWatchdog()
@@ -397,7 +405,8 @@ export class UpdaterService {
           state: 'error',
           errorMessage: cancelledLocalTransfer
             ? 'The update is downloaded and verified, but macOS kept cancelling the hand-off to its installer. Nothing needs downloading again: choose Install to retry from the cached update.'
-            : `The update could not be installed: ${error.message}`
+            : `The update could not be installed: ${error.message}`,
+          installRetryable: payloadKept
         })
         return
       }
@@ -1097,6 +1106,27 @@ export class UpdaterService {
   }
 
   /**
+   * Install again after an install failure whose verified payload is still
+   * cached, the same way a `downloaded` update installs.
+   *
+   * Only the states that advertise `installRetryable` are retried. A check or
+   * download failure has nothing on disk to hand over, and a version that used
+   * up its attempts had its payload swept, so both stay on the error they
+   * already report instead of pretending an install can start.
+   */
+  retryInstall(): void {
+    if (this._status.state === 'error' && this._status.installRetryable) {
+      this.updateState({
+        state: 'downloaded',
+        downloadProgress: 100,
+        errorMessage: undefined,
+        installRetryable: undefined
+      })
+    }
+    this.quitAndInstall()
+  }
+
+  /**
    * Install once all sessions are idle   the safe, non-forced install path.
    * Keeps waiting (polling) until every activity source reports idle, then
    * installs exactly once. There is no timeout and no forced quit.
@@ -1219,6 +1249,19 @@ export class UpdaterService {
     } catch (error: unknown) {
       Logger.error('Updater: failed to reconcile the previous install', error)
     }
+  }
+
+  /**
+   * Whether the verified payload would survive one more failed install.
+   *
+   * The attempt that reaches the limit sweeps the staging and clears the cached
+   * release record, so only a failure under that limit leaves something the
+   * user can install again without downloading it.
+   */
+  private installPayloadSurvivesFailure(version: string | undefined): boolean {
+    if (!version) return false
+    const record = nextFailureState(this.installFailure, version, Date.now())
+    return record.attempts < INSTALL_ATTEMPT_LIMIT
   }
 
   /**
@@ -1363,7 +1406,11 @@ export class UpdaterService {
       // Both kinds count as running downloads on the rail: they are transfers
       // whose bytes are still arriving, and the rail names the number, not the
       // surface that started them.
-      this.broadcastWaitingForWork(threadCount, downloads.length + localAiDownloads.length, speechCount)
+      this.broadcastWaitingForWork(
+        threadCount,
+        downloads.length + localAiDownloads.length,
+        speechCount
+      )
 
       this.clearDeferredInstall()
       this.deferredInstallPoll = setInterval(() => {
@@ -1548,10 +1595,14 @@ export class UpdaterService {
       this.installDispatched = false
       Logger.error(`Updater: install of ${version ?? 'the update'} did not restart the app`)
       this.updateQuitHooks?.end()
+      // Read before recording the failure, which counts the attempt and may
+      // sweep the payload on the final one.
+      const payloadKept = this.installPayloadSurvivesFailure(version)
       void this.recordInstallFailure(version)
       this.updateState({
         state: 'error',
-        errorMessage: `The update to ${version ?? 'the latest version'} did not install. Try again, or download it from the releases page.`
+        errorMessage: `The update to ${version ?? 'the latest version'} did not install. Try again, or download it from the releases page.`,
+        installRetryable: payloadKept
       })
     }, INSTALL_QUIT_WATCHDOG_MS)
     // Never keep the process alive just for this bound.

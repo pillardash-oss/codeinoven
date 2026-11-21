@@ -1675,8 +1675,18 @@
             </div>
           {:else if updaterState.status.state === 'error'}
             <div class="mb-3 flex items-center gap-2 text-xs text-danger">
-              <CioAlertCircle size={13} />
+              <CioAlertCircle size={13} class="shrink-0" />
               <span>{updaterState.status.errorMessage ?? 'Update check failed'}</span>
+              {#if updaterState.status.installRetryable}
+                <button
+                  type="button"
+                  class="shrink-0 whitespace-nowrap border border-danger/40 px-2 py-1 font-medium text-danger transition-colors hover:bg-danger/10"
+                  title="Install the cached update again without downloading it"
+                  onclick={() => void updaterState.installUpdate()}
+                >
+                  Retry install
+                </button>
+              {/if}
             </div>
           {:else if updaterState.status.state === 'idle' && updaterState.status.canAutoUpdate}
             <div class="mb-3 flex items-center gap-2 text-xs text-dimmed">

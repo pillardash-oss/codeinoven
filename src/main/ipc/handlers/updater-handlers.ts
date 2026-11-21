@@ -17,7 +17,7 @@ export function registerUpdaterHandlers(ctx: Pick<IpcHandlerContext, 'updaterSer
 
     ipcMain.handle('updater:download', () => updaterService.downloadUpdate())
 
-    ipcMain.handle('updater:install', () => updaterService.quitAndInstall())
+    ipcMain.handle('updater:install', () => updaterService.retryInstall())
 
     ipcMain.handle('updater:blockers', () => updaterService.blockers())
 
