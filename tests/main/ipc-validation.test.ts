@@ -396,6 +396,33 @@ describe('privileged-IPC sender validation', () => {
     )
   })
 
+  it('accepts a trusted document that carries a fragment', () => {
+    const validator = createValidator({
+      navigationTargets: ['http://localhost:5173', 'file:///app/out/renderer/index.html']
+    })
+    // A hash is a same-document navigation: the frame is still the app's own
+    // document, and refusing it made the whole window unusable.
+    expect(
+      validator.isTrustedSenderFrame({ url: 'file:///app/out/renderer/index.html#step-2' })
+    ).toBe(true)
+    expect(validator.isTrustedSenderFrame({ url: 'http://localhost:5173/#/settings' })).toBe(true)
+  })
+
+  it('still rejects a subframe and a foreign document that carries a fragment', () => {
+    const validator = createValidator({
+      navigationTargets: ['file:///app/out/renderer/index.html']
+    })
+    expect(
+      validator.isTrustedSenderFrame({
+        url: 'file:///app/out/renderer/index.html#step-2',
+        parent: { url: 'file:///app/out/renderer/index.html' }
+      })
+    ).toBe(false)
+    expect(validator.isTrustedSenderFrame({ url: 'file:///app/out/renderer/other.html#x' })).toBe(
+      false
+    )
+  })
+
   it('rejects subframes even when their document is trusted', () => {
     const validator = createValidator({ navigationTargets: ['http://localhost:5173'] })
     const main = { url: 'http://localhost:5173/' }
