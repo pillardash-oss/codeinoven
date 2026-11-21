@@ -55,6 +55,7 @@ import {
   type PiCioFilesStorage
 } from './pi/pi-driver-cio-files'
 import { PiRpcSessions, type PiRpcLaunch } from './pi/pi-driver-rpc'
+import { piHostSupervisor } from '../agents/pi-host-runtime'
 import { PiHostClient } from './pi/pi-host-client'
 import { PiTurnLifecycle } from './pi/pi-driver-turns'
 
@@ -275,6 +276,9 @@ export class PiDriver extends PersistentCliDriver {
         this.normalizeInteractionEvents(sessionId, events),
       clearUsageThrottle: (sessionId) => this.usage.endTurn(sessionId),
       markCompactionReady: (sessionId) => this.rpcSessions.markCompactionReady(sessionId),
+      // Residency is the host's business, so the supervisor is told what a turn
+      // is doing: its row reports working threads, not the ones it keeps warm.
+      noteTurnBusy: (sessionId, busy) => piHostSupervisor().noteSessionBusy(sessionId, busy),
       handleUsageStatus: (record, sessionId) => this.usage.handleUsageStatus(record, sessionId),
       handleSubagentStreamStatus: (record, sessionId) =>
         this.subagentStreams.handleSubagentStreamStatus(record, sessionId)

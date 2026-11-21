@@ -636,6 +636,48 @@ class ThreadMessagesStore {
     })
   }
 
+  /**
+   * Put a composer send on screen before the checks that decide where it goes.
+   *
+   * The composer empties on submit, and the gate reading, the Engineering stage
+   * lookups and the session binding that follow are all IPC. Without this the
+   * words leave the composer and reach the transcript a round-trip later, which
+   * reads as the message vanishing. The row is marked as owned by the send, so
+   * `send` rewrites it in place (annotated attachments included) instead of
+   * reusing it as-is; `unstage` takes it back when the send is parked instead.
+   */
+  stage(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    text: string,
+    attachments: PromptAttachment[],
+    promptReferences?: PromptReference[],
+    projectReferences?: PromptProjectReference[],
+    presentation?: UserMessagePresentation
+  ): void {
+    this.appendOptimistic(
+      projectId,
+      threadId,
+      text,
+      attachments,
+      messageId,
+      promptReferences,
+      projectReferences,
+      presentation
+    )
+    this.#editedMessageIds.add(messageId)
+  }
+
+  /** Remove a staged row whose send never left (parked, refused or failed early). */
+  unstage(projectId: string, threadId: string, messageId: string): void {
+    this.#editedMessageIds.delete(messageId)
+    const entry = this.cache.entry(projectId, threadId)
+    if (!entry.messages.some((message) => message.id === messageId)) return
+    entry.messages = entry.messages.filter((message) => message.id !== messageId)
+    this.cache.notify(projectId, threadId)
+  }
+
   private confirmOptimistic(
     projectId: string,
     threadId: string,

@@ -171,10 +171,29 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
    *  ("click and go") instead of lingering and blocking the composer. Runs in
    *  the capture phase so it fires before focus settles into the editor. */
   handleComposerPointerDown(event: Event): void {
-    const target = event.target
-    if (!(target instanceof Element)) return
-    if (!target.closest('[data-onboarding="composer"]')) return
+    if (!this.eventCameFromComposer(event)) return
     this.sidebar.closeAllSearches()
+  }
+
+  /**
+   * Typing in the composer dismisses an open sidebar search just like clicking
+   * into it does. A composer that already owned the focus never gets the
+   * pointerdown above, so a search opened from the sidebar used to sit there
+   * over the list while the user typed a message. `beforeinput` covers every
+   * way text reaches the editor (typing, paste, deleting) and only fires for
+   * real edits, so keyboard shortcuts that happen to land in the composer leave
+   * the search alone.
+   */
+  handleComposerTyping(event: Event): void {
+    if (!this.eventCameFromComposer(event)) return
+    this.sidebar.closeAllSearches()
+  }
+
+  /** Whether a DOM event originated inside the chat composer. */
+  private eventCameFromComposer(event: Event): boolean {
+    const target = event.target
+    if (!(target instanceof Element)) return false
+    return target.closest('[data-onboarding="composer"]') !== null
   }
 
   // ─── Context dock (right rail) ───────────────────────────────────────────

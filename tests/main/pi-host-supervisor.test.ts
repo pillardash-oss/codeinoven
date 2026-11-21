@@ -140,6 +140,39 @@ describe('PiHostSupervisor', () => {
   })
 
   /**
+   * A host's row counts the turns in flight, not the sessions it keeps warm.
+   *
+   * A finished session stays on its host so the next prompt on that thread is
+   * instant, so the two numbers differ for as long as a thread sits idle after
+   * its turn. The row reports the one that answers what the process is doing.
+   */
+  it('counts the turns in flight rather than the sessions it keeps', async () => {
+    const { supervisor } = harness()
+    for (const sessionId of ['atlas', 'ledger']) {
+      await supervisor.createSession({
+        sessionId,
+        command: { type: 'create_session', cwd: `/work/${sessionId}`, agentDir: '/agent' }
+      })
+    }
+    expect(supervisor.sessionsOn(500)).toBe(2)
+    expect(supervisor.busyOn(500)).toBe(0)
+
+    const changes: number[] = []
+    supervisor.onHostsChanged(() => changes.push(supervisor.busyOn(500)))
+    supervisor.noteSessionBusy('atlas', true)
+    expect(supervisor.busyOn(500)).toBe(1)
+    // Repeating a state it already reported is not a change.
+    const published = changes.length
+    supervisor.noteSessionBusy('atlas', true)
+    expect(changes.length).toBe(published)
+
+    // A session that leaves its host cannot still be working on it.
+    await supervisor.disposeSession('atlas')
+    expect(supervisor.busyOn(500)).toBe(0)
+    expect(changes).toContain(0)
+  })
+
+  /**
    * Where a session runs is part of what a host's row says, so every change of
    * that mapping has to be published.
    *

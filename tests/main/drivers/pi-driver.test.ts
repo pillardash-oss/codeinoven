@@ -4,6 +4,7 @@ import { join } from 'path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
 import { PiDriver, mapPiRecord } from '../../../src/main/drivers/pi-driver'
+import { piHostSupervisor } from '../../../src/main/agents/pi-host-runtime'
 import {
   PI_STATUS_EXTENSION_KEY,
   PI_STATUS_IDLE,
@@ -669,6 +670,23 @@ describe('PiDriver', () => {
       { type: 'session.status', holdsTurn: true },
       { type: 'session.idle', holdsTurn: false }
     ])
+  })
+
+  it('reports a turn starting and settling to the host, so its row counts work', async () => {
+    // The task manager's host row counts threads that are working, not sessions
+    // it keeps warm for an instant follow-up. The driver owns what a turn is, so
+    // it is the one that has to say when one starts and when one settles.
+    const note = vi.spyOn(piHostSupervisor(), 'noteSessionBusy')
+    const driver = new PiDriver(await storage())
+    const sessionId = await driver.createSession(projectPath(), 'Pi')
+    await driver.sendPrompt(projectPath(), { sessionId, settings, text: 'go', attachments: [] })
+    expect(note).toHaveBeenCalledWith(sessionId, true)
+
+    const client = rpcMock.client
+    expect(client).toBeDefined()
+    client.emit({ type: 'agent_settled' })
+    await vi.waitFor(() => expect(note).toHaveBeenCalledWith(sessionId, false))
+    note.mockRestore()
   })
 
   it('answers idle when the session has no live client, even if the registration survived', async () => {

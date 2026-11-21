@@ -670,10 +670,58 @@ describe('UpdaterService macOS local transfer', () => {
     expect(nativeAutoUpdater.checkForUpdates).toHaveBeenCalledTimes(delays.length)
     expect(service.status.state).toBe('error')
     expect(service.status.errorMessage).toContain('choose Install to retry')
+    expect(service.status.installRetryable).toBe(true)
     // No build was installed or rejected, so this must not count against the
     // version's attempt limit   the cached update stays installable.
     expect(storage.files.get('updater/install-failure.json')).toBeUndefined()
     expect(storage.files.get('updater/install-dispatch.json')).toBeUndefined()
+  })
+
+  it('retries the cached install after every hand-off was cancelled', async () => {
+    const { service } = await dispatchInstall()
+
+    const delays = [1_000, 2_000, 4_000, 8_000, 15_000, 30_000, 30_000]
+    for (const delay of delays) {
+      autoUpdater.emit('error', cancelledTransfer())
+      await flush()
+      await vi.advanceTimersByTimeAsync(delay)
+    }
+    autoUpdater.emit('error', cancelledTransfer())
+    await flush()
+    expect(service.status.state).toBe('error')
+    expect(service.status.installRetryable).toBe(true)
+
+    autoUpdater.quitAndInstall.mockClear()
+    service.retryInstall()
+    await flush()
+
+    // The retry goes through the same gate as a downloaded update, handing the
+    // cached payload to the installer again instead of opening About.
+    expect(autoUpdater.quitAndInstall).toHaveBeenCalledTimes(1)
+    expect(service.status.state).toBe('idle')
+    expect(service.status.installRetryable).toBeUndefined()
+  })
+
+  it('does not retry an error that has nothing cached to install', async () => {
+    const config = defaultConfig()
+    config.autoDownloadUpdates = false
+    const storage = makeStorage({ getConfig: vi.fn(async () => config) })
+    const service = new UpdaterService(storage)
+    service.setChatEngine(makeChatEngine(() => 0))
+
+    autoUpdater.emit('update-available', { version: '9.9.9', files: [] })
+    await flush()
+    autoUpdater.emit('error', new Error('the update server is unreachable'))
+    await flush()
+    expect(service.status.state).toBe('error')
+    expect(service.status.installRetryable).toBeUndefined()
+
+    autoUpdater.quitAndInstall.mockClear()
+    service.retryInstall()
+    await flush()
+
+    expect(autoUpdater.quitAndInstall).not.toHaveBeenCalled()
+    expect(service.status.state).toBe('error')
   })
 
   it('treats a real installer failure as final instead of retrying it', async () => {

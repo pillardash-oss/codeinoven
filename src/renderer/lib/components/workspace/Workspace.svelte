@@ -696,7 +696,10 @@
   }
 </script>
 
-<svelte:document onpointerdowncapture={board.switcherPanelTabs.handleComposerPointerDown} />
+<svelte:document
+  onpointerdowncapture={board.switcherPanelTabs.handleComposerPointerDown}
+  onbeforeinputcapture={board.switcherPanelTabs.handleComposerTyping}
+/>
 
 <div class="flex h-full">
   <!-- Shared board.switcherPanelTabs.sidebar   Projects/Chats/Threads use WorkspaceSidebar; Assistant has its own.

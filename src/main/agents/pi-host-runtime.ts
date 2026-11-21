@@ -65,9 +65,10 @@ export function stopPiHost(): void {
  * host reports none yet, and a row registered then would carry pid 0 and show
  * no CPU or memory for as long as it lived.
  *
- * The detail is written from the live session map, so it is only correct for the
- * moment it is written: this runs again every time a session lands on a host or
- * leaves it, which is what keeps a running host from claiming it carries none.
+ * The detail is written from the live host state, so it is only correct for the
+ * moment it is written: this runs again every time a session lands on a host,
+ * leaves it, or starts and finishes a turn. That is what keeps a running host
+ * from claiming it carries none, or from looking busy after its work is done.
  */
 function syncHostServices(host: PiHostSupervisor): void {
   const live = host.pids()
@@ -78,9 +79,14 @@ function syncHostServices(host: PiHostSupervisor): void {
     hostServiceIds.delete(pid)
   }
   named.forEach((pid, index) => {
-    const hosted = host.sessionsOn(pid)
+    // Working threads, not resident ones: a session stays on its host after its
+    // turn ends so the next prompt is instant, and counting those made a host
+    // with nothing to do read as if it were still carrying three threads.
+    const working = host.busyOn(pid)
     const carrying =
-      hosted === 0 ? 'No hosted threads' : `${hosted} hosted thread${hosted === 1 ? '' : 's'}`
+      working === 0
+        ? 'No hosted threads'
+        : `${working} hosted thread${working === 1 ? '' : 's'} working`
     const detail =
       named.length === 1 ? carrying : `Pi host ${index + 1} of ${named.length}, ${carrying}`
     hostServiceIds.set(

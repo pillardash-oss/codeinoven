@@ -133,34 +133,44 @@ describe('Pi host service rows', () => {
   })
 
   /**
-   * The row's count is what a host is carrying right now.
+   * The row counts threads that are working, and that count moves both ways.
    *
-   * The row is written when the process appears, which is before the first
-   * session has landed on it, so a count written only then stays at the value
-   * from the host's first instant   zero   for the rest of its life. A host
-   * running the open thread was listed as carrying none for exactly that
-   * reason.
+   * A host keeps a finished session resident so the next prompt on that thread is
+   * instant, so "sessions this process holds" is not the number the row should
+   * show: it read as work that had already finished. The row is also written when
+   * the process appears   before any session has landed   and nothing used to
+   * rewrite it afterwards, which froze the number at zero for the life of the
+   * host.
    */
-  it('counts the threads a host carries as they land and leave', async () => {
+  it('counts the threads a host is working as they start and settle', async () => {
     const supervisor = piHostSupervisor()
     await supervisor.start()
     spawned[0]!.pid = 5125
     await vi.advanceTimersByTimeAsync(300)
     expect(hostRows()[0]?.detail).toBe('No hosted threads')
 
-    await supervisor.createSession({
-      sessionId: 'atlas',
-      command: { type: 'create_session', cwd: '/work/atlas', agentDir: '/agent' }
-    })
-    expect(hostRows()[0]?.detail).toBe('1 hosted thread')
+    for (const sessionId of ['atlas', 'ledger']) {
+      await supervisor.createSession({
+        sessionId,
+        command: { type: 'create_session', cwd: `/work/${sessionId}`, agentDir: '/agent' }
+      })
+    }
+    // Two sessions are resident, none is working: a kept-warm session is not a
+    // thread in flight.
+    expect(supervisor.sessionsOn(5125)).toBe(2)
+    expect(hostRows()[0]?.detail).toBe('No hosted threads')
 
-    await supervisor.createSession({
-      sessionId: 'ledger',
-      command: { type: 'create_session', cwd: '/work/ledger', agentDir: '/agent' }
-    })
-    expect(hostRows()[0]?.detail).toBe('2 hosted threads')
+    supervisor.noteSessionBusy('atlas', true)
+    expect(hostRows()[0]?.detail).toBe('1 hosted thread working')
+    supervisor.noteSessionBusy('ledger', true)
+    expect(hostRows()[0]?.detail).toBe('2 hosted threads working')
 
-    await supervisor.disposeSession('ledger')
-    expect(hostRows()[0]?.detail).toBe('1 hosted thread')
+    supervisor.noteSessionBusy('ledger', false)
+    expect(hostRows()[0]?.detail).toBe('1 hosted thread working')
+    // The session is still resident, and no longer counted.
+    expect(supervisor.sessionsOn(5125)).toBe(2)
+
+    supervisor.noteSessionBusy('atlas', false)
+    expect(hostRows()[0]?.detail).toBe('No hosted threads')
   })
 })

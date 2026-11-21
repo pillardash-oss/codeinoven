@@ -116,6 +116,16 @@ export class PiHostSupervisor {
   readonly #hosts = new Map<string, LiveHost>()
   /** Which host runs which session. */
   readonly #sessionHost = new Map<string, string>()
+  /**
+   * Sessions with a turn in flight.
+   *
+   * A host keeps a finished session resident so the next prompt on that thread is
+   * instant, so "how many sessions this process holds" and "how many threads are
+   * working" are different numbers. The task manager reports the second one: a
+   * row that counted resident sessions read as work that had already finished.
+   * The driver reports each turn's start and settlement here.
+   */
+  readonly #busySessions = new Set<string>()
   #primaryId: string | null = null
   #sequence = 0
   #hostSequence = 0
@@ -166,6 +176,40 @@ export class PiHostSupervisor {
       if (host.transport.pid === pid) return this.#sessionsOn(host.id).length
     }
     return 0
+  }
+
+  /**
+   * How many sessions on one host are mid-turn, or 0 for an unknown pid.
+   *
+   * This is what a host's row reports, because it answers what the process is
+   * doing rather than what it is keeping warm.
+   */
+  busyOn(pid: number): number {
+    for (const host of this.#hosts.values()) {
+      if (host.transport.pid !== pid) continue
+      let busy = 0
+      for (const sessionId of this.#busySessions) {
+        if (this.#sessionHost.get(sessionId) === host.id) busy += 1
+      }
+      return busy
+    }
+    return 0
+  }
+
+  /**
+   * Report that a session's turn started or settled.
+   *
+   * The driver owns what a turn is; this only remembers it, so the host's row can
+   * tell work in flight from a session kept warm for the next prompt. A session
+   * with no host is ignored, which is what a locally spawned CLI child is.
+   */
+  noteSessionBusy(sessionId: string, busy: boolean): void {
+    const known = this.#busySessions.has(sessionId)
+    if (!known && !busy) return
+    if (busy) this.#busySessions.add(sessionId)
+    else this.#busySessions.delete(sessionId)
+    if (known === busy) return
+    this.#hostsChanged()
   }
 
   /** Start the primary host if it is not running. */
@@ -616,6 +660,7 @@ export class PiHostSupervisor {
   #releaseSessions(host: LiveHost): string[] {
     const sessionIds = this.#sessionsOn(host.id)
     for (const sessionId of sessionIds) {
+      this.#busySessions.delete(sessionId)
       try {
         this.#ownership.release(sessionId, host.id)
       } catch {
@@ -643,6 +688,9 @@ export class PiHostSupervisor {
 
   /** Drop a session's host mapping and tell every listener, if it had one. */
   #unmountSession(sessionId: string): void {
+    // A session that left its host cannot be working on it, and a mark left
+    // behind would count against whichever host picks it up next.
+    this.#busySessions.delete(sessionId)
     if (this.#sessionHost.delete(sessionId)) this.#hostsChanged()
   }
 

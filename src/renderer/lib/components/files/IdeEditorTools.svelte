@@ -193,14 +193,21 @@
   function connect(enabled: boolean, context: SessionContext): (() => void) | undefined {
     if (!enabled) return
     alive = true
-    const recalled = recalledIdeResults(floatingKey)
+    const key = floatingKey
+    const recalled = recalledIdeResults(key)
     if (recalled) {
       results = recalled.results
       selectedIndex = recalled.selectedIndex
       locationTitle = recalled.title
       anchor = recalled.anchor
-      mode = 'locations'
+      mode = recalled.search?.mode ?? 'locations'
+      truncated = recalled.search?.truncated ?? false
       open = true
+      if (recalled.search) {
+        query = recalled.search.query
+        forgetIdeResults(key)
+        if (recalled.search.pending) queueMicrotask(() => scheduleSearch(true))
+      }
     }
     if (!projectName)
       void invoke('project:get', context.projectId)
@@ -237,6 +244,18 @@
       capabilities = undefined
       hover = null
       installingLabel = ''
+      // A session that reconnects while a search is open (the editor remounting
+      // under it) must hand that search back rather than dismiss it: closing
+      // here threw the query and its results away the moment unrelated UI, such
+      // as a toast, updated the surface the editor sits in.
+      if (open && (mode === 'grep' || mode === 'files'))
+        rememberIdeResults(key, {
+          results: $state.snapshot(results),
+          selectedIndex,
+          title: locationTitle,
+          anchor: $state.snapshot(anchor),
+          search: { mode, query, truncated, pending: busy }
+        })
       closeModal(true)
       void invoke(
         'projectFiles:ide',
