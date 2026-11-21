@@ -69,6 +69,76 @@ async function withMarkAttachments(
   return composed.length > 0 ? [...attachments, ...composed] : attachments
 }
 
+/** What a user message needs to be built from, on the optimistic side of a send
+ *  or an edit. */
+interface UserMessageParts {
+  id: string
+  text: string
+  attachments: PromptAttachment[]
+  promptReferences?: PromptReference[]
+  projectReferences?: PromptProjectReference[]
+  presentation?: UserMessagePresentation
+  createdAt: number
+}
+
+/**
+ * The user message the transcript shows before the mirror answers.
+ *
+ * One builder for both paths that put words on screen: a send appends it at the
+ * tail, an edit rewrites the row it already occupies. Keeping them identical is
+ * what lets an edited message keep its identity instead of being re-created.
+ */
+function buildUserMessage(input: UserMessageParts): AgentMessage {
+  const { id, text, attachments, promptReferences, projectReferences, presentation, createdAt } =
+    input
+  return {
+    id,
+    role: 'user',
+    origin: 'user',
+    visibility: 'conversation',
+    parts: [
+      ...(!presentation
+        ? [
+            {
+              type: 'text' as const,
+              id: `${id}-text`,
+              messageID: id,
+              text
+            }
+          ]
+        : []),
+      ...attachments.map((file, index): AgentPart => ({
+        type: 'file',
+        id: `${id}-file-${index}`,
+        messageID: id,
+        mime: file.mime,
+        url: file.url,
+        filename: file.filename
+      })),
+      ...(presentation
+        ? [
+            {
+              type: 'user-presentation' as const,
+              id: `${id}-presentation`,
+              messageID: id,
+              presentation
+            }
+          ]
+        : [])
+    ],
+    references: promptReferences?.length ? promptReferences : undefined,
+    projectReferences: projectReferences?.length ? projectReferences : undefined,
+    createdAt,
+    completedAt: createdAt
+  }
+}
+
+/** The app action a message records, when it records one instead of typed text. */
+function userMessagePresentation(message: AgentMessage): UserMessagePresentation | undefined {
+  const part = message.parts.find((candidate) => candidate.type === 'user-presentation')
+  return part?.type === 'user-presentation' ? part.presentation : undefined
+}
+
 /** One older page fetched to reach the newest turn's opening prompt. A long
  *  working trace spans dozens of rows (one row per step), so this is sized to
  *  cover a whole turn in one or two round trips instead of walking it twelve
@@ -81,6 +151,10 @@ const MAX_TURN_ALIGNMENT_PAGES = 4
 
 class ThreadMessagesStore {
   #loadPromises = new Map<string, Promise<void>>()
+  /** Rows an edit rewrote, waiting for the send that owns them. A send under one
+   *  of these ids brings the row up to date in place instead of reusing it
+   *  untouched, and never appends a second copy of the same prompt. */
+  #editedMessageIds = new Set<string>()
   private cache = new ThreadMessagesCache()
   private events = new ThreadMessagesEvents(this.cache, (projectId, threadId) => {
     void this.mergeTurnAlignedTail(projectId, threadId, THREAD_MESSAGE_PRELOAD_WINDOW).catch(
@@ -494,54 +568,72 @@ class ThreadMessagesStore {
     this.cache.flushReveal(threadKey(projectId, threadId))
     const entry = this.cache.entry(projectId, threadId)
     const messageId = userMessageId ?? createMessageId()
-    // A pre-seeded message (the side chat's explain prompt committed at open
-    // time) already occupies this ID, reuse it instead of appending a duplicate.
-    if (entry.messages.some((candidate) => candidate.id === messageId)) {
-      return { entry, messageId }
-    }
-    const optimistic: AgentMessage = {
+    const index = entry.messages.findIndex((candidate) => candidate.id === messageId)
+    const existing = index >= 0 ? entry.messages[index] : undefined
+    // A message already holding this ID is normally reused as-is: a pre-seeded
+    // prompt (the side chat's explain prompt committed at open time) is already
+    // exactly the row the send would build, and rewriting it would change part
+    // ids the mirror later merges by. An edit is the exception   it owns its row
+    // and the send has to bring the row up to what the agent actually receives
+    // (annotated attachments included) without appending a second prompt.
+    const edited = this.#editedMessageIds.delete(messageId)
+    if (existing && !edited) return { entry, messageId }
+    const optimistic = buildUserMessage({
       id: messageId,
-      role: 'user',
-      origin: 'user',
-      visibility: 'conversation',
-      parts: [
-        ...(!presentation
-          ? [
-              {
-                type: 'text' as const,
-                id: `${messageId}-text`,
-                messageID: messageId,
-                text
-              }
-            ]
-          : []),
-        ...attachments.map((file, index): AgentPart => ({
-          type: 'file',
-          id: `${messageId}-file-${index}`,
-          messageID: messageId,
-          mime: file.mime,
-          url: file.url,
-          filename: file.filename
-        })),
-        ...(presentation
-          ? [
-              {
-                type: 'user-presentation' as const,
-                id: `${messageId}-presentation`,
-                messageID: messageId,
-                presentation
-              }
-            ]
-          : [])
-      ],
-      references: promptReferences?.length ? promptReferences : undefined,
-      projectReferences: projectReferences?.length ? projectReferences : undefined,
-      createdAt: Date.now(),
-      completedAt: Date.now()
-    }
-    entry.messages = [...entry.messages, optimistic]
+      text,
+      attachments,
+      promptReferences,
+      projectReferences,
+      presentation,
+      // An edit keeps the row's own timestamp, so the bubble is not replayed as
+      // a brand-new arrival the reader has to watch fly in.
+      createdAt: existing?.createdAt ?? Date.now()
+    })
+    entry.messages = existing
+      ? [...entry.messages.slice(0, index), optimistic, ...entry.messages.slice(index + 1)]
+      : [...entry.messages, optimistic]
     this.cache.notify(projectId, threadId)
     return { entry, messageId }
+  }
+
+  /**
+   * Rewrite a user message in place and drop the history it replaces, in one
+   * publish, before any IPC happens.
+   *
+   * Editing is a replacement of everything below the message, never of the
+   * message itself: the reader's own words must never leave the conversation,
+   * not for a frame and not while the mirror is truncated and the turn is
+   * re-persisted. The message keeps its id and its position, so its bubble is
+   * the same element before and after, and the new text is on screen at the
+   * instant the edit is submitted.
+   */
+  beginEdit(
+    projectId: string,
+    threadId: string,
+    messageId: string,
+    text: string,
+    attachments: PromptAttachment[],
+    projectReferences: PromptProjectReference[]
+  ): AgentMessage | null {
+    this.#editedMessageIds.add(messageId)
+    return this.cache.applyEdit(projectId, threadId, messageId, (message) => {
+      const edited = buildUserMessage({
+        id: message.id,
+        text,
+        attachments,
+        projectReferences,
+        presentation: userMessagePresentation(message),
+        createdAt: message.createdAt
+      })
+      // Keep the telemetry the row already carries: an edit replaces the words
+      // and the history below them, not what the previous turn reported.
+      return {
+        ...edited,
+        origin: message.origin,
+        visibility: message.visibility,
+        ...(message.references ? { references: message.references } : {})
+      }
+    })
   }
 
   private confirmOptimistic(
@@ -973,10 +1065,33 @@ class ThreadMessagesStore {
     return kept
   }
 
+  /**
+   * The truncation half of an edit: drop the history below the edited message
+   * in the mirror, and keep that message in the cache where the optimistic
+   * rewrite already put it.
+   *
+   * The message is read back from the cache rather than passed in, so whatever
+   * the send has rewritten it to by the time the mirror answers (its annotated
+   * attachments, say) is what survives.
+   */
+  async truncateForEdit(
+    projectId: string,
+    threadId: string,
+    messageId: string
+  ): Promise<AgentMessage[]> {
+    const kept = await invoke('agent:truncateMessages', projectId, threadId, messageId)
+    const edited = this.cache
+      .messages(projectId, threadId)
+      .find((message) => message.id === messageId)
+    this.cache.applyRemoval(projectId, threadId, kept, edited)
+    return kept
+  }
+
   /** Replace the cached messages of a conversation with the kept set returned
-   *  by a temporary-chat history deletion. */
-  applyKept(projectId: string, threadId: string, kept: AgentMessage[]): void {
-    this.cache.applyRemoval(projectId, threadId, kept)
+   *  by a temporary-chat history deletion, keeping the message an edit rewrote
+   *  at the end of that set. */
+  applyKept(projectId: string, threadId: string, kept: AgentMessage[], keep?: AgentMessage): void {
+    this.cache.applyRemoval(projectId, threadId, kept, keep)
   }
 
   /**

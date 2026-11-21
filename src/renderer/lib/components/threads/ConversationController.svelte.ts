@@ -27,6 +27,10 @@ export interface SendPayload {
    *  temporary chats to show a short action label while sending the full
    *  instruction to the agent). */
   transportText?: string
+  /** The row this send already owns in the transcript. An edit rewrites the
+   *  message in place and sends it under the same id, so the bubble the reader
+   *  is looking at is never unmounted and never duplicated. */
+  userMessageId?: string
 }
 
 /**
@@ -115,8 +119,9 @@ export interface ConversationController {
 
   /** Drop a message and everything after it (message editing). Temporary
    *  chats implement this against their own backend; threads use the
-   *  `threadMessages` store directly. */
-  truncateBefore?(messageId: string): Promise<AgentMessage[]>
+   *  `threadMessages` store directly. `keep` is the message the edit rewrote:
+   *  it stays in the cache because the edit replaces only what is below it. */
+  truncateBefore?(messageId: string, keep?: AgentMessage): Promise<AgentMessage[]>
   /** Delete history around a message (`down` / `single` / `up`). */
   removeAround?(messageId: string, mode: 'down' | 'single' | 'up'): Promise<AgentMessage[]>
 }

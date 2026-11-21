@@ -497,7 +497,12 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     presentation?: UserMessagePresentation,
     taskReferences: PromptAssignmentTaskReference[] = [],
     restorable?: boolean,
-    startAfterThreads: StartAfterThreadReference[] = []
+    startAfterThreads: StartAfterThreadReference[] = [],
+    /** The transcript row this send already owns (message editing). The
+     *  optimistic message is rewritten in place under this id instead of a new
+     *  one being appended, so the reader's message never leaves the screen and
+     *  is never shown twice. */
+    userMessageId?: string
   ): Promise<void> {
     if (this.root.props.controller) {
       this.errorMessage = ''
@@ -566,7 +571,8 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         promptReferences,
         projectReferences,
         presentation,
-        taskReferences
+        taskReferences,
+        ...(userMessageId ? { userMessageId } : {})
       }
       await this.root.props.controller.send(payload)
       this.root.sources.recordModelUse()
@@ -794,12 +800,14 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
     // Use a stable UUIDv7 for the optimistic message and the persisted mirror
     // message so they merge cleanly across thread switches. Mark the run busy
     // before waiting for a slow first connection so the initial send is
-    // acknowledged immediately and cannot be submitted again.
-    const userMessageId = messageId()
+    // acknowledged immediately and cannot be submitted again. An edit brings
+    // its own id (the row it rewrote) so the transcript keeps that message
+    // instead of gaining a second copy of the same prompt.
+    const turnUserMessageId = userMessageId ?? messageId()
     const { projectId, id } = this.thread
-    this.root.buildSpecActionPrompt.beginLocalTurn(userMessageId)
+    this.root.buildSpecActionPrompt.beginLocalTurn(turnUserMessageId)
     this.root.currentWorkingTraceAttribution.captureLiveWorkingSelection()
-    agentRuns.setBusy(projectId, id, true, userMessageId)
+    agentRuns.setBusy(projectId, id, true, turnUserMessageId)
     // Nothing has reported this turn yet: the harness session still has to be
     // bound (and, after a provider or harness switch, created and spawned while
     // the orphaned one is released). The persisted row keeps the previous turn's
@@ -824,7 +832,7 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         msg,
         attachments,
         specAction,
-        userMessageId,
+        turnUserMessageId,
         this.root.currentWorkingTraceAttribution.prepareSessionForSend,
         promptContext,
         promptReferences,

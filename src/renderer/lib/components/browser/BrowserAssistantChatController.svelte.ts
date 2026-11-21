@@ -177,7 +177,9 @@ export class BrowserAssistantChatController implements ConversationController {
   async send(payload: SendPayload): Promise<void> {
     const text = payload.text.trim()
     if (!text) return
-    const userMessageId = messageId()
+    // An edit already owns the row it rewrote; sending under that id keeps the
+    // reader's message in place instead of appending a second copy of it.
+    const userMessageId = payload.userMessageId ?? messageId()
     agentRuns.setBusy(this.projectId, this.conversationId, true, userMessageId)
     agentRuns.beginDispatch(this.projectId, this.conversationId)
     try {
