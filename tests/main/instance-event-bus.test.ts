@@ -312,6 +312,10 @@ describe('InstanceEventBus', () => {
  * the directory and the OS temp root are deep: a harness can set TMPDIR to a
  * per-run scratch directory, and joining a hashed name onto that used to
  * overflow the limit the fallback existed to avoid.
+ *
+ * Windows addresses a socket by named pipe rather than by a filesystem path, so
+ * only the pipe name is asserted there: `sun_path` and the temp root do not
+ * apply.
  */
 describe('instanceBusEndpoint', () => {
   // 108 bytes before the file name, so `<pid>.sock` cannot fit beside it.
@@ -328,22 +332,33 @@ describe('instanceBusEndpoint', () => {
   const SUN_PATH_BYTES = 100
 
   it('keeps the endpoint beside the instances when it fits', () => {
-    expect(instanceBusEndpoint('/tmp/cio-instances', PEER_A)).toBe('/tmp/cio-instances/700001.sock')
+    const endpoint = instanceBusEndpoint('/tmp/cio-instances', PEER_A)
+
+    if (process.platform === 'win32') {
+      expect(endpoint.startsWith('\\\\.\\pipe\\cio-instance-bus-')).toBe(true)
+      expect(endpoint.endsWith(`-${PEER_A}`)).toBe(true)
+      return
+    }
+
+    expect(endpoint).toBe('/tmp/cio-instances/700001.sock')
   })
 
-  it('moves a too-long endpoint into the OS temp root under a hashed name', () => {
-    const endpoint = instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, '/tmp')
+  it.skipIf(process.platform === 'win32')(
+    'moves a too-long endpoint into the OS temp root under a hashed name',
+    () => {
+      const endpoint = instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, '/tmp')
 
-    expect(endpoint.startsWith('/tmp/')).toBe(true)
-    expect(endpoint).toContain(`-${PEER_A}.sock`)
-    expect(Buffer.byteLength(endpoint)).toBeLessThanOrEqual(SUN_PATH_BYTES)
-    // Deterministic from (directory, pid), so a peer derives the same address.
-    expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, '/tmp')).toBe(endpoint)
-    // A different pid is a different endpoint, or two windows would collide.
-    expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_B, '/tmp')).not.toBe(endpoint)
-  })
+      expect(endpoint.startsWith('/tmp/')).toBe(true)
+      expect(endpoint).toContain(`-${PEER_A}.sock`)
+      expect(Buffer.byteLength(endpoint)).toBeLessThanOrEqual(SUN_PATH_BYTES)
+      // Deterministic from (directory, pid), so a peer derives the same address.
+      expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, '/tmp')).toBe(endpoint)
+      // A different pid is a different endpoint, or two windows would collide.
+      expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_B, '/tmp')).not.toBe(endpoint)
+    }
+  )
 
-  it('still fits when the OS temp root is itself deep', () => {
+  it.skipIf(process.platform === 'win32')('still fits when the OS temp root is itself deep', () => {
     const endpoint = instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, DEEP_TEMP_ROOT)
 
     expect(endpoint.startsWith('/tmp/')).toBe(true)
