@@ -22,7 +22,8 @@ import {
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_SUGGEST_TOOL_NAME
+  UTILITY_SUGGEST_TOOL_NAME,
+  PROCESS_TOOL_NAMES
 } from '../../../lib/gateway-tools'
 import {
   isOrchestrationTool,
@@ -160,6 +161,12 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // itself, instead of sending the user back to re-send the same message
       // with @cio-utility.
       if (name === UTILITY_DIAGNOSTICS_TOOL_NAME) return true
+      // Process lifecycle belongs to whoever started the process. A shell kill
+      // cannot prove it started its target, so it is refused in every form and
+      // the app owns the stop instead: an agent that started a dev server or a
+      // probe instance must be able to list it and end it on every turn, not
+      // only in Full Access or an @cio-hey session.
+      if (PROCESS_TOOL_NAMES.has(name)) return true
       // Asking for a secret is an app capability rather than a utility
       // operation, and it never needs a secret to be installed: it is offered on
       // every turn that carries the gateway at all, plus every explicit setup

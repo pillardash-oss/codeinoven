@@ -3,7 +3,16 @@ import { readFile, readlink } from 'node:fs/promises'
 import { promisify } from 'node:util'
 import type { AgentRunningProcess, TaskManagerProcess } from '../../lib/types'
 import type { AgentProcessObserver } from '../drivers/driver.interface'
-import { OWNED_PROCESS_MARKER, OWNED_SESSION_MARKER } from '../drivers/cli-environment'
+import {
+  INSTANCE_OWNER_ID,
+  OWNED_PROCESS_MARKER,
+  OWNED_SESSION_MARKER,
+  isOwnerId,
+  isOwnerRunning,
+  isRecycledPid,
+  isSharedDaemon,
+  startedAtFromElapsed
+} from '../system/process-ownership'
 import { Logger } from '../system/logger'
 import { OwnedProcessJournal } from '../system/owned-process-journal'
 import { broadcastAgentProcessesChanged } from '../chat/thread-events'
@@ -51,6 +60,8 @@ export interface ProcessSnapshotEntry {
   command: string
   cpuPercent: number | null
   memoryBytes: number | null
+  /** When it started, where the platform says. What tells a recycled pid apart. */
+  startedAt?: number | undefined
 }
 
 interface ProcessOwner {
@@ -73,9 +84,17 @@ interface TrackedProcess extends AgentRunningProcess {
 interface ProcessOwnership {
   /** App ownership marker present; `null` when the platform cannot tell. */
   owned: boolean | null
+  /** The instance whose stamp it carries; `null` for none or an older version's. */
+  instance: string | null
   /** CodeInOven session id stamped in the process environment, when known. */
   sessionId: string | null
 }
+/** Read a process's markers. `1` is what versions before per-instance stamps wrote. */
+function ownershipFrom(marker: string | null, sessionId: string | null): ProcessOwnership {
+  const instance = isOwnerId(marker) ? marker : null
+  return { owned: instance !== null || marker === '1', instance, sessionId }
+}
+
 export interface ReapOrphansResult {
   killed: number[]
   skipped: number[]
@@ -154,9 +173,13 @@ async function snapshotWindowsProcesses(): Promise<ProcessSnapshotEntry[]> {
 }
 
 async function snapshotUnixProcesses(): Promise<ProcessSnapshotEntry[]> {
-  const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,ppid=,%cpu=,rss=,command='])
+  const capturedAt = Date.now()
+  const { stdout } = await execFileAsync('ps', ['-axo', 'pid=,ppid=,%cpu=,rss=,etime=,command='], {
+    // The whole table with full command lines outgrows the 1 MiB default on a busy machine.
+    maxBuffer: 8 * 1024 * 1024
+  })
   return stdout.split(/\r?\n/u).flatMap((line) => {
-    const match = line.match(/^\s*(\d+)\s+(\d+)\s+([\d.,]+)\s+(\d+)\s+(.+)$/u)
+    const match = line.match(/^\s*(\d+)\s+(\d+)\s+([\d.,]+)\s+(\d+)\s+([\d:-]+)\s+(.+)$/u)
     if (!match) return []
     return [
       {
@@ -164,7 +187,8 @@ async function snapshotUnixProcesses(): Promise<ProcessSnapshotEntry[]> {
         parentPid: Number(match[2]),
         cpuPercent: Number(match[3]?.replace(',', '.')),
         memoryBytes: Number(match[4]) * 1024,
-        command: match[5]?.trim() || `Process ${match[1]}`
+        startedAt: startedAtFromElapsed(match[5] ?? '', capturedAt),
+        command: match[6]?.trim() || `Process ${match[1]}`
       }
     ]
   })
@@ -176,6 +200,34 @@ async function defaultSnapshotter(): Promise<ProcessSnapshotEntry[]> {
 
 function finiteOrNull(value: number | null | undefined): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function childrenIndex(
+  snapshot: readonly ProcessSnapshotEntry[]
+): Map<number, ProcessSnapshotEntry[]> {
+  const index = new Map<number, ProcessSnapshotEntry[]>()
+  for (const entry of snapshot) {
+    const children = index.get(entry.parentPid) ?? []
+    children.push(entry)
+    index.set(entry.parentPid, children)
+  }
+  return index
+}
+
+/** Whether a process is a shared daemon or sits below one, looking no higher than `stopAt`. */
+function isUnderSharedDaemon(
+  pid: number,
+  byPid: ReadonlyMap<number, ProcessSnapshotEntry>,
+  stopAt = 0
+): boolean {
+  const seen = new Set<number>()
+  let entry = byPid.get(pid)
+  while (entry && entry.pid !== stopAt && !seen.has(entry.pid)) {
+    if (isSharedDaemon(entry.command)) return true
+    seen.add(entry.pid)
+    entry = byPid.get(entry.parentPid)
+  }
+  return false
 }
 
 function descendantsOf(
@@ -257,12 +309,17 @@ export class AgentProcessService implements AgentProcessObserver {
     return [...unique.values()].sort((left, right) => left.startedAt - right.startedAt)
   }
 
-  async killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
+  async killProcess(
+    projectId: string,
+    threadId: string,
+    pid: number,
+    force = false
+  ): Promise<void> {
     const processes = await this.list(projectId, threadId)
     if (!processes.some((entry) => entry.pid === pid)) {
       throw new Error(`Process ${pid} is not owned by this thread`)
     }
-    await this.killTree(pid, false)
+    await this.killTree(pid, force)
     await this.scan({ force: true })
   }
 
@@ -472,12 +529,7 @@ export class AgentProcessService implements AgentProcessObserver {
 
   async killThread(projectId: string, threadId: string): Promise<void> {
     const sessionIds = this.sessionsForThread(projectId, threadId)
-    const pids = new Set<number>()
-    for (const sessionId of sessionIds) {
-      for (const process of this.tracked.get(sessionId)?.values() ?? []) pids.add(process.pid)
-      for (const root of this.roots.get(sessionId)?.values() ?? []) pids.add(root.pid)
-    }
-    await Promise.all([...pids].map((pid) => this.killTree(pid)))
+    await this.stopRecorded(sessionIds)
     for (const sessionId of sessionIds) {
       this.tracked.delete(sessionId)
       for (const root of this.roots.get(sessionId)?.values() ?? []) {
@@ -499,24 +551,63 @@ export class AgentProcessService implements AgentProcessObserver {
 
   async killAll(): Promise<void> {
     const owners = new Map(this.owners)
-    const pids = new Set<number>()
-    for (const processes of this.tracked.values()) {
-      for (const process of processes.values()) pids.add(process.pid)
-    }
-    for (const roots of this.roots.values()) {
-      for (const root of roots.values()) pids.add(root.pid)
-    }
-    await Promise.allSettled([...pids].map((pid) => this.killTree(pid)))
+    const stopped = await this.stopRecorded([
+      ...new Set([...this.roots.keys(), ...this.tracked.keys()])
+    ])
     this.tracked.clear()
     this.roots.clear()
     this.owners.clear()
-    if (this.journal) {
+    // What could not be verified stays journaled, for the next launch to reap.
+    if (this.journal && stopped) {
       this.journal.clear()
       await this.journal.flush()
     }
     for (const owner of owners.values()) {
       broadcastAgentProcessesChanged(owner.projectId, owner.threadId)
     }
+  }
+
+  /**
+   * The automatic stop behind a quit and a thread cleanup: end what these sessions
+   * recorded, as long as each pid still names that same process and is not a daemon
+   * the machine shares.
+   *
+   * @returns false when the process table was unreadable, so nothing was signalled:
+   * a pid that cannot be identified is not known to be this instance's.
+   */
+  private async stopRecorded(sessionIds: readonly string[]): Promise<boolean> {
+    const recorded = new Map<number, { startedAt: number; command: string }>()
+    for (const sessionId of sessionIds) {
+      for (const process of this.tracked.get(sessionId)?.values() ?? []) {
+        recorded.set(process.pid, process)
+      }
+      for (const root of this.roots.get(sessionId)?.values() ?? []) recorded.set(root.pid, root)
+    }
+    if (recorded.size === 0) return true
+    if (process.platform === 'win32') {
+      // `taskkill /T` walks the tree itself and Windows exposes no environment to
+      // adopt from, so only the recorded commands need filtering here.
+      const pids = [...recorded].flatMap(([pid, entry]) =>
+        isSharedDaemon(entry.command) ? [] : [pid]
+      )
+      await Promise.allSettled(pids.map((pid) => this.killTree(pid)))
+      return true
+    }
+    let snapshot: ProcessSnapshotEntry[]
+    try {
+      snapshot = await this.snapshotter()
+    } catch (error) {
+      Logger.error('Processes were left running: the process table could not be read', error)
+      return false
+    }
+    const byPid = new Map(snapshot.map((entry) => [entry.pid, entry]))
+    const pids = [...recorded].flatMap(([pid, { startedAt }]) => {
+      const current = byPid.get(pid)
+      if (!current || isRecycledPid(current.startedAt, startedAt)) return []
+      return isUnderSharedDaemon(pid, byPid) ? [] : [pid]
+    })
+    await Promise.allSettled(pids.map((pid) => this.killTree(pid, false, snapshot)))
+    return true
   }
 
   /**
@@ -534,6 +625,10 @@ export class AgentProcessService implements AgentProcessObserver {
    * harness the sibling is actively using, so the entry stays journaled for a
    * future launch once that instance is gone.
    *
+   * The journal names each entry's instance. Nothing is reaped while that instance
+   * runs, and an adopted entry with no instance is forgotten unsignalled: older
+   * versions adopted other instances' processes, so it proves nothing.
+   *
    * Pass `requireOwnershipProof` from the repeated running sweep
    * (`ChatEngine.sweepOrphanedProcesses`) so only marker-verified roots are
    * signalled; an unproven entry stays journaled for the next launch instead.
@@ -546,7 +641,7 @@ export class AgentProcessService implements AgentProcessObserver {
     if (roots.length === 0) return { killed: [], skipped: [] }
     const snapshot = await this.snapshotter().catch(() => [])
     const alive = new Set(snapshot.map((entry) => entry.pid))
-    const parentOf = new Map(snapshot.map((entry) => [entry.pid, entry.parentPid]))
+    const byPid = new Map(snapshot.map((entry) => [entry.pid, entry]))
     const killed: number[] = []
     const skipped: number[] = []
 
@@ -556,7 +651,7 @@ export class AgentProcessService implements AgentProcessObserver {
         this.journal.unregister(root.pid)
         continue
       }
-      const parentPid = parentOf.get(root.pid) ?? 0
+      const parentPid = byPid.get(root.pid)?.parentPid ?? 0
       // A journaled root with a live parent is not an orphan: it still belongs
       // to whoever spawned it (typically another running CodeInOven instance,
       // since the journal is shared via userData and a sibling instance skips
@@ -569,6 +664,23 @@ export class AgentProcessService implements AgentProcessObserver {
         // a future launch must still be able to reap it.
         continue
       }
+      if (root.owner && isOwnerRunning(root.owner, alive)) {
+        skipped.push(root.pid)
+        continue
+      }
+      if ((root.adopted && !root.owner) || isUnderSharedDaemon(root.pid, byPid)) {
+        skipped.push(root.pid)
+        this.journal.unregister(root.pid)
+        continue
+      }
+      const ownership = (await this.readOwnership([root.pid])).get(root.pid)
+      const marker = ownership?.owned ?? null
+      if (marker === true && (ownership?.instance ?? null) !== (root.owner ?? null)) {
+        // Another instance's stamp: the OS handed this pid on since it was journaled.
+        skipped.push(root.pid)
+        this.journal.unregister(root.pid)
+        continue
+      }
       if (options.requireOwnershipProof) {
         // An adopted daemon (see OwnedRoot.adopted) is an app-marked orphan too,
         // but the running app may be talking to it; only a launch reaps those.
@@ -576,9 +688,8 @@ export class AgentProcessService implements AgentProcessObserver {
         // but never uses: it is reaped so a historical leak does not outlive the
         // fix that stopped spawning it.
         if (root.adopted === true && !isOpenCodeServiceDaemon(root.command)) continue
-        const marker = await this.processHasMarker(root.pid)
         if (marker === true) {
-          await this.killTree(root.pid)
+          await this.killTree(root.pid, false, snapshot)
           killed.push(root.pid)
           this.journal.unregister(root.pid)
         } else if (marker === false) {
@@ -591,9 +702,9 @@ export class AgentProcessService implements AgentProcessObserver {
         continue
       }
 
-      const owned = await this.isOwnedOrOrphaned(root.pid, parentPid, alive)
-      if (owned) {
-        await this.killTree(root.pid)
+      // Orphaned is established above, so an unreadable environment still reaps.
+      if (marker !== false) {
+        await this.killTree(root.pid, false, snapshot)
         killed.push(root.pid)
         this.journal.unregister(root.pid)
       } else {
@@ -615,10 +726,11 @@ export class AgentProcessService implements AgentProcessObserver {
     // skips it: an adopted daemon (for example an `adb` fork-server) is an
     // app-marked orphan too, so a launch-only reclaim of those is deliberate.
     if (process.platform === 'linux' && !options.requireOwnershipProof) {
-      const markedOrphans = await this.sweepMarkedOrphans(snapshot, alive)
+      const journaledOwners = new Set(roots.flatMap((root) => root.owner ?? []))
+      const markedOrphans = await this.sweepMarkedOrphans(snapshot, alive, journaledOwners)
       for (const pid of markedOrphans) {
         if (killed.includes(pid)) continue
-        await this.killTree(pid)
+        await this.killTree(pid, false, snapshot)
         killed.push(pid)
       }
     }
@@ -626,28 +738,22 @@ export class AgentProcessService implements AgentProcessObserver {
     return { killed, skipped }
   }
 
+  /** Orphans stamped by a dead instance of this data root, which the journal names. */
   private async sweepMarkedOrphans(
     snapshot: ProcessSnapshotEntry[],
-    alive: ReadonlySet<number>
+    alive: ReadonlySet<number>,
+    journaledOwners: ReadonlySet<string>
   ): Promise<number[]> {
-    const found: number[] = []
-    for (const entry of snapshot) {
-      if (!this.isOrphaned(entry.parentPid, alive)) continue
-      if ((await this.processHasMarker(entry.pid)) !== true) continue
-      found.push(entry.pid)
-    }
-    return found
-  }
-
-  private async isOwnedOrOrphaned(
-    pid: number,
-    parentPid: number,
-    alive: ReadonlySet<number>
-  ): Promise<boolean> {
-    const marker = await this.processHasMarker(pid)
-    if (marker === true) return true
-    if (marker === false) return false
-    return this.isOrphaned(parentPid, alive)
+    const byPid = new Map(snapshot.map((entry) => [entry.pid, entry]))
+    const orphans = snapshot.filter(
+      (entry) => this.isOrphaned(entry.parentPid, alive) && !isUnderSharedDaemon(entry.pid, byPid)
+    )
+    const ownership = await this.readOwnership(orphans.map((entry) => entry.pid))
+    return orphans.flatMap(({ pid }) => {
+      const instance = ownership.get(pid)?.instance
+      if (!instance || !journaledOwners.has(instance) || isOwnerRunning(instance, alive)) return []
+      return [pid]
+    })
   }
 
   private isOrphaned(parentPid: number, alive: ReadonlySet<number>): boolean {
@@ -668,16 +774,28 @@ export class AgentProcessService implements AgentProcessObserver {
       for (let index = 0; index < pids.length; index += OWNERSHIP_PROBE_CHUNK) {
         const chunk = pids.slice(index, index + OWNERSHIP_PROBE_CHUNK)
         try {
-          const { stdout } = await execFileAsync('ps', ['-E', '-p', chunk.map(String).join(',')], {
-            timeout: PORT_SCAN_TIMEOUT_MS
-          })
+          const { stdout } = await execFileAsync(
+            'ps',
+            // `-ww`: the environment follows the arguments, so a clipped line loses the stamp.
+            ['-E', '-ww', '-p', chunk.map(String).join(',')],
+            { timeout: PORT_SCAN_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 }
+          )
           for (const line of stdout.split(/\r?\n/u)) {
             const pid = Number(line.trim().split(/\s+/u)[0])
             if (!Number.isFinite(pid) || pid <= 0 || result.has(pid)) continue
-            result.set(pid, {
-              owned: line.includes(`${OWNED_PROCESS_MARKER}=1`),
-              sessionId: line.match(new RegExp(`${OWNED_SESSION_MARKER}=(\\S+)`, 'u'))?.[1] ?? null
-            })
+            // The environment is printed after the arguments, so the last match is the
+            // real one. No regular expression: this reads every environment on the machine.
+            const valueOf = (name: string): string | null => {
+              const at = line.lastIndexOf(` ${name}=`)
+              if (at < 0) return null
+              const from = at + name.length + 2
+              const end = line.indexOf(' ', from)
+              return line.slice(from, end < 0 ? undefined : end) || null
+            }
+            result.set(
+              pid,
+              ownershipFrom(valueOf(OWNED_PROCESS_MARKER), valueOf(OWNED_SESSION_MARKER))
+            )
           }
         } catch {
           // Probes are best-effort; missing rows are treated as unknown.
@@ -691,32 +809,15 @@ export class AgentProcessService implements AgentProcessObserver {
         try {
           const environ = await readFile(`/proc/${pid}/environ`, 'utf8')
           const entries = environ.split('\0')
-          return [
-            pid,
-            {
-              owned: entries.includes(`${OWNED_PROCESS_MARKER}=1`),
-              sessionId:
-                entries
-                  .find((entry) => entry.startsWith(`${OWNED_SESSION_MARKER}=`))
-                  ?.slice(OWNED_SESSION_MARKER.length + 1) ?? null
-            }
-          ]
+          const valueOf = (name: string): string | null =>
+            entries.find((entry) => entry.startsWith(`${name}=`))?.slice(name.length + 1) ?? null
+          return [pid, ownershipFrom(valueOf(OWNED_PROCESS_MARKER), valueOf(OWNED_SESSION_MARKER))]
         } catch {
-          return [pid, { owned: null, sessionId: null }]
+          return [pid, { owned: null, instance: null, sessionId: null }]
         }
       })
     )
     return new Map(ownerships)
-  }
-
-  /**
-   * Best-effort check for the app's ownership marker in a process environment.
-   * Returns `true`/`false` only where another process's environment is reliably
-   * readable (macOS `ps -E`, Linux `/proc`); returns `null` on Windows so
-   * callers fall back to the orphaned-parent check.
-   */
-  private async processHasMarker(pid: number): Promise<boolean | null> {
-    return (await this.readOwnership([pid])).get(pid)?.owned ?? null
   }
 
   /**
@@ -810,12 +911,7 @@ export class AgentProcessService implements AgentProcessObserver {
       const snapshot = await this.snapshotter()
       this.lastSnapshot = snapshot
       const currentByPid = new Map(snapshot.map((entry) => [entry.pid, entry]))
-      const childrenByParent = new Map<number, ProcessSnapshotEntry[]>()
-      for (const entry of snapshot) {
-        const children = childrenByParent.get(entry.parentPid) ?? []
-        children.push(entry)
-        childrenByParent.set(entry.parentPid, children)
-      }
+      const childrenByParent = childrenIndex(snapshot)
 
       await this.adoptMarkedOrphans(snapshot, currentByPid, childrenByParent)
 
@@ -831,6 +927,12 @@ export class AgentProcessService implements AgentProcessObserver {
         }
         let changed = false
         for (const root of sessionRoots.values()) {
+          if (isRecycledPid(currentByPid.get(root.pid)?.startedAt, root.startedAt)) {
+            // The root exited and its pid is another process's now, children included.
+            sessionRoots.delete(root.pid)
+            this.journal?.unregister(root.pid)
+            continue
+          }
           for (const descendant of descendantsOf(root.pid, childrenByParent)) {
             if (sessionProcesses.has(descendant.pid)) continue
             sessionProcesses.set(descendant.pid, {
@@ -851,7 +953,7 @@ export class AgentProcessService implements AgentProcessObserver {
         }
         for (const [pid, tracked] of sessionProcesses) {
           const current = currentByPid.get(pid)
-          if (current) {
+          if (current && !isRecycledPid(current.startedAt, tracked.startedAt)) {
             tracked.command = current.command
             tracked.parentPid = current.parentPid
           } else {
@@ -885,8 +987,10 @@ export class AgentProcessService implements AgentProcessObserver {
    * reaches becomes a runtime the task manager lists, the user can end, and the
    * journal reaps.
    *
-   * Ownership is proven by the marker in the process environment, which the app
-   * stamps on every harness spawn and children inherit. Inheritance covers a
+   * Ownership is proven by this instance's id in the process environment, which it
+   * stamps on every harness spawn and children inherit. Another instance's stamp, or
+   * an older version's, is never adopted, whatever its parent: adoption is what
+   * makes a process this instance's to stop. Inheritance covers a
    * child macOS cannot judge on its own: the environment of a process running a
    * platform binary (`/bin/bash`, `/bin/sleep`) is unreadable, so a `/bin/bash`
    * worker under a marked server is adopted because its parent is. A platform
@@ -895,9 +999,8 @@ export class AgentProcessService implements AgentProcessObserver {
    * adoption from stealing rows the app already owns elsewhere: the app's own
    * process family (registered services such as the gateway, the llama server,
    * and MCP children are its descendants and already have service rows), and a
-   * process whose readable session marker names a session another running
-   * instance owns, unless it is detached, which is what a cross-instance handoff
-   * looks like.
+   * process whose readable session marker names a session this instance does not
+   * hold, unless it is detached.
    *
    * Live children of a harness (short-lived `adb` clients, dev servers, etc.)
    * are reachable from their root, already tracked as descendants, and never
@@ -950,14 +1053,14 @@ export class AgentProcessService implements AgentProcessObserver {
     if (candidates.length === 0) return
     const candidatePids = new Set(candidates.map((entry) => entry.pid))
     const ownership = await this.readOwnership(candidates.map((entry) => entry.pid))
-    // A process is app-owned when its own environment carries the marker, and so
+    // A process is owned when its own environment carries this instance's id, and so
     // is a child of an owned process: the environment is inherited, so a platform
     // binary a marked server spawns is adopted even though its own environment is
     // unreadable.
     const adoptable = new Map<number, string | null>()
     for (const entry of candidates) {
       const owner = ownership.get(entry.pid)
-      if (owner?.owned === true) adoptable.set(entry.pid, owner.sessionId)
+      if (owner?.instance === INSTANCE_OWNER_ID) adoptable.set(entry.pid, owner.sessionId)
     }
     const queue = [...adoptable.keys()]
     while (queue.length > 0) {
@@ -966,6 +1069,8 @@ export class AgentProcessService implements AgentProcessObserver {
       const sessionId = adoptable.get(pid) ?? null
       for (const child of childrenByParent.get(pid) ?? []) {
         if (!candidatePids.has(child.pid) || adoptable.has(child.pid)) continue
+        const stamp = ownership.get(child.pid)?.instance
+        if (stamp && stamp !== INSTANCE_OWNER_ID) continue
         adoptable.set(child.pid, ownership.get(child.pid)?.sessionId ?? sessionId)
         queue.push(child.pid)
       }
@@ -981,15 +1086,16 @@ export class AgentProcessService implements AgentProcessObserver {
     // swept root, while overwriting it as "adopted" would hide it from the
     // running orphan sweep.
     const existingRoots = (await this.journal?.load()) ?? []
-    const journalled = new Set(existingRoots.map((root) => root.pid))
+    const journalled = new Set(
+      existingRoots.flatMap((root) => (root.owner === INSTANCE_OWNER_ID ? [root.pid] : []))
+    )
     const adoptedScopes = new Set<string>()
     for (const entry of candidates) {
       if (!adoptable.has(entry.pid)) continue
       const sessionId = adoptable.get(entry.pid) ?? null
       const claimed = sessionId !== null && this.owners.has(sessionId)
       // A process that still has a live parent and carries a session this
-      // instance does not own belongs to another running instance. Leave it be;
-      // a detached one is the cross-instance handoff case and is adopted.
+      // instance no longer holds is still that parent's. Only a detached one is adopted.
       if (sessionId !== null && !claimed && !this.isOrphaned(entry.parentPid, alive)) continue
       const scope =
         claimed && sessionId !== null
@@ -1053,7 +1159,15 @@ export class AgentProcessService implements AgentProcessObserver {
     return family
   }
 
-  private async killTree(pid: number, force = false): Promise<void> {
+  /**
+   * End a process and what it started, except a shared daemon somewhere below it
+   * (an emulator an agent booted) and that daemon's own children.
+   */
+  private async killTree(
+    pid: number,
+    force = false,
+    known?: readonly ProcessSnapshotEntry[]
+  ): Promise<void> {
     if (process.platform === 'win32') {
       try {
         await execFileAsync('taskkill.exe', ['/PID', String(pid), '/T', ...(force ? ['/F'] : [])], {
@@ -1066,14 +1180,11 @@ export class AgentProcessService implements AgentProcessObserver {
       return
     }
 
-    const snapshot = await this.snapshotter().catch(() => [])
-    const childrenByParent = new Map<number, ProcessSnapshotEntry[]>()
-    for (const entry of snapshot) {
-      const children = childrenByParent.get(entry.parentPid) ?? []
-      children.push(entry)
-      childrenByParent.set(entry.parentPid, children)
-    }
-    const tree = descendantsOf(pid, childrenByParent).reverse()
+    const snapshot = known ?? (await this.snapshotter().catch(() => []))
+    const byPid = new Map(snapshot.map((entry) => [entry.pid, entry]))
+    const tree = descendantsOf(pid, childrenIndex(snapshot))
+      .filter((entry) => !isUnderSharedDaemon(entry.pid, byPid, pid))
+      .reverse()
     const targets = [...tree, { pid }]
     if (force) {
       // No grace period: terminate every process in the tree immediately.

@@ -1070,6 +1070,21 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     return this.titleTurns.isTitleSession(sessionId)
   }
 
+  /**
+   * Register a process as a session's root, so everything it spawns is tracked.
+   *
+   * A root needs no unwatch: `AgentProcessService` keeps it until a scan cannot
+   * find the pid, so a root that dies with its session is dropped on its own.
+   */
+  protected watchHarnessRoot(
+    sessionId: string | undefined,
+    pid: number | undefined,
+    command: string,
+    cwd: string
+  ): void {
+    this.processObserver?.watchProcess(sessionId, pid, command, cwd)
+  }
+
   protected observeHarnessProcess(
     sessionId: string | undefined,
     child: ChildProcess,
@@ -1078,7 +1093,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
   ): void {
     const pid = child.pid
     if (typeof pid === 'number' && pid > 0) {
-      this.processObserver?.watchProcess(sessionId, pid, command, cwd)
+      this.watchHarnessRoot(sessionId, pid, command, cwd)
       return
     }
     // A bundled harness runs inside an Electron utilityProcess, whose OS pid is
@@ -1090,7 +1105,7 @@ export abstract class PersistentCliDriver implements HarnessDriver {
     const onSpawn = (): void => {
       const spawnedPid = child.pid
       if (typeof spawnedPid === 'number' && spawnedPid > 0) {
-        this.processObserver?.watchProcess(sessionId, spawnedPid, command, cwd)
+        this.watchHarnessRoot(sessionId, spawnedPid, command, cwd)
       }
     }
     child.once('spawn', onSpawn)

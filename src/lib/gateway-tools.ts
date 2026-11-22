@@ -42,6 +42,27 @@ export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
  * harness: the value goes to the encrypted vault, and the model never sees it.
  */
 export const ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
+/**
+ * The process handle an agent gets for what it starts.
+ *
+ * Process lifecycle belongs to the app, not to a shell command: a shell kill
+ * cannot prove it started its target, so it is refused in every form (see
+ * `unmanagedProcessKillReason`). That refusal used to point at the task-manager
+ * channels, which an ordinary thread cannot reach, leaving an agent that started
+ * a dev server or a probe instance with no way to stop it. These three tools are
+ * the sanctioned path instead, granted on every turn that carries the gateway:
+ * the app starts the process and records its pid, lists what this thread owns,
+ * and stops one of those pids after re-verifying ownership in main.
+ */
+export const PROCESS_LIST_TOOL_NAME = 'cio_process_list'
+export const PROCESS_START_TOOL_NAME = 'cio_process_start'
+export const PROCESS_STOP_TOOL_NAME = 'cio_process_stop'
+/** The app-owned process tools, granted together on every gateway turn. */
+export const PROCESS_TOOL_NAMES: ReadonlySet<string> = new Set([
+  PROCESS_LIST_TOOL_NAME,
+  PROCESS_START_TOOL_NAME,
+  PROCESS_STOP_TOOL_NAME
+])
 
 /** Optional app APIs remain callable through the core invocation tool. */
 export const GATEWAY_CAPABILITY_ID = 'cio:gateway'
@@ -51,7 +72,10 @@ export const CORE_GATEWAY_TOOL_NAMES: ReadonlySet<string> = new Set([
   UTILITY_INVOKE_TOOL_NAME,
   UTILITY_DOCS_TOOL_NAME,
   ASK_SECRET_TOOL_NAME,
-  UTILITY_DIAGNOSTICS_TOOL_NAME
+  UTILITY_DIAGNOSTICS_TOOL_NAME,
+  PROCESS_LIST_TOOL_NAME,
+  PROCESS_START_TOOL_NAME,
+  PROCESS_STOP_TOOL_NAME
 ])
 export const GATEWAY_DISCOVERY_INSTRUCTION =
   'Optional app, workstation, engineering and utility-setup tools are available through the built-in cio:gateway capability, already active. Use cio_util_use with utility_id "cio:gateway", operation "catalog", and input {names:["tool_name"]} to load only the needed schemas, or input {} for a compact index. Then operation "call" with input {tool:"tool_name",arguments:{...}} executes it with the original permissions. Operation "batch" takes input {calls:[...]} with up to eight entries in one round trip: {tool,arguments} for any gateway tool, or {utility_id,operation,input} for an activated or banked utility. Entries settle in your order, so an activation can precede the call that needs it, and a permission-gated call still raises its own card. Do not call optional tool names directly or use shell gateway requests.'
@@ -124,6 +148,12 @@ const MODEL_TOOL_DESCRIPTIONS: Readonly<Record<string, string>> = {
     'Install or update a secret-free utility bundle only during explicit utility setup. Each entry wraps definition with kind inside it. Collect credentials afterward with cio_ask_secret.',
   cio_util_diagnose:
     'Read-only app diagnostics: search every thread by keyword and by meaning for context, find threads, read bounded messages or redacted logs, inspect schema, or run bounded SELECT queries. Never changes data.',
+  cio_process_list:
+    'List the processes this thread owns with their pids, commands, working directories and ports. Read it before stopping anything and to answer "is it still running?".',
+  cio_process_start:
+    'Start a long-running command as an app-owned process and get its pid, so it outlives the tool call and can be stopped later. Use it for a dev server, a probe instance or a watcher instead of backgrounding one in the shell.',
+  cio_process_stop:
+    'Stop one process this thread owns by pid. The app re-verifies ownership, so another project\u2019s server or the user\u2019s own process is refused. Never stop a process from a shell command.',
   cio_util_suggest:
     'Offer a validated, secret-free capability bundle for user installation. Include real MCP transport configuration. Claim connection only after accepted; collect credentials afterward with cio_ask_secret. Handle declined, alternative, invalid and failed results honestly.'
 }
@@ -514,5 +544,80 @@ export const GATEWAY_TOOLS: GatewayToolDefinition[] = [
     },
     route: '/suggest-utility',
     sentWhen: 'After a search finds a capability the user does not have and the task needs it'
+  },
+  {
+    name: PROCESS_LIST_TOOL_NAME,
+    description:
+      'List the processes this thread owns: every process the app started for this thread and everything the session\u2019s own shell tool spawned that is still running, with pid, command, working directory and listening ports. Available on every turn that carries the gateway. Use it before stopping anything, and to check whether a server or a probe instance you started is still up.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      additionalProperties: false
+    },
+    outputSchema: GATEWAY_OPERATION_RESULT_SCHEMA,
+    route: '/process-list',
+    sentWhen: 'Before stopping a process, or when the user asks what is still running'
+  },
+  {
+    name: PROCESS_START_TOOL_NAME,
+    description:
+      'Start a command as an app-owned background process and return its pid, together with the cwd and label the app recorded with it. Use this instead of backgrounding a process in the shell (a trailing &, nohup, setsid) whenever the process has to outlive the tool call: a dev server, a probe instance, a watcher, a long conversion. The app spawns it detached with its own environment, records the pid against this thread, lists it in ' +
+      PROCESS_LIST_TOOL_NAME +
+      ', and stops it with ' +
+      PROCESS_STOP_TOOL_NAME +
+      ' or when the thread is cleaned up or the app quits, so it can never be orphaned. Output goes to the log file the result names.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description:
+            'Shell command to run in the background, for example "bun run dev:probe" or "bun run dev:fast". Run through the platform shell in the working directory below.'
+        },
+        cwd: {
+          type: 'string',
+          description:
+            'Working directory. Defaults to this thread\u2019s project root; must stay inside the project.'
+        },
+        label: {
+          type: 'string',
+          description: 'Short human label for the process row, for example "probe instance".'
+        }
+      },
+      required: ['command'],
+      additionalProperties: false
+    },
+    outputSchema: GATEWAY_OPERATION_RESULT_SCHEMA,
+    route: '/process-start',
+    sentWhen: 'A dev server, probe instance, watcher or any command that must outlive the tool call'
+  },
+  {
+    name: PROCESS_STOP_TOOL_NAME,
+    description:
+      'Stop one process owned by this thread, by pid, and report the pid that was stopped. Ownership is re-verified in the app before anything is signalled: a pid this thread does not own (another project\u2019s server, a process the user started, a recycled pid) is refused with the list of pids this thread can stop. Stopping a process from a shell command is refused in every form, so this is the only way to end a process you started. Use it for a dev server or a probe instance once you are done with it; a process that must keep running is left alone.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pid: {
+          type: 'number',
+          description:
+            'Process id to stop, as returned by ' +
+            PROCESS_LIST_TOOL_NAME +
+            ' or ' +
+            PROCESS_START_TOOL_NAME +
+            '.'
+        },
+        force: {
+          type: 'boolean',
+          description:
+            'Skip the graceful stop and terminate immediately. Use it only when the process ignored a normal stop.'
+        }
+      },
+      required: ['pid'],
+      additionalProperties: false
+    },
+    outputSchema: GATEWAY_OPERATION_RESULT_SCHEMA,
+    route: '/process-stop',
+    sentWhen: 'A process you started is still running and is no longer needed'
   }
 ]

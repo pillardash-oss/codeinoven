@@ -234,6 +234,13 @@ export function wireChatEngine(
     engine.state.utilityOrchestration.setSecretRequestExecutor((input, context) =>
       engine.requestUtilitySecrets(input, context)
     )
+    // The app owns process lifecycle, so an agent that starts a long-running
+    // process ends it through the app rather than a shell kill it cannot prove.
+    // The engine supplies the executor because it owns the agent process
+    // service, which records the pid and re-verifies ownership before a stop.
+    engine.state.utilityOrchestration.setAgentProcessExecutor((action, input, context) =>
+      engine.runAgentProcessTool(action, input, context)
+    )
     // A proposed capability is an app-owned gateway tool too, so the call has to
     // be able to wait for the user: the engine surfaces the card and settles a
     // promise with the decision, and only the gateway installs on acceptance.
