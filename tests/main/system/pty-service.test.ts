@@ -128,3 +128,89 @@ describe('PtyService scope roots', () => {
     rmSync(root, { recursive: true, force: true })
   })
 })
+
+/**
+ * A pty double that can actually emit output and exit, so the delivery contract
+ * between a shell and the renderer can be asserted.
+ */
+function streamingPty() {
+  let onData: ((data: string) => void) | undefined
+  let onExit: ((event: { exitCode: number }) => void) | undefined
+  return {
+    pid: 200,
+    pause: vi.fn(),
+    resume: vi.fn(),
+    onData: (fn: (data: string) => void) => (onData = fn),
+    onExit: (fn: (event: { exitCode: number }) => void) => (onExit = fn),
+    write: vi.fn(),
+    resize: vi.fn(),
+    kill: vi.fn(),
+    emit: (data: string) => onData?.(data),
+    exit: (exitCode = 0) => onExit?.({ exitCode })
+  }
+}
+
+/** The window side of `sendToRenderer`, recording what the terminal would see. */
+function fakeSender() {
+  const sent: Array<{ channel: string; payload: unknown }> = []
+  return {
+    sent,
+    send: vi.fn((channel: string, payload: unknown) => sent.push({ channel, payload })),
+    isDestroyed: () => false,
+    isCrashed: () => false,
+    isLoadingMainFrame: () => false,
+    mainFrame: null
+  }
+}
+
+describe('PtyService terminal output pacing', () => {
+  it('gathers a shell burst into one message instead of one message per chunk', async () => {
+    vi.useFakeTimers()
+    const root = mkdtempSync(join(tmpdir(), 'cio-pty-paced-'))
+    const storage = new StorageEngine(root)
+    const proc = streamingPty()
+    ptySpawn.mockImplementation(() => proc)
+    const service = new PtyService(storage, fakeDatabase(root) as never, undefined)
+    const sender = fakeSender()
+    service.attach(sender as never)
+
+    await asTest(service).create('term-paced', 'p1', 't1', 80, 24)
+    // A build is one long run of small writes; each used to be its own IPC
+    // message, each one a renderer task and a WASM terminal write.
+    for (let line = 0; line < 200; line++) proc.emit(`line ${line}\n`)
+
+    expect(sender.sent).toEqual([])
+    vi.advanceTimersByTime(20)
+
+    expect(sender.sent).toHaveLength(1)
+    expect(sender.sent[0]?.channel).toBe('pty:data:term-paced')
+    expect(sender.sent[0]?.payload).toContain('line 0\n')
+    expect(sender.sent[0]?.payload).toContain('line 199\n')
+
+    vi.useRealTimers()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('delivers the last output before the exit, never after it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cio-pty-exit-'))
+    const storage = new StorageEngine(root)
+    const proc = streamingPty()
+    ptySpawn.mockImplementation(() => proc)
+    const service = new PtyService(storage, fakeDatabase(root) as never, undefined)
+    const sender = fakeSender()
+    service.attach(sender as never)
+
+    await asTest(service).create('term-exit', 'p1', 't1', 80, 24)
+    proc.emit('build finished\n')
+    proc.exit(0)
+
+    // A terminal closed before the next frame must still show how the run ended,
+    // and an exit may never overtake output that was written before it.
+    expect(sender.sent).toEqual([
+      { channel: 'pty:data:term-exit', payload: 'build finished\n' },
+      { channel: 'pty:exit:term-exit', payload: 0 }
+    ])
+
+    rmSync(root, { recursive: true, force: true })
+  })
+})
