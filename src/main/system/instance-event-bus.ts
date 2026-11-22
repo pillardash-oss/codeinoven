@@ -61,6 +61,8 @@ import { Logger } from './logger'
  * from the same directory and pid, so they always agree.
  */
 const MAX_SOCKET_PATH_BYTES = 100
+/** Bases a too-long endpoint may move to, tried after the OS temp root. */
+const ENDPOINT_FALLBACK_ROOTS = ['/tmp']
 /** Bytes one link may buffer before a frame is dropped instead of written. */
 const MAX_BUFFERED_BYTES = 2 * 1024 * 1024
 /** Longest frame this bus will assemble from one peer, so a bad peer cannot grow it. */
@@ -177,20 +179,41 @@ function shortHash(value: string): string {
   return createHash('sha256').update(value).digest('hex').slice(0, 12)
 }
 
+/** Whether an endpoint path fits the platform's socket address limit. */
+function fitsSocketPath(endpoint: string): boolean {
+  return Buffer.byteLength(endpoint) <= MAX_SOCKET_PATH_BYTES
+}
+
 /**
  * The endpoint one process listens on and its peers dial.
  *
  * Deterministic from the pair (directory, pid), which is why no discovery channel
  * is needed: the instance registry already tells every process which pids are
  * alive, and this turns one of them into an address.
+ *
+ * `tempRoot` is a parameter because the fallback cannot assume the OS temp root
+ * is short: a harness or a desktop session may point TMPDIR at a deep per-run
+ * directory, and joining a hashed name onto it then overflows `sun_path` again,
+ * which leaves both windows listening nowhere and permanently unlinked.
  */
-export function instanceBusEndpoint(directory: string, pid: number): string {
+export function instanceBusEndpoint(
+  directory: string,
+  pid: number,
+  tempRoot: string = tmpdir()
+): string {
   if (process.platform === 'win32') {
     return `\\\\.\\pipe\\cio-instance-bus-${shortHash(directory)}-${pid}`
   }
   const endpoint = join(directory, `${pid}.sock`)
-  if (Buffer.byteLength(endpoint) <= MAX_SOCKET_PATH_BYTES) return endpoint
-  return join(tmpdir(), `cio-instance-bus-${shortHash(directory)}-${pid}.sock`)
+  if (fitsSocketPath(endpoint)) return endpoint
+  const name = `cio-instance-bus-${shortHash(directory)}-${pid}.sock`
+  // `/tmp` is the one short base every supported platform is guaranteed to have,
+  // so it is the last resort rather than a hope that TMPDIR happens to be short.
+  for (const root of [tempRoot, ...ENDPOINT_FALLBACK_ROOTS]) {
+    const candidate = join(root, name)
+    if (fitsSocketPath(candidate)) return candidate
+  }
+  return join(tempRoot, name)
 }
 
 export class InstanceEventBus {

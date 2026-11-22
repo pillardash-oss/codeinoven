@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { AgentEvent, RemoteAgentEventPayload } from '../../src/lib/types'
 import {
   InstanceEventBus,
+  instanceBusEndpoint,
   type InstanceEventBusOptions
 } from '../../src/main/system/instance-event-bus'
 import type { CrossInstanceThreadEvent } from '../../src/main/system/instance-registry'
@@ -301,5 +302,52 @@ describe('InstanceEventBus', () => {
     // never touches the filesystem either.
     alone.publishAgentEvent(deltaEvent())
     expect(probes).toBe(discovered)
+  })
+})
+
+/**
+ * `sun_path` is 104 bytes on macOS and 108 on Linux, and a bind to a longer path
+ * fails with no listener at all, which is how two windows end up permanently
+ * unlinked. The endpoint therefore has to reach a path that fits even when both
+ * the directory and the OS temp root are deep: a harness can set TMPDIR to a
+ * per-run scratch directory, and joining a hashed name onto that used to
+ * overflow the limit the fallback existed to avoid.
+ */
+describe('instanceBusEndpoint', () => {
+  // 108 bytes before the file name, so `<pid>.sock` cannot fit beside it.
+  const DEEP_DIRECTORY = join(
+    '/Users/someone/Development/in-house/very-deep-workspace-name',
+    'another-nesting-level',
+    '.cio',
+    'instances',
+    'bus'
+  )
+  const DEEP_TEMP_ROOT = join(
+    '/Users/someone/.config/pillardash/codeinoven/chats-cwd/179c81ac04f4f1fff90d59d3/.cio/tmp'
+  )
+  const SUN_PATH_BYTES = 100
+
+  it('keeps the endpoint beside the instances when it fits', () => {
+    expect(instanceBusEndpoint('/tmp/cio-instances', PEER_A)).toBe('/tmp/cio-instances/700001.sock')
+  })
+
+  it('moves a too-long endpoint into the OS temp root under a hashed name', () => {
+    const endpoint = instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, '/tmp')
+
+    expect(endpoint.startsWith('/tmp/')).toBe(true)
+    expect(endpoint).toContain(`-${PEER_A}.sock`)
+    expect(Buffer.byteLength(endpoint)).toBeLessThanOrEqual(SUN_PATH_BYTES)
+    // Deterministic from (directory, pid), so a peer derives the same address.
+    expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, '/tmp')).toBe(endpoint)
+    // A different pid is a different endpoint, or two windows would collide.
+    expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_B, '/tmp')).not.toBe(endpoint)
+  })
+
+  it('still fits when the OS temp root is itself deep', () => {
+    const endpoint = instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, DEEP_TEMP_ROOT)
+
+    expect(endpoint.startsWith('/tmp/')).toBe(true)
+    expect(Buffer.byteLength(endpoint)).toBeLessThanOrEqual(SUN_PATH_BYTES)
+    expect(instanceBusEndpoint(DEEP_DIRECTORY, PEER_A, DEEP_TEMP_ROOT)).toBe(endpoint)
   })
 })
