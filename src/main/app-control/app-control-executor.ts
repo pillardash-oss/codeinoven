@@ -144,7 +144,7 @@ const CHANNEL_ARG_HINTS: Readonly<Record<string, string>> = {
   'cloudDeploy:containerStatus': 'projectId, providerKind, containerId, accountId?',
   'cloudDeploy:deployments': 'projectId, providerKind, containerId, accountId?',
   'cloudDeploy:containerLog':
-    'projectId, providerKind, containerId, deploymentId?, accountId?, serviceName? (a logSources id, for one compose container)',
+    'projectId, providerKind, containerId, deploymentId?, accountId?, serviceName? (a logSources id, for one compose container), before? (cursor from the previous page), refresh? (boolean). Returns one page of the log: log, hasMore, cursor. The newest page comes first; pass cursor back as before to read the page above it until hasMore is false.',
   'browser:loadTabs': 'no arguments',
   'taskManager:list':
     'no arguments. Returns the processes CodeInOven started, with pid, command, cwd, project, thread and listening ports.',

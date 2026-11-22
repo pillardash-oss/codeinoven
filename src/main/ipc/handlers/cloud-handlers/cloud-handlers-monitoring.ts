@@ -1,4 +1,8 @@
 import { resolveDeploymentProvider } from '../../../providers/registry'
+import {
+  DeploymentLogPageCache,
+  readPreparedDeploymentLogPage
+} from '../../../providers/deployment-log-pages'
 import { validateEntityId } from '../../ipc-validation'
 import { isRecord, requireString } from '../shared'
 import { trustedIpcMain as ipcMain } from '../../trusted-ipc-main'
@@ -33,6 +37,21 @@ export function registerCloudDeploymentMonitoringHandlers(
   const { storage, projectManager, vault } = ctx
   const { loadOrCreate: loadOrCreateCloudDeploymentConfig, persist: persistCloudDeploymentConfig } =
     store
+  // Full provider logs kept in main so paging one log never re-reads the provider.
+  const deploymentLogPages = new DeploymentLogPageCache()
+
+  /** Cache key of one log payload: every input that selects it, in a fixed order. */
+  const deploymentLogKey = (
+    projectId: string,
+    kind: CloudDeploymentProviderKind,
+    accountId: string | undefined,
+    containerId: string,
+    deploymentId: string | undefined,
+    serviceName: string | undefined
+  ): string =>
+    [projectId, kind, accountId ?? '', containerId, deploymentId ?? '', serviceName ?? ''].join(
+      '\u0000'
+    )
 
   ipcMain.handle(
     'cloudDeploy:attachAccount',
@@ -436,6 +455,12 @@ export function registerCloudDeploymentMonitoringHandlers(
    * Read a container's log: one deployment's build log, or   when `serviceName`
    * names one of the container's log sources   that compose service's runtime
    * output.
+   *
+   * A log is evidence, so nothing is thrown away: the full payload is kept in
+   * main and served tail-first in windows, and `before` asks for the window that
+   * precedes the one just read. The renderer starts at the newest lines (a failed
+   * build explains itself at the end) and pages backwards as the reader scrolls
+   * up, so a megabyte of build output never has to cross IPC in one message.
    */
   ipcMain.handle(
     'cloudDeploy:containerLog',
@@ -446,7 +471,9 @@ export function registerCloudDeploymentMonitoringHandlers(
       containerId: unknown,
       deploymentId?: unknown,
       accountId?: unknown,
-      serviceName?: unknown
+      serviceName?: unknown,
+      before?: unknown,
+      refresh?: unknown
     ) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
       const kind = validateCloudDeploymentProviderKind(providerKind)
@@ -457,12 +484,40 @@ export function registerCloudDeploymentMonitoringHandlers(
         accountId === undefined ? undefined : requireString(accountId, 'Account ID', true)
       const safeServiceName =
         serviceName === undefined ? undefined : requireString(serviceName, 'Service name')
-      const provider = resolveDeploymentProvider(
+      const safeBefore =
+        before === undefined ? undefined : requireString(before, 'Log cursor', true)
+      // The cache is keyed by every input that selects a payload, so two logs of
+      // one container (its latest build, one older build, one compose service)
+      // never page through each other's content.
+      const logKey = deploymentLogKey(
+        safeProjectId,
         kind,
-        await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
+        safeAccountId,
+        safeContainerId,
+        safeDeploymentId,
+        safeServiceName
       )
-      const log = await provider.getLogs(safeContainerId, safeDeploymentId, safeServiceName)
-      return { containerId: safeContainerId, deploymentId: safeDeploymentId ?? null, log }
+      // A building deployment grows at the end, so a refresh must read the payload
+      // again instead of paging through the copy this process kept.
+      if (refresh === true) deploymentLogPages.drop(logKey)
+
+      const prepared =
+        deploymentLogPages.get(logKey) ??
+        deploymentLogPages.set(
+          logKey,
+          await resolveDeploymentProvider(
+            kind,
+            await resolveDeploymentContext(safeProjectId, kind, safeAccountId)
+          ).getLogs(safeContainerId, safeDeploymentId, safeServiceName)
+        )
+      const page = readPreparedDeploymentLogPage(prepared, safeBefore)
+      return {
+        containerId: safeContainerId,
+        deploymentId: safeDeploymentId ?? null,
+        log: page.log,
+        hasMore: page.hasMore,
+        cursor: page.cursor
+      }
     }
   )
 
