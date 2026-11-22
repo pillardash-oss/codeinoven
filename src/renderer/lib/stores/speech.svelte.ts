@@ -8,6 +8,7 @@ import type {
   SpeechHistoryPage,
   SpeechLlamaRuntimeStatus,
   SpeechLesson,
+  SpeechMlxMetalRuntimeStatus,
   SpeechModelCatalog,
   SpeechProgressEvent,
   SpeechRuntime
@@ -29,6 +30,12 @@ class SpeechSettingsStore {
   history = $state<SpeechHistoryPage>({ items: [], total: 0 })
   lessons = $state<SpeechLesson[]>([])
   llamaRuntime = $state<SpeechLlamaRuntimeStatus | null>(null)
+  /**
+   * The MLX engine that owns the Metal kernel library MLX models need. It is
+   * provisioned on demand, so an MLX model can be installed while the engine is
+   * still absent; the models list offers the one-time engine install from here.
+   */
+  mlxRuntime = $state<SpeechMlxMetalRuntimeStatus | null>(null)
   downloads = $state<Record<string, SpeechDownloadState>>({})
   retryStatus = $state<Record<string, SpeechRetryStatus>>({})
   loading = $state(false)
@@ -40,12 +47,13 @@ class SpeechSettingsStore {
     this.loading = true
     this.error = ''
     try {
-      const [catalog, capabilities, history, lessons, llama] = await Promise.all([
+      const [catalog, capabilities, history, lessons, llama, mlx] = await Promise.all([
         invoke('speech:getCatalog'),
         invoke('speech:getCapabilities'),
         invoke('speech:getHistory', undefined, 50),
         invoke('speech:getLessons', undefined),
-        invoke('speech:getLlamaRuntimeStatus')
+        invoke('speech:getLlamaRuntimeStatus'),
+        invoke('speech:getMlxRuntimeStatus')
       ])
       if (!catalog.ok) throw new Error(catalog.error.message)
       if (!capabilities.ok) throw new Error(capabilities.error.message)
@@ -56,6 +64,7 @@ class SpeechSettingsStore {
       this.history = history.value
       this.lessons = lessons.value
       if (llama.ok) this.llamaRuntime = llama.value
+      if (mlx.ok) this.mlxRuntime = mlx.value
       this.unsubscribe ??= subscribe('speech:progress', (progress) => this.onProgress(progress))
     } catch (cause) {
       this.error = cause instanceof Error ? cause.message : String(cause)
@@ -181,6 +190,22 @@ class SpeechSettingsStore {
     } catch (cause) {
       this.error = cause instanceof Error ? cause.message : String(cause)
       reportError(cause, 'The speech runtime could not be downloaded.')
+    }
+    await this.load()
+  }
+
+  /** Install the pinned MLX engine, replacing any library discovered on disk. */
+  async downloadMlxRuntime(): Promise<void> {
+    this.error = ''
+    try {
+      const result = await invoke('speech:downloadMlxRuntime')
+      if (!result.ok) {
+        this.error = result.error.message
+        toast.error(result.error.message)
+      }
+    } catch (cause) {
+      this.error = cause instanceof Error ? cause.message : String(cause)
+      reportError(cause, 'The MLX engine could not be downloaded.')
     }
     await this.load()
   }

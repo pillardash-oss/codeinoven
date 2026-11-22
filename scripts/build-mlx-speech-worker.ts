@@ -7,6 +7,15 @@
  * pinned MLX Metal wheel   resolve through the shared build cache, so a worktree
  * reuses the project root's build instead of recompiling it (see
  * `scripts/lib/speech-worker-build.ts`).
+ *
+ * Only two of those outputs are build products. `mlx-worker` is what this app
+ * ships; `mlx.metallib` is engine data that is deliberately excluded from the
+ * package (see `electron-builder.yml`) and is instead provisioned at runtime by
+ * `src/main/speech/mlx-metal-runtime.ts`. Building it here is what makes a
+ * development checkout self-contained: the runtime discovers the library sitting
+ * beside the worker in `resources/speech/runtime/darwin-arm64` instead of
+ * downloading it. Apple silicon is the only architecture this app targets, so
+ * this directory is the only runtime the app ever looks at.
  */
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'

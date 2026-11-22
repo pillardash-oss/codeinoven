@@ -50,6 +50,7 @@ import { MlxSpeechBackend } from './backends/mlx-backend'
 import { CoreMlSpeechBackend } from './backends/coreml-backend'
 import { LlamaServerSpeechBackend, setLlamaServerBinary } from './backends/llama-backend'
 import { LlamaRuntimeService, sharedLlamaRuntimeService } from './llama-runtime-service'
+import { MlxMetalRuntime } from './mlx-metal-runtime'
 import { sharedLocalAiRuntimeRegistry } from '../local-ai/local-ai-runtime-registry'
 import { Logger } from '../system/logger'
 import { getConfigRoot } from '../../lib/utils'
@@ -92,6 +93,17 @@ interface SpeechServicePaths {
 /** Cleanup prompt protocol required by the artifact's model family. */
 function cleanupProfileFor(artifact: SpeechModelArtifact): 'instruct' | 'normalizer' {
   return artifact.familyId === 's1-cleanup' ? 'normalizer' : 'instruct'
+}
+
+/**
+ * Why a runtime reported no capabilities, when the backend itself could not say.
+ * MLX is the one runtime whose engine is provisioned rather than shipped, so its
+ * missing-engine state is a download offer, not a fault.
+ */
+function defaultRuntimeUnavailableReason(runtime: SpeechRuntime): string {
+  if (runtime === 'mlx') return 'The MLX engine is not installed yet.'
+  if (runtime === 'coreml') return 'The packaged Core ML worker or audio decoder is unavailable.'
+  return 'Runtime unavailable.'
 }
 
 export interface SpeechRemoteCleanupInput {
@@ -164,6 +176,13 @@ export class SpeechService {
   private readonly storage: SpeechStorage
   private readonly queue = new SpeechJobQueue()
   private readonly backends: Map<SpeechRuntime, SpeechBackend>
+  /**
+   * The MLX engine: a 102 MB Metal kernel library that is not shipped with the
+   * app. It is reused from an MLX install on the machine or downloaded the first
+   * time an MLX model is chosen, then paired with the bundled worker in a
+   * writable runtime directory.
+   */
+  private readonly mlxRuntime: MlxMetalRuntime
   private readonly listeners = new Set<SpeechProgressListener>()
   private readonly downloader: SpeechArtifactDownloader
   private catalog: SpeechModelCatalog | null = null
@@ -210,13 +229,14 @@ export class SpeechService {
   ) {
     this.nativeCapture = new NativeSpeechCapture(paths.nativeCaptureWorkerPath)
     this.storage = storage ?? new SpeechStorage()
+    this.mlxRuntime = new MlxMetalRuntime(paths.mlxWorkerPath)
     this.learning = new SpeechLearningService(
       join(getConfigRoot(), 'speech', 'lessons.json'),
       (observation) => this.learnLessonsFromCorrection(observation)
     )
     this.backends = new Map<SpeechRuntime, SpeechBackend>([
       ['sherpa-onnx', new SherpaSpeechBackend()],
-      ['mlx', new MlxSpeechBackend(paths.mlxWorkerPath)],
+      ['mlx', new MlxSpeechBackend(this.mlxRuntime)],
       ['coreml', new CoreMlSpeechBackend(paths.coremlWorkerPath)],
       [
         'gguf',
@@ -386,6 +406,21 @@ export class SpeechService {
     return this.llamaRuntime.status()
   }
 
+  /** Discover-or-download status of the MLX engine the MLX worker runs on. */
+  mlxRuntimeStatus(): ReturnType<MlxMetalRuntime['status']> {
+    return this.mlxRuntime.status()
+  }
+
+  /**
+   * Install the pinned MLX engine, replacing any discovered copy.
+   *
+   * This is the recovery path when a library another tool installed on the
+   * machine is the wrong MLX version: the managed copy outranks it.
+   */
+  async downloadMlxRuntime(signal?: AbortSignal): Promise<void> {
+    await this.mlxRuntime.download(signal)
+  }
+
   onProgress(listener: SpeechProgressListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
@@ -407,12 +442,7 @@ export class SpeechService {
             available: capabilities.length > 0,
             ...(capabilities.length === 0
               ? {
-                  reason:
-                    runtime === 'mlx'
-                      ? 'The packaged MLX worker is unavailable.'
-                      : runtime === 'coreml'
-                        ? 'The packaged Core ML worker or audio decoder is unavailable.'
-                        : 'Runtime unavailable.'
+                  reason: backend.unavailableReason?.() ?? defaultRuntimeUnavailableReason(runtime)
                 }
               : {})
           }
@@ -1456,6 +1486,14 @@ export class SpeechService {
   }
 
   async downloadArtifact(artifactId: string, mode: SpeechDownloadMode = 'resume'): Promise<void> {
+    const artifact = this.catalog?.artifacts.find((item) => item.id === artifactId)
+    // An MLX model is unloadable without the Metal library, and that library is
+    // no longer shipped. Provision it first (reuse what the machine has, else
+    // download the pinned copy) so the model bytes never start moving toward a
+    // directory this app cannot run from.
+    if (artifact?.runtime === 'mlx' && artifact.qualification.status !== 'retired') {
+      await this.mlxRuntime.ensure()
+    }
     return this.downloader.download(artifactId, mode)
   }
 

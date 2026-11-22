@@ -51,8 +51,18 @@ mac:
     # repeating them here copies the same tree twice. Duplicating any symlink
     # inside those trees (e.g. a vendored .bin/esbuild) crashes the second copy
     # pass with EEXIST. Only the darwin-arm64 speech runtime is mac-specific.
+    #
+    # Apple silicon is the only architecture this app targets, so darwin-arm64 is
+    # the only speech runtime that exists. The MLX Metal kernel library
+    # (`mlx.metallib`, ~102 MB) is deliberately filtered out: it is engine data,
+    # not code, and is provisioned at runtime instead   reused from an MLX
+    # installation already on the machine, otherwise downloaded on the first MLX
+    # model download (see src/main/speech/mlx-metal-runtime.ts).
     - from: resources/speech/runtime/darwin-arm64
       to: speech
+      filter:
+        - '**/*'
+        - '!**/mlx.metallib'
   hardenedRuntime: true
   notarize: true
   entitlements: build/entitlements.mac.plist
