@@ -224,7 +224,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     // and a range that failed to rebuild in that state was never retried. That is
     // what left a comment with no bubble and no highlight on return.
     $effect(() => {
-      void this.root.steerQueuedMessage.annotationReferences.length
+      const anchors = this.root.steerQueuedMessage.annotationAnchorKey
       void this.root.composerScope.visibleMessages.length
       void this.root.pollStreamParts.conversationBusy
       void threadMessages.streamRevision(
@@ -232,7 +232,7 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
         this.root.pollStreamParts.conversationId
       )
       void this.root.props.active
-      if (this.root.steerQueuedMessage.annotationReferences.length === 0) return
+      if (!anchors) return
       this.root.unmirroredTraceStartTime.responseRangeRetriesLeft =
         this.root.unmirroredTraceStartTime.RESPONSE_RANGE_RETRIES
       void tick().then(() => {

@@ -12,7 +12,7 @@ import { invoke } from '$lib/ipc.svelte'
  * without one IPC call per keystroke; going empty forwards once and stops.
  *
  * Draft persistence is debounced: the draft content is committed to the DB
- * only after 10s of draft inactivity, and cleared drafts flush immediately so
+ * only after a pause (10s by default), and cleared drafts flush immediately so
  * a sent message never leaves a stale draft behind.
  *
  * A thread's draft is one shared slot, so the same pub/sub has to carry the
@@ -20,6 +20,13 @@ import { invoke } from '$lib/ipc.svelte'
  * instance is published back to the surfaces holding a mirror of it, or the
  * thread reads as drafted long after its message was sent.
  */
+
+/**
+ * Delay for a comment being typed on an annotation. Every commit is broadcast
+ * back and rebuilds the thread lists, so it cannot run per keystroke, but a
+ * comment must reach the shared slot sooner than composer text does.
+ */
+export const COMMENT_COMMIT_DEBOUNCE_MS = 1_000
 
 /** Delay between the last draft activity and its DB content commit. */
 const DRAFT_COMMIT_DEBOUNCE_MS = 10_000
@@ -109,13 +116,14 @@ export function publishDraftActivity(projectId: string, threadId: string, drafti
 /**
  * Schedule the DB commit of a thread's draft state (flag + content), pushing
  * the commit back by the debounce window on every draft edit so the DB write
- * lands only after 10s of draft inactivity.
+ * lands only after `delayMs` of draft inactivity.
  */
 export function scheduleDraftCommit(
   projectId: string,
   threadId: string,
   drafting: boolean,
-  draftJson: string | null
+  draftJson: string | null,
+  delayMs = DRAFT_COMMIT_DEBOUNCE_MS
 ): void {
   if (!projectId || !threadId) return
   const key = `${projectId}:${threadId}`
@@ -124,7 +132,7 @@ export function scheduleDraftCommit(
   const timer = setTimeout(() => {
     pendingDraftCommits.delete(key)
     void invoke('thread:setDraftState', projectId, threadId, drafting, draftJson).catch(() => {})
-  }, DRAFT_COMMIT_DEBOUNCE_MS)
+  }, delayMs)
   pendingDraftCommits.set(key, { timer, projectId, threadId, drafting, draftJson })
 }
 
