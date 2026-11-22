@@ -45,12 +45,6 @@ const MAX_SCREENSHOT_AGE_MS = 30 * 24 * 60 * 60 * 1000
  *  selector; the fallback keydown path and the global chord are debounced. */
 const TRIGGER_DEBOUNCE_MS = 400
 
-/** The selector process exits once the selection is made, and macOS's capture
- *  agent writes the file a moment later, so a missing file is polled for briefly
- *  before the capture is read as cancelled. */
-const CAPTURE_FILE_WAIT_MS = 3000
-const CAPTURE_FILE_POLL_MS = 100
-
 let activeAccelerator: string | null = null
 let capturing = false
 let lastTriggerAt = 0
@@ -79,27 +73,20 @@ function failed(
   return { status: 'failed', reason }
 }
 
-/** Run the platform selector; it answers when the user releases the selection,
- *  and with its exit code, because a refused capture also exits without a file. */
-function runScreenCapture(path: string): Promise<number> {
+/** Run the platform selector; it answers when the user releases the selection.
+ *  It exits 0 even when it could not write the file, so stderr comes back too. */
+function runScreenCapture(path: string): Promise<{ exitCode: number; stderr: string }> {
   return new Promise((resolveCapture, rejectCapture) => {
     const child = spawn(SCREEN_CAPTURE_BIN, ['-i', '-x', '-o', '-t', 'png', path], {
-      stdio: 'ignore'
+      stdio: ['ignore', 'ignore', 'pipe']
+    })
+    let stderr = ''
+    child.stderr.on('data', (chunk: Buffer) => {
+      stderr = `${stderr}${chunk.toString()}`.slice(-2000)
     })
     child.once('error', rejectCapture)
-    child.once('close', (code) => resolveCapture(code ?? 0))
+    child.once('close', (code) => resolveCapture({ exitCode: code ?? 0, stderr }))
   })
-}
-
-/** The written capture, once it has bytes, or null when none arrives in time. */
-async function awaitCaptureFile(path: string): Promise<{ size: number } | null> {
-  const deadline = Date.now() + CAPTURE_FILE_WAIT_MS
-  for (;;) {
-    const info = await stat(path).catch(() => null)
-    if (info && info.size > 0) return info
-    if (Date.now() >= deadline) return null
-    await new Promise((resolveWait) => setTimeout(resolveWait, CAPTURE_FILE_POLL_MS))
-  }
 }
 
 /** Fit the selection for a vision provider: one downscale, never an upscale. */
@@ -191,23 +178,25 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
 
   capturing = true
   const directory = screenshotsDirectory()
-  const rawPath = join(directory, `.capture-${randomUUID()}.png`)
+  // Never dot-prefixed: screencapture cannot write to a hidden filename.
+  const rawPath = join(directory, `capture-${randomUUID()}.png`)
   try {
     await mkdir(directory, { recursive: true })
     Logger.dev('Opening the region screenshot selector', { rawPath })
-    let exitCode = 0
+    let selector: { exitCode: number; stderr: string }
     try {
-      exitCode = await runScreenCapture(rawPath)
+      selector = await runScreenCapture(rawPath)
     } catch (error) {
       return failed(
         `The macOS screenshot selector could not start: ${error instanceof Error ? error.message : String(error)}`
       )
     }
 
-    const rawInfo = await awaitCaptureFile(rawPath)
-    if (!rawInfo) {
+    const rawInfo = await stat(rawPath).catch(() => null)
+    if (!rawInfo || rawInfo.size === 0) {
       await rm(rawPath, { force: true }).catch(() => undefined)
-      Logger.dev('The region screenshot selector wrote no file', { exitCode })
+      Logger.dev('The region screenshot selector wrote no file', selector)
+      if (selector.stderr.includes('cannot write file')) return failed(selector.stderr.trim())
       // A selector that wrote nothing is either a cancelled selection or a
       // capture the system quietly refused. The permission state, read again
       // rather than assumed, is what tells the two apart.

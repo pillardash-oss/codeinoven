@@ -23,11 +23,12 @@ export class ChatComposerEffects extends BoardUnit<ChatComposer> {
    * so every effect here is owned by the component.
    */
   init(): void {
-    // The composer is the prompt a system-wide capture lands in. Only one thread
-    // surface is mounted at a time, so the newest registration is the visible one,
-    // and the cleanup leaves captures to the next composer when this remounts.
+    // The composer is the prompt a system-wide capture lands in. A side chat can
+    // be mounted beside the thread, so the root is handed over to rank them, and
+    // the cleanup leaves captures to the next composer when this remounts.
     onMount(() =>
       registerScreenshotTarget({
+        getRoot: () => this.root.captureComposerRoot.composerRoot,
         attachScreenshot: (path) => this.root.handleDropData.attachScreenshot(path)
       })
     )
