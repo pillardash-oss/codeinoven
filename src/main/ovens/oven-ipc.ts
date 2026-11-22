@@ -304,7 +304,8 @@ export function registerOvenIpc(
     // Turning the store off must leave nothing behind on that machine, which is
     // a promise the switch makes in words, so it is kept here rather than left
     // to the host's own bookkeeping.
-    if (!answer.enabled) await service.forgetUtilitySecrets(id)
+    // Keyed on the request: a switch-on the machine declined must delete nothing.
+    if (!enabled) await service.forgetUtilitySecrets(id)
     return answer
   })
   ipcMain.handle('oven:forgetUtilitySecrets', async (_event, raw: unknown, utilityId: unknown) => {

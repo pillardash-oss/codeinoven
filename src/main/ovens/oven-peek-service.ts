@@ -176,7 +176,12 @@ export class OvenPeekService {
       // waiting for it is what kept a connected Oven on "Checking…"; it fills the
       // cache the moment it lands instead.
       const probeTask = this.service.probe(ovenId, refresh)
-      const preflightTask = this.preflight(ovenId)
+      // Settled here, not where it is used: on an unreachable Oven it rejects
+      // before the probe does, and nothing would be listening yet.
+      const preflightTask = this.preflight(ovenId).then(
+        (value) => ({ ok: true as const, value }),
+        (reason: unknown) => ({ ok: false as const, reason })
+      )
       const probeOutcome = await probeTask.then(
         (value) => ({ ok: true as const, value }),
         (reason: unknown) => ({ ok: false as const, reason })
@@ -187,23 +192,24 @@ export class OvenPeekService {
         : Promise.resolve({ state: 'unverified' })
       const cachedPreflight = this.cache.get(ovenId)?.preflight ?? null
       const report: OvenPreflightReport | null = cachedPreflight?.report ?? null
-      void preflightTask.then(
-        (value) => {
-          const current = this.cache.get(ovenId)
-          if (!current) return
-          const filled: OvenPeek = {
-            ...current,
-            preflight: { report: value, assessment: assessPreflight(value) }
-          }
-          this.cache.set(ovenId, filled)
-          if (filled.probe) void this.persist(ovenId, filled)
-        },
-        (reason: unknown) =>
+      void preflightTask.then((outcome) => {
+        if (!outcome.ok) {
           Logger.dev('Oven package check did not complete', {
             ovenId,
-            error: messageOf(reason)
+            error: messageOf(outcome.reason)
           })
-      )
+          return
+        }
+        const { value } = outcome
+        const current = this.cache.get(ovenId)
+        if (!current) return
+        const filled: OvenPeek = {
+          ...current,
+          preflight: { report: value, assessment: assessPreflight(value) }
+        }
+        this.cache.set(ovenId, filled)
+        if (filled.probe) void this.persist(ovenId, filled)
+      })
       let inventory: OvenHarnessInventoryItem[] = this.harness.cachedInventory(ovenId)
       if (probe) {
         try {

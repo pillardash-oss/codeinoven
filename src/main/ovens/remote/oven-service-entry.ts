@@ -46,12 +46,17 @@ import {
 } from '../oven-wsl'
 import { ovenRootOperation } from './oven-root-operations'
 import { ovenWorkspace } from './oven-workspace'
-import { OVEN_UTILITY_HOST_MODE, OVEN_UTILITY_RELAY_MODE } from '../../../lib/oven-utility-host'
+import {
+  OVEN_UTILITY_HOST_MODE,
+  OVEN_UTILITY_RELAY_MODE,
+  type OvenUtilityHostState
+} from '../../../lib/oven-utility-host'
 import { startOvenUtilityHost } from './oven-utility-host'
 import { openOvenUtilityHostLog } from './oven-utility-host/oven-utility-host-log'
 import { createOvenUtilityLocalHost } from './oven-utility-host/oven-utility-local'
 import { OvenUtilitySecrets } from './oven-utility-host/oven-utility-secrets'
-import { answerOvenUtilityAdminRequest } from './oven-service-utility-secrets'
+import { answerOvenUtilityAdminRequest, getOvenUtilityJson } from './oven-service-utility-secrets'
+import { ovenUtilityUrl } from './oven-utility-http'
 import { runOvenUtilityRelay } from './oven-utility-relay'
 import {
   readOvenUtilityHostState,
@@ -295,6 +300,8 @@ let shutDownServer: (() => void) | undefined
  */
 let utilityHostChild: ChildProcess | undefined
 let requestTail: Promise<unknown> = Promise.resolve()
+/** How long a host this daemon did not start gets to prove it is alive. */
+const UTILITY_HOST_CHECK_MS = 2000
 const MAX_REQUEST = 1024 * 1024
 const MAX_RUNS = 64
 const MAX_ACTIVE = 4
@@ -971,7 +978,7 @@ async function utilityHost(): Promise<{ port: number }> {
   // for it, which is not necessarily a daemon started with an overridden root.
   const home = homedir()
   const published = await readOvenUtilityHostState(home)
-  if (published && processAlive(published.pid)) return { port: published.port }
+  if (published && (await utilityHostUsable(published))) return { port: published.port }
   // A state file whose host is gone names a port nothing listens on, so it is
   // withdrawn before a new host publishes over it.
   if (published) await removeOvenUtilityHostState(home, published.hostToken)
@@ -998,6 +1005,27 @@ async function utilityHost(): Promise<{ port: number }> {
   const started = await waitForOvenUtilityHostState(home)
   if (!started) throw new Error('The Oven utility host did not start.')
   return { port: started.port }
+}
+
+/**
+ * Whether a published host is one to keep using.
+ *
+ * A live pid is not enough: a crashed host's pid gets reused, and a host that
+ * outlived a killed daemon still runs the bundle an update meant to replace.
+ * This daemon's own child is trusted, so a busy host is never started twice.
+ */
+async function utilityHostUsable(host: OvenUtilityHostState): Promise<boolean> {
+  if (!processAlive(host.pid)) return false
+  if (host.pid === utilityHostChild?.pid) return true
+  if (host.revision !== revision) return false
+  return await getOvenUtilityJson(
+    `${ovenUtilityUrl(host.port)}/host/status`,
+    host.hostToken,
+    UTILITY_HOST_CHECK_MS
+  ).then(
+    () => true,
+    () => false
+  )
 }
 
 /** Stop the utility host this daemon started, if it is still its own. */

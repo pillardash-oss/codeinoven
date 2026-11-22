@@ -3,7 +3,8 @@
  *
  * An Oven has no Electron, so it has no `safeStorage`: the only encrypted store
  * it can honestly offer is the one its own operating system already runs — the
- * login keychain on macOS, the Secret Service on Linux, DPAPI on Windows. Each
+ * login keychain on macOS (holding the key to encrypted files, because its CLI
+ * cannot take a long value on stdin), the Secret Service on Linux, DPAPI on Windows. Each
  * platform therefore gets one small backend that speaks its native tool, and a
  * machine with none of them reports itself unavailable instead of writing
  * plaintext under a reassuring name.
@@ -18,9 +19,9 @@
  *    never touches a real keychain and a probe never surprises an operator.
  */
 import { execFile } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { chmod, mkdir, readFile, unlink, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 import type { OvenUtilitySecretBackend } from '../../../../lib/oven-utility-host'
 
 /** Most one stored value may carry: a bundle of tokens, never a file. */
@@ -44,6 +45,20 @@ const MAX_KEY_LENGTH = 200
 /** What the macOS keychain answers when the item it was asked for is absent. */
 const KEYCHAIN_ITEM_NOT_FOUND = 44
 
+/** The keychain account holding the key that encrypts this Oven's files on macOS. */
+const KEYCHAIN_KEY_ACCOUNT = 'cio-store-key'
+
+/** The cipher for those files, and the sizes of what precedes the ciphertext. */
+const FILE_CIPHER = 'aes-256-gcm'
+const FILE_IV_BYTES = 12
+const FILE_TAG_BYTES = 16
+
+/** Shorter than the daemon's 15 s wait, so a hung store still gets reported. */
+const COMMAND_TIMEOUT_MS = 10_000
+
+/** What a command that was killed for taking too long exits with, as `timeout` does. */
+const COMMAND_TIMED_OUT = 124
+
 /** Longest stderr excerpt an error message carries. */
 const MAX_ERROR_DETAIL = 240
 
@@ -59,6 +74,13 @@ export const OVEN_UTILITY_LINUX_NO_SESSION_BUS_REASON =
 /** Why a Linux machine without `secret-tool` cannot keep a credential. */
 export const OVEN_UTILITY_LINUX_NO_SECRET_TOOL_REASON =
   'This Linux machine has no `secret-tool`, so no secret service can be reached.'
+
+/** Why a Linux machine whose secret service does not answer cannot keep a credential. */
+const OVEN_UTILITY_LINUX_NO_SERVICE_REASON =
+  'The secret service on this Linux machine is locked or not running'
+
+/** A key nothing is filed under, looked up to see whether the service answers. */
+const PROBE_KEY = 'cio-probe'
 
 /** Why an unknown platform cannot keep a credential. */
 const NO_PLATFORM_STORE_REASON =
@@ -123,7 +145,7 @@ export function createOvenUtilitySecretBackend(options: SecretBackendOptions): S
   const run = options.runner ?? runSecretCommand
   switch (options.platform ?? process.platform) {
     case 'darwin':
-      return new MacosKeychainSecretBackend(run)
+      return new MacosKeychainSecretBackend(options.directory, run)
     case 'linux':
       return new LinuxSecretServiceBackend(run, options.env ?? process.env)
     case 'win32':
@@ -163,6 +185,7 @@ function failedExitCode(error: Error): number {
   const code = (error as { code?: unknown }).code
   if (typeof code === 'number') return code
   if (code === 'ENOENT') return 127
+  if ((error as { killed?: unknown }).killed) return COMMAND_TIMED_OUT
   return 1
 }
 
@@ -185,7 +208,7 @@ const runSecretCommand: SecretCommandRunner = (argv, stdin = '') =>
       args,
       {
         encoding: 'utf8',
-        timeout: 15_000,
+        timeout: COMMAND_TIMEOUT_MS,
         maxBuffer: MAX_ERROR_DETAIL * 1024,
         windowsHide: true
       },
@@ -203,20 +226,44 @@ const runSecretCommand: SecretCommandRunner = (argv, stdin = '') =>
     child.stdin?.end(stdin)
   })
 
-/** The login keychain, through the tool macOS ships for exactly this. */
+/** Where a file-backed backend keeps one key: named by hash, so any id is a safe name. */
+function secretFilePath(directory: string, key: string): string {
+  return join(directory, `${createHash('sha256').update(key).digest('hex')}`)
+}
+
+/** Write one ciphertext 0600. */
+async function writeSecretFile(path: string, data: string | Buffer): Promise<void> {
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  await writeFile(path, data, { mode: 0o600 })
+  // `writeFile` applies its mode only when it creates the file, so a file left
+  // behind by an earlier version keeps whatever permissions it already had.
+  await chmod(path, 0o600)
+}
+
+/**
+ * The login keychain, through the tool macOS ships for exactly this.
+ *
+ * `security` has no stdin form of `-w` (`-w -` stores a dash), and its
+ * interactive mode cuts a line at 4 KiB, below what a bundle may carry. So the
+ * keychain holds one random key, handed over in interactive mode, and each
+ * value is a file encrypted with it.
+ */
 class MacosKeychainSecretBackend implements SecretBackend {
   readonly id: OvenUtilitySecretBackend = 'macos-keychain'
 
-  constructor(private readonly run: SecretCommandRunner) {}
+  constructor(
+    private readonly directory: string,
+    private readonly run: SecretCommandRunner
+  ) {}
 
   /**
-   * Whether the keychain is reachable at all.
+   * Whether the keychain can be used right now.
    *
-   * `list-keychains` reads the search list without touching an item, so probing
-   * never creates one and never asks for a password it does not need.
+   * `show-keychain-info` fails on a locked keychain, as it is over SSH, where
+   * `list-keychains` succeeds and promises a store that cannot be written.
    */
   async probe(): Promise<SecretBackendProbe> {
-    const result = await this.run(['/usr/bin/security', 'list-keychains'])
+    const result = await this.run(['/usr/bin/security', 'show-keychain-info'])
     return result.code === 0
       ? { available: true }
       : {
@@ -228,49 +275,37 @@ class MacosKeychainSecretBackend implements SecretBackend {
 
   async read(key: string): Promise<string | null> {
     assertKey(key)
-    const result = await this.run([
-      '/usr/bin/security',
-      'find-generic-password',
-      '-s',
-      OVEN_UTILITY_SECRET_SERVICE,
-      '-a',
-      key,
-      '-w'
-    ])
-    if (result.code === 0) return trimTrailingNewlines(result.stdout)
-    if (result.code === KEYCHAIN_ITEM_NOT_FOUND) return null
-    throw new Error(
-      `The macOS keychain could not read \`${key}\` (security exit ${result.code}${commandDetail(result)}).`
+    const sealed = await readFile(this.pathFor(key)).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null
+      throw error
+    })
+    if (!sealed) return null
+    const secret = await this.storeKey()
+    if (!secret) return null
+    const body = FILE_IV_BYTES + FILE_TAG_BYTES
+    const decipher = createDecipheriv(FILE_CIPHER, secret, sealed.subarray(0, FILE_IV_BYTES), {
+      authTagLength: FILE_TAG_BYTES
+    })
+    decipher.setAuthTag(sealed.subarray(FILE_IV_BYTES, body))
+    return Buffer.concat([decipher.update(sealed.subarray(body)), decipher.final()]).toString(
+      'utf8'
     )
   }
 
   async write(key: string, value: string): Promise<void> {
     assertKey(key)
     assertValue(value)
-    // `-w -` reads the secret from stdin, so it never appears in the process
-    // list beside the account that can read this machine.
-    const result = await this.run(
-      [
-        '/usr/bin/security',
-        'add-generic-password',
-        '-U',
-        '-s',
-        OVEN_UTILITY_SECRET_SERVICE,
-        '-a',
-        key,
-        '-w',
-        '-'
-      ],
-      value
-    )
-    if (result.code !== 0)
-      throw new Error(
-        `The macOS keychain could not write \`${key}\` (security exit ${result.code}).`
-      )
+    const secret = (await this.storeKey()) ?? (await this.createStoreKey())
+    const iv = randomBytes(FILE_IV_BYTES)
+    const cipher = createCipheriv(FILE_CIPHER, secret, iv, { authTagLength: FILE_TAG_BYTES })
+    const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()])
+    await writeSecretFile(this.pathFor(key), Buffer.concat([iv, cipher.getAuthTag(), body]))
   }
 
   async remove(key: string): Promise<void> {
     assertKey(key)
+    await rm(this.pathFor(key), { force: true })
+    // Earlier releases filed an item under the key itself.
     const result = await this.run([
       '/usr/bin/security',
       'delete-generic-password',
@@ -285,6 +320,51 @@ class MacosKeychainSecretBackend implements SecretBackend {
         `The macOS keychain could not remove \`${key}\` (security exit ${result.code}).`
       )
   }
+
+  /** The key the files are encrypted with, or null before the first write. */
+  private async storeKey(): Promise<Buffer | null> {
+    const result = await this.run([
+      '/usr/bin/security',
+      'find-generic-password',
+      '-s',
+      OVEN_UTILITY_SECRET_SERVICE,
+      '-a',
+      KEYCHAIN_KEY_ACCOUNT,
+      '-w'
+    ])
+    if (result.code === KEYCHAIN_ITEM_NOT_FOUND) return null
+    if (result.code !== 0)
+      throw new Error(
+        `The macOS keychain could not be read (security exit ${result.code}${commandDetail(result)}).`
+      )
+    return Buffer.from(trimTrailingNewlines(result.stdout), 'hex')
+  }
+
+  /** Create that key. It travels in a command on stdin, so it is never in argv. */
+  private async createStoreKey(): Promise<Buffer> {
+    const secret = randomBytes(32)
+    const result = await this.run(
+      ['/usr/bin/security', '-i'],
+      `add-generic-password -s ${OVEN_UTILITY_SECRET_SERVICE} -a ${KEYCHAIN_KEY_ACCOUNT} -w ${secret.toString('hex')}\n`
+    )
+    // Read back before anything depends on it. stderr is not quoted, because
+    // interactive mode can echo the line it was given, and the line holds the key.
+    const saved = result.code === 0 ? await this.storeKey() : null
+    if (!saved?.equals(secret))
+      throw new Error(
+        `The macOS keychain could not save its encryption key (security exit ${result.code}).`
+      )
+    return secret
+  }
+
+  private pathFor(key: string): string {
+    return `${secretFilePath(this.directory, key)}.keychain`
+  }
+}
+
+/** `secret-tool` exits 1 both for a miss and for a failure, and only a failure says why. */
+function isSecretToolMiss(result: SecretCommandResult): boolean {
+  return result.code === 1 && result.stderr.trim().length === 0
 }
 
 /**
@@ -309,7 +389,21 @@ class LinuxSecretServiceBackend implements SecretBackend {
     const resolved = await this.run(['which', 'secret-tool'])
     if (resolved.code !== 0)
       return { available: false, reason: OVEN_UTILITY_LINUX_NO_SECRET_TOOL_REASON }
-    return { available: true }
+    // The tool and a bus can both exist on a headless machine with no service
+    // behind them. Only a lookup tells, and a clean miss exits 1 without a word.
+    const lookup = await this.run([
+      'secret-tool',
+      'lookup',
+      'service',
+      OVEN_UTILITY_SECRET_SERVICE,
+      'key',
+      PROBE_KEY
+    ])
+    if (lookup.code === 0 || isSecretToolMiss(lookup)) return { available: true }
+    return {
+      available: false,
+      reason: `${OVEN_UTILITY_LINUX_NO_SERVICE_REASON}${commandDetail(lookup)}`
+    }
   }
 
   async read(key: string): Promise<string | null> {
@@ -323,7 +417,7 @@ class LinuxSecretServiceBackend implements SecretBackend {
       key
     ])
     if (result.code === 0) return trimTrailingNewlines(result.stdout)
-    if (result.code === 1) return null
+    if (isSecretToolMiss(result)) return null
     throw new Error(
       `The secret service could not read \`${key}\` (secret-tool exit ${result.code}${commandDetail(result)}).`
     )
@@ -361,8 +455,8 @@ class LinuxSecretServiceBackend implements SecretBackend {
       key
     ])
     // `clear` exits non-zero when there is nothing to clear, which is the state
-    // the caller asked for.
-    if (result.code !== 0 && result.code !== 1)
+    // the caller asked for. With a message, the same code is a real failure.
+    if (result.code !== 0 && !isSecretToolMiss(result))
       throw new Error(
         `The secret service could not remove \`${key}\` (secret-tool exit ${result.code}).`
       )
@@ -427,22 +521,17 @@ class WindowsDpapiSecretBackend implements SecretBackend {
       )
     const ciphertext = result.stdout.trim()
     if (ciphertext.length === 0) throw new Error(`Windows DPAPI answered nothing for \`${key}\`.`)
-    await mkdir(this.directory, { recursive: true, mode: 0o700 })
-    const path = this.pathFor(key)
-    await writeFile(path, ciphertext, { mode: 0o600 })
-    // `writeFile` applies its mode only when it creates the file, so a file left
-    // behind by an earlier version keeps whatever permissions it already had.
-    await chmod(path, 0o600)
+    await writeSecretFile(this.pathFor(key), ciphertext)
   }
 
   async remove(key: string): Promise<void> {
     assertKey(key)
-    await unlink(this.pathFor(key)).catch(() => undefined)
+    await rm(this.pathFor(key), { force: true })
   }
 
   /** One ciphertext file per key, named by the key's hash rather than its text. */
   private pathFor(key: string): string {
-    return join(this.directory, `${createHash('sha256').update(key).digest('hex')}.dpapi`)
+    return `${secretFilePath(this.directory, key)}.dpapi`
   }
 }
 
