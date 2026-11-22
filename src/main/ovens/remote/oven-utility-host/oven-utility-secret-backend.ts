@@ -197,6 +197,9 @@ const runSecretCommand: SecretCommandRunner = (argv, stdin = '') =>
         })
       }
     )
+    // A tool like `which` can exit before stdin is written. The exit code is the
+    // answer, and an unhandled EPIPE here would take the whole utility host down.
+    child.stdin?.on('error', () => undefined)
     child.stdin?.end(stdin)
   })
 
