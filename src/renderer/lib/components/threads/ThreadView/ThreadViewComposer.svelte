@@ -1121,6 +1121,7 @@
                   onHideUsage={board.unmirroredTraceStartTime.hideContextUsage}
                   usageRefreshing={board.contextUsage.accountUsageCache.refreshing}
                   harnessUsage={board.harnessUsage.harnessUsage}
+                  accountLimit={board.contextUsage.shoeLimit}
                   canCompact={supportsManualCompaction(
                     board.loadOlderMessages.settings.harnessId,
                     providerStore.providers

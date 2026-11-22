@@ -237,6 +237,21 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
         }
       }
     }
+    // The selected account's reading wins for its harness, so the panel and the
+    // shoe state the same number and a percent-less turn event cannot blank it.
+    const selected = this.root.contextUsage.selectedAccountLimits
+    if (selected) {
+      const { harnessId, providerId } = this.root.loadOlderMessages.settings
+      byHarness[harnessId] ??= {
+        harnessId,
+        providerId,
+        costUsd: 0,
+        pricedCostEvents: 0,
+        unavailableCostEvents: 0,
+        rateLimits: []
+      }
+      byHarness[harnessId].rateLimits = selected
+    }
     return Object.values(byHarness).filter(
       (entry) =>
         entry.rateLimits.length > 0 ||

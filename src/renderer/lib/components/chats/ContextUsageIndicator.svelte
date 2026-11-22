@@ -16,12 +16,20 @@
     AgentBankedResets,
     AgentContextUsage,
     AgentHarnessUsage,
+    AgentRateLimitWindow,
     HarnessModelUsage,
     UsageEfficiencyKpis
   } from '$shared/types'
   import UsageWindowList from '../shared/UsageWindowList.svelte'
   import ShoePopover from './ShoePopover.svelte'
-  import { compactCount, creditsLabel, formatExpiry, formatMoney } from '$lib/format/usage'
+  import {
+    compactCount,
+    creditsLabel,
+    formatExpiry,
+    formatMoney,
+    quotaPercent,
+    shortWindowLabel
+  } from '$lib/format/usage'
 
   interface Props {
     usage?: AgentContextUsage
@@ -31,6 +39,8 @@
     efficiencyKpis?: UsageEfficiencyKpis
     /** Per-harness quota telemetry when a thread used more than one harness. */
     harnessUsage?: AgentHarnessUsage[]
+    /** The account quota window stated beside the context meter. */
+    accountLimit?: AgentRateLimitWindow
     canCompact?: boolean
     compacting?: boolean
     onCompact?: () => void
@@ -51,6 +61,7 @@
     previewContextWindow,
     efficiencyKpis,
     harnessUsage = [],
+    accountLimit,
     canCompact = false,
     compacting = false,
     onCompact,
@@ -143,6 +154,26 @@
   const filledCells = $derived(
     boundedPercent === undefined ? 0 : Math.min(METER_CELLS.length, Math.round(boundedPercent / 25))
   )
+  const limitPercent = $derived.by(() => {
+    const percent = accountLimit && quotaPercent(accountLimit)
+    return percent === undefined ? undefined : Math.round(percent)
+  })
+  const limitClass = $derived(
+    limitPercent === undefined || limitPercent < 70
+      ? 'text-foreground'
+      : limitPercent >= 90
+        ? 'text-danger'
+        : 'text-warning'
+  )
+  const triggerLabel = $derived.by(() => {
+    const context =
+      boundedPercent === undefined
+        ? 'Context usage unavailable'
+        : `Context ${Math.round(boundedPercent)}% used`
+    return accountLimit && limitPercent !== undefined
+      ? `${context}, ${accountLimit.label} ${limitPercent}% used`
+      : context
+  })
   const multiHarness = $derived(harnessUsage.length > 1)
   const cacheHitLabel = $derived(
     efficiencyKpis?.cacheHitRatio == null
@@ -465,9 +496,7 @@
     <button
       {...props}
       class="flex h-6 shrink-0 items-center gap-1.5 px-1.5 text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      aria-label={boundedPercent === undefined
-        ? 'Context usage unavailable'
-        : `Context ${Math.round(boundedPercent)}% used`}
+      aria-label={triggerLabel}
       title="Context and usage"
     >
       <span class="flex shrink-0 flex-col-reverse gap-0.5" aria-hidden="true">
@@ -475,7 +504,19 @@
           <span class="h-0.5 w-3 {cell < filledCells ? fillClass : 'bg-overlay'}"></span>
         {/each}
       </span>
-      <span class="context-usage-label tabular-nums text-[0.6875rem]">{percentLabel}</span>
+      <span class="context-usage-label tabular-nums text-[0.6875rem] empty:hidden"
+        >{percentLabel}</span
+      >
+      <!-- The account's limit is words, never a second gauge: the cells mean context
+           and nothing else, and the window's own name says what this percent is of. -->
+      {#if accountLimit && limitPercent !== undefined}
+        <span class="h-3 w-px shrink-0 bg-border-strong" aria-hidden="true"></span>
+        <span class="flex shrink-0 items-center gap-1 text-[0.6875rem] tabular-nums">
+          <span class="text-dimmed">{shortWindowLabel(accountLimit)}</span>
+          <span class={limitClass}>{limitPercent}%</span>
+          <span class="account-limit-suffix text-dimmed">used</span>
+        </span>
+      {/if}
     </button>
   {/snippet}
 

@@ -13,6 +13,7 @@ import { invoke, subscribe, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { chatDraft } from '$lib/stores/chat-draft'
 import { loadIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
+import { accountRefreshDelay } from '$lib/stores/account-usage.svelte'
 import { modelRuntime } from '$lib/stores/model-runtime.svelte'
 import { workspaceState, type HistoryMessageActions } from '$lib/stores/workspace.svelte'
 import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
@@ -40,6 +41,10 @@ import { mergedUserMessageSummaries } from '../thread-history'
 import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+
+const RESET_READ_DELAY_MS = 5_000
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+
 /** One concern of the ThreadView board. */
 export class ThreadViewEffects extends BoardUnit<ThreadView> {
   constructor(root: ThreadView) {
@@ -183,6 +188,33 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
           this.root.state.contextUsageSettleTimer = undefined
         }
       }
+    })
+
+    // Keep the shoe's limit current only while there is cause: an opened thread, an
+    // account switch, or turn activity. Nothing polls an idle thread; activity
+    // inside the throttle moves the one pending read, it never adds another.
+    $effect(() => {
+      if (this.root.props.controller || !this.root.loadOlderMessages.settings.modelId) return
+      const account = this.root.contextUsage.selectedAccount
+      void this.root.switchProject.busy
+      void this.root.contextUsage.usageActivity
+      const timer = setTimeout(
+        () => this.root.contextUsage.refreshShoeLimit(),
+        accountRefreshDelay(account)
+      )
+      return () => clearTimeout(timer)
+    })
+
+    // One read when the stated window resets, so an idle thread drops a spent limit.
+    $effect(() => {
+      if (this.root.props.controller) return
+      const resetsAt = this.root.contextUsage.shoeLimit?.resetsAt
+      if (resetsAt === undefined) return
+      const wait = resetsAt - Date.now() + RESET_READ_DELAY_MS
+      // A longer delay overflows setTimeout and would fire immediately.
+      if (wait <= 0 || wait > MAX_TIMER_DELAY_MS) return
+      const timer = setTimeout(() => this.root.contextUsage.refreshShoeLimit(), wait)
+      return () => clearTimeout(timer)
     })
 
     /**

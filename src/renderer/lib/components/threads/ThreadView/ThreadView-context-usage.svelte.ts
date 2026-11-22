@@ -1,10 +1,10 @@
 import type { ComposerIdentity } from '../../chats/ComposerIdentity.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
-import { createAccountUsageCache } from '$lib/stores/account-usage.svelte'
+import { headlineQuotaWindow } from '$lib/format/usage'
+import { accountLimits, createAccountUsageCache } from '$lib/stores/account-usage.svelte'
 import { getProjectIcon } from '$lib/project-icons'
 import { normalizeFastInference } from '$shared/fast-inference'
 import { invoke } from '$lib/ipc.svelte'
-import { isCodeInOvenCustomProviderId } from '$shared/custom-provider-id'
 import { LOCAL_OVEN_ID } from '$shared/ovens'
 import { clearIndependentAuditIntent } from '$lib/stores/lifecycle-intent'
 import { normalizeChatSettings } from '$lib/stores/thread-settings.svelte'
@@ -25,6 +25,7 @@ import type {
   ThreadSettings,
   ThreadContextUsage,
   AgentMessage,
+  AgentAccountUsageOverrides,
   AgentContextUsage,
   Project,
   AuditReport
@@ -307,6 +308,35 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
    *  harness used on the thread. */
   accountUsageCache = createAccountUsageCache()
 
+  /** The account the composer is set to send on. */
+  selectedAccount = $derived.by((): AgentAccountUsageOverrides => {
+    const { harnessId, providerId, accountId, ovenId } = this.root.loadOlderMessages.settings
+    // The Oven this thread runs on answers only when this machine has no such
+    // harness installed; a local reading always wins over it, and a thread on
+    // this device asks no other machine at all.
+    return { harnessId, providerId, accountId, ovenId: ovenId ?? LOCAL_OVEN_ID }
+  })
+
+  selectedAccountLimits = $derived(accountLimits(this.selectedAccount))
+
+  /**
+   * Turn progress as a primitive, so a republished transcript that reports the same
+   * occupancy does not keep postponing the shoe's pending read.
+   */
+  usageActivity = $derived(this.contextUsage?.contextUsed)
+
+  /** The window the shoe states beside the context meter. */
+  shoeLimit = $derived(headlineQuotaWindow(this.selectedAccountLimits ?? []))
+
+  /**
+   * Update the shoe without committing the thread's usage snapshot: that write
+   * belongs to turns and hovers, not to opening a thread.
+   */
+  refreshShoeLimit(): void {
+    const { projectId, id: threadId } = this.root.handleAgentEvent.thread
+    void this.accountUsageCache.refresh({ ...this.selectedAccount, projectId, threadId })
+  }
+
   revealContextUsage(): void {
     if (this.contextUsage) this.commitContextUsage(this.contextUsage)
     void this.root.studioTemporaryChatContext.refreshEfficiencyKpis()
@@ -332,13 +362,7 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
     const refreshKey = `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}:${this.root.loadOlderMessages.settings.ovenId ?? ''}`
     const usageList = await this.accountUsageCache.refresh(
       {
-        harnessId: this.root.loadOlderMessages.settings.harnessId,
-        providerId: this.root.loadOlderMessages.settings.providerId,
-        accountId: this.root.loadOlderMessages.settings.accountId,
-        // The Oven this thread runs on. It answers only when this machine has
-        // no such harness installed; a local reading always wins over it, and a
-        // thread on this device asks no other machine at all.
-        ovenId: this.root.loadOlderMessages.settings.ovenId ?? LOCAL_OVEN_ID,
+        ...this.selectedAccount,
         // Name the thread so the reading can only be answered by this thread's
         // own session. Account quota ignores it; context occupancy must never
         // come from another conversation's live process.
@@ -349,14 +373,11 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         refreshKey !==
         `${this.root.loadOlderMessages.settings.harnessId}:${this.root.loadOlderMessages.settings.accountId ?? ''}:${this.root.loadOlderMessages.settings.providerId}:${this.root.loadOlderMessages.settings.ovenId ?? ''}`
     )
+    // The main process resolves the account, and its id differs from the saved
+    // selection whenever a provider has a single account or none was pinned.
     const currentUsage = usageList.find(
       (usage) =>
         usage.harnessId === this.root.loadOlderMessages.settings.harnessId &&
-        usage.accountId ===
-          (isCodeInOvenCustomProviderId(this.root.loadOlderMessages.settings.providerId)
-            ? this.root.loadOlderMessages.settings.providerId
-            : (this.root.loadOlderMessages.settings.accountId ??
-              `${this.root.loadOlderMessages.settings.harnessId}.default`)) &&
         usage.providerId === this.root.loadOlderMessages.settings.providerId
     )
     if (currentUsage) {
@@ -602,7 +623,8 @@ export class ThreadViewContextUsage extends BoardUnit<ThreadView> {
         usage.harnessId === result.harnessId && usage.providerId === result.providerId
           ? result
           : usage
-      )
+      ),
+      this.selectedAccount
     )
     if (
       result.harnessId === this.root.loadOlderMessages.settings.harnessId &&
