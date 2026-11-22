@@ -69,6 +69,11 @@ export interface StreamControlMessage {
   action: DisplayControlAction
 }
 
+/** The renderer dropped frames and can only resume on a key frame, so it asks for one. */
+export interface StreamRefreshMessage {
+  type: 'refresh'
+}
+
 /** The renderer gives up on a stream it cannot decode, so the panel can fall back. */
 export interface StreamAbortMessage {
   type: 'abort'
@@ -81,6 +86,7 @@ export type StreamInbound =
   | StreamTextMessage
   | StreamScrollMessage
   | StreamControlMessage
+  | StreamRefreshMessage
   | StreamAbortMessage
 
 /** The one message the main process sends a stream host, beside its port. */
@@ -119,6 +125,8 @@ const CONTROL_ACTIONS: readonly string[] = [
   'recents',
   'volume-up',
   'volume-down',
+  'lock',
+  'unlock',
   'power',
   'appearance'
 ]
@@ -156,6 +164,8 @@ export function isStreamInbound(value: unknown): value is StreamInbound {
       )
     case 'control':
       return typeof value.action === 'string' && CONTROL_ACTIONS.includes(value.action)
+    case 'refresh':
+      return true
     case 'abort':
       return typeof value.reason === 'string'
     default:

@@ -65,7 +65,11 @@ const FAILED_AFTER = 8
 /** How long a hidden stage keeps its device stream before it is shut down. */
 const STREAM_HIDE_GRACE_MS = 5_000
 /** How long a changed stage size settles before the stream is rebuilt at it. */
-const STREAM_RESIZE_DEBOUNCE_MS = 300
+const STREAM_RESIZE_DEBOUNCE_MS = 1_000
+/** A rebuild costs about a second of live picture, so the stage has to outgrow the
+ *  encode, or shrink well below it, before one is worth it. The canvas scales the rest. */
+const STREAM_GROW_RATIO = 1.2
+const STREAM_SHRINK_RATIO = 0.6
 /** Let the stage's first size arrive so the stream starts at it, not at the default. */
 const STREAM_START_DELAY_MS = 80
 /** A stream that never went live is retried this many times before the session polls. */
@@ -106,14 +110,22 @@ interface DisplaySession {
   inputProblem: string | null
   /** The live video stream, while one is running. It replaces the capture tick. */
   stream: DisplayStreamHandle | null
+  /** True while that stream is delivering video, false while it is still starting. */
+  streamLive: boolean
   /** The size the running stream was asked to encode at. */
   streamSize: number
   /** True once a stream failed for this session: it stays on the polled capture. */
   streamBroken: boolean
   /** Stream starts since one last went live, so a flaky start is retried then given up. */
   streamStarts: number
-  /** Pending stream start, hide or resize timers. */
+  /** True once any stream of this session went live, so a dropped one keeps re-arming. */
+  streamWasLive: boolean
+  /** A pending stream start or retry. */
   streamTimer: ReturnType<typeof setTimeout> | null
+  /** The grace period of a hidden stage. */
+  hideTimer: ReturnType<typeof setTimeout> | null
+  /** A size change waiting to settle. */
+  resizeTimer: ReturnType<typeof setTimeout> | null
 }
 
 export class DisplayService {
@@ -165,10 +177,14 @@ export class DisplayService {
       input: Boolean(capture.input),
       inputProblem: capture.input ? null : (capture.inputProblem ?? null),
       stream: null,
+      streamLive: false,
       streamSize: 0,
       streamBroken: false,
       streamStarts: 0,
-      streamTimer: null
+      streamWasLive: false,
+      streamTimer: null,
+      hideTimer: null,
+      resizeTimer: null
     }
     this.sessions.set(session.id, session)
     this.watchWindowReload()
@@ -198,12 +214,9 @@ export class DisplayService {
     const maxDimension = quantizeDemand(demand.maxDimension)
     const streamMaxDimension = quantizeDemand(demand.streamMaxDimension)
     const wasPaused = !session.demand.visible
-    // Only the stream has to be rebuilt for a new size: the polled capture takes the
-    // size it is handed on every grab.
-    const resized = streamMaxDimension !== session.demand.streamMaxDimension
     session.demand = { maxDimension, streamMaxDimension, visible: demand.visible }
     if (this.canStream(session)) {
-      this.followStreamDemand(session, wasPaused, resized)
+      this.followStreamDemand(session, wasPaused)
       return
     }
     // Coming back from a pause is the one case that should not wait for the idle
@@ -221,32 +234,38 @@ export class DisplayService {
    * been hidden for a while, bring it back when the stage returns, and rebuild it
    * when the stage settles at a different size (an encoder cannot be resized).
    */
-  private followStreamDemand(session: DisplaySession, wasPaused: boolean, resized: boolean): void {
+  private followStreamDemand(session: DisplaySession, wasPaused: boolean): void {
+    // Whatever was settling is judged again against the size just reported, so a
+    // size that bounced back never costs a rebuild.
+    if (session.resizeTimer) clearTimeout(session.resizeTimer)
+    session.resizeTimer = null
     if (!session.demand.visible) {
-      if (session.stream && !session.streamTimer) {
-        session.streamTimer = setTimeout(() => {
-          session.streamTimer = null
+      if (session.stream && !session.hideTimer) {
+        session.hideTimer = setTimeout(() => {
+          session.hideTimer = null
           this.endStream(session, 'hidden')
         }, STREAM_HIDE_GRACE_MS)
       }
       return
     }
-    if (session.streamTimer && wasPaused) {
-      clearTimeout(session.streamTimer)
+    if (session.hideTimer) clearTimeout(session.hideTimer)
+    session.hideTimer = null
+    if (!session.stream) {
+      if (session.streamTimer && !wasPaused) return
+      if (session.streamTimer) clearTimeout(session.streamTimer)
       session.streamTimer = null
-    }
-    if (!session.stream && !session.streamTimer) {
       this.beginStream(session)
       return
     }
-    if (session.stream && resized && session.demand.streamMaxDimension !== session.streamSize) {
-      if (session.streamTimer) clearTimeout(session.streamTimer)
-      session.streamTimer = setTimeout(() => {
-        session.streamTimer = null
-        this.endStream(session, 'resized')
-        this.beginStream(session)
-      }, STREAM_RESIZE_DEBOUNCE_MS)
-    }
+    const wanted = session.demand.streamMaxDimension
+    const outgrown = wanted > session.streamSize * STREAM_GROW_RATIO
+    const oversized = wanted < session.streamSize * STREAM_SHRINK_RATIO
+    if (!outgrown && !oversized) return
+    session.resizeTimer = setTimeout(() => {
+      session.resizeTimer = null
+      this.endStream(session, 'resized')
+      this.beginStream(session)
+    }, STREAM_RESIZE_DEBOUNCE_MS)
   }
 
   /** Start the live video stream for a session, or fall back to the capture tick. */
@@ -259,7 +278,7 @@ export class DisplayService {
       return
     }
     session.streamSize = session.demand.streamMaxDimension
-    let wentLive = false
+    session.streamLive = false
     session.stream = startDisplayStream({
       window,
       sessionId: session.id,
@@ -268,7 +287,8 @@ export class DisplayService {
       maxSize: session.streamSize,
       onLive: () => {
         if (session.disposed) return
-        wentLive = true
+        session.streamLive = true
+        session.streamWasLive = true
         session.streamStarts = 0
         session.failures = 0
         session.detail = null
@@ -282,7 +302,7 @@ export class DisplayService {
         // died is a device that went away. Either way the panel retries before it
         // settles for the much slower polled capture.
         session.streamStarts += 1
-        const attempts = wentLive ? STREAM_REARM_ATTEMPTS : STREAM_START_ATTEMPTS
+        const attempts = session.streamWasLive ? STREAM_REARM_ATTEMPTS : STREAM_START_ATTEMPTS
         const retry = session.streamStarts < attempts
         if (!retry) session.streamBroken = true
         Logger.dev(
@@ -291,7 +311,7 @@ export class DisplayService {
             : `Display stream for ${session.sourceId} ended, polling instead: ${detail ?? ''}`
         )
         if (retry) {
-          const wait = wentLive
+          const wait = session.streamWasLive
             ? Math.min(STREAM_REARM_MAX_MS, STREAM_REARM_MS * session.streamStarts)
             : STREAM_RETRY_MS
           session.streamTimer = setTimeout(() => {
@@ -302,6 +322,8 @@ export class DisplayService {
         this.schedule(session, 0)
       }
     })
+    // A device can take ten seconds to start its encoder; one screenshot fills that.
+    if (session.frames === 0 && !session.streamWasLive) this.schedule(session, 0)
   }
 
   /** Stop the running stream without ending the session. */
@@ -357,8 +379,12 @@ export class DisplayService {
     session.disposed = true
     if (session.timer) clearTimeout(session.timer)
     session.timer = null
-    if (session.streamTimer) clearTimeout(session.streamTimer)
+    for (const timer of [session.streamTimer, session.hideTimer, session.resizeTimer]) {
+      if (timer) clearTimeout(timer)
+    }
     session.streamTimer = null
+    session.hideTimer = null
+    session.resizeTimer = null
     this.endStream(session, 'stopped')
     try {
       session.capture.dispose()
@@ -386,8 +412,10 @@ export class DisplayService {
     const window = this.deps.window()
     const contents = window?.webContents
     if (!contents || contents.isDestroyed()) return
-    contents.on('did-start-loading', () => {
-      this.dispose()
+    // Not `did-start-loading`: that also fires for every iframe the page mounts (an
+    // agent's artifact) and for in-page navigation, neither of which loses a stage.
+    contents.on('did-start-navigation', (details) => {
+      if (details.isMainFrame && !details.isSameDocument) this.dispose()
     })
   }
 
@@ -425,8 +453,9 @@ export class DisplayService {
 
   private async tick(session: DisplaySession): Promise<void> {
     if (session.disposed) return
-    // A running stream is the picture; the capture loop only covers for it.
-    if (session.stream) return
+    // A running stream is the picture; the capture loop only covers for it, with one
+    // screenshot while a first stream starts.
+    if (session.stream && (session.streamLive || session.frames > 0)) return
     const window = this.deps.window()
     if (!window || window.isDestroyed()) {
       // No window means no stage: let go rather than capture for nobody.
@@ -443,7 +472,9 @@ export class DisplayService {
     try {
       const grabStartedAt = Date.now()
       const image = await session.capture.grab(session.demand.maxDimension)
-      if (session.disposed) return
+      // A screenshot that lands after the stream came back is older than the video,
+      // and the renderer reads any screenshot as "the stream is gone".
+      if (session.disposed || (session.stream && session.streamLive)) return
       // A frame costs a capture and nothing else: the bytes the target produced are
       // the bytes the renderer paints, so there is no decode, resize, encode or
       // base64 conversion in this process to report on.
@@ -473,7 +504,7 @@ export class DisplayService {
         Math.max(MIN_CAPTURE_GAP_MS, TARGET_INTERVAL_MS[session.kind] - (Date.now() - startedAt))
       )
     } catch (error) {
-      if (session.disposed) return
+      if (session.disposed || session.stream) return
       this.fail(session, error)
     }
   }

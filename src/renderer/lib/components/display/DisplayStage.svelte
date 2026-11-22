@@ -5,6 +5,7 @@
   import CioHome from '@pdslng/cio-icon/CioHome.svelte'
   import CioLayers from '@pdslng/cio-icon/CioLayers.svelte'
   import CioLock from '@pdslng/cio-icon/CioLock.svelte'
+  import CioLockOpen from '@pdslng/cio-icon/CioLockOpen.svelte'
   import CioMinimize from '@pdslng/cio-icon/CioMinimize.svelte'
   import CioMoon from '@pdslng/cio-icon/CioMoon.svelte'
   import CioMaximize from '@pdslng/cio-icon/CioMaximize.svelte'
@@ -13,6 +14,7 @@
   import { onMount } from 'svelte'
   import type { DisplayControlAction } from '$shared/ipc/display'
   import { DISPLAY_CONTROLS_BY_KIND } from '$shared/ipc/display'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
   import { displayPanel } from '$lib/stores/display-panel.svelte'
   import CioVolumeDown from '$lib/components/icons/cio/CioVolumeDown.svelte'
   import CioVolumeUp from '$lib/components/icons/cio/CioVolumeUp.svelte'
@@ -57,7 +59,9 @@
     recents: { action: 'recents', label: 'Recent apps', icon: CioLayers },
     'volume-up': { action: 'volume-up', label: 'Volume up', icon: CioVolumeUp },
     'volume-down': { action: 'volume-down', label: 'Volume down', icon: CioVolumeDown },
-    power: { action: 'power', label: 'Power', icon: CioLock },
+    lock: { action: 'lock', label: 'Lock the device', icon: CioLock },
+    unlock: { action: 'unlock', label: 'Wake and unlock the device', icon: CioLockOpen },
+    power: { action: 'power', label: 'Lock or wake the device', icon: CioLock },
     appearance: { action: 'appearance', label: 'Switch light and dark', icon: CioMoon }
   }
 
@@ -78,6 +82,15 @@
   const sourceId = $derived(tab.sourceId)
   const session = $derived(displayPanel.sessionFor(tab.id))
   const stream = $derived(session?.stream ?? null)
+  /**
+   * Where touch goes. A stream that is still connecting cannot take it and the one it
+   * replaces is already closed, so until it has a size the target's own injector does.
+   */
+  const inputStream = $derived.by(() => {
+    const incoming = session?.incoming
+    if (incoming) return incoming.width > 0 ? incoming : null
+    return stream?.ended ? null : stream
+  })
   /** The latest polled frame; a live stream paints itself and has none. */
   const polled = $derived(session?.frame ?? null)
   /** The picture's size, from the stream when one is running, else the last frame. */
@@ -114,7 +127,7 @@
         notice = error instanceof Error ? error.message : String(error)
       })
     },
-    () => stream
+    () => inputStream
   )
 
   /**
@@ -197,7 +210,7 @@
     try {
       await displayPanel.control(tab.id, action)
     } catch (error: unknown) {
-      notice = error instanceof Error ? error.message : String(error)
+      notice = ipcErrorMessage(error, 'The device did not take that button.')
     }
   }
 
@@ -239,8 +252,10 @@
     const sessionId = displayPanel.start(tabId, kind, sourceId)
     displayPanel.setVisibleTab(tabId)
     const measure = (): void => {
-      const width = handle.clientWidth
-      const height = handle.clientHeight
+      // The outer box, not the client box: a scrollbar must not read as a resize,
+      // or it rebuilds the stream, which removes the scrollbar, which rebuilds it.
+      const width = handle.offsetWidth
+      const height = handle.offsetHeight
       if (width === areaSize.width && height === areaSize.height) return
       areaSize = { width, height }
     }
@@ -258,18 +273,24 @@
     return () => {
       observer.disconnect()
       touch.dispose()
-      displayPanel.releaseVisibleTab(tabId)
+      // A replacement stage of the same tab has already taken the visible slot.
+      if (displayPanel.sessionFor(tabId)?.sessionId === sessionId) {
+        displayPanel.releaseVisibleTab(tabId)
+      }
       displayPanel.stop(tabId, sessionId)
     }
   })
 </script>
 
 <div class="relative flex h-full min-h-0 bg-app">
-  <div class="relative flex min-w-0 flex-1 overflow-auto" bind:this={area}>
+  <div
+    class="relative flex min-w-0 flex-1 {zoom === 'fit' ? 'overflow-hidden' : 'overflow-auto'}"
+    bind:this={area}
+  >
     {#if frame && box && (stream || url)}
       <button
         type="button"
-        class="relative m-auto block shrink-0 select-none p-0 {controlling
+        class="relative m-auto block shrink-0 touch-none select-none overflow-hidden p-0 {controlling
           ? 'cursor-crosshair'
           : 'cursor-default'}"
         style="width:{box.width}px;height:{box.height}px"

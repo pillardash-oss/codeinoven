@@ -15,12 +15,18 @@ import {
  * canvas. Pointer and key events travel back on the same port as they happen.
  *
  * Latency beats completeness here: only the newest decoded frame is ever kept, one
- * frame is painted per animation frame, and a decoder that falls behind drops
- * delta frames until the next key frame instead of building a queue.
+ * frame is painted per animation frame, and a decoder that falls seconds behind
+ * drops to a key frame it asks the device for instead of building a queue.
  */
 
-/** A decoder with more than this many chunks waiting is behind and sheds load. */
-const MAX_DECODE_QUEUE = 3
+/**
+ * A decoder further behind than this (two seconds of video) sheds load.
+ *
+ * Deliberately far above a burst: chunks arrive in clumps whenever the page is busy,
+ * and a dropped delta costs every frame up to the next key frame, which the device
+ * sends seconds apart. Decoding a clump is cheap, and only its last frame is painted.
+ */
+const MAX_DECODE_QUEUE = 120
 
 /** What the touch controller needs from a stream, so it never imports the decoder. */
 export interface StreamInput {
@@ -35,6 +41,8 @@ export class DisplayStream implements StreamInput {
   /** The picture's size in device pixels, 0 until the first config arrives. */
   width = $state(0)
   height = $state(0)
+  /** True once the stream is over. Its last painted picture stays up until replaced. */
+  ended = $state(false)
 
   private decoder: VideoDecoder | null = null
   private latest: VideoFrame | null = null
@@ -45,9 +53,11 @@ export class DisplayStream implements StreamInput {
   private pendingMove: { x: number; y: number } | null = null
   private needKey = true
   private finished = false
+  private painted = false
 
   constructor(
     private readonly port: MessagePort,
+    private readonly onFirstFrame: () => void,
     private readonly onEnded: (detail: string | null) => void
   ) {
     port.onmessage = (event: MessageEvent<unknown>) => this.receive(event.data)
@@ -100,6 +110,7 @@ export class DisplayStream implements StreamInput {
   /** Release the decoder, the held frame and the port. Safe to call twice. */
   dispose(): void {
     this.finished = true
+    this.ended = true
     if (this.paintHandle !== 0) cancelAnimationFrame(this.paintHandle)
     if (this.moveHandle !== 0) cancelAnimationFrame(this.moveHandle)
     this.paintHandle = 0
@@ -140,6 +151,9 @@ export class DisplayStream implements StreamInput {
         this.latest?.close()
         this.latest = frame
         this.schedulePaint()
+        if (this.painted) return
+        this.painted = true
+        this.onFirstFrame()
       },
       error: (error) =>
         this.fail(
@@ -170,7 +184,10 @@ export class DisplayStream implements StreamInput {
   private decode(chunk: StreamChunkMessage): void {
     const decoder = this.decoder
     if (!decoder || decoder.state !== 'configured') return
-    if (!chunk.key && decoder.decodeQueueSize > MAX_DECODE_QUEUE) this.needKey = true
+    if (!chunk.key && !this.needKey && decoder.decodeQueueSize > MAX_DECODE_QUEUE) {
+      this.needKey = true
+      this.post({ type: 'refresh' })
+    }
     if (this.needKey && !chunk.key) return
     if (chunk.key) this.needKey = false
     try {

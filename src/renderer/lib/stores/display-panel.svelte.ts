@@ -52,10 +52,13 @@ export interface DisplaySession {
   /** Why it does not, when it does not. */
   inputProblem: string | null
   /**
-   * The live video stream, while the target has one. The stage paints it instead
-   * of `url`, and a stream that ends leaves the polled frames to take over.
+   * The video stream on screen. It is only replaced by something with a picture: a
+   * newer stream's first frame, or a polled frame. Until then its last frame stays
+   * up, so a reconnect never blanks the stage.
    */
   stream: DisplayStream | null
+  /** A stream that is connecting and has not produced a frame yet. */
+  incoming: DisplayStream | null
 }
 
 export interface DisplaySourceSection {
@@ -92,7 +95,8 @@ class DisplayPanelState {
   visibleTabId = $state<string | null>(null)
 
   private cleanups: Array<() => void> = []
-  private started = false
+  /** Mounted panels. The dock's and fullscreen's overlap while one replaces the other. */
+  private users = 0
   /**
    * Last demand each tab reported, so an unchanged size costs no IPC.
    *
@@ -115,9 +119,19 @@ class DisplayPanelState {
     }))
   )
 
-  init(): void {
-    if (this.started) return
-    this.started = true
+  /** Listen for as long as any panel is mounted. Returns that panel's release. */
+  init(): () => void {
+    this.users += 1
+    if (this.users === 1) this.listen()
+    return () => {
+      this.users -= 1
+      if (this.users > 0) return
+      for (const cleanup of this.cleanups) cleanup()
+      this.cleanups = []
+    }
+  }
+
+  private listen(): void {
     this.cleanups.push(
       subscribe('display:frame', (frame: DisplayFrame) => {
         const session = this.sessions[frame.tabId]
@@ -127,6 +141,9 @@ class DisplayPanelState {
         session.frame = frame
         session.url = url
         if (previous) URL.revokeObjectURL(previous)
+        // Main only polls without a stream, so a screenshot means the video is gone.
+        session.stream?.dispose()
+        session.stream = null
       })
     )
     const onPort = (event: MessageEvent<unknown>): void => this.acceptStreamPort(event)
@@ -159,19 +176,24 @@ class DisplayPanelState {
       port.close()
       return
     }
-    session.stream?.dispose()
-    const stream = new DisplayStream(port, (detail) => {
-      if (session.stream !== stream) return
-      session.stream = null
-      if (detail) logRendererDev(`The device stream ended: ${detail}`)
-    })
-    session.stream = stream
-  }
-
-  destroy(): void {
-    for (const cleanup of this.cleanups) cleanup()
-    this.cleanups = []
-    this.started = false
+    session.incoming?.dispose()
+    const stream = new DisplayStream(
+      port,
+      () => {
+        if (session.incoming !== stream) return
+        session.stream?.dispose()
+        session.stream = stream
+        session.incoming = null
+        if (session.url) URL.revokeObjectURL(session.url)
+        session.url = null
+        session.frame = null
+      },
+      (detail) => {
+        if (session.incoming === stream) session.incoming = null
+        if (detail) logRendererDev(`The device stream ended: ${detail}`)
+      }
+    )
+    session.incoming = stream
   }
 
   sessionFor(tabId: string | null): DisplaySession | null {
@@ -196,7 +218,8 @@ class DisplayPanelState {
       detail: null,
       input: false,
       inputProblem: null,
-      stream: null
+      stream: null,
+      incoming: null
     }
     this.demands.delete(tabId)
     this.sessions = { ...this.sessions, [tabId]: session }
@@ -227,6 +250,7 @@ class DisplayPanelState {
     if (sessionId !== undefined && session.sessionId !== sessionId) return
     if (session.url) URL.revokeObjectURL(session.url)
     session.stream?.dispose()
+    session.incoming?.dispose()
     const next = { ...this.sessions }
     delete next[tabId]
     this.sessions = next

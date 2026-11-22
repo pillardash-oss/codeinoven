@@ -100,6 +100,7 @@ const TYPE_INJECT_KEYCODE = 0
 const TYPE_INJECT_TEXT = 1
 const TYPE_INJECT_TOUCH_EVENT = 2
 const TYPE_INJECT_SCROLL_EVENT = 3
+const TYPE_RESET_VIDEO = 17
 /** The longest text one message may carry. */
 const TEXT_MAX_BYTES = 300
 
@@ -135,6 +136,11 @@ export function encodeTouch(
   out.setUint32(24, action === ANDROID_ACTION_MOVE ? 0 : BUTTON_PRIMARY)
   out.setUint32(28, pressed ? BUTTON_PRIMARY : 0)
   return message
+}
+
+/** Restart the encoder, which answers with a fresh config and key frame. One byte. */
+export function encodeResetVideo(): Uint8Array {
+  return Uint8Array.of(TYPE_RESET_VIDEO)
 }
 
 /** A key press or release, 14 bytes. */
