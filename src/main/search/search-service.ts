@@ -208,13 +208,10 @@ export class SearchService {
         updated: (thread) => this.updateCorpusThread(thread),
         deleted: (thread) => this.removeCorpusThread(thread.id),
         // A composer draft never changes what a thread means, so it never
-        // changes corpus membership either. The flag is only refreshed here so
-        // membership follows the thread row, not the keystrokes in it.
-        draftUpdated: (projectId, threadId) => {
-          void this.reloadCorpusThread(projectId, threadId).catch((error) => {
-            Logger.error('Search corpus draft update failed:', error)
-          })
-        }
+        // changes corpus membership either. Re-reading the row here would do
+        // both: a draft commit bumps `updated_at`, which marks the thread stale
+        // and buys a sweep that rewrites the whole index for unchanged content.
+        draftUpdated: () => {}
       }) ?? null
     await this.storage.initialize()
     const platform = process.platform as SearchPlatform
@@ -396,24 +393,6 @@ export class SearchService {
     this.index.removeThread(id)
     this.summaryJobs.delete(id)
     this.emitStatus()
-  }
-
-  private async reloadCorpusThread(projectId: string, id: string): Promise<void> {
-    const result = await this.db.queryViaWorker(
-      'SELECT title, last_activity, updated_at FROM threads WHERE id = ? AND project_id = ?',
-      [id, projectId],
-      1
-    )
-    const row = result.rows[0]
-    if (!result.ok || !row || this.disposed || projectId === GLOBAL_BROWSER_PROJECT_ID) return
-    this.index.updateThread({
-      id,
-      projectId,
-      title: String(row['title'] ?? ''),
-      stamp: Math.max(Number(row['last_activity'] ?? 0), Number(row['updated_at'] ?? 0))
-    })
-    this.emitStatus()
-    this.requestCorpusSweep()
   }
 
   onProgress(listener: (event: SearchProgressEvent) => void): () => void {
