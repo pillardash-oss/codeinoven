@@ -341,7 +341,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_CITE_UTILITY_ID)
         ? [
-            `When this turn produces something the user will open again outside your answer (a report, a document, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message. The app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well.`
+            `This is a rule, not a judgment call: when this turn produced work the user will open again outside your answer (a report, a document, findings, an analysis, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message. Reciting that work inline in place of citing it, or naming where the file lives, is not an alternative: the app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well. Citing is one local call the app answers itself, with no fee attached, so its cost is never a reason to skip it.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)

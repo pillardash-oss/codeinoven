@@ -42,6 +42,11 @@ Use this when a turn produced something the user will open again outside the
 answer itself: a report, a document, a script folder, a generated project, a set
 of assets. Cite it as you finish the turn, before your final message.
 
+This is a rule, not a judgment call. A report you produced is cited, never
+recited: pasting its contents into the answer instead leaves the user with no
+card to open. The call is local and free, so its cost is never a reason to skip
+it.
+
 Do not cite what you only talked about. A cited path that does not exist is
 dropped, and a card for something the user never received is worse than no card.
 
