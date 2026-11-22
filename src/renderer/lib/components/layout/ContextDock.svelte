@@ -104,7 +104,7 @@
   import { trackBrowserOcclusion } from '$lib/stores/browser-visibility.svelte'
 
   interface Props {
-    /** Ordered groups. Empty groups are dropped so no stray hairline renders. */
+    /** Ordered groups of tools. Empty groups are dropped. */
     groups: ContextDockItem[][]
   }
 
@@ -115,6 +115,10 @@
       .map((group) => group.filter((item) => !item.overflow))
       .filter((group) => group.length > 0)
   )
+
+  /** The same items in rail order, flattened: group boundaries no longer draw
+   *  anything, so the dock renders one run of tools. */
+  let visibleItems = $derived(visibleGroups.flat())
 
   /** Tools that are not needed right now, folded behind the More button. */
   let moreItems = $derived(groups.flat().filter((item) => item.overflow))
@@ -190,16 +194,10 @@
   <!-- One current-tool surface for the whole dock, so switching tools slides it
        to the icon that took over instead of fading two separate ones. -->
   <RailHighlight revision={highlightRevision} currentValue="true" accentSide="left" />
-  {#each visibleGroups as group, groupIndex (groupIndex)}
-    {#if groupIndex > 0}
-      <div class="my-1.5 h-px w-5 shrink-0 bg-border" aria-hidden="true"></div>
-    {/if}
-    {#each group as item (item.id)}
-      {@render tool(item, item.emerges ? 24 : 0)}
-    {/each}
+  {#each visibleItems as item (item.id)}
+    {@render tool(item, item.emerges ? 24 : 0)}
   {/each}
   {#if moreItems.length > 0}
-    <div class="my-1.5 h-px w-5 shrink-0 bg-border" aria-hidden="true"></div>
     <button
       type="button"
       class="flex h-8 w-8 shrink-0 items-center justify-center transition-colors duration-150 {moreOpen ||
