@@ -737,6 +737,13 @@ export class ThreadManager {
        * while no second notification interrupts them for it.
        */
       notify?: boolean
+      /**
+       * False for a bookkeeping transition on a row whose work ended long ago:
+       * the row keeps its `last_activity` instead of being stamped with now, so
+       * closing an abandoned orchestration child out never resurfaces its
+       * coordinator at the top of a list. See `ThreadStatusService.setStatus`.
+       */
+      touchActivity?: boolean
     }
   ): Promise<Thread> {
     return this.status.setStatus(projectId, threadId, status, opts)

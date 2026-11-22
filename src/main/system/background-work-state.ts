@@ -18,6 +18,7 @@
  * never hold the main thread on SQLite.
  */
 
+import { SETTLED_THREAD_STATUSES } from '../../lib/thread-status-policy'
 import { SCHEDULED_RETRY_WAKE_WINDOW_MS } from '../../lib/provider-issue'
 import { ThreadRepo } from '../database/repositories/thread-repo'
 import type { Database } from '../database/database'
@@ -136,6 +137,51 @@ export function residencyReason(state: BootstrapState, database: Database): Resi
 }
 
 /**
+ * The WHERE fragment keeping only threads a list can actually show the user.
+ *
+ * Two kinds of row are hidden by the rail today, and both of them must be hidden
+ * from the attention predicate for the same reason: a problem the user cannot
+ * open is not a problem the icon may pester them about.
+ *
+ *   - `archived = 0` on the row itself: an archived thread is one the user put
+ *     away, so a failure or a gate inside it is not an open question any more.
+ *   - an orchestration child (a worker, an auditor, or anything spawned under a
+ *     coordinator   the same shape `isOrchestrationChildThread` recognises on the
+ *     renderer) whose coordinator has already settled. The rail folds children
+ *     into the coordinator's own row and never lists them; once that coordinator
+ *     is `completed`, `failed` or `interrupted`, there is no surface left that
+ *     shows the child, no retry that can resume it and no way to clear it.
+ *
+ * A child whose coordinator is still live *is* counted: it is reachable through
+ * the orchestration board of a run the user is watching, and its gate or its
+ * failure is something they can still answer.
+ *
+ * Written in SQL rather than applied to the rows afterwards because the predicate
+ * is `LIMIT 1`   the first reachable problem has to be the one the query finds.
+ */
+function reachableThreadSql(alias: string): string {
+  const settled = SETTLED_THREAD_STATUSES.map((status) => `'${status}'`).join(', ')
+  return `(
+    NOT (
+      ${alias}.assignment_role IS NOT 'coordinator'
+      AND ${alias}.achievement_role IS NOT 'coordinator'
+      AND (
+        ${alias}.achievement_role IS 'auditor'
+        OR ${alias}.assignment_role IS 'worker'
+        OR ${alias}.assignment_id IS NOT NULL
+        OR ${alias}.coordinator_thread_id IS NOT NULL
+      )
+    )
+    OR EXISTS (
+      SELECT 1 FROM threads coordinator
+       WHERE coordinator.id = ${alias}.coordinator_thread_id
+         AND coordinator.archived = 0
+         AND coordinator.status NOT IN (${settled})
+    )
+  )`
+}
+
+/**
  * The attention predicate: does any thread currently hold a problem the user
  * has not seen?
  *
@@ -164,14 +210,25 @@ export function residencyReason(state: BootstrapState, database: Database): Resi
  * The read runs on the database worker: the tray refreshes it on every thread
  * update, which is an interaction path, and even a COUNT over `threads` holds
  * the whole main process for as long as the OS takes to serve it.
+ *
+ * A problem only counts while the user can *reach* the thread that carries it
+ * (see {@link reachableThreadSql}). The icon is a prompt to go and answer
+ * something, so a row hidden from every list would turn it into a light that
+ * never goes out and that no action can clear   which is exactly what a stale
+ * orchestration child does: a worker left `working-paused` or parked on a gate
+ * after its coordinator already settled is never listed, never openable and
+ * never markable, so counting it was a permanent exclamation with no error
+ * anywhere on screen.
  */
 export async function computeAttention(database: Database): Promise<boolean> {
   if (!database.isOpen()) return false
   try {
     const result = await database.queryViaWorker(
-      `SELECT 1 AS attention FROM threads
-        WHERE status IN ('working-paused', 'awaiting_approval')
-           OR (read = 0 AND status = 'failed')
+      `SELECT 1 AS attention FROM threads t
+        WHERE t.archived = 0
+          AND (t.status IN ('working-paused', 'awaiting_approval')
+               OR (t.read = 0 AND t.status = 'failed'))
+          AND ${reachableThreadSql('t')}
         LIMIT 1`,
       [],
       1

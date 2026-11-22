@@ -135,6 +135,8 @@ export interface BootstrapState {
 
   /** Stops the instance take-over watcher registered after launch recovery. */
   stopInstanceTakeOverListener: (() => void) | null
+  /** Stops the sweep that closes out the children of a settled orchestration. */
+  stopCoordinatorChildSettleSweep: (() => void) | null
   /** Cross-instance turn-ownership notices pushed to every window. */
   foreignRuns: ForeignRunService | null
   /** Shared thread rows and transcripts a sibling instance changed. */
@@ -224,6 +226,7 @@ export function createBootstrapState(): BootstrapState {
     autoAnswerStore: null,
     cleanShutdownStore: null,
     stopInstanceTakeOverListener: null,
+    stopCoordinatorChildSettleSweep: null,
     foreignRuns: null,
     crossInstanceThreads: null,
     threadTransfer: null,
