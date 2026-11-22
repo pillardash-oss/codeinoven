@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -28,6 +28,7 @@ import type {
   Thread,
   ThreadSettings
 } from '../../src/lib/types'
+import { removeTempRoots } from '../helpers/temp-root'
 
 /**
  * When a question card outlives the harness turn that asked it, replying to the
@@ -92,10 +93,9 @@ beforeEach(() => {
   process.env['CODEINOVEN_CONFIG_ROOT'] = temporaryConfigRoot
 })
 
-afterEach(() => {
+afterEach(async () => {
   temporaryDatabases.splice(0).forEach(destroyTestDb)
-  rmSync(temporaryConfigRoot, { force: true, recursive: true })
-  temporaryProjectRoots.splice(0).forEach((path) => rmSync(path, { force: true, recursive: true }))
+  await removeTempRoots([temporaryConfigRoot, ...temporaryProjectRoots.splice(0)])
   temporaryConfigRoot = ''
   if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
   else process.env['CODEINOVEN_CONFIG_ROOT'] = originalConfigRoot

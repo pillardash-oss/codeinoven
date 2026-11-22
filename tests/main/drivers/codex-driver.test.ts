@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { mkdtemp, rm, writeFile } from 'fs/promises'
+import { mkdtemp, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -11,6 +11,7 @@ import {
 } from '../../../src/lib/tool-action-label'
 import { GATEWAY_TOOLS, gatewayToolForModel } from '../../../src/lib/gateway-tools'
 import { StorageEngine } from '../../../src/main/storage/storage-engine'
+import { removeTempRoots } from '../../helpers/temp-root'
 import {
   CodexDriver,
   mapCodexRateLimits,
@@ -101,30 +102,16 @@ class FakeChild extends EventEmitter {
 
 const roots: string[] = []
 /**
- * Recursive `rm` is not atomic: a fire-and-forget session write (for example
- * the failed-turn handler persisting the session after a compaction turn
- * rejects) can land between the directory listing and the final `rmdir`, which
- * then fails with ENOTEMPTY. Retry briefly so late writes can settle.
+ * A fire-and-forget session write (for example the failed-turn handler persisting
+ * the session after a compaction turn rejects) can land between the directory
+ * listing and the final `rmdir`, which then fails with ENOTEMPTY. The shared
+ * helper retries briefly so late writes can settle.
  */
-async function rmRoot(root: string): Promise<void> {
-  const retriable = new Set(['ENOTEMPTY', 'EBUSY', 'EEXIST'])
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await rm(root, { recursive: true, force: true })
-      return
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (attempt >= 5 || code === undefined || !retriable.has(code)) throw error
-      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)))
-    }
-  }
-}
-
 afterEach(async () => {
   spawnMock.mockReset()
   vi.restoreAllMocks()
   vi.useRealTimers()
-  await Promise.all(roots.splice(0).map((root) => rmRoot(root)))
+  await removeTempRoots(roots.splice(0))
 })
 
 async function storage(): Promise<StorageEngine> {

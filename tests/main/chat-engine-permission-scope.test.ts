@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -16,6 +16,7 @@ import { StorageEngine } from '../../src/main/storage/storage-engine'
 import { ChatEngine } from '../../src/main/chat/chat-engine'
 import type { SessionInfo } from '../../src/main/chat/chat-engine/chat-engine-types'
 import type { CreateThreadInput, Thread, ThreadSettings } from '../../src/lib/types'
+import { removeTempRoots } from '../helpers/temp-root'
 
 /**
  * The file-access scope a chat gets when its turn runs on an external Oven.
@@ -56,9 +57,9 @@ beforeEach(() => {
   process.env['CODEINOVEN_CONFIG_ROOT'] = temporaryConfigRoot
 })
 
-afterEach(() => {
+afterEach(async () => {
   temporaryDatabases.splice(0).forEach(destroyTestDb)
-  temporaryRoots.splice(0).forEach((path) => rmSync(path, { force: true, recursive: true }))
+  await removeTempRoots(temporaryRoots.splice(0))
   if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
   else process.env['CODEINOVEN_CONFIG_ROOT'] = originalConfigRoot
 })
