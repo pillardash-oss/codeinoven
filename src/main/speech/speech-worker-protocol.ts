@@ -1,3 +1,10 @@
+/**
+ * Environment variable that points the sherpa engine process at the provisioned
+ * module tree (`<runtime>/node_modules`), where the bundled wrapper sits beside
+ * the downloaded platform package.
+ */
+export const SHERPA_MODULE_ROOT_ENV = 'CODEINOVEN_SHERPA_MODULE_ROOT'
+
 export type SpeechWorkerRequest =
   | {
       id: string

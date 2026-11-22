@@ -394,6 +394,7 @@ export class ChatComposerHandleDropData extends BoardUnit<ChatComposer> {
     generationDetails: this.root.props.generationDetails,
     efficiencyKpis: this.root.props.efficiencyKpis,
     harnessUsage: this.root.props.harnessUsage,
+    accountLimit: this.root.props.accountLimit,
     canCompact: this.root.props.canCompact,
     compacting: this.root.props.compacting,
     onCompact: this.root.props.onCompact,

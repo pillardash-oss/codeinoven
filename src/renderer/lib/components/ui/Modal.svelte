@@ -59,8 +59,14 @@
     '[contenteditable="true"]:not([aria-disabled="true"])'
   ].join(',')
 
-  /** The scrim is shared by every placement. A full screen panel covers it. */
-  const OVERLAY_CLASS = 'fixed inset-0 bg-overlay/70 backdrop-blur-[1px]'
+  /** The scrim is shared by every placement. A full screen panel covers it.
+   *
+   *  Deliberately no `backdrop-filter`: a full-window blur is the most expensive
+   *  thing the compositor can be asked for, and it has to be recomputed every
+   *  time anything underneath repaints   a terminal canvas streaming a build, a
+   *  device mirror, the conversation. A 1px blur is invisible on a 70% overlay
+   *  anyway, so the dimming alone is the whole visual result. */
+  const OVERLAY_CLASS = 'fixed inset-0 bg-overlay/70'
 
   /**
    * How the fixed wrapper positions the panel. Padding lives here rather than on

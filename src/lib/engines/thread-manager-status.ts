@@ -75,6 +75,16 @@ export class ThreadStatusService {
       errorDetail?: string
       /** False when this settle repeats a completion already announced. */
       notify?: boolean
+      /**
+       * False for a transition that only finishes a row the user already knows
+       * ended, so it must not pull anything back to the top of a list. Every
+       * ordinary settle is news and stamps `last_activity` with it; a bookkeeping
+       * write (a child closed out under a coordinator that settled long ago) keeps
+       * the activity it had, because the coordinator's own `last_activity` is
+       * raised from its children's (see the `threads_coordinator_activity`
+       * trigger) and a sweep must not resurface a finished orchestration.
+       */
+      touchActivity?: boolean
     }
   ): Promise<Thread> {
     const existing = this.requireOwned(projectId, threadId)
@@ -130,7 +140,7 @@ export class ThreadStatusService {
       lastErrorAt: status === 'failed' ? now : undefined,
       lastOutcome,
       updatedAt: now,
-      lastActivity: now,
+      lastActivity: opts?.touchActivity === false ? existing.lastActivity : now,
       sortOrder: undefined
     }
 

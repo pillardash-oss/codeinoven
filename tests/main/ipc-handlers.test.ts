@@ -295,7 +295,10 @@ describe('validateAppConfigPatch', () => {
   it.each([
     null,
     [],
-    { keybindings: {} },
+    { keybindings: 'mod+k' },
+    { keybindings: [] },
+    { keybindings: { 'nav find': 'mod k' } },
+    { keybindings: { navfind: 5 } },
     { lastFolderDialogPath: '/tmp' },
     { theme: 'sepia' },
     { threadLimit: 0 },
@@ -502,9 +505,26 @@ describe('config IPC', () => {
 
     const updateHandler = handlers.get('config:update')
     await expect(
-      updateHandler?.(trustedEvent(), { keybindings: { quit: 'cmd+q' } })
+      updateHandler?.(trustedEvent(), { lastFolderDialogPath: '/tmp' })
     ).rejects.toThrow('Unsupported config field')
     expect(saveConfig).not.toHaveBeenCalled()
+  })
+
+  it('accepts a keybinding patch and persists it with the rest of the config', async () => {
+    const storage = new StorageEngine()
+    vi.spyOn(storage, 'getConfig').mockResolvedValue(defaultConfig)
+    const saveConfig = vi.spyOn(storage, 'saveConfig').mockResolvedValue()
+
+    registerIpcHandlers(storage, database)
+
+    const updateHandler = handlers.get('config:update')
+    await updateHandler?.(trustedEvent(), {
+      keybindings: { 'nav-find': 'mod shift f', 'chat-send': '' }
+    })
+    expect(saveConfig).toHaveBeenCalledWith({
+      ...defaultConfig,
+      keybindings: { 'nav-find': 'mod shift f', 'chat-send': '' }
+    })
   })
 
   it('uses the configured thread limit as the default for new projects', async () => {

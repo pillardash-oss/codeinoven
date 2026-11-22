@@ -35,7 +35,7 @@ export function publishScreenshotShortcut(keys: readonly string[]): void {
     showToastWarning('macOS already owns that screenshot shortcut', {
       id: 'screenshot-shortcut-mac-owned',
       description:
-        'Command+Shift+3, 4, 5, 6 and 7 are the system screenshot chords, and the system wins the keypress. Choose a different key for the app in Settings › Keymap.',
+        'Command+Shift+3, 4, 5 and 6 are the system screenshot chords, and the system wins the keypress. Choose a different key for the app in Settings › Keymap.',
       duration: 10_000
     })
     return

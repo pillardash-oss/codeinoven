@@ -89,6 +89,26 @@ export interface PiRpcSessionsHost {
     projectPath: string
   ): void
   /**
+   * Register the pooled Pi host a hosted session runs on with the process
+   * tracker.
+   *
+   * A hosted session has no child process of its own: its shell tool, and every
+   * process that shell starts, run inside the long-lived Pi host. Up to
+   * `maxSessionsPerHost` sessions share that one host pid, and the host's
+   * environment names only whichever session wrote it last, so the host cannot
+   * be attributed to one thread. It is registered app-wide instead (an
+   * undefined session id), which is the pool the tracker already models: the
+   * commands appear in the task manager with their real pid, and a thread
+   * cleanup can never signal a host other threads are still running on.
+   *
+   * A process the agent needs to stop by pid is started with the app's own
+   * process tool instead, which records the pid against its thread.
+   *
+   * Optional for the same reason `launch` is: a host driven without a process
+   * tracker (a test) simply has nothing to register.
+   */
+  observeHostedProcess?(pid: number, command: string, cwd: string): void
+  /**
    * Start the session's peer somewhere other than this machine's child, e.g. a
    * run on an Oven. Absent means the session spawns `pi --mode rpc` itself,
    * exactly as it always has. A launched session is never a hosted session:
@@ -448,6 +468,8 @@ export class PiRpcSessions {
     let client: PiSessionClient
     /** The child this process spawned, or null when no local child exists. */
     let localClient: PiRpcClient | null = null
+    /** The hosted client, once a session was acquired from the Pi host. */
+    let hostedClient: PiHostClient | null = null
     if (launch) {
       const launched = await launch({
         sessionId,
@@ -496,6 +518,7 @@ export class PiRpcSessions {
           this.handleExit(code, sessionId, hostClient)
         }
       })
+      hostedClient = hostClient
       client = hostClient
     } else {
       localClient = new PiRpcClient({
@@ -520,10 +543,13 @@ export class PiRpcSessions {
     // `CodeInOven-electron` instead of `pi`. `runtime.command` is the command
     // the user asked for in both the bundled and native cases, so the row reads
     // the harness that actually owns the process again.
-    // A hosted session is not a child process: the host itself is the process,
-    // and it is registered once with the app's service list instead of a row per
-    // thread. A launched session's peer is not this process's child either.
-    // Only a real RPC child is handed to the process tracker.
+    // A hosted session has no child of its own, but the host process it runs on
+    // is the process its shell tool starts commands in, so the host is the
+    // session's root. It is registered below, once the host has answered the
+    // session's create request: an Electron utility process names its pid when it
+    // starts, and a session only gets an answer from a host that is running, so
+    // by then the pid is there to register. A launched session's peer is not
+    // this process's child and has no pid here at all.
     if (localClient) {
       this.host.observeHarnessProcess(
         sessionId,
@@ -572,6 +598,22 @@ export class PiRpcSessions {
       throw new Error(
         `Failed to start a Pi session: ${error instanceof Error ? error.message : String(error)}`,
         { cause: error }
+      )
+    }
+    // The session is acquired, so the host that runs it is a known process. It
+    // is registered with the tracker so the commands an agent starts in the
+    // session (a dev server, a probe run) appear in the task manager with a real
+    // pid instead of running under a process nothing walks. The host is shared by
+    // several sessions, so it is registered app-wide and never as one thread's
+    // root: neither the host's environment nor its pid can prove which thread a
+    // child came from, and a thread cleanup must not stop a host its siblings
+    // are using. Nothing has to unregister it: the app-wide pool is dropped by
+    // the scan's liveness check when the host exits, and by `killAll` on quit.
+    if (hostedClient) {
+      this.host.observeHostedProcess?.(
+        hostedClient.pid,
+        invocation.runtime?.command ?? invocation.command,
+        projectPath
       )
     }
     return client

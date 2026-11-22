@@ -253,12 +253,22 @@ export interface DisplayInputPermission {
  * exposes no way to summon it, so a rail entry would be a button that does nothing.
  */
 export type DisplayControlAction =
-  'home' | 'back' | 'recents' | 'volume-up' | 'volume-down' | 'power' | 'appearance'
+  | 'home'
+  | 'back'
+  | 'recents'
+  | 'volume-up'
+  | 'volume-down'
+  | 'lock'
+  | 'unlock'
+  | 'power'
+  | 'appearance'
 
 /** What each kind can be asked to do, in the order the rail lists it. */
 export const DISPLAY_CONTROLS_BY_KIND: Record<DisplaySourceKind, readonly DisplayControlAction[]> =
   {
-    android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'power'],
+    // Lock and unlock rather than one power key: power toggles, so pressing it
+    // without knowing the screen's state does the opposite of what was meant.
+    android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'lock', 'unlock'],
     // The simulator's own buttons, in the order a hand finds them. `back` is the
     // system edge swipe, `power` the side button (lock and wake), volume is the
     // output volume the simulator plays through, and `appearance` is the light/dark
@@ -275,6 +285,8 @@ export function isDisplayControlAction(value: unknown): value is DisplayControlA
     value === 'recents' ||
     value === 'volume-up' ||
     value === 'volume-down' ||
+    value === 'lock' ||
+    value === 'unlock' ||
     value === 'power' ||
     value === 'appearance'
   )

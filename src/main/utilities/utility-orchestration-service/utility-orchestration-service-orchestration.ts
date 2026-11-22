@@ -21,7 +21,10 @@ import {
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_SUGGEST_TOOL_NAME
+  UTILITY_SUGGEST_TOOL_NAME,
+  PROCESS_LIST_TOOL_NAME,
+  PROCESS_START_TOOL_NAME,
+  PROCESS_STOP_TOOL_NAME
 } from '../../../lib/gateway-tools'
 import {
   ORCHESTRATION_ANSWER_TOOL_NAME,
@@ -195,6 +198,12 @@ export class UtilityOrchestrationServiceOrchestration {
         return (state, input) => this.host.units['capability-invoke'].manage(state, input)
       case UTILITY_DIAGNOSTICS_TOOL_NAME:
         return (state, input) => this.host.units['diagnostics'].runDiagnostics(state, input)
+      case PROCESS_LIST_TOOL_NAME:
+        return (state, input) => this.host.units['processes'].run(state, input, 'list')
+      case PROCESS_START_TOOL_NAME:
+        return (state, input) => this.host.units['processes'].run(state, input, 'start')
+      case PROCESS_STOP_TOOL_NAME:
+        return (state, input) => this.host.units['processes'].run(state, input, 'stop')
       case ASK_SECRET_TOOL_NAME:
         return (state, input) => this.askSecret(state, input)
       case UTILITY_SUGGEST_TOOL_NAME:

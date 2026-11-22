@@ -107,6 +107,24 @@ export const ANDROID_KEY_CODES: Partial<Record<DisplayControlAction, number>> = 
 }
 
 /**
+ * The controls that take more than one key, as the device's own shell runs them.
+ *
+ * Power is a toggle, so lock presses it only on a lit screen. Unlock wakes the
+ * screen and dismisses the keyguard, which on a device with a PIN, pattern or
+ * password raises that prompt: the credential stays the person's to enter. Android
+ * blanks that prompt in every mirror, so unlock reports when it is waiting on one.
+ */
+const ANDROID_SHELL_CONTROLS: Partial<Record<DisplayControlAction, string>> = {
+  lock: 'if dumpsys power | grep -q mWakefulness=Awake; then input keyevent 26; fi',
+  unlock:
+    'input keyevent 224 && wm dismiss-keyguard && sleep 1 && if dumpsys window | grep -q mDreamingLockscreen=true; then echo secured; fi'
+}
+
+/** Said under the picture when unlock is waiting on a credential. */
+const ANDROID_CREDENTIAL_NOTICE =
+  'This device needs its PIN or password, and Android hides that screen from mirrors. Turn on control, type it, then press Enter.'
+
+/**
  * The keys a panel can send beside a hardware button, by Android's own key codes.
  *
  * These are what a soft keyboard's own keys are: enter, delete, tab, escape and
@@ -202,6 +220,16 @@ export class AndroidDisplayCapture implements DisplayCapture {
   }
 
   async control(action: DisplayControlAction): Promise<void> {
+    const script = ANDROID_SHELL_CONTROLS[action]
+    if (script) {
+      const output = await captureText(
+        this.adb,
+        ['-s', this.sourceId, 'shell', script],
+        ADB_CAPTURE_TIMEOUT_MS
+      )
+      if (output.includes('secured')) throw new Error(ANDROID_CREDENTIAL_NOTICE)
+      return
+    }
     const keyCode = ANDROID_KEY_CODES[action]
     if (keyCode === undefined) {
       throw new Error(`An Android target has no "${action}" control`)

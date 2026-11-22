@@ -19,7 +19,7 @@
  * Nothing is cached across turns: a bundle is read on demand every time, so a
  * forgotten secret cannot survive in a host that is still running.
  */
-import { chmod, mkdir, open, readFile } from 'node:fs/promises'
+import { chmod, mkdir, open, readFile, rename } from 'node:fs/promises'
 import type {
   OvenUtilitySecretVault,
   OvenUtilityStoredSecret
@@ -37,7 +37,7 @@ import {
 /** The one file that says whether this machine keeps credentials, and which. */
 export const OVEN_UTILITY_SECRETS_FILE = 'secrets.json'
 
-/** Where a file-backed backend (Windows DPAPI) keeps its ciphertext. */
+/** Where a file-backed backend (macOS, Windows) keeps its ciphertext. */
 export const OVEN_UTILITY_SECRET_FILES_DIRECTORY = 'secret-files'
 
 /** The write half of the store, as the credential resolver sees it. */
@@ -101,10 +101,11 @@ export function ovenUtilitySecretFilesDirectory(home: string): string {
 
 /** One utility's bundle as the single value a backend carries for it. */
 function secretBundleValue(bundle: OvenUtilityStoredSecret): string {
+  // ASCII only: PowerShell reads stdin in the machine's code page, not UTF-8.
   const value = JSON.stringify({
     env: bundle.env,
     ...(bundle.headers ? { headers: bundle.headers } : {})
-  })
+  }).replace(/[\u0080-\uffff]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`)
   if (Buffer.byteLength(value, 'utf8') > OVEN_UTILITY_SECRET_MAX_VALUE_BYTES)
     throw new Error(
       `One utility's credential bundle may carry at most ${OVEN_UTILITY_SECRET_MAX_VALUE_BYTES} bytes.`
@@ -156,8 +157,9 @@ function firstFreeSlot(slots: Record<string, number>): number {
 /**
  * One Oven's at-rest credential store.
  *
- * The probe is asked once and cached for this host's life, because it starts a
- * helper process and its answer is a property of the machine, not of the call.
+ * A successful probe is cached for this host's life, because it starts a helper
+ * process. A failed one is asked again, because a user can install the tool or
+ * unlock the store without restarting the host.
  * Whether the store is *enabled* is never cached: it is read from the file on
  * every use, so toggling it in the app takes effect on the next turn.
  */
@@ -165,7 +167,7 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
   private readonly backend: SecretBackend
   private readonly home: string
   private readonly indexPath: string
-  /** The probe, once asked. `null` until then. */
+  /** The probe, while it runs or once it succeeded. `null` otherwise. */
   private probe: Promise<{ available: boolean; reason?: string }> | null = null
   /** Index mutations go through here, one at a time. */
   private mutation: Promise<unknown> = Promise.resolve()
@@ -217,16 +219,15 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
    */
   async setEnabled(enabled: boolean): Promise<{ enabled: boolean }> {
     return await this.mutate(async () => {
-      const [index, probe] = await Promise.all([this.index(), this.probeOnce()])
-      const effective = enabled && probe.available
+      const index = await this.index()
+      // Switching off never depends on the store working.
+      const effective = enabled && (await this.probeOnce()).available
       if (effective !== index.enabled) {
         await this.save({ ...index, enabled: effective })
         Logger.info(
           effective
             ? `Oven secret store enabled: this machine keeps credentials with ${this.backend.id}.`
-            : `Oven secret store disabled: ${
-                probe.reason ?? 'this machine keeps no credential at rest.'
-              }`
+            : 'Oven secret store disabled: this machine keeps no credential at rest.'
         )
       }
       return { enabled: effective }
@@ -242,8 +243,8 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
   async remember(bundle: OvenUtilityStoredSecret): Promise<{ enabled: boolean }> {
     const value = secretBundleValue(bundle)
     return await this.mutate(async () => {
-      const [index, probe] = await Promise.all([this.index(), this.probeOnce()])
-      if (!index.enabled || !probe.available) return { enabled: false }
+      const index = await this.index()
+      if (!index.enabled || !(await this.probeOnce()).available) return { enabled: false }
       const remembered = index.stored.includes(bundle.utilityId)
       if (!remembered && index.stored.length >= OVEN_UTILITY_SECRET_MAX_KEYS)
         throw new Error(
@@ -251,10 +252,11 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
         )
       const slot = index.slots[bundle.utilityId] ?? firstFreeSlot(index.slots)
       await this.backend.write(ovenUtilitySecretSlotKey(slot), value)
-      if (!remembered)
+      // An entry from the first release is remembered but has no slot yet.
+      if (!remembered || index.slots[bundle.utilityId] === undefined)
         await this.save({
           ...index,
-          stored: [...index.stored, bundle.utilityId],
+          stored: remembered ? index.stored : [...index.stored, bundle.utilityId],
           slots: { ...index.slots, [bundle.utilityId]: slot }
         })
       Logger.dev(`Oven secret store kept a credential bundle for \`${bundle.utilityId}\`.`)
@@ -289,6 +291,8 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
       const forgotten =
         utilityId === undefined ? [...index.stored] : index.stored.filter((id) => id === utilityId)
       if (utilityId === undefined) {
+        // With no store to reach and nothing recorded, there is nothing to sweep.
+        if (forgotten.length === 0 && !(await this.probeOnce()).available) return 0
         // A disable sweeps the whole namespace, not the ids this index happens to
         // still name: a credential whose row was lost is exactly the case this
         // exists for, and it costs one delete per slot the store can ever own.
@@ -369,7 +373,10 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
   /** Rewrite the index 0600, after the mutation that decided its new shape. */
   private async save(index: OvenUtilitySecretIndex): Promise<void> {
     await mkdir(ovenUtilityHostDirectory(this.home), { recursive: true, mode: 0o700 })
-    const file = await open(this.indexPath, 'w', 0o600)
+    // Readers are not queued behind writers, so the file is replaced whole: a
+    // half-written one would read as a store that is switched off.
+    const staged = `${this.indexPath}.${process.pid}.next`
+    const file = await open(staged, 'w', 0o600)
     try {
       await file.writeFile(JSON.stringify(index))
       await file.sync()
@@ -378,7 +385,8 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
     }
     // `open` applies its mode only when it creates the file, so a file left
     // behind by an earlier version keeps whatever permissions it had without this.
-    await chmod(this.indexPath, 0o600)
+    await chmod(staged, 0o600)
+    await rename(staged, this.indexPath)
   }
 
   /**
@@ -394,7 +402,7 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
     return next
   }
 
-  /** Ask the backend once; every later reader gets the same answer. */
+  /** Ask the backend until it says yes; concurrent readers share one ask. */
   private probeOnce(): Promise<{ available: boolean; reason?: string }> {
     const cached = this.probe
     if (cached) return cached
@@ -406,6 +414,9 @@ export class OvenUtilitySecrets implements OvenUtilityCredentialStore {
           : 'This machine offered no answer about its credential store.'
     }))
     this.probe = probing
+    void probing.then(({ available }) => {
+      if (!available) this.probe = null
+    })
     return probing
   }
 }

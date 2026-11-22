@@ -2,8 +2,13 @@ import { app, dialog, shell } from 'electron'
 import { Logger } from './system/logger'
 import { setMainBundleDirectory } from './bootstrap/bundle-directory'
 import { installWindowsRenderingDefaults } from './system/windows-rendering'
+import { dropInheritedOwnership } from './system/process-ownership'
 
 setMainBundleDirectory(import.meta.url)
+
+// Before anything is spawned: this instance's children belong to it, not to the
+// instance whose agent may have launched it.
+dropInheritedOwnership()
 
 // Chromium reads these switches once, when the renderer starts, so they have to
 // be in place before the ready event. Doing it here, ahead of the application

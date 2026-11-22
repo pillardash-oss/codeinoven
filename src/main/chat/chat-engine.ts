@@ -741,6 +741,14 @@ export class ChatEngine {
   killProcess(projectId: string, threadId: string, pid: number): Promise<void> {
     return this.units['processes'].killProcess(projectId, threadId, pid)
   }
+  /** Answer one app-owned process tool call: list, start or stop for a thread. */
+  runAgentProcessTool(
+    action: 'list' | 'start' | 'stop',
+    input: Record<string, unknown>,
+    context: SecretRequestContext
+  ): Promise<unknown> {
+    return this.units['processes'].runAgentProcessTool(action, input, context)
+  }
   killThreadProcesses(projectId: string, threadId: string): Promise<void> {
     return this.units['processes'].killThreadProcesses(projectId, threadId)
   }

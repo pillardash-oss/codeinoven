@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -10,6 +10,7 @@ vi.mock('electron', () => ({
 }))
 
 import { createTestDb, destroyTestDb } from './database/test-helper'
+import { removeTempRoot } from '../helpers/temp-root'
 import type { Database } from '../../src/main/database/database'
 import { ProjectRepo } from '../../src/main/database/repositories/project-repo'
 import { StorageEngine } from '../../src/main/storage/storage-engine'
@@ -84,9 +85,10 @@ beforeEach(() => {
   process.env['CODEINOVEN_CONFIG_ROOT'] = temporaryConfigRoot
 })
 
-afterEach(() => {
+afterEach(async () => {
   temporaryDatabases.splice(0).forEach(destroyTestDb)
-  rmSync(temporaryConfigRoot, { force: true, recursive: true })
+  // The engine persists asynchronously, so a removal here races a late write.
+  await removeTempRoot(temporaryConfigRoot)
   temporaryConfigRoot = ''
   if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
   else process.env['CODEINOVEN_CONFIG_ROOT'] = originalConfigRoot

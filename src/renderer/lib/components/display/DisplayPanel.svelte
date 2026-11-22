@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, onMount } from 'svelte'
+  import { onMount } from 'svelte'
   import type { DisplayContextTab } from '$lib/stores/context-sidebar.svelte'
   import { displayPanel } from '$lib/stores/display-panel.svelte'
   import DisplaySourcePicker from './DisplaySourcePicker.svelte'
@@ -29,11 +29,12 @@
   // Frames are only ever addressed to an open panel, so the subscriptions live
   // exactly as long as the panel does instead of arming at boot.
   onMount(() => displayPanel.init())
-  onDestroy(() => displayPanel.destroy())
 </script>
 
 {#if targetKey}
-  {#key targetKey}
+  <!-- By tab as well as target: a session belongs to its tab, and two projects can
+       each hold a tab for the same device. -->
+  {#key `${tab.id}:${targetKey}`}
     <DisplayStage {tab} />
   {/key}
 {:else}

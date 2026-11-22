@@ -26,6 +26,7 @@ import {
   type WorktreeRegistration
 } from '../../src/main/workspaces/scope-root-resolver'
 import { getScopeRootPath } from '../../src/lib/utils'
+import { removeTempRoots } from '../helpers/temp-root'
 
 const temporaryDatabases: Database[] = []
 const originalConfigRoot = process.env['CODEINOVEN_CONFIG_ROOT']
@@ -40,10 +41,9 @@ beforeEach(() => {
   process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'] = '1'
 })
 
-afterEach(() => {
+afterEach(async () => {
   temporaryDatabases.splice(0).forEach(destroyTestDb)
-  rmSync(temporaryConfigRoot, { force: true, recursive: true })
-  rmSync(projectDir, { force: true, recursive: true })
+  await removeTempRoots([temporaryConfigRoot, projectDir])
   temporaryConfigRoot = ''
   projectDir = ''
   if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
@@ -170,7 +170,7 @@ describe('ChatEngine scope-owned roots', () => {
     const resolve = resolveThreadPathFn(engine)
     const threads = threadCreator(engine)
 
-    // A thread in a healthy managed scope resolves to the worktree root  
+    // A thread in a healthy managed scope resolves to the worktree root
     // the same funnel drivers, session registries, change tracking, and
     // checkpoints all use.
     const scoped = await threads.createThread({

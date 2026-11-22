@@ -9,6 +9,7 @@ import { parseModelKey } from '$lib/model-keys'
 import type { ModelScope } from './thread-settings.svelte'
 import { clearDraftLabelCookie, setDraftLabelCookie } from './draft-label'
 import {
+  COMMENT_COMMIT_DEBOUNCE_MS,
   commitDraftStateNow,
   flushAllDraftCommits,
   hasPendingDraftCommit,
@@ -541,7 +542,8 @@ export class RendererRecoveryStore {
     attachments?: PromptAttachment[],
     projectReferences?: PromptProjectReference[],
     taskReferences?: PromptAssignmentTaskReference[],
-    promptReferences?: QueuedResponseReference[]
+    promptReferences?: QueuedResponseReference[],
+    typingComment = false
   ): void {
     if (
       !isRecoveryIdentifier(projectId) ||
@@ -570,11 +572,13 @@ export class RendererRecoveryStore {
     // else (a file added or removed, a tag, an annotation, clearing the
     // composer) is a finished action on the slot, so it commits at once and no
     // refresh, other window or instance can read a draft state that has moved.
+    // A comment still being typed is text too, so it waits out its own pause.
     const deliberate =
-      attachments !== undefined ||
-      projectReferences !== undefined ||
-      taskReferences !== undefined ||
-      promptReferences !== undefined
+      !typingComment &&
+      (attachments !== undefined ||
+        projectReferences !== undefined ||
+        taskReferences !== undefined ||
+        promptReferences !== undefined)
     // No-op writes must not reassign state — callers may run inside effects.
     if (
       current.text === draft &&
@@ -624,7 +628,10 @@ export class RendererRecoveryStore {
     if (key in next) {
       const content = JSON.stringify(next[key])
       if (deliberate) commitDraftStateNow(projectId, threadId, true, content)
-      else scheduleDraftCommit(projectId, threadId, true, content)
+      else {
+        const delay = typingComment ? COMMENT_COMMIT_DEBOUNCE_MS : undefined
+        scheduleDraftCommit(projectId, threadId, true, content, delay)
+      }
     } else {
       commitDraftStateNow(projectId, threadId, false, null)
     }
@@ -767,7 +774,8 @@ export class RendererRecoveryStore {
   setPromptReferences(
     projectId: string,
     threadId: string,
-    references: QueuedResponseReference[]
+    references: QueuedResponseReference[],
+    typingComment = false
   ): void {
     const entry = this.entryFor(projectId, threadId)
     this.setDraft(
@@ -777,7 +785,8 @@ export class RendererRecoveryStore {
       entry.attachments,
       entry.projectReferences,
       entry.taskReferences,
-      references
+      references,
+      typingComment
     )
   }
 

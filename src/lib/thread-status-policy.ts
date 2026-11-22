@@ -153,6 +153,22 @@ export const DONE_THREAD_STATUSES: readonly ThreadStatus[] = THREAD_STATUSES.fil
 )
 
 /**
+ * The statuses a coordinator can settle into, after which the threads it
+ * spawned are finished business: nothing can resume them (a retry only ever
+ * admits a `working-paused` row) and nobody is waiting on their result.
+ *
+ * `failed` is here rather than in {@link DONE_THREAD_STATUSES} because a failed
+ * coordinator is not *done*   it is an issue of its own that the user still has
+ * to read   but it settles its children exactly the same way, and the child rows
+ * must not outlive it as invisible work.
+ */
+export const SETTLED_THREAD_STATUSES: readonly ThreadStatus[] = [
+  'interrupted',
+  'completed',
+  'failed'
+]
+
+/**
  * Whether a thread may read as unread at all.
  *
  * Unread is reserved for a run that *finished* (`completed`) and that the user

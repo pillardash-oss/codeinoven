@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto'
-import { access } from 'node:fs/promises'
 import { rm } from 'node:fs/promises'
 import { spawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -11,6 +10,7 @@ import type {
   SpeechTranscribeInput
 } from '../speech-backend'
 import { resolveFfmpegPath } from '../ffmpeg-path'
+import type { MlxMetalRuntime } from '../mlx-metal-runtime'
 
 type MlxRequest =
   | { id: string; operation: 'warmup'; model: string }
@@ -41,24 +41,41 @@ interface PendingMlxRequest {
  * Apple Silicon adapter for a signed, packaged JSON-lines worker. Development
  * never searches PATH and unsupported installations remain a typed capability
  * failure rather than switching to sherpa.
+ *
+ * The worker binary ships with the app, but the 102 MB Metal kernel library it
+ * needs does not: it is resolved or downloaded on demand (see
+ * {@link MlxMetalRuntime}), and the worker is spawned from the writable runtime
+ * directory that pairs the two.
  */
 export class MlxSpeechBackend implements SpeechBackend {
   readonly runtime = 'mlx' as const
   private process: ChildProcessWithoutNullStreams | null = null
+  private starting: Promise<ChildProcessWithoutNullStreams> | null = null
   private readonly pending = new Map<string, PendingMlxRequest>()
   private buffered = ''
+  private failure: string | null = null
 
-  constructor(private readonly executablePath: string) {}
+  constructor(private readonly metalRuntime: MlxMetalRuntime) {}
 
   async capabilities(): Promise<SpeechCapability[]> {
     if (process.platform !== 'darwin' || process.arch !== 'arm64') return []
     try {
-      await access(this.executablePath)
+      await this.metalRuntime.prepare()
       await resolveFfmpegPath()
+      this.failure = null
       return ['asr', 'cleanup', 'tts']
-    } catch {
+    } catch (error) {
+      // An absent engine is the normal state on a fresh install, not a defect:
+      // report it so the models list can offer the download instead of showing
+      // MLX as broken.
+      this.failure = error instanceof Error ? error.message : String(error)
       return []
     }
+  }
+
+  /** Why this runtime is unavailable, when the capability probe could tell. */
+  unavailableReason(): string | null {
+    return this.failure
   }
 
   async warmup(artifact: SpeechBackendArtifact, signal: AbortSignal): Promise<void> {
@@ -177,9 +194,14 @@ export class MlxSpeechBackend implements SpeechBackend {
     this.pending.clear()
   }
 
-  private request(request: MlxRequest, signal: AbortSignal): Promise<MlxResponse> {
-    if (signal.aborted) return Promise.reject(new Error('Speech operation cancelled.'))
-    const child = this.ensureProcess()
+  private async request(request: MlxRequest, signal: AbortSignal): Promise<MlxResponse> {
+    if (signal.aborted) throw new Error('Speech operation cancelled.')
+    const child = await this.ensureProcess()
+    if (signal.aborted) {
+      child.kill('SIGTERM')
+      this.process = null
+      throw new Error('Speech operation cancelled.')
+    }
     return new Promise<MlxResponse>((resolve, reject) => {
       const abort = (): void => {
         this.pending.delete(request.id)
@@ -202,9 +224,22 @@ export class MlxSpeechBackend implements SpeechBackend {
     })
   }
 
-  private ensureProcess(): ChildProcessWithoutNullStreams {
+  private async ensureProcess(): Promise<ChildProcessWithoutNullStreams> {
     if (this.process) return this.process
-    const child = spawn(this.executablePath, [], { stdio: ['pipe', 'pipe', 'pipe'] })
+    // Two operations can be queued before the engine is materialized; one spawn
+    // must serve both, and the runtime preparation must not be repeated.
+    this.starting ??= this.metalRuntime
+      .prepare()
+      .then((executablePath) => this.spawnWorker(executablePath))
+      .finally(() => {
+        this.starting = null
+      })
+    return this.starting
+  }
+
+  private spawnWorker(executablePath: string): ChildProcessWithoutNullStreams {
+    if (this.process) return this.process
+    const child = spawn(executablePath, [], { stdio: ['pipe', 'pipe', 'pipe'] })
     let stderr = ''
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => this.receive(chunk))

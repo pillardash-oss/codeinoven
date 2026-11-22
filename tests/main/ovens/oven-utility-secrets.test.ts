@@ -344,7 +344,10 @@ describe('Oven secret backends', () => {
       directory
     })
     expect(await bus.probe()).toEqual({ available: true })
-    expect(withBus.calls.at(-1)?.argv).toEqual(['which', 'secret-tool'])
+    expect(withBus.calls.map((call) => call.argv.slice(0, 2))).toEqual([
+      ['which', 'secret-tool'],
+      ['secret-tool', 'lookup']
+    ])
 
     await bus.write('cio:kitchen', VALUE)
     expect(withBus.calls.at(-1)?.argv).toEqual([
@@ -378,14 +381,18 @@ describe('Oven secret backends', () => {
     })
   })
 
-  it('passes a macOS value on stdin and never in argv', async () => {
+  it('keeps a macOS value and its key out of argv', async () => {
     const directory = join(
       await mkdtemp(join(resolve('.cio/tmp'), 'oven-secret-backend-')),
       'files'
     )
+    let key = ''
     const { runner, calls } = recordingRunner((argv) => {
+      if (argv.includes('-i')) key = /-w (\S+)/u.exec(calls.at(-1)?.stdin ?? '')?.[1] ?? ''
       if (argv.includes('find-generic-password'))
-        return { code: 0, stdout: `${VALUE}\n`, stderr: '' }
+        return key
+          ? { code: 0, stdout: `${key}\n`, stderr: '' }
+          : { code: 44, stdout: '', stderr: '' }
       if (argv.includes('delete-generic-password')) return { code: 44, stdout: '', stderr: '' }
       return { code: 0, stdout: '', stderr: '' }
     })
@@ -397,21 +404,13 @@ describe('Oven secret backends', () => {
     })
 
     expect(await backend.probe()).toEqual({ available: true })
-    expect(calls.at(-1)?.argv).toEqual(['/usr/bin/security', 'list-keychains'])
+    expect(calls.at(-1)?.argv).toEqual(['/usr/bin/security', 'show-keychain-info'])
 
     await backend.write('cio:kitchen', VALUE)
-    expect(calls.at(-1)?.argv).toEqual([
-      '/usr/bin/security',
-      'add-generic-password',
-      '-U',
-      '-s',
-      'codeinoven-oven',
-      '-a',
-      'cio:kitchen',
-      '-w',
-      '-'
-    ])
-    expect(calls.at(-1)?.stdin).toBe(VALUE)
+    // `-w -` would store a dash, so the key is handed over in interactive mode.
+    expect(calls.find((call) => call.stdin)?.argv).toEqual(['/usr/bin/security', '-i'])
+    expect(key).toMatch(/^[0-9a-f]{64}$/u)
+    for (const recorded of calls) expect(recorded.argv.join('\u0000')).not.toContain(key)
     for (const recorded of calls) expect(recorded.argv.join('\u0000')).not.toContain(VALUE)
 
     expect(await backend.read('cio:kitchen')).toBe(VALUE)

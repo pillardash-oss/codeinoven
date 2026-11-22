@@ -672,6 +672,7 @@
     previewContextWindow={usage.previewContextWindow}
     efficiencyKpis={usage.efficiencyKpis}
     harnessUsage={usage.harnessUsage ?? []}
+    accountLimit={usage.accountLimit}
     canCompact={usage.canCompact ?? false}
     compacting={usage.compacting ?? false}
     onCompact={usage.onCompact}
@@ -921,7 +922,8 @@
   }
 
   :global([data-shoe-fit='readings'] .shoe-generation-label),
-  :global([data-shoe-fit='readings'] .context-usage-label) {
+  :global([data-shoe-fit='readings'] .context-usage-label),
+  :global([data-shoe-fit='readings'] .account-limit-suffix) {
     display: none;
   }
 

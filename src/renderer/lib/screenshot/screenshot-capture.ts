@@ -1,5 +1,6 @@
 import { toast } from 'svelte-sonner'
 import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
+import { compareComposerPriority } from '$lib/focus/composer-focus-registry'
 import { publishScreenshotShortcut } from '$lib/keymap/screenshot-shortcut'
 import { showToastWarning } from '$lib/stores/app-errors.svelte'
 import { logRendererError } from '$lib/system/renderer-logger'
@@ -17,11 +18,13 @@ import type { ScreenshotCapture } from '$shared/types'
  */
 
 export interface ScreenshotTarget {
+  /** The composer's root, which ranks it against the other mounted composers. */
+  getRoot(): HTMLElement | null
   /** Copy the capture into this prompt's storage and answer whether it landed. */
   attachScreenshot(path: string): Promise<boolean>
 }
 
-/** Newest registration wins, so a remounted composer is the one that receives. */
+/** Every mounted composer, the main thread's and any side chat's. */
 const targets: ScreenshotTarget[] = []
 
 /** Captures waiting for a composer, or for their fallback deadline. */
@@ -67,15 +70,25 @@ export function registerScreenshotTarget(target: ScreenshotTarget): () => void {
   }
 }
 
+/** The current thread's composer. Mount order cannot name it, because a side
+ *  chat can mount after the thread it sits beside. */
+function currentTarget(): ScreenshotTarget | undefined {
+  return [...targets].sort((a, b) => {
+    const first = a.getRoot()
+    const second = b.getRoot()
+    if (!first || !second) return Number(!first) - Number(!second)
+    return compareComposerPriority(first, second)
+  })[0]
+}
+
+/** Only the current thread is tried: a refusal must not land in another chat. */
 async function deliverOne(capture: ScreenshotCapture): Promise<boolean> {
-  for (let index = targets.length - 1; index >= 0; index -= 1) {
-    try {
-      if (await targets[index]!.attachScreenshot(capture.path)) return true
-    } catch (error) {
-      logRendererError('A screenshot could not be attached to the composer', error)
-    }
+  try {
+    return (await currentTarget()?.attachScreenshot(capture.path)) ?? false
+  } catch (error) {
+    logRendererError('A screenshot could not be attached to the composer', error)
+    return false
   }
-  return false
 }
 
 /** The composer could not take it, so the file itself stays useful: its path

@@ -1,4 +1,9 @@
-import type { AgentContextUsage, AgentHarnessUsage, UsageEfficiencyKpis } from '$shared/types'
+import type {
+  AgentContextUsage,
+  AgentHarnessUsage,
+  AgentRateLimitWindow,
+  UsageEfficiencyKpis
+} from '$shared/types'
 
 /**
  * What the context holds, as the composer's shoe states it: the five-cell meter
@@ -16,6 +21,7 @@ export interface ComposerUsage {
   generationDetails?: import('$lib/generation-details').GenerationDetails
   efficiencyKpis?: UsageEfficiencyKpis
   harnessUsage?: AgentHarnessUsage[]
+  accountLimit?: AgentRateLimitWindow
   canCompact?: boolean
   compacting?: boolean
   onCompact?: () => void

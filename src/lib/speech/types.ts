@@ -403,6 +403,64 @@ export interface SpeechLlamaRuntimeStatus {
   downloadByteSize?: number
 }
 
+/**
+ * Where the MLX Metal library in use came from.
+ *
+ * `environment` is an explicit override, `managed` is the copy this app
+ * downloaded, `development` is the build output sitting beside the worker in a
+ * development checkout, and `python` is an MLX package another tool installed on
+ * this machine.
+ */
+export type SpeechMlxMetalRuntimeSource = 'environment' | 'managed' | 'development' | 'python'
+
+/**
+ * Discover-or-download status of the MLX engine the MLX speech worker needs.
+ *
+ * The engine is `mlx.metallib`, the precompiled Metal kernel library MLX loads
+ * beside its executable. It is not a model and not the worker: it is about
+ * 102 MB of GPU kernels, so it is provisioned at runtime (reused from an MLX
+ * installation already on the machine, else downloaded) instead of shipping in
+ * every Apple Silicon build. The worker binary itself stays in the bundle.
+ */
+export interface SpeechMlxMetalRuntimeStatus {
+  /** Whether this machine can run the MLX engine at all (macOS, Apple silicon). */
+  supported: boolean
+  /** Whether a Metal library was found or installed on this machine. */
+  available: boolean
+  /** Whether the runtime directory already holds a worker and library ready to spawn. */
+  prepared: boolean
+  source?: SpeechMlxMetalRuntimeSource
+  selectedPath?: string
+  workerPath?: string
+  runtimeDirectory: string
+  /** Pinned `mlx_metal` release the bundled worker was built against. */
+  metallibVersion: string
+  metallibSha256: string
+  downloadRequired: boolean
+  downloadName?: string
+  downloadByteSize?: number
+  /** Why the engine could not be prepared on the last attempt, when it failed. */
+  unavailableReason?: string
+}
+
+/**
+ * Discover-or-download status of the sherpa-onnx engine: the native addon plus
+ * onnxruntime that the portable speech runtime loads. It is not shipped with the
+ * app; it is downloaded the first time a sherpa-onnx model is chosen.
+ */
+export interface SpeechSherpaRuntimeStatus {
+  supported: boolean
+  available: boolean
+  prepared: boolean
+  packageName?: string
+  runtimeDirectory: string
+  version: string
+  downloadRequired: boolean
+  downloadName?: string
+  downloadByteSize?: number
+  unavailableReason?: string
+}
+
 export interface SpeechSegment {
   id: string
   index: number

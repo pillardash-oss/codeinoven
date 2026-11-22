@@ -22,7 +22,8 @@ import {
   UTILITY_DOCS_TOOL_NAME,
   UTILITY_MANAGE_TOOL_NAME,
   UTILITY_DIAGNOSTICS_TOOL_NAME,
-  UTILITY_SUGGEST_TOOL_NAME
+  UTILITY_SUGGEST_TOOL_NAME,
+  PROCESS_TOOL_NAMES
 } from '../../../lib/gateway-tools'
 import {
   isOrchestrationTool,
@@ -160,6 +161,12 @@ export class UtilityOrchestrationServiceTurnRuntime {
       // itself, instead of sending the user back to re-send the same message
       // with @cio-utility.
       if (name === UTILITY_DIAGNOSTICS_TOOL_NAME) return true
+      // Process lifecycle belongs to whoever started the process. A shell kill
+      // cannot prove it started its target, so it is refused in every form and
+      // the app owns the stop instead: an agent that started a dev server or a
+      // probe instance must be able to list it and end it on every turn, not
+      // only in Full Access or an @cio-hey session.
+      if (PROCESS_TOOL_NAMES.has(name)) return true
       // Asking for a secret is an app capability rather than a utility
       // operation, and it never needs a secret to be installed: it is offered on
       // every turn that carries the gateway at all, plus every explicit setup
@@ -341,7 +348,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_CITE_UTILITY_ID)
         ? [
-            `When this turn produces something the user will open again outside your answer (a report, a document, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message. The app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well.`
+            `This is a rule, not a judgment call: when this turn produced work the user will open again outside your answer (a report, a document, findings, an analysis, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message. Reciting that work inline in place of citing it, or naming where the file lives, is not an alternative: the app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well. Citing is one local call the app answers itself, with no fee attached, so its cost is never a reason to skip it.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)

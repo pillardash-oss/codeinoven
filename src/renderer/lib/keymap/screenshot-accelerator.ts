@@ -85,13 +85,15 @@ export function acceleratorForKeys(
  * wins the keypress, so the app's action never runs while the user sees the
  * platform's screenshot UI. They are refused rather than registered, so the
  * keymap can say why instead of leaving a dead shortcut behind.
+ *
+ * 7 is absent on purpose: macOS gives it only to the Touch Bar screenshot, and
+ * it is this app's default.
  */
 const MAC_SCREENSHOT_ACCELERATORS: ReadonlySet<string> = new Set([
   'Command+Shift+3',
   'Command+Shift+4',
   'Command+Shift+5',
-  'Command+Shift+6',
-  'Command+Shift+7'
+  'Command+Shift+6'
 ])
 
 /** Whether macOS owns this chord for a screenshot of its own. */

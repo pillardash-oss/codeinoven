@@ -10,6 +10,13 @@ import { epochMilliseconds, numberProperty, record, string } from './claude-valu
 /** Claude Code token accounting, context and rate-limit extraction. */
 
 export const CLAUDE_USAGE_TIMEOUT_MS = 12_000
+/** How long a live session's answered quota waits for its context reading. */
+export const CLAUDE_CONTEXT_GRACE_MS = 1_500
+/** Without `skip_behaviors` the CLI scans seven days of transcripts before it answers. */
+export const CLAUDE_USAGE_REQUEST = { subtype: 'get_usage', skip_behaviors: true } as const
+
+/** `get_usage` reports 0-100; stream events report a 0-1 fraction. */
+type UtilizationScale = 'fraction' | 'percent'
 
 export type ClaudeAccountUsage = {
   rateLimits: AgentRateLimitWindow[]
@@ -244,7 +251,8 @@ export function aggregateModelUsage(value: unknown): {
 
 export function rateLimitWindow(
   value: unknown,
-  fallbackId = 'claude-rate-limit'
+  fallbackId = 'claude-rate-limit',
+  scale: UtilizationScale = 'fraction'
 ): AgentRateLimitWindow | null {
   const limit = record(value)
   if (!limit) return null
@@ -252,7 +260,9 @@ export function rateLimitWindow(
   const limitType = string(limit['rateLimitType']) ?? string(limit['rate_limit_type'])
   const utilization = numberProperty(limit, 'utilization', 'used_percentage', 'usedPercent')
   const usedPercent =
-    utilization === undefined ? undefined : utilization <= 1 ? utilization * 100 : utilization
+    utilization !== undefined && scale === 'fraction' && utilization <= 1
+      ? utilization * 100
+      : utilization
   const resetsAt = epochMilliseconds(limit['resetsAt'] ?? limit['resets_at'])
   const windowMinutes = numberProperty(limit, 'window_duration_mins', 'windowDurationMins')
   const overageStatus = string(limit['overageStatus']) ?? string(limit['overage_status'])
@@ -270,13 +280,18 @@ export function rateLimitWindow(
   if (usedPercent === undefined && resetsAt === undefined && windowMinutes === undefined) {
     return null
   }
+  // Claude names its windows instead of stating their length, and a weekly
+  // window's suffix is the model it is scoped to.
+  const weekly = /^seven_day(?:_(.+))?$/u.exec(id)
+  const length = windowMinutes ?? (id === 'five_hour' ? 300 : weekly ? 10_080 : undefined)
   return {
     id,
     label,
     ...(status === undefined ? {} : { status }),
     ...(usedPercent === undefined ? {} : { usedPercent: Math.min(100, usedPercent) }),
     ...(resetsAt === undefined ? {} : { resetsAt }),
-    ...(windowMinutes === undefined ? {} : { windowMinutes }),
+    ...(length === undefined ? {} : { windowMinutes: length }),
+    ...(weekly?.[1] === undefined ? {} : { model: weekly[1] }),
     ...(overageStatus === undefined ? {} : { overageStatus }),
     ...(overageDisabledReason === undefined ? {} : { overageDisabledReason }),
     ...(isUsingOverage === undefined ? {} : { isUsingOverage })
@@ -299,24 +314,30 @@ function windowLabel(
   const type = (limitType ?? fallbackId)?.toLowerCase()
   if (type === 'five_hour' || type === '5h' || type === '5hour') return '5-hour limit'
   if (type === 'seven_day' || type === '7day' || type === 'weekly') return 'Weekly limit'
+  if (type?.startsWith('seven_day_')) {
+    return `Weekly ${type.slice('seven_day_'.length).replaceAll('_', ' ')} limit`
+  }
   if (limitType) return limitType.replaceAll('_', ' ')
   return 'usage limit'
 }
 
-export function rateLimitWindows(value: unknown): AgentRateLimitWindow[] {
+export function rateLimitWindows(
+  value: unknown,
+  scale: UtilizationScale = 'fraction'
+): AgentRateLimitWindow[] {
   if (Array.isArray(value)) {
     return value
-      .map((item, index) => rateLimitWindow(item, `claude-rate-limit-${index}`))
+      .map((item, index) => rateLimitWindow(item, `claude-rate-limit-${index}`, scale))
       .filter((item): item is AgentRateLimitWindow => item !== null)
   }
   const limits = record(value)
   if (!limits) return []
   if ('status' in limits || 'utilization' in limits) {
-    const mapped = rateLimitWindow(limits)
+    const mapped = rateLimitWindow(limits, undefined, scale)
     return mapped ? [mapped] : []
   }
   return Object.entries(limits)
-    .map(([id, item]) => rateLimitWindow(item, id))
+    .map(([id, item]) => rateLimitWindow(item, id, scale))
     .filter((item): item is AgentRateLimitWindow => item !== null)
 }
 

@@ -1,9 +1,7 @@
-import { BrowserWindow, app, globalShortcut, nativeImage, type NativeImage } from 'electron'
-import { spawn } from 'node:child_process'
+import { BrowserWindow, app, globalShortcut } from 'electron'
 import { randomUUID } from 'node:crypto'
-import { copyFile, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
-import { fitWithin, MAX_SCREENSHOT_DIMENSION } from '../../lib/image-payload'
 import type {
   ScreenshotCapture,
   ScreenshotCaptureOutcome,
@@ -13,11 +11,18 @@ import { broadcastAppToast } from '../ipc/app-toast'
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { Logger } from './logger'
 import { ensureScreenshotPermission, screenshotPermissionState } from './screenshot-permission'
+import { pruneScreenshots } from './screenshot-service/screenshot-files'
+import { selectRegionOnMac } from './screenshot-service/screenshot-mac'
+import { selectRegionWithOverlay } from './screenshot-service/screenshot-overlay'
+import {
+  screenshotSelector,
+  unsupportedScreenshotReason
+} from './screenshot-service/screenshot-platform'
 
 /**
  * Region screenshots for agents.
  *
- * A macOS screenshot is taken at the display's device pixels: a Retina full
+ * A screenshot is taken at the display's device pixels: a Retina full
  * screen is around 3000x2000, and a vision provider folds that down to the same
  * 1568px budget this module applies itself. The text the user wanted the agent
  * to read is then whatever survives that second downscale. Capturing a user
@@ -27,29 +32,18 @@ import { ensureScreenshotPermission, screenshotPermissionState } from './screens
  * The chord belongs to the operating system, not to a window, so the capture is
  * free to start while the browser or another app owns the keyboard. The window
  * receives the finished file and attaches it to the active prompt.
+ *
+ * macOS uses the system's selector, Windows and X11 use the app's overlay. Both
+ * decode and encode outside the main process.
  */
-
-/** macOS's own selector: it draws the crosshair, handles window mode and writes
- *  the selection at native pixel density, which no reimplementation matches. */
-const SCREEN_CAPTURE_BIN = '/usr/sbin/screencapture'
 
 /** Folder the app owns; captures are copied into a thread's attachment folder
  *  before they are used, so pruning this one never breaks a sent prompt. */
 const SCREENSHOT_DIRECTORY = 'screenshots'
 
-/** Kept for audit and for the fallback, bounded so the folder cannot grow. */
-const MAX_RETAINED_SCREENSHOTS = 100
-const MAX_SCREENSHOT_AGE_MS = 30 * 24 * 60 * 60 * 1000
-
 /** A second trigger landing while the selector is open would start a second
  *  selector; the fallback keydown path and the global chord are debounced. */
 const TRIGGER_DEBOUNCE_MS = 400
-
-/** The selector process exits once the selection is made, and macOS's capture
- *  agent writes the file a moment later, so a missing file is polled for briefly
- *  before the capture is read as cancelled. */
-const CAPTURE_FILE_WAIT_MS = 3000
-const CAPTURE_FILE_POLL_MS = 100
 
 let activeAccelerator: string | null = null
 let capturing = false
@@ -62,8 +56,7 @@ const MAC_SCREENSHOT_ACCELERATORS: ReadonlySet<string> = new Set([
   'Command+Shift+3',
   'Command+Shift+4',
   'Command+Shift+5',
-  'Command+Shift+6',
-  'Command+Shift+7'
+  'Command+Shift+6'
 ])
 
 function screenshotsDirectory(): string {
@@ -77,77 +70,6 @@ function failed(
 ): ScreenshotCaptureOutcome {
   broadcastAppToast({ message: title, type: 'error', details: reason })
   return { status: 'failed', reason }
-}
-
-/** Run the platform selector; it answers when the user releases the selection,
- *  and with its exit code, because a refused capture also exits without a file. */
-function runScreenCapture(path: string): Promise<number> {
-  return new Promise((resolveCapture, rejectCapture) => {
-    const child = spawn(SCREEN_CAPTURE_BIN, ['-i', '-x', '-o', '-t', 'png', path], {
-      stdio: 'ignore'
-    })
-    child.once('error', rejectCapture)
-    child.once('close', (code) => resolveCapture(code ?? 0))
-  })
-}
-
-/** The written capture, once it has bytes, or null when none arrives in time. */
-async function awaitCaptureFile(path: string): Promise<{ size: number } | null> {
-  const deadline = Date.now() + CAPTURE_FILE_WAIT_MS
-  for (;;) {
-    const info = await stat(path).catch(() => null)
-    if (info && info.size > 0) return info
-    if (Date.now() >= deadline) return null
-    await new Promise((resolveWait) => setTimeout(resolveWait, CAPTURE_FILE_POLL_MS))
-  }
-}
-
-/** Fit the selection for a vision provider: one downscale, never an upscale. */
-function optimizedImage(image: NativeImage): { image: NativeImage; width: number; height: number } {
-  const size = image.getSize()
-  const fitted = fitWithin(size.width, size.height, MAX_SCREENSHOT_DIMENSION)
-  if (fitted.width === size.width && fitted.height === size.height) {
-    return { image, width: size.width, height: size.height }
-  }
-  const resized = image.resize({ width: fitted.width, height: fitted.height, quality: 'best' })
-  return { image: resized, width: fitted.width, height: fitted.height }
-}
-
-async function writePicture(image: NativeImage, directory: string): Promise<string> {
-  const filename = `shot-${Date.now()}-${randomUUID().slice(0, 8)}.png`
-  const target = join(directory, filename)
-  const staging = join(directory, `.${filename}.${process.pid}.${randomUUID()}.tmp`)
-  try {
-    await writeFile(staging, image.toPNG(), { flag: 'wx', mode: 0o600 })
-    await rename(staging, target)
-  } catch (error) {
-    await rm(staging, { force: true }).catch(() => undefined)
-    throw error
-  }
-  return target
-}
-
-/** Bound the app's own screenshot folder. Best effort: a failure here never
- *  costs the user the capture that was just taken. */
-async function pruneScreenshots(directory: string): Promise<void> {
-  try {
-    const entries = await readdir(directory)
-    const shots: { path: string; age: number; modified: number }[] = []
-    for (const entry of entries) {
-      if (!entry.startsWith('shot-')) continue
-      const path = join(directory, entry)
-      const info = await stat(path).catch(() => null)
-      if (!info?.isFile()) continue
-      shots.push({ path, age: Date.now() - info.mtimeMs, modified: info.mtimeMs })
-    }
-    shots.sort((left, right) => right.modified - left.modified)
-    for (const [index, shot] of shots.entries()) {
-      if (index < MAX_RETAINED_SCREENSHOTS && shot.age <= MAX_SCREENSHOT_AGE_MS) continue
-      await rm(shot.path, { force: true }).catch(() => undefined)
-    }
-  } catch (error) {
-    Logger.dev('The screenshot folder could not be pruned:', error)
-  }
 }
 
 function deliver(capture: ScreenshotCapture): void {
@@ -165,11 +87,8 @@ function deliver(capture: ScreenshotCapture): void {
 
 /** Capture a user-selected region now and hand the optimized file to the app. */
 export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutcome> {
-  if (process.platform !== 'darwin') {
-    return failed(
-      'Region screenshots use the macOS screen selector, which this platform does not provide.'
-    )
-  }
+  const selector = screenshotSelector()
+  if (!selector) return failed(unsupportedScreenshotReason())
   const now = Date.now()
   if (capturing || now - lastTriggerAt < TRIGGER_DEBOUNCE_MS) return { status: 'busy' }
   lastTriggerAt = now
@@ -191,56 +110,21 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
 
   capturing = true
   const directory = screenshotsDirectory()
-  const rawPath = join(directory, `.capture-${randomUUID()}.png`)
   try {
     await mkdir(directory, { recursive: true })
-    Logger.dev('Opening the region screenshot selector', { rawPath })
-    let exitCode = 0
-    try {
-      exitCode = await runScreenCapture(rawPath)
-    } catch (error) {
-      return failed(
-        `The macOS screenshot selector could not start: ${error instanceof Error ? error.message : String(error)}`
-      )
-    }
-
-    const rawInfo = await awaitCaptureFile(rawPath)
-    if (!rawInfo) {
-      await rm(rawPath, { force: true }).catch(() => undefined)
-      Logger.dev('The region screenshot selector wrote no file', { exitCode })
-      // A selector that wrote nothing is either a cancelled selection or a
-      // capture the system quietly refused. The permission state, read again
-      // rather than assumed, is what tells the two apart.
-      const state = screenshotPermissionState()
-      if (state !== 'granted' && state !== 'not-required') {
-        const refused = await ensureScreenshotPermission()
-        return failed(
-          refused.message ?? 'Screen Recording is not allowed for this app.',
-          'Screenshot needs Screen Recording permission'
-        )
-      }
-      return { status: 'cancelled' }
-    }
-
-    const source = nativeImage.createFromPath(rawPath)
-    if (source.isEmpty()) {
-      await rm(rawPath, { force: true }).catch(() => undefined)
-      return failed(
-        'The screenshot file was empty. Allow Screen Recording for this app, quit and reopen the app, then take the screenshot again.'
-      )
-    }
-
-    const sourceSize = source.getSize()
-    const fitted = optimizedImage(source)
-    const path = await writePicture(fitted.image, directory)
-    await rm(rawPath, { force: true }).catch(() => undefined)
+    const selection =
+      selector === 'macos'
+        ? await selectRegionOnMac(directory)
+        : await selectRegionWithOverlay(directory)
+    if (selection.status === 'cancelled') return { status: 'cancelled' }
+    if (selection.status === 'failed') return failed(selection.reason, selection.title)
 
     const capture: ScreenshotCapture = {
-      path,
-      width: fitted.width,
-      height: fitted.height,
-      sourceWidth: sourceSize.width,
-      sourceHeight: sourceSize.height,
+      path: selection.path,
+      width: selection.width,
+      height: selection.height,
+      sourceWidth: selection.sourceWidth,
+      sourceHeight: selection.sourceHeight,
       capturedAt: Date.now()
     }
     Logger.dev('Region screenshot captured', {
@@ -257,7 +141,6 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
     return failed(error instanceof Error ? error.message : String(error))
   } finally {
     capturing = false
-    await rm(rawPath, { force: true }).catch(() => undefined)
   }
 }
 
@@ -268,9 +151,9 @@ export async function captureScreenshotForAgent(): Promise<ScreenshotCaptureOutc
  * effective chord is answered without touching the registration.
  */
 export function setScreenshotShortcut(accelerator: string | null): ScreenshotShortcutRegistration {
-  // The selector this chord opens exists only on macOS, so the other platforms
-  // must not give up a system-wide key for a capture that cannot happen.
-  if (process.platform !== 'darwin') return { registered: false, reason: 'unsupported-platform' }
+  // A session with no selector (Wayland, for now) must not give up a system-wide
+  // key for a capture that cannot happen.
+  if (!screenshotSelector()) return { registered: false, reason: 'unsupported-platform' }
   if (accelerator === activeAccelerator) {
     if (!accelerator) return { registered: false, reason: 'unbound' }
     if (globalShortcut.isRegistered(accelerator)) return { registered: true }
@@ -284,7 +167,7 @@ export function setScreenshotShortcut(accelerator: string | null): ScreenshotSho
     activeAccelerator = null
   }
   if (!accelerator) return { registered: false, reason: 'unbound' }
-  if (MAC_SCREENSHOT_ACCELERATORS.has(accelerator)) {
+  if (process.platform === 'darwin' && MAC_SCREENSHOT_ACCELERATORS.has(accelerator)) {
     return { registered: false, reason: 'reserved' }
   }
   try {

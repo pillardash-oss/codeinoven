@@ -358,6 +358,22 @@ export interface SecretRequestContext {
 }
 
 /**
+ * Runs one app-owned process request for the turn that made it.
+ *
+ * Process lifecycle belongs to whoever started the process, and a shell command
+ * can never prove it started its target, so the app is the only surface that may
+ * stop one. The chat engine supplies this executor because it owns the agent
+ * process service: the same tracker that lists a thread's harness processes,
+ * records every descendant a session's shell spawned, and re-verifies ownership
+ * before signalling a pid.
+ */
+export type AgentProcessExecutor = (
+  action: 'list' | 'start' | 'stop',
+  input: Record<string, unknown>,
+  context: SecretRequestContext
+) => Promise<unknown>
+
+/**
  * Runs one `cio_util_suggest` gateway request for the turn that made it: it
  * surfaces the suggestion card, awaits the user's decision and returns it. The
  * chat engine supplies it because it owns the pending-question machinery. The
@@ -624,6 +640,8 @@ export class UtilityOrchestrationService {
   expertSettings: ExpertSettingsService | null = null
   scopeToolExecutor: ScopeToolExecutor | null = null
   secretRequestExecutor: SecretRequestExecutor | null = null
+  /** The app-owned process tools: list, start and stop a thread's processes. */
+  agentProcessExecutor: AgentProcessExecutor | null = null
   utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
   mcpSignInExecutor: McpSignInExecutor | null = null
   orchestrationExecutor: OrchestrationExecutor | null = null
@@ -724,6 +742,10 @@ export class UtilityOrchestrationService {
   }
   setSecretRequestExecutor(executor: SecretRequestExecutor | null): void {
     return this.units['executors'].setSecretRequestExecutor(executor)
+  }
+  /** Register the executor behind the app-owned process tools. */
+  setAgentProcessExecutor(executor: AgentProcessExecutor | null): void {
+    this.agentProcessExecutor = executor
   }
   setUtilitySuggestionExecutor(executor: UtilitySuggestionExecutor | null): void {
     return this.units['capability-invoke'].setUtilitySuggestionExecutor(executor)

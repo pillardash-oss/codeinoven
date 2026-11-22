@@ -63,6 +63,19 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
       : this.responseReferences
   )
 
+  /**
+   * Where the annotations are anchored, without what their comments say.
+   *
+   * The list is replaced on every keystroke of a comment, and re-anchoring reads
+   * every range's text and box, a forced layout of the whole transcript. A string
+   * only notifies when an anchor really changed.
+   */
+  annotationAnchorKey = $derived(
+    this.annotationReferences
+      .map((reference) => `${reference.id}:${reference.startOffset}:${reference.endOffset}`)
+      .join('|')
+  )
+
   responseReferenceRanges = new SvelteMap<string, Range>()
 
   /** Viewport position for the comment bubble of each reference anchor. Every

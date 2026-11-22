@@ -834,6 +834,15 @@ export async function createFileEditor(
       },
       mousemove(event, view) {
         if (!options.isIdeEnabled?.()) return false
+        // A held button is a selection being dragged, not a hover. Measuring here
+        // forces a layout per move, and a pause mid-drag asked the language server.
+        if (event.buttons !== 0) {
+          if (hoverWord === null) return false
+          hoverWord = null
+          clearTimeout(hoverTimer)
+          options.onIdeHoverEnd?.()
+          return false
+        }
         const position = view.posAtCoords({ x: event.clientX, y: event.clientY })
         const word = position === null ? null : view.state.wordAt(position)
         const key = word ? `${word.from}:${word.to}` : null

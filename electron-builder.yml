@@ -36,6 +36,23 @@ files:
   - '!node_modules/better-sqlite3/deps/**'
   - '!node_modules/better-sqlite3/src/**'
   - '!node_modules/better-sqlite3/binding.gyp'
+  # These packages are inlined into the renderer and main bundles at build
+  # time, so a packaged copy is dead weight (measured at ~3 MB). Nothing
+  # requires them from `node_modules` at runtime: the renderer is fully
+  # bundled, and main only reaches them through the bundle.
+  - '!node_modules/@codemirror/**'
+  - '!node_modules/@lezer/**'
+  - '!node_modules/@replit/codemirror-lang-svelte/**'
+  - '!node_modules/gemoji/**'
+  - '!node_modules/@fontsource-variable/**'
+  # The sherpa-onnx platform binary (28 MB of onnxruntime plus the sherpa
+  # dylibs) is provisioned at runtime like the MLX engine, so no platform copy
+  # ships. `sherpa-onnx-node` itself (the ~108 KB JS wrapper) stays: it is what
+  # the loader reads, and it resolves the provisioned platform package from the
+  # app config root.
+  - '!node_modules/sherpa-onnx-darwin-*/**'
+  - '!node_modules/sherpa-onnx-linux-*/**'
+  - '!node_modules/sherpa-onnx-win-*/**'
 # Signing is driven by CI environment variables (CSC_LINK, CSC_KEY_PASSWORD,
 # APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID). When unset, builds
 # produce unsigned artifacts. Local macOS package scripts opt into ad-hoc
@@ -51,8 +68,18 @@ mac:
     # repeating them here copies the same tree twice. Duplicating any symlink
     # inside those trees (e.g. a vendored .bin/esbuild) crashes the second copy
     # pass with EEXIST. Only the darwin-arm64 speech runtime is mac-specific.
+    #
+    # Apple silicon is the only architecture this app targets, so darwin-arm64 is
+    # the only speech runtime that exists. The MLX Metal kernel library
+    # (`mlx.metallib`, ~102 MB) is deliberately filtered out: it is engine data,
+    # not code, and is provisioned at runtime instead   reused from an MLX
+    # installation already on the machine, otherwise downloaded on the first MLX
+    # model download (see src/main/speech/mlx-metal-runtime.ts).
     - from: resources/speech/runtime/darwin-arm64
       to: speech
+      filter:
+        - '**/*'
+        - '!**/mlx.metallib'
   hardenedRuntime: true
   notarize: true
   entitlements: build/entitlements.mac.plist
@@ -118,6 +145,17 @@ mac:
     - '!node_modules/better-sqlite3/prebuilds/darwin-x64.node'
     - '!node_modules/better-sqlite3/prebuilds/linux*'
     - '!node_modules/better-sqlite3/prebuilds/win32*'
+    # Platform-level `files` replaces the top-level list, so the deduplication
+    # excludes above are repeated here or the mac package would silently keep
+    # everything they remove.
+    - '!node_modules/@codemirror/**'
+    - '!node_modules/@lezer/**'
+    - '!node_modules/@replit/codemirror-lang-svelte/**'
+    - '!node_modules/gemoji/**'
+    - '!node_modules/@fontsource-variable/**'
+    - '!node_modules/sherpa-onnx-darwin-*/**'
+    - '!node_modules/sherpa-onnx-linux-*/**'
+    - '!node_modules/sherpa-onnx-win-*/**'
 win:
   icon: build/icon.ico
   target:

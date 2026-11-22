@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync } from 'fs'
+import { mkdirSync, mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
@@ -15,6 +15,7 @@ import {
   type WorktreeRegistration
 } from '../../../src/main/workspaces/scope-root-resolver'
 import { getScopeRootPath } from '../../../src/lib/utils'
+import { removeTempRoots } from '../../helpers/temp-root'
 
 const temporaryDatabases: Database[] = []
 const originalConfigRoot = process.env['CODEINOVEN_CONFIG_ROOT']
@@ -29,10 +30,9 @@ beforeEach(() => {
   process.env['CODEINOVEN_PACKAGED_SMOKE_OUTPUT'] = '1'
 })
 
-afterEach(() => {
+afterEach(async () => {
   temporaryDatabases.splice(0).forEach(destroyTestDb)
-  rmSync(temporaryConfigRoot, { force: true, recursive: true })
-  rmSync(projectDir, { force: true, recursive: true })
+  await removeTempRoots([temporaryConfigRoot, projectDir])
   temporaryConfigRoot = ''
   projectDir = ''
   if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']

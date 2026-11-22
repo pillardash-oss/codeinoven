@@ -1,17 +1,154 @@
 diff --git a/dist/ghostty-web.js b/dist/ghostty-web.js
-index a4ca427b95288e70c782ce303013cd644893dcec..a504fb73d31b6b371aa70de45d88285eac90f088 100644
+index a4ca427..1807fc6 100644
 --- a/dist/ghostty-web.js
 +++ b/dist/ghostty-web.js
-@@ -2624,7 +2624,7 @@ class IA {
+@@ -1396,7 +1396,7 @@ class $ {
+    */
+   render(A, B = !1, g = 0, E, C = 1) {
+     var U;
+-    this.currentBuffer = A;
++    this.terminal = E, this.currentBuffer = A;
+     const I = A.getCursor(), D = A.getDimensions(), i = E ? E.getScrollbackLength() : 0;
+     (U = A.needsFullRedraw) != null && U.call(A) && (B = !0), (this.canvas.width !== D.cols * this.metrics.width * this.devicePixelRatio || this.canvas.height !== D.rows * this.metrics.height * this.devicePixelRatio) && (this.resize(D.cols, D.rows), B = !0), g !== this.lastViewportY && (B = !0, this.lastViewportY = g);
+     const s = I.x !== this.lastCursorPosition.x || I.y !== this.lastCursorPosition.y;
+@@ -1584,11 +1584,11 @@ class $ {
+   // ==========================================================================
+   startCursorBlink() {
+     this.cursorBlinkInterval = window.setInterval(() => {
+-      this.cursorVisible = !this.cursorVisible;
++      this.cursorVisible = !this.cursorVisible, this.terminal && this.terminal.requestPaint();
+     }, 530);
+   }
+   stopCursorBlink() {
+-    this.cursorBlinkInterval !== void 0 && (clearInterval(this.cursorBlinkInterval), this.cursorBlinkInterval = void 0), this.cursorVisible = !0;
++    this.cursorBlinkInterval !== void 0 && (clearInterval(this.cursorBlinkInterval), this.cursorBlinkInterval = void 0), this.cursorVisible = !0, this.terminal && this.terminal.requestPaint();
+   }
+   // ==========================================================================
+   // Public API
+@@ -1687,14 +1687,14 @@ class $ {
+    * Set the currently hovered hyperlink ID for rendering underlines
+    */
+   setHoveredHyperlinkId(A) {
+-    this.hoveredHyperlinkId = A;
++    this.hoveredHyperlinkId = A, this.terminal && this.terminal.requestPaint();
+   }
+   /**
+    * Set the currently hovered link range for rendering underlines (for regex-detected URLs)
+    * Pass null to clear the hover state
+    */
+   setHoveredLinkRange(A) {
+-    this.hoveredLinkRange = A;
++    this.hoveredLinkRange = A, this.terminal && this.terminal.requestPaint();
+   }
+   /**
+    * Get character cell width (for coordinate conversion)
+@@ -2090,6 +2090,7 @@ const L = class Y {
+    * Request a render update (triggers selection overlay redraw)
+    */
+   requestRender() {
++    this.terminal && this.terminal.requestPaint();
+   }
+ };
+ L.AUTO_SCROLL_EDGE_SIZE = 30;
+@@ -2103,7 +2104,7 @@ class IA {
+       get activeVersion() {
+         return "15.1";
+       }
+-    }, this.dataEmitter = new J(), this.resizeEmitter = new J(), this.bellEmitter = new J(), this.selectionChangeEmitter = new J(), this.keyEmitter = new J(), this.titleChangeEmitter = new J(), this.scrollEmitter = new J(), this.renderEmitter = new J(), this.cursorMoveEmitter = new J(), this.onData = this.dataEmitter.event, this.onResize = this.resizeEmitter.event, this.onBell = this.bellEmitter.event, this.onSelectionChange = this.selectionChangeEmitter.event, this.onKey = this.keyEmitter.event, this.onTitleChange = this.titleChangeEmitter.event, this.onScroll = this.scrollEmitter.event, this.onRender = this.renderEmitter.event, this.onCursorMove = this.cursorMoveEmitter.event, this.isOpen = !1, this.isDisposed = !1, this.addons = [], this.currentTitle = "", this.viewportY = 0, this.targetViewportY = 0, this.lastCursorY = 0, this.isDraggingScrollbar = !1, this.scrollbarDragStart = null, this.scrollbarDragStartViewportY = 0, this.scrollbarVisible = !1, this.scrollbarOpacity = 0, this.SCROLLBAR_HIDE_DELAY_MS = 1500, this.SCROLLBAR_FADE_DURATION_MS = 200, this.animateScroll = () => {
++    }, this.dataEmitter = new J(), this.resizeEmitter = new J(), this.bellEmitter = new J(), this.selectionChangeEmitter = new J(), this.keyEmitter = new J(), this.titleChangeEmitter = new J(), this.scrollEmitter = new J(), this.renderEmitter = new J(), this.cursorMoveEmitter = new J(), this.onData = this.dataEmitter.event, this.onResize = this.resizeEmitter.event, this.onBell = this.bellEmitter.event, this.onSelectionChange = this.selectionChangeEmitter.event, this.onKey = this.keyEmitter.event, this.onTitleChange = this.titleChangeEmitter.event, this.onScroll = this.scrollEmitter.event, this.onRender = this.renderEmitter.event, this.onCursorMove = this.cursorMoveEmitter.event, this.isOpen = !1, this.isDisposed = !1, this.addons = [], this.currentTitle = "", this.viewportY = 0, this.targetViewportY = 0, this.lastCursorY = 0, this.isDraggingScrollbar = !1, this.scrollbarDragStart = null, this.scrollbarDragStartViewportY = 0, this.scrollbarVisible = !1, this.scrollbarOpacity = 0, this.SCROLLBAR_HIDE_DELAY_MS = 1500, this.SCROLLBAR_FADE_DURATION_MS = 200, this.IDLE_PAINT_MS = 250, this.animateScroll = () => {
+       if (!this.wasmTerm || this.scrollAnimationStartTime === void 0)
+         return;
+       const g = this.options.smoothScrollDuration ?? 100, E = this.targetViewportY - this.viewportY;
+@@ -2112,7 +2113,7 @@ class IA {
+         return;
+       }
+       const D = 1 - (1 / (g / 1e3 * 60)) ** 2;
+-      this.viewportY += E * D;
++      this.viewportY += E * D, this.requestPaint();
+       const i = Math.floor(this.viewportY);
+       this.scrollEmitter.fire(i), this.getScrollbackLength() > 0 && this.showScrollbar(), this.scrollAnimationFrame = requestAnimationFrame(this.animateScroll);
+     }, this.handleMouseMove = (g) => {
+@@ -2387,7 +2388,7 @@ class IA {
+    */
+   writeInternal(A, B) {
+     var g;
+-    this.wasmTerm.write(A), this.processTerminalResponses(), typeof A == "string" && A.includes("\x07") ? this.bellEmitter.fire() : A instanceof Uint8Array && A.includes(7) && this.bellEmitter.fire(), (g = this.linkDetector) == null || g.invalidateCache(), this.viewportY !== 0 && this.scrollToBottom(), typeof A == "string" && A.includes("\x1B]") && this.checkForTitleChange(A), B && requestAnimationFrame(B);
++    this.wasmTerm.write(A), this.processTerminalResponses(), typeof A == "string" && A.includes("\x07") ? this.bellEmitter.fire() : A instanceof Uint8Array && A.includes(7) && this.bellEmitter.fire(), (g = this.linkDetector) == null || g.invalidateCache(), this.viewportY !== 0 && this.scrollToBottom(), typeof A == "string" && A.includes("\x1B]") && this.checkForTitleChange(A), B && requestAnimationFrame(B), this.requestPaint();
+   }
+   /**
+    * Write data with newline
+@@ -2572,7 +2573,7 @@ class IA {
+     if (!this.wasmTerm)
+       throw new Error("Terminal not open");
+     const B = this.getScrollbackLength(), E = Math.max(0, Math.min(B, this.viewportY - A));
+-    E !== this.viewportY && (this.viewportY = E, this.scrollEmitter.fire(this.viewportY), B > 0 && this.showScrollbar());
++    E !== this.viewportY && (this.viewportY = E, this.scrollEmitter.fire(this.viewportY), B > 0 && this.showScrollbar(), this.requestPaint());
+   }
+   /**
+    * Scroll viewport by a number of pages
+@@ -2586,13 +2587,13 @@ class IA {
+    */
+   scrollToTop() {
+     const A = this.getScrollbackLength();
+-    A > 0 && this.viewportY !== A && (this.viewportY = A, this.scrollEmitter.fire(this.viewportY), this.showScrollbar());
++    A > 0 && this.viewportY !== A && (this.viewportY = A, this.scrollEmitter.fire(this.viewportY), this.showScrollbar(), this.requestPaint());
+   }
+   /**
+    * Scroll viewport to the bottom (current output)
+    */
+   scrollToBottom() {
+-    this.viewportY !== 0 && (this.viewportY = 0, this.scrollEmitter.fire(this.viewportY), this.getScrollbackLength() > 0 && this.showScrollbar());
++    this.viewportY !== 0 && (this.viewportY = 0, this.scrollEmitter.fire(this.viewportY), this.getScrollbackLength() > 0 && this.showScrollbar(), this.requestPaint());
+   }
+   /**
+    * Scroll viewport to a specific line in the buffer
+@@ -2600,7 +2601,7 @@ class IA {
+    */
+   scrollToLine(A) {
+     const B = this.getScrollbackLength(), g = Math.max(0, Math.min(B, A));
+-    g !== this.viewportY && (this.viewportY = g, this.scrollEmitter.fire(this.viewportY), B > 0 && this.showScrollbar());
++    g !== this.viewportY && (this.viewportY = g, this.scrollEmitter.fire(this.viewportY), B > 0 && this.showScrollbar(), this.requestPaint());
+   }
+   /**
+    * Smoothly scroll to a target viewport position
+@@ -2611,7 +2612,7 @@ class IA {
+       return;
+     const B = this.getScrollbackLength(), E = Math.max(0, Math.min(B, A));
+     if ((this.options.smoothScrollDuration ?? 100) === 0) {
+-      this.viewportY = E, this.targetViewportY = E, this.scrollEmitter.fire(Math.floor(this.viewportY)), B > 0 && this.showScrollbar();
++      this.viewportY = E, this.targetViewportY = E, this.scrollEmitter.fire(Math.floor(this.viewportY)), B > 0 && this.showScrollbar(), this.requestPaint();
+       return;
+     }
+     this.targetViewportY = E, !this.scrollAnimationFrame && (this.scrollAnimationStartTime = Date.now(), this.scrollAnimationStartY = this.viewportY, this.animateScroll());
+@@ -2624,7 +2625,7 @@ class IA {
     */
    dispose() {
      if (!this.isDisposed) {
 -      this.isDisposed = !0, this.isOpen = !1, this.animationFrameId && (cancelAnimationFrame(this.animationFrameId), this.animationFrameId = void 0), this.scrollAnimationFrame && (cancelAnimationFrame(this.scrollAnimationFrame), this.scrollAnimationFrame = void 0), this.mouseMoveThrottleTimeout && (clearTimeout(this.mouseMoveThrottleTimeout), this.mouseMoveThrottleTimeout = void 0), this.pendingMouseMove = void 0;
-+      this.isDisposed = !0, this.isOpen = !1, this.renderVisibilityObserver && (this.renderVisibilityObserver.disconnect(), this.renderVisibilityObserver = void 0), this.handleRenderVisibility && (document.removeEventListener("visibilitychange", this.handleRenderVisibility), this.handleRenderVisibility = void 0), this.animationFrameId && (cancelAnimationFrame(this.animationFrameId), this.animationFrameId = void 0), this.scrollAnimationFrame && (cancelAnimationFrame(this.scrollAnimationFrame), this.scrollAnimationFrame = void 0), this.mouseMoveThrottleTimeout && (clearTimeout(this.mouseMoveThrottleTimeout), this.mouseMoveThrottleTimeout = void 0), this.pendingMouseMove = void 0;
++      this.isDisposed = !0, this.isOpen = !1, this.renderVisibilityObserver && (this.renderVisibilityObserver.disconnect(), this.renderVisibilityObserver = void 0), this.handleRenderVisibility && (document.removeEventListener("visibilitychange", this.handleRenderVisibility), this.handleRenderVisibility = void 0), this.animationFrameId && (cancelAnimationFrame(this.animationFrameId), this.animationFrameId = void 0), this.idleFrameTimer !== void 0 && (clearTimeout(this.idleFrameTimer), this.idleFrameTimer = void 0), this.scrollAnimationFrame && (cancelAnimationFrame(this.scrollAnimationFrame), this.scrollAnimationFrame = void 0), this.mouseMoveThrottleTimeout && (clearTimeout(this.mouseMoveThrottleTimeout), this.mouseMoveThrottleTimeout = void 0), this.pendingMouseMove = void 0;
        for (const A of this.addons)
          A.dispose();
        this.addons = [], this.cleanupComponents(), this.dataEmitter.dispose(), this.resizeEmitter.dispose(), this.bellEmitter.dispose(), this.selectionChangeEmitter.dispose(), this.keyEmitter.dispose(), this.titleChangeEmitter.dispose(), this.scrollEmitter.dispose(), this.renderEmitter.dispose(), this.cursorMoveEmitter.dispose();
-@@ -2637,13 +2637,33 @@ class IA {
+@@ -2633,17 +2634,58 @@ class IA {
+   // ==========================================================================
+   // Private Methods
+   // ==========================================================================
++  /**
++   * Ask for one frame because something on screen changed.
++   *
++   * Patched (CodeInOven): a terminal used to repaint its whole canvas sixty
++   * times a second whether anything changed or not, which is a permanent CPU
++   * and GPU cost per visible terminal and made the app compete with the build
++   * it was showing. Output, scrolling, selection, hover and the caret ask for
++   * the frame they need instead. A frame that finds nothing new parks the loop
++   * and re-checks after IDLE_PAINT_MS, so a change that somehow reaches the
++   * canvas without asking (a font swap, a theme patch) still lands within a
++   * quarter second, at four repaints a second instead of sixty.
++   */
++  requestPaint() {
++    this.paintDirty = !0, this.resumeRenderLoop && this.resumeRenderLoop();
++  }
+   /**
     * Start the render loop
     */
    startRenderLoop() {
@@ -22,21 +159,26 @@ index a4ca427b95288e70c782ce303013cd644893dcec..a504fb73d31b6b371aa70de45d88285e
      const A = () => {
 -      if (!this.isDisposed && this.isOpen) {
 -        this.renderer.render(this.wasmTerm, !1, this.viewportY, this, this.scrollbarOpacity);
--        const B = this.wasmTerm.getCursor();
--        B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire()), this.animationFrameId = requestAnimationFrame(A);
 +      this.animationFrameId = void 0;
 +      if (this.isDisposed || !this.isOpen) return;
 +      if (!this.renderOnScreen || document.visibilityState === "hidden") {
 +        this.renderStale = !0;
 +        return;
++      }
++      const changed = this.paintDirty === !0 || this.renderStale === !0, blinking = this.renderer !== void 0 && this.renderer.cursorBlink === !0;
++      if (this.paintDirty = !1, this.renderer.render(this.wasmTerm, this.renderStale === !0, this.viewportY, this, this.scrollbarOpacity), this.renderStale = !1, changed || blinking)
++        this.animationFrameId = requestAnimationFrame(A);
++      else {
+         const B = this.wasmTerm.getCursor();
+-        B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire()), this.animationFrameId = requestAnimationFrame(A);
++        B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire()), this.idleFrameTimer = setTimeout(() => {
++          this.idleFrameTimer = void 0, this.requestPaint();
++        }, this.IDLE_PAINT_MS);
        }
-+      this.renderer.render(this.wasmTerm, this.renderStale === !0, this.viewportY, this, this.scrollbarOpacity), this.renderStale = !1;
-+      const B = this.wasmTerm.getCursor();
-+      B.y !== this.lastCursorY && (this.lastCursorY = B.y, this.cursorMoveEmitter.fire()), this.animationFrameId = requestAnimationFrame(A);
-+    };
-+    this.resumeRenderLoop = () => {
-+      this.animationFrameId === void 0 && !this.isDisposed && this.isOpen && (this.animationFrameId = requestAnimationFrame(A));
      };
++    this.resumeRenderLoop = () => {
++      this.idleFrameTimer !== void 0 && (clearTimeout(this.idleFrameTimer), this.idleFrameTimer = void 0), this.isDisposed || !this.isOpen || this.animationFrameId !== void 0 || (this.animationFrameId = requestAnimationFrame(A));
++    };
 +    if (this.renderOnScreen = !0, typeof IntersectionObserver < "u" && this.element) {
 +      this.renderVisibilityObserver = new IntersectionObserver((C) => {
 +        const E = C[C.length - 1];

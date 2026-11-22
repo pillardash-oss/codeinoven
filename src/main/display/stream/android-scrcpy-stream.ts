@@ -19,6 +19,7 @@ import {
   SCRCPY_VERSION,
   ScrcpyVideoParser,
   encodeKeycode,
+  encodeResetVideo,
   encodeScroll,
   encodeText,
   encodeTouch,
@@ -32,8 +33,11 @@ const ADB_STEP_TIMEOUT_MS = 15_000
  * cold device (first start after a boot, which loads classes and initialises the
  * hardware encoder) takes seconds rather than milliseconds. */
 const CONNECT_RETRY_MS = 100
-/** How long to keep trying before calling the start a failure. */
-const CONNECT_TIMEOUT_MS = 12_000
+/** How long to keep trying before calling the start a failure. A busy emulator takes
+ *  seven to eleven seconds to bind, and a server that died ends the wait at once. */
+const CONNECT_TIMEOUT_MS = 30_000
+/** How long a start may go without video before it is ended so it can be retried. */
+const LIVE_TIMEOUT_MS = 45_000
 const VIDEO_BIT_RATE = 8_000_000
 const MAX_FPS = 60
 /** The last of the server's own output, kept to say why a stream died. */
@@ -84,6 +88,7 @@ export class AndroidScrcpyStream {
   private size = { width: 0, height: 0 }
   private configPacket: Uint8Array | null = null
   private live = false
+  private liveTimer: ReturnType<typeof setTimeout> | null = null
   private touching = false
   private lastPoint = { x: 0, y: 0 }
   private readonly parser = new ScrcpyVideoParser()
@@ -93,6 +98,8 @@ export class AndroidScrcpyStream {
   /** Bring the stream up. Resolves once the sockets are open, rejects with the reason it could not. */
   async start(): Promise<void> {
     const { adb, serial, serverPath } = this.options
+    // A socket that is accepted and then says nothing would otherwise wait forever.
+    this.liveTimer = setTimeout(() => this.end('The device sent no video'), LIVE_TIMEOUT_MS)
     const scid = randomInt(1, 0x7fffffff).toString(16).padStart(8, '0')
     // One jar per stream. The server removes its own file when it exits, so a
     // shared path lets a stream that is still shutting down delete the jar the next
@@ -130,6 +137,7 @@ export class AndroidScrcpyStream {
   stop(): void {
     if (this.stopped) return
     this.stopped = true
+    if (this.liveTimer) clearTimeout(this.liveTimer)
     this.video?.destroy()
     this.control?.destroy()
     this.video = null
@@ -211,6 +219,10 @@ export class AndroidScrcpyStream {
     if (code !== undefined) this.press(code)
   }
 
+  refresh(): void {
+    this.control?.write(encodeResetVideo())
+  }
+
   private press(code: number): void {
     if (!this.control) return
     this.control.write(encodeKeycode(ANDROID_ACTION_DOWN, code))
@@ -239,6 +251,8 @@ export class AndroidScrcpyStream {
       `video_bit_rate=${VIDEO_BIT_RATE}`,
       'send_device_meta=false',
       'clipboard_autosync=false',
+      // A rebuilt stream must not wake a device the person just locked.
+      'power_on=false',
       'cleanup=true'
     ]
     const child = spawn(adb, args, { stdio: ['ignore', 'pipe', 'pipe'] })
@@ -330,6 +344,7 @@ export class AndroidScrcpyStream {
         })
         if (!this.live) {
           this.live = true
+          if (this.liveTimer) clearTimeout(this.liveTimer)
           this.options.send({ type: 'state', phase: 'live' })
         }
         continue

@@ -54,8 +54,13 @@ import {
   subscribeThreadCorpus,
   setBackgroundTray,
   setNotificationService,
-  setPowerWakeService
+  setPowerWakeService,
+  updateRetryWakeWindow
 } from '../chat/thread-events'
+import {
+  settleAbandonedCoordinatorChildren,
+  startCoordinatorChildSettleSweep
+} from '../chat/coordinator-child-settle'
 import { setTranscriptChangeListener } from '../../lib/engines/thread-manager-transcripts'
 import { instanceEventBus } from '../system/instance-event-bus'
 import { instanceRegistry } from '../system/instance-registry'
@@ -1598,6 +1603,28 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
     // the threads that are actually running.
     if (state.backgroundLifecycle) setBackgroundTray(state.backgroundLifecycle)
 
+    // The children of an orchestration exist only to serve it: the rail folds
+    // them into the coordinator's row and never lists them. The moment that
+    // coordinator settles they are unreachable, so they are closed out here
+    // instead of being left parked in `working-paused` (with a retry still armed
+    // on a session nobody is waiting for) or `awaiting_approval` forever. The
+    // same corpus that feeds the icon triggers the sweep, so a settle closes its
+    // children whether the window is open or the app is parked.
+    const coordinatorChildSettleHost =
+      state.chatEngine === null
+        ? null
+        : {
+            database,
+            threadManager: state.chatEngine.threadManager,
+            clearRetry: (sessionId: string): void => {
+              state.retryScheduler?.clear(sessionId)
+              updateRetryWakeWindow(sessionId, null)
+            }
+          }
+    state.stopCoordinatorChildSettleSweep = coordinatorChildSettleHost
+      ? startCoordinatorChildSettleSweep(coordinatorChildSettleHost)
+      : null
+
     // Everything below is independent background work: services starting plus
     // one bounded database repair sequence. None of it reads another task's
     // result, and every task already reports its own failure as non-fatal, so
@@ -1766,6 +1793,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
           // Settles and resumes work left in flight by a process that stopped, while
           // leaving every turn a sibling instance is still running alone.
           await reconcileInterruptedWork(state, database, 'launch')
+          // Recovery above is one of the ways a coordinator settles, and a launch
+          // that never ran a sweep leaves the children of every orchestration
+          // that finished while the app was closed still parked. One indexed read
+          // finds them, and the write is a bookkeeping settle that keeps its own
+          // activity stamp so no finished orchestration resurfaces in a list.
+          if (coordinatorChildSettleHost) {
+            await settleAbandonedCoordinatorChildren(coordinatorChildSettleHost)
+          }
         } catch (error) {
           Logger.error('Restart recovery failed (non-fatal):', error)
         }

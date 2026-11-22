@@ -42,11 +42,11 @@ export function unmanagedCuaShellReason(
  * project's server. Shell one-liners, interpreters and child scripts hide the
  * same kill behind different syntax, and a name, port or pattern can only ever
  * discover its target at run time. So this refuses the whole family and points
- * at the app-owned path instead: `taskManager:list` shows what the app owns and
- * `taskManager:killProcess` stops one of those, with ownership rechecked in
- * main. It is a block, never a permission card, so Full Access cannot approve
- * it, and it is a parser rather than a keyword search so a quoted search
- * pattern (`rg "kill|pkill"`) still runs.
+ * at the app-owned path instead: `cio_process_list` shows the processes this
+ * session started and `cio_process_stop` stops one of those by pid, with
+ * ownership rechecked in main. It is a block, never a permission card, so Full
+ * Access cannot approve it, and it is a parser rather than a keyword search so
+ * a quoted search pattern (`rg "kill|pkill"`) still runs.
  *
  * Kept self-contained so Pi embeds the same implementation in its generated
  * extension.
@@ -60,7 +60,7 @@ export function unmanagedProcessKillReason(
   if (!command.trim()) return null
 
   const refused =
-    'Not executed: stopping a process from a shell command is refused in every form (by pid, port, name, signal or pattern, or by an interpreter, a script, or a nested shell that does it), because the command cannot prove it started that process and another project or the user may own it. CodeInOven owns process lifecycle: call cio_app_call with channel "taskManager:list" to see the processes the app started, stop one with "taskManager:killProcess" after asking the user, and otherwise leave it running. If a port is busy, start your own server on another port. If a process must go, report it instead of guessing.'
+    'Not executed: stopping a process from a shell command is refused in every form (by pid, port, name, signal or pattern, or by an interpreter, a script, or a nested shell that does it), because the command cannot prove it started that process and another project or the user may own it. CodeInOven owns process lifecycle: a process this session started is stopped by pid through the app with cio_process_stop, after listing your own with cio_process_list, and anything else is left running. If a port is busy, start your own server on another port. If a process must go, report it instead of guessing.'
 
   /** Programs that terminate a process. `kill.exe` and friends reduce to these. */
   const stopPrograms = new Set([

@@ -599,6 +599,7 @@ export type AppConfigPatch = Partial<
     | 'onboardingCompleted'
     | 'shareAnonymousUsage'
     | 'threadLimit'
+    | 'keybindings'
     | 'switcherTerminalTabs'
     | 'switcherFileTabs'
     | 'switcherThreadBrowserTabs'

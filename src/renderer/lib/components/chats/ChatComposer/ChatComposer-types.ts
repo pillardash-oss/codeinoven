@@ -173,6 +173,8 @@ export interface Props {
   efficiencyKpis?: UsageEfficiencyKpis
   /** Per-harness quota telemetry when a thread used more than one harness. */
   harnessUsage?: AgentHarnessUsage[]
+  /** The selected account's quota window the shoe states. */
+  accountLimit?: import('$shared/types').AgentRateLimitWindow
   /** Flushes the rendered usage snapshot to the latest value (e.g. on hover). */
   onRevealUsage?: () => void
   /** Called when the user stops hovering the usage indicator. */

@@ -99,8 +99,10 @@ describe('process lifecycle guard', () => {
 
   it('points at the app-owned process path', () => {
     const reason = shell('pkill -f vite')
-    expect(reason).toContain('taskManager:list')
-    expect(reason).toContain('taskManager:killProcess')
+    expect(reason).toContain('cio_process_stop')
+    expect(reason).toContain('cio_process_list')
     expect(reason).toContain('another port')
+    expect(reason).not.toContain('cio_app_call')
+    expect(reason).not.toContain('taskManager:')
   })
 })

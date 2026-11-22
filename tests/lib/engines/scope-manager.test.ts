@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, realpathSync, rmSync } from 'fs'
+import { mkdtempSync, realpathSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createTestDb, destroyTestDb } from '../../main/database/test-helper'
@@ -12,6 +12,7 @@ import {
   type ScopeBoard
 } from '../../../src/lib/types'
 import { getScopeRootPath } from '../../../src/lib/utils'
+import { removeTempRoot } from '../../helpers/temp-root'
 
 const temporaryDatabases: Database[] = []
 const originalConfigRoot = process.env['CODEINOVEN_CONFIG_ROOT']
@@ -31,9 +32,9 @@ async function createManager(): Promise<ScopeManager> {
   return new ScopeManager(db)
 }
 
-afterEach(() => {
+afterEach(async () => {
   temporaryDatabases.splice(0).forEach(destroyTestDb)
-  rmSync(temporaryConfigRoot, { force: true, recursive: true })
+  await removeTempRoot(temporaryConfigRoot)
   temporaryConfigRoot = ''
   if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
   else process.env['CODEINOVEN_CONFIG_ROOT'] = originalConfigRoot

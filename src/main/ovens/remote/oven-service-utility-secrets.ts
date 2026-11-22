@@ -119,7 +119,11 @@ function requiredValue(result: OvenUtilityPostResult, route: string): OvenUtilit
 }
 
 /** GET one host route with the machine credential and read its envelope. */
-async function getOvenUtilityJson(url: string, token: string): Promise<OvenUtilityJson> {
+export async function getOvenUtilityJson(
+  url: string,
+  token: string,
+  timeoutMs: number = ADMIN_TIMEOUT_MS
+): Promise<OvenUtilityJson> {
   const target = new URL(url)
   return await new Promise<OvenUtilityJson>((resolve, reject) => {
     const request = httpRequest(
@@ -129,7 +133,7 @@ async function getOvenUtilityJson(url: string, token: string): Promise<OvenUtili
         path: `${target.pathname}${target.search}`,
         method: 'GET',
         headers: { authorization: `Bearer ${token}` },
-        timeout: ADMIN_TIMEOUT_MS
+        timeout: timeoutMs
       },
       (response) => {
         const chunks: Buffer[] = []

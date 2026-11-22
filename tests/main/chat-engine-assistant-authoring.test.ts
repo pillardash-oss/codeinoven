@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'fs'
+import { mkdtempSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -19,6 +19,7 @@ import { AssistantAuthoringCheckpoints } from '../../src/main/chat/assistant-aut
 import { ASSISTANT_SPACE_ID } from '../../src/lib/types'
 import { ASSISTANT_BRIEF_REPLY_INSTRUCTION } from '../../src/lib/assistant-voice'
 import type { AgentMessage, CreateThreadInput, Assistant, Thread } from '../../src/lib/types'
+import { removeTempRoot } from '../helpers/temp-root'
 
 /**
  * An assistant's Getting started conversation is an interview, and the interview
@@ -39,9 +40,9 @@ beforeEach(() => {
   process.env['CODEINOVEN_CONFIG_ROOT'] = temporaryConfigRoot
 })
 
-afterEach(() => {
+afterEach(async () => {
   temporaryDatabases.splice(0).forEach(destroyTestDb)
-  rmSync(temporaryConfigRoot, { force: true, recursive: true })
+  await removeTempRoot(temporaryConfigRoot)
   temporaryConfigRoot = ''
   if (originalConfigRoot === undefined) delete process.env['CODEINOVEN_CONFIG_ROOT']
   else process.env['CODEINOVEN_CONFIG_ROOT'] = originalConfigRoot

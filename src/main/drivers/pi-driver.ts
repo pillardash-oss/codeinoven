@@ -297,6 +297,14 @@ export class PiDriver extends PersistentCliDriver {
         this.modelCatalog.workspaceTemporaryEnvironment(projectPath),
       observeHarnessProcess: (sessionId, child, command, projectPath) =>
         this.observeHarnessProcess(sessionId, child, command, projectPath),
+      // A hosted session has no child of its own: the pooled Pi host runs its
+      // shell tool, and up to eight sessions share that one host pid, so it is
+      // tracked app-wide (an undefined session) rather than as this thread's
+      // root. A thread cleanup must never signal a host its siblings are still
+      // running on, and a process an agent needs to stop by pid is started with
+      // the app's own process tool, which records the pid against its thread.
+      observeHostedProcess: (pid, command, projectPath) =>
+        this.watchHarnessRoot(undefined, pid, command, projectPath),
       materializeCoreToolsExtension: (sessionId, bundledRuntime, sessionCwd) =>
         this.cioFiles.materializeCoreToolsExtension(sessionId, bundledRuntime, sessionCwd),
       materializeProvidersExtension: (sessionId) =>

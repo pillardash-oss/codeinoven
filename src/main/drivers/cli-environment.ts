@@ -8,6 +8,11 @@ import {
   windowsGitBins,
   windowsPathValue
 } from './windows-git-paths'
+import {
+  INSTANCE_OWNER_ID,
+  OWNED_PROCESS_MARKER,
+  OWNED_SESSION_MARKER
+} from '../system/process-ownership'
 
 /** Parse a versioned nvm dir name like `v24.18.0` into `[major, minor, patch]`. */
 function parseVersion(name: string): [number, number, number] | null {
@@ -146,17 +151,7 @@ function preferredNodeBin(base: NodeJS.ProcessEnv, platform: NodeJS.Platform): s
   return version ? versionBinDir(root, version, platform) : undefined
 }
 
-/** Marker env var set on every process spawned for a harness so a startup
- * reaper can identify app-owned processes without touching a user's own
- * external claude-code/opencode sessions. Inherited by agent-spawned children. */
-export const OWNED_PROCESS_MARKER = 'CODEINOVEN_OWNED'
-
-/** Companion marker stamped with the CodeInOven session id that spawned the
- * harness. Inherited by agent-spawned children   including daemons that
- * re-parent to launchd/init (e.g. the adb server)   so the agent process
- * service can attribute an orphaned daemon back to its owning thread even
- * after the parent harness process is gone. */
-export const OWNED_SESSION_MARKER = 'CODEINOVEN_SESSION'
+export { OWNED_PROCESS_MARKER, OWNED_SESSION_MARKER }
 
 /**
  * Desktop apps do not inherit a login shell PATH. Keep the augmented external
@@ -280,7 +275,7 @@ function composeProcessEnvironment(
   if (base['GIT_OPTIONAL_LOCKS'] === undefined) {
     environment['GIT_OPTIONAL_LOCKS'] = '0'
   }
-  if (markOwned) environment[OWNED_PROCESS_MARKER] = '1'
+  if (markOwned) environment[OWNED_PROCESS_MARKER] = INSTANCE_OWNER_ID
   else delete environment[OWNED_PROCESS_MARKER]
   return environment
 }

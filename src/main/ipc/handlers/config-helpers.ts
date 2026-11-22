@@ -170,6 +170,7 @@ const CONFIG_PATCH_FIELDS = new Set([
   'onboardingCompleted',
   'shareAnonymousUsage',
   'threadLimit',
+  'keybindings',
   'switcherTerminalTabs',
   'switcherFileTabs',
   'switcherThreadBrowserTabs',
@@ -596,6 +597,31 @@ function validateBrowserCustomSearchEngines(value: unknown): BrowserSearchEngine
   return engines
 }
 
+/** Validate the user's keymap overrides: a shortcut id mapped to the tokens it
+ *  is bound to, or an empty value for an entry the user unbound.
+ *
+ * The renderer owns which ids exist, so a stale id from an older build is kept
+ * rather than rejected; the shape is what this boundary guards. Tokens are a
+ * short grammar (`mod`, `shift`, letters, punctuation), which is why only their
+ * length and the id's form are checked here.
+ */
+function validateKeybindings(value: unknown): Record<string, string> {
+  if (!isRecord(value)) throw new TypeError('Keybindings must be an object')
+  const entries = Object.entries(value)
+  if (entries.length > 400) throw new TypeError('At most 400 keybindings are allowed')
+  const keybindings: Record<string, string> = {}
+  for (const [id, tokens] of entries) {
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(id) || id.length > 64) {
+      throw new TypeError(`Invalid keybinding id: ${id}`)
+    }
+    if (typeof tokens !== 'string' || tokens.length > 120) {
+      throw new TypeError(`Keybinding ${id} must be a string of at most 120 characters`)
+    }
+    keybindings[id] = tokens
+  }
+  return keybindings
+}
+
 /** Validate the complete renderer-controlled config boundary. */
 export function validateAppConfigPatch(value: unknown): AppConfigPatch {
   if (!isRecord(value)) throw new TypeError('Config patch must be an object')
@@ -703,6 +729,10 @@ export function validateAppConfigPatch(value: unknown): AppConfigPatch {
       throw new TypeError('Thread limit must be an integer between 1 and 1000')
     }
     patch.threadLimit = value.threadLimit
+  }
+
+  if ('keybindings' in value) {
+    patch.keybindings = validateKeybindings(value.keybindings)
   }
 
   for (const field of [

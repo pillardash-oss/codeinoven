@@ -48,6 +48,9 @@ function route(stream: AndroidScrcpyStream, message: StreamInbound): void {
     case 'control':
       stream.controlButton(message)
       return
+    case 'refresh':
+      stream.refresh()
+      return
     case 'abort':
       stream.stop()
       // The renderer already knows why it aborted, but the main process is what puts

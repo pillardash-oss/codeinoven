@@ -22,6 +22,7 @@
   import AgentIcon from '$lib/agent-icons/AgentIcon.svelte'
   import { getAgentIcon } from '$lib/agent-icons/registry'
   import { invoke } from '$lib/ipc.svelte'
+  import { ipcErrorMessage } from '$lib/ipc-errors'
   import { pickCustomIconImage, type OptimizedCustomIcon } from '$lib/custom-icon-pipeline'
   import { randomOvenAppearance } from '$lib/oven-appearance'
   import { getIconSvgDataUrl } from '$lib/project-svg-icons'
@@ -123,6 +124,8 @@
   let secretErrors = $state<Record<string, string>>({})
   /** The Oven whose credential store is being read or changed. */
   let secretBusy = $state('')
+  /** The Oven whose credential store is about to be switched off. */
+  let pendingSecretDisable = $state<Oven | null>(null)
   /** The Oven whose stored credentials are about to be forgotten. */
   let pendingSecretForget = $state<Oven | null>(null)
   const hasAppearance = $derived(
@@ -140,7 +143,7 @@
   )
 
   function message(value: unknown): string {
-    return value instanceof Error ? value.message : 'The Oven operation failed.'
+    return ipcErrorMessage(value, 'The Oven operation failed.')
   }
 
   /** The live probe the unified check read for one remote Oven. */
@@ -1012,17 +1015,22 @@
     secretBusy = oven.id
     try {
       const answer = await invoke('oven:utilitySecretStore', oven.id, enabled)
-      toast.success(
-        answer.enabled
-          ? `${oven.name} now keeps utility credentials at rest`
-          : `${oven.name} forgot its stored utility credentials`
-      )
+      if (enabled && !answer.enabled) toast.error(`${oven.name} cannot keep credentials right now`)
+      else
+        toast.success(
+          enabled
+            ? `${oven.name} now keeps utility credentials at rest`
+            : `${oven.name} forgot its stored utility credentials`
+        )
       await refreshUtilitySecrets(oven.id, answer.enabled)
     } catch (failure) {
       const detail = message(failure)
       toast.error(`${oven.name} could not change its credential store`, { description: detail })
+      // The store may be off with its deletion unfinished, so show what is true now.
+      await refreshUtilitySecrets(oven.id)
     } finally {
       secretBusy = ''
+      pendingSecretDisable = null
     }
   }
 
@@ -1456,10 +1464,14 @@
                       {#if vault}
                         <Switch
                           checked={secretEnabled[oven.id] ?? false}
-                          disabled={!vault.available || secretBusy === oven.id}
+                          disabled={(!vault.available && !secretEnabled[oven.id]) ||
+                            secretBusy === oven.id}
                           title="Keep utility credentials on this Oven"
                           aria-label="Keep utility credentials on this Oven"
-                          onchange={(next) => void setUtilitySecretStore(oven, next)}
+                          onchange={(next) => {
+                            if (next) void setUtilitySecretStore(oven, true)
+                            else pendingSecretDisable = oven
+                          }}
                         />
                       {/if}
                     </div>
@@ -1789,6 +1801,22 @@
     Forget {pendingSecretCount === 1 ? '1 credential' : `${pendingSecretCount} credentials`} kept on
     {pendingSecretForget?.name}?
   </p>
+  <p>
+    Its terminals and agents will then get utility credentials only from this app, turn by turn.
+  </p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={Boolean(pendingSecretDisable)}
+  title="Stop keeping credentials?"
+  confirmLabel="Stop and forget"
+  busy={Boolean(pendingSecretDisable) && secretBusy === pendingSecretDisable?.id}
+  onCancel={() => (pendingSecretDisable = null)}
+  onConfirm={() => {
+    if (pendingSecretDisable) void setUtilitySecretStore(pendingSecretDisable, false)
+  }}
+>
+  <p>Every utility credential kept on {pendingSecretDisable?.name} will be deleted.</p>
   <p>
     Its terminals and agents will then get utility credentials only from this app, turn by turn.
   </p>

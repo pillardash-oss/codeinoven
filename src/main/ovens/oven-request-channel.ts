@@ -123,6 +123,8 @@ export class OvenRequestChannel {
     try {
       await this.acquire(id)
     } catch (error) {
+      // The one failure the caller repairs, by installing this app's service.
+      if (error instanceof OvenServiceOutdated) throw error
       Logger.dev('Oven channel could not be warmed', {
         ovenId: id,
         error: error instanceof Error ? error.message : String(error)
