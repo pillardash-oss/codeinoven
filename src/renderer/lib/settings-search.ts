@@ -265,8 +265,8 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: 'keymap',
     group: 'app',
     title: 'Keymap',
-    description: 'Keyboard shortcuts for every app action.',
-    keywords: ['shortcuts', 'hotkeys', 'keyboard'],
+    description: 'Every keyboard shortcut, and the keys each one answers to.',
+    keywords: ['shortcuts', 'hotkeys', 'keyboard', 'rebind', 'conflict'],
     icon: CioKeyboard
   },
   {

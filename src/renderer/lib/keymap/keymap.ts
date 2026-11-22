@@ -1,5 +1,6 @@
 import keymapData from './keymap.json'
 import { isMacPlatform } from '$lib/shortcut-display'
+import type { KeymapContextId } from './keymap-contexts'
 
 /**
  * A single shortcut entry in the keymap registry. `keys` uses symbolic tokens:
@@ -25,6 +26,9 @@ export interface KeymapShortcut {
   label: string
   description: string
   scenario: string
+  /** Where the handler listens, so a rebind can tell a real collision from a
+   *  chord two mutually exclusive surfaces share. See `keymap-contexts`. */
+  context: KeymapContextId
 }
 
 /** Per-platform replacement key tokens; see {@link KeymapShortcut.platformKeys}. */
@@ -377,6 +381,16 @@ const KEYMAP_BY_ID: Map<string, KeymapShortcut> = new Map(
     category.shortcuts.map((shortcut) => [shortcut.id, shortcut] as const)
   )
 )
+
+/** The registry entry behind an id, or undefined for an unknown id. */
+export function keymapShortcut(id: string): KeymapShortcut | undefined {
+  return KEYMAP_BY_ID.get(id)
+}
+
+/** Every registry entry, in catalog order. */
+export function keymapShortcuts(): readonly KeymapShortcut[] {
+  return [...KEYMAP_BY_ID.values()]
+}
 
 /** Key tokens for a keymap entry id, resolved for the current platform, e.g.
  *  'nav-new-thread' → ['mod', 'n']. Returns an empty array for unknown ids so

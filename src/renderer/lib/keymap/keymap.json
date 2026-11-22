@@ -10,184 +10,214 @@
           "keys": ["mod", "1"],
           "label": "Projects view",
           "description": "Opens the Projects view with the project thread list.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-threads",
           "keys": ["mod", "2"],
           "label": "Threads view",
           "description": "Opens the Threads view.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-projects-with-scope",
           "keys": ["mod", "3"],
           "label": "Projects with scope state",
           "description": "Opens the Projects view with the scope sidebar active for the current thread.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-scope",
           "keys": ["mod", "4"],
           "label": "Scope view",
           "description": "Opens the Scope board for the active project.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-chats",
           "keys": ["mod", "8"],
           "label": "Chats view",
           "description": "Opens the Chats view.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-browser",
           "keys": ["mod", "0"],
           "label": "Browser view",
           "description": "Opens the global browser workspace with its tab strip in the left sidebar. Inside a browser the same chord resets page zoom, which mirrors a browser.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-assistant",
           "keys": ["mod", "9"],
           "label": "Assistant view",
           "description": "Opens the Assistant view with its assistants and tasks.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-settings",
           "keys": ["mod", ","],
           "label": "Settings",
           "description": "Opens the Settings page.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-task-manager",
           "keys": ["mod", "shift", ","],
           "label": "Task manager",
           "description": "Opens the Task Manager with every process and service the app runs, its pid, its owner, and its resource use.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-storage-manager",
           "keys": [],
           "label": "Storage manager",
           "description": "Opens the Storage manager with how the app's data folder is spent, what can be reclaimed, and where to compact the database.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-command-palette",
           "keys": ["mod", "k"],
           "label": "Command palette",
           "description": "Toggles the command palette.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-history-back",
           "keys": ["mod", "["],
-          "platformKeys": { "other": ["alt", "arrowleft"] },
+          "platformKeys": {
+            "other": ["alt", "arrowleft"]
+          },
           "label": "Go back",
           "description": "Navigates to the previous view or location, mirroring the header's back button. Cmd+[ on macOS, Alt+Left on Windows and Linux.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-history-forward",
           "keys": ["mod", "]"],
-          "platformKeys": { "other": ["alt", "arrowright"] },
+          "platformKeys": {
+            "other": ["alt", "arrowright"]
+          },
           "label": "Go forward",
           "description": "Navigates to the next view or location, mirroring the header's forward button. Cmd+] on macOS, Alt+Right on Windows and Linux.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-settings-back",
           "keys": ["escape"],
           "label": "Leave Settings",
           "description": "Closes the Settings page and returns to the view you came from. Escape is ignored while a modal, palette, or the settings search is open.",
-          "scenario": "Settings view open."
+          "scenario": "Settings view open.",
+          "context": "settings"
         },
         {
           "id": "settings-protected-file-add",
           "keys": ["mod", "enter"],
           "label": "Add protected file pattern",
           "description": "Adds the entered pattern to bundled Pi's sensitive-file block list.",
-          "scenario": "Focus is in General settings' protected-file pattern field."
+          "scenario": "Focus is in General settings' protected-file pattern field.",
+          "context": "settings"
         },
         {
           "id": "nav-find",
           "keys": ["mod", "f"],
           "label": "Find in focused surface",
           "description": "Opens find in whatever surface is focused: the file tree filter, the file reader (its source editor and the rendered document it is showing), the env file panel, the git panel, the spec studio, deployment logs, sticky notes, thread notes, or the conversation.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-new-project",
           "keys": ["mod", "shift", "n"],
           "label": "New project",
           "description": "Starts the new-project flow with local or SSH options.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-new-thread",
           "keys": ["mod", "n"],
           "label": "New thread / chat / file",
           "description": "Creates a new thread, chat, or scoped thread depending on the current view; creates a file when the file tree is focused.",
-          "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view."
+          "scenario": "Projects (including the scoped threads sidebar), Chats, Threads, or Scope view.",
+          "context": "app-views"
         },
         {
           "id": "panel-search",
           "keys": ["mod", "shift", "f"],
           "label": "Search this panel",
           "description": "Opens the search of the active view's own panel: the project or thread list on the left, or the assistant panel. The conversation keeps its own find on Cmd/Ctrl+F.",
-          "scenario": "Projects, Threads, Chats or Assistant view."
+          "scenario": "Projects, Threads, Chats or Assistant view.",
+          "context": "app-views"
         },
         {
           "id": "threads-toggle-grouping",
           "keys": [],
           "label": "Group threads by status",
           "description": "Toggles foldable status groups for the filtered Threads view.",
-          "scenario": "Threads view."
+          "scenario": "Threads view.",
+          "context": "app-views"
         },
         {
           "id": "assistant-new-task",
           "keys": ["mod", "n"],
           "label": "New task",
           "description": "Creates an assistant task: inside an assistant it lands in that assistant, otherwise it is an assistant-less task.",
-          "scenario": "Assistant view."
+          "scenario": "Assistant view.",
+          "context": "assistant"
         },
         {
           "id": "assistant-new-assistant",
           "keys": ["mod", "shift", "n"],
           "label": "New assistant",
           "description": "Starts the new-assistant flow, which seeds a first task and opens its knowledge.",
-          "scenario": "Assistant view."
+          "scenario": "Assistant view.",
+          "context": "assistant"
         },
         {
           "id": "nav-close-surface",
           "keys": ["mod", "w"],
           "label": "Close active surface",
           "description": "Closes palettes, the command palette, modals, Settings, an open thread, then finally the window (with a working-threads gate).",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         },
         {
           "id": "nav-delete-thread",
           "keys": ["mod", "d"],
           "label": "Delete active thread",
           "description": "Opens the delete confirmation for the open thread; Enter on the focused Delete button confirms, Escape cancels.",
-          "scenario": "When a thread is open."
+          "scenario": "When a thread is open.",
+          "context": "thread"
         },
         {
           "id": "nav-toggle-left-sidebar",
           "keys": ["mod", "s"],
           "label": "Toggle left sidebar",
           "description": "Folds or unfolds the sidebar (without Shift): the workspace sidebar on plain views, the app sidebar in the Browser view. Studios, conflict resolution, and dirty file tabs still own the chord for saving.",
-          "scenario": "Projects, Chats, or Threads view with no studio and no dirty file tab open."
+          "scenario": "Projects, Chats, or Threads view with no studio and no dirty file tab open.",
+          "context": "app-views"
         },
         {
           "id": "nav-toggle-right-sidebar",
           "keys": ["mod", "shift", "s"],
           "label": "Toggle right sidebar",
           "description": "Hides the right context sidebar, or brings back the tool you last had selected in it. With nothing selected yet it opens the file tree when the open thread has one, otherwise the first tool the context rail offers. In the Browser view it shows or hides the notes rail of the browser tab on screen, which is the same right sidebar holding notes.",
-          "scenario": "Projects, Chats, or Threads view, including the scope state; or the Browser view with a browser tab open."
+          "scenario": "Projects, Chats, or Threads view, including the scope state; or the Browser view with a browser tab open.",
+          "context": "app-views"
         }
       ]
     },
@@ -200,147 +230,168 @@
           "keys": ["mod", "enter"],
           "label": "Continue after assistant setup",
           "description": "Starts a task from the setup completion card, or submits the selected modification-session answer.",
-          "scenario": "An assistant setup completion or modification confirmation card is visible."
+          "scenario": "An assistant setup completion or modification confirmation card is visible.",
+          "context": "assistant"
         },
         {
           "id": "chat-send",
           "keys": ["mod", "enter"],
           "label": "Send message",
           "description": "Sends the message, or queues it while the agent is busy. Enter is never a send key   plain Enter always makes a new line or list item.",
-          "scenario": "Chat composer and message editing."
+          "scenario": "Chat composer and message editing.",
+          "context": "composer"
         },
         {
           "id": "chat-steer",
           "keys": ["mod", "shift", "enter"],
           "label": "Steer into the running turn",
           "description": "Force-sends the message into the live turn mid-turn, skipping the queue.",
-          "scenario": "Chat composer while the agent is working."
+          "scenario": "Chat composer while the agent is working.",
+          "context": "composer"
         },
         {
           "id": "chat-soft-break",
           "keys": ["shift", "enter"],
           "label": "Soft line break",
           "description": "Inserts a new line without starting a new list item and never sends.",
-          "scenario": "Rich text editor / chat composer."
+          "scenario": "Rich text editor / chat composer.",
+          "context": "rich-editor"
         },
         {
           "id": "chat-stop",
           "keys": ["escape", "escape"],
           "label": "Stop agent (double Escape)",
           "description": "Presses Escape twice within 800ms to hard-stop the running agent turn; a single Escape cancels a pending stop.",
-          "scenario": "Composer focused while the agent is working."
+          "scenario": "Composer focused while the agent is working.",
+          "context": "composer"
         },
         {
           "id": "chat-voice-dictation",
           "keys": ["alt", "alt"],
           "label": "Dictate with voice",
           "description": "Starts voice dictation in whatever input with a microphone is on view   the chat composer, a selection comment, the temporary chat, or an open editor. Defaults to double-pressing the left Alt key (Option on macOS) and can be remapped in Sound > Preferences; Escape stops an active recording and starts transcribing it, and pressing Escape twice in a row cancels that dictation entirely   nothing is transcribed, sent, or kept in the history.",
-          "scenario": "Anywhere a microphone input is visible."
+          "scenario": "Anywhere a microphone input is visible.",
+          "context": "composer"
         },
         {
           "id": "don-listening",
           "keys": ["alt", "alt", "alt"],
           "label": "Open Don Listening",
           "description": "Presses the dictation modifier three times in a row to open the Don Listening panel, where dictation lands in a markdown editor that sends into Don's thread. The first two presses still start and stop dictation, so the third press asks Don to listen instead of recording. Follows the dictation binding set in Sound > Preferences.",
-          "scenario": "Anywhere in the app window."
+          "scenario": "Anywhere in the app window.",
+          "context": "global"
         },
         {
           "id": "chat-focus-composer",
           "keys": ["double-mod"],
           "label": "Focus the chat composer",
           "description": "Taps the primary modifier twice in quick succession (⌘ on macOS, Ctrl elsewhere) to move keyboard focus into the chat composer from anywhere in the app, restoring the caret where you left it. Stays inert while a modal, sheet, or palette is open.",
-          "scenario": "A chat composer is on screen."
+          "scenario": "A chat composer is on screen.",
+          "context": "composer"
         },
         {
           "id": "chat-history-previous",
           "keys": ["arrowup"],
           "label": "Recall previous message",
           "description": "Steps back through previously sent messages.",
-          "scenario": "Empty composer or already browsing history."
+          "scenario": "Empty composer or already browsing history.",
+          "context": "composer"
         },
         {
           "id": "chat-history-next",
           "keys": ["arrowdown"],
           "label": "Recall next message",
           "description": "Moves forward through history, returning to the saved draft at the end.",
-          "scenario": "While browsing composer history."
+          "scenario": "While browsing composer history.",
+          "context": "composer"
         },
         {
           "id": "chat-mention-nav",
           "keys": ["arrowup", "arrowdown"],
           "label": "Navigate mentions",
           "description": "Cycles through @ file/task mention candidates.",
-          "scenario": "While the mention menu is open."
+          "scenario": "While the mention menu is open.",
+          "context": "composer-overlay"
         },
         {
           "id": "chat-mention-accept",
           "keys": ["tab", "enter"],
           "label": "Accept mention",
           "description": "Inserts the highlighted mention.",
-          "scenario": "While the mention menu is open."
+          "scenario": "While the mention menu is open.",
+          "context": "composer-overlay"
         },
         {
           "id": "chat-slash-nav",
           "keys": ["arrowup", "arrowdown"],
           "label": "Navigate slash commands",
           "description": "Cycles through slash-command candidates.",
-          "scenario": "While the slash menu is open."
+          "scenario": "While the slash menu is open.",
+          "context": "composer-overlay"
         },
         {
           "id": "chat-slash-accept",
           "keys": ["tab", "enter"],
           "label": "Accept slash command",
           "description": "Runs the highlighted slash action.",
-          "scenario": "While the slash menu is open."
+          "scenario": "While the slash menu is open.",
+          "context": "composer-overlay"
         },
         {
           "id": "chat-annotation-comment",
           "keys": ["mod", "enter"],
           "label": "Submit annotation comment",
           "description": "Posts the comment being written: on a response selection, on a document passage, or on an element of a design open in the browser. Escape closes the editor.",
-          "scenario": "Editing a comment on a selection, a document passage, or a design element."
+          "scenario": "Editing a comment on a selection, a document passage, or a design element.",
+          "context": "comment-editor"
         },
         {
           "id": "chat-notification-open",
           "keys": ["enter"],
           "label": "Open notification thread",
           "description": "Navigates to the thread for the highlighted notification.",
-          "scenario": "Notifications panel, row focused."
+          "scenario": "Notifications panel, row focused.",
+          "context": "notifications"
         },
         {
           "id": "chat-mention-close",
           "keys": ["escape"],
           "label": "Close mention menu",
           "description": "Dismisses the @ mention candidate menu without inserting a mention.",
-          "scenario": "While the mention menu is open."
+          "scenario": "While the mention menu is open.",
+          "context": "composer-overlay"
         },
         {
           "id": "chat-slash-close",
           "keys": ["escape"],
           "label": "Close slash menu",
           "description": "Dismisses the slash-command menu without running a command.",
-          "scenario": "While the slash menu is open."
+          "scenario": "While the slash menu is open.",
+          "context": "composer-overlay"
         },
         {
           "id": "chat-selection-popover-close",
           "keys": ["escape"],
           "label": "Close selection popover",
           "description": "Closes the composer's reference selection popover.",
-          "scenario": "While the selection popover is open."
+          "scenario": "While the selection popover is open.",
+          "context": "composer-overlay"
         },
         {
           "id": "chat-start-after-popover-close",
           "keys": ["escape"],
           "label": "Close start-after picker",
           "description": "Closes the composer's start-after picker.",
-          "scenario": "While the start-after popover is open."
+          "scenario": "While the start-after popover is open.",
+          "context": "composer-overlay"
         },
         {
           "id": "chat-annotation-close",
           "keys": ["escape"],
           "label": "Close annotation comment",
           "description": "Closes the comment editor on a response selection without posting.",
-          "scenario": "Editing a comment on a response selection."
+          "scenario": "Editing a comment on a response selection.",
+          "context": "comment-editor"
         }
       ]
     },
@@ -353,84 +404,96 @@
           "keys": ["mod", "z"],
           "label": "Undo",
           "description": "Undoes the last edit.",
-          "scenario": "Any rich text editor."
+          "scenario": "Any rich text editor.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-redo",
           "keys": ["mod", "shift", "z", "ctrl", "y"],
           "label": "Redo",
           "description": "Redoes the last undone edit. Ctrl+Y also works on Windows/Linux.",
-          "scenario": "Any rich text editor."
+          "scenario": "Any rich text editor.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-select-all",
           "keys": ["mod", "a"],
           "label": "Select all",
           "description": "Selects the whole field, including any code block, wherever the caret sits.",
-          "scenario": "Any rich text editor."
+          "scenario": "Any rich text editor.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-bold",
           "keys": ["mod", "b"],
           "label": "Bold",
           "description": "Wraps the selection in bold.",
-          "scenario": "Any rich text editor with a selection."
+          "scenario": "Any rich text editor with a selection.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-italic",
           "keys": ["mod", "i"],
           "label": "Italic",
           "description": "Wraps the selection in italics.",
-          "scenario": "Any rich text editor with a selection."
+          "scenario": "Any rich text editor with a selection.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-code",
           "keys": ["mod", "e"],
           "label": "Inline code",
           "description": "Wraps the selection as inline code.",
-          "scenario": "Any rich text editor with a selection."
+          "scenario": "Any rich text editor with a selection.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-codeblock-newline",
           "keys": ["enter", "shift", "enter"],
           "label": "New line in code block",
           "description": "Inserts a new line inside a code block; Enter on the language label focuses the code body.",
-          "scenario": "Caret inside a code block."
+          "scenario": "Caret inside a code block.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-exit-codeblock",
           "keys": ["arrowup", "arrowdown"],
           "label": "Exit code block",
           "description": "Creates a paragraph above or below the block when the caret is at its edge.",
-          "scenario": "Caret at the top or bottom of a code block."
+          "scenario": "Caret at the top or bottom of a code block.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-unlist",
           "keys": ["backspace"],
           "label": "Unlist list item",
           "description": "Turns the list item back into a paragraph when the caret is at its very start.",
-          "scenario": "Caret at the start of a list item."
+          "scenario": "Caret at the start of a list item.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-inline-code-close",
           "keys": ["`"],
           "label": "Close inline code",
           "description": "Moves the caret out of an inline code span when a backtick is typed at its end.",
-          "scenario": "Caret at the end of an inline code span."
+          "scenario": "Caret at the end of an inline code span.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-code-fence",
           "keys": ["enter"],
           "label": "Materialize code fence",
           "description": "Turns a paragraph holding a fenced-code marker into a code block.",
-          "scenario": "Caret in a paragraph whose text is a fenced code marker."
+          "scenario": "Caret in a paragraph whose text is a fenced code marker.",
+          "context": "rich-editor"
         },
         {
           "id": "editor-exit-empty-list",
           "keys": ["enter"],
           "label": "Exit empty list item",
           "description": "Leaves the list when Enter is pressed on an empty list item.",
-          "scenario": "Caret in an empty list item."
+          "scenario": "Caret in an empty list item.",
+          "context": "rich-editor"
         }
       ]
     },
@@ -443,49 +506,56 @@
           "keys": ["mod", "enter"],
           "label": "Commit staged changes",
           "description": "Commits the staged files from the message box. Enter never commits   multi-line messages are safe.",
-          "scenario": "Git status panel composer or the Commit dialog."
+          "scenario": "Git status panel composer or the Commit dialog.",
+          "context": "git"
         },
         {
           "id": "git-create-pr",
           "keys": ["mod", "enter"],
           "label": "Create pull request",
           "description": "Creates the pull request from the title or description field.",
-          "scenario": "Pull Request sheet."
+          "scenario": "Pull Request sheet.",
+          "context": "git"
         },
         {
           "id": "git-new-branch",
           "keys": ["enter"],
           "label": "Create branch",
           "description": "Creates the new branch; Escape cancels.",
-          "scenario": "New-branch input in the Git panel."
+          "scenario": "New-branch input in the Git panel.",
+          "context": "git"
         },
         {
           "id": "git-toggle-diff",
           "keys": ["enter"],
           "label": "Toggle file diff",
           "description": "Opens or closes the diff for the highlighted change.",
-          "scenario": "Changes tree, row focused."
+          "scenario": "Changes tree, row focused.",
+          "context": "git"
         },
         {
           "id": "git-toggle-select",
           "keys": ["mod", "click"],
           "label": "Toggle file selection",
           "description": "Toggles the file's staged selection instead of opening its diff.",
-          "scenario": "File row in the changes tree."
+          "scenario": "File row in the changes tree.",
+          "context": "git"
         },
         {
           "id": "git-select-checkbox",
           "keys": ["space"],
           "label": "Toggle selection checkbox",
           "description": "Toggles selection for the focused checkbox (files, directories, or select-all sections).",
-          "scenario": "Git changes tree / status panel, checkbox focused."
+          "scenario": "Git changes tree / status panel, checkbox focused.",
+          "context": "git"
         },
         {
           "id": "git-pr-clear-selection",
           "keys": ["escape"],
           "label": "Clear pull request selection",
           "description": "Clears the selected pull request in the Git panel.",
-          "scenario": "Git pull request list, a request selected."
+          "scenario": "Git pull request list, a request selected.",
+          "context": "git"
         }
       ]
     },
@@ -498,42 +568,48 @@
           "keys": ["mod", "s"],
           "label": "Save draft",
           "description": "Saves the current spec, assignment, or brainstorm draft.",
-          "scenario": "Spec, Assignment, or Brainstorm studio."
+          "scenario": "Spec, Assignment, or Brainstorm studio.",
+          "context": "studios"
         },
         {
           "id": "studio-edit-field",
           "keys": ["enter"],
           "label": "Edit text field",
           "description": "Enters inline edit mode on a markdown field; Escape cancels the edit.",
-          "scenario": "Studio markdown field, not already editing."
+          "scenario": "Studio markdown field, not already editing.",
+          "context": "studios"
         },
         {
           "id": "studio-section-nav",
           "keys": ["arrowup", "arrowdown", "home", "end"],
           "label": "Navigate spec sections",
           "description": "Moves through the spec section list.",
-          "scenario": "Spec studio section dropdown."
+          "scenario": "Spec studio section dropdown.",
+          "context": "studios"
         },
         {
           "id": "studio-resize-sidebar",
           "keys": ["arrowleft", "arrowright"],
           "label": "Resize sidebar",
           "description": "Resizes the panel by 16px.",
-          "scenario": "Studio sidebar or coordinator panel resize handle focused."
+          "scenario": "Studio sidebar or coordinator panel resize handle focused.",
+          "context": "studios"
         },
         {
           "id": "studio-edit-cancel",
           "keys": ["escape"],
           "label": "Cancel inline edit",
           "description": "Abandons the inline markdown edit and restores the previous text.",
-          "scenario": "Editing a studio markdown field."
+          "scenario": "Editing a studio markdown field.",
+          "context": "studios"
         },
         {
           "id": "studio-cancel-annotation",
           "keys": ["escape"],
           "label": "Cancel annotation edit",
           "description": "Clears the pending annotation, closes the open annotation editor, and drops a pending decision action.",
-          "scenario": "Spec or Brainstorm studio with an annotation pending or being edited."
+          "scenario": "Spec or Brainstorm studio with an annotation pending or being edited.",
+          "context": "studios"
         }
       ]
     },
@@ -546,22 +622,27 @@
           "keys": ["mod", "t"],
           "label": "New terminal tab",
           "description": "Opens a new terminal tab for the active thread.",
-          "scenario": "A terminal is focused."
+          "scenario": "A terminal is focused.",
+          "context": "terminal"
         },
         {
           "id": "terminal-word-hop",
           "keys": ["alt", "arrowleft", "arrowright"],
-          "platformKeys": { "other": ["ctrl", "arrowleft", "arrowright"] },
+          "platformKeys": {
+            "other": ["ctrl", "arrowleft", "arrowright"]
+          },
           "label": "Word backward / forward",
           "description": "Moves the cursor by whole words in plain shells: Option+Arrow on macOS, Ctrl+Arrow on Windows and Linux.",
-          "scenario": "Terminal focused in a shell prompt (not on the alternate screen)."
+          "scenario": "Terminal focused in a shell prompt (not on the alternate screen).",
+          "context": "terminal"
         },
         {
           "id": "terminal-reveal-path",
           "keys": ["mod", "click"],
           "label": "Reveal file in explorer",
           "description": "Reveals the clicked file path in the OS file manager.",
-          "scenario": "Clicking a path link in the terminal."
+          "scenario": "Clicking a path link in the terminal.",
+          "context": "terminal"
         }
       ]
     },
@@ -572,132 +653,158 @@
         {
           "id": "browser-reload",
           "keys": ["mod", "r"],
-          "platformKeys": { "other": ["f5", "ctrl", "r"] },
+          "platformKeys": {
+            "other": ["f5", "ctrl", "r"]
+          },
           "label": "Reload page",
           "description": "Reloads the page in the browser. Cmd+R on macOS, F5 or Ctrl+R on Windows and Linux.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-hard-reload",
           "keys": ["mod", "shift", "r"],
           "label": "Hard reload page",
           "description": "Reloads the page ignoring its cache, so every asset is fetched again.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-back",
           "keys": ["mod", "["],
-          "platformKeys": { "other": ["alt", "arrowleft"] },
+          "platformKeys": {
+            "other": ["alt", "arrowleft"]
+          },
           "label": "Back in page history",
           "description": "Goes back in the page's own history, not in the app's. Cmd+[ on macOS, Alt+Left on Windows and Linux.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-forward",
           "keys": ["mod", "]"],
-          "platformKeys": { "other": ["alt", "arrowright"] },
+          "platformKeys": {
+            "other": ["alt", "arrowright"]
+          },
           "label": "Forward in page history",
           "description": "Goes forward in the page's own history, not in the app's. Cmd+] on macOS, Alt+Right on Windows and Linux.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-focus-address",
           "keys": ["mod", "l"],
           "label": "Focus the address bar",
           "description": "Moves focus to the browser's address bar and selects the address already there.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-design-undo",
           "keys": [],
           "label": "Undo screen checkpoint",
           "description": "Returns the authored screen being viewed to its previous checkpoint.",
-          "scenario": "Bindable while viewing a design or video screen in the thread browser."
+          "scenario": "Bindable while viewing a design or video screen in the thread browser.",
+          "context": "browser-canvas"
         },
         {
           "id": "browser-design-redo",
           "keys": [],
           "label": "Redo screen checkpoint",
           "description": "Restores the next checkpoint of the authored screen being viewed.",
-          "scenario": "Bindable while viewing a design or video screen in the thread browser."
+          "scenario": "Bindable while viewing a design or video screen in the thread browser.",
+          "context": "browser-canvas"
         },
         {
           "id": "browser-save-page",
           "keys": [],
           "label": "Save page",
           "description": "Saves the page to a file you choose, as one complete web page. Unbound by default so Mod+S toggles the sidebars and pages that handle it keep it; Save Page As stays in the page context menu.",
-          "scenario": "Bindable. Assign a key to save the page while a browser tab is on screen."
+          "scenario": "Bindable. Assign a key to save the page while a browser tab is on screen.",
+          "context": "browser"
         },
         {
           "id": "browser-zoom-in",
           "keys": ["mod", "="],
           "label": "Zoom page in",
           "description": "Steps the page's zoom in.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-zoom-out",
           "keys": ["mod", "-"],
           "label": "Zoom page out",
           "description": "Steps the page's zoom out.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-zoom-reset",
           "keys": ["mod", "0"],
           "label": "Reset page zoom",
           "description": "Returns the page to its default zoom level.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-devtools",
           "keys": ["mod", "alt", "i"],
-          "platformKeys": { "other": ["ctrl", "shift", "i", "f12"] },
+          "platformKeys": {
+            "other": ["ctrl", "shift", "i", "f12"]
+          },
           "label": "Toggle page DevTools",
           "description": "Opens or closes DevTools for the page in this browser.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-close-tab",
           "keys": ["mod", "w"],
           "label": "Close browser tab",
           "description": "Closes the browser tab that has focus. The app's close-the-active-surface chord owns this key everywhere else.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-new-tab",
           "keys": ["mod", "t"],
           "label": "New browser tab",
           "description": "Opens a new blank browser tab for the current thread.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-reopen-tab",
           "keys": ["mod", "shift", "t"],
           "label": "Reopen closed browser tab",
           "description": "Brings back the tab you closed last, with its back and forward history. Reopening works until the app is quit, like a browser's own reopen.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-find",
           "keys": ["mod", "f"],
           "label": "Find in page",
           "description": "Opens the find bar over the page, or returns to it with the query selected when it is already open. Enter moves to the next match, Shift+Enter to the previous one, and Escape closes the bar.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-find-next",
           "keys": ["mod", "g"],
           "label": "Find next match in page",
           "description": "Moves to the next match of the page's find bar, and opens the bar on the last query when it is closed. Works with the page focused, which is what makes it usable after clicking into it.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         },
         {
           "id": "browser-find-previous",
           "keys": ["mod", "shift", "g"],
           "label": "Find previous match in page",
           "description": "Moves to the previous match of the page's find bar.",
-          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus."
+          "scenario": "The Browser view is on screen, or a browser tab in the context sidebar or the full screen browser has focus.",
+          "context": "browser"
         }
       ]
     },
@@ -710,106 +817,123 @@
           "keys": ["mod", "s"],
           "label": "Save file",
           "description": "Saves the active file tab, an edited file opened from the operating system, or the env file panel when it is the focused surface. In the conflict resolution editor the press first saves the resolved progress as a draft, and only once there is no draft left to write does it replace the original file and mark it resolved.",
-          "scenario": "A file tab is open and has unsaved changes, or a conflicted file is open in the conflict resolution editor."
+          "scenario": "A file tab is open and has unsaved changes, or a conflicted file is open in the conflict resolution editor.",
+          "context": "file-editor"
         },
         {
           "id": "files-goto-line",
           "keys": ["mod", "g"],
           "label": "Go to line",
           "description": "Opens the go-to-line bar; Enter jumps to the line, Escape closes.",
-          "scenario": "A file tab is open."
+          "scenario": "A file tab is open.",
+          "context": "file-editor"
         },
         {
           "id": "files-indent",
           "keys": ["tab"],
           "label": "Insert indentation",
           "description": "Inserts two spaces instead of moving focus.",
-          "scenario": "File editor textarea."
+          "scenario": "File editor textarea.",
+          "context": "file-editor"
         },
         {
           "id": "files-find-next",
           "keys": ["enter"],
           "label": "Find next match",
           "description": "Moves to the next match in the find bar.",
-          "scenario": "Find bar focused."
+          "scenario": "Find bar focused.",
+          "context": "find-bar"
         },
         {
           "id": "files-find-previous",
           "keys": ["shift", "enter"],
           "label": "Find previous match",
           "description": "Moves to the previous match in the find bar.",
-          "scenario": "Find bar focused."
+          "scenario": "Find bar focused.",
+          "context": "find-bar"
         },
         {
           "id": "files-tree-nav",
           "keys": ["arrowup", "arrowdown", "arrowleft", "arrowright"],
           "label": "Navigate file tree",
           "description": "Moves selection; ArrowRight expands or descends, ArrowLeft collapses or ascends. Shift+Arrow extends the range.",
-          "scenario": "File tree focused."
+          "scenario": "File tree focused.",
+          "context": "file-tree"
         },
         {
           "id": "files-rename",
           "keys": ["enter"],
           "label": "Commit rename / create",
           "description": "Confirms an inline create or rename; Escape cancels.",
-          "scenario": "File tree inline input."
+          "scenario": "File tree inline input.",
+          "context": "file-tree"
         },
         {
           "id": "files-delete",
           "keys": ["mod", "backspace"],
-          "platformKeys": { "other": ["delete"] },
+          "platformKeys": {
+            "other": ["delete"]
+          },
           "label": "Delete selected files",
           "description": "Opens the Trash confirmation for the selected files and folders. Cmd+Delete on macOS, Delete on Windows and Linux.",
-          "scenario": "File tree focused, outside an inline input."
+          "scenario": "File tree focused, outside an inline input.",
+          "context": "file-tree"
         },
         {
           "id": "files-deployment-find",
           "keys": ["mod", "f"],
           "label": "Search deployment logs",
           "description": "Opens log search; Escape closes it.",
-          "scenario": "Cloud deployment detail view."
+          "scenario": "Cloud deployment detail view.",
+          "context": "deployment"
         },
         {
           "id": "files-find-close",
           "keys": ["escape"],
           "label": "Close find bar",
           "description": "Closes the find bar without changing the query.",
-          "scenario": "Find bar focused."
+          "scenario": "Find bar focused.",
+          "context": "find-bar"
         },
         {
           "id": "files-replace-one",
           "keys": ["enter"],
           "label": "Replace current match",
           "description": "Replaces the active match from the replace field.",
-          "scenario": "Replace field focused."
+          "scenario": "Replace field focused.",
+          "context": "find-bar"
         },
         {
           "id": "files-goto-line-close",
           "keys": ["escape"],
           "label": "Close go-to-line bar",
           "description": "Closes the go-to-line bar without jumping.",
-          "scenario": "Go-to-line bar focused."
+          "scenario": "Go-to-line bar focused.",
+          "context": "find-bar"
         },
         {
           "id": "files-tree-filter-close",
           "keys": ["escape"],
           "label": "Close file tree filter",
           "description": "Closes the file tree filter.",
-          "scenario": "File tree filter focused."
+          "scenario": "File tree filter focused.",
+          "context": "file-tree"
         },
         {
           "id": "files-hover-diff-close",
           "keys": ["escape"],
           "label": "Close hover diff",
           "description": "Closes the hover diff popover.",
-          "scenario": "Hover diff popover open."
+          "scenario": "Hover diff popover open.",
+          "context": "file-editor"
         },
         {
           "id": "files-deployment-find-close",
           "keys": ["escape"],
           "label": "Close deployment log search",
           "description": "Closes the deployment log search bar.",
-          "scenario": "Cloud deployment detail with log search open."
+          "scenario": "Cloud deployment detail with log search open.",
+          "context": "deployment"
         }
       ]
     },
@@ -822,56 +946,64 @@
           "keys": ["arrowup", "arrowdown"],
           "label": "Navigate picker rows",
           "description": "Moves between the rows of a picker: its model list, saved profiles, and harness filter chips.",
-          "scenario": "Model picker or one of its panels open."
+          "scenario": "Model picker or one of its panels open.",
+          "context": "palette"
         },
         {
           "id": "palette-model-rail",
           "keys": ["arrowleft"],
           "label": "Focus model picker rail",
           "description": "Moves focus from picker entries to the section rail.",
-          "scenario": "Model picker open."
+          "scenario": "Model picker open.",
+          "context": "palette"
         },
         {
           "id": "palette-model-entries",
           "keys": ["arrowright"],
           "label": "Focus model picker entries",
           "description": "Moves focus from the section rail to its entries.",
-          "scenario": "Model picker open."
+          "scenario": "Model picker open.",
+          "context": "palette"
         },
         {
           "id": "palette-model-select",
           "keys": ["enter"],
           "label": "Select model",
           "description": "Activates the highlighted model.",
-          "scenario": "Model picker open."
+          "scenario": "Model picker open.",
+          "context": "palette"
         },
         {
           "id": "palette-model-favorite",
           "keys": ["enter", "space"],
           "label": "Toggle model favorite",
           "description": "Favorites or unfavorites the highlighted model.",
-          "scenario": "Favorite star focused in the model picker."
+          "scenario": "Favorite star focused in the model picker.",
+          "context": "palette"
         },
         {
           "id": "palette-close",
           "keys": ["escape"],
           "label": "Close overlay",
           "description": "Closes the command palette, model picker, appearance picker, and similar overlays.",
-          "scenario": "A palette, menu, or picker is open."
+          "scenario": "A palette, menu, or picker is open.",
+          "context": "palette"
         },
         {
           "id": "palette-back",
           "keys": ["alt", "arrowleft"],
           "label": "Back to previous surface",
           "description": "Returns the command palette to the surface it was opened from. Only the left Alt or Option key triggers this, so right Option keeps its native word jump.",
-          "scenario": "Inline command palette with a back stack."
+          "scenario": "Inline command palette with a back stack.",
+          "context": "palette"
         },
         {
           "id": "palette-model-remove-recent",
           "keys": ["enter", "space"],
           "label": "Remove model from recently used",
           "description": "Removes the highlighted model from the recently used list.",
-          "scenario": "Remove control focused in the model picker."
+          "scenario": "Remove control focused in the model picker.",
+          "context": "palette"
         }
       ]
     },
@@ -884,21 +1016,24 @@
           "keys": ["ctrl", "tab", "ctrl", "shift", "tab"],
           "label": "Open thread switcher",
           "description": "Opens the thread switcher; Ctrl+Shift+Tab cycles backward. Releasing Ctrl selects the highlighted thread, Escape cancels.",
-          "scenario": "A project with at least one thread."
+          "scenario": "A project with at least one thread.",
+          "context": "app-views"
         },
         {
           "id": "thread-pin",
           "keys": ["enter"],
           "label": "Toggle thread pin",
           "description": "Pins or unpins the thread.",
-          "scenario": "Thread row pin button focused."
+          "scenario": "Thread row pin button focused.",
+          "context": "app-views"
         },
         {
           "id": "thread-find",
           "keys": ["mod", "f"],
           "label": "Find in conversation",
           "description": "Opens the in-conversation find bar.",
-          "scenario": "Conversation area focused."
+          "scenario": "Conversation area focused.",
+          "context": "conversation"
         }
       ]
     },
@@ -911,196 +1046,224 @@
           "keys": ["enter", "space"],
           "label": "Activate focused control",
           "description": "Activates the focused button, menu item, or row (native behavior).",
-          "scenario": "Any focusable control."
+          "scenario": "Any focusable control.",
+          "context": "accessibility"
         },
         {
           "id": "ui-modal-primary-action",
           "keys": ["mod", "enter"],
           "label": "Run modal primary action",
           "description": "Activates the topmost open modal's primary action   start, save, merge, confirm, and so on   even when a text field inside the modal has focus.",
-          "scenario": "A modal overlay is open."
+          "scenario": "A modal overlay is open.",
+          "context": "modal"
         },
         {
           "id": "video-primary-action",
           "keys": ["mod", "enter"],
           "label": "Run video primary action",
           "description": "Saves edited video controls, or exports MP4 when there are no unsaved changes.",
-          "scenario": "Focus is inside Video controls."
+          "scenario": "Focus is inside Video controls.",
+          "context": "video-controls"
         },
         {
           "id": "video-edit-play",
           "keys": ["space"],
           "label": "Play or pause the video",
           "description": "Play or pause the video, whichever control has the focus, and while nothing is focused but the surface itself.",
-          "scenario": "Focus is anywhere in the video editor or in the composition player, its buttons and seek bar included, outside a text field, a list and an open annotation pen. Finishing a comment puts the focus back on the player."
+          "scenario": "Focus is anywhere in the video editor or in the composition player, its buttons and seek bar included, outside a text field, a list and an open annotation pen. Finishing a comment puts the focus back on the player.",
+          "context": "video-player"
         },
         {
           "id": "video-annotation-continue",
           "keys": [],
           "label": "Continue the video from an annotation",
           "description": "Lets the video continue while the pen stays in hand. Unbound by default: space is play and pause, and the pen is only put down by its own check mark.",
-          "scenario": "Annotating a video frame or a composition frame, outside a comment field. Bind a key here to resume the picture from the keyboard."
+          "scenario": "Annotating a video frame or a composition frame, outside a comment field. Bind a key here to resume the picture from the keyboard.",
+          "context": "video-annotation"
         },
         {
           "id": "video-edit-split",
           "keys": ["s"],
           "label": "Split the selected clip at the playhead",
           "description": "Split the selected clip at the playhead.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-split-all",
           "keys": ["shift", "s"],
           "label": "Split all unlocked tracks",
           "description": "Split all unlocked tracks.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-delete",
           "keys": ["backspace"],
           "label": "Remove the selected timeline item",
           "description": "Remove the selected timeline item.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-duplicate",
           "keys": ["mod", "d"],
           "label": "Duplicate the selected clip",
           "description": "Duplicate the selected clip.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-extract-audio",
           "keys": [],
           "label": "Extract audio",
           "description": "Detach selected video clip audio to a new synchronized audio track.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-copy",
           "keys": ["mod", "c"],
           "label": "Copy the selected clip",
           "description": "Copy the selected clip.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-cut",
           "keys": ["mod", "x"],
           "label": "Cut the selected clip",
           "description": "Copy and remove the selected clip with confirmation.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-paste",
           "keys": ["mod", "v"],
           "label": "Paste a clip at the playhead",
           "description": "Paste a copied clip at the playhead on its matching track.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-snap",
           "keys": [],
           "label": "Toggle magnetic video editing",
           "description": "Move following clips together and close gaps on delete when magnetic editing is enabled.",
-          "scenario": "Video editor is focused."
+          "scenario": "Video editor is focused.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-select-all",
           "keys": ["mod", "a"],
           "label": "Select every clip on the track",
           "description": "Highlight all clips on the selected track so one menu action can edit them together.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-snap-all",
           "keys": [],
           "label": "Snap all clips on the track",
           "description": "Close every gap on the tracks of the selected clips so the clips butt together.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-merge-selected",
           "keys": [],
           "label": "Merge selected clips",
           "description": "Join selected clips that come from one continuous take into a single clip.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-merge-all",
           "keys": [],
           "label": "Merge all clips on the track",
           "description": "Join every eligible neighbouring clip on the selected track.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-paint-blur",
           "keys": [],
           "label": "Paint blur on video",
           "description": "Paint an undoable privacy mask on the video preview.",
-          "scenario": "Video editor is focused."
+          "scenario": "Video editor is focused.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-undo",
           "keys": ["mod", "z"],
           "label": "Undo an edit",
           "description": "Undo an edit.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-redo",
           "keys": ["mod", "shift", "z"],
           "label": "Redo an edit",
           "description": "Redo an edit.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-import",
           "keys": ["mod", "i"],
           "label": "Import video, music or stickers",
           "description": "Import video, music or stickers.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-frame-back",
           "keys": ["arrowleft"],
           "label": "Step back five frames",
           "description": "Step back five frames.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-frame-forward",
           "keys": ["arrowright"],
           "label": "Step forward five frames",
           "description": "Step forward five frames.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-frame-back-one",
           "keys": ["shift", "arrowleft"],
           "label": "Step back one frame",
           "description": "Step back one frame.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "video-edit-frame-forward-one",
           "keys": ["shift", "arrowright"],
           "label": "Step forward one frame",
           "description": "Step forward one frame.",
-          "scenario": "Focus is inside the video editor, outside a text field."
+          "scenario": "Focus is inside the video editor, outside a text field.",
+          "context": "video-editor"
         },
         {
           "id": "ui-close-modal",
           "keys": ["escape"],
           "label": "Close modal / sheet",
           "description": "Closes the top modal, side sheet, or dockable panel.",
-          "scenario": "A modal overlay is open."
+          "scenario": "A modal overlay is open.",
+          "context": "modal"
         },
         {
           "id": "ui-media-close",
           "keys": ["escape"],
           "label": "Close media preview",
           "description": "Closes the attachment or media preview.",
-          "scenario": "A media preview is open."
+          "scenario": "A media preview is open.",
+          "context": "media-preview"
         }
       ]
     },
@@ -1113,21 +1276,24 @@
           "keys": [],
           "label": "Next guide stop",
           "description": "Advances the running view guide to its next stop. Unbound by default so the arrow keys keep working in the composer the guide may be pointing at; bind a chord here if you want one.",
-          "scenario": "A view guide is running."
+          "scenario": "A view guide is running.",
+          "context": "guide"
         },
         {
           "id": "guide-back",
           "keys": [],
           "label": "Previous guide stop",
           "description": "Steps the running view guide back one stop. Unbound by default for the same reason as the next-stop action.",
-          "scenario": "A view guide is running."
+          "scenario": "A view guide is running.",
+          "context": "guide"
         },
         {
           "id": "guide-close",
           "keys": [],
           "label": "Close the view guide",
           "description": "Leaves the running view guide without finishing it, so it stays unseen and can be walked again later. Escape already closes a guide, so this entry is for a second chord of your own.",
-          "scenario": "A view guide is running."
+          "scenario": "A view guide is running.",
+          "context": "guide"
         }
       ]
     },
@@ -1140,7 +1306,8 @@
           "keys": ["mod", "shift", "d"],
           "label": "Quit CodeInOven",
           "description": "Quits the app for real, bypassing background mode's park to the menu bar. A turn still running settles as a deliberate close on the next launch.",
-          "scenario": "Anywhere in the app."
+          "scenario": "Anywhere in the app.",
+          "context": "global"
         }
       ]
     },
@@ -1153,70 +1320,80 @@
           "keys": [],
           "label": "Go to definition",
           "description": "Go to definition in IDE Mode.",
-          "scenario": "A project source editor with IDE Mode enabled."
+          "scenario": "A project source editor with IDE Mode enabled.",
+          "context": "ide"
         },
         {
           "id": "ide-references",
           "keys": [],
           "label": "Find references",
           "description": "Find references in IDE Mode.",
-          "scenario": "A project source editor with IDE Mode enabled."
+          "scenario": "A project source editor with IDE Mode enabled.",
+          "context": "ide"
         },
         {
           "id": "ide-documentation",
           "keys": ["alt", "enter"],
           "label": "Show documentation",
           "description": "Show documentation in IDE Mode.",
-          "scenario": "A project source editor with IDE Mode enabled."
+          "scenario": "A project source editor with IDE Mode enabled.",
+          "context": "ide"
         },
         {
           "id": "ide-grep",
           "keys": ["mod", "shift", "g"],
           "label": "Search project text",
           "description": "Search project text in IDE Mode.",
-          "scenario": "A project source editor with IDE Mode enabled."
+          "scenario": "A project source editor with IDE Mode enabled.",
+          "context": "ide"
         },
         {
           "id": "ide-files",
           "keys": [],
           "label": "Find project file",
           "description": "Find project file in IDE Mode.",
-          "scenario": "A project source editor with IDE Mode enabled."
+          "scenario": "A project source editor with IDE Mode enabled.",
+          "context": "ide"
         },
         {
           "id": "ide-complete",
           "keys": ["ctrl", "space"],
           "label": "Trigger suggestions",
           "description": "Opens the IDE Mode suggestion dropdown at the caret and asks the file's language server for completions, including imports, even when nothing has been typed yet.",
-          "scenario": "A project source editor with IDE Mode enabled."
+          "scenario": "A project source editor with IDE Mode enabled.",
+          "context": "ide"
         },
         {
           "id": "ide-info-close",
           "keys": ["escape"],
           "label": "Close code information",
           "description": "Dismisses floating documentation and code locations.",
-          "scenario": "IDE code information is open."
+          "scenario": "IDE code information is open.",
+          "context": "ide"
         },
         {
           "id": "ide-result-next",
           "keys": ["arrowdown"],
           "label": "Next IDE result",
           "description": "Select the next code location or project search result.",
-          "scenario": "IDE Mode results open."
+          "scenario": "IDE Mode results open.",
+          "context": "ide"
         },
         {
           "id": "ide-result-previous",
           "keys": ["arrowup"],
           "label": "Previous IDE result",
           "description": "Select the previous code location or project search result.",
-          "scenario": "IDE Mode results open."
+          "scenario": "IDE Mode results open.",
+          "context": "ide"
         },
         {
           "id": "ide-result-open",
           "keys": ["enter"],
           "label": "Open IDE result",
           "description": "Open the selected code location or project search result.",
-          "scenario": "IDE Mode results open."
+          "scenario": "IDE Mode results open.",
+          "context": "ide"
         }
       ]
     },
@@ -1229,7 +1406,8 @@
           "keys": ["mod", "shift", "7"],
           "label": "Capture region for agent",
           "description": "Opens a region selector and attaches an agent-optimized PNG to the active thread's composer. The capture works while another app is focused and is fitted to the 1568px size vision models read, so the text in it stays legible.",
-          "scenario": "Anywhere on macOS, Windows or Linux X11, including from another app, while a thread is open."
+          "scenario": "Anywhere on macOS, Windows or Linux X11, including from another app, while a thread is open.",
+          "context": "system"
         }
       ]
     }

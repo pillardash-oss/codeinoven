@@ -214,6 +214,18 @@ export interface RawFileChunk {
   size: number
 }
 
+/** Read the keymap overrides tolerantly: a hand-edited `config.json` whose
+ *  `keybindings` is not a string map must not stop the app from starting, so
+ *  every value that is not a string is dropped instead of reaching the keymap. */
+function readKeybindings(value: unknown): Record<string, string> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return {}
+  const keybindings: Record<string, string> = {}
+  for (const [id, tokens] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof tokens === 'string') keybindings[id] = tokens
+  }
+  return keybindings
+}
+
 export class StorageEngine {
   private readonly writeListeners = new Map<string, Set<() => void>>()
 
@@ -354,6 +366,7 @@ export class StorageEngine {
     return {
       ...DEFAULT_CONFIG,
       ...(config ?? {}),
+      keybindings: readKeybindings(config?.keybindings),
       bundledPiSensitiveFilePatterns: sensitiveFilePolicy.patterns,
       bundledPiSensitiveFileProtectionEnabled: sensitiveFilePolicy.enabled,
       fontFamily: normalizeAppFontFamily(config?.fontFamily),

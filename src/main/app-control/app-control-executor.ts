@@ -40,15 +40,21 @@ export interface AppControlExecutor {
  * the user chose. The settings page writes it through the same
  * `config:update` channel, so the field is only removed here, at the
  * agent-facing door.
+ *
+ * `keybindings` is the user's keyboard, and a shortcut an agent could remap is
+ * a shortcut that stopped doing what the person at the keyboard expects. The
+ * Keymap settings page saves it through this same channel, so it is removed at
+ * the agent-facing door as well.
  */
 function withoutUserOwnedConfig(patch: unknown): unknown {
   if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) return patch
-  const candidate = patch as Record<string, unknown>
+  const candidate = { ...(patch as Record<string, unknown>) }
+  delete candidate['keybindings']
   const agentDefaults = candidate['agentDefaults']
   if (typeof agentDefaults !== 'object' || agentDefaults === null || Array.isArray(agentDefaults))
-    return patch
+    return candidate
   const defaults = { ...(agentDefaults as Record<string, unknown>) }
-  if (!('pawn' in defaults)) return patch
+  if (!('pawn' in defaults)) return candidate
   delete defaults['pawn']
   return { ...candidate, agentDefaults: defaults }
 }
