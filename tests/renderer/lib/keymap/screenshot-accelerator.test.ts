@@ -15,14 +15,14 @@ function setPlatform(platform: string): void {
 describe('region screenshot accelerator', () => {
   it('claims the registry default as a system-wide macOS chord', () => {
     setPlatform('darwin')
-    expect(acceleratorForKeys(keymapKeys('screenshot-region'))).toBe('Command+Shift+U')
+    expect(acceleratorForKeys(keymapKeys('screenshot-region'))).toBe('Command+Shift+7')
   })
 
   it('recognizes the chords macOS keeps for its own screenshot service', () => {
-    for (const key of ['3', '4', '5', '6', '7']) {
+    for (const key of ['3', '4', '5', '6']) {
       expect(isMacScreenshotAccelerator(`Command+Shift+${key}`)).toBe(true)
     }
-    expect(isMacScreenshotAccelerator('Command+Shift+U')).toBe(false)
+    expect(isMacScreenshotAccelerator('Command+Shift+7')).toBe(false)
   })
 
   it('uses Control outside macOS', () => {

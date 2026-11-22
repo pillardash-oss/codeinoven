@@ -339,7 +339,10 @@ export default defineConfig(({ mode }) => {
             index: resolve(__dirname, 'src/preload/index.ts'),
             // A window built with no bridge at all points here: Electron rejects
             // an empty `preload` string, so "none" has to be a real file.
-            blank: resolve(__dirname, 'src/preload/blank.ts')
+            blank: resolve(__dirname, 'src/preload/blank.ts'),
+            // The region selector shows the whole screen, so it gets its own
+            // five-call bridge instead of the app's.
+            'screenshot-overlay': resolve(__dirname, 'src/preload/screenshot-overlay.ts')
           },
           // Sandboxed Electron preloads execute in a CommonJS-like isolated
           // context. Emitting ESM here makes production fail before the bridge
@@ -445,7 +448,10 @@ export default defineConfig(({ mode }) => {
             // browser's page in a transparent window of its own. It is an entry
             // of its own because it draws the card with the app's stylesheet,
             // and runs nothing else of the app.
-            'permission-prompt': resolve(__dirname, 'src/renderer/permission-prompt.html')
+            'permission-prompt': resolve(__dirname, 'src/renderer/permission-prompt.html'),
+            // The Windows and X11 region selector: a still of one display, opened
+            // only while a screenshot is being selected.
+            'screenshot-overlay': resolve(__dirname, 'src/renderer/screenshot-overlay.html')
           },
           // Chunks are left to the bundler's own splitter. Naming groups was
           // tried and reverted: forcing the Svelte packages into a `vendor`

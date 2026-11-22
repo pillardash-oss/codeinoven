@@ -227,7 +227,9 @@ function chordMatches(chord: KeymapChord, event: KeyboardEvent, isMac: boolean):
   if (event.ctrlKey !== wants.control) return false
   if (event.shiftKey !== wants.shift) return false
   if (event.altKey !== wants.alt) return false
-  return eventKeyToken(event) === chord.key
+  if (eventKeyToken(event) === chord.key) return true
+  // Shift turns a digit's `key` into its symbol (Shift+7 is "&"); `code` keeps it.
+  return event.shiftKey && /^[0-9]$/u.test(chord.key) && event.code === `Digit${chord.key}`
 }
 
 /** True when an event is one press of a chord that may be a bare modifier tap. */
