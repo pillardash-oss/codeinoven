@@ -409,6 +409,12 @@ export function registerSpeechIpc(
   ipcMain.handle('speech:downloadMlxRuntime', () =>
     speechResult(() => service.downloadMlxRuntime())
   )
+  ipcMain.handle('speech:getSherpaRuntimeStatus', () =>
+    speechResult(() => service.sherpaRuntimeStatus())
+  )
+  ipcMain.handle('speech:downloadSherpaRuntime', () =>
+    speechResult(() => service.downloadSherpaRuntime())
+  )
   ipcMain.handle('speech:requestConfirmation', (_event, rawAction: unknown, rawTargetId: unknown) =>
     speechResult(async () =>
       service.requestConfirmation(
@@ -592,6 +598,8 @@ export function registerSpeechIpc(
       'speech:downloadLlamaRuntime',
       'speech:getMlxRuntimeStatus',
       'speech:downloadMlxRuntime',
+      'speech:getSherpaRuntimeStatus',
+      'speech:downloadSherpaRuntime',
       'speech:requestConfirmation',
       'speech:deleteHistory',
       'speech:deleteAllHistory',

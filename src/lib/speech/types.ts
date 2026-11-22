@@ -443,6 +443,24 @@ export interface SpeechMlxMetalRuntimeStatus {
   unavailableReason?: string
 }
 
+/**
+ * Discover-or-download status of the sherpa-onnx engine: the native addon plus
+ * onnxruntime that the portable speech runtime loads. It is not shipped with the
+ * app; it is downloaded the first time a sherpa-onnx model is chosen.
+ */
+export interface SpeechSherpaRuntimeStatus {
+  supported: boolean
+  available: boolean
+  prepared: boolean
+  packageName?: string
+  runtimeDirectory: string
+  version: string
+  downloadRequired: boolean
+  downloadName?: string
+  downloadByteSize?: number
+  unavailableReason?: string
+}
+
 export interface SpeechSegment {
   id: string
   index: number

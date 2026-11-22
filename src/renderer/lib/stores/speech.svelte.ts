@@ -9,6 +9,7 @@ import type {
   SpeechLlamaRuntimeStatus,
   SpeechLesson,
   SpeechMlxMetalRuntimeStatus,
+  SpeechSherpaRuntimeStatus,
   SpeechModelCatalog,
   SpeechProgressEvent,
   SpeechRuntime
@@ -36,6 +37,8 @@ class SpeechSettingsStore {
    * still absent; the models list offers the one-time engine install from here.
    */
   mlxRuntime = $state<SpeechMlxMetalRuntimeStatus | null>(null)
+  /** The portable sherpa-onnx engine, provisioned on demand like the MLX one. */
+  sherpaRuntime = $state<SpeechSherpaRuntimeStatus | null>(null)
   downloads = $state<Record<string, SpeechDownloadState>>({})
   retryStatus = $state<Record<string, SpeechRetryStatus>>({})
   loading = $state(false)
@@ -47,13 +50,14 @@ class SpeechSettingsStore {
     this.loading = true
     this.error = ''
     try {
-      const [catalog, capabilities, history, lessons, llama, mlx] = await Promise.all([
+      const [catalog, capabilities, history, lessons, llama, mlx, sherpa] = await Promise.all([
         invoke('speech:getCatalog'),
         invoke('speech:getCapabilities'),
         invoke('speech:getHistory', undefined, 50),
         invoke('speech:getLessons', undefined),
         invoke('speech:getLlamaRuntimeStatus'),
-        invoke('speech:getMlxRuntimeStatus')
+        invoke('speech:getMlxRuntimeStatus'),
+        invoke('speech:getSherpaRuntimeStatus')
       ])
       if (!catalog.ok) throw new Error(catalog.error.message)
       if (!capabilities.ok) throw new Error(capabilities.error.message)
@@ -65,6 +69,7 @@ class SpeechSettingsStore {
       this.lessons = lessons.value
       if (llama.ok) this.llamaRuntime = llama.value
       if (mlx.ok) this.mlxRuntime = mlx.value
+      if (sherpa.ok) this.sherpaRuntime = sherpa.value
       this.unsubscribe ??= subscribe('speech:progress', (progress) => this.onProgress(progress))
     } catch (cause) {
       this.error = cause instanceof Error ? cause.message : String(cause)
@@ -206,6 +211,22 @@ class SpeechSettingsStore {
     } catch (cause) {
       this.error = cause instanceof Error ? cause.message : String(cause)
       reportError(cause, 'The MLX engine could not be downloaded.')
+    }
+    await this.load()
+  }
+
+  /** Install the pinned sherpa-onnx platform package for this machine. */
+  async downloadSherpaRuntime(): Promise<void> {
+    this.error = ''
+    try {
+      const result = await invoke('speech:downloadSherpaRuntime')
+      if (!result.ok) {
+        this.error = result.error.message
+        toast.error(result.error.message)
+      }
+    } catch (cause) {
+      this.error = cause instanceof Error ? cause.message : String(cause)
+      reportError(cause, 'The sherpa-onnx engine could not be downloaded.')
     }
     await this.load()
   }

@@ -60,7 +60,7 @@
   let runtimeFilter = $state<'all' | SpeechRuntime>('all')
   let importing = $state(false)
   let pasteOpen = $state(false)
-  let installingEngine = $state(false)
+  let installingEngine = $state<'mlx' | 'sherpa' | null>(null)
   /** Artifacts whose resume/restart request has not reported progress yet. */
   let recovering = $state<Record<string, boolean>>({})
 
@@ -108,25 +108,60 @@
   )
 
   /**
-   * MLX models need the Metal kernel library, which is not shipped with the app.
-   * It is provisioned on demand, so an MLX model can be listed and even installed
-   * while the engine is still missing; this is the affordance that installs it,
-   * and it stays hidden on machines where an MLX install was reused.
+   * Engines whose binary is provisioned on demand rather than shipped, and that
+   * this machine is missing while a model that needs it is on screen. The card
+   * below installs one; downloading such a model installs it too.
    */
-  const mlxEngineMissing = $derived(
-    speech.mlxRuntime?.supported === true &&
-      !speech.mlxRuntime.prepared &&
+  type MissingEngine = {
+    id: 'mlx' | 'sherpa'
+    title: string
+    body: string
+    packageLabel: string
+  }
+
+  const missingEngines = $derived.by((): MissingEngine[] => {
+    const engines: MissingEngine[] = []
+    const mlx = speech.mlxRuntime
+    if (
+      mlx?.supported === true &&
+      !mlx.prepared &&
       (catalogArtifacts.some((artifact) => artifact.runtime === 'mlx') ||
         installedArtifacts.some((artifact) => artifact.runtime === 'mlx'))
-  )
+    ) {
+      engines.push({
+        id: 'mlx',
+        title: 'The MLX engine is not installed',
+        body: 'MLX models run on the Apple GPU through a Metal kernel library that is not part of the app.',
+        packageLabel: mlx.downloadByteSize
+          ? `${mlx.downloadName ?? 'MLX'} · ${formatBytes(mlx.downloadByteSize)}`
+          : (mlx.downloadName ?? 'MLX')
+      })
+    }
+    const sherpa = speech.sherpaRuntime
+    if (
+      sherpa?.supported === true &&
+      !sherpa.prepared &&
+      (catalogArtifacts.some((artifact) => artifact.runtime === 'sherpa-onnx') ||
+        installedArtifacts.some((artifact) => artifact.runtime === 'sherpa-onnx'))
+    ) {
+      engines.push({
+        id: 'sherpa',
+        title: 'The sherpa-onnx engine is not installed',
+        body: 'sherpa-onnx models run on a native speech engine that is downloaded separately instead of shipping with the app.',
+        packageLabel: sherpa.downloadName ?? 'sherpa-onnx'
+      })
+    }
+    return engines
+  })
 
-  async function installMlxEngine(): Promise<void> {
+  async function installEngine(id: 'mlx' | 'sherpa'): Promise<void> {
     if (installingEngine) return
-    installingEngine = true
+    installingEngine = id
     try {
-      await speech.downloadMlxRuntime()
+      if (id === 'mlx') await speech.downloadMlxRuntime()
+      else await speech.downloadSherpaRuntime()
     } finally {
-      installingEngine = false
+      installingEngine = null
     }
   }
 
@@ -260,27 +295,24 @@
     {/each}
   </div>
 
-  {#if mlxEngineMissing}
+  {#each missingEngines as engine (engine.id)}
     <div class="flex items-start gap-3 border border-warning/40 bg-warning/10 p-4">
       <CioAlertCircle size={16} class="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
       <div class="min-w-0 flex-1">
-        <p class="text-sm font-medium">The MLX engine is not installed</p>
+        <p class="text-sm font-medium">{engine.title}</p>
         <p class="mt-0.5 text-xs leading-relaxed text-muted">
-          MLX models run on the Apple GPU through a Metal kernel library that is not part of the
-          app. Installing it once makes every MLX model usable, and downloading an MLX model
-          installs it automatically.
-          {#if speech.mlxRuntime?.downloadByteSize}
-            ({speech.mlxRuntime.downloadName} · {formatBytes(speech.mlxRuntime.downloadByteSize)})
-          {/if}
+          {engine.body} Installing it once makes every model on this tab usable, and downloading one installs
+          it automatically.
+          <span class="text-dimmed">({engine.packageLabel})</span>
         </p>
       </div>
       <button
         type="button"
         class="flex shrink-0 items-center gap-1.5 bg-primary px-3 py-1.5 text-xs font-medium text-on-primary hover:opacity-90 disabled:opacity-50"
-        disabled={installingEngine}
-        onclick={() => void installMlxEngine()}
+        disabled={installingEngine !== null}
+        onclick={() => void installEngine(engine.id)}
       >
-        {#if installingEngine}
+        {#if installingEngine === engine.id}
           <CioSpinner size={12} class="animate-spin" aria-hidden="true" />
           Installing
         {:else}
@@ -289,7 +321,7 @@
         {/if}
       </button>
     </div>
-  {/if}
+  {/each}
 
   <!-- One card, exactly like the Search models card: installed rows first
        (active on top), then the catalog models this device has not downloaded. -->

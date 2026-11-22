@@ -15,6 +15,10 @@ import { resolveImages } from '../../git/github-images'
 import { retainTemporaryAttachment } from '../../editor/temporary-attachment-retention'
 import { readDocumentPreviewHtml } from '../../drivers/document-attachment'
 import {
+  readDocumentPlainTextFile,
+  documentMimeForExtension
+} from '../../drivers/document-attachment-core'
+import {
   isMissingScopedPathError,
   validateFaviconHostnames,
   validateGitHubAvatarRequests,
@@ -533,11 +537,12 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
   // no longer reads files directly; it delegates here so the path can be
   // constrained to registered project, config-root, or user-selected scopes.
   // Read a pasted-file source for the Sound Playground's read-aloud section:
-  // plain text files directly, and rich documents (PDF, Word, PowerPoint, Excel,
-  // OpenDocument, RTF, EPUB) through the `@firecrawl/anydoc` Rust library
-  // fully local, no network, OCR never invoked. Only scoped paths (e.g. a file
-  // the user just picked from the system dialog) are read.
-  // Text is capped below the prepared-playback text limit.
+  // plain text files directly, and rich documents (Word, PowerPoint, Excel,
+  // OpenDocument, CSV/TSV) through the in-house document pipeline, which runs
+  // fully locally and never invokes OCR. Formats with no local text extraction
+  // (PDF, EPUB, RTF) are rejected by name instead of being read as bytes. Only
+  // scoped paths (e.g. a file the user just picked from the system dialog) are
+  // read. Text is capped below the prepared-playback text limit.
   const PLAYGROUND_TEXT_EXTENSIONS = new Set([
     'txt',
     'md',
@@ -566,18 +571,6 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     'srt',
     'vtt'
   ])
-  const PLAYGROUND_DOCUMENT_EXTENSIONS = new Set([
-    'pdf',
-    'docx',
-    'doc',
-    'odt',
-    'rtf',
-    'epub',
-    'pptx',
-    'xlsx',
-    'xls',
-    'ods'
-  ])
   const MAX_PLAYGROUND_TEXT_CHARS = 900_000
   privileged('speech:playgroundReadText', async (_event, rawPath: unknown) => {
     try {
@@ -588,41 +581,24 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
       const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
       const fileName = basename(safePath)
       let text: string
-      if (PLAYGROUND_DOCUMENT_EXTENSIONS.has(extension)) {
-        const bytes = await readFile(safePath)
-        const { toMarkdownBytes, formatFromExtension } = await import('@firecrawl/anydoc')
-        const format = formatFromExtension(extension)
-        try {
-          text = await toMarkdownBytes(bytes, format)
-        } catch (parseError) {
-          if (
-            extension === 'pdf' &&
-            parseError instanceof Error &&
-            parseError.message.includes('NeedsOcr')
-          ) {
-            throw new RangeError(
-              'This PDF appears to be scanned   no local OCR is performed in the playground.',
-              { cause: parseError }
-            )
-          }
-          throw parseError
-        }
-        // Strip Markdown emphasis/heading markup so the TTS voice does not
-        // read out syntax characters from the converted document.
-        text = text
-          .replace(/^#{1,6}\s+/gmu, '')
-          .replace(/[*_~`]+/gu, '')
-          .replace(/\[([^\]]*)\]\([^)]*\)/gu, '$1')
-          .replace(/<[^>]+>/gu, '')
-      } else {
-        if (!PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
-          throw new RangeError(`Unsupported file type ".${extension}".`)
-        }
+      let truncated = false
+      if (PLAYGROUND_TEXT_EXTENSIONS.has(extension)) {
         text = await readFile(safePath, 'utf8')
+      } else {
+        // Rich documents go through the in-house pipeline, which flattens markup
+        // so the TTS voice does not read out syntax characters and refuses the
+        // formats it cannot extract text from (PDF, EPUB, RTF).
+        const extracted = await readDocumentPlainTextFile(safePath, MAX_PLAYGROUND_TEXT_CHARS)
+        if (!extracted) {
+          throw new RangeError(
+            `This ${extension.toUpperCase()} file could not be read for read-aloud.`
+          )
+        }
+        text = extracted.text
+        truncated = extracted.truncated
       }
       text = text.replace(/\r\n?/gu, '\n').trimEnd()
       if (text.trim().length === 0) throw new RangeError('The file contains no readable text.')
-      let truncated = false
       if (text.length > MAX_PLAYGROUND_TEXT_CHARS) {
         text = text.slice(0, MAX_PLAYGROUND_TEXT_CHARS)
         truncated = true
@@ -708,18 +684,7 @@ export function registerSystemHandlers(ctx: IpcHandlerContext): void {
     try {
       const safePath = await privilegedIpc.resolveScopedPath(filePath)
       const extension = extname(safePath).toLowerCase().replace(/^\./u, '')
-      const mimeByExtension: Record<string, string> = {
-        docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        doc: 'application/msword',
-        odt: 'application/vnd.oasis.opendocument.text',
-        pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-        xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        xls: 'application/vnd.ms-excel',
-        ods: 'application/vnd.oasis.opendocument.spreadsheet',
-        csv: 'text/csv',
-        tsv: 'text/tab-separated-values'
-      }
-      const mime = mimeByExtension[extension]
+      const mime = documentMimeForExtension(extension)
       if (!mime) return null
       return readDocumentPreviewHtml({
         mime,

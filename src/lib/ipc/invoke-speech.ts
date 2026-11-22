@@ -138,6 +138,11 @@ export const invokeSpeechContract = {
     import('../speech/types').SpeechResult<import('../speech/types').SpeechMlxMetalRuntimeStatus>
   >,
   'speech:downloadMlxRuntime': {} as Contract<[], import('../speech/types').SpeechResult<void>>,
+  'speech:getSherpaRuntimeStatus': {} as Contract<
+    [],
+    import('../speech/types').SpeechResult<import('../speech/types').SpeechSherpaRuntimeStatus>
+  >,
+  'speech:downloadSherpaRuntime': {} as Contract<[], import('../speech/types').SpeechResult<void>>,
   'speech:requestConfirmation': {} as Contract<
     [action: import('../speech/types').SpeechDestructiveAction, targetId: string],
     import('../speech/types').SpeechResult<import('../speech/types').SpeechConfirmation>

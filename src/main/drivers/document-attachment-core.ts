@@ -1,6 +1,7 @@
 /// <reference types="node" />
 
 import { readFile, stat } from 'node:fs/promises'
+import { basename, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Logger } from '../system/logger'
 import type { PromptAttachment } from '../../lib/types'
@@ -264,6 +265,17 @@ function boundDocumentText(text: string): string {
   if (trimmed.length <= MAX_EXTRACTED_CHARACTERS) return trimmed
   const omitted = trimmed.length - MAX_EXTRACTED_CHARACTERS
   return `${trimmed.slice(0, MAX_EXTRACTED_CHARACTERS)}\n\n[Document truncated: ${omitted.toLocaleString('en-US')} additional characters omitted.]`
+}
+
+/** Flatten markup so a reader never voices syntax characters: heading hashes,
+ *  emphasis markers, link targets, and tag names are dropped while the words a
+ *  person would say survive. */
+function flattenDocumentMarkup(text: string): string {
+  return text
+    .replace(/^#{1,6}\s+/gmu, '')
+    .replace(/[*_~`]+/gu, '')
+    .replace(/\[([^\]]*)\]\([^)]*\)/gu, '$1')
+    .replace(/<[^>]+>/gu, '')
 }
 
 // ─── DOCX ────────────────────────────────────────────────────────────────────
@@ -822,6 +834,67 @@ function pptxDeckToText(deck: PptxDeck): string | null {
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
+/** Mime types a bare file extension maps to, so a caller holding a path can
+ *  resolve a document kind without inventing one. */
+const DOCUMENT_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  doc: 'application/msword',
+  odt: 'application/vnd.oasis.opendocument.text',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  ods: 'application/vnd.oasis.opendocument.spreadsheet',
+  csv: 'text/csv',
+  tsv: 'text/tab-separated-values'
+}
+
+/** Resolve the mime type a document extension maps to, or null when the pipeline
+ *  has no reader for it. */
+export function documentMimeForExtension(extension: string): string | null {
+  return DOCUMENT_MIME_BY_EXTENSION[extension] ?? null
+}
+
+/** Rich formats the app can preview or hand to another tool but cannot extract
+ *  text from locally: a PDF's text layer needs a parser the app does not ship,
+ *  an EPUB is a container of HTML documents, and RTF has no in-house reader. */
+const UNREADABLE_DOCUMENT_EXTENSIONS = new Set(['pdf', 'rtf', 'epub'])
+
+/** A document reduced to speakable plain text. */
+export interface DocumentPlainText {
+  text: string
+  /** True when `maxCharacters` cut the document short. */
+  truncated: boolean
+}
+
+/** A document format the pipeline can extract text from. */
+type DocumentKind = NonNullable<ReturnType<typeof documentKind>>
+
+/** The one place that knows which parser handles which document kind. */
+async function extractDocumentText(
+  attachment: PromptAttachment,
+  kind: DocumentKind,
+  bytes: Buffer
+): Promise<string | null> {
+  if (kind === 'docx') return readModernWordDocumentText(bytes)
+  if (kind === 'doc') {
+    const content = await readLegacyWordDocument(bytes)
+    return content ? legacyWordToText(content) : null
+  }
+  if (kind === 'odt') {
+    const blocks = await readOpenDocumentBlocks(bytes)
+    return blocks ? odtBlocksToText(blocks).join('\n') : null
+  }
+  if (kind === 'pptx') {
+    const deck = await readPptxDeck(bytes)
+    return deck ? pptxDeckToText(deck) : null
+  }
+  if (kind === 'xlsx' || kind === 'xls' || kind === 'ods' || kind === 'csv') {
+    const workbook = await readWorkbook(bytes, kind, kind === 'csv' && extensionIsTsv(attachment))
+    return workbook ? workbookToText(workbook) : null
+  }
+  return null
+}
+
 /**
  * Extract model-readable text from a supported document attachment (DOCX,
  * legacy DOC, ODT, PPTX, XLSX, legacy XLS, ODS, CSV/TSV). Returns null when
@@ -833,24 +906,47 @@ export async function readDocumentText(attachment: PromptAttachment): Promise<st
   try {
     const bytes = await documentAttachmentBytes(attachment)
     if (!bytes || !boundedDocumentArchive(bytes)) return null
-    let text: string | null = null
-    if (kind === 'docx') {
-      text = await readModernWordDocumentText(bytes)
-    } else if (kind === 'doc') {
-      const content = await readLegacyWordDocument(bytes)
-      text = content ? legacyWordToText(content) : null
-    } else if (kind === 'odt') {
-      const blocks = await readOpenDocumentBlocks(bytes)
-      text = blocks ? odtBlocksToText(blocks).join('\n') : null
-    } else if (kind === 'pptx') {
-      const deck = await readPptxDeck(bytes)
-      text = deck ? pptxDeckToText(deck) : null
-    } else if (kind === 'xlsx' || kind === 'xls' || kind === 'ods' || kind === 'csv') {
-      const workbook = await readWorkbook(bytes, kind, kind === 'csv' && extensionIsTsv(attachment))
-      text = workbook ? workbookToText(workbook) : null
-    }
-    return boundDocumentText(text ?? '') || null
+    return boundDocumentText((await extractDocumentText(attachment, kind, bytes)) ?? '') || null
   } catch (error) {
+    Logger.error(`Failed to extract document ${documentAttachmentLabel(attachment)}:`, error)
+    return null
+  }
+}
+
+/**
+ * Extract the plain text of a document file on disk, markup flattened so a
+ * reader never voices syntax characters. Used by callers that hold a filesystem
+ * path instead of a `PromptAttachment` (the Sound Playground's read-aloud
+ * import). Returns null when the file itself is unavailable, oversized, or
+ * corrupt. Throws a `RangeError` carrying a user-facing reason when the format
+ * is refused (an extension the pipeline cannot read, or one whose format has no
+ * local text layer such as PDF, EPUB, or RTF) or when nothing readable remains.
+ */
+export async function readDocumentPlainTextFile(
+  filePath: string,
+  maxCharacters: number = MAX_EXTRACTED_CHARACTERS
+): Promise<DocumentPlainText | null> {
+  const extension = extname(filePath).toLowerCase().replace(/^\./u, '')
+  if (UNREADABLE_DOCUMENT_EXTENSIONS.has(extension)) {
+    throw new RangeError(
+      `Read-aloud does not support ${extension.toUpperCase()} files: no local text extraction is available for that format.`
+    )
+  }
+  const mime = documentMimeForExtension(extension)
+  if (!mime) throw new RangeError(`Unsupported file type ".${extension}".`)
+  const attachment: PromptAttachment = { mime, url: filePath, filename: basename(filePath) }
+  const kind = documentKind(attachment)
+  if (!kind) throw new RangeError(`Unsupported file type ".${extension}".`)
+  try {
+    const bytes = await documentAttachmentBytes(attachment)
+    if (!bytes || !boundedDocumentArchive(bytes)) return null
+    const text = flattenDocumentMarkup(
+      (await extractDocumentText(attachment, kind, bytes)) ?? ''
+    ).trim()
+    if (!text) throw new RangeError('The file contains no readable text.')
+    return { text: text.slice(0, maxCharacters), truncated: text.length > maxCharacters }
+  } catch (error) {
+    if (error instanceof RangeError) throw error
     Logger.error(`Failed to extract document ${documentAttachmentLabel(attachment)}:`, error)
     return null
   }

@@ -19,6 +19,7 @@ import { open, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import type { SpeechWorkerRequest, SpeechWorkerResponse } from './speech-worker-protocol'
+import { SHERPA_MODULE_ROOT_ENV } from './speech-worker-protocol'
 import { resolveFfmpegPath } from './ffmpeg-path'
 import {
   ASR_BYTES_PER_SAMPLE,
@@ -102,7 +103,13 @@ interface EnginePort {
 // Optional because the port only exists in a forked utility process; the
 // annotation keeps the guard below honest for any other loader.
 const port = (process as NodeJS.Process & { parentPort?: EnginePort }).parentPort
-const nodeRequire = createRequire(import.meta.url)
+// The engine resolves the addon from the provisioned tree when the backend
+// hands one over; without it (a development checkout that still packages the
+// binary) the app's own module root is correct.
+const sherpaModuleRoot = process.env[SHERPA_MODULE_ROOT_ENV]
+const nodeRequire = sherpaModuleRoot
+  ? createRequire(join(sherpaModuleRoot, 'package.json'))
+  : createRequire(import.meta.url)
 let loadedModule: SherpaModule | null = null
 
 let cachedRecognizer: {
