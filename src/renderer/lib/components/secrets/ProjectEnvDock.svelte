@@ -14,6 +14,7 @@
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
   import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
+  import { projectSecretsPresence } from '$lib/stores/project-secrets.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
   import { APP_SLUG } from '$shared/brand'
@@ -250,6 +251,17 @@
     rows = snapshot.rows.map((row) => ({ ...row }))
   }
 
+  /**
+   * Take a manifest the store just returned.
+   *
+   * The same list answers the explorer's Secrets button, so a key saved here lights
+   * its dot without the panel being reopened.
+   */
+  function applyManifest(projectId: string, next: ProjectEnvFile[]): void {
+    files = next
+    projectSecretsPresence.publish(projectId, next)
+  }
+
   async function readFiles(): Promise<void> {
     const projectId = projectEnvDock.projectId
     if (!projectId) return
@@ -265,7 +277,7 @@
     loading = true
     error = ''
     try {
-      files = await invoke('secrets:envList', projectId)
+      applyManifest(projectId, await invoke('secrets:envList', projectId))
       const available = files.filter((file) => file.group === group)
       // A link named the file it came from, so open exactly that one even when it
       // does not exist yet; anything else falls back to the usual default.
@@ -717,7 +729,7 @@
         text,
         keep: untouchedNames(text)
       })
-      files = result.files
+      applyManifest(projectId, result.files)
       // The stored file is what the panel now holds, so its parked draft is done.
       drafts.delete(targetKey(group, fileName))
       savedBody = text
@@ -769,7 +781,7 @@
       outcome = result.changed
         ? `Wrote ${result.path}${result.backupPath ? `, previous content kept as ${result.backupPath}` : ''}.`
         : `${result.path} already holds these references.`
-      files = await invoke('secrets:envList', projectId)
+      applyManifest(projectId, await invoke('secrets:envList', projectId))
       // The project tree has to show the file and its backup now, not after a
       // manual refresh: the write happened off the tree's own action.
       await projectFilesWorkspace.refresh(projectId, result.path)
