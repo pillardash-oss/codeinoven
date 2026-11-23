@@ -1339,6 +1339,27 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
       }
     })
     registerProjectEnvIpc(projectEnvService)
+    // An agent's shell starts at the project root and moves into packages the way
+    // an action script does, so it sees the root env and then every group's env,
+    // deeper groups last so the nearest value wins.
+    state.chatEngine?.state.agentSecrets.setProjectEnvironmentSource(
+      async ({ projectId, threadId, projectPath }) => {
+        const groups = [
+          ...new Set((await projectEnvService.listProjectEnv(projectId)).map((file) => file.group))
+        ].sort((left, right) => left.split('/').length - right.split('/').length)
+        let environment: Record<string, string> = {}
+        for (const directory of ['', ...groups.filter((group) => group !== '')]) {
+          const resolved = await projectEnvService.environmentForLaunch({
+            projectId,
+            threadId,
+            cwd: projectPath,
+            directory
+          })
+          environment = { ...environment, ...resolved.environment }
+        }
+        return environment
+      }
+    )
 
     // `node-pty` is the only compiled native module in this graph, and it is
     // built on whichever machine packages the app. A build whose binary will not

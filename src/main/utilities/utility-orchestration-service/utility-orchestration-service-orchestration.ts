@@ -24,7 +24,8 @@ import {
   UTILITY_SUGGEST_TOOL_NAME,
   PROCESS_LIST_TOOL_NAME,
   PROCESS_START_TOOL_NAME,
-  PROCESS_STOP_TOOL_NAME
+  PROCESS_STOP_TOOL_NAME,
+  SESSION_ENVIRONMENT_ROUTE
 } from '../../../lib/gateway-tools'
 import {
   ORCHESTRATION_ANSWER_TOOL_NAME,
@@ -729,6 +730,26 @@ export class UtilityOrchestrationServiceOrchestration {
     }
   }
 
+  /**
+   * The values an in-process transport applies to its own session environment:
+   * the project's ENV files and this thread's secrets. Names only ever reach
+   * the model through the files it reads, never through this response.
+   */
+  private async sessionEnvironment(
+    state: TurnState
+  ): Promise<{ environment: Record<string, string> }> {
+    const executor = this.host.sessionEnvironmentExecutor
+    if (!executor) return { environment: {} }
+    const environment = await executor({
+      projectId: state.request.projectId,
+      threadId: state.request.threadId,
+      projectPath: state.request.projectPath,
+      sessionId: state.request.sessionId,
+      harnessId: state.request.harnessId
+    })
+    return { environment }
+  }
+
   async handleRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
       const authorization = request.headers.authorization
@@ -740,6 +761,10 @@ export class UtilityOrchestrationServiceOrchestration {
         return
       }
       const input = await readJsonBody(request)
+      if (request.url === SESSION_ENVIRONMENT_ROUTE) {
+        this.respond(response, 200, await this.sessionEnvironment(state))
+        return
+      }
       const handler = this.host.bridgeHandlers.get(request.url)
       if (!handler) {
         this.respond(response, 404, { error: 'Not found' })
@@ -767,6 +792,7 @@ export class UtilityOrchestrationServiceOrchestration {
   async callRouteForTurn(turnId: string, route: string, input: unknown): Promise<unknown> {
     const state = this.host.turns.get(turnId)?.state
     if (!state) throw new Error('This turn is no longer active')
+    if (route === SESSION_ENVIRONMENT_ROUTE) return this.sessionEnvironment(state)
     const handler = this.host.bridgeHandlers.get(route)
     if (!handler) throw new Error(`The gateway has no route ${route}`)
     const direct = GATEWAY_TOOLS.find((tool) => tool.route === route)

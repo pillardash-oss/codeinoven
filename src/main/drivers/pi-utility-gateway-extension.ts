@@ -34,6 +34,7 @@
 
 import {
   ASK_SECRET_TOOL_NAME,
+  SESSION_ENVIRONMENT_ROUTE,
   GATEWAY_TOOLS,
   CORE_GATEWAY_TOOL_NAMES,
   gatewayToolForModel,
@@ -348,7 +349,44 @@ function applySecretEnvironment(result) {
   return safe
 }
 
+/** Names the last session environment refresh applied, so a removed one is unset. */
+const appliedSessionNames = new Set()
+
+/**
+ * Apply the project's ENV files and this thread's secrets to the pi process
+ * before the agent runs, so every shell it starts sees them. The process
+ * outlives a turn, so a name that left the project env is unset again. A
+ * gateway that cannot answer leaves the environment as it was.
+ */
+async function refreshSessionEnvironment() {
+  let result
+  try {
+    result = await callGateway(${JSON.stringify(SESSION_ENVIRONMENT_ROUTE)}, {})
+  } catch {
+    return
+  }
+  const environment = result && typeof result === 'object' ? result.environment : null
+  if (!environment || typeof environment !== 'object') return
+  for (const name of appliedSessionNames) {
+    if (!(name in environment)) delete process.env[name]
+  }
+  appliedSessionNames.clear()
+  for (const [name, value] of Object.entries(environment)) {
+    if (typeof value === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+      process.env[name] = value
+      appliedSessionNames.add(name)
+    }
+  }
+}
+
 export default function codeInOvenUtilityGatewayExtension(pi) {
+  // A host without run events (a tool-only loader) still registers the tools.
+  if (typeof pi.on === 'function') {
+    pi.on('agent_start', async () => {
+      await refreshSessionEnvironment()
+    })
+  }
+
   registerCioGatewayTool(pi, {
     name: ${JSON.stringify(searchTool.name)},
     label: 'Search CodeInOven utilities',

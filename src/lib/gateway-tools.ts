@@ -43,6 +43,13 @@ export const UTILITY_DOCS_TOOL_NAME = 'cio_util_docs_lookup'
  */
 export const ASK_SECRET_TOOL_NAME = 'cio_ask_secret'
 /**
+ * Gateway route an in-process transport (Pi) calls at the start of every agent
+ * run to apply the project's ENV and the thread's secrets to its own session.
+ * It is not a model tool: the turn token alone authorizes it, and its values
+ * never reach a tool result.
+ */
+export const SESSION_ENVIRONMENT_ROUTE = '/session-environment'
+/**
  * The process handle an agent gets for what it starts.
  *
  * Process lifecycle belongs to the app, not to a shell command: a shell kill

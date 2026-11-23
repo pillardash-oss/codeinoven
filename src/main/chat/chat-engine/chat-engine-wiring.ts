@@ -234,6 +234,11 @@ export function wireChatEngine(
     engine.state.utilityOrchestration.setSecretRequestExecutor((input, context) =>
       engine.requestUtilitySecrets(input, context)
     )
+    // Pi keeps one process across turns, so its launch environment cannot carry
+    // project ENV edited later: the extension asks for it at every agent run.
+    engine.state.utilityOrchestration.setSessionEnvironmentExecutor((context) =>
+      engine.state.agentSecrets.turnEnvironment(context)
+    )
     // The app owns process lifecycle, so an agent that starts a long-running
     // process ends it through the app rather than a shell kill it cannot prove.
     // The engine supplies the executor because it owns the agent process

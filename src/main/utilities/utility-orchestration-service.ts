@@ -348,6 +348,16 @@ export type SecretRequestExecutor = (
   context: SecretRequestContext
 ) => Promise<AgentSecretResolution>
 
+/**
+ * Resolves the environment an in-process gateway transport (Pi) applies to its
+ * own session at the start of every agent run: the project's ENV files and the
+ * thread's collected secrets, which a harness the app spawns per turn receives
+ * through its launch environment instead.
+ */
+export type SessionEnvironmentExecutor = (
+  context: SecretRequestContext
+) => Promise<Record<string, string>>
+
 /** Which turn is asking, so the card is bound to the right thread and session. */
 export interface SecretRequestContext {
   projectId: string
@@ -640,6 +650,7 @@ export class UtilityOrchestrationService {
   expertSettings: ExpertSettingsService | null = null
   scopeToolExecutor: ScopeToolExecutor | null = null
   secretRequestExecutor: SecretRequestExecutor | null = null
+  sessionEnvironmentExecutor: SessionEnvironmentExecutor | null = null
   /** The app-owned process tools: list, start and stop a thread's processes. */
   agentProcessExecutor: AgentProcessExecutor | null = null
   utilitySuggestionExecutor: UtilitySuggestionExecutor | null = null
@@ -742,6 +753,10 @@ export class UtilityOrchestrationService {
   }
   setSecretRequestExecutor(executor: SecretRequestExecutor | null): void {
     return this.units['executors'].setSecretRequestExecutor(executor)
+  }
+  /** Register the resolver behind the in-process session environment route. */
+  setSessionEnvironmentExecutor(executor: SessionEnvironmentExecutor | null): void {
+    this.sessionEnvironmentExecutor = executor
   }
   /** Register the executor behind the app-owned process tools. */
   setAgentProcessExecutor(executor: AgentProcessExecutor | null): void {

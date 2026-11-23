@@ -577,14 +577,15 @@ export class ChatEngineUtilities {
       }
       const environment = {
         ...(overlay.env ?? {}),
-        // Free-standing secrets the app launchers must expose for this thread.
-        // Pi and codex never reach this branch: Pi applies the same values to
-        // its own session environment through the gateway extension instead.
+        // The project's ENV files and this thread's free-standing secrets, which
+        // the app launchers must expose for this thread. Pi and codex never reach
+        // this branch: Pi applies the same values to its own session environment
+        // through the gateway extension instead.
         ...(await this.host.units['misc'].timedStep(
           dispatchTimer,
           'secretEnvironment',
           this.host.state.agentSecrets
-            .secretEnvironment(threadId)
+            .turnEnvironment({ projectId, threadId, projectPath })
             .catch(() => ({}) as Record<string, string>)
         ))
       }
