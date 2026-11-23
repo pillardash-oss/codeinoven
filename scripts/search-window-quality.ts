@@ -30,6 +30,13 @@
  * else. Quality alone is not the answer   a run also prints what each setting
  * costs in windows and seconds, which is the other half of the trade.
  *
+ * `--strip fences` answers a second question with the same run: a window is
+ * embedded verbatim by default, fences and diagram source included, which is what
+ * production does. Listing both modes embeds the same window geometry twice, once
+ * as it is and once with fenced blocks and <svg> markup removed, so the recall
+ * difference is what carrying code in a window costs or earns. The geometry never
+ * changes between the two, so only the embedded content differs.
+ *
  * Honest caveat: the query passage is literal text taken from the thread it is
  * supposed to retrieve, so a window that overlaps it matches almost verbatim.
  * That makes absolute recall optimistic; it is comparable across settings, and
@@ -98,11 +105,15 @@ const CORPUS_SQL = `SELECT thread_id, role, parts, created_at FROM agent_message
 // Options
 // ---------------------------------------------------------------------------
 
+/** Whether a window is embedded verbatim or with its code and diagrams removed. */
+type StripMode = 'raw' | 'fences'
+
 interface Options {
   dbPath: string
   threadCount: number
   queryCount: number
   widths: number[]
+  strip: StripMode[]
   maxWindows: number
   serverPath: string
   modelPath: string
@@ -121,6 +132,10 @@ function usage(): string {
     '  --threads <n>      threads to sample and index. Default: 120',
     '  --queries <n>      query passages to score per width. Default: 40',
     '  --widths <list>    comma separated window widths in characters. Default: 4096,2048',
+    '  --strip <list>     how a window is embedded, comma separated:',
+    '                       raw     the window verbatim, fences and diagram source included (production)',
+    '                       fences  fenced blocks and <svg> removed before embedding, geometry unchanged',
+    '                     Default: raw. Listing both measures the same windows with and without code.',
     '  --windows <n>      max windows per thread. Default: 6',
     `  --server <path>    llama-server binary. Default: ${DEFAULT_SERVER_PATH}`,
     `  --model <path>     GGUF embedding model. Default: ${DEFAULT_MODEL_PATH}`,
@@ -136,6 +151,7 @@ function parseArgs(argv: readonly string[]): Options {
     threadCount: 120,
     queryCount: 40,
     widths: [4096, 2048],
+    strip: ['raw'],
     maxWindows: 6,
     serverPath: DEFAULT_SERVER_PATH,
     modelPath: DEFAULT_MODEL_PATH,
@@ -156,6 +172,7 @@ function parseArgs(argv: readonly string[]): Options {
     else if (flag === '--threads') options.threadCount = positiveInt(next(), flag)
     else if (flag === '--queries') options.queryCount = positiveInt(next(), flag)
     else if (flag === '--widths') options.widths = parseWidths(next())
+    else if (flag === '--strip') options.strip = parseStripModes(next())
     else if (flag === '--windows') options.maxWindows = positiveInt(next(), flag)
     else if (flag === '--server') options.serverPath = next()
     else if (flag === '--model') options.modelPath = next()
@@ -186,6 +203,16 @@ function parseWidths(raw: string): number[] {
   })
   if (widths.length === 0) fail('--widths needs at least one width.')
   return widths
+}
+
+function parseStripModes(raw: string): StripMode[] {
+  const modes = raw.split(',').map((part) => part.trim())
+  if (modes.length === 0) fail('--strip needs at least one mode.')
+  for (const mode of modes) {
+    if (mode !== 'raw' && mode !== 'fences')
+      fail(`--strip expects "raw" or "fences", got "${mode}".`)
+  }
+  return modes as StripMode[]
 }
 
 function fail(message: string): never {
@@ -580,6 +607,8 @@ interface Metrics {
 
 interface SettingResult {
   width: number
+  /** How the windows were embedded: verbatim, or with code and diagrams removed. */
+  strip: StripMode
   windows: number
   threadsWithWindows: number
   indexMs: number
@@ -659,46 +688,63 @@ function scoreRetrieval(
 // Measurement
 // ---------------------------------------------------------------------------
 
+/**
+ * Remove the content a code-first window carries instead of conversation.
+ *
+ * Fenced blocks cover mermaid and every other diagram source, and `<svg>` covers
+ * artifact markup that a presentation body carries inline. Nothing else is
+ * touched: the point of the measurement is whether the dialogue around a block
+ * retrieves better without the block's tokens competing for the window.
+ */
+function stripCodeBlocks(text: string): string {
+  return text.replace(/```[\s\S]*?```/gu, ' ').replace(/<svg\b[\s\S]*?<\/svg>/giu, ' ')
+}
+
 async function indexThreads(
   threads: readonly CorpusThread[],
   width: number,
-  maxWindows: number
+  maxWindows: number,
+  strip: StripMode
 ): Promise<{ indexed: IndexedThread[]; windows: number }> {
   const indexed: IndexedThread[] = []
   let windows = 0
   for (const thread of threads) {
     const texts = threadWindows(thread.text, width, maxWindows)
     const vectors: Float32Array[] = []
-    for (const text of texts) {
-      if (text.length === 0) continue
+    for (const slice of texts) {
+      const text = strip === 'fences' ? stripCodeBlocks(slice) : slice
+      // A window that was nothing but code carries no conversation to embed, and
+      // the production index has no vector for text it never had.
+      if (text.trim().length === 0) continue
       vectors.push(await embed(text))
       windows += 1
       if (windows % PROGRESS_EVERY === 0) {
-        writeErr(`  ${width}ch: ${windows} windows embedded\r`)
+        writeErr(`  ${width}ch ${strip}: ${windows} windows embedded\r`)
       }
     }
     if (vectors.length > 0) indexed.push({ id: thread.id, windows: vectors })
   }
-  writeErr(`  ${width}ch: ${windows} windows embedded\n`)
+  writeErr(`  ${width}ch ${strip}: ${windows} windows embedded\n`)
   return { indexed, windows }
 }
 
 async function measureSetting(
   width: number,
+  strip: StripMode,
   threads: readonly CorpusThread[],
   queries: readonly QueryPassage[],
   queryVectors: { raw: Float32Array[]; prefixed: Float32Array[] },
   options: Options
 ): Promise<SettingResult> {
   const indexStarted = performance.now()
-  const { indexed, windows } = await indexThreads(threads, width, options.maxWindows)
+  const { indexed, windows } = await indexThreads(threads, width, options.maxWindows, strip)
   const indexMs = performance.now() - indexStarted
 
   // Queries were embedded once for the run; these two passes only score.
   const raw = scoreRetrieval(indexed, queries, queryVectors.raw)
   const prefixed = scoreRetrieval(indexed, queries, queryVectors.prefixed)
 
-  return { width, windows, threadsWithWindows: indexed.length, indexMs, raw, prefixed }
+  return { width, strip, windows, threadsWithWindows: indexed.length, indexMs, raw, prefixed }
 }
 
 async function embedQueries(queries: readonly QueryPassage[]): Promise<{
@@ -736,7 +782,7 @@ function printTable(results: readonly SettingResult[]): void {
     for (const form of ['raw', 'prefixed'] as const) {
       const metrics = result[form]
       rows.push([
-        `${result.width}ch ${form}`,
+        `${result.width}ch ${result.strip === 'fences' ? 'stripped' : 'raw'} ${form}`,
         String(result.windows),
         percent(metrics.recall1),
         percent(metrics.recall5),
@@ -772,7 +818,8 @@ function printCosts(
   for (const result of results) {
     const perWindow = result.windows > 0 ? (result.indexMs / result.windows).toFixed(0) : '-'
     write(
-      `  ${String(result.width).padStart(5)}ch: ${String(result.windows).padStart(5)} windows over ` +
+      `  ${String(result.width).padStart(5)}ch ${(result.strip === 'fences' ? 'stripped' : 'raw').padEnd(8)}: ` +
+        `${String(result.windows).padStart(5)} windows over ` +
         `${String(result.threadsWithWindows).padStart(3)} threads in ${seconds(result.indexMs)}s ` +
         `(${perWindow} ms/window)\n`
     )
@@ -820,7 +867,9 @@ async function run(options: Options): Promise<void> {
 
     const results: SettingResult[] = []
     for (const width of options.widths) {
-      results.push(await measureSetting(width, sampled, queries, queryVectors, options))
+      for (const strip of options.strip) {
+        results.push(await measureSetting(width, strip, sampled, queries, queryVectors, options))
+      }
     }
 
     write('\n')
