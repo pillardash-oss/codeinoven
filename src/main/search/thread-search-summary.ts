@@ -79,19 +79,76 @@ export function threadWindowCount(total: number, width: number, maxWindows: numb
 }
 
 /**
- * Character offset of one window: an even spread that always includes the
- * thread's opening text and always ends at its latest text. Offsets are a pure
- * function of (index, count, total, width), so window `index` describes the same
- * region on every sweep and an unchanged window is never re-embedded.
+ * Where a thread's windows start, and the thread size that spread was computed
+ * for.
+ *
+ * The even spread alone was a per-turn bug: the offsets are a function of the
+ * thread's size, so appending ten characters to a 20,000-character thread moved
+ * four of its five windows, changed their text and therefore their content
+ * hashes, and re-embedded all of them. A window costs a full embedding (measured:
+ * 2.05 s of one core for a 4 K-character window on an 8-core machine), so a
+ * settled run on a long thread cost six of them, roughly 12 s, for every turn -
+ * on a corpus whose average thread is 810 K characters, where the six-window cap
+ * is always reached.
+ *
+ * So the spread is frozen at the size it was planned for and only the last window
+ * follows the newest text. The frozen plan is refreshed when the thread's window
+ * count changes or when it has grown by more than the distance between two
+ * neighbouring windows, which keeps the sampled region from lagging behind by more
+ * than one window spacing. Every other turn then costs one embedding, not six.
  */
-export function threadWindowOffset(
-  index: number,
-  count: number,
+export interface ThreadWindowPlan {
+  /** Thread size this spread was computed for. Persisted with the record. */
+  plannedTotal: number
+  /** Character offset of each window, in plan order. */
+  offsets: number[]
+}
+
+/** Even spread of `count` windows across a thread of `total` characters. */
+function evenSpread(total: number, width: number, count: number): number[] {
+  const offsets: number[] = []
+  for (let index = 0; index < count; index += 1) {
+    offsets.push(
+      count <= 1 || total <= width ? 0 : Math.round((index * (total - width)) / (count - 1))
+    )
+  }
+  return offsets
+}
+
+/**
+ * Plan a thread's windows, reusing the frozen spread unless it has fallen behind.
+ *
+ * `plannedTotal` is the value stored with the thread's record; `0` marks a record
+ * from before the plan was persisted, which is planned afresh once and then frozen
+ * like any other.
+ */
+export function threadWindowPlan(
   total: number,
-  width: number
-): number {
-  if (count <= 1 || total <= width) return 0
-  return Math.round((index * (total - width)) / (count - 1))
+  width: number,
+  maxWindows: number,
+  plannedTotal = 0
+): ThreadWindowPlan {
+  const plan = (from: number): ThreadWindowPlan => {
+    const count = threadWindowCount(from, width, maxWindows)
+    return { plannedTotal: from, offsets: evenSpread(from, width, count) }
+  }
+  if (total <= 0 || width <= 0 || maxWindows <= 0) return plan(Math.max(0, total))
+  if (plannedTotal <= 0 || total < plannedTotal) return plan(total)
+  const count = threadWindowCount(plannedTotal, width, maxWindows)
+  // One more window is enough new material to re-spread: a plan with one fewer
+  // would not cover the thread at the width it deserves.
+  if (count !== threadWindowCount(total, width, maxWindows)) return plan(total)
+  const span = Math.max(0, plannedTotal - width)
+  const spacing = count > 1 ? Math.floor(span / (count - 1)) : 0
+  // The thread is allowed to grow by one whole window spacing before the spread
+  // is recomputed: the sampled region then never lags by more than the gap it
+  // already has between two windows.
+  if (total - plannedTotal > Math.max(width, spacing)) return plan(total)
+  const offsets = evenSpread(plannedTotal, width, count)
+  // Only the last window follows the newest text; every other window still
+  // describes the region it was embedded for.
+  offsets[count - 1] = Math.max(0, total - width)
+  return { plannedTotal, offsets }
 }
 
 export function validateSearchSummary(raw: string): string | null {

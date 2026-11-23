@@ -231,6 +231,16 @@ export interface ThreadEmbeddingRecord {
   planned: number
   /** Characters of conversation each window covers under that plan. */
   width: number
+  /**
+   * Conversation size the window spread was computed for.
+   *
+   * The offsets are a function of the thread's size, so without this every
+   * appended character moved every window and re-embedded all of them. Persisting
+   * the planned size lets the next pass keep the spread it already paid for and
+   * re-embed only the window that follows the newest text. `0` marks a record
+   * written before the plan was stored: it is planned afresh once.
+   */
+  plannedTotal: number
 }
 
 /** One thread that surfaced from intent search, before it is hydrated. */

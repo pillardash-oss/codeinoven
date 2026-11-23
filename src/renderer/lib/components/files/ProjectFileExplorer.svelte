@@ -27,6 +27,7 @@
   import { cioSearchVisibility, isCioScratchPath } from '$lib/stores/cio-search-visibility.svelte'
   import { cioCleanupStore } from '$lib/stores/cio-cleanup.svelte'
   import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
+  import { projectSecretsPresence } from '$lib/stores/project-secrets.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import ProjectFileContextMenu from './ProjectFileContextMenu.svelte'
   import ProjectFileExplorerDialogs from './ProjectFileExplorerDialogs.svelte'
@@ -123,6 +124,13 @@
   }
 
   const secretsTarget = $derived(secretsGroupFor(selectedPath))
+  /** Whether the path the Secrets button would edit already holds a key. */
+  const secretsPresent = $derived(projectSecretsPresence.hasKeys(projectId, secretsTarget))
+  // The manifest is read once per project and kept in step by the env panel itself,
+  // so this read only answers the button the first time a tree is mounted.
+  $effect(() => {
+    void projectSecretsPresence.ensure(projectId)
+  })
 
   let filterQuery = $state('')
   let filterOpen = $state(false)
@@ -1408,6 +1416,7 @@
     onRevealActiveFile={locateActiveFileTab}
     onRefresh={() => void projectFilesWorkspace.refresh(projectId, selectedPath ?? undefined)}
     {secretsTarget}
+    hasSecrets={secretsPresent}
     onOpenSecrets={() =>
       projectEnvDock.open({
         projectId,

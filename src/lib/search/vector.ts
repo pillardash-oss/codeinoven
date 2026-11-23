@@ -41,7 +41,9 @@ const INDEX_MAGIC = 0x43494f53 // "CIOS"
 // Version 4 indexes several evenly spread windows per thread (see
 // ThreadEmbeddingRecord); version 3 held one head vector and is still read so an
 // upgrade keeps answering from the existing index instead of blanking it.
-const INDEX_VERSION = 4
+const INDEX_VERSION = 5
+/** Windows without a stored plan size, still read so an upgrade keeps the index. */
+const UNPLANNED_INDEX_VERSION = 4
 const HEAD_ONLY_INDEX_VERSION = 3
 
 const textEncoder = new TextEncoder()
@@ -60,7 +62,7 @@ export function encodeThreadIndex(records: readonly ThreadEmbeddingRecord[]): Ui
   let size = 12
   for (const record of records) {
     const idBytes = textEncoder.encode(record.threadId)
-    size += 4 + idBytes.length + 4 + 4 + 8 + 4
+    size += 4 + idBytes.length + 4 + 4 + 8 + 4 + 4
     for (const window of record.windows) {
       size += 4 + textEncoder.encode(window.contentHash).length + 4 + window.vector.length * 4
     }
@@ -85,6 +87,8 @@ export function encodeThreadIndex(records: readonly ThreadEmbeddingRecord[]): Ui
     offset += 4
     view.setFloat64(offset, record.updatedAt, false)
     offset += 8
+    view.setUint32(offset, record.plannedTotal, false)
+    offset += 4
     view.setUint32(offset, record.windows.length, false)
     offset += 4
     for (const window of record.windows) {
@@ -109,7 +113,12 @@ export function decodeThreadIndex(buffer: Uint8Array): ThreadEmbeddingRecord[] |
   const view = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength)
   if (view.getUint32(0, false) !== INDEX_MAGIC) return null
   const version = view.getUint32(4, false)
-  if (version !== INDEX_VERSION && version !== HEAD_ONLY_INDEX_VERSION) return null
+  if (
+    version !== INDEX_VERSION &&
+    version !== UNPLANNED_INDEX_VERSION &&
+    version !== HEAD_ONLY_INDEX_VERSION
+  )
+    return null
   const count = view.getUint32(8, false)
   let offset = 12
   const records: ThreadEmbeddingRecord[] = []
@@ -134,6 +143,12 @@ export function decodeThreadIndex(buffer: Uint8Array): ThreadEmbeddingRecord[] |
     offset += 4
     const updatedAt = view.getFloat64(offset, false)
     offset += 8
+    let plannedTotal = 0
+    if (version === INDEX_VERSION) {
+      if (offset + 4 > buffer.byteLength) return null
+      plannedTotal = view.getUint32(offset, false)
+      offset += 4
+    }
     const windowCount = view.getUint32(offset, false)
     offset += 4
     const windows: ThreadEmbeddingWindow[] = []
@@ -145,7 +160,7 @@ export function decodeThreadIndex(buffer: Uint8Array): ThreadEmbeddingRecord[] |
       offset = decoded.offset
       dimensions = decoded.window.vector.length
     }
-    records.push({ threadId, planned, width, updatedAt, dimensions, windows })
+    records.push({ threadId, planned, width, plannedTotal, updatedAt, dimensions, windows })
   }
   return records
 }
@@ -212,7 +227,8 @@ function readHeadOnlyRecord(
       // The version-3 layout recorded no plan: the next sweep re-plans it and
       // tops the record up with the windows the thread now needs.
       planned: 0,
-      width: 0
+      width: 0,
+      plannedTotal: 0
     },
     offset
   }

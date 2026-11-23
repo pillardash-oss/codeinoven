@@ -22,6 +22,13 @@
  * script cannot read the app's stylesheet, and a hardcoded light box on a dark
  * application is exactly the bug that push exists to prevent.
  *
+ * The overlay is a manual popover rather than a plain fixed div, because a
+ * drawer or a modal on the inspected page is a `<dialog>` opened with
+ * `showModal()` and lives in the document's top layer, which paints above every
+ * z-index a page content element can carry. Sharing that layer is the only way
+ * the box and the pins describe the surface the reader actually opened, and
+ * `syncTopLayer()` keeps the overlay last in it.
+ *
  * The channel is the same one the capture observer uses, and for the same
  * reason: the embedded browser deliberately gives remote content no preload
  * script (`docs/EMBEDDED_BROWSER_ARCHITECTURE.md`), so `executeJavaScript` in
@@ -168,7 +175,18 @@ export function inspectorInstallScript(key: string): string {
 
     const host = document.createElement('div');
     host.setAttribute('data-cio-inspector', '');
-    host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483646';
+    // A drawer, a sheet or a modal is a <dialog> shown with showModal(), and
+    // every one of those lives in the document's top layer: that layer paints
+    // above all page content no matter what z-index it carries, so the overlay
+    // ends up behind exactly the surface the reader wants to comment on. The
+    // overlay is therefore a manual popover, which puts it in the top layer too,
+    // and syncTopLayer() keeps it last in that stack (see there).
+    const topLayer = typeof host.showPopover === 'function' && typeof host.hidePopover === 'function';
+    if (topLayer) host.setAttribute('popover', 'manual');
+    // The popover defaults (auto margins, a border, a background, a scroll box)
+    // are cancelled here: this element is a transparent sheet of overlay, and on
+    // an engine without the popover API the same line is what it always was.
+    host.style.cssText = 'position:fixed;inset:0;margin:0;padding:0;border:0;background:none;overflow:visible;pointer-events:none;z-index:2147483646';
     const root = host.attachShadow({ mode: 'open' });
     const style = document.createElement('style');
     style.textContent = CSS;
@@ -177,6 +195,12 @@ export function inspectorInstallScript(key: string): string {
     layer.className = 'cio-layer';
     root.appendChild(layer);
     document.documentElement.appendChild(host);
+    if (topLayer) {
+      // Anything the page had in the top layer before this install is already
+      // below this overlay, because that stack is ordered by when a surface was
+      // shown, so a sheet that was already open needs no re-raise.
+      try { host.showPopover(); } catch (error) {}
+    }
 
     // The overlay cannot carry the pointer cursor itself: it is one layer with
     // pointer-events off, so a cursor set on it never applies to what is under
@@ -213,7 +237,13 @@ export function inspectorInstallScript(key: string): string {
       /** The re-place signature of the previous tick, so a still page can rest. */
       lastLayoutSignature: '',
       hoverFrame: 0,
-      listeners: false
+      listeners: false,
+      /** Whether this engine put the overlay in the top layer at all. */
+      topLayer: topLayer,
+      /** Set when the page's top layer moved, so the next draw re-raises. */
+      topLayerDirty: false,
+      /** Watches the page for surfaces entering its top layer. */
+      topLayerObserver: null
     };
 
     // Lucide's message-circle icon, the same one the app's own annotation
@@ -783,9 +813,89 @@ export function inspectorInstallScript(key: string): string {
       if (state.hoverFrame) return;
       state.hoverFrame = requestAnimationFrame(() => {
         state.hoverFrame = 0;
+        syncTopLayer();
         syncCursor();
         layout();
       });
+    }
+
+    /**
+     * Put the overlay back in front of the page's own top layer.
+     *
+     * The top layer is a stack ordered by when each surface was shown, so a
+     * drawer the reader opens after this overlay was installed is drawn after it
+     * and covers it, even though no z-index on the page outranks the overlay.
+     * Hiding and showing this popover again moves it to the end of that stack,
+     * which is what makes the box and the pins describe the drawer instead of
+     * hiding behind it. Both calls happen in one task, so nothing paints in
+     * between and nothing flickers.
+     *
+     * It runs on the draw path only, and only when the page's top layer actually
+     * moved, because hiding and showing on every frame of a still page would be
+     * work for nothing.
+     */
+    function syncTopLayer() {
+      if (!state.topLayer || !state.topLayerDirty) return;
+      state.topLayerDirty = false;
+      try { host.hidePopover(); } catch (error) {}
+      try { host.showPopover(); } catch (error) {}
+    }
+
+    /**
+     * A surface entered or left the page's top layer.
+     *
+     * A dialog reports itself as a toggle event, a popover reports itself the
+     * same way, and the overlay's own raise is ignored here: counting it would
+     * make every raise schedule the next one.
+     */
+    function onToggle(event) {
+      if (event.target === host) return;
+      state.topLayerDirty = true;
+    }
+
+    /**
+     * A surface arrived as a node, or a dialog was opened by setting open.
+     *
+     * showModal() on a dialog already in the page only sets that attribute, which
+     * is why the attribute has to be watched as well as the tree: a component
+     * that keeps its sheet mounted and opens it by state never adds a node.
+     */
+    function onTopLayerMutation(records) {
+      for (let index = 0; index < records.length; index += 1) {
+        const record = records[index];
+        if (record.type === 'attributes') {
+          state.topLayerDirty = true;
+          return;
+        }
+        const added = record.addedNodes;
+        for (let nodeIndex = 0; nodeIndex < added.length; nodeIndex += 1) {
+          const node = added[nodeIndex];
+          if (node.nodeType !== 1) continue;
+          if (node.tagName === 'DIALOG' || node.hasAttribute('popover')) {
+            state.topLayerDirty = true;
+            return;
+          }
+        }
+      }
+    }
+
+    function watchTopLayer() {
+      if (!state.topLayer || state.topLayerObserver) return;
+      document.addEventListener('toggle', onToggle, true);
+      state.topLayerObserver = new MutationObserver(onTopLayerMutation);
+      state.topLayerObserver.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['open', 'popover']
+      });
+    }
+
+    function unwatchTopLayer() {
+      if (!state.topLayerObserver) return;
+      document.removeEventListener('toggle', onToggle, true);
+      state.topLayerObserver.disconnect();
+      state.topLayerObserver = null;
     }
 
     function onPointerMove(event) {
@@ -1019,6 +1129,7 @@ export function inspectorInstallScript(key: string): string {
       addEventListener('scroll', onViewportChange, true);
       addEventListener('resize', onViewportChange);
       state.listeners = true;
+      watchTopLayer();
       installFrames();
     }
 
@@ -1032,6 +1143,7 @@ export function inspectorInstallScript(key: string): string {
       removeEventListener('scroll', onViewportChange, true);
       removeEventListener('resize', onViewportChange);
       state.listeners = false;
+      unwatchTopLayer();
     }
 
     function onViewportChange() {
@@ -1077,6 +1189,7 @@ export function inspectorInstallScript(key: string): string {
         // A frame that appeared since the last tick is pickable on this one, and
         // the canvas settling moves every framed element, so the re-place runs on
         // the same beat.
+        syncTopLayer();
         installFrames();
         const signature = layout();
         const still = signature === state.lastLayoutSignature;
@@ -1267,6 +1380,8 @@ export function inspectorInstallScript(key: string): string {
         }
       }
       state.activeId = marker.id;
+      state.topLayerDirty = true;
+      syncTopLayer();
       layout();
       // A focus is a request to put one element's comment in front of the reader,
       // so it reports the same event a pin click does: the app opens the bubble
@@ -1278,6 +1393,11 @@ export function inspectorInstallScript(key: string): string {
     function apply(command) {
       if (!command || typeof command !== 'object') return false;
       if (command.type === 'arm') {
+        // A drawer opened while this overlay was idle sits above it, because the
+        // watch that would have re-raised it was off: arming asks for a fresh
+        // place in the top layer first, so the very first box is drawn on top.
+        state.topLayerDirty = true;
+        syncTopLayer();
         if (!state.armed) {
           state.armed = true;
           state.hovered = null;
@@ -1320,6 +1440,11 @@ export function inspectorInstallScript(key: string): string {
           if (!keep.has(id)) removeMarker(id);
         }
         if (state.activeId && !keep.has(state.activeId)) state.activeId = null;
+        // Pins are drawn now, so they belong above whatever the page has in its
+        // top layer at this moment rather than behind a drawer that opened while
+        // this overlay was idle.
+        state.topLayerDirty = true;
+        syncTopLayer();
         layout();
         if (state.markers.size > 0) startScan();
         syncListeners();

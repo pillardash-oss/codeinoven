@@ -574,7 +574,14 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         taskReferences,
         ...(userMessageId ? { userMessageId } : {})
       }
-      await this.root.props.controller.send(payload)
+      // The controller appends the message optimistically and then holds this
+      // promise until the whole turn is over (a temporary chat's transport spans
+      // it), so follow the words to the tail the way the thread path does
+      // instead of waiting for the answer before deciding where the viewport is.
+      const dispatch = this.root.props.controller.send(payload)
+      await tick()
+      this.root.loadOlderMessages.scrollToLatest()
+      await dispatch
       this.root.sources.recordModelUse()
       return
     }
@@ -869,7 +876,10 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
         // A send is the reader acting on the conversation, so it always returns
         // them to the tail: the view may have opened anchored on the previous
         // prompt (a restore), and leaving the message they just sent below the
-        // fold would read as the send doing nothing.
+        // fold would read as the send doing nothing. `scrollToLatest` also takes
+        // the viewport out of the open-at-prompt restore's hands, which is what
+        // a restore still in flight (a thread opened and answered immediately)
+        // would otherwise do right after this scroll.
         await tick()
         this.root.loadOlderMessages.scrollToLatest()
         await sendPromise

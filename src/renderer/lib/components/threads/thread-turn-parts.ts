@@ -636,6 +636,31 @@ export function turnStartIndexForEnd(
 }
 
 /**
+ * Creation time of the newest prompt that opened a turn, or null when the
+ * transcript holds no prompt that did.
+ *
+ * Every user-role row that rides mid-turn rather than opening one is skipped:
+ * activity notices (compaction, sub-agent envelopes, the app's own continuation
+ * prompts), the app's record of an answered question, and a steer the harness
+ * has not taken yet. That is the same boundary the main process folds its turn
+ * stream by, so a live trace measured from this instant agrees with the turn it
+ * sits under. Counting an answered question as a prompt is what restarted a
+ * live trace's clock minutes into a turn that had been running since its prompt.
+ */
+export function newestTurnPromptCreatedAt(
+  messages: readonly AgentMessage[],
+  isTransparent: TurnTransparency = persistedTurnTransparency
+): number | null {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]
+    if (!message || message.role !== 'user') continue
+    if (isTransparent(message)) continue
+    return message.createdAt || null
+  }
+  return null
+}
+
+/**
  * True for a finished assistant row the app wrote into the conversation itself,
  * rather than one an agent run produced.
  *

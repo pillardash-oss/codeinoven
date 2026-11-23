@@ -50,6 +50,9 @@
      * the condition for showing the action.
      */
     secretsTarget?: string
+    /** True when that path already holds a stored key, which the button's icon
+     *  marks with a dot. */
+    hasSecrets?: boolean
     /** Opens this path's env files in the env editor. */
     onOpenSecrets?: () => void
   }
@@ -76,8 +79,14 @@
     onRevealActiveFile,
     onRefresh,
     secretsTarget = '',
+    hasSecrets = false,
     onOpenSecrets
   }: Props = $props()
+
+  /** One label for the tooltip and the button's accessible name. */
+  const secretsLabel = $derived(
+    `Env secrets for ${secretsTarget || 'the project root'}${hasSecrets ? ', keys stored' : ''}`
+  )
 </script>
 
 <button
@@ -135,11 +144,20 @@
     <button
       type="button"
       class="flex h-6 shrink-0 items-center gap-1 border px-1.5 text-[0.6875rem] font-medium text-muted transition-colors hover:bg-elevated hover:text-foreground"
-      title="Env secrets for {secretsTarget || 'the project root'}"
-      aria-label="Env secrets for {secretsTarget || 'the project root'}"
+      title={secretsLabel}
+      aria-label={secretsLabel}
       onclick={onOpenSecrets}
     >
-      <CioKey size={12} />
+      <span class="relative flex items-center justify-center">
+        <CioKey size={12} />
+        {#if hasSecrets}
+          <!-- Informational, not an alarm: the dot takes the muted tone so a
+               reader who looks at the button knows this path holds keys, and
+               nothing pulls the eye here when they are not looking. -->
+          <span class="absolute -top-1 -right-1 h-1 w-1 rounded-full bg-muted" aria-hidden="true"
+          ></span>
+        {/if}
+      </span>
       Secrets
     </button>
   {/if}
