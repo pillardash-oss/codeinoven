@@ -14,6 +14,7 @@
  */
 import { app, utilityProcess } from 'electron'
 import { join } from 'node:path'
+import { auditPiImageSupport } from '../drivers/pi/pi-image-support'
 import { Logger } from '../system/logger'
 import type { HostTransport } from './pi-host-supervisor'
 
@@ -24,6 +25,11 @@ export function piHostEntryPath(): string {
 
 /** One host process, spoken to as protocol lines. */
 export function spawnPiHost(): HostTransport {
+  // Hosted Pi runs the app's own bundled copy, whose image pipeline depends on
+  // a wasm payload the bundler does not emit. Checking it here is what turns a
+  // silent "image omitted" on every attachment into a named log line; it is
+  // cached, so this costs one existence check per app run.
+  auditPiImageSupport(import.meta.url)
   const helper = utilityProcess.fork(piHostEntryPath(), [], { stdio: 'pipe' })
   const lineListeners: ((line: string) => void)[] = []
   const exitListeners: ((code: number | null) => void)[] = []
