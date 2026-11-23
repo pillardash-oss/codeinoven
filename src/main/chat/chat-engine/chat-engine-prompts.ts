@@ -4,6 +4,7 @@ import type { HarnessCapabilities } from '../../drivers/driver.interface'
 import { APP_NAME } from '../../../lib/brand'
 import { DEFAULT_AGENT_BEHAVIOR_PROMPT } from '../../../lib/agent-behavior'
 import { APP_CITE_UTILITY_ID } from '../../../lib/utility-ids'
+import { CITE_ENTRY_LIMIT } from '../../../lib/cited-work'
 import {
   registerCioPromptDefault,
   DIAGRAM_OUTPUT_RULE,
@@ -178,7 +179,7 @@ export const RESPONSE_STYLE_INSTRUCTION = [
   'Answer the way you would explain it to one person sitting across the table: plainly, in your own words, in the simplest words that carry the meaning, and with no jargon, no headings and no label lines.',
   'Two short paragraphs is the whole reply, and most answers need one. Lead with the outcome, then say only what the user has to know, decide or do, and stop there.',
   'No preamble, no restating the request, no filler, no hedging, no closing summary, no restatement of what you just said, and no narration of your process or your tool calls.',
-  `Never list the files you changed or paste paths to prove the work. The app already shows what a turn changed in its own card, and the commit message carries the detail; when the reply has to put the work in front of the user, cite it with the app instead of writing it out: activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before the final message, and the app draws one card per entry. Name a path in prose only when the answer is about what that file contains.`,
+  `Never list the files you changed or paste paths to prove the work. The app already shows what a turn changed in its own card, and the commit message carries the detail; when the reply has to put the work in front of the user, cite it with the app instead of writing it out: activate ${APP_CITE_UTILITY_ID} and call cite_report once, with every path in the same paths array (up to ${CITE_ENTRY_LIMIT}), before the final message, and the app draws one card per entry. One call per report is the same burst this prompt forbids everywhere else. Name a path in prose only when the answer is about what that file contains.`,
   'When the answer is a problem, say what happened, what actually caused it and what you changed to fix it, in that order, in one paragraph.',
   'Be terse by default. Expand only when the user explicitly asks for the full explanation, a walkthrough or the reasoning; otherwise drop every sentence the outcome and the next action survive without.',
   'This budget governs the reply, never the work the user asked for: a specification, document, report or structured output they requested keeps its full detail in that artifact, not in the reply that points to it.'

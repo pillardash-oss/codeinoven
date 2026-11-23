@@ -243,7 +243,8 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     // ever a user request.
     expect(RESPONSE_STYLE_INSTRUCTION).toContain('Two short paragraphs is the whole reply')
     expect(RESPONSE_STYLE_INSTRUCTION).toContain('Never list the files you changed')
-    expect(RESPONSE_STYLE_INSTRUCTION).toContain('call cite_report')
+    expect(RESPONSE_STYLE_INSTRUCTION).toContain('call cite_report once')
+    expect(RESPONSE_STYLE_INSTRUCTION).toContain('One call per report is the same burst')
     expect(RESPONSE_STYLE_INSTRUCTION).toContain('no jargon')
     expect(RESPONSE_STYLE_INSTRUCTION).toContain(
       'Expand only when the user explicitly asks for the full explanation'

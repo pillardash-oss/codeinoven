@@ -8,6 +8,7 @@ import {
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
 import { APP_BROWSER_UTILITY_ID, APP_SCOPE_UTILITY_ID } from '../utility-registry-service'
+import { CITE_ENTRY_LIMIT } from '../../../lib/cited-work'
 import { isUnrestrictedLevel } from '../../../lib/permission-level'
 import {
   ASK_SECRET_TOOL_NAME,
@@ -348,7 +349,7 @@ export class UtilityOrchestrationServiceTurnRuntime {
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_CITE_UTILITY_ID)
         ? [
-            `This is a rule, not a judgment call: when this turn produced work the user will open again outside your answer (a report, a document, findings, an analysis, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report with the workspace-relative paths before your final message. Reciting that work inline in place of citing it, or naming where the file lives, is not an alternative: the app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well. Citing is one local call the app answers itself, with no fee attached, so its cost is never a reason to skip it.`
+            `This is a rule, not a judgment call: when this turn produced work the user will open again outside your answer (a report, a document, findings, an analysis, a folder of scripts, generated assets), activate ${APP_CITE_UTILITY_ID} and call cite_report once, with every path in the same paths array (up to ${CITE_ENTRY_LIMIT}), before your final message. Never call it once per report: a list of reports is one call, not one call each. Reciting that work inline in place of citing it, or naming where the file lives, is not an alternative: the app shows one card per cited entry under your answer, with its name, when it was last modified and one open action, so never print the paths or describe the cards yourself. A folder stands for itself; do not list its children as well. Citing is one local call the app answers itself, with no fee attached, so its cost is never a reason to skip it.`
           ]
         : []),
       ...(eligible.some(({ utility }) => utility.id === APP_ARTIFACT_UTILITY_ID)
