@@ -3,19 +3,23 @@
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import Modal from '../ui/Modal.svelte'
+  import PreviewPager, { type PreviewPagerState } from '../ui/PreviewPager.svelte'
   import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import { trafficLightInsetStyle } from '$lib/stores/traffic-light.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import type { PromptReference } from '$shared/types'
 
   interface Props {
-    /** The excerpt a sent message carries: the passage the user marked and the
-     *  comment they wrote on it. */
+    /** The excerpt the reader shows: the passage the user marked and the comment
+     *  they wrote on it. */
     reference: PromptReference
+    /** Sibling navigation over the same message's other excerpts. Absent for a
+     *  message that carries only one. */
+    pager?: PreviewPagerState
     onClose: () => void
   }
 
-  let { reference, onClose }: Props = $props()
+  let { reference, pager, onClose }: Props = $props()
 
   /** The exact words of a passage that came straight from a file, as opposed to
    *  an element picked from a page or an artifact, which reads as a description
@@ -49,6 +53,9 @@
     <span class="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">
       {reference.label}
     </span>
+    {#if pager}
+      <PreviewPager {pager} noun="passage" />
+    {/if}
     <button
       type="button"
       class="titlebar-no-drag flex h-7 w-7 shrink-0 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"

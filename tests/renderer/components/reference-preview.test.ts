@@ -22,16 +22,33 @@ describe('a sent passage opens in a reader', () => {
   it('draws the reference chip as a button that opens the passage reader', () => {
     const chipStart = conversationSource.indexOf('{#if msg.references?.length}')
     expect(chipStart).toBeGreaterThan(-1)
-    const chip = conversationSource.slice(chipStart, chipStart + 1200)
+    const chip = conversationSource.slice(chipStart, chipStart + 2400)
     expect(chip).toMatch(/<button/)
-    expect(chip).toMatch(/openReferencePreview\(reference\)/)
+    expect(chip).toMatch(/openReferencePreview\(\s*references,\s*reference\s*\)/)
     expect(chip).toMatch(/aria-label=\{`Read \$\{reference\.label\}`\}/)
   })
 
   it('mounts the reader from the view that owns the message previews', () => {
     expect(threadViewSource).toMatch(/chats\/ReferencePreview\.svelte/)
-    expect(threadViewSource).toMatch(/reference=\{referencePreview\}/)
+    expect(threadViewSource).toMatch(
+      /reference=\{referencePreview\.items\[referencePreview\.index\]\}/
+    )
+    expect(threadViewSource).toMatch(
+      /pager=\{board\.studioTemporaryChatContext\.referencePreviewPager\}/
+    )
     expect(threadViewSource).toMatch(/closeReferencePreview/)
+  })
+
+  it("walks a message's passages the way the attachment viewer walks its files", () => {
+    const contextSource = readRepoFile(
+      'src/renderer/lib/components/threads/ThreadView/ThreadView-studio-temporary-chat-context.svelte.ts'
+    )
+    expect(contextSource).toMatch(/stepReferencePreview\(delta: number\)/)
+    expect(contextSource).toMatch(/referencePreviewPager = \$derived\.by<PreviewPagerState/)
+    expect(contextSource).toMatch(/reader\.items\.length < 2/)
+    // The reader opens on the chip that was pressed, not on the first passage.
+    expect(contextSource).toMatch(/findIndex\(\(item\) => item\.id === reference\.id\)/)
+    expect(readerSource).toMatch(/<PreviewPager \{pager\} noun="passage" \/>/)
   })
 
   it('shows the passage above and the comment below in the attachment lightbox', () => {

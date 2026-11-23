@@ -582,21 +582,49 @@ export class ThreadViewStudioTemporaryChatContext extends BoardUnit<ThreadView> 
   }
 
   /**
-   * A passage a sent message carries, open in the read-only reader.
+   * The passages a sent message carries, and which one is open in the reader.
    *
    * A reference chip truncates the excerpt it stands for, so the only way to
    * read the passage back used to be its tooltip. The reader is the attachment
-   * lightbox's counterpart for words: the passage above, the comment below.
+   * lightbox's counterpart for words: the passage above, the comment below, and
+   * a pager that walks the message's other passages the way the attachment
+   * viewer walks its files.
    */
-  referencePreview = $state<PromptReference | null>(null)
+  referencePreview = $state<{ items: PromptReference[]; index: number } | null>(null)
 
-  openReferencePreview(reference: PromptReference): void {
-    this.referencePreview = reference
+  openReferencePreview(references: readonly PromptReference[], reference: PromptReference): void {
+    const items = [...references]
+    const index = items.findIndex((item) => item.id === reference.id)
+    if (index === -1) return
+    this.referencePreview = { items, index }
+  }
+
+  /** Move the open passage by `delta`, so a message's excerpts are one after the
+   *  other instead of one chip at a time. */
+  stepReferencePreview(delta: number): void {
+    const reader = this.referencePreview
+    if (!reader) return
+    const index = reader.index + delta
+    if (index < 0 || index >= reader.items.length) return
+    this.referencePreview = { items: reader.items, index }
   }
 
   closeReferencePreview(): void {
     this.referencePreview = null
   }
+
+  /** Sibling navigation for the open passage, absent for a message that carries
+   *  a single excerpt. */
+  referencePreviewPager = $derived.by<PreviewPagerState | undefined>(() => {
+    const reader = this.referencePreview
+    if (!reader || reader.items.length < 2) return undefined
+    return {
+      index: reader.index,
+      count: reader.items.length,
+      onPrevious: () => this.stepReferencePreview(-1),
+      onNext: () => this.stepReferencePreview(1)
+    }
+  })
 
   /**
    * Open one of the queued message's files fullscreen, stepping between its

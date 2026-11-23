@@ -819,7 +819,8 @@
   {@const referencePreview = board.studioTemporaryChatContext.referencePreview}
   {#await loadCachedPanelModule('module:lib/components/chats/ReferencePreview.svelte', () => import('../chats/ReferencePreview.svelte')) then { default: ReferencePreview }}
     <ReferencePreview
-      reference={referencePreview}
+      reference={referencePreview.items[referencePreview.index]}
+      pager={board.studioTemporaryChatContext.referencePreviewPager}
       onClose={board.studioTemporaryChatContext.closeReferencePreview}
     />
   {/await}
