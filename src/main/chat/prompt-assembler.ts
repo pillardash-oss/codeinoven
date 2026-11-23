@@ -7,6 +7,7 @@ import {
   gateCuaDriverBehaviorPrompt
 } from '../../lib/agent-behavior'
 import type { MemoryService } from './memory-service'
+import { APP_CITE_UTILITY_ID } from '../../lib/utility-ids'
 
 export interface BehaviorLayer {
   title: string
@@ -356,7 +357,9 @@ function buildWorkspaceContext(driver: DriverInfo | null, projectPath: string): 
     '1. Cite the source of every factual claim. Files must be cited with their project-rooted relative path, e.g. `src/app.html`   never a bare filename like `app.html` and never a full absolute filesystem path, because the relative form is what renders as a clickable citation in the app UI.',
     '2. External references must be Markdown links, e.g. `[pr issue #155](https://github.com/org/repo/pull/155)`   never bare text such as "pr issue #155".',
     '3. Never cite a source you did not inspect or retrieve; when a claim cannot be verified, state that limitation instead of padding the report with references.',
-    '4. These rules govern what a claim cites, never how much the reply says. The app lists the files a turn changed in its own changes card and renders every cited path as a link, so a reply never inventories the files it touched or pastes paths to prove the work: name a path only when the answer is about what that file contains.'
+    '4. These rules govern what a claim cites, never how much the reply says. The app lists the files a turn changed in its own changes card and renders every cited path as a link, so a reply never inventories the files it touched or pastes paths to prove the work. Work the user should be able to open belongs in a citation, not in prose: activate the `' +
+      APP_CITE_UTILITY_ID +
+      '` capability and call `cite_report` with the workspace-relative paths before the final message, and the app draws one card per entry. Name a path in prose only when the answer is about what that file contains.'
   ].join('\n')
 }
 
