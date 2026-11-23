@@ -812,6 +812,19 @@
   {/if}
 {/if}
 
+<!-- A passage a message carries, read back at full size: the same lightbox a
+     text attachment opens in, with the excerpt and its comment rather than a
+     file. -->
+{#if board.studioTemporaryChatContext.referencePreview}
+  {@const referencePreview = board.studioTemporaryChatContext.referencePreview}
+  {#await loadCachedPanelModule('module:lib/components/chats/ReferencePreview.svelte', () => import('../chats/ReferencePreview.svelte')) then { default: ReferencePreview }}
+    <ReferencePreview
+      reference={referencePreview}
+      onClose={board.studioTemporaryChatContext.closeReferencePreview}
+    />
+  {/await}
+{/if}
+
 {#if board.studioTemporaryChatContext.queuedAttachmentViewer}
   {@const queuedViewerItem =
     board.studioTemporaryChatContext.queuedAttachmentViewer.items[

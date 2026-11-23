@@ -18,6 +18,7 @@ import type {
   AgentMessage,
   AgentEvent,
   PromptAttachment,
+  PromptReference,
   Project,
   EngineeringSpec,
   UsageEfficiencyKpis
@@ -578,6 +579,23 @@ export class ThreadViewStudioTemporaryChatContext extends BoardUnit<ThreadView> 
   closeMessageViewer(): void {
     this.messageViewer = null
     this.attachmentPreview.close()
+  }
+
+  /**
+   * A passage a sent message carries, open in the read-only reader.
+   *
+   * A reference chip truncates the excerpt it stands for, so the only way to
+   * read the passage back used to be its tooltip. The reader is the attachment
+   * lightbox's counterpart for words: the passage above, the comment below.
+   */
+  referencePreview = $state<PromptReference | null>(null)
+
+  openReferencePreview(reference: PromptReference): void {
+    this.referencePreview = reference
+  }
+
+  closeReferencePreview(): void {
+    this.referencePreview = null
   }
 
   /**
