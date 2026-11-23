@@ -21,6 +21,7 @@ import { AndroidDisplayCapture, ANDROID_CREDENTIAL_NOTICE, listAndroidSources } 
 import { resolveAdb } from './display-adb-paths'
 import { quantizeDemand, type DisplayCapture } from './display-capture'
 import { nextCaptureDelayMs } from './display-cadence'
+import { fitFrameToDemand } from './display-frame-fit'
 import { DesktopDisplayCapture, listDesktopSources } from './display-desktop'
 import { IosDisplayCapture, listIosSources } from './display-ios'
 import { startDisplayStream, type DisplayStreamHandle } from './stream/display-stream-process'
@@ -595,9 +596,6 @@ export class DisplayService {
       // A screenshot that lands after the stream came back is older than the video,
       // and the renderer reads any screenshot as "the stream is gone".
       if (session.disposed || (session.stream && session.streamLive)) return
-      // A frame costs a capture and nothing else: the bytes the target produced are
-      // the bytes the renderer paints, so there is no decode, resize, encode or
-      // base64 conversion in this process to report on.
       const captureMs = Date.now() - grabStartedAt
       session.frames += 1
       if (captureMs > SLOW_CAPTURE_MS || session.frames === 1) {
@@ -606,6 +604,18 @@ export class DisplayService {
         )
       }
       if (!image) throw new Error('the target returned nothing to paint')
+      // The device adapters cannot capture small (neither `simctl` nor `screencap`
+      // has a scale flag), so the demand is applied here: a three-megapixel phone
+      // screenshot shipped whole to a 1280px stage paid for its own decode and
+      // paint twice over.
+      const fitStartedAt = Date.now()
+      const fitted = fitFrameToDemand(image, session.demand.maxDimension)
+      const fitMs = Date.now() - fitStartedAt
+      if (fitted !== image && fitMs > SLOW_CAPTURE_MS) {
+        Logger.dev(
+          `Display frame fit for ${session.kind} took ${fitMs} ms (${image.width}x${image.height} ${image.mime} -> ${fitted.width}x${fitted.height} ${fitted.mime})`
+        )
+      }
       session.failures = 0
       session.detail = null
       this.setPhase(session, 'live')
@@ -613,17 +623,17 @@ export class DisplayService {
       // stage already holds those exact pixels. The capture itself cannot be
       // avoided (asking the device is how its screen is read), but the second
       // half of the cost is.
-      const digest = createHash('sha1').update(image.bytes).digest('base64')
+      const digest = createHash('sha1').update(fitted.bytes).digest('base64')
       const unchanged = session.lastFrameDigest === digest
       session.lastFrameDigest = digest
       if (!unchanged) {
         const frame: DisplayFrame = {
           sessionId: session.id,
           tabId: session.tabId,
-          bytes: image.bytes,
-          mime: image.mime,
-          width: image.width,
-          height: image.height,
+          bytes: fitted.bytes,
+          mime: fitted.mime,
+          width: fitted.width,
+          height: fitted.height,
           timestamp: Date.now()
         }
         this.send('display:frame', frame, window)

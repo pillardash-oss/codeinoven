@@ -14,6 +14,7 @@ import {
   projectIdForWorkingDirectory
 } from '../../agents/process-project-attribution'
 import { appServiceRegistry } from '../../system/app-service-registry'
+import { collectSurfaceMetrics } from '../../system/surface-metrics'
 import type { AgentRunningProcess, TaskManagerSnapshot } from '../../../lib/types'
 import { DEFAULT_SCOPE_BUCKET_ID } from '../../../lib/types'
 import type { SessionInfo } from './chat-engine-types'
@@ -318,6 +319,10 @@ export class ChatEngineProcesses {
     return {
       processes: resolvedProcesses,
       services: servicesWithResources,
+      // Renderer surfaces are read last and separately: they come from Electron
+      // rather than from the process tracker, and the modal is where a user
+      // connects a hot renderer to the tab or stage that owns it.
+      surfaces: collectSurfaceMetrics(),
       power: {
         source: powerMonitor.isOnBatteryPower() ? 'battery' : 'ac',
         thermalState:
