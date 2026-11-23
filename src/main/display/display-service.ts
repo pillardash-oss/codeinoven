@@ -4,6 +4,7 @@ import {
   type DisplayCapturePhase,
   type DisplayCaptureState,
   type DisplayControlAction,
+  type DisplayControlOutcome,
   type DisplayFrame,
   type DisplayFrameDemand,
   type DisplayInputGesture,
@@ -14,7 +15,7 @@ import {
 import { sendToRenderer } from '../ipc/renderer-delivery'
 import { appServiceRegistry } from '../system/app-service-registry'
 import { Logger } from '../system/logger'
-import { listAndroidSources, AndroidDisplayCapture } from './display-adb'
+import { AndroidDisplayCapture, ANDROID_CREDENTIAL_NOTICE, listAndroidSources } from './display-adb'
 import { resolveAdb } from './display-adb-paths'
 import { quantizeDemand, type DisplayCapture } from './display-capture'
 import { DesktopDisplayCapture, listDesktopSources } from './display-desktop'
@@ -84,6 +85,9 @@ const STREAM_RETRY_MS = 400
  * is still picked up, while a stream that keeps dying settles at one try per 8s. */
 const STREAM_REARM_MS = 2_000
 const STREAM_REARM_MAX_MS = 8_000
+/** How often a screen the panel is explaining is looked at again. A person who types
+ *  their PIN takes seconds, and one adb query costs less than the frame beside it. */
+const HINT_RECHECK_MS = 1_500
 
 interface DisplaySession {
   id: string
@@ -99,6 +103,15 @@ interface DisplaySession {
   phase: DisplayCapturePhase
   /** Detail shown for the last failure, cleared by the next good frame. */
   detail: string | null
+  /**
+   * A sentence about the device's screen that is true only for a while.
+   *
+   * The lock screen of a phone with a PIN exists on the device and in no mirror, so
+   * the panel can only say it is there. This process owns when it stops being true.
+   */
+  hint: string | null
+  /** The pending re-check of `hint`, when one is armed. */
+  hintTimer: ReturnType<typeof setTimeout> | null
   /** Frames delivered by this session, so the first one's cost is reported once. */
   frames: number
   disposed: boolean
@@ -171,6 +184,8 @@ export class DisplayService {
       failures: 0,
       phase: 'starting',
       detail: null,
+      hint: null,
+      hintTimer: null,
       frames: 0,
       disposed: false,
       busy: false,
@@ -215,6 +230,8 @@ export class DisplayService {
     const streamMaxDimension = quantizeDemand(demand.streamMaxDimension)
     const wasPaused = !session.demand.visible
     session.demand = { maxDimension, streamMaxDimension, visible: demand.visible }
+    // A tab that comes back on screen resumes watching a screen it was explaining.
+    if (demand.visible) this.watchHint(session)
     if (this.canStream(session)) {
       this.followStreamDemand(session, wasPaused)
       return
@@ -340,17 +357,67 @@ export class DisplayService {
    * Refused for an action the target's kind does not advertise, so the rail and
    * this boundary read the same list instead of two copies that can drift.
    */
-  async control(sessionId: string, action: DisplayControlAction): Promise<void> {
+  async control(sessionId: string, action: DisplayControlAction): Promise<DisplayControlOutcome> {
     const session = this.sessions.get(sessionId)
     if (!session) throw new Error('That display session is no longer open')
     if (!DISPLAY_CONTROLS_BY_KIND[session.kind].includes(action)) {
       throw new Error(`A ${session.kind} target has no "${action}" control`)
     }
     if (!session.capture.control) throw new Error('This target cannot be controlled')
-    await session.capture.control(action)
+    const outcome = await session.capture.control(action)
     // A button press changes the device, so its frame is asked for now instead of
     // at the next tick: the person pressed it to see what it did.
-    if (!session.disposed) this.schedule(session, 0)
+    if (!session.disposed) {
+      // A press is the one moment the device's screen state is known, so the sentence
+      // about it starts and ends here instead of on a timer nobody can stop.
+      this.setHint(session, outcome?.credentialPrompt ? ANDROID_CREDENTIAL_NOTICE : null)
+      this.schedule(session, 0)
+    }
+    return outcome ?? {}
+  }
+
+  /**
+   * Say what the device's screen is waiting on, and watch until it is not.
+   *
+   * A notice about a lock screen is true of a moment: leaving the page, typing the
+   * PIN, or tapping unlock on the device all end it. Re-asking the device is what
+   * takes the sentence down, so it never outlives the screen it describes.
+   */
+  private setHint(session: DisplaySession, hint: string | null): void {
+    const changed = session.hint !== hint
+    session.hint = hint
+    if (changed) this.broadcastState(session)
+    this.watchHint(session)
+  }
+
+  /** Arm the next look at a screen the panel is explaining. */
+  private watchHint(session: DisplaySession): void {
+    if (session.hintTimer) clearTimeout(session.hintTimer)
+    session.hintTimer = null
+    // Nothing to watch, nothing to ask, or nobody looking: a hidden tab stops
+    // querying the device and picks the watch up again when it is shown.
+    if (!session.hint || session.disposed) return
+    if (!session.capture.keyguardShowing) return
+    if (!session.demand.visible) return
+    session.hintTimer = setTimeout(() => {
+      session.hintTimer = null
+      void this.recheckHint(session)
+    }, HINT_RECHECK_MS)
+  }
+
+  private async recheckHint(session: DisplaySession): Promise<void> {
+    const probe = session.capture.keyguardShowing
+    if (!session.hint || session.disposed || !probe) return
+    let showing: boolean
+    try {
+      showing = await probe.call(session.capture)
+    } catch {
+      showing = false
+    }
+    if (session.disposed || !session.hint) return
+    // The screen is still waiting, so the sentence is still true and stays up.
+    if (showing) this.setHint(session, session.hint)
+    else this.setHint(session, null)
   }
 
   /**
@@ -379,12 +446,18 @@ export class DisplayService {
     session.disposed = true
     if (session.timer) clearTimeout(session.timer)
     session.timer = null
-    for (const timer of [session.streamTimer, session.hideTimer, session.resizeTimer]) {
+    for (const timer of [
+      session.streamTimer,
+      session.hideTimer,
+      session.resizeTimer,
+      session.hintTimer
+    ]) {
       if (timer) clearTimeout(timer)
     }
     session.streamTimer = null
     session.hideTimer = null
     session.resizeTimer = null
+    session.hintTimer = null
     this.endStream(session, 'stopped')
     try {
       session.capture.dispose()
@@ -531,7 +604,8 @@ export class DisplayService {
       phase: session.phase,
       input: session.input,
       ...(session.inputProblem ? { inputProblem: session.inputProblem } : {}),
-      ...(session.detail ? { detail: session.detail } : {})
+      ...(session.detail ? { detail: session.detail } : {}),
+      ...(session.hint ? { hint: session.hint } : {})
     }
     this.send('display:captureState', state, null)
   }

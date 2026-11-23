@@ -125,8 +125,6 @@ const CONTROL_ACTIONS: readonly string[] = [
   'recents',
   'volume-up',
   'volume-down',
-  'lock',
-  'unlock',
   'power',
   'appearance'
 ]

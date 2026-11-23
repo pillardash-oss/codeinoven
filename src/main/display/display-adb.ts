@@ -1,5 +1,6 @@
 import type {
   DisplayControlAction,
+  DisplayControlOutcome,
   DisplayInputGesture,
   DisplayInputKey,
   DisplaySourceDescriptor,
@@ -102,27 +103,41 @@ export const ANDROID_KEY_CODES: Partial<Record<DisplayControlAction, number>> = 
   back: 4,
   recents: 187,
   'volume-up': 24,
-  'volume-down': 25,
-  power: 26
+  'volume-down': 25
 }
 
 /**
- * The controls that take more than one key, as the device's own shell runs them.
+ * One power key, read before it is pressed.
  *
- * Power is a toggle, so lock presses it only on a lit screen. Unlock wakes the
- * screen and dismisses the keyguard, which on a device with a PIN, pattern or
- * password raises that prompt: the credential stays the person's to enter. Android
- * blanks that prompt in every mirror, so unlock reports when it is waiting on one.
+ * The device's power key toggles blindly, so a single rail button that presses it
+ * would lock a screen the person meant to wake. This reads the screen's own state
+ * first, then does the one thing that state calls for: a lit screen goes dark, a
+ * dark one wakes and has its keyguard dismissed. Whatever the screen is left in is
+ * echoed back, which is how the panel knows whether to offer Lock or Unlock next
+ * and whether a credential is waiting behind a keyguard the mirror cannot show.
  */
-const ANDROID_SHELL_CONTROLS: Partial<Record<DisplayControlAction, string>> = {
-  lock: 'if dumpsys power | grep -q mWakefulness=Awake; then input keyevent 26; fi',
-  unlock:
-    'input keyevent 224 && wm dismiss-keyguard && sleep 1 && if dumpsys window | grep -q mDreamingLockscreen=true; then echo secured; fi'
-}
+const ANDROID_POWER_TOGGLE = [
+  'if dumpsys power | grep -q mWakefulness=Awake; then',
+  'if dumpsys window | grep -q mDreamingLockscreen=true; then wm dismiss-keyguard;',
+  'else input keyevent 26; echo cio-locked; exit 0; fi;',
+  'else input keyevent 224; wm dismiss-keyguard; fi;',
+  // The keyguard is dismissed asynchronously, so the state is read a beat later.
+  'sleep 1;',
+  'if dumpsys window | grep -q mDreamingLockscreen=true; then echo cio-secured;',
+  'else echo cio-awake; fi'
+].join(' ')
 
-/** Said under the picture when unlock is waiting on a credential. */
-const ANDROID_CREDENTIAL_NOTICE =
+/** The marks that script prints, so its answer is read and not guessed at. */
+const POWER_LOCKED = 'cio-locked'
+const POWER_SECURED = 'cio-secured'
+
+/** Said under the picture while the device waits on a credential. */
+export const ANDROID_CREDENTIAL_NOTICE =
   'This device needs its PIN or password, and Android hides that screen from mirrors. Turn on control, type it, then press Enter.'
+
+/** Whether the device's own keyguard, credential prompt included, is on screen. */
+const ANDROID_KEYGUARD_QUERY =
+  'dumpsys window | grep -q mDreamingLockscreen=true && echo cio-keyguard'
 
 /**
  * The keys a panel can send beside a hardware button, by Android's own key codes.
@@ -219,17 +234,8 @@ export class AndroidDisplayCapture implements DisplayCapture {
     }
   }
 
-  async control(action: DisplayControlAction): Promise<void> {
-    const script = ANDROID_SHELL_CONTROLS[action]
-    if (script) {
-      const output = await captureText(
-        this.adb,
-        ['-s', this.sourceId, 'shell', script],
-        ADB_CAPTURE_TIMEOUT_MS
-      )
-      if (output.includes('secured')) throw new Error(ANDROID_CREDENTIAL_NOTICE)
-      return
-    }
+  async control(action: DisplayControlAction): Promise<DisplayControlOutcome | void> {
+    if (action === 'power') return this.pressPower()
     const keyCode = ANDROID_KEY_CODES[action]
     if (keyCode === undefined) {
       throw new Error(`An Android target has no "${action}" control`)
@@ -239,6 +245,34 @@ export class AndroidDisplayCapture implements DisplayCapture {
       ['-s', this.sourceId, 'shell', 'input', 'keyevent', String(keyCode)],
       ADB_CAPTURE_TIMEOUT_MS
     ).promise
+  }
+
+  /** The one power key: read the screen, do what its state calls for, answer it. */
+  private async pressPower(): Promise<DisplayControlOutcome> {
+    const output = await captureText(
+      this.adb,
+      ['-s', this.sourceId, 'shell', ANDROID_POWER_TOGGLE],
+      ADB_CAPTURE_TIMEOUT_MS
+    )
+    if (output.includes(POWER_SECURED)) return { screenLocked: false, credentialPrompt: true }
+    return { screenLocked: output.includes(POWER_LOCKED) }
+  }
+
+  /** Whether a keyguard the mirror cannot draw is still in front of the device. */
+  async keyguardShowing(): Promise<boolean> {
+    if (this.disposed) return false
+    try {
+      const output = await captureText(
+        this.adb,
+        ['-s', this.sourceId, 'shell', ANDROID_KEYGUARD_QUERY],
+        ADB_CAPTURE_TIMEOUT_MS
+      )
+      return output.includes('cio-keyguard')
+    } catch {
+      // A device that cannot answer is not confirmed locked: a notice nobody can
+      // take down is worse than one that ends with the session it described.
+      return false
+    }
   }
 
   dispose(): void {
