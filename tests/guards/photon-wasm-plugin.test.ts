@@ -25,10 +25,10 @@ afterEach(async () => {
 
 describe('photonPayloadDirectories', () => {
   it('covers the bundle root and its chunks sibling', () => {
-    expect(photonPayloadDirectories('/app/out/main')).toEqual([
-      '/app/out/main',
-      '/app/out/main/chunks'
-    ])
+    // Built with `join` so the expectation follows the platform separator:
+    // Windows normalises the paths to `\\a\\b` and the run must not depend on it.
+    const root = join(directory, 'app', 'out', 'main')
+    expect(photonPayloadDirectories(root)).toEqual([root, join(root, 'chunks')])
   })
 })
 
