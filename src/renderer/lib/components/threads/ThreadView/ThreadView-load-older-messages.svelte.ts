@@ -902,6 +902,13 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
 
   scrollToLatest(): void {
     if (!this.scrollEl) return
+    // The reader has taken the viewport. Any pending open-at-prompt restore has
+    // to stand down: a thread that mounted empty (a brand-new conversation) only
+    // flips its loaded flag as the first message lands, so that restore runs
+    // AFTER this call and would pin the viewport to the prompt instead of
+    // following the answer streaming in below it. A send claims the viewport
+    // exactly like a jump does.
+    this.root.unmirroredTraceStartTime.scrollRestored = true
     // Snap instantly   a smooth scroll races the agent's stream: its target
     // is captured once, so while it animates the bottom keeps growing and the
     // scroll lands short, re-locking the user as "away". Arming the follow
@@ -912,12 +919,22 @@ export class ThreadViewLoadOlderMessages extends BoardUnit<ThreadView> {
     // message keeps every page they had already loaded, so scrolling up again
     // finds the same work in the document instead of mounting it from scratch.
     this.scrollEl.scrollTo({ top: this.scrollEl.scrollHeight, behavior: 'auto' })
-    void tick().then(() => {
-      if (!this.scrollEl || this.userScrolledAway) return
-      if (!this.root.unmirroredTraceStartTime.isAtBottom(this.scrollEl)) {
-        this.scrollEl.scrollTop = this.scrollEl.scrollHeight
-      }
-    })
+    // The transcript above the new message can still find its height a moment
+    // later (a trace shell mounting, a card resolving, markdown finishing), so
+    // the bottom is re-taken after the flush and again after the frame that
+    // layout lands in. Both are no-ops when the reader has scrolled away in the
+    // meantime.
+    void tick().then(() => this.reanchorToLatest())
+    requestAnimationFrame(() => this.reanchorToLatest())
+  }
+
+  /** Snap to the live bottom, unless the reader has taken the viewport back. */
+  private reanchorToLatest(): void {
+    const el = this.scrollEl
+    if (!el || this.userScrolledAway) return
+    if (!this.root.unmirroredTraceStartTime.isAtBottom(el)) {
+      el.scrollTop = el.scrollHeight
+    }
   }
 
   async loadLocal(attempt = 0): Promise<void> {
