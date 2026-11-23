@@ -46,6 +46,12 @@
     readonly?: boolean
     /** Overrides the label shown for the path (e.g. just the basename inside a tree). */
     displayPath?: string
+    /**
+     * Names what the open action really opens. The working tree view opens the
+     * file itself, while a commit's diff opens the file as it is on disk now,
+     * so the row says so instead of claiming the commit's version.
+     */
+    openLabel?: string
   }
 
   let {
@@ -67,7 +73,8 @@
     onRemoveFromCommit,
     onResolveConflict,
     readonly = false,
-    displayPath
+    displayPath,
+    openLabel = 'Open'
   }: Props = $props()
 
   const hasActions = $derived(
@@ -305,7 +312,7 @@
                 onSelect={() => onOpenInEditor?.(change.path)}
               >
                 <span class="inline-block w-3 text-center text-[0.625rem]">✎</span>
-                Open
+                {openLabel}
               </ContextMenu.Item>
             {/if}
             {#if onRestore || onRemoveFromCommit}
