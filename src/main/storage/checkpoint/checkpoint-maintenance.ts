@@ -494,6 +494,20 @@ export async function pruneUnusedBlobs(
       encoding: 'utf-8',
       mode: 0o600
     })
+    // Anything to prune at all? Reading the directory first turns the common
+    // "nothing to do" case into one `readdir` instead of a scan over every
+    // checkpoint of the project, which on a large project is seconds of the one
+    // database worker that every click and every page load is queued behind.
+    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) return 0
+      throw error
+    }
+    if (entries.length === 0) return 0
+
     // Collect referenced hashes in SQL   a full scan used to ship every
     // checkpoint JSON blob across the worker port, which crashed the process
     // on large projects. The change list is unioned in as well: a change
@@ -541,14 +555,6 @@ export async function pruneUnusedBlobs(
       if (typeof hash === 'string') referenced.add(hash)
     }
 
-    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
-    let entries
-    try {
-      entries = await readdir(directory, { withFileTypes: true })
-    } catch (error) {
-      if (isMissing(error)) return 0
-      throw error
-    }
     let deleted = 0
     for (const entry of entries) {
       if (!entry.isFile() || referenced.has(entry.name)) continue

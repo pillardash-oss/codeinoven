@@ -10,7 +10,6 @@ import { fileUrlToPath } from '$lib/mime'
 import { placeCaretAtEnd } from '../../shared/rich-markdown'
 import { handleComposerKeydown } from '../chat-composer-keydown'
 import { handleComposerPaste } from '../chat-composer-paste'
-import { noteKeystroke } from '$lib/typing-activity'
 import { type ComposerReadingSurface } from '../chat-composer-slash.svelte'
 import { createComposerExpansion } from '../chat-composer-expand.svelte'
 import { isImageAttachment } from '../chat-composer-attachments'
@@ -396,9 +395,6 @@ export class ChatComposerCaptureComposerRoot extends BoardUnit<ChatComposer> {
   }
 
   onWindowKeydown(e: KeyboardEvent): void {
-    // One place sees every keystroke the app will answer, and a completion's
-    // reconcile reads it to stay out of the way while the user is typing.
-    noteKeystroke()
     handleComposerKeydown(e, this.root.submit.keydownContext)
   }
 }

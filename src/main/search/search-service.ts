@@ -34,7 +34,6 @@ import { SearchModelImporter, type ImportProbe } from './search-model-importer'
 import { ThreadEmbeddingIndex, composeDocument } from './thread-embedding-index'
 import type { ThreadIndexOptions } from './thread-embedding-index'
 import { SearchStorage } from './search-storage'
-import { whenUserQuiet } from '../system/user-typing-gate'
 import {
   SearchSummaryUnavailableError,
   ThreadSearchSummaries,
@@ -867,12 +866,6 @@ export class SearchService {
   }
 
   private async performSweep(reason: string): Promise<void> {
-    // Indexing is CPU-bound (a local llama.cpp embedding pass) and nothing waits
-    // for it. Every sweep a finishing thread triggers used to start inside the
-    // moment the user was reading or typing, which is CPU taken from the frame
-    // they were looking at; it now starts on the first quiet keyboard instead,
-    // bounded so the index is never starved.
-    await whenUserQuiet()
     const model = this.activeModel()
     if (!model) return
     if (!this.canEmbed()) return
