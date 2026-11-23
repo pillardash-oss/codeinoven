@@ -22,6 +22,7 @@ import {
 } from '$lib/thread-state-counts'
 import { GLOBAL_BROWSER_PROJECT_ID } from '$shared/ipc-contract'
 import { notificationPanelState } from '$lib/stores/notification-panel.svelte'
+import { temporaryChatUnread } from '$lib/stores/temporary-chat-unread.svelte'
 import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
 
 /**
@@ -45,6 +46,22 @@ import type { HeaderViewOptionId } from './AppHeaderNavigationController.svelte'
  * report different numbers for the same threads.
  */
 export type ViewActivityCounts = Record<ContentThreadFamily, ThreadStateCounts>
+
+/**
+ * Threads whose unread state comes from a finished side chat rather than from
+ * their own run, grouped the way the rail draws them.
+ *
+ * A side chat never settles its parent thread, so its parent's `read` flag never
+ * changes and the family counts cannot see it. The mark is raised by the delivery
+ * that arrives while the user is not reading the side-chat panel, and it is
+ * cleared when that panel is focused, so the rail has to read the same store the
+ * row does instead of asking a notice to stand in for it.
+ */
+export type ViewTemporaryUnread = Record<ContentThreadFamily, ReadonlySet<string>>
+
+function emptyTemporaryUnread(): Record<ContentThreadFamily, Set<string>> {
+  return { projects: new Set(), chats: new Set(), assistant: new Set() }
+}
 
 export type ViewBadgeTone = 'working' | 'attention' | 'error' | 'retry'
 
@@ -270,6 +287,23 @@ export class ViewRailActivity {
     families: browserAudio.familiesPlaying(),
     global: browserAudio.globalIsPlaying()
   }))
+
+  /**
+   * Threads a finished side chat left unread, per family.
+   *
+   * Read straight from the side-chat store, not from the notification panel: a
+   * side chat that finishes while the user is on the parent thread raises the
+   * row and rail marks without any notice (there is nothing to announce to
+   * someone looking at the conversation), so the panel alone left the rail
+   * saying nothing about work the row was already flagging.
+   */
+  temporaryUnread: ViewTemporaryUnread = $derived.by(() => {
+    const byFamily = emptyTemporaryUnread()
+    for (const thread of temporaryChatUnread.unreadThreads()) {
+      byFamily[contentThreadFamily(thread)].add(thread.threadId)
+    }
+    return byFamily
+  })
 }
 
 /**
@@ -304,8 +338,9 @@ export class ViewRailActivity {
  * playing sound shows both without either hiding the other.
  *
  * The unread mark carries the family's unread count, read as the union of the
- * notices the bell holds and the unread rows in the family
- * ({@link ThreadStateCounts.unreadThreadIds}), counted once per thread, so it
+ * notices the bell holds, the unread rows in the family
+ * ({@link ThreadStateCounts.unreadThreadIds}), and the threads a finished side
+ * chat left unread ({@link ViewTemporaryUnread}), counted once per thread, so it
  * never counts one thread twice (a settled turn plus the side chat that answered
  * on it) and never hides one of two unread threads behind a maximum.
  */
@@ -315,7 +350,8 @@ export function viewBadgesFor(
   counts: ViewActivityCounts,
   browserTransfers: BrowserDownloadOutstanding,
   browserAssistantActivity: ThreadStateCounts = emptyThreadStateCounts(),
-  audio: ViewAudioActivity = NO_AUDIO_ACTIVITY
+  audio: ViewAudioActivity = NO_AUDIO_ACTIVITY,
+  temporaryUnread: ViewTemporaryUnread | null = null
 ): ViewRailBadges {
   if (optionId === 'browser') {
     return {
@@ -341,6 +377,14 @@ export function viewBadgesFor(
   // (one unread row in the slice, one notice for a row outside it).
   const unreadThreadIds = [...counts[family].unreadThreadIds]
   for (const threadId of unread?.threadIds ?? []) {
+    if (!unreadThreadIds.includes(threadId)) unreadThreadIds.push(threadId)
+  }
+  // A finished side chat marks its parent row, never the parent's own `read`
+  // flag, so those threads are the one unread state the family counts cannot
+  // see. The panel's notices cover the case where the user was somewhere else;
+  // this covers the case where they were on the thread and simply not reading
+  // the side-chat panel, which raises a row dot and no notice at all.
+  for (const threadId of temporaryUnread?.[family] ?? []) {
     if (!unreadThreadIds.includes(threadId)) unreadThreadIds.push(threadId)
   }
   const unreadCount = unreadThreadIds.length
