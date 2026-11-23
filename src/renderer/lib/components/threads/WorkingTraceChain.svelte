@@ -12,6 +12,7 @@
   import type { AgentPart } from '$shared/types'
   import DeferredMarkdownView from '../markdown/DeferredMarkdownView.svelte'
   import WorkingTraceRow from './WorkingTraceRow.svelte'
+  import { traceStepExpansion } from '$lib/stores/trace-step-expansion.svelte'
 
   interface Props {
     chain: TraceChain
@@ -45,6 +46,12 @@
      * an opaque fill: rows pass underneath it, not behind a pinned transcript header.
      */
     ownScroll?: boolean
+    /** The conversation these steps belong to, for the reader's per-step state. */
+    scope: string
+    /** Called when the reader works inside these steps, so the trace they are
+     *  working in becomes theirs instead of folding itself at the next step
+     *  boundary or when the run settles. */
+    onReaderInteraction?: () => void
   }
 
   let {
@@ -63,7 +70,9 @@
     onOpenSubagent,
     formatOutput,
     flat = false,
-    ownScroll = false
+    ownScroll = false,
+    scope,
+    onReaderInteraction
   }: Props = $props()
 
   /**
@@ -77,10 +86,17 @@
    * scroll position.
    */
   let userChoice = $state<boolean | null>(null)
-  const open = $derived(userChoice ?? (active && chain.output === null))
+  /** Whether this chain holds a step the reader opened. Folding the chain would
+   *  take that step off the screen, so the default fold waits until they close
+   *  it themselves. */
+  const holdsExpandedStep = $derived(
+    chain.steps.some((step) => traceStepExpansion.isOpen(scope, step.id))
+  )
+  const open = $derived(userChoice ?? ((active && chain.output === null) || holdsExpandedStep))
 
   function keepOpenForReader(): void {
     if (userChoice === null) userChoice = true
+    onReaderInteraction?.()
   }
 
   const span = $derived(traceChainSpan(chain))

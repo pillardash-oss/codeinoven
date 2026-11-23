@@ -12,6 +12,7 @@
   import SubagentCard from './SubagentCard.svelte'
   import ThinkingBlock from './ThinkingBlock.svelte'
   import ToolCard from './ToolCard.svelte'
+  import { traceStepExpansion, traceStepScope } from '$lib/stores/trace-step-expansion.svelte'
 
   interface Props {
     part: AgentPart
@@ -44,14 +45,37 @@
     onOpenSubagent
   }: Props = $props()
 
-  /** Expansion state of the compaction disclosure, which is not a chain step. */
-  let compactionOpen = $state(false)
+  /** The conversation this step belongs to. Expansion is remembered against it
+   *  so a fold upstream cannot close a card the reader is inspecting. */
+  const stepScope = $derived(traceStepScope(projectId, threadId))
+
+  /** Expansion state of the compaction disclosure, which is not a chain step.
+   *  Store-backed for the same reason a tool call's is: this row is re-created
+   *  whenever the trace re-mounts its steps, and the reader's open is theirs. */
+  const compactionOpen = $derived(traceStepExpansion.isOpen(stepScope, part.id))
+  function toggleCompaction(): void {
+    traceStepExpansion.setOpen(stepScope, part.id, !compactionOpen)
+  }
 </script>
 
 {#if part.type === 'reasoning'}
-  <ThinkingBlock {part} active={busy && part.id === lastReasoningId} {live} {onCiteFile} />
+  <ThinkingBlock
+    {part}
+    active={busy && part.id === lastReasoningId}
+    {live}
+    {onCiteFile}
+    scope={stepScope}
+  />
 {:else if part.type === 'tool'}
-  <ToolCard {part} {live} {projectId} {threadId} {checkpointId} {checkpointPaths} />
+  <ToolCard
+    {part}
+    {live}
+    {projectId}
+    {threadId}
+    {checkpointId}
+    {checkpointPaths}
+    scope={stepScope}
+  />
 {:else if part.type === 'subagent'}
   <SubagentCard {part} {live} onOpen={onOpenSubagent} />
 {:else if part.type === 'compaction-summary'}
@@ -72,7 +96,7 @@
       class="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-overlay"
       aria-expanded={compactionOpen}
       title={compactionOpen ? 'Hide compaction summary' : 'Show compaction summary'}
-      onclick={() => (compactionOpen = !compactionOpen)}
+      onclick={toggleCompaction}
     >
       {#if busy && !part.summary}
         <CioSpinner size={12} class="shrink-0 animate-spin text-info" />

@@ -33,6 +33,15 @@ interface AgentRunEntry {
   parkedAt: number | null
   /** User message ID that started the current turn; used as the trace key. */
   currentTurnUserMessageId: string | null
+  /** The prompt this run was last working on, kept across the idle blips a
+   *  harness reports between steps.
+   *
+   *  A harness goes idle when a tool call finishes and busy again for the next
+   *  one, and every idle clears `currentTurnUserMessageId`. Without this, the
+   *  next part read as a brand-new turn, and a new turn resets the trace's fold
+   *  state   which closed the trace   and the tool call expanded inside it   once
+   *  per step for a reader who was inspecting it. */
+  lastTurnUserMessageId: string | null
   /** Whether the working trace is currently open. */
   traceOpen: boolean
   /** Provider retry deadline (epoch ms) while this thread waits on a
@@ -89,6 +98,7 @@ class AgentRunsStore {
         busySince: null,
         parkedAt: null,
         currentTurnUserMessageId: null,
+        lastTurnUserMessageId: null,
         traceOpen: false,
         retryAt: null,
         traceUserOpened: false,
@@ -247,10 +257,8 @@ class AgentRunsStore {
     const previousTraceUserOpened = entry.traceUserOpened
     const previousTraceUserFolded = entry.traceUserFolded
     const wasBusy = entry.busy
-    const isNewTurn =
-      busy &&
-      turnUserMessageId !== undefined &&
-      turnUserMessageId !== entry.currentTurnUserMessageId
+    const turnOwner = entry.currentTurnUserMessageId ?? entry.lastTurnUserMessageId
+    const isNewTurn = busy && turnUserMessageId !== undefined && turnUserMessageId !== turnOwner
     // A start time older than the last park is the run that was parked, not the
     // run that just resumed it. Honoring it is what kept a retried turn on the
     // parked attempt's clock, so its trace read minutes of work with no steps.
@@ -273,6 +281,10 @@ class AgentRunsStore {
     if (busy) entry.live = live
     if (busy && detail) entry.activityDetail = detail
     if (!busy) entry.activityDetail = null
+
+    if (busy && turnUserMessageId !== undefined) {
+      entry.lastTurnUserMessageId = turnUserMessageId
+    }
 
     if (isNewTurn && turnUserMessageId) {
       entry.currentTurnUserMessageId = turnUserMessageId
@@ -462,6 +474,9 @@ class AgentRunsStore {
     entry.activityDetail = null
     entry.live = false
     entry.busySince = null
+    if (entry.currentTurnUserMessageId !== null) {
+      entry.lastTurnUserMessageId = entry.currentTurnUserMessageId
+    }
     entry.currentTurnUserMessageId = null
     entry.retryAt = retryAt
     this.foldSettledTrace(entry)
@@ -500,6 +515,9 @@ class AgentRunsStore {
     entry.activityDetail = null
     entry.live = false
     entry.busySince = null
+    if (entry.currentTurnUserMessageId !== null) {
+      entry.lastTurnUserMessageId = entry.currentTurnUserMessageId
+    }
     entry.currentTurnUserMessageId = null
     entry.retryAt = null
     this.foldSettledTrace(entry)

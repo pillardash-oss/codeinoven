@@ -39,6 +39,7 @@ import { captureResponseSelection, RESPONSE_HIGHLIGHT_NAME } from '../thread-res
 import { messageText, tracePreviewByUserMessage } from '../thread-message-presentation'
 import { mergedUserMessageSummaries } from '../thread-history'
 import { threadScrollPositions } from '../thread-scroll-memory'
+import { traceStepExpansion, traceStepScope } from '$lib/stores/trace-step-expansion.svelte'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
 
@@ -81,6 +82,21 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
     agentRuns.resetTraceView(
       this.root.handleAgentEvent.thread.projectId,
       this.root.handleAgentEvent.thread.id
+    )
+    // A trace step the reader opened belongs to the visit that opened it too.
+    // Leaving the thread forgets it, so a conversation re-entered later starts
+    // from the trace's own defaults instead of a pile of cards left open.
+    traceStepExpansion.forgetScope(
+      traceStepScope(
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.pollStreamParts.conversationId
+      )
+    )
+    traceStepExpansion.forgetScope(
+      traceStepScope(
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )
     )
     // A persisted in-flight status is only a recovery hint. Start every mount in
     // a settled idle state unless this thread is already receiving live activity;

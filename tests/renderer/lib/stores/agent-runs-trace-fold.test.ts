@@ -79,6 +79,31 @@ describe('the working trace fold', () => {
     expect(agentRuns.isTraceUserOpened(PROJECT, THREAD)).toBe(false)
   })
 
+  it('survives the idle blip a harness reports between steps', () => {
+    // A harness goes idle when a tool call finishes and busy again for the next
+    // one. Every idle clears the turn id, so the next part looked like a new
+    // turn   and a new turn reset the fold, closing the trace and the tool call
+    // expanded inside it once per step.
+    startLiveTurn()
+    readerOpens()
+
+    agentRuns.setIdle(PROJECT, THREAD)
+    agentRuns.setBusy(PROJECT, THREAD, true, 'message-1')
+
+    expect(agentRuns.isTraceOpen(PROJECT, THREAD)).toBe(true)
+    expect(agentRuns.isTraceUserOpened(PROJECT, THREAD)).toBe(true)
+  })
+
+  it('keeps a reader-folded trace folded through a step boundary too', () => {
+    startLiveTurn()
+    agentRuns.setTraceOpen(PROJECT, THREAD, false, false, true)
+
+    agentRuns.setIdle(PROJECT, THREAD)
+    agentRuns.setBusy(PROJECT, THREAD, true, 'message-1')
+
+    expect(agentRuns.isTraceOpen(PROJECT, THREAD)).toBe(false)
+  })
+
   it('forgets the visit when the thread is left, and never while the run is live', () => {
     startLiveTurn()
     readerOpens()
