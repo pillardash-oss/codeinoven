@@ -850,4 +850,52 @@ describe('DatabaseWorker production wrapper', () => {
     // slow Windows runners, and the hosted runner's disk can push it past 20s.
     60000
   )
+
+  it('gives the async lane its own worker, its own connection, and no write access', async () => {
+    const dir = makeDir()
+    const db = await openDatabase(dir)
+    new ProjectRepo(db).upsert({
+      id: 'p1',
+      name: 'P',
+      path: '/p',
+      source: 'local',
+      providerId: 'openai',
+      workflowId: 'default',
+      threadLimit: 70,
+      changeTrackingMode: 'manual',
+      createdAt: 1,
+      updatedAt: 1
+    })
+    const manager = new ThreadManager(db)
+    const thread = await manager.createThread({
+      projectId: 'p1',
+      providerId: 'openai',
+      title: 'Async lane'
+    })
+
+    // The lane is a second thread with a connection of its own: routing a read
+    // to it must not be routing it to the maintenance worker.
+    const maintenanceWorker = db.maintenanceWorker()
+    const asyncWorker = db.asyncReadWorker()
+    expect(asyncWorker).not.toBeNull()
+    expect(asyncWorker?.isRunning()).toBe(true)
+    expect(asyncWorker).not.toBe(maintenanceWorker)
+
+    // A read on that connection sees everything the writer has committed, which
+    // is what makes the lane usable for search and rollups.
+    const seen = await db.queryViaWorker('SELECT id FROM threads WHERE id = ?', [thread.id], 1, {
+      lane: 'async'
+    })
+    expect(seen.ok).toBe(true)
+    expect(seen.rows).toHaveLength(1)
+
+    // And it is read-only, so this lane can never become a second writer.
+    const write = await asyncWorker?.execute('DELETE FROM threads WHERE id = ?', [thread.id])
+    expect(write?.ok).toBe(false)
+    expect(write?.error ?? '').toMatch(/readonly|read-only/i)
+    const stillThere = db.all<{ id: string }>('SELECT id FROM threads WHERE id = ?', thread.id)
+    expect(stillThere).toHaveLength(1)
+
+    await db.close()
+  })
 })

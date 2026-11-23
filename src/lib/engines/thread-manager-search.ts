@@ -342,7 +342,13 @@ export class ThreadSearchService {
     allFailed: boolean
     timedOut: boolean
   }> {
-    const options = deadlineMs === undefined ? {} : { deadlineMs }
+    // Both halves are the query the durable log shows at 5,960 ms. They are not
+    // deferrable (the palette is waiting for them) and they are not click
+    // blocking either (the palette shows its own busy state and the reads are
+    // already deadline-bounded), so they run on the async lane: their own thread
+    // and connection, where a long MATCH can never make the next click queue
+    // behind it.
+    const options = { lane: 'async' as const, ...(deadlineMs === undefined ? {} : { deadlineMs }) }
     const [title, message] = await Promise.all([
       this.db.queryViaWorker(built.title.sql, built.title.params, built.limit, options),
       built.fts

@@ -37,6 +37,16 @@ export interface DatabaseWorkerConfig {
   maintenanceEnabled: boolean
   /** Base interval between maintenance passes (ms). */
   maintenanceIntervalMs: number
+  /**
+   * Open the connection read-only.
+   *
+   * The interactive slot and the deferrable slot share one connection, and a
+   * statement on it cannot be preempted. The async slot is a second worker with a
+   * connection of its own, so a long read there cannot occupy the connection a
+   * click is waiting on; opening it read-only is what guarantees that lane can
+   * never become a second writer, which SQLite serialises anyway.
+   */
+  readOnly?: boolean
 }
 
 export const DATABASE_WORKER_DEFAULTS = {
@@ -56,6 +66,18 @@ export const DATABASE_WORKER_DEFAULTS = {
  * ORDER: an interactive read never waits behind queued background work.
  */
 export type WorkerLane = 'interactive' | 'background'
+
+/**
+ * Where a read runs, from the caller's side.
+ *
+ * `interactive` and `background` are two queues on one worker, so they differ
+ * only in order: an interactive read is drained first, and a statement already
+ * running cannot be preempted. `async` is a lane of its own — a second worker with
+ * its own read-only connection — for reads that are neither deferrable nor
+ * click-blocking: a thread search, a usage rollup, a whole-project scan whose
+ * answer the surface can wait for but whose duration a click must never sit in.
+ */
+export type QueryLane = WorkerLane | 'async'
 
 export type DatabaseWorkerRequest =
   | { kind: 'checkpoint'; mode: 'passive' | 'truncate' }
