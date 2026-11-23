@@ -358,7 +358,17 @@
   }
 
   $effect(() => {
-    memoryProposalState.setContext(workspaceState.selectedThread?.projectId ?? null)
+    const thread = workspaceState.selectedThread
+    memoryProposalState.setContext(
+      thread
+        ? {
+            projectId: thread.projectId,
+            threadId: thread.id,
+            scopeBucketId: thread.scopeBucketId,
+            assistantId: thread.assistantId
+          }
+        : null
+    )
   })
 
   // ─── Git status chip ─────────────────────────────────────────────────────

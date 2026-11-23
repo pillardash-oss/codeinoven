@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ASSISTANT_SPACE_ID, INBOX_PROJECT_ID } from '$shared/types'
+import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID, INBOX_PROJECT_ID } from '$shared/types'
 import type { MemoryEntry, MemoryProposal } from '$shared/types'
 import {
   defaultScopesForSurface,
@@ -11,6 +11,7 @@ import {
   planMemorySaveGroups,
   proposalVisibleOnSurface,
   surfaceContextAudience,
+  surfaceForMemoryProject,
   MEMORY_SCOPE_OPTIONS,
   type MemorySurfaceContext
 } from '$lib/components/memory/memory-routing'
@@ -49,6 +50,16 @@ function proposal(overrides: Partial<MemoryProposal> = {}): MemoryProposal {
     ...overrides
   }
 }
+
+describe('surfaceForMemoryProject', () => {
+  it('maps each conversation container to its own sidebar', () => {
+    expect(surfaceForMemoryProject(INBOX_PROJECT_ID)).toBe('sidebar-chats')
+    expect(surfaceForMemoryProject(GLOBAL_BROWSER_PROJECT_ID)).toBe('sidebar-browser')
+    expect(surfaceForMemoryProject(ASSISTANT_SPACE_ID)).toBe('sidebar-assistant')
+    expect(surfaceForMemoryProject('proj-1')).toBe('sidebar-projects')
+    expect(surfaceForMemoryProject(undefined)).toBe('sidebar-projects')
+  })
+})
 
 describe('defaultScopesForSurface', () => {
   it('starts every surface in its audience-wide set', () => {
