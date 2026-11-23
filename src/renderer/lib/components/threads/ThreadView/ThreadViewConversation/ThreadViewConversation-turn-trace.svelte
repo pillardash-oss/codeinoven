@@ -86,6 +86,18 @@
   const turnEndIndex = $derived(
     board.pollStreamParts.transcriptIndex.turnEnd[turnStart] ?? turnStart
   )
+  /**
+   * The instant this turn's closing message landed, once the turn has closed.
+   *
+   * The turn's duration ends here, not at the last step it wrote: the harness
+   * writes its answer after its last step, and a run can sit quiet for far
+   * longer than the work it did. This is the same instant the turn's own duration
+   * is reported from, so the trace header states that duration instead of the
+   * minutes the rows underneath happen to cover.
+   */
+  const turnClosedAt = $derived(
+    turnDone ? board.loadOlderMessages.messages[turnEndIndex]?.completedAt : undefined
+  )
   const turnClosingText = $derived(
     getTurnFinalText(
       board.loadOlderMessages.messages,
@@ -230,6 +242,7 @@
       : settledTrace?.compacted}
     turnSpan={liveTracePaging ? board.pollStreamParts.streamTrace.turnSpan : settledTrace?.span}
     startTime={segmentStartTime}
+    closedAt={turnClosedAt}
     modelLabel={useSegmentLiveAttribution
       ? board.currentWorkingTraceAttribution.currentWorkingTraceAttribution.modelLabel
       : segmentModelLabel}
