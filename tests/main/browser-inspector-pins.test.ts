@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { BrowserInspectorTarget } from '../../src/lib/ipc/browser'
 import { inspectorInstallScript } from '../../src/main/browser/browser-service/browser-inspector'
 
@@ -168,5 +168,89 @@ describe('a design comment pin', () => {
     expect(pin.getAttribute('data-comment')).toBe('1')
     expect((pin as HTMLElement).style.display).toBe('inline-flex')
     expect(pin.getAttribute('aria-label')).toContain('click to edit the comment')
+  })
+})
+
+/**
+ * A drawer is a `<dialog>` opened with `showModal()`, and a modal dialog lives in
+ * the document's top layer, which paints above every z-index page content can
+ * carry. The overlay therefore has to share that layer and stay last in it, or
+ * the box and the pins describe the drawer from behind it.
+ *
+ * jsdom has no popover API, so the two calls are stubbed to record when the
+ * overlay joins the top layer and when it is moved to the end of it.
+ */
+describe('the overlay against the page top layer', () => {
+  const calls: string[] = []
+
+  function stubPopoverApi(): void {
+    Object.defineProperty(HTMLElement.prototype, 'showPopover', {
+      configurable: true,
+      writable: true,
+      value: () => {
+        calls.push('show')
+      }
+    })
+    Object.defineProperty(HTMLElement.prototype, 'hidePopover', {
+      configurable: true,
+      writable: true,
+      value: () => {
+        calls.push('hide')
+      }
+    })
+  }
+
+  function unstubPopoverApi(): void {
+    Reflect.deleteProperty(HTMLElement.prototype, 'showPopover')
+    Reflect.deleteProperty(HTMLElement.prototype, 'hidePopover')
+  }
+
+  function overlayHost(): HTMLElement {
+    return document.querySelector('[data-cio-inspector]') as HTMLElement
+  }
+
+  async function waitFor(condition: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      if (condition()) return
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+  }
+
+  afterEach(() => {
+    unstubPopoverApi()
+    calls.length = 0
+  })
+
+  it('is a plain overlay on an engine with no popover API', () => {
+    install()
+    expect(overlayHost().hasAttribute('popover')).toBe(false)
+  })
+
+  it('joins the top layer so a drawer cannot cover it', () => {
+    stubPopoverApi()
+    install()
+
+    expect(overlayHost().getAttribute('popover')).toBe('manual')
+    expect(calls).toEqual(['show'])
+  })
+
+  it('moves back to the end of the top layer when a drawer opens after it', async () => {
+    stubPopoverApi()
+    install()
+    calls.length = 0
+    inspector().run({ type: 'arm' })
+    // Arming takes a fresh place in the layer, so the first box drawn is on top
+    // of a drawer that opened while the overlay was idle.
+    expect(calls).toEqual(['hide', 'show'])
+    calls.length = 0
+
+    // A component that keeps its sheet mounted opens it by setting `open`,
+    // which is what a dialog reports here rather than a new node.
+    const dialog = document.createElement('dialog')
+    document.body.appendChild(dialog)
+    document.querySelector('#otp')!.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }))
+
+    await waitFor(() => calls.length === 2)
+    expect(calls).toEqual(['hide', 'show'])
   })
 })
