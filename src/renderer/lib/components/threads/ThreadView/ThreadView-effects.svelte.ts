@@ -41,6 +41,7 @@ import { mergedUserMessageSummaries } from '../thread-history'
 import { threadScrollPositions } from '../thread-scroll-memory'
 import type { ThreadView } from './ThreadView-board.svelte'
 import { BoardUnit } from '$lib/components/board-unit'
+import { whenTypingPauses } from '$lib/typing-activity'
 
 const RESET_READ_DELAY_MS = 5_000
 const MAX_TIMER_DELAY_MS = 2_147_483_647
@@ -1033,7 +1034,12 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
             // Thread updates are deliberately low-frequency lifecycle boundaries.
             // Reconcile on every one so early-return workflows (for example a
             // planning turn awaiting a choice) cannot strand the remote prompt.
-            void this.root.abortRun.refreshMessages()
+            // The reconcile re-reads and re-renders the tail, which is the part a
+            // keystroke competes with, so it waits for the first quiet moment: a
+            // completion can afford a fraction of a second, a keystroke cannot.
+            void whenTypingPauses(() => {
+              void this.root.abortRun.refreshMessages()
+            })
             this.root.buildSpecActionPrompt.restoreWorkingState(
               updatedThread.status,
               updatedThread.auditState === 'running'
@@ -1118,7 +1124,9 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
             return
           }
           if (type !== 'session.idle' && type !== 'session.error' && type !== 'thread.error') return
-          void this.root.abortRun.refreshMessages()
+          void whenTypingPauses(() => {
+            void this.root.abortRun.refreshMessages()
+          })
           void this.root.pollStreamParts.refreshStreamTailAfterTurn()
         }
       )
