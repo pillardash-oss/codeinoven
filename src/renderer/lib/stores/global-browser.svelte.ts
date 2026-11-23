@@ -31,6 +31,7 @@ import {
 } from '$shared/ipc-contract'
 import { type GlobalBrowserTabsSnapshot } from '$shared/browser/global-browser-tabs'
 import { appConfigState } from './app-config.svelte'
+import { deviceIsShortCached, effectiveHibernationWindowMs } from './browser-hibernation-pressure'
 import { BrowserTabFavicons } from './browser-tab-favicon'
 import {
   BROWSER_ASSISTANT_DEFAULT_TITLE,
@@ -742,9 +743,14 @@ export class GlobalBrowserState {
 
   // ─── Hibernation ──────────────────────────────────────────────────────────
 
-  /** The configured idle window, from the setting. */
+  /** The configured idle window, from the setting, shortened while this machine
+   *  is short on CPU or memory: a parked page keeps producing frames, and those
+   *  frames are stolen from whatever the user is actually looking at. */
   get hibernationWindowMs(): number {
-    return appConfigState.browserHibernationMinutes * 60_000
+    return effectiveHibernationWindowMs(
+      appConfigState.browserHibernationMinutes * 60_000,
+      deviceIsShortCached()
+    )
   }
   hibernate(tabId: string): boolean {
     return this.units['runtime'].hibernate(tabId)
