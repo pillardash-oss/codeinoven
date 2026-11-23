@@ -4,6 +4,7 @@ import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { assistants } from '$lib/stores/assistants.svelte'
 import { isThreadExecutionActiveStatus } from '$shared/thread-status-policy'
 import {
   captureError,
@@ -420,6 +421,27 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
           workspaceState.clearThread()
         }
       })
+      return
+    }
+    // A task owns the runs it produced, so deleting it sweeps them too: removing a
+    // job from an assistant's clock also takes away the run the user was reading.
+    // Land on that assistant's Getting started thread instead of the empty shell,
+    // which also keeps the assistant's panel (where the job was removed) on screen.
+    if (deleted.assistantId) {
+      const assistantId = deleted.assistantId
+      void assistants
+        .knowledgeThread(assistantId)
+        .then((setup) =>
+          setup && setup.id !== threadId ? openThreadById(projectId, setup.id) : false
+        )
+        .then((opened) => {
+          if (!opened && workspaceState.selectedThread?.id === threadId) {
+            workspaceState.clearThread()
+          }
+        })
+        .catch(() => {
+          if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+        })
       return
     }
     workspaceState.clearThread()
