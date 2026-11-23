@@ -3,8 +3,14 @@
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import { toast } from 'svelte-sonner'
-  import { assistantIsUnnamed, type Assistant, type UpdateAssistantInput } from '$shared/types'
+  import {
+    assistantIsUnnamed,
+    type Assistant,
+    type Thread,
+    type UpdateAssistantInput
+  } from '$shared/types'
 
   /**
    * The clock: whether the assistant runs on one at all, what it is called, when
@@ -28,6 +34,10 @@
     missedRunPolicyLabel: string
     /** Whether the assistant has an authoring thread to agree the clock in. */
     hasKnowledgeThread: boolean
+    /** The functions that run on this clock: the assistant's tasks, never a run. */
+    tasks: Thread[]
+    /** Pause or resume one function's own clock, without touching its assistant. */
+    onSetTaskScheduled: (task: Thread, scheduled: boolean) => Promise<void>
     /** Opens that thread, so an agent turn can ask for the clock. */
     onOpenKnowledgeThread: () => void
     /** One write path for the assistant record, owned by the panel. */
@@ -43,6 +53,8 @@
     nextRunRelative,
     missedRunPolicyLabel,
     hasKnowledgeThread,
+    tasks,
+    onSetTaskScheduled,
     onOpenKnowledgeThread,
     onPersist
   }: Props = $props()
@@ -100,6 +112,34 @@
     const name = raw.trim()
     if (name === (assistant.scheduleName ?? '')) return
     void onPersist({ scheduleName: name || null }, 'Could not save the schedule name')
+  }
+
+  /** The functions whose own switch is mid-write, so one row never double-fires. */
+  const pendingTasks = new SvelteSet<string>()
+
+  /**
+   * Whether one function runs on this clock. A task that never set its own flag
+   * follows its assistant, and this tab only draws the list once that clock is
+   * agreed, so an unset flag reads as scheduled.
+   */
+  function taskIsScheduled(task: Thread): boolean {
+    return task.scheduled !== false
+  }
+
+  /**
+   * Pausing a single function is a write to the task, not to the assistant: the
+   * clock and its name stay, and only this row stops firing. Resuming clears the
+   * override instead of writing `true`, so the task follows the assistant's clock
+   * again and a later schedule change carries it along.
+   */
+  async function setTaskScheduled(task: Thread, next: boolean): Promise<void> {
+    if (pendingTasks.has(task.id)) return
+    pendingTasks.add(task.id)
+    try {
+      await onSetTaskScheduled(task, next)
+    } finally {
+      pendingTasks.delete(task.id)
+    }
   }
 </script>
 
@@ -183,6 +223,46 @@
       </dl>
     {/if}
   </div>
+
+  <!--
+    One switch per function, so a task that has nothing left to do can be taken
+    off the clock on its own. Before this, the only stops were the assistant-wide
+    switch above or skipping a single slot, which meant pausing a whole teammate
+    to silence one job.
+  -->
+  {#if scheduleAgreed && tasks.length > 0}
+    <div class="flex flex-col gap-2 border border-border bg-surface p-2.5">
+      <h2 class="text-[0.875rem] font-semibold text-foreground">What runs on this clock</h2>
+      <p class="text-[0.6875rem] leading-relaxed text-muted">
+        Every function below runs on the schedule above unless you pause it. Pausing one keeps the
+        schedule and the rest of {assistantLabel}'s work exactly as they are.
+      </p>
+      {#each tasks as entry (entry.id)}
+        <div
+          class="flex items-center justify-between gap-3 border-t border-border py-1.5"
+          title={taskIsScheduled(entry) ? 'Runs on this schedule' : 'Runs only when you ask'}
+        >
+          <span class="min-w-0 flex-1 truncate text-[0.75rem] text-foreground" title={entry.title}
+            >{entry.title}</span
+          >
+          {#if !taskIsScheduled(entry)}
+            <span class="shrink-0 text-[0.6875rem] text-dimmed">Paused</span>
+          {/if}
+          <Switch
+            checked={taskIsScheduled(entry)}
+            disabled={pendingTasks.has(entry.id)}
+            onchange={(next: boolean) => void setTaskScheduled(entry, next)}
+            aria-label={taskIsScheduled(entry)
+              ? `Pause the schedule for ${entry.title}`
+              : `Resume the schedule for ${entry.title}`}
+            title={taskIsScheduled(entry)
+              ? `Stop running ${entry.title} on this schedule`
+              : `Run ${entry.title} on this schedule again`}
+          />
+        </div>
+      {/each}
+    </div>
+  {/if}
 </div>
 
 <ConfirmDialog

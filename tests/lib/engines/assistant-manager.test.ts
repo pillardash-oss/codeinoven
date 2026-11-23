@@ -213,4 +213,64 @@ describe('AssistantManager', () => {
     assistants.setTaskLastRun(task.id, 1_700_000_000_000)
     expect(assistants.listAssistantTasks()[0].lastRunAt).toBe(1_700_000_000_000)
   })
+
+  it("never lists an assistant's knowledge thread as a task on its clock", async () => {
+    const assistant = assistants.createAssistant({ name: 'Pildash' })
+    assistants.updateAssistant(assistant.id, {
+      knowledge: 'Watch the product sites.',
+      scheduled: true,
+      schedule: { cadence: 'weekly', times: ['08:00'], weekdays: [1, 5] }
+    })
+    const setup = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Getting started',
+      assistantGettingStarted: true
+    })
+    const task = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Why Google is not indexing milogs.app'
+    })
+    assistants.assignTask(setup.id, assistant.id)
+    assistants.assignTask(task.id, assistant.id)
+
+    // The authoring host is still owned and still reachable, just not a job.
+    expect(assistants.knowledgeThread(assistant.id)?.id).toBe(setup.id)
+    expect(assistants.listAssistantTasksFor(assistant.id).map((entry) => entry.id)).toEqual([
+      task.id
+    ])
+  })
+
+  it('takes one task off its assistant clock without touching the assistant', async () => {
+    const assistant = assistants.createAssistant({ name: 'Pildash' })
+    assistants.updateAssistant(assistant.id, {
+      knowledge: 'Watch the product sites.',
+      scheduled: true,
+      schedule: { cadence: 'weekly', times: ['08:00'], weekdays: [1, 5] }
+    })
+    const kept = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Kept'
+    })
+    const paused = await threads.createThread({
+      projectId: ASSISTANT_SPACE_ID,
+      providerId: 'pi',
+      title: 'Paused'
+    })
+    assistants.assignTask(kept.id, assistant.id)
+    assistants.assignTask(paused.id, assistant.id)
+
+    assistants.setTaskScheduled(paused.id, false)
+
+    // The task's own flag wins; the assistant and its sibling keep their clock.
+    expect(assistants.resolveTaskScheduled((await threads.getThreadById(paused.id))!)).toBe(false)
+    expect(assistants.resolveTaskScheduled((await threads.getThreadById(kept.id))!)).toBe(true)
+    expect(assistants.getAssistant(assistant.id)?.scheduled).toBe(true)
+
+    // Resuming clears the override instead of pinning `true`.
+    assistants.setTaskScheduled(paused.id, null)
+    expect(assistants.resolveTaskScheduled((await threads.getThreadById(paused.id))!)).toBe(true)
+  })
 })

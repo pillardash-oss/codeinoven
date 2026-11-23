@@ -26,6 +26,8 @@
     assistantAgentsComplete,
     assistantIsScheduled,
     assistantKnowledgeComplete,
+    isAssistantRunThread,
+    isAssistantSetupThread,
     type AgentCapabilityCatalog,
     type BackgroundRun,
     type MissedRun,
@@ -433,6 +435,30 @@
     if (!assistant) return task ? [task] : []
     return scopeState.allScopeThreads.filter((thread) => thread.assistantId === assistant.id)
   })
+
+  /**
+   * The functions the Schedule tab draws switches for. A run is one execution of
+   * a task and the knowledge thread is where the user writes behaviour, so
+   * neither is a job a clock can start.
+   */
+  const scheduleTasks = $derived(
+    assistantTasks
+      .filter((entry) => !isAssistantSetupThread(entry) && !isAssistantRunThread(entry))
+      .sort((a, b) => b.lastActivity - a.lastActivity)
+  )
+
+  /**
+   * Pause or resume one function without touching the assistant's own clock.
+   * Resuming clears the task's flag instead of writing `true`, so the task follows
+   * its assistant again and a later schedule change carries it along.
+   */
+  async function setTaskScheduled(entry: Thread, next: boolean): Promise<void> {
+    try {
+      await assistants.setTaskScheduled(entry.id, next ? null : false)
+    } catch (error) {
+      reportError(error, 'Could not change this function\u2019s schedule')
+    }
+  }
 
   /** Wakes armed on this assistant's own threads, newest first as the store holds them. */
   const wakes = $derived(followUpsState.forThreads(assistantTasks.map((entry) => entry.id)))
@@ -920,6 +946,8 @@
           {nextRunRelative}
           {missedRunPolicyLabel}
           hasKnowledgeThread={knowledgeThread !== null}
+          tasks={scheduleTasks}
+          onSetTaskScheduled={(entry, next) => setTaskScheduled(entry, next)}
           onOpenKnowledgeThread={openKnowledgeTask}
           onPersist={persistAssistant}
         />
