@@ -80,6 +80,21 @@ browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
 
 ### Fixed
 
+- **A working trace keeps counting while its turn is still running, so a stuck
+  run can no longer read as minutes of work.** The header measured the turn's
+  mirrored rows: once the harness closed a message and went quiet between steps,
+  the transcript read the turn as completed and the trace froze at the last step
+  it had written, so a run that had been going 44 minutes showed 4 while the row
+  underneath it kept spinning. A live session on the turn now keeps its trace
+  live whatever the mirrored rows say, which is also what the turn's own audit
+  duration reports once it settles (`ThreadViewConversation-turn-trace.svelte`).
+- **Answering an agent's question no longer restarts the trace's clock.** The
+  app's record of an answer is a user-role row, and the live trace measured from
+  the newest such row, so answering mid-turn made minutes of work look like the
+  whole turn. The anchor now skips every row that rides mid-turn instead of
+  opening one — activity notices, answered-question records and a steer the
+  harness has not taken — the same boundary the main process folds its turn
+  stream by (`thread-turn-parts.ts`, `ThreadView-poll-stream-parts.svelte.ts`).
 - **The menu bar icon no longer keeps an exclamation for a problem nothing on
   screen shows.** The attention predicate counted every `working-paused`,
   `awaiting_approval` and unread `failed` row, including orchestration children:

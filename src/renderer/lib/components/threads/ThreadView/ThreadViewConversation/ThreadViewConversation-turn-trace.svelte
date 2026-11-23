@@ -52,11 +52,27 @@
       board.buildSpecActionPrompt.latestTurnInfo.active &&
       !board.buildSpecActionPrompt.pendingLiveTurn
   )
+  /**
+   * Whether this turn is still being worked on right now.
+   *
+   * A turn does not end when its newest mirrored assistant message closes: the
+   * harness finishes a message, then thinks, then calls another tool, and the
+   * row for that next step only lands once it produces something. While it is
+   * quiet the transcript already reads the turn as completed, and gating the
+   * trace on that froze the whole trace of a run that was demonstrably still
+   * working — its clock stopped at the last step it had written, so a turn that
+   * had been running 44 minutes showed 4 and the row underneath it kept spinning
+   * with no way to tell the difference. A live session on this turn is what
+   * keeps the trace live, whatever the mirrored rows say.
+   *
+   * Background work alone never revives a closed turn: delegated and audit work
+   * is covered by `threadWorking`, which only counts while the turn is open.
+   */
   const traceIsLive = $derived(
-    board.unmirroredTraceStartTime.threadWorking &&
-      isCurrentAssistantTurn &&
-      !turnDone &&
-      !board.unmirroredTraceStartTime.brainstormReportRefreshing
+    isCurrentAssistantTurn &&
+      !board.unmirroredTraceStartTime.brainstormReportRefreshing &&
+      ((!turnDone && board.unmirroredTraceStartTime.threadWorking) ||
+        board.pollStreamParts.conversationBusy)
   )
   const traceIsRestored = $derived(
     board.buildSpecActionPrompt.restoredBusy &&

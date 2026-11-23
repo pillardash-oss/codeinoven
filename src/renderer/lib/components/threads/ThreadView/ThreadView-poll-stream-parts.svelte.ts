@@ -24,6 +24,7 @@ import {
   isActivityOnlyUserMessage,
   isTurnCompleted,
   isTurnTransparentUserMessage,
+  newestTurnPromptCreatedAt,
   pendingTurnAnchorIndex,
   splitTurnTraceParts,
   streamWorkingPartsForTurn,
@@ -523,31 +524,17 @@ export class ThreadViewPollStreamParts extends BoardUnit<ThreadView> {
   })
 
   /**
-   * Creation time of the newest prompt that opened a turn.
-   *
-   * Activity-only user messages (compaction notices, sub-agent envelopes, the
-   * app's own continuation prompts) ride mid-turn and a steer the harness has
-   * not taken yet opens no turn at all, so both are skipped   the same boundary
-   * the main process folds its turn stream by. This is the instant the turn on
+   * Creation time of the newest prompt that opened a turn, or null when none
+   * did. The rule lives beside the other turn-boundary rules, so this instant,
+   * the task list and the main process's turn fold all skip the same mid-turn
+   * rows (see `newestTurnPromptCreatedAt`). This is the instant the turn on
    * screen is measured from, and unlike the run store's in-memory start it is
    * persisted, so it survives a window reload.
    */
   turnAnchorCreatedAt(): number | null {
-    for (let index = this.root.loadOlderMessages.messages.length - 1; index >= 0; index--) {
-      const message = this.root.loadOlderMessages.messages[index]
-      if (!message || message.role !== 'user') continue
-      if (isActivityOnlyUserMessage(message)) continue
-      if (
-        threadMessages.isSteerHeld(
-          this.root.handleAgentEvent.thread.projectId,
-          this.conversationId,
-          message.id
-        )
-      )
-        continue
-      return message.createdAt || null
-    }
-    return null
+    return newestTurnPromptCreatedAt(this.root.loadOlderMessages.messages, (message) =>
+      this.isTransparentTurnMessage(message)
+    )
   }
 
   /**
