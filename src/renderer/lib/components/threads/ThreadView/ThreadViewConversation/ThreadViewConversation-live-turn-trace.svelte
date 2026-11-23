@@ -26,13 +26,20 @@
 
   const shownParts = $derived(latestOnly ? traceParts.slice(-1) : traceParts)
 
+  /** A group reply is attributed to the speaker above its bubble, and a
+   *  temporary chat names the model that answered in the message footer, so
+   *  neither repeats the machinery in the trace header. */
+  const hideAttribution = $derived(
+    inGroupBubble || board.props.controller?.kind === 'temporary-chat'
+  )
+
   const formatOutput = conversationTraceOutput(() => board)
 </script>
 
 <WorkingTrace
   parts={shownParts}
   open
-  compact={inGroupBubble}
+  {hideAttribution}
   flat={inGroupBubble}
   bodyMaxHeightRem={inGroupBubble ? 14 : undefined}
   busy={traceBusy}

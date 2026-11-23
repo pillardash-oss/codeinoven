@@ -36,6 +36,10 @@
   let { board, segment, traceMsg, inlineInBubble = false, closingTextIdOverride }: Props = $props()
 
   const groupThread = $derived(isGroupThread(board.handleAgentEvent.thread))
+  /** A group reply is attributed to the speaker above its bubble, and a
+   *  temporary chat names the model that answered in the message footer, so
+   *  neither repeats the machinery in the trace header. */
+  const hideAttribution = $derived(groupThread || board.props.controller?.kind === 'temporary-chat')
   const formatOutput = conversationTraceOutput(() => board)
 
   const turnStart = $derived(segment.turnStart)
@@ -181,7 +185,7 @@
 {#snippet segmentTrace()}
   <WorkingTrace
     parts={turnParts}
-    compact={groupThread}
+    {hideAttribution}
     flat={groupThread}
     bodyMaxHeightRem={groupThread ? 14 : undefined}
     open={isCurrentAssistantTurn || traceIsLive}

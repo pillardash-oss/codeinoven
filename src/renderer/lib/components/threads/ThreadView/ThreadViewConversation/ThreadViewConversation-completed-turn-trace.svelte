@@ -20,6 +20,10 @@
   let { board, turn }: Props = $props()
 
   const groupThread = $derived(isGroupThread(board.handleAgentEvent.thread))
+  /** A group reply is attributed to the speaker above its bubble, and a
+   *  temporary chat names the model that answered in the message footer, so
+   *  neither repeats the machinery in this trace's header. */
+  const hideAttribution = $derived(groupThread || board.props.controller?.kind === 'temporary-chat')
   const formatOutput = conversationTraceOutput(() => board)
 </script>
 
@@ -27,7 +31,7 @@
   parts={turn.parts}
   done
   busy={false}
-  compact={groupThread}
+  {hideAttribution}
   flat={groupThread}
   bodyMaxHeightRem={groupThread ? 14 : undefined}
   totalSteps={turn.totalSteps}

@@ -29,6 +29,7 @@
   import WorkingTraceSummary from './WorkingTraceSummary.svelte'
   import { subagentBadgeLabel, subagentBadgeTitle } from './working-trace-subagents'
   import { workingTraceStartTime } from './working-trace-start'
+  import { traceStepExpansion, traceStepScope } from '$lib/stores/trace-step-expansion.svelte'
 
   interface Props {
     parts: AgentPart[]
@@ -85,11 +86,12 @@
     /** Attribution for the model currently working on this trace. */
     modelLabel?: string | null
     /**
-     * True inside a group conversation. The trace belongs to the speaker named
-     * above its bubble, so its header drops the model, harness and account chips
-     * and keeps only the work and the fold control.
+     * True where the header must carry no attribution at all, only the work and
+     * the fold control: inside a group conversation the trace belongs to the
+     * speaker named above its bubble, and in a temporary chat the message footer
+     * already names the model that answered.
      */
-    compact?: boolean
+    hideAttribution?: boolean
     /**
      * True inside a group reply, where the trace is a section of the bubble rather
      * than a band of its own. Its rows then take the bubble's own surface instead
@@ -188,7 +190,7 @@
     turnSpan = null,
     onLoadOlderParts,
     modelLabel = null,
-    compact = false,
+    hideAttribution = false,
     flat = false,
     bodyMaxHeightRem,
     thinkingLevel = null,
@@ -267,6 +269,15 @@
   let foldRequest: { open: boolean; activity: number } | null = null
   let imageUrls = new FileBlobUrlManager()
   const visibleParts = $derived(latestWorkingTraceParts(parts))
+  /** The conversation this trace belongs to: the key its steps' expansion state
+   *  is remembered against, for as long as the reader stays in the thread. */
+  const stepScope = $derived(traceStepScope(projectId, threadId))
+  /** Whether the reader has a step open inside this trace. */
+  const holdsExpandedStep = $derived(
+    visibleParts.some(
+      (part) => part.type !== 'text' && traceStepExpansion.isOpen(stepScope, part.id)
+    )
+  )
   /** The trace's root. It exists only to find the transcript scroller the trace
    *  lives in, because the trace no longer owns a scroller of its own. */
   let traceRootEl = $state<HTMLDivElement>()
@@ -557,6 +568,21 @@
     setFold(open)
   }
 
+  /**
+   * The reader worked inside this trace   they opened a tool call, a reasoning
+   * block, a chain. From that moment the trace is theirs: the idle blip a
+   * harness reports between steps, and the settle at the end of the turn, must
+   * not fold away what they are reading.
+   *
+   * This is what a live turn did to them before: a step finishing was reported
+   * as the run going idle, the trace closed itself, and the card they had just
+   * expanded went with it   again on the next step.
+   */
+  function markReaderInteraction(): void {
+    if (isOpen && userOpened) return
+    setFold(true, true, false)
+  }
+
   $effect(() => {
     // The newest activity mounted right now. A retry keeps the old parts, so
     // this value stands still until the attempt really produces work.
@@ -593,6 +619,9 @@
     // reader had already reopened after the owner's close.
     if (controlled) return
     if (localUserOpened) return
+    // A trace holding a step the reader opened is theirs, exactly like one they
+    // opened themselves: closing it would take that step off the screen.
+    if (holdsExpandedStep) return
     if ((done || sawLiveWork) && !autoClosedOnSettle) {
       autoClosedOnSettle = true
       if (isOpen) foldToHeader()
@@ -698,7 +727,7 @@
       label={subagentBadgeLabelText}
       elapsedFor={subagentElapsed}
       {modelLabel}
-      {compact}
+      {hideAttribution}
       {isFast}
       {thinkingLevel}
       {providerName}
@@ -728,6 +757,8 @@
           {flat}
           ownScroll={bodyMaxHeightRem !== undefined}
           {formatOutput}
+          scope={stepScope}
+          onReaderInteraction={markReaderInteraction}
           active={liveActivity && index === chains.length - 1}
           showHeader={chains.length > 1 || chain.output !== null}
           {busy}
