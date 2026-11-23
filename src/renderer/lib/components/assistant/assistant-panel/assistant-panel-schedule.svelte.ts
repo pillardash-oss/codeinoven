@@ -156,6 +156,24 @@ export class AssistantPanelSchedule {
   }
 
   /**
+   * Delete one task, and with it the runs it already made. The task's thread is
+   * what the scheduler fires, so removing it is what ends that one job; the other
+   * tasks, the assistant and its clock are untouched.
+   */
+  async deleteOne(task: Thread): Promise<void> {
+    if (this.pending.has(task.id)) return
+    this.pending.add(task.id)
+    try {
+      await invoke('thread:delete', task.projectId, task.id)
+      this.drop(task.id)
+    } catch (error) {
+      reportError(error, `Could not delete ${task.title}`)
+    } finally {
+      this.pending.delete(task.id)
+    }
+  }
+
+  /**
    * Delete every task of this assistant, and with each one its runs. The task's
    * thread is what the scheduler fires, so removing it is what ends the job; the
    * runs hang off it and would otherwise be left with nothing to belong to.

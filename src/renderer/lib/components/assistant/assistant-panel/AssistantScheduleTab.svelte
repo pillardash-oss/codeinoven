@@ -1,5 +1,6 @@
 <script lang="ts">
   import Switch from '$lib/components/ui/Switch.svelte'
+  import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
   import { invoke } from '$lib/ipc.svelte'
   import { reportError } from '$lib/stores/app-errors.svelte'
   import ConfirmDialog from '$lib/components/ui/ConfirmDialog.svelte'
@@ -47,6 +48,8 @@
     onResumeAll: () => Promise<void>
     /** Delete every listed function, and with each one its runs. */
     onDeleteAll: () => Promise<void>
+    /** Delete one function, and with it the runs it already made. */
+    onDeleteTask: (task: Thread) => Promise<void>
     /** Whether every listed function is already off the clock. */
     allPaused: boolean
     /** One row's write is out, so its control reads as busy. */
@@ -73,6 +76,7 @@
     onPauseAll,
     onResumeAll,
     onDeleteAll,
+    onDeleteTask,
     allPaused,
     isTaskPending,
     tasksBusy,
@@ -140,6 +144,8 @@
 
   /** The confirmation that stands between the user and deleting every function. */
   let confirmDeleteAll = $state(false)
+  /** The one function the user asked to delete, or null while no confirmation is open. */
+  let taskPendingDelete = $state<Thread | null>(null)
 
   /** Whether this assistant has anything to list. */
   const hasTasks = $derived(tasks.length > 0)
@@ -173,6 +179,14 @@
   async function runBulk(action: () => Promise<void>): Promise<void> {
     confirmDeleteAll = false
     await action()
+  }
+
+  /** Delete the one function the user confirmed, then close its confirmation. */
+  async function confirmDeleteTask(): Promise<void> {
+    const doomed = taskPendingDelete
+    if (!doomed) return
+    taskPendingDelete = null
+    await onDeleteTask(doomed)
   }
 </script>
 
@@ -327,6 +341,18 @@
               ? `Stop running ${entry.title} on this schedule`
               : `Run ${entry.title} on this schedule again`}
           />
+          <button
+            type="button"
+            class="flex size-6 shrink-0 items-center justify-center text-dimmed transition-colors hover:text-error disabled:opacity-50"
+            disabled={tasksBusy || isTaskPending(entry.id)}
+            title={`Delete ${entry.title}, and the runs it already made`}
+            aria-label={`Delete ${entry.title}`}
+            onclick={() => {
+              taskPendingDelete = entry
+            }}
+          >
+            <CioTrash size={13} aria-hidden="true" />
+          </button>
         </div>
       {/each}
     </div>
@@ -344,6 +370,19 @@
   <p>
     Turning the schedule off drops the clock and its name. {assistantLabel} will only run when you ask,
     and putting it back on a clock means agreeing a new one with it.
+  </p>
+</ConfirmDialog>
+
+<ConfirmDialog
+  open={taskPendingDelete !== null}
+  title="Delete this task"
+  confirmLabel="Delete it"
+  onCancel={() => (taskPendingDelete = null)}
+  onConfirm={() => void confirmDeleteTask()}
+>
+  <p>
+    This deletes {taskPendingDelete?.title ?? 'this task'}, and every run it already made. The
+    assistant, its behavior and the rest of its tasks stay.
   </p>
 </ConfirmDialog>
 

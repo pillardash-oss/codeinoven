@@ -142,6 +142,22 @@ describe('AssistantPanelSchedule', () => {
     expect(schedule.isScheduled(schedule.tasks[1])).toBe(false)
   })
 
+  it('deletes one task through the thread channel and drops its row', async () => {
+    mock.listTasks.mockResolvedValue([
+      task({ id: 'keep', createdAt: 30 }),
+      task({ id: 'doomed', createdAt: 10, title: 'Old sweep' })
+    ])
+    mock.invoke.mockResolvedValue(undefined)
+    const schedule = new AssistantPanelSchedule()
+    await schedule.load('a1')
+    const doomed = schedule.tasks.find((entry) => entry.id === 'doomed')!
+
+    await schedule.deleteOne(doomed)
+
+    expect(mock.invoke).toHaveBeenCalledWith('thread:delete', 'assistant', 'doomed')
+    expect(schedule.tasks.map((entry) => entry.id)).toEqual(['keep'])
+  })
+
   it('stops listening when the panel leaves the assistant', async () => {
     mock.listTasks.mockResolvedValue([])
     const schedule = new AssistantPanelSchedule()

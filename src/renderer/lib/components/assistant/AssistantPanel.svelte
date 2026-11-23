@@ -234,6 +234,8 @@
   function tabCount(id: AssistantPanelTab): number | null {
     if (id === 'connections') return connectionViews.length || null
     if (id === 'agents') return assistant ? agentCount : null
+    if (id === 'schedule')
+      return scheduleTasks.filter((entry) => schedule.isScheduled(entry)).length || null
     if (id === 'wakes') return wakes.length || null
     if (id === 'issues') return issueCount || null
     return null
@@ -465,6 +467,11 @@
   /** Delete every task of the open assistant, and with each one its runs. */
   async function deleteAllTasks(): Promise<void> {
     if (assistant) await schedule.deleteAll(assistant.id)
+  }
+
+  /** Delete one task of the open assistant. */
+  async function deleteTask(entry: Thread): Promise<void> {
+    await schedule.deleteOne(entry)
   }
 
   /** Wakes armed on this assistant's own threads, newest first as the store holds them. */
@@ -946,6 +953,7 @@
           onPauseAll={pauseAllTasks}
           onResumeAll={resumeAllTasks}
           onDeleteAll={deleteAllTasks}
+          onDeleteTask={(entry) => deleteTask(entry)}
           allPaused={schedule.allPaused}
           isTaskPending={(taskId) => schedule.isPending(taskId)}
           tasksBusy={schedule.busy}
