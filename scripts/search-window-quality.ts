@@ -248,11 +248,32 @@ interface MessageRow {
 interface MessagePart {
   type?: unknown
   text?: unknown
+  question?: unknown
+  presentation?: unknown
+  activity?: unknown
+}
+
+function objectField(value: unknown, key: string): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object') return null
+  const field = (value as Record<string, unknown>)[key]
+  return field && typeof field === 'object' ? (field as Record<string, unknown>) : null
+}
+
+function stringField(value: Record<string, unknown> | null, key: string): string {
+  const field = value?.[key]
+  return typeof field === 'string' ? field : ''
 }
 
 /**
- * Concatenate the `text` of every text part of one message. Reasoning, tool and
- * image parts are skipped: the production index only embeds conversation text.
+ * Fold one message's parts into the text the index actually embeds.
+ *
+ * This mirrors `partsToSearchText` in the app: text and reasoning verbatim, a
+ * question with its answer, a presentation body, and a subagent's description,
+ * prompt and output. Tool parts are the one deliberate omission, because a
+ * tool result is not conversation. Mirroring it matters: reading only text parts
+ * makes threads look far shorter than the index sees them (reasoning alone
+ * changes the window count per thread), and the cost per window is what this
+ * script prices.
  */
 function extractText(partsJson: string): string {
   let parsed: unknown
@@ -262,15 +283,36 @@ function extractText(partsJson: string): string {
     return ''
   }
   if (!Array.isArray(parsed)) return ''
-  const texts: string[] = []
+  const chunks: string[] = []
   for (const entry of parsed as MessagePart[]) {
     if (!entry || typeof entry !== 'object') continue
-    if (entry.type !== 'text') continue
-    if (typeof entry.text !== 'string') continue
-    const text = entry.text.trim()
-    if (text.length > 0) texts.push(text)
+    if (entry.type === 'text' || entry.type === 'reasoning') {
+      if (typeof entry.text === 'string' && entry.text.length > 0) chunks.push(entry.text)
+      continue
+    }
+    if (entry.type === 'question') {
+      const question = objectField(entry.question, 'question')
+      const prompt = stringField(question, 'prompt')
+      const answer = stringField(question, 'answer').trim()
+      if (prompt) chunks.push(`Question: ${prompt}${answer ? `\nAnswer: ${answer}` : ''}`)
+      continue
+    }
+    if (entry.type === 'user-presentation') {
+      const presentation = objectField(entry.presentation, 'presentation')
+      const action = stringField(presentation, 'action')
+      const body = stringField(presentation, 'body')
+      if (action || body) chunks.push(`${action}${body ? `\n${body}` : ''}`)
+      continue
+    }
+    if (entry.type === 'subagent') {
+      const activity = objectField(entry.activity, 'activity')
+      for (const key of ['description', 'prompt', 'output']) {
+        const value = stringField(activity, key)
+        if (value) chunks.push(value)
+      }
+    }
   }
-  return texts.join('\n')
+  return chunks.join('\n')
 }
 
 /**
