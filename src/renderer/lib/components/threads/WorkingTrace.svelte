@@ -7,6 +7,7 @@
   import type { MenuItem } from '$lib/components/shared/ThreadDropdown.svelte'
   import type { AgentPart, OvenPrepareStep, ThinkingLevel } from '$shared/types'
   import type { TraceSpan } from '$shared/working-trace-span'
+  import { traceEndInstant } from '$shared/working-trace-span'
   import type { OvenAppearance } from '$shared/ovens'
   import { isImageMime } from '$lib/mime'
   import { FileBlobUrlManager } from '$lib/media-urls.svelte'
@@ -76,11 +77,22 @@
     /** When the agent started working on this trace; used to show a live duration. */
     startTime?: number
     /**
-     * When this trace's turn closed, when the caller knows it.
+     * The instant this turn's last message closed, once the turn has really
+     * closed (see `traceEndInstant`).
      *
-     * A folded trace mounts no entries, so it has no span of its own to measure:
-     * a settled turn reports its duration from its own close instead of from
-     * whatever window happens to be on screen.
+     * A turn outlives its last step: the harness writes its answer afterwards,
+     * and it can sit quiet for a long time before it does. The header states the
+     * duration of the turn, so the close ends it, and the mounted span — the
+     * extent of the rows underneath — only stands in when no close was reported.
+     */
+    closedAt?: number
+    /**
+     * The app's own end of this turn, for a trace that mounts no entries to
+     * measure.
+     *
+     * A folded trace mounts none, so a settled turn reports its duration from
+     * this boundary instead of from whatever window happens to be on screen.
+     * A reported `closedAt` outranks it.
      */
     endTime?: number
     /** Attribution for the model currently working on this trace. */
@@ -181,6 +193,7 @@
     initialUserOpened = false,
     initiallyFolded = false,
     startTime,
+    closedAt,
     endTime,
     active = true,
     totalSteps = 0,
@@ -510,15 +523,13 @@
 
   const elapsed = $derived(busy && effectiveStartTime ? agentClock.seconds(effectiveStartTime) : 0)
   /** The trace's total duration in seconds: the live clock while it works, the
-   *  frozen span once it settles. Null when no entry reported a timestamp. */
+   *  turn's own end once it settles. Null when nothing reported a timestamp. */
   const totalDurationSeconds = $derived.by((): number | null => {
     if (busy && effectiveStartTime) return elapsed
-    const spanEnd = traceSpan?.end ?? endTime
-    if (spanEnd !== undefined && effectiveStartTime) {
-      return Math.max(0, (spanEnd - effectiveStartTime) / 1000)
-    }
-    if (spanEnd !== undefined && traceSpan) return (spanEnd - traceSpan.start) / 1000
-    return null
+    const end = traceEndInstant({ span: traceSpan, closedAt, endTime })
+    const origin = effectiveStartTime ?? traceSpan?.start
+    if (end === undefined || origin === undefined) return null
+    return Math.max(0, (end - origin) / 1000)
   })
   // Convert file:// image URLs to blob: Object URLs so attached images render
   // reliably in the Electron renderer.

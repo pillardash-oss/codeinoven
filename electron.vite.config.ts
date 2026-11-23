@@ -7,6 +7,7 @@ import { join, resolve } from 'path'
 import { build, type Plugin, type PluginOption } from 'vite'
 import packageJson from './package.json'
 import { compatSourcePlugin } from './scripts/lib/vite-compat-source-plugin.ts'
+import { photonWasmPlugin } from './scripts/lib/vite-photon-wasm-plugin.ts'
 
 // Nightly CI resolves the full prerelease semver (e.g. 0.5.53-nightly.4) before
 // packaging and passes it here so the splash/about surfaces show the exact
@@ -259,6 +260,10 @@ export default defineConfig(({ mode }) => {
     main: {
       plugins: [
         compatSourcePlugin(),
+        // Pi reads images through Photon, whose wasm payload the bundler emits
+        // as JavaScript only. Ship it beside the chunk that reads it, or every
+        // attached image is dropped before the model ever sees it.
+        photonWasmPlugin(),
         refuseEmptyChunks('main'),
         useModuleScopeCommonJsShim(),
         standaloneOvenService()

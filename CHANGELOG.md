@@ -86,8 +86,11 @@ browser-session-cookies.ts`), plus upstream ANGLE, Skia and V8 backports and
   the transcript read the turn as completed and the trace froze at the last step
   it had written, so a run that had been going 44 minutes showed 4 while the row
   underneath it kept spinning. A live session on the turn now keeps its trace
-  live whatever the mirrored rows say, which is also what the turn's own audit
-  duration reports once it settles (`ThreadViewConversation-turn-trace.svelte`).
+  live whatever the mirrored rows say, and a settled trace ends its duration at
+  the instant the turn's closing message landed instead of at its last step, so
+  the header states what the turn's own duration states
+  (`ThreadViewConversation-turn-trace.svelte`, `WorkingTrace.svelte`,
+  `working-trace-span.ts`).
 - **Answering an agent's question no longer restarts the trace's clock.** The
   app's record of an answer is a user-role row, and the live trace measured from
   the newest such row, so answering mid-turn made minutes of work look like the
