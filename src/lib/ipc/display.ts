@@ -146,6 +146,30 @@ export interface DisplayCaptureState {
   input: boolean
   /** Why this target cannot be worked from the panel, when it cannot. */
   inputProblem?: string
+  /**
+   * A sentence about the target's screen right now, while it is true.
+   *
+   * Unlike `detail`, which reports a capture failure, this describes a state of
+   * the device that the mirror cannot show (a lock screen waiting on a PIN) and
+   * that ends on its own. The main process withdraws it the moment the device
+   * stops needing it, so the panel never has to guess when to take it down.
+   */
+  hint?: string
+}
+
+/**
+ * What pressing one of the target's buttons said about its screen.
+ *
+ * A hardware key is a blind press: the panel cannot see the device's state, so a
+ * single toggle that assumes it does the opposite of what was meant. The adapter
+ * reads the state as part of the press and answers here, which is what lets one
+ * button lock a lit device and unlock a dark one.
+ */
+export interface DisplayControlOutcome {
+  /** The device's screen after the press, when the adapter can tell. */
+  screenLocked?: boolean
+  /** True when the device is waiting on a credential the mirror cannot show. */
+  credentialPrompt?: boolean
 }
 
 /**
@@ -253,22 +277,15 @@ export interface DisplayInputPermission {
  * exposes no way to summon it, so a rail entry would be a button that does nothing.
  */
 export type DisplayControlAction =
-  | 'home'
-  | 'back'
-  | 'recents'
-  | 'volume-up'
-  | 'volume-down'
-  | 'lock'
-  | 'unlock'
-  | 'power'
-  | 'appearance'
+  'home' | 'back' | 'recents' | 'volume-up' | 'volume-down' | 'power' | 'appearance'
 
 /** What each kind can be asked to do, in the order the rail lists it. */
 export const DISPLAY_CONTROLS_BY_KIND: Record<DisplaySourceKind, readonly DisplayControlAction[]> =
   {
-    // Lock and unlock rather than one power key: power toggles, so pressing it
-    // without knowing the screen's state does the opposite of what was meant.
-    android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'lock', 'unlock'],
+    // One power key, the way the device itself has one: the adapter reads the
+    // screen's state as part of the press, so a single button locks a lit screen
+    // and unlocks a dark one instead of two buttons that can only be half right.
+    android: ['home', 'back', 'recents', 'volume-up', 'volume-down', 'power'],
     // The simulator's own buttons, in the order a hand finds them. `back` is the
     // system edge swipe, `power` the side button (lock and wake), volume is the
     // output volume the simulator plays through, and `appearance` is the light/dark
@@ -285,8 +302,6 @@ export function isDisplayControlAction(value: unknown): value is DisplayControlA
     value === 'recents' ||
     value === 'volume-up' ||
     value === 'volume-down' ||
-    value === 'lock' ||
-    value === 'unlock' ||
     value === 'power' ||
     value === 'appearance'
   )
@@ -388,9 +403,13 @@ export const invokeDisplayContract = {
   /**
    * Press one of the target's own buttons. Refused for an action the target's
    * kind does not advertise in `DISPLAY_CONTROLS_BY_KIND`, so the UI and the
-   * boundary agree without a second copy of the rule.
+   * boundary agree without a second copy of the rule. The answer says what the
+   * press revealed about the screen, so a blind toggle can label its next press.
    */
-  'display:control': {} as Contract<[sessionId: string, action: DisplayControlAction], void>,
+  'display:control': {} as Contract<
+    [sessionId: string, action: DisplayControlAction],
+    DisplayControlOutcome
+  >,
   /**
    * Work the target's own screen: tap, press, swipe, type.
    *

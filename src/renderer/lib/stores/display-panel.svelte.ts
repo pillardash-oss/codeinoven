@@ -2,6 +2,7 @@ import type {
   DisplayCapturePhase,
   DisplayCaptureState,
   DisplayControlAction,
+  DisplayControlOutcome,
   DisplayFrame,
   DisplayInputGesture,
   DisplayInputPermission,
@@ -47,6 +48,11 @@ export interface DisplaySession {
   phase: DisplayCapturePhase
   /** Sentence shown while retrying or failed; cleared by the next good frame. */
   detail: string | null
+  /**
+   * What the device's screen is waiting on, while it is. Written and withdrawn by
+   * the main process, which can see the device; never by the stage.
+   */
+  hint: string | null
   /** True when the target accepts taps and typing from the panel. */
   input: boolean
   /** Why it does not, when it does not. */
@@ -155,6 +161,7 @@ class DisplayPanelState {
           if (session.sessionId !== state.sessionId) continue
           session.phase = state.phase
           session.detail = state.detail ?? null
+          session.hint = state.hint ?? null
           session.input = state.input
           session.inputProblem = state.inputProblem ?? null
           return
@@ -216,6 +223,7 @@ class DisplayPanelState {
       url: null,
       phase: 'starting',
       detail: null,
+      hint: null,
       input: false,
       inputProblem: null,
       stream: null,
@@ -329,12 +337,14 @@ class DisplayPanelState {
   }
 
   /** Press one of the target's own buttons. Rejects with the target's reason when
-   *  it refuses, so the panel can say it instead of leaving a dead button. */
-  async control(tabId: string, action: DisplayControlAction): Promise<void> {
+   *  it refuses, so the panel can say it instead of leaving a dead button. The
+   *  answer is what the press revealed about the screen, so the rail can label the
+   *  next press. */
+  async control(tabId: string, action: DisplayControlAction): Promise<DisplayControlOutcome> {
     const session = this.sessions[tabId]
     if (!session) throw new Error('This display tab is not mirroring anything')
     try {
-      await invoke('display:control', session.sessionId, action)
+      return await invoke('display:control', session.sessionId, action)
     } catch (error: unknown) {
       logRendererError(`The display control "${action}" failed`, error)
       throw error

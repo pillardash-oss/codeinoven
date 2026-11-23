@@ -1,5 +1,6 @@
 import type {
   DisplayControlAction,
+  DisplayControlOutcome,
   DisplayInputGesture,
   DisplaySourceKind
 } from '../../lib/ipc/display'
@@ -22,9 +23,18 @@ export interface DisplayCapture {
    *
    * Only the targets that answer for hardware keys implement it, and only for the
    * actions their kind advertises in `DISPLAY_CONTROLS_BY_KIND`: a screen has no
-   * home button, and offering one would be a lie in the rail.
+   * home button, and offering one would be a lie in the rail. The answer is what
+   * the press revealed, so the panel can label the next one.
    */
-  control?(action: DisplayControlAction): Promise<void>
+  control?(action: DisplayControlAction): Promise<DisplayControlOutcome | void>
+  /**
+   * Whether the target is still showing a lock screen the mirror cannot see.
+   *
+   * Asked only while the panel is telling the person about that lock screen: the
+   * sentence is true of a moment, and this is how the service learns the moment
+   * ended instead of leaving a notice up over a device that is already usable.
+   */
+  keyguardShowing?(): Promise<boolean>
   /**
    * Work the target's own screen.
    *

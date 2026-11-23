@@ -59,9 +59,10 @@
     recents: { action: 'recents', label: 'Recent apps', icon: CioLayers },
     'volume-up': { action: 'volume-up', label: 'Volume up', icon: CioVolumeUp },
     'volume-down': { action: 'volume-down', label: 'Volume down', icon: CioVolumeDown },
-    lock: { action: 'lock', label: 'Lock the device', icon: CioLock },
-    unlock: { action: 'unlock', label: 'Wake and unlock the device', icon: CioLockOpen },
-    power: { action: 'power', label: 'Lock or wake the device', icon: CioLock },
+    // One key, the way the phone has one: the device says which state its screen
+    // is in after each press, so the same button locks and unlocks rather than two
+    // buttons that can only be half right.
+    power: { action: 'power', label: 'Lock or unlock the device', icon: CioLock },
     appearance: { action: 'appearance', label: 'Switch light and dark', icon: CioMoon }
   }
 
@@ -75,6 +76,14 @@
   let controlling = $state(false)
   /** A sentence shown when the user asks for control this target cannot offer. */
   let notice = $state<string | null>(null)
+  /**
+   * The screen state the last power press reported, for this session only.
+   *
+   * A first press is blind, so the button is generic until one has happened; after
+   * it the rail can offer the action the screen actually calls for. Keyed by the
+   * session because a restart mirrors a device whose state nobody has read yet.
+   */
+  let screenState = $state<{ sessionId: string; locked: boolean } | null>(null)
   /** True while the walkthrough for a missing system grant is on screen. */
   let walkthrough = $state(false)
 
@@ -102,9 +111,18 @@
   const status = $derived(
     session?.phase === 'failed' || session?.phase === 'retrying' ? session.phase : null
   )
-  const controls = $derived.by((): RailControl[] =>
-    kind ? DISPLAY_CONTROLS_BY_KIND[kind].map((action) => RAIL_CONTROLS[action]) : []
-  )
+  const controls = $derived.by((): RailControl[] => {
+    if (!kind) return []
+    const known = screenState
+    const locked = known && known.sessionId === session?.sessionId ? known.locked : null
+    return DISPLAY_CONTROLS_BY_KIND[kind].map((action) => {
+      const control = RAIL_CONTROLS[action]
+      if (action !== 'power' || locked === null) return control
+      return locked
+        ? { action, label: 'Unlock the device', icon: CioLockOpen }
+        : { action, label: 'Lock the device', icon: CioLock }
+    })
+  })
   /** Whether this kind has anything to touch at all: a screen or a window does not. */
   const touchable = $derived(controls.length > 0)
   const inputReady = $derived(session?.input === true)
@@ -207,8 +225,12 @@
    */
   async function pressControl(action: DisplayControlAction): Promise<void> {
     notice = null
+    const target = session?.sessionId
     try {
-      await displayPanel.control(tab.id, action)
+      const outcome = await displayPanel.control(tab.id, action)
+      if (outcome.screenLocked !== undefined && target) {
+        screenState = { sessionId: target, locked: outcome.screenLocked }
+      }
     } catch (error: unknown) {
       notice = ipcErrorMessage(error, 'The device did not take that button.')
     }
@@ -352,7 +374,7 @@
       </div>
     {/if}
 
-    {#if status || notice}
+    {#if status || notice || session?.hint}
       <div
         class="absolute inset-x-0 bottom-0 flex items-start gap-1.5 bg-surface/95 px-2 py-1"
         role="status"
@@ -364,7 +386,7 @@
               ? `: ${session.detail}`
               : '.'}
           {:else}
-            {notice}
+            {notice ?? session?.hint}
           {/if}
         </p>
       </div>

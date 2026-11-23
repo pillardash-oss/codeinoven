@@ -522,6 +522,13 @@ export class AssistantManager {
    * Every assistant task thread, newest activity first. Run threads are not
    * tasks: a run is one execution of a task, so it is never listed here, never
    * scheduled, and never counted as a task in an assistant.
+   *
+   * The knowledge thread is not a task either. "Getting started" is the host the
+   * user writes an assistant's behaviour in, not a job it performs, so listing it
+   * here made the scheduler run it on every slot of its assistant's clock and
+   * dispatch the assistant against its own name with no task to do. The panel
+   * already counts only real tasks (`assistantThreadCount`) and the run contract
+   * already refuses to run the setup thread; the scheduler now agrees with both.
    */
   listAssistantTasks(): Thread[] {
     // Archived tasks are hidden tasks: they keep their thread and their
@@ -547,7 +554,7 @@ export class AssistantManager {
 
   private listableTaskThreads(rows: Thread[]): Thread[] {
     return rows
-      .filter((thread) => !isAssistantRunThread(thread))
+      .filter((thread) => !isAssistantRunThread(thread) && !isAssistantSetupThread(thread))
       .sort((a, b) => b.lastActivity - a.lastActivity)
   }
 

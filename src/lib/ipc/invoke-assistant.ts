@@ -77,6 +77,23 @@ export const invokeAssistantContract = {
    */
   'assistant:knowledgeThread': {} as Contract<[assistantId: string], Thread | null>,
   /**
+   * Every task an assistant owns, newest created first, read from the database
+   * rather than from whatever the workspace happens to have loaded. A task Don
+   * scheduled is owned by the assistant in charge like any other, so this is what
+   * the Schedule tab lists: the complete set the user can act on, not a slice.
+   */
+  'assistant:listTasks': {} as Contract<[assistantId: string], Thread[]>,
+  /**
+   * Turn the whole clock off (or back on) for every task an assistant owns, in one
+   * write. `false` pauses them all, `true` schedules them all even under an
+   * unscheduled assistant, and `null` returns each to the assistant's default.
+   * Returns the fresh rows so the list repaints without a reload.
+   */
+  'assistant:setTasksScheduled': {} as Contract<
+    [assistantId: string, scheduled: boolean | null],
+    Thread[]
+  >,
+  /**
    * Every version of an assistant's instructions, newest first, without the
    * documents themselves. Each save replaces the knowledge whole, so the history is
    * what makes a save that lost the page recoverable.

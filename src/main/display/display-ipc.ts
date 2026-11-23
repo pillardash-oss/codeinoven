@@ -71,7 +71,7 @@ export function registerDisplayIpc(deps: DisplayIpcDeps): void {
   })
   ipcMain.handle('display:control', async (_event, sessionId: unknown, action: unknown) => {
     const service = await displayService()
-    await service.control(requireSessionId(sessionId), requireControl(action))
+    return service.control(requireSessionId(sessionId), requireControl(action))
   })
   ipcMain.handle('display:input', async (_event, sessionId: unknown, gesture: unknown) => {
     const service = await displayService()

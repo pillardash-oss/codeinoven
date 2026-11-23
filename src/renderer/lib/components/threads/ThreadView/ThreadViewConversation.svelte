@@ -751,13 +751,27 @@
                     </div>
                   {/if}
                   {#if msg.references?.length}
+                    <!-- Read once, so the chip that opens the reader and the
+                         reader's own sibling list are the same array: a closure
+                         cannot keep the narrowing a reactive `msg.references`
+                         read loses. -->
+                    {@const references = msg.references}
                     <div class="mb-2 flex flex-wrap gap-1.5">
-                      {#each msg.references as reference (reference.id)}
-                        <span
-                          class="inline-flex max-w-full items-center gap-1.5 border border-accent/30 bg-accent/10 px-2 py-1 text-[0.75rem]"
-                          title={reference.comment
-                            ? `${reference.comment}\n\n${reference.text}`
-                            : reference.text}
+                      {#each references as reference (reference.id)}
+                        <!-- The chip truncates the excerpt it stands for, so
+                             reading it back is a click: the passage and its
+                             comment open in the same lightbox a text attachment
+                             uses. Hovering still names the act, not the text. -->
+                        <button
+                          type="button"
+                          class="inline-flex max-w-full cursor-pointer items-center gap-1.5 border border-accent/30 bg-accent/10 px-2 py-1 text-left text-[0.75rem] transition-colors hover:bg-accent/20"
+                          title={`Read ${reference.label}`}
+                          aria-label={`Read ${reference.label}`}
+                          onclick={() =>
+                            board.studioTemporaryChatContext.openReferencePreview(
+                              references,
+                              reference
+                            )}
                         >
                           <CioMessage size={11} class="shrink-0 text-accent" />
                           <span class="font-medium text-foreground">{reference.label}</span>
@@ -767,7 +781,7 @@
                               “{reference.comment}”
                             </span>
                           {/if}
-                        </span>
+                        </button>
                       {/each}
                     </div>
                   {/if}

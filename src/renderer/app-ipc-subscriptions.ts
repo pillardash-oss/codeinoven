@@ -4,6 +4,8 @@ import { invoke, subscribeGuarded } from '$lib/ipc.svelte'
 import { scheduleDeferredWork } from '$lib/deferred-work'
 import { playInAppAlert } from '$lib/notification-sound'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
+import { assistants } from '$lib/stores/assistants.svelte'
+import { deletedThreadLanding } from '$shared/thread-deletion-landing'
 import { isThreadExecutionActiveStatus } from '$shared/thread-status-policy'
 import {
   captureError,
@@ -407,19 +409,39 @@ export function installAppIpcSubscriptions(deps: AppIpcSubscriptionDeps): () => 
     notificationPanelState.dismissForThread(projectId, threadId)
     temporaryChatUnread.clearThread(projectId, threadId)
     if (!deleted) return
-    const coordinatorThreadId =
-      deleted.achievementRole === 'auditor' ? deleted.coordinatorThreadId : undefined
+    const landing = deletedThreadLanding(deleted)
     // Move to the coordinator first, without clearing the selection: clearing it
     // deactivates the context sidebar, which is the panel that holds the way
     // back to the Sr. Engineer, so the user came back to an auditor thread with
     // its coordinator panel gone. Only a reveal that could not happen hands the
     // shell back to the empty state it would have shown anyway.
-    if (coordinatorThreadId) {
-      void openThreadById(projectId, coordinatorThreadId).then((opened) => {
+    if (landing.kind === 'coordinator') {
+      void openThreadById(projectId, landing.threadId).then((opened) => {
         if (!opened && workspaceState.selectedThread?.id === threadId) {
           workspaceState.clearThread()
         }
       })
+      return
+    }
+    // A task owns the runs it produced, so deleting it sweeps them too: removing a
+    // job from an assistant's clock also takes away the run the user was reading.
+    // Land on that assistant's Getting started thread instead of the empty shell,
+    // which also keeps the assistant's panel (where the job was removed) on screen.
+    if (landing.kind === 'assistant') {
+      const assistantId = landing.assistantId
+      void assistants
+        .knowledgeThread(assistantId)
+        .then((setup) =>
+          setup && setup.id !== threadId ? openThreadById(projectId, setup.id) : false
+        )
+        .then((opened) => {
+          if (!opened && workspaceState.selectedThread?.id === threadId) {
+            workspaceState.clearThread()
+          }
+        })
+        .catch(() => {
+          if (workspaceState.selectedThread?.id === threadId) workspaceState.clearThread()
+        })
       return
     }
     workspaceState.clearThread()
