@@ -280,6 +280,22 @@ export class IosDisplayCapture implements DisplayCapture {
     return findSimulatorWindow(await this.deviceName())
   }
 
+  /**
+   * Why a tap or a button would not land, while that is true.
+   *
+   * A booted simulator can be mirrored headless, and then there is no window to
+   * post anything into: the device is real, the place to touch it is not. Saying so
+   * is only useful while it holds, so this is asked again until the window appears.
+   */
+  async hint(): Promise<string | null> {
+    if (this.disposed) return null
+    // Without the helper this machine cannot post input at all, which is a
+    // different sentence and the one the rail already gives.
+    if (!(await simulatorInputHelper())) return null
+    if (await this.window()) return null
+    return `Open ${await this.deviceName()} in Device Hub to work it`
+  }
+
   /** The device's own name, which is what its window is titled. */
   private deviceName(): Promise<string> {
     if (this.name) return Promise.resolve(this.name)

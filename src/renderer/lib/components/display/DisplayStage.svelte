@@ -140,9 +140,11 @@
     (gesture) => {
       // The mark on the picture is the receipt for a gesture that landed; one the
       // target refuses is said in the strip, because a tap that vanishes looks
-      // exactly like a tap on a slow device.
+      // exactly like a tap on a slow device. A target that can explain itself does
+      // so in its own hint instead, so this only carries what nothing else says.
+      notice = null
       displayPanel.sendInput(tab.id, gesture).catch((error: unknown) => {
-        notice = error instanceof Error ? error.message : String(error)
+        notice = ipcErrorMessage(error, 'The device did not take that gesture.')
       })
     },
     () => inputStream
