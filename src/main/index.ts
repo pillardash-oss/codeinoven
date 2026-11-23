@@ -34,6 +34,7 @@ import { installProcessCrashDiagnostics } from './system/lifecycle-diagnostics'
 import { ThreadCreationCoordinator } from './chat/thread-creation-coordinator'
 import { ThreadDeletionCoordinator } from './chat/thread-deletion-coordinator'
 import { appRendererNavigationTargets, trustedIpcMain as ipcMain } from './ipc/trusted-ipc-main'
+import { noteUserTyping } from './system/user-typing-gate'
 import { registerAppControlHandlers } from './app-control/app-control-ipc'
 import { spawnNewInstance } from './system/new-instance'
 import { MAX_INSTANCE_SLOTS } from './system/instance-slots'
@@ -255,6 +256,18 @@ ipcMain.handle(
 /** Track when a terminal in the renderer holds focus (Windows shortcut routing). */
 ipcMain.on('terminal:focusState', (_event, focused: unknown) => {
   state.terminalFocused = focused === true
+})
+
+/**
+ * Track the keyboard across the whole app, not only inside the chat composer.
+ *
+ * Background model work (titles, summaries, memory proposals) is worth a few
+ * seconds' delay and is not worth a stutter, so it asks this gate before starting.
+ * The renderer reports a keystroke at most a few times a second while somebody is
+ * typing, which is enough for a 250 ms window and costs nothing while nobody is.
+ */
+ipcMain.on('system:typingActivity', () => {
+  noteUserTyping()
 })
 
 /** Guard so the renderer's readiness signal is timestamped at most once. */

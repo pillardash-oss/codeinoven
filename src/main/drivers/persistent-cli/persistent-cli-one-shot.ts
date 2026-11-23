@@ -13,6 +13,7 @@ import type {
   TitleModelCandidate
 } from './persistent-cli-types'
 import type { AuxiliaryCandidateVerdict, AuxiliaryVerdictBlockMap } from './auxiliary-verdict-store'
+import { whenUserQuiet } from '../../system/user-typing-gate'
 import {
   buildTitleAttempt,
   describeTitleFailure,
@@ -324,6 +325,13 @@ export async function runOneShotWithCandidates(
   timeoutMs: number = TITLE_GENERATION_TIMEOUT_MS,
   preparePrompt?: (candidate: { providerId?: string; modelId?: string }) => string
 ): Promise<OneShotOutcome> {
+  // Every background model call the app makes — a title, a summary, a memory
+  // proposal, a verdict — runs through here, and each one boots a harness process
+  // that competes with whatever the user is looking at. A finishing thread starts
+  // several at once, which is why typing stuttered when a thread the user was not
+  // even reading settled. Nobody waits for these, so they start on the first quiet
+  // moment instead, bounded by the gate's own ceiling.
+  await whenUserQuiet()
   const fallback = {
     providerId: options.settings.providerId,
     modelId: options.settings.modelId
