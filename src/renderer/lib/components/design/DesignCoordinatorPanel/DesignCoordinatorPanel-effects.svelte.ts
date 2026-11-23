@@ -125,9 +125,10 @@ export class DesignBoardEffects extends BoardUnit<DesignBoard> {
 
     // The board owns the composition job poll, because it draws the export above the
     // controls and both must read the same list. A design has no jobs, so nothing
-    // polls for one.
+    // polls for one, and a board parked behind another tab reads nothing: the
+    // effect re-runs and takes its first read when it is back in front.
     $effect(() => {
-      if (!this.root.gallery.video) return
+      if (!this.root.props.active || !this.root.gallery.video) return
       void this.root.studio.readVideoJobs()
       const timer = setInterval(() => void this.root.studio.readVideoJobs(), 1500)
       return () => clearInterval(timer)

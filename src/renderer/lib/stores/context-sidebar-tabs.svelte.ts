@@ -1130,12 +1130,19 @@ export class SidebarTabContexts {
     if (tab.expired) return
     tab.expiresAt = expiresAt
     this.scheduleTemporaryChatExpiry(tab)
-    // Touching the chat is activity inside it: sending a message, or a turn
-    // lifecycle landing on a panel that is mounted on screen. Either way the
-    // user is in this conversation. A response flagged while the panel was away
-    // must drop its row and rail dots here, because typing into the chat never
-    // goes through a focus event and the badge used to survive exactly that.
-    temporaryChatUnread.clear(tab.projectId, tab.threadId, tab.temporaryChatId)
+    // Touching the chat is activity inside it, and it is a read signal exactly
+    // while that chat is the panel on screen: typing into the chat never goes
+    // through a focus event, so the mark a response raised has to drop here.
+    //
+    // A touch is not a read on its own. The lifecycle keepalive touches the tab
+    // when its turn settles, and that happens whether or not the panel is in
+    // front: a chat whose controller is still alive behind a closed sidebar, a
+    // switched tab, or another thread settles its turn, touches itself, and used
+    // to erase the very mark the finished response had just raised. That is why
+    // the parent row, the rail icon and the dock badge all stopped lighting up.
+    if (this.isTemporaryChatOnScreen(tab.projectId, tab.threadId, tab.temporaryChatId)) {
+      temporaryChatUnread.clear(tab.projectId, tab.threadId, tab.temporaryChatId)
+    }
   }
 
   /**

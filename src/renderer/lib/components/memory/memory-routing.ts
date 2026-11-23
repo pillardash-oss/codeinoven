@@ -1,4 +1,4 @@
-import { ASSISTANT_SPACE_ID } from '$shared/types'
+import { ASSISTANT_SPACE_ID, GLOBAL_BROWSER_PROJECT_ID, INBOX_PROJECT_ID } from '$shared/types'
 import type { MemoryAudience, MemoryEntry, MemoryProposal, MemoryScope } from '$shared/types'
 import {
   locationScopeOf,
@@ -19,6 +19,21 @@ export interface MemoryLocation {
 /** The memory panel context, which controls scope labels and visibility. */
 export type MemoryPanelSurface =
   'settings' | 'sidebar-projects' | 'sidebar-chats' | 'sidebar-assistant' | 'sidebar-browser'
+
+/**
+ * The sidebar surface a project container opens as.
+ *
+ * Chats, browser chats and assistant tasks are ordinary projects with fixed
+ * ids, so every reader that needs the surface for a container resolves it here
+ * instead of repeating the id table: the panel and the rail badge must agree on
+ * which audience's proposals are reviewable in the open thread.
+ */
+export function surfaceForMemoryProject(projectId: string | undefined): MemoryPanelSurface {
+  if (projectId === GLOBAL_BROWSER_PROJECT_ID) return 'sidebar-browser'
+  if (projectId === INBOX_PROJECT_ID) return 'sidebar-chats'
+  if (projectId === ASSISTANT_SPACE_ID) return 'sidebar-assistant'
+  return 'sidebar-projects'
+}
 
 /** One selectable scope, with the pickers it needs on the surface offering it. */
 export interface MemoryScopeOption {

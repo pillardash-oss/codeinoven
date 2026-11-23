@@ -961,7 +961,13 @@ export class HarnessUsageRepo {
    * set; any caller-owned LIMIT remains valid inside the worker's outer bound.
    */
   private async aggregate<T>(sql: string, params: unknown[]): Promise<T[]> {
-    const result = await this.db.queryViaWorker(sql, params, ANALYTICS_MAX_ROWS)
+    // A usage rollup scans every matching usage event: 2,152 ms in the durable
+    // log, queued ahead of a 7,928 ms single-row thread read. Nobody waits on it
+    // with a pointer in hand, and it cannot be deferred either, so it belongs on
+    // the async lane's own connection.
+    const result = await this.db.queryViaWorker(sql, params, ANALYTICS_MAX_ROWS, {
+      lane: 'async'
+    })
     return result.rows as T[]
   }
 

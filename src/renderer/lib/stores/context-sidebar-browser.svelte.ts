@@ -10,6 +10,11 @@ import { browserVisibility } from './browser-visibility.svelte'
 import { BrowserTabFavicons } from './browser-tab-favicon'
 import { loadPersistedBrowserTabs, persistBrowserTabs } from './context-sidebar-persistence'
 import { browserHistory } from './browser-history.svelte'
+import {
+  deviceIsShortCached,
+  effectiveHibernationWindowMs,
+  refreshDeviceIsShort
+} from './browser-hibernation-pressure'
 import { recentVisits } from './recent-visits.svelte'
 import { threadBrowserTabs } from './thread-browser-tabs.svelte'
 import type { BrowserContextTab } from './context-sidebar-types'
@@ -677,7 +682,10 @@ export class SidebarBrowserTabs {
    */
   sweepIdleTabs(now: number = Date.now()): void {
     if (!this.started) return
-    const windowMs = appConfigState.browserHibernationMinutes * 60_000
+    const windowMs = effectiveHibernationWindowMs(
+      appConfigState.browserHibernationMinutes * 60_000,
+      deviceIsShortCached()
+    )
     for (const tab of this.tabs) {
       const onScreen = browserVisibility.isDisplayedByAnyone(tab.id)
       if (!canSleepThreadTab(tab, onScreen)) continue
@@ -702,10 +710,11 @@ export class SidebarBrowserTabs {
     if (!this.started) return
     const awake = this.tabs.some((tab) => !tab.hibernated && tab.url !== '')
     if (awake && this.sweepTimer === null) {
-      this.sweepTimer = window.setInterval(
-        () => this.sweepIdleTabs(),
-        THREAD_HIBERNATION_SWEEP_INTERVAL_MS
-      )
+      this.sweepTimer = window.setInterval(() => {
+        // Ask the device before deciding, so a page parked on a starving
+        // machine is released in minutes rather than in the user's half hour.
+        void refreshDeviceIsShort(true).finally(() => this.sweepIdleTabs())
+      }, THREAD_HIBERNATION_SWEEP_INTERVAL_MS)
       return
     }
     if (!awake && this.sweepTimer !== null) {

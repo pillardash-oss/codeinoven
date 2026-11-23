@@ -135,9 +135,17 @@ const POWER_SECURED = 'cio-secured'
 export const ANDROID_CREDENTIAL_NOTICE =
   'This device needs its PIN or password, and Android hides that screen from mirrors. Turn on control, type it, then press Enter.'
 
-/** Whether the device's own keyguard, credential prompt included, is on screen. */
-const ANDROID_KEYGUARD_QUERY =
-  'dumpsys window | grep -q mDreamingLockscreen=true && echo cio-keyguard'
+/**
+ * Whether the device's own keyguard, credential prompt included, is on screen.
+ *
+ * Both branches answer, and the command always succeeds: a query whose silence
+ * also covers a failed exit would make a broken channel look like an unlocked
+ * device, and one whose failure looks like silence would make a lock screen that
+ * ended look permanent. Only the word printed here is the answer.
+ */
+const ANDROID_KEYGUARD = 'cio-keyguard'
+const ANDROID_KEYGUARD_OPEN = 'cio-open'
+const ANDROID_KEYGUARD_QUERY = `dumpsys window | grep -q mDreamingLockscreen=true && echo ${ANDROID_KEYGUARD} || echo ${ANDROID_KEYGUARD_OPEN}`
 
 /**
  * The keys a panel can send beside a hardware button, by Android's own key codes.
@@ -258,21 +266,20 @@ export class AndroidDisplayCapture implements DisplayCapture {
     return { screenLocked: output.includes(POWER_LOCKED) }
   }
 
-  /** Whether a keyguard the mirror cannot draw is still in front of the device. */
-  async keyguardShowing(): Promise<boolean> {
-    if (this.disposed) return false
-    try {
-      const output = await captureText(
-        this.adb,
-        ['-s', this.sourceId, 'shell', ANDROID_KEYGUARD_QUERY],
-        ADB_CAPTURE_TIMEOUT_MS
-      )
-      return output.includes('cio-keyguard')
-    } catch {
-      // A device that cannot answer is not confirmed locked: a notice nobody can
-      // take down is worse than one that ends with the session it described.
-      return false
-    }
+  /**
+   * Whether a keyguard the mirror cannot draw is still in front of the device.
+   *
+   * A device that cannot answer throws rather than answering "no": silence from a
+   * flaky cable must not be read as the lock screen ending.
+   */
+  async hint(): Promise<string | null> {
+    if (this.disposed) return null
+    const output = await captureText(
+      this.adb,
+      ['-s', this.sourceId, 'shell', ANDROID_KEYGUARD_QUERY],
+      ADB_CAPTURE_TIMEOUT_MS
+    )
+    return output.includes(ANDROID_KEYGUARD) ? ANDROID_CREDENTIAL_NOTICE : null
   }
 
   dispose(): void {

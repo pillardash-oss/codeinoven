@@ -38,13 +38,14 @@
      *  only while the trace is live. */
     modelLabel: string | null
     /**
-     * True inside a group conversation, where a reply's trace belongs to the
-     * speaker named above it. The model, harness and account chips are the
-     * thread's own attribution and would report one speaker's machinery beside
-     * every bubble, so a compact summary keeps only the work: steps, time and the
+     * True where the trace must not carry the model, harness and account chips
+     * at all: a group conversation, whose reply's trace belongs to the speaker
+     * named above it and would report one speaker's machinery beside every
+     * bubble, and a temporary chat, whose message footer already names the model
+     * that answered. The summary then keeps only the work: steps, time and the
      * fold control.
      */
-    compact?: boolean
+    hideAttribution?: boolean
     isFast: boolean
     thinkingLevel: ThinkingLevel | null
     providerName?: string | null
@@ -75,7 +76,7 @@
     label,
     elapsedFor,
     modelLabel,
-    compact = false,
+    hideAttribution = false,
     isFast,
     thinkingLevel,
     providerName,
@@ -179,7 +180,7 @@
   </div>
   <!-- The attribution belongs to the turn that is running: a finished trace
        keeps its steps and time, never the model chips. -->
-  {#if modelLabel && !compact && live}
+  {#if modelLabel && !hideAttribution && live}
     <div
       class="pointer-events-none relative ml-auto inline-flex min-w-0 items-center self-stretch border-b border-border pb-1 transition-colors group-hover/trace:border-border-strong"
     >

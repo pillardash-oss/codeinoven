@@ -28,13 +28,14 @@ export interface DisplayCapture {
    */
   control?(action: DisplayControlAction): Promise<DisplayControlOutcome | void>
   /**
-   * Whether the target is still showing a lock screen the mirror cannot see.
+   * What the target cannot do right now, as a sentence, or null when it can.
    *
-   * Asked only while the panel is telling the person about that lock screen: the
-   * sentence is true of a moment, and this is how the service learns the moment
-   * ended instead of leaving a notice up over a device that is already usable.
+   * A target has states a mirror cannot show and no press explains: a phone behind
+   * its lock screen, a simulator whose window is not on the desktop. Asked only
+   * while the panel is saying such a sentence, and again as it starts, so the
+   * sentence is a fact about this moment rather than a scolding that stays up.
    */
-  keyguardShowing?(): Promise<boolean>
+  hint?(): Promise<string | null>
   /**
    * Work the target's own screen.
    *

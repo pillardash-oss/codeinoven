@@ -479,6 +479,18 @@ export async function dropUnprovenOverlappingChanges(
 }
 
 /** Remove project checkpoint blobs that no remaining thread references. */
+/** Checkpoints one window of the blob scan reads. The scan reads a project in
+ *  windows so the database worker can answer a click between them. */
+const BLOB_PRUNE_WINDOW = 20
+
+/** Hashes one window may return, so a project with huge file maps still yields. */
+const BLOB_PRUNE_WINDOW_ROWS = 20_000
+
+/** Hashes one prune collects in total, matching the single-statement bound this
+ *  replaced. Past it the remaining blobs are kept rather than risk deleting one
+ *  that is still referenced. */
+const BLOB_PRUNE_MAX_ROWS = 200_000
+
 export async function pruneUnusedBlobs(
   host: CheckpointMaintenanceHost,
   projectId: string
@@ -494,6 +506,20 @@ export async function pruneUnusedBlobs(
       encoding: 'utf-8',
       mode: 0o600
     })
+    // Anything to prune at all? Reading the directory first turns the common
+    // "nothing to do" case into one `readdir` instead of a scan over every
+    // checkpoint of the project, which on a large project is seconds of the one
+    // database worker that every click and every page load is queued behind.
+    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
+    let entries
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch (error) {
+      if (isMissing(error)) return 0
+      throw error
+    }
+    if (entries.length === 0) return 0
+
     // Collect referenced hashes in SQL   a full scan used to ship every
     // checkpoint JSON blob across the worker port, which crashed the process
     // on large projects. The change list is unioned in as well: a change
@@ -510,45 +536,70 @@ export async function pruneUnusedBlobs(
     // The read is strict: this scan covers every checkpoint of a project, so it
     // must never be answered by the primary connection on the main thread. A
     // failure throws and the catch below keeps the blobs.
-    let rows: Record<string, unknown>[]
-    try {
-      rows = await host.queryRowsStrict(
-        `SELECT json_extract(je.value, '$.hash') AS hash
-           FROM turn_checkpoints tc, json_each(tc.data, '$.before.files') je
-           WHERE tc.project_id = ?
+    // Every checkpoint of the project, a window at a time.
+    //
+    // This was one statement over the whole project, measured at 3-4.5 s. The
+    // worker's background lane only decides ORDER: a statement already running
+    // cannot be preempted, so a scan that began while the app looked idle made the
+    // very next click wait for the whole of it. Read in windows instead, the scan
+    // returns to the queue between windows, and an interactive read that arrived
+    // meanwhile is drained first — which is what the lanes were built to do.
+    const referenced = new Set<string>()
+    let cursor = 0
+    let collected = 0
+    let more = true
+    while (more) {
+      let rows: Record<string, unknown>[]
+      let windowEnd: number
+      try {
+        const bounds = await host.queryRowsStrict(
+          `SELECT rowid AS rid FROM turn_checkpoints
+            WHERE project_id = ? AND rowid > ?
+            ORDER BY rowid
+            LIMIT ?`,
+          [projectId, cursor, BLOB_PRUNE_WINDOW + 1],
+          BLOB_PRUNE_WINDOW + 1
+        )
+        if (bounds.length === 0) break
+        more = bounds.length > BLOB_PRUNE_WINDOW
+        const lastInWindow = bounds[Math.min(bounds.length, BLOB_PRUNE_WINDOW) - 1]
+        windowEnd = Number(lastInWindow?.['rid'] ?? 0)
+        if (!Number.isFinite(windowEnd) || windowEnd <= cursor) break
+        rows = await host.queryRowsStrict(
+          `WITH window AS (
+             SELECT rowid AS rid, data FROM turn_checkpoints
+              WHERE project_id = ? AND rowid > ? AND rowid <= ?
+           )
+           SELECT json_extract(je.value, '$.hash') AS hash
+             FROM window w, json_each(w.data, '$.before.files') je
            UNION
            SELECT json_extract(je.value, '$.hash') AS hash
-           FROM turn_checkpoints tc, json_each(tc.data, '$.after.files') je
-           WHERE tc.project_id = ?
+             FROM window w, json_each(w.data, '$.after.files') je
            UNION
            SELECT json_extract(side.value, '$.hash') AS hash
-           FROM turn_checkpoints tc, json_each(tc.data, '$.changes') je,
-                json_each(je.value) side
-           WHERE tc.project_id = ?
-             AND side.key IN ('before', 'after')
-             AND json_extract(side.value, '$.hash') IS NOT NULL`,
-        [projectId, projectId, projectId],
-        200_000
-      )
-    } catch {
-      // A malformed checkpoint row fails the whole extraction; preserving
-      // the project blob directory is safer than risking data loss.
-      return 0
-    }
-    const referenced = new Set<string>()
-    for (const row of rows) {
-      const hash = row['hash']
-      if (typeof hash === 'string') referenced.add(hash)
+             FROM window w, json_each(w.data, '$.changes') je,
+                  json_each(je.value) side
+            WHERE side.key IN ('before', 'after')
+              AND json_extract(side.value, '$.hash') IS NOT NULL`,
+          [projectId, cursor, windowEnd],
+          BLOB_PRUNE_WINDOW_ROWS
+        )
+      } catch {
+        // A malformed checkpoint row fails the whole extraction; preserving
+        // the project blob directory is safer than risking data loss.
+        return 0
+      }
+      for (const row of rows) {
+        const hash = row['hash']
+        if (typeof hash === 'string') referenced.add(hash)
+      }
+      collected += rows.length
+      cursor = windowEnd
+      // Bounded total, exactly as the single-statement version was: past it the
+      // remaining blobs are kept rather than risk deleting a referenced one.
+      if (collected >= BLOB_PRUNE_MAX_ROWS) more = false
     }
 
-    const directory = join(getConfigRoot(), `projects/${projectId}/blobs`)
-    let entries
-    try {
-      entries = await readdir(directory, { withFileTypes: true })
-    } catch (error) {
-      if (isMissing(error)) return 0
-      throw error
-    }
     let deleted = 0
     for (const entry of entries) {
       if (!entry.isFile() || referenced.has(entry.name)) continue

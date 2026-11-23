@@ -114,6 +114,7 @@ const SNAPSHOT: TaskManagerSnapshot = {
     }
   ],
   services: [],
+  surfaces: [],
   power: { source: 'ac', thermalState: 'nominal' },
   sampledAt: 2_000
 }

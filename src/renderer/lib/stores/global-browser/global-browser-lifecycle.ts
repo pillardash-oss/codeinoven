@@ -1,6 +1,7 @@
 import { invoke, subscribe } from '$lib/ipc.svelte'
 import { HIBERNATION_SWEEP_INTERVAL_MS } from '../global-browser.svelte'
 import type { GlobalBrowserState } from '../global-browser.svelte'
+import { refreshDeviceIsShort } from '../browser-hibernation-pressure'
 
 /** GlobalBrowserState lifecycle: one concern, moved verbatim from the composition root. */
 export class GlobalBrowserStateLifecycle {
@@ -52,10 +53,13 @@ export class GlobalBrowserStateLifecycle {
     // renderer alive for it, which is what makes this write land.
     subscribe('window:beforeQuit', () => this.host.units['runtime'].flushPendingSave())
     if (typeof window !== 'undefined') {
-      this.host.sweepTimer = window.setInterval(
-        () => this.host.sweepIdleTabs(),
-        HIBERNATION_SWEEP_INTERVAL_MS
-      )
+      this.host.sweepTimer = window.setInterval(() => {
+        // The window this sweep applies is the user's setting, shortened while
+        // the device reports itself short. Ask before sweeping, and only when
+        // there is a page the answer could release.
+        const hasAwakePage = this.host.tabs.some((tab) => !tab.hibernated && tab.url !== '')
+        void refreshDeviceIsShort(hasAwakePage).finally(() => this.host.sweepIdleTabs())
+      }, HIBERNATION_SWEEP_INTERVAL_MS)
     }
     // The read is kept rather than dropped: a caller that has to resolve a tab
     // against the list (opening an address, switching to a tab) awaits it through

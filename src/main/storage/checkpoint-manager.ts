@@ -220,9 +220,21 @@ export const LATE_CLAIM_REOPEN_WINDOW_MS = 15 * 60_000
  * Persists pre/post-turn checkpoints and exposes selective, snapshot-backed rollback.
  * It never uses git reset or rewrites paths that are absent from the recorded diff.
  */
+/**
+ * How long one project's blob prune is trusted.
+ *
+ * The scan behind it reads every checkpoint of the project, and thread cleanup
+ * arrives in bursts, so without this the same full scan was requested again for
+ * every thread trimmed out of the same project.
+ */
+const BLOB_PRUNE_COALESCE_MS = 60_000
+
 export class CheckpointManager {
   private readonly trackers = new Map<string, ChangeTrackingService>()
   private readonly blobLocks = new Map<string, CrossProcessMutex>()
+  /** Blob prunes in flight, and when each project last finished one. */
+  private readonly blobPruneRuns = new Map<string, Promise<number>>()
+  private readonly blobPrunedAt = new Map<string, number>()
 
   constructor(private readonly db: Database) {}
 
@@ -1286,9 +1298,33 @@ export class CheckpointManager {
     })
   }
 
-  /** Remove project checkpoint blobs that no remaining thread references. */
+  /**
+   * Remove project checkpoint blobs that no remaining thread references.
+   *
+   * Coalesced, because the scan behind it reads every checkpoint of the project
+   * (measuring 3-4.5 s on a busy project) and it is triggered by thread cleanup,
+   * which arrives in bursts: nine working threads settling and being trimmed
+   * asked for the same full scan again and again, and every click's own read
+   * queued behind it on the single database worker. A prune already running is
+   * joined, and a project pruned within the last minute is left alone — a blob
+   * that no thread references stays unreferenced for the next sweep, so nothing
+   * is lost by waiting.
+   */
   async pruneUnusedBlobs(projectId: string): Promise<number> {
-    return pruneUnusedBlobs(this.maintenanceHost(), projectId)
+    const running = this.blobPruneRuns.get(projectId)
+    if (running) return running
+    const lastRun = this.blobPrunedAt.get(projectId)
+    if (lastRun !== undefined && Date.now() - lastRun < BLOB_PRUNE_COALESCE_MS) return 0
+    const run = pruneUnusedBlobs(this.maintenanceHost(), projectId)
+      .then((deleted) => {
+        this.blobPrunedAt.set(projectId, Date.now())
+        return deleted
+      })
+      .finally(() => {
+        this.blobPruneRuns.delete(projectId)
+      })
+    this.blobPruneRuns.set(projectId, run)
+    return run
   }
 
   /**

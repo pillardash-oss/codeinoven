@@ -9,6 +9,7 @@
   import { reasoningBlockTitle, reasoningSummaryRepeatsBody } from '$shared/agent-part-merge'
   import { ElapsedTimer } from '$lib/elapsed.svelte'
   import { formatDurationMs } from '$lib/format/duration'
+  import { traceStepExpansion } from '$lib/stores/trace-step-expansion.svelte'
 
   interface Props {
     part: Extract<AgentPart, { type: 'reasoning' }>
@@ -16,11 +17,26 @@
     /** True only while a live session is streaming   gates the ticking clock. */
     live?: boolean
     onCiteFile?: (path: string, line?: number) => void
+    /** The conversation this step belongs to, so the reader's expansion follows
+     *  the step across the folds and re-mounts a live trace causes. */
+    scope: string
   }
 
-  let { part, active = false, live = false, onCiteFile }: Props = $props()
+  let { part, active = false, live = false, onCiteFile, scope }: Props = $props()
 
-  let open = $state(false)
+  /**
+   * Open state lives in the visit-scoped store, not here.
+   *
+   * This row is destroyed and re-created whenever the trace re-mounts it   a
+   * chain folding once it reports its output, the body closing as the run
+   * settles, a page of older steps arriving   and local state would die with
+   * it. The reader opened this block to read it, so it opens the same way every
+   * time the row comes back, for as long as they are in the thread.
+   */
+  const open = $derived(traceStepExpansion.isOpen(scope, part.id))
+  function toggle(): void {
+    traceStepExpansion.setOpen(scope, part.id, !open)
+  }
   const clock = new ElapsedTimer()
 
   let start = $derived(part.time?.start)
@@ -73,7 +89,7 @@
       class="group/think flex w-full cursor-pointer items-center gap-1.5 py-1 text-left text-[0.6875rem] text-dimmed transition-colors hover:text-foreground"
       aria-expanded={open}
       title={open ? 'Hide reasoning' : 'Show reasoning'}
-      onclick={() => (open = !open)}
+      onclick={toggle}
     >
       <CioMemory
         size={13}

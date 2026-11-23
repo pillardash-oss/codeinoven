@@ -71,7 +71,8 @@
         activity.counts,
         activity.browserTransfers,
         activity.browserAssistant,
-        activity.audio
+        activity.audio,
+        activity.temporaryUnread
       )}
       <AppRailButton
         label={option.label}
