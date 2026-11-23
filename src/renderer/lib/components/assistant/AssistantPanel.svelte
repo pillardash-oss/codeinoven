@@ -26,8 +26,6 @@
     assistantAgentsComplete,
     assistantIsScheduled,
     assistantKnowledgeComplete,
-    isAssistantRunThread,
-    isAssistantSetupThread,
     type AgentCapabilityCatalog,
     type BackgroundRun,
     type MissedRun,
@@ -70,6 +68,8 @@
   import AssistantOverviewTab from './assistant-panel/AssistantOverviewTab.svelte'
   import AssistantBehaviourTab from './assistant-panel/AssistantBehaviourTab.svelte'
   import AssistantScheduleTab from './assistant-panel/AssistantScheduleTab.svelte'
+  import { AssistantPanelKnowledge } from './assistant-panel/assistant-panel-knowledge.svelte'
+  import { AssistantPanelSchedule } from './assistant-panel/assistant-panel-schedule.svelte'
   import AssistantReportingTab from './assistant-panel/AssistantReportingTab.svelte'
   import AssistantIssuesTab from './assistant-panel/AssistantIssuesTab.svelte'
   import UtilityEditorModal, {
@@ -437,27 +437,30 @@
   })
 
   /**
-   * The functions the Schedule tab draws switches for. A run is one execution of
-   * a task and the knowledge thread is where the user writes behaviour, so
-   * neither is a job a clock can start.
+   * Every task this assistant owns, and the switches that pause them. Read from
+   * the database so a task Don scheduled is on this assistant's clock tab even when
+   * the user never opened it in this window.
    */
-  const scheduleTasks = $derived(
-    assistantTasks
-      .filter((entry) => !isAssistantSetupThread(entry) && !isAssistantRunThread(entry))
-      .sort((a, b) => b.lastActivity - a.lastActivity)
-  )
+  const schedule = new AssistantPanelSchedule()
+  const scheduleTasks = $derived(schedule.tasks)
 
-  /**
-   * Pause or resume one function without touching the assistant's own clock.
-   * Resuming clears the task's flag instead of writing `true`, so the task follows
-   * its assistant again and a later schedule change carries it along.
-   */
-  async function setTaskScheduled(entry: Thread, next: boolean): Promise<void> {
-    try {
-      await assistants.setTaskScheduled(entry.id, next ? null : false)
-    } catch (error) {
-      reportError(error, 'Could not change this function\u2019s schedule')
-    }
+  $effect(() => {
+    void schedule.load(assistant?.id ?? null)
+  })
+
+  /** Pause every task of the open assistant, leaving its clock and behavior alone. */
+  async function pauseAllTasks(): Promise<void> {
+    if (assistant) await schedule.pauseAll(assistant.id)
+  }
+
+  /** Put every task of the open assistant back on its clock. */
+  async function resumeAllTasks(): Promise<void> {
+    if (assistant) await schedule.resumeAll(assistant.id)
+  }
+
+  /** Delete every task of the open assistant, and with each one its runs. */
+  async function deleteAllTasks(): Promise<void> {
+    if (assistant) await schedule.deleteAll(assistant.id)
   }
 
   /** Wakes armed on this assistant's own threads, newest first as the store holds them. */
@@ -633,33 +636,21 @@
    * The assistant's knowledge ("Getting started") thread, hidden or not. A hidden
    * row never reaches the hydrated thread list the sidebar renders from, so the
    * panel asks the main process for its own assistant's thread instead of reading
-   * the workspace's rows.
+   * the workspace's rows. The read and its state live in the controller, so this
+   * component never assigns a stateful variable from inside an effect.
    */
-  let knowledgeThread = $state<Thread | null>(null)
-  let knowledgeThreadBusy = $state(false)
+  const knowledge = new AssistantPanelKnowledge()
+  const knowledgeThread = $derived(knowledge.thread(assistant?.id ?? null))
+  const knowledgeThreadBusy = $derived(knowledge.busy)
 
   $effect(() => {
     const assistantIdValue = assistant?.id ?? null
-    if (!assistantIdValue) {
-      knowledgeThread = null
-      return
-    }
+    if (!assistantIdValue) return
     // The same target drives the interview checkpoint: the panel is looking at
     // this assistant's knowledge, so the state its authoring conversation agreed is
     // worth having loaded (and the store keeps it fresh from then on).
     void assistants.refreshCheckpoint(assistantIdValue)
-    let cancelled = false
-    void assistants
-      .knowledgeThread(assistantIdValue)
-      .then((thread) => {
-        if (!cancelled) knowledgeThread = thread
-      })
-      .catch(() => {
-        if (!cancelled) knowledgeThread = null
-      })
-    return () => {
-      cancelled = true
-    }
+    knowledge.ensure(assistantIdValue)
   })
 
   const knowledgeThreadHidden = $derived(knowledgeThread?.archived === true)
@@ -682,10 +673,10 @@
   async function toggleKnowledgeThread(): Promise<void> {
     if (!assistant || !knowledgeThread || knowledgeThreadBusy) return
     const revealing = knowledgeThreadHidden
-    knowledgeThreadBusy = true
+    knowledge.busy = true
     try {
       const updated = await assistants.setKnowledgeHidden(assistant.id, !revealing)
-      knowledgeThread = updated
+      knowledge.set(assistant.id, updated)
       if (revealing) onOpenTask(updated)
     } catch (error) {
       reportError(
@@ -695,7 +686,7 @@
           : 'Could not hide the Getting started thread'
       )
     } finally {
-      knowledgeThreadBusy = false
+      knowledge.busy = false
     }
   }
 
@@ -947,7 +938,13 @@
           {missedRunPolicyLabel}
           hasKnowledgeThread={knowledgeThread !== null}
           tasks={scheduleTasks}
-          onSetTaskScheduled={(entry, next) => setTaskScheduled(entry, next)}
+          onSetTaskScheduled={(entry, next) => schedule.setOne(entry, next)}
+          onPauseAll={pauseAllTasks}
+          onResumeAll={resumeAllTasks}
+          onDeleteAll={deleteAllTasks}
+          allPaused={schedule.allPaused}
+          isTaskPending={(taskId) => schedule.isPending(taskId)}
+          tasksBusy={schedule.busy}
           onOpenKnowledgeThread={openKnowledgeTask}
           onPersist={persistAssistant}
         />

@@ -125,4 +125,27 @@ describe('assistants store', () => {
     await vi.waitFor(() => expect(assistants.missedRuns).toEqual(runs))
     expect(missedRunReads).toBe(2)
   })
+
+  it('reads every task an assistant owns, newest created first', async () => {
+    const older = task({ id: 'old', createdAt: 10 })
+    const newer = task({ id: 'new', createdAt: 30 })
+    invoke.mockImplementation(async (channel: string) =>
+      channel === 'assistant:listTasks' ? [older, newer] : undefined
+    )
+
+    const listed = await assistants.listTasks('r1')
+
+    expect(invoke).toHaveBeenCalledWith('assistant:listTasks', 'r1')
+    expect(listed.map((entry) => entry.id)).toEqual(['new', 'old'])
+  })
+
+  it('pauses or resumes every task of one assistant in a single write', async () => {
+    const rows = [task({ id: 'late', createdAt: 5 }), task({ id: 'early', createdAt: 1 })]
+    invoke.mockImplementation(async () => rows)
+
+    const updated = await assistants.setTasksScheduled('r1', false)
+
+    expect(invoke).toHaveBeenCalledWith('assistant:setTasksScheduled', 'r1', false)
+    expect(updated.map((entry) => entry.id)).toEqual(['late', 'early'])
+  })
 })

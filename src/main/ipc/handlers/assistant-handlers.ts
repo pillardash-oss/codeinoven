@@ -648,6 +648,34 @@ export function registerAssistantHandlers(ctx: IpcHandlerContext): void {
   )
 
   /**
+   * Every task an assistant owns, newest created first. The Schedule tab reads
+   * this instead of the workspace's loaded threads, so a task scheduled by Don
+   * shows up under the assistant in charge even when that thread was never opened
+   * in this window.
+   */
+  ipcMain.handle('assistant:listTasks', (_, assistantId: unknown) =>
+    assistantManager.listAssistantTasksFor(validateEntityId(assistantId, 'Assistant ID'))
+  )
+
+  /**
+   * Pause, resume or reset the clock of every task an assistant owns in one write.
+   * Each row is broadcast so every renderer repaints, and the scheduler re-arms
+   * once at the end rather than once per task.
+   */
+  ipcMain.handle('assistant:setTasksScheduled', (_, assistantId: unknown, scheduled: unknown) => {
+    const safeAssistantId = validateEntityId(assistantId, 'Assistant ID')
+    if (scheduled !== null && typeof scheduled !== 'boolean') {
+      throw new TypeError('Task scheduled flag must be a boolean or null')
+    }
+    const updated = assistantManager
+      .listAssistantTasksFor(safeAssistantId)
+      .map((task) => assistantManager.setTaskScheduled(task.id, scheduled))
+    for (const thread of updated) broadcastThreadUpdate(thread)
+    assistantScheduler?.refreshSchedule()
+    return updated
+  })
+
+  /**
    * The getting-started checkpoint the authoring agent keeps current, for the
    * knowledge panel. Read-only: the interview's own turn owns the write.
    */
