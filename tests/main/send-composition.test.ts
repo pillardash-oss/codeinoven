@@ -234,4 +234,18 @@ describe('production send-composition budget (composeBudgetedSend)', () => {
     expect(assistant).not.toContain(RESPONSE_STYLE_INSTRUCTION)
     expect(assistant).toContain('at most 80 words')
   })
+
+  it('keeps the day-to-day reply to two plain paragraphs and no file inventory', () => {
+    // The budget is the app's default reply shape, so its two load-bearing halves
+    // are pinned here: two short paragraphs of plain sentences by default, and no
+    // restating the work as a list of touched files. The app's own changes card
+    // and clickable citations carry that detail instead, and expansion is only
+    // ever a user request.
+    expect(RESPONSE_STYLE_INSTRUCTION).toContain('Two short paragraphs is the whole reply')
+    expect(RESPONSE_STYLE_INSTRUCTION).toContain('Never list the files you changed')
+    expect(RESPONSE_STYLE_INSTRUCTION).toContain('no jargon')
+    expect(RESPONSE_STYLE_INSTRUCTION).toContain(
+      'Expand only when the user explicitly asks for the full explanation'
+    )
+  })
 })
