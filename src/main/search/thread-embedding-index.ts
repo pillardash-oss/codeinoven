@@ -424,7 +424,9 @@ export class ThreadEmbeddingIndex {
       layout.total,
       options.windowChars,
       options.maxWindows,
-      existing?.plannedTotal ?? 0
+      // A record written at another window width carries a spread for a layout
+      // this pass no longer uses, so it is planned afresh instead.
+      existing?.width === options.windowChars ? existing.plannedTotal : 0
     )
     const count = plan.offsets.length
     const windows: (ThreadEmbeddingWindow | undefined)[] = new Array(count)
