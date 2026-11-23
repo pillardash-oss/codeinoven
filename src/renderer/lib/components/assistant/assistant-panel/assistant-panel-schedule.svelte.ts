@@ -1,6 +1,6 @@
 import { SvelteSet } from 'svelte/reactivity'
-import type { Thread } from '$shared/types'
-import { invoke } from '$lib/ipc.svelte'
+import { isAssistantSetupThread, type Thread } from '$shared/types'
+import { invoke, subscribe } from '$lib/ipc.svelte'
 import { reportError } from '$lib/stores/app-errors.svelte'
 import { assistants } from '$lib/stores/assistants.svelte'
 
@@ -40,7 +40,9 @@ export class AssistantPanelSchedule {
     try {
       const rows = await assistants.listTasks(assistantId)
       if (token !== this.ticket) return
-      this.tasks = rows
+      // Newest created first, whatever order the read came back in: the tab's
+      // contract is age order, and one sort per open is cheaper than trusting it.
+      this.tasks = [...rows].sort((a, b) => b.createdAt - a.createdAt)
     } catch (error) {
       if (token === this.ticket) this.loadedFor = null
       reportError(error, 'Could not read this assistant\u2019s tasks')
@@ -50,6 +52,70 @@ export class AssistantPanelSchedule {
   /** Whether one row's write is out, so its control reads as busy. */
   isPending(taskId: string): boolean {
     return this.pending.has(taskId)
+  }
+
+  /**
+   * Keep the list current while the tab is open, without reading it again.
+   *
+   * Every thread event already carries the whole row, so a task Don scheduled, a
+   * rename, a pause made in another window or a deletion costs one lookup here and
+   * no main-process round trip. The guard order is the performance contract:
+   * run threads are the overwhelming majority of `thread:updated` traffic (an
+   * agent status tick per step), so they are dropped on the first field check, and
+   * an unrelated thread is dropped after a comparison, before any list work.
+   *
+   * Returns the dispose, so the subscription lives exactly as long as the panel
+   * is mounted on this assistant.
+   */
+  watch(assistantId: string | null): () => void {
+    if (!assistantId) return () => {}
+    const offUpdated = subscribe('thread:updated', (thread) => this.consider(thread, assistantId))
+    const offDeleted = subscribe('thread:deleted', (_projectId, threadId) => this.drop(threadId))
+    return () => {
+      offUpdated()
+      offDeleted()
+    }
+  }
+
+  /**
+   * Fold one updated row into the list, or take it out when it stopped being a
+   * task of this assistant. A bulk write owns the whole list while it runs, so
+   * events are ignored until it settles and its own fresh rows have landed.
+   */
+  private consider(thread: Thread, assistantId: string): void {
+    if (this.busy) return
+    if (thread.assistantId !== assistantId) {
+      // A task moved away from this assistant, or an unrelated row.
+      this.drop(thread.id)
+      return
+    }
+    if (thread.assistantTaskId || isAssistantSetupThread(thread) || thread.archived) {
+      this.drop(thread.id)
+      return
+    }
+    this.upsert(thread)
+  }
+
+  /** Replace one row in place, or insert a new one where its age puts it. */
+  private upsert(thread: Thread): void {
+    const index = this.tasks.findIndex((task) => task.id === thread.id)
+    if (index >= 0) {
+      if (this.tasks[index] === thread) return
+      const next = this.tasks.slice()
+      next[index] = thread
+      this.tasks = next
+      return
+    }
+    // A newly created task is the newest, so it leads; the sort keeps the two
+    // rows that share a millisecond in the same order on every window.
+    this.tasks = [thread, ...this.tasks].sort((a, b) => b.createdAt - a.createdAt)
+  }
+
+  /** Remove one row if this list holds it. Cheap early exit for unrelated ids. */
+  private drop(taskId: string): void {
+    if (this.tasks.length === 0) return
+    if (!this.tasks.some((task) => task.id === taskId)) return
+    this.tasks = this.tasks.filter((task) => task.id !== taskId)
   }
 
   /** Whether one task runs on the clock. Unset follows the assistant, which is on here. */

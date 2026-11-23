@@ -445,7 +445,11 @@
   const scheduleTasks = $derived(schedule.tasks)
 
   $effect(() => {
-    void schedule.load(assistant?.id ?? null)
+    const assistantIdValue = assistant?.id ?? null
+    void schedule.load(assistantIdValue)
+    // Events carry the whole row, so a task Don schedules while this tab is open
+    // is folded in without re-reading the list.
+    return schedule.watch(assistantIdValue)
   })
 
   /** Pause every task of the open assistant, leaving its clock and behavior alone. */
