@@ -1138,7 +1138,10 @@ export class SearchService {
  * previous pair instead of mixing incomparable spaces in one index.
  */
 function modelSignatureOf(model: InstalledSearchModel, effectiveTokens: number): string {
-  return `windows-v4:${model.id}:${model.dimensions}:${effectiveTokens}:${SEARCH_WINDOW_CHARS}`
+  // Coarse, not stale: `text-v2` marks documents that drop fenced blocks and SVG,
+  // so every vector built from the raw text is retired instead of being mixed
+  // into one index.
+  return `windows-v5:text-v2:${model.id}:${model.dimensions}:${effectiveTokens}:${SEARCH_WINDOW_CHARS}`
 }
 
 function isInstalledSearchModel(value: unknown): value is InstalledSearchModel {
