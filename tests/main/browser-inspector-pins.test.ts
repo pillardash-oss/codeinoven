@@ -244,13 +244,35 @@ describe('the overlay against the page top layer', () => {
     expect(calls).toEqual(['hide', 'show'])
     calls.length = 0
 
-    // A component that keeps its sheet mounted opens it by setting `open`,
-    // which is what a dialog reports here rather than a new node.
+    // A dialog announces itself as a toggle when showModal() runs, and that is
+    // the only thing the overlay listens to: it does not watch the page's DOM.
     const dialog = document.createElement('dialog')
     document.body.appendChild(dialog)
-    document.querySelector('#otp')!.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }))
+    dialog.dispatchEvent(new Event('toggle'))
 
     await waitFor(() => calls.length === 2)
     expect(calls).toEqual(['hide', 'show'])
+  })
+
+  it('does not watch the tree it was injected into', async () => {
+    stubPopoverApi()
+    install()
+    calls.length = 0
+    inspector().run({ type: 'arm' })
+    calls.length = 0
+
+    // A re-rendering list is the normal state of the pages this overlay is
+    // injected into. Watching the tree for surfaces made every one of these
+    // nodes cost something; a surface announces itself instead.
+    const list = document.createElement('div')
+    document.body.appendChild(list)
+    for (let index = 0; index < 500; index += 1) {
+      const row = document.createElement('div')
+      row.textContent = `row ${index}`
+      list.appendChild(row)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 120))
+
+    expect(calls).toEqual([])
   })
 })
