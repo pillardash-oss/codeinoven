@@ -291,7 +291,8 @@ export function installBrowserHistorySwipe(
         if (contents.isDestroyed() || documents.get(contents) !== state) return
         // A document swap rejects the outstanding wait routinely, and the
         // `dom-ready` that follows installs the reporter again for the new
-        // document.
+        // document. A removed frame is that same swap, so it is not logged.
+        if (/WebFrame was removed/u.test(String(error))) return
         Logger.dev('Browser history gesture reporter ended:', error)
       })
   }

@@ -28,8 +28,14 @@ import {
   type DatabaseWorkerFactory
 } from '../database-worker'
 
+/** First integrity probe after the lane starts: well clear of startup. */
+const INTEGRITY_FIRST_DELAY_MS = 30 * 60 * 1000
+/** One full-file quick_check per day of uptime is enough to notice corruption. */
+const INTEGRITY_INTERVAL_MS = 24 * 60 * 60 * 1000
+
 export class DatabaseAsyncReads {
   private worker: DatabaseWorker | null = null
+  private integrityTimer: ReturnType<typeof setTimeout> | null = null
   private readonly path: string
   private readonly workerFactory: DatabaseWorkerFactory | undefined
 
@@ -62,6 +68,34 @@ export class DatabaseAsyncReads {
     )
     this.worker = worker
     worker.start()
+    this.scheduleIntegrityProbe(INTEGRITY_FIRST_DELAY_MS)
+  }
+
+  /**
+   * The daily `PRAGMA quick_check`, on this lane's read-only connection.
+   *
+   * It reads every page of the file, so on the shared worker it held the
+   * interactive queue for as long as the disk took (18 s on a 1.2 GB file).
+   * Here it is a WAL reader on its own thread: nothing can queue behind it
+   * except other async reads, which are already deadline-bounded.
+   */
+  private scheduleIntegrityProbe(delayMs: number): void {
+    this.integrityTimer = setTimeout(() => {
+      this.integrityTimer = null
+      const worker = this.worker
+      if (!worker?.isRunning()) return
+      void worker
+        .integrityCheck(true)
+        .then((result) => {
+          if (result.ok) Logger.info(`Database maintenance: quick_check: ${result.text}`)
+          else Logger.error('Database maintenance: quick_check failed', result.error ?? result.text)
+        })
+        .catch((error: unknown) => Logger.error('Database maintenance: quick_check failed', error))
+        .finally(() => {
+          if (this.worker === worker) this.scheduleIntegrityProbe(INTEGRITY_INTERVAL_MS)
+        })
+    }, delayMs)
+    this.integrityTimer.unref?.()
   }
 
   /** The live worker, or null when this database runs without one. */
@@ -82,6 +116,8 @@ export class DatabaseAsyncReads {
    * write-ahead log of its own to hand back, so there is no checkpoint here.
    */
   async stop(): Promise<void> {
+    if (this.integrityTimer) clearTimeout(this.integrityTimer)
+    this.integrityTimer = null
     const worker = this.worker
     if (!worker?.isRunning()) {
       this.worker = null

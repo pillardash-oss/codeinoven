@@ -810,7 +810,7 @@ export function piCoreToolsSubagentSource(): string {
       promptGuidelines: [
         'Scope each worker to the files or area it owns and tell it to verify only those; a project-wide check belongs to the agent that owns the thread.',
         'A piece you delegate must be separable from the work you keep, or you will duplicate each other.',
-        'You do not commit: list every file you and your workers touched in your final message, and the agent that spawned you commits it.'
+        'You do not commit: list every file you and your workers touched in your final message, relative to the project root and marked uncommitted, and the agent that spawned you commits it. Never report work as committed, landed or finished without a hash read back from git log, and never leave a reported path uncommitted without saying so.'
       ],
       parameters: Type.Object({
         purpose: Type.String({
@@ -920,6 +920,10 @@ export function piCoreToolsSubagentSource(): string {
       // is never a permission card: Full Access would auto-approve it.
       const processKillBypass = unmanagedProcessKillReason(toolName, recordValue(params) ?? {})
       if (processKillBypass) return processKillBypass
+      // And for browsers: a worker that launches its own proves nothing about the
+      // page the app is serving, so the same block applies inside a sub-agent.
+      const browserBypass = unmanagedBrowserShellReason(toolName, recordValue(params) ?? {})
+      if (browserBypass) return browserBypass
       if (['bash', 'powershell', 'cmd'].includes(toolName) && recordValue(params) && typeof params['command'] === 'string') {
         const workspaceWide = params['command']
           .split(/&&|;|\\|\\||\\|/u)

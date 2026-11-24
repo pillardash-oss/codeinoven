@@ -9,6 +9,7 @@
   import CioFolderInput from '@pdslng/cio-icon/CioFolderInput.svelte'
   import CioFork from '@pdslng/cio-icon/CioFork.svelte'
   import CioMessage from '@pdslng/cio-icon/CioMessage.svelte'
+  import CioArrowLeft from '@pdslng/cio-icon/CioArrowLeft.svelte'
   import CioPencil from '@pdslng/cio-icon/CioPencil.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
   import CioTrash from '@pdslng/cio-icon/CioTrash.svelte'
@@ -758,30 +759,52 @@
                     {@const references = msg.references}
                     <div class="mb-2 flex flex-wrap gap-1.5">
                       {#each references as reference (reference.id)}
-                        <!-- The chip truncates the excerpt it stands for, so
-                             reading it back is a click: the passage and its
-                             comment open in the same lightbox a text attachment
-                             uses. Hovering still names the act, not the text. -->
-                        <button
-                          type="button"
-                          class="inline-flex max-w-full cursor-pointer items-center gap-1.5 border border-accent/30 bg-accent/10 px-2 py-1 text-left text-[0.75rem] transition-colors hover:bg-accent/20"
-                          title={`Read ${reference.label}`}
-                          aria-label={`Read ${reference.label}`}
-                          onclick={() =>
-                            board.studioTemporaryChatContext.openReferencePreview(
-                              references,
-                              reference
-                            )}
-                        >
-                          <CioMessage size={11} class="shrink-0 text-accent" />
-                          <span class="font-medium text-foreground">{reference.label}</span>
-                          <span class="max-w-56 truncate text-muted">{reference.text}</span>
-                          {#if reference.comment}
-                            <span class="max-w-48 truncate italic text-foreground">
-                              “{reference.comment}”
+                        {#if reference.kind !== 'thread'}
+                          <!-- The chip truncates the excerpt it stands for, so
+                               reading it back is a click: the passage and its
+                               comment open in the same lightbox a text attachment
+                               uses. Hovering still names the act, not the text. -->
+                          <button
+                            type="button"
+                            class="inline-flex max-w-full cursor-pointer items-center gap-1.5 border border-accent/30 bg-accent/10 px-2 py-1 text-left text-[0.75rem] transition-colors hover:bg-accent/20"
+                            title={`Read ${reference.label}`}
+                            aria-label={`Read ${reference.label}`}
+                            onclick={() =>
+                              board.studioTemporaryChatContext.openReferencePreview(
+                                references,
+                                reference
+                              )}
+                          >
+                            <CioMessage size={11} class="shrink-0 text-accent" />
+                            <span class="font-medium text-foreground">{reference.label}</span>
+                            <span class="max-w-56 truncate text-muted">{reference.text}</span>
+                            {#if reference.comment}
+                              <span class="max-w-48 truncate italic text-foreground">
+                                “{reference.comment}”
+                              </span>
+                            {/if}
+                          </button>
+                        {:else}
+                          <!-- A whole conversation attached as context: the chip
+                               names it and opens it in its own thread page, which
+                               is where the reader checks what the turn was given. -->
+                          <button
+                            type="button"
+                            class="inline-flex max-w-full cursor-pointer items-center gap-1.5 border border-info/30 bg-info/10 px-2 py-1 text-left text-[0.75rem] transition-colors hover:bg-info/20"
+                            title={`Open ${reference.label}`}
+                            aria-label={`Open ${reference.label}`}
+                            onclick={() =>
+                              void openThreadById(
+                                reference.projectId ?? board.handleAgentEvent.thread.projectId,
+                                reference.threadId ?? reference.id
+                              )}
+                          >
+                            <CioMessage size={11} class="shrink-0 text-info" />
+                            <span class="max-w-56 truncate font-medium text-foreground">
+                              {reference.label}
                             </span>
-                          {/if}
-                        </button>
+                          </button>
+                        {/if}
                       {/each}
                     </div>
                   {/if}
@@ -1364,6 +1387,25 @@
                                 <CioSpinner size={12} class="animate-spin" />
                               {:else}
                                 <CioMessage size={12} />
+                              {/if}
+                            </button>
+                          {/if}
+                          {#if board.props.onAttachToParent && board.props.controller?.kind === 'temporary-chat'}
+                            <!-- The side chat becomes durable and rides the chat
+                                 it was opened from as context, so the agent can
+                                 read it back without the user leaving the turn
+                                 they were writing. -->
+                            <button
+                              class="p-1 text-dimmed transition-colors hover:bg-elevated hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+                              aria-label="Attach this chat to the main chat"
+                              title="Attach to main chat"
+                              disabled={board.composerScope.attachingToParent}
+                              onclick={() => void board.composerScope.attachToParent()}
+                            >
+                              {#if board.composerScope.attachingToParent}
+                                <CioSpinner size={12} class="animate-spin" />
+                              {:else}
+                                <CioArrowLeft size={12} />
                               {/if}
                             </button>
                           {/if}

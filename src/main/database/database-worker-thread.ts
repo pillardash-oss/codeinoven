@@ -860,20 +860,10 @@ const MAINTENANCE_STEPS: readonly MaintenanceStep[] = [
       return { level: 'info', label: 'passive checkpoint', detail: JSON.stringify(result) }
     }
   },
-  {
-    key: 'integrity_at',
-    intervalMs: DAY_MS,
-    run: () => {
-      const result = integrity({ kind: 'integrity', quick: true })
-      const detail =
-        result.kind === 'integrity'
-          ? result.ok
-            ? result.text
-            : (result.error ?? 'failed')
-          : 'unexpected result'
-      return { level: result.ok ? 'info' : 'warn', label: 'quick_check', detail }
-    }
-  },
+  // The daily quick_check is not a step here. It reads every page of the file,
+  // which on a 1.2 GB database held this worker, and every click queued behind
+  // it, for 18 s. It runs on the read-only async lane instead
+  // (`DatabaseAsyncReads`), where a WAL reader cannot block anything.
   {
     key: 'retention_at',
     intervalMs: DAY_MS,

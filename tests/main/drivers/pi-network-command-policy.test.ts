@@ -41,10 +41,10 @@ function generatedPolicy(): (command: unknown, cwd: string) => boolean {
 const CHAT_WORKSPACE = '/tmp/cio-test/chats-cwd/thread-1'
 
 describe('the generated network-command policy', () => {
-  it('allows the probe loop that used to raise a card', () => {
+  it('allows the probe loop that used to raise a card, staged in the workspace scratch', () => {
     const isSafe = generatedPolicy()
     const command =
-      'for p in 34349 42285; do echo "== $p"; curl -s -m 4 -o /tmp/o.txt -w \'code=%{http_code}\\n\' "http://127.0.0.1:$p/"; head -c 300 /tmp/o.txt; echo; done'
+      'mkdir -p .cio/tmp/probe && for p in 34349 42285; do echo "== $p"; curl -s -m 4 -o .cio/tmp/probe/o.txt -w \'code=%{http_code}\\n\' "http://127.0.0.1:$p/"; head -c 300 .cio/tmp/probe/o.txt; echo; done'
 
     expect(isSafe(command, CHAT_WORKSPACE)).toBe(true)
   })
@@ -57,12 +57,14 @@ describe('the generated network-command policy', () => {
     expect(isSafe('curl --output-dir ./out https://example.com/x', CHAT_WORKSPACE)).toBe(true)
   })
 
-  it('refuses a download that lands outside the workspace and the temp directory', () => {
+  it('refuses a download that lands outside the workspace', () => {
     const isSafe = generatedPolicy()
 
     expect(isSafe('curl -o /etc/passwd https://example.com/x', CHAT_WORKSPACE)).toBe(false)
     expect(isSafe('curl --output ~/secrets.txt https://example.com/x', CHAT_WORKSPACE)).toBe(false)
-    expect(isSafe('curl -o /tmp/x https://example.com/x', '/no-such-place')).toBe(true)
+    // The machine's temp directory is not scratch: agent work there is refused
+    // outright before this rule is even asked (see the temp-workspace policy).
+    expect(isSafe('curl -o /tmp/x https://example.com/x', '/no-such-place')).toBe(false)
   })
 
   it('refuses what a network request is not: uploads, config reads, local inputs', () => {

@@ -273,10 +273,20 @@ export function piCoreToolsEventsSource(): string {
   // stays transparent there.
   async function gateToolCall(event, ctx, skipSensitive = false) {
     const input = recordValue(event.input) ?? {}
+    // The OS temp directory is not a place to approve work in: the session has
+    // its own scratch folder, so a temp path is refused here, before any card,
+    // and no permission mode can turn it into an approved action.
+    const tempWorkdir = tempWorkdirReason(event.toolName, input, ctx.cwd)
+    if (tempWorkdir) return { block: true, reason: tempWorkdir }
     // Session ownership is an invariant, including in Full Access. Never route
     // this through a permission card that could auto-approve the bypass.
     const cuaBypass = unmanagedCuaShellReason(event.toolName, input)
     if (cuaBypass) return { block: true, reason: cuaBypass }
+    // A browser the agent launches itself is refused in every form, for the same
+    // reason: the in-app browser is the only one that shows the page the app is
+    // serving in the tab the user can watch. Never a card, so no tier approves it.
+    const browserBypass = unmanagedBrowserShellReason(event.toolName, input)
+    if (browserBypass) return { block: true, reason: browserBypass }
     // Same invariant for processes, in every form: no shell command may stop a
     // process by pid, port, name, pattern, signal, interpreter or script, since
     // it can only ever reach something this session did not start. Never a card,

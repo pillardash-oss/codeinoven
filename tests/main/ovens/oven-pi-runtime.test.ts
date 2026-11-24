@@ -221,7 +221,12 @@ describe('createOvenPiLaunch', () => {
     expect(started?.ovenId).toBe(OVEN)
     expect(started?.input.command).toBe('pi')
     expect(started?.input.cwd).toBe(CHECKOUT)
-    expect(started?.input.environment).toEqual(bound.environment)
+    // The bound environment plus the app's own browser decision: an Oven run has
+    // no usable in-app browser, so the shell block allows a headless one there.
+    expect(started?.input.environment).toEqual({
+      ...bound.environment,
+      CIO_THREAD_BROWSER: 'unavailable'
+    })
     expect(started?.input.closeInput).toBe(false)
     expect(started?.input.input).toBe('')
     expect(started?.input.args).toEqual(['--mode', 'rpc', ...bound.extensionArgs])
@@ -375,15 +380,29 @@ describe('ovenPiRunEnvironment', () => {
         EMPTY: ''
       }
     )
+    // `CIO_THREAD_BROWSER` is the app's own decision, not the caller's: a run on
+    // an Oven has no usable in-app browser, so it is appended for every run.
     expect(environment).toEqual({
       ANTHROPIC_API_KEY: 'sk-test',
-      PI_SESSION: 'session-1'
+      PI_SESSION: 'session-1',
+      CIO_THREAD_BROWSER: 'unavailable'
+    })
+  })
+
+  it('marks the run as a thread the in-app browser cannot serve', () => {
+    // The tab in front of the user shows this machine, so a headless browser on
+    // the Oven is the only way to see the page the Oven serves. The shell block
+    // reads this exact flag before it allows one.
+    expect(ovenPiRunEnvironment({}, {})).toEqual({ CIO_THREAD_BROWSER: 'unavailable' })
+    // A caller cannot grant the exception away by supplying its own value.
+    expect(ovenPiRunEnvironment({}, { CIO_THREAD_BROWSER: 'available' })).toEqual({
+      CIO_THREAD_BROWSER: 'unavailable'
     })
   })
 
   it('drops a value larger than the Oven will accept', () => {
     const environment = ovenPiRunEnvironment({}, { HUGE_VALUE: 'x'.repeat(32_769) })
-    expect(environment).toEqual({})
+    expect(environment).toEqual({ CIO_THREAD_BROWSER: 'unavailable' })
   })
 })
 

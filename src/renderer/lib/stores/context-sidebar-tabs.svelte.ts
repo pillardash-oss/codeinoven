@@ -17,6 +17,7 @@ import { conversationAttention } from './conversation-attention.svelte'
 import { threadMessages } from './thread-messages.svelte'
 import { temporaryChatUnread } from './temporary-chat-unread.svelte'
 import { recentVisits } from './recent-visits.svelte'
+import { rendererRecovery } from './renderer-recovery.svelte'
 import { gitState } from './git.svelte'
 import { subagentTaskLabel } from '$lib/subagent-presentation'
 import {
@@ -1179,6 +1180,10 @@ export class SidebarTabContexts {
     threadMessages.clear(tab.projectId, temporaryChatId)
     agentRuns.clear(tab.projectId, temporaryChatId)
     conversationAttention.clear(tab.projectId, temporaryChatId)
+    // A message still queued behind the side chat's last turn belongs to the
+    // chat that is now gone; a stale key would be swept by the headless
+    // dispatcher as if it were a thread.
+    rendererRecovery.clearAllQueuedMessages(tab.projectId, temporaryChatId)
     this.clearTemporaryChatExpiry(temporaryChatId)
     if (closeRemote) void invoke('agent:closeTemporaryChat', temporaryChatId)
   }
@@ -1188,6 +1193,7 @@ export class SidebarTabContexts {
     threadMessages.clear(tab.projectId, tab.temporaryChatId)
     agentRuns.clear(tab.projectId, tab.temporaryChatId)
     conversationAttention.clear(tab.projectId, tab.temporaryChatId)
+    rendererRecovery.clearAllQueuedMessages(tab.projectId, tab.temporaryChatId)
     temporaryChatUnread.clear(tab.projectId, tab.threadId, tab.temporaryChatId)
     this.clearTemporaryChatExpiry(tab.temporaryChatId)
     tab.temporaryChatId = crypto.randomUUID()

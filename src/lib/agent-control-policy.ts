@@ -10,6 +10,17 @@ export const BACKGROUND_AGENT_CONTROL_INSTRUCTION = [
   'Keep activity visible through the existing agent cursor, PiP, and thread indicators without activating the target solely to show activity.'
 ].join(' ')
 
+/**
+ * The session flag that says this thread's in-app browser cannot serve it.
+ *
+ * Set by the app, never by the agent: an Oven thread is always marked, because
+ * the browser tab in front of the user shows this machine while the work runs
+ * on the Oven, so a headless browser over there is the only way to see the page.
+ */
+export const THREAD_BROWSER_ENV = 'CIO_THREAD_BROWSER'
+/** The value of {@link THREAD_BROWSER_ENV} for a thread without a usable browser. */
+export const THREAD_BROWSER_UNAVAILABLE = 'unavailable'
+
 /** A routing guard, independent of permission tier. Kept self-contained so Pi
  * can embed the same implementation in its generated extension. */
 export function unmanagedCuaShellReason(
@@ -397,4 +408,341 @@ export function unmanagedProcessKillReason(
   }
 
   return inspectScript(command, 0)
+}
+
+/**
+ * The browser rule every agent surface obeys: no shell command may launch a
+ * browser of its own.
+ *
+ * The in-app browser is the only browser an agent has, because it is the only
+ * one that shows the page the app actually serves, in the tab the user can see,
+ * with the session, extensions and permissions the app already prepared. A
+ * chromium, Playwright, Puppeteer or WebKit the agent downloads and launches
+ * proves nothing about that tab and can reach a page the app never served.
+ *
+ * The prompt forbade it and agents substituted anyway: they hunted a
+ * Playwright cache for a downloaded "Google Chrome for Testing" binary, ran
+ * `--headless` screenshots, and opened remote-debugging ports. A prohibition
+ * that only exists in words has already lost twice, so this is a block like the
+ * process-kill and cua-driver guards beside it: never a permission card, so no
+ * permission tier can approve it. It is a parser rather than a keyword search,
+ * so `rg "playwright"` still runs, and quoted text is only read when it is code
+ * an executor was handed.
+ *
+ * Kept self-contained so Pi embeds the same implementation in its generated
+ * extension.
+ *
+ * The rule is not absolute, and the one exception is the app's call, not the
+ * agent's: a thread whose browser cannot serve it may use a headless browser.
+ * That is an Oven thread (the browser tab shows this machine, never the Oven's
+ * checkout) and any thread the app marks unavailable. The app decides before
+ * the command runs, through `options.threadBrowserAvailable` or the
+ * `CIO_THREAD_BROWSER=unavailable` flag it sets for the session, so an agent can
+ * never grant itself the exception by arguing for it.
+ */
+export function unmanagedBrowserShellReason(
+  toolName: string,
+  input: Record<string, unknown>,
+  options?: { threadBrowserAvailable?: boolean }
+): string | null {
+  if (!['bash', 'powershell', 'cmd'].includes(toolName)) return null
+  const command = typeof input['command'] === 'string' ? input['command'] : ''
+  if (!command.trim()) return null
+  // The app decides whether the thread browser can serve this thread. An Oven
+  // thread is always unavailable, because the tab in front of the user is this
+  // machine's, and a headless browser over there is the only option left.
+  const marked = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+    ?.env?.['CIO_THREAD_BROWSER']
+  const threadBrowserAvailable = options?.threadBrowserAvailable ?? marked !== 'unavailable'
+  if (!threadBrowserAvailable) return null
+
+  const refused =
+    'Not executed: launching your own browser is refused while this thread has its in-app browser, which is the only browser that shows the page the app is serving, in the tab the user can watch. Use it first: find it with cio_util_find (query "browser"), activate it with cio_util_init, and drive the page with its operations   open a tab, navigate, read the console, click, type, and take a screenshot. Only when that browser genuinely cannot serve this thread may you fall back to a headless browser, and the app allows the fallback itself (an Oven thread, where the browser tab belongs to this machine, is already allowed). When you are refused here, that means the app has not marked this thread unavailable: use the in-app browser, or say what it could not do and report the check you could not run. A binary that happens to be on disk is not permission to use it.'
+
+  /** Programs that are a browser, or a launcher that drives one. */
+  const browserPrograms = new Set([
+    'playwright',
+    'playwright-core',
+    'puppeteer',
+    'chrome',
+    'chrome.exe',
+    'google-chrome',
+    'google-chrome-stable',
+    'google-chrome-beta',
+    'google-chrome-unstable',
+    'chromium',
+    'chromium-browser',
+    'chrome-headless-shell',
+    'headless-shell',
+    'headless_shell',
+    'msedge',
+    'msedge.exe',
+    'microsoft-edge',
+    'microsoft-edge-stable',
+    // The macOS app bundle hands the binary's human name to the shell, so a
+    // launch from /Applications has to match on the name as well as the path.
+    'google chrome',
+    'chrome for testing',
+    'google chrome for testing',
+    'microsoft edge',
+    'chromium headless shell',
+    'firefox',
+    'firefox.exe',
+    'webkit',
+    'geckodriver',
+    'chromedriver',
+    'safaridriver',
+    'selenium-side-runner'
+  ])
+  /** Package runners that can reach a browser package without naming a binary. */
+  const packageRunners = new Set([
+    'npx',
+    'bunx',
+    'pnpm',
+    'yarn',
+    'npm',
+    'bun',
+    'node',
+    'deno',
+    'tsx',
+    'python',
+    'python2',
+    'python3',
+    'ruby',
+    'sh',
+    'bash',
+    'zsh',
+    'pwsh',
+    'powershell'
+  ])
+  /** Browser packages and cache paths, which name the act without naming it. */
+  const browserEvidence =
+    /(?:^|[\s/\\'"])(?:@playwright\/test|playwright-core|playwright|puppeteer-core|puppeteer)(?:$|[\s/\\'"]|@)|ms-playwright|chrome-headless-shell|google chrome for testing|\.local-chromium|chromium-\d+/iu
+  /** Flags that only ever belong to a browser being driven from a shell. */
+  const browserFlags =
+    /^(?:--headless(?:=\w+)?|--headless-new|--remote-debugging-port(?:=\d+)?|--remote-debugging-pipe|--dump-dom|--print-to-pdf(?:=.*)?|--screenshot(?:=.*)?|--user-data-dir(?:=.*)?|--virtual-time-budget(?:=\d+)?|--window-size(?:=\d+,\d+)?|--disable-gpu|--no-sandbox|--single-process)$/iu
+  /** Code an executor was handed, which is the one place a launch hides. */
+  const browserApi =
+    /\b(?:chromium|chrome|firefox|webkit|puppeteer)\s*\.\s*launch\b|\b(?:playwright)\s*\.\s*(?:chromium|firefox|webkit)\b|\blaunch_persistent_context\b|\bpuppeteer\.launch\b|\brequire\(\s*['"](?:puppeteer|playwright|playwright-core)|\bfrom\s+['"]?(?:puppeteer|playwright|playwright-core)|\bconnect_over_cdp\b|\bremote-debugging-port\b/iu
+
+  /** A browser bundle or cache path, which tokenising would split on its spaces. */
+  const browserPath =
+    /(?:\.app\/Contents\/MacOS\/|\/ms-playwright\/|\.local-chromium[\\/]|\/chrome-linux\/chrome\b|\/chrome-headless-shell\b|Google Chrome for Testing\b)/iu
+
+  const programName = (word: string): string => {
+    const cleaned = word.replace(/^["']+|["']+$/gu, '')
+    const parts = cleaned.split(/[\\/]/u)
+    const last = parts[parts.length - 1] ?? cleaned
+    return last.replace(/\.(?:exe|cmd|bat|ps1)$/iu, '').toLowerCase()
+  }
+
+  /** Reading about a browser bundle is not launching it. */
+  const readOnlyPrograms =
+    /(?:^|[\s;&|])(?:rg|grep|ag|ack|git|ls|cat|find|head|tail|wc|stat|file|readlink|realpath)\b/u
+  if (browserPath.test(command) && !readOnlyPrograms.test(command)) return refused
+
+  /** Split a command into words, remembering whether a word was quoted. */
+  const tokenize = (text: string): { words: string[]; quoted: boolean[] }[] => {
+    const commands: { words: string[]; quoted: boolean[] }[] = []
+    let words: string[] = []
+    let quoted: boolean[] = []
+    let word = ''
+    let open = false
+    let quote: string | null = null
+    let wasQuoted = false
+    const finishWord = (): void => {
+      if (!open) return
+      words.push(word)
+      quoted.push(wasQuoted)
+      word = ''
+      open = false
+      wasQuoted = false
+    }
+    const finishCommand = (): void => {
+      finishWord()
+      if (words.length > 0) commands.push({ words, quoted })
+      words = []
+      quoted = []
+    }
+    let escaped = false
+    for (const character of text) {
+      if (escaped) {
+        word += character
+        open = true
+        escaped = false
+        continue
+      }
+      if (character === '\\' && quote !== "'") {
+        escaped = true
+        continue
+      }
+      if (quote) {
+        if (character === quote) quote = null
+        else word += character
+        open = true
+        continue
+      }
+      if (character === '"' || character === "'" || character === '`') {
+        quote = character
+        open = true
+        wasQuoted = true
+        continue
+      }
+      if (
+        character === '\n' ||
+        character === ';' ||
+        character === '&' ||
+        character === '|' ||
+        character === '(' ||
+        character === ')'
+      ) {
+        finishCommand()
+        continue
+      }
+      if (character === ' ' || character === '\t' || character === '\r') {
+        finishWord()
+        continue
+      }
+      word += character
+      open = true
+    }
+    finishCommand()
+    return commands
+  }
+
+  /** A file an executor was handed, read only when it is a real path. */
+  const readScript = (candidate: string): string | null => {
+    if (!candidate || /^[|&;<>]+$/u.test(candidate)) return null
+    if (!/\.(?:[cm]?[jt]sx?|py|rb|pl|php|ps1)$/iu.test(candidate)) return null
+    const moduleProcess = (
+      globalThis as {
+        process?: { getBuiltinModule?: (specifier: string) => unknown; cwd?: () => string }
+      }
+    ).process
+    const fsModule = moduleProcess?.getBuiltinModule?.('node:fs')
+    const readFileSync = (
+      fsModule as { readFileSync?: (target: string, encoding: string) => string } | undefined
+    )?.readFileSync
+    if (!readFileSync) return null
+    const cwd = moduleProcess?.cwd?.() ?? '.'
+    const candidates = [candidate, `${cwd}/${candidate}`, `${cwd}\\${candidate}`]
+    for (const path of candidates) {
+      try {
+        return readFileSync(path, 'utf8')
+      } catch {
+        continue
+      }
+    }
+    return null
+  }
+
+  for (const segment of tokenize(command)) {
+    const { words, quoted } = segment
+    let cursor = 0
+    while (cursor < words.length && /^[A-Za-z_]\w*=/u.test(words[cursor] ?? '')) cursor++
+    const wrappers = new Set([
+      'env',
+      'sudo',
+      'doas',
+      'nohup',
+      'command',
+      'exec',
+      'nice',
+      'time',
+      'timeout'
+    ])
+    while (cursor < words.length && wrappers.has(programName(words[cursor] ?? ''))) {
+      const name = programName(words[cursor] ?? '')
+      cursor++
+      while (cursor < words.length) {
+        const word = words[cursor] ?? ''
+        if (name === 'env' && /^[A-Za-z_]\w*=/u.test(word)) {
+          cursor++
+          continue
+        }
+        if (name === 'timeout') {
+          cursor++
+          break
+        }
+        if (word.startsWith('-')) {
+          cursor++
+          continue
+        }
+        break
+      }
+    }
+    const head = programName(words[cursor] ?? '')
+    const rest = words.slice(cursor + 1)
+    const restQuoted = quoted.slice(cursor + 1)
+    // A search reads text about browsers; it never drives one. `rg "playwright"`
+    // and `grep -rn chromium.launch src` stay allowed, which is why this is a
+    // parser and not a keyword search.
+    if (head === 'rg' || head === 'grep' || head === 'ag' || head === 'ack' || head === 'git') {
+      continue
+    }
+
+    // A flag no other program takes: a headless run, a debugging port, a dump.
+    if (rest.some((word) => browserFlags.test(word))) return refused
+    // The browser itself, or a launcher that only exists to drive one.
+    if (browserPrograms.has(head)) return refused
+    // A macOS launch of an installed browser: `open -a "Google Chrome"`.
+    if (head === 'open') {
+      const appAt = rest.findIndex((word) => /^-(?:a|na|b)$/u.test(word))
+      const target = appAt >= 0 ? (rest[appAt + 1] ?? '') : ''
+      if (browserPrograms.has(programName(target))) return refused
+      if (/chrome|chromium|firefox|playwright|puppeteer|webkit|edge/iu.test(target)) return refused
+    }
+    // A package runner reaching a browser package: npx playwright, bunx puppeteer.
+    if (packageRunners.has(head) || head === '') {
+      for (let index = 0; index < rest.length; index++) {
+        const word = rest[index] ?? ''
+        const isQuoted = restQuoted[index] === true
+        if (browserEvidence.test(word)) return refused
+        if (browserPrograms.has(programName(word))) return refused
+        // Inline code handed to an interpreter.
+        if (isQuoted && browserApi.test(word)) return refused
+        const source = readScript(word)
+        if (source && browserApi.test(source)) return refused
+      }
+    }
+    // Shell text that is itself a whole command, quoted or in a heredoc. Only an
+    // executor runs its argument; `echo "chromium --headless"` writes a string
+    // and must keep working, which is why this is not a keyword search.
+    const executors = new Set([
+      'bash',
+      'sh',
+      'zsh',
+      'dash',
+      'ksh',
+      'fish',
+      'cmd',
+      'pwsh',
+      'powershell',
+      'node',
+      'bun',
+      'deno',
+      'tsx',
+      'python',
+      'python2',
+      'python3',
+      'ruby',
+      'perl',
+      'php',
+      'source'
+    ])
+    if (executors.has(head)) {
+      for (let index = 0; index < rest.length; index++) {
+        const word = rest[index] ?? ''
+        const isQuoted = restQuoted[index] === true
+        const source = readScript(word)
+        if (source && browserApi.test(source)) return refused
+        if (!isQuoted) continue
+        if (browserApi.test(word)) return refused
+        if (!/[\s;&|]/u.test(word)) continue
+        const nested = unmanagedBrowserShellReason(toolName, { command: word })
+        if (nested) return refused
+      }
+    }
+  }
+  return null
 }

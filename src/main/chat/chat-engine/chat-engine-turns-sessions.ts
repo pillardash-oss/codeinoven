@@ -1670,6 +1670,22 @@ export class ChatEngineTurnsSessions {
   ): Promise<unknown | undefined> {
     const labelForMessage = label
     return new Promise((resolve, reject) => {
+      // A session runs one turn at a time, so a second waiter for the same
+      // session is a caller starting a turn over one that is still running.
+      // Overwriting the previous waiter would orphan its promise forever, which
+      // the renderer can only report as an opaque `reply was never sent`. The
+      // previous turn is settled with a real error instead.
+      const pending = this.host.state.completionWaiters.get(sessionId)
+      if (pending) {
+        Logger.info(
+          `${labelForMessage}: a new turn started before the previous one settled; failing the stale wait.`
+        )
+        this.host.state.completionWaiters.delete(sessionId)
+        if (pending.timer !== undefined) clearTimeout(pending.timer)
+        pending.reject(
+          new Error(`${labelForMessage} was replaced by a newer turn before it finished`)
+        )
+      }
       const armTimer = (): ReturnType<typeof setTimeout> | undefined => {
         if (timeoutMs === null) return undefined
         return setTimeout(() => {

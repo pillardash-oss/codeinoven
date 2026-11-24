@@ -116,10 +116,12 @@ describe('chat permission scope on an external Oven', () => {
   it('pre-authorizes the Oven thread root the session runs in', async () => {
     const scope = await chatScope({ ovenId: OVEN_ID })
 
-    // The Oven's own temp is that machine's scratch in exactly the way a local
-    // chat's workspace is this machine's: a probe writing `/tmp/o.txt` there is
-    // not reaching outside its authorisation.
-    expect(scope.scratchPaths).toEqual([OVEN_ROOT, '/tmp', '/var/tmp', '/private/tmp'])
+    // Only the root the Oven hands the session: the machine's temp directory is
+    // not an authorisation anywhere, on this computer or on an Oven. A command
+    // that names it is refused by the temp-workspace policy before any scope is
+    // consulted, and this session stages its throwaway files in `.cio/tmp`
+    // inside the root below.
+    expect(scope.scratchPaths).toEqual([OVEN_ROOT])
     expect(scope.restrictToAllowed).toBe(true)
   })
 

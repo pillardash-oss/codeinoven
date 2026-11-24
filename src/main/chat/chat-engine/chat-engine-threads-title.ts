@@ -11,6 +11,7 @@ import { createHash } from 'crypto'
 import { Logger } from '../../system/logger'
 import { broadcastThreadUpdate } from '../thread-events'
 import { estimateTokens } from '../memory-service'
+import { shouldRequestModelTitle } from '../title-generator'
 import { validateEntityId } from '../../ipc/ipc-validation'
 import type { HarnessDriver, HandoffWorkerSession } from '../../drivers/driver.interface'
 import { DEFAULT_HARNESS } from '../../../lib/harness-default'
@@ -69,6 +70,17 @@ export class ChatEngineThreadsTitle {
   ): Promise<void> {
     const thread = await this.host.threadManager.getThread(projectId, threadId)
     if (!thread || thread.titleSource === 'manual' || isAssistantSetupThread(thread)) return
+    // A message of six words or fewer IS a title: the deterministic fallback
+    // already stored the user's own words, so a disposable model turn here
+    // would only rephrase them. No title request is made for that thread.
+    if (!shouldRequestModelTitle(text)) {
+      Logger.dev('Thread auto-title skipped: first message is already short enough', {
+        projectId,
+        threadId,
+        driverId
+      })
+      return
+    }
     // The first-message fallback is already visible, and it must never be the
     // only title a thread gets. An auxiliary assignment is a preference, not a
     // precondition: `generateTitleWithModel` tries the assigned model first and

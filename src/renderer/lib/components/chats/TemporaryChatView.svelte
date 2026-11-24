@@ -12,9 +12,11 @@
     tabId: string
     /** Promote the side chat into a regular thread, then open it. */
     onContinueInThread?: (tab: TemporaryChatContextTab) => void | Promise<void>
+    /** Make the side chat durable and attach it to the chat it was opened from. */
+    onAttachToParent?: (tab: TemporaryChatContextTab) => void | Promise<void>
   }
 
-  let { tabId, onContinueInThread }: Props = $props()
+  let { tabId, onContinueInThread, onAttachToParent }: Props = $props()
 
   function resolveTab(): TemporaryChatContextTab | null {
     return contextSidebarState.temporaryChatTab(tabId)
@@ -58,6 +60,17 @@
       const raw = error instanceof Error ? error.message : String(error)
       const clean = raw.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
       throw new Error(clean || 'The side chat could not be continued.', { cause: error })
+    }
+  }
+
+  async function attachToParent(): Promise<void> {
+    if (!onAttachToParent || !tab) return
+    try {
+      await onAttachToParent(tab)
+    } catch (error: unknown) {
+      const raw = error instanceof Error ? error.message : String(error)
+      const clean = raw.replace(/^Error invoking remote method '[^']+': Error:\s*/u, '')
+      throw new Error(clean || 'The side chat could not be attached.', { cause: error })
     }
   }
 
@@ -114,6 +127,7 @@
         emptyStateHeading={quickChat ? quickChatEmptyStateHeading : undefined}
         promptSuggestions={quickChat ? quickChatPrompts : undefined}
         onContinueInThread={continueInThread}
+        onAttachToParent={attachToParent}
       />
     {/key}
   {:else}

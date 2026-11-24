@@ -40,6 +40,7 @@ import {
   MAX_CHECKPOINT_FAILURE_LENGTH
 } from './checkpoint/checkpoint-errors'
 import {
+  backfillChangeProvenance,
   dropExcludedPathChanges,
   dropUnprovenOverlappingChanges,
   pruneUnusedBlobs,
@@ -113,6 +114,8 @@ export interface TurnCheckpoint {
   >
   /** Whether completion deliberately restricted the snapshot diff to reported tool paths. */
   changeFilterApplied?: boolean
+  /** When a maintenance pass last read this card's transcript for provenance. */
+  provenanceCheckedAt?: number
   lineStats?: Record<string, CheckpointLineStats>
   createdAt: number
   completedAt?: number
@@ -1281,6 +1284,11 @@ export class CheckpointManager {
    *  while their write evidence was mis-parsed, so an empty card becomes true. */
   async repairEvidenceDroppedCheckpoints(): Promise<number> {
     return repairEvidenceDroppedCheckpoints(this.maintenanceHost())
+  }
+
+  /** Fill in the tool sources of cards whose transcript landed after the turn. */
+  async backfillChangeProvenance(): Promise<number> {
+    return backfillChangeProvenance(this.maintenanceHost())
   }
 
   /** Re-open a recently completed checkpoint so late tool claims   edits that

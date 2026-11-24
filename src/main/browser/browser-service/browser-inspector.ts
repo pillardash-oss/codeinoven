@@ -241,9 +241,7 @@ export function inspectorInstallScript(key: string): string {
       /** Whether this engine put the overlay in the top layer at all. */
       topLayer: topLayer,
       /** Set when the page's top layer moved, so the next draw re-raises. */
-      topLayerDirty: false,
-      /** Watches the page for surfaces entering its top layer. */
-      topLayerObserver: null
+      topLayerDirty: false
     };
 
     // Lucide's message-circle icon, the same one the app's own annotation
@@ -844,58 +842,29 @@ export function inspectorInstallScript(key: string): string {
     /**
      * A surface entered or left the page's top layer.
      *
-     * A dialog reports itself as a toggle event, a popover reports itself the
-     * same way, and the overlay's own raise is ignored here: counting it would
-     * make every raise schedule the next one.
+     * A dialog reports itself as a toggle event when showModal() or close() runs,
+     * a popover reports itself the same way when it is shown or hidden (including
+     * a declarative popovertarget button, which never calls into page script), and
+     * a fullscreen element goes to the top layer too. One capture listener for
+     * those is the whole of the watch: it fires when a surface actually moves and
+     * costs nothing for the rest of the page's DOM work, which is why the overlay
+     * does not observe the tree it was injected into.
+     *
+     * The overlay's own raise reports itself as a toggle on the host and is
+     * ignored here, or raising would schedule the next raise forever.
      */
     function onToggle(event) {
       if (event.target === host) return;
       state.topLayerDirty = true;
+      // One frame later, so the surface is definitely in the stack before the
+      // overlay asks to be drawn after it. Nothing here is immediate: a raise in
+      // the same task as the event would race the surface being shown.
+      scheduleHoverFrame();
     }
 
-    /**
-     * A surface arrived as a node, or a dialog was opened by setting open.
-     *
-     * showModal() on a dialog already in the page only sets that attribute, which
-     * is why the attribute has to be watched as well as the tree: a component
-     * that keeps its sheet mounted and opens it by state never adds a node.
-     */
-    function onTopLayerMutation(records) {
-      for (let index = 0; index < records.length; index += 1) {
-        const record = records[index];
-        if (record.type === 'attributes') {
-          state.topLayerDirty = true;
-          return;
-        }
-        const added = record.addedNodes;
-        for (let nodeIndex = 0; nodeIndex < added.length; nodeIndex += 1) {
-          const node = added[nodeIndex];
-          if (node.nodeType !== 1) continue;
-          if (node.tagName === 'DIALOG' || node.hasAttribute('popover')) {
-            state.topLayerDirty = true;
-            return;
-          }
-        }
-      }
-    }
-
-    function watchTopLayer() {
-      if (!state.topLayer || state.topLayerObserver) return;
-      document.addEventListener('toggle', onToggle, true);
-      state.topLayerObserver = new MutationObserver(onTopLayerMutation);
-      state.topLayerObserver.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['open', 'popover']
-      });
-    }
-
-    function unwatchTopLayer() {
-      if (!state.topLayerObserver) return;
-      document.removeEventListener('toggle', onToggle, true);
-      state.topLayerObserver.disconnect();
-      state.topLayerObserver = null;
+    function onFullscreenChange() {
+      state.topLayerDirty = true;
+      scheduleHoverFrame();
     }
 
     function onPointerMove(event) {
@@ -1128,8 +1097,9 @@ export function inspectorInstallScript(key: string): string {
       document.addEventListener('cio:canvas-view', scheduleHoverFrame);
       addEventListener('scroll', onViewportChange, true);
       addEventListener('resize', onViewportChange);
+      document.addEventListener('toggle', onToggle, true);
+      document.addEventListener('fullscreenchange', onFullscreenChange, true);
       state.listeners = true;
-      watchTopLayer();
       installFrames();
     }
 
@@ -1142,8 +1112,9 @@ export function inspectorInstallScript(key: string): string {
       document.removeEventListener('cio:canvas-view', scheduleHoverFrame);
       removeEventListener('scroll', onViewportChange, true);
       removeEventListener('resize', onViewportChange);
+      document.removeEventListener('toggle', onToggle, true);
+      document.removeEventListener('fullscreenchange', onFullscreenChange, true);
       state.listeners = false;
-      unwatchTopLayer();
     }
 
     function onViewportChange() {

@@ -274,11 +274,15 @@ export class ThreadSearchService {
     // The same bounded FTS read the keyword pass runs, with the worker and the
     // primary connection as its two homes: this is a ranking read, not a
     // transcript scan, so it follows `keywordSearch`'s degradation instead of
-    // answering "no threads found" on an instance whose worker is down.
+    // answering "no threads found" on an instance whose worker is down. It runs
+    // on the async lane for the same reason the keyword halves do: on the
+    // interactive lane each evidence pass held every click behind it for up to
+    // a second while the user typed.
     const candidates = await this.db.queryViaWorker(
       built.fts.sql,
       built.fts.params,
-      threadSearchMessageLimit(limit) * 2
+      threadSearchMessageLimit(limit) * 2,
+      { lane: 'async' }
     )
     if (!candidates.ok) return []
     const scored = candidates.rows

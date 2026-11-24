@@ -1416,7 +1416,7 @@ export class ChatEngineAssignmentWorkers {
     const prompt = [
       `You are a CodeInOven pawn agent: an independent worker thread spawned by the agent working on thread ${threadId}, and you answer to that agent alone.`,
       purpose ? `Purpose: ${purpose}.` : '',
-      'The user cannot prompt you and does not answer you. Work autonomously, do not ask the user questions, and do not commit: the agent that spawned you reviews your work and commits it.',
+      'The user cannot prompt you and does not answer you. Work autonomously, do not ask the user questions, and do not commit: the agent that spawned you reviews your work and commits it. Your report lists every path you changed as uncommitted, because that list is the only thing its commit can rely on.',
       isUnrestrictedLevel(settings.permissionLevel)
         ? 'You have full access to this project.'
         : 'Destructive actions need approval, which is surfaced on the thread that spawned you.',
@@ -1691,7 +1691,7 @@ export class ChatEngineAssignmentWorkers {
       [
         `Pawn agent ${pawn.title} finished its task.`,
         purpose ? `Purpose: ${purpose}.` : '',
-        'Read its report, inspect the files it touched, and commit the work you accept: a pawn never commits.',
+        'Read its report, inspect the files it touched, and commit the work you accept: a pawn never commits, so the commit is yours or nobody makes it. If you leave any reported path uncommitted, name every one of those paths and say why.',
         output || 'The pawn agent returned no message.'
       ]
         .filter(Boolean)

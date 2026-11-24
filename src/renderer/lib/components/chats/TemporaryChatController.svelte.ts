@@ -343,12 +343,21 @@ export class TemporaryChatController implements ConversationController {
       attachments,
       transportText,
       promptReferences: _promptReferences,
-      userMessageId: payloadUserMessageId
+      userMessageId: payloadUserMessageId,
+      direct
     } = payload
     const prompt = text.trim()
     const backendPrompt = (transportText ?? text).trim()
     if (this.#tab.expired) return
     if (!prompt && !backendPrompt && !this.#carriesPayload(attachments)) return
+    // A force-send (the steer shortcut) belongs to the turn that is running:
+    // opening a second turn on the very same session would run two turns at
+    // once and orphan the first reply. A plain send never reaches this branch
+    // while busy   ThreadView parks it in the side chat's queue instead.
+    if (direct && agentRuns.isBusy(this.projectId, this.conversationId)) {
+      await this.steer(payload)
+      return
+    }
 
     this.#touch()
 

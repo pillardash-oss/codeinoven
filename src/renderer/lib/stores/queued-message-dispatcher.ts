@@ -108,6 +108,11 @@ class QueuedMessageDispatcher {
       // A scope worktree still building for this thread holds the queue behind
       // the scope switch; the mounted view flushes it once the run settles.
       if (scopeJobs.hasPendingScopeJob(projectId, threadId)) return
+      // A temporary side chat parks its queue under its own id, which is no
+      // thread row at all: only its mounted view can deliver it through the
+      // side-chat transport, so this headless sweep steps aside. A thread that
+      // is not durable yet is treated the same way and retried on the next idle.
+      if ((await invoke('thread:get', projectId, threadId)) === null) return
       const settings = await resolveThreadDeliverySettings(projectId, threadId)
       // Nothing may have changed while we waited — verify before dispatching.
       if (this.#mounted.has(key)) return

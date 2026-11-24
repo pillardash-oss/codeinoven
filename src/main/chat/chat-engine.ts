@@ -1083,6 +1083,21 @@ export class ChatEngine {
       title
     )
   }
+  async attachTemporaryChatToThread(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    settings: ThreadSettings,
+    title?: string
+  ): Promise<Thread> {
+    return this.units['temporary-chats'].attachTemporaryChatToThread(
+      projectId,
+      threadId,
+      temporaryChatId,
+      settings,
+      title
+    )
+  }
   async loadTemporaryChatMessages(temporaryChatId: string): Promise<AgentMessage[]> {
     return this.units['temporary-chats'].loadTemporaryChatMessages(temporaryChatId)
   }

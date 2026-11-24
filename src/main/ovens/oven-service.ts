@@ -834,6 +834,12 @@ export class OvenService {
         })
         return true
       } catch (error) {
+        // A live run refusing the swap is the Oven working as intended: the
+        // update waits for the run, so it is a note, not an error.
+        if (activeRunsBlockUpdate(messageOf(error))) {
+          Logger.info('Oven service update waits for its active runs', { ovenId: id })
+          return false
+        }
         this.serviceFaults.set(id, messageOf(error))
         Logger.error('The Oven service could not be installed', {
           ovenId: id,

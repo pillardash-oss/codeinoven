@@ -312,7 +312,7 @@ export function ovenPiRunEnvironment(
     if (value.length > 32_768) continue
     environment[name] = value
   }
-  return { ...environment, ...session }
+  return { ...environment, ...session, CIO_THREAD_BROWSER: 'unavailable' }
 }
 
 /** The name shape and value bound the Oven accepts for an environment override. */

@@ -26,6 +26,7 @@ import { pawnAgentsState } from '$lib/stores/pawn-agents.svelte'
 import CioSubagent from '@pdslng/cio-icon/CioSubagent.svelte'
 import { publishDraftActivity, onRemoteDraftCleared } from '$lib/stores/renderer-recovery.svelte'
 import { threadMessages } from '$lib/stores/thread-messages.svelte'
+import { composerAttachmentRequests } from '$lib/stores/composer-attachment-request.svelte'
 import { queuedMessageDispatcher } from '$lib/stores/queued-message-dispatcher'
 import { scopeJobs } from '$lib/stores/scope-jobs.svelte'
 import { agentRuns } from '$lib/stores/agent-runs.svelte'
@@ -48,6 +49,12 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647
 
 /** One concern of the ThreadView board. */
 export class ThreadViewEffects extends BoardUnit<ThreadView> {
+  /** Attachment requests this view has already answered, so one ask is one re-seed.
+   *  `-1` until the first effect run: a request made while this view was not
+   *  mounted needs no re-seed, because the composer mounting now reads the
+   *  persisted attachment itself. */
+  private servedAttachmentRequests = -1
+
   constructor(root: ThreadView) {
     super(root)
   }
@@ -133,6 +140,23 @@ export class ThreadViewEffects extends BoardUnit<ThreadView> {
      */
     $effect(() => {
       modelRuntime.ensure(this.root.currentWorkingTraceAttribution.modelRuntimeSelection)
+    })
+
+    // A conversation attached from another surface (a side chat attached to this
+    // chat) targets a composer that is already mounted, and a mounted composer
+    // seeds its attachment row once and owns it from then on. Re-seeding it is a
+    // remount, exactly what a relocation of a reference does, so the attachment
+    // appears without discarding the draft it is being attached to.
+    $effect(() => {
+      const requests = composerAttachmentRequests.countFor(
+        this.root.handleAgentEvent.thread.projectId,
+        this.root.handleAgentEvent.thread.id
+      )
+      if (requests === this.servedAttachmentRequests) return
+      const firstRun = this.servedAttachmentRequests === -1
+      this.servedAttachmentRequests = requests
+      if (firstRun || requests === 0) return
+      this.root.currentWorkingTraceAttribution.composerRestoreKey += 1
     })
 
     $effect(() => {

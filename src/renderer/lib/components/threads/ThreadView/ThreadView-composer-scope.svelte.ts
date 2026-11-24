@@ -753,6 +753,22 @@ export class ThreadViewComposerScope extends BoardUnit<ThreadView> {
     }
   }
 
+  attachingToParent = $state(false)
+
+  /** Attach a temporary chat to the conversation it was opened from. */
+  async attachToParent(): Promise<void> {
+    if (!this.root.props.onAttachToParent || this.attachingToParent) return
+    this.attachingToParent = true
+    try {
+      await this.root.props.onAttachToParent()
+    } catch (error) {
+      this.root.handleAgentEvent.errorMessage =
+        error instanceof Error ? error.message : 'The chat could not be attached.'
+    } finally {
+      this.attachingToParent = false
+    }
+  }
+
   /**
    * Send pasted secret values to the main process. It stores them (vault, and a
    * utility credential when the agent named one) and hands them to the harness;

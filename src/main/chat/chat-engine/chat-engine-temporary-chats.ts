@@ -246,6 +246,17 @@ export class ChatEngineTemporaryChats {
       await this.retireForRebind(temporary)
       temporary = undefined
     }
+    // One turn at a time per side chat. A second send into a session that is
+    // already running would register a second completion waiter over the first
+    // one, orphaning the first turn's reply forever (the renderer reports that
+    // as `reply was never sent`). The renderer queues while busy, so reaching
+    // this is a caller that bypassed that queue, and it is told to steer
+    // instead of being allowed to wedge the session.
+    if (temporary && this.host.state.completionWaiters.has(temporary.sessionId)) {
+      throw new Error(
+        'This quick chat is still answering. Wait for the turn to finish, or send the message as a steer.'
+      )
+    }
     if (!temporary) {
       const thread = await this.host.threadManager.getThread(projectId, threadId)
       if (!thread) throw new Error(`Thread not found: ${threadId}`)
@@ -739,6 +750,57 @@ export class ChatEngineTemporaryChats {
     settings: ThreadSettings,
     title?: string
   ): Promise<Thread> {
+    return this.promoteTemporaryChat(
+      projectId,
+      threadId,
+      temporaryChatId,
+      settings,
+      title,
+      'thread'
+    )
+  }
+
+  /**
+   * Attach a side chat to the conversation it was opened from.
+   *
+   * The conversation becomes a durable thread so the agent can read it back by
+   * id, exactly as it reads any other attached thread, but it is a worker of
+   * the thread it was opened from: `coordinatorThreadId` is what every surface
+   * already reads to fold a child under its parent, so it keeps the new thread
+   * out of the thread lists, out of search and out of notifications, gives its
+   * view the Parent strip back to the chat, and sweeps it away when that chat is
+   * deleted.
+   *
+   * The row is created already settled and read: it copies a conversation that
+   * had finished, so it must never claim attention from its parent (a child's
+   * unread state rolls up into the parent's row) and it is never a stranded
+   * orchestration child waiting to be resumed.
+   */
+  async attachTemporaryChatToThread(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    settings: ThreadSettings,
+    title?: string
+  ): Promise<Thread> {
+    return this.promoteTemporaryChat(
+      projectId,
+      threadId,
+      temporaryChatId,
+      settings,
+      title,
+      'attached'
+    )
+  }
+
+  private async promoteTemporaryChat(
+    projectId: string,
+    threadId: string,
+    temporaryChatId: string,
+    settings: ThreadSettings,
+    title: string | undefined,
+    mode: 'thread' | 'attached'
+  ): Promise<Thread> {
     projectId = validateEntityId(projectId, 'Project ID')
     threadId = validateEntityId(threadId, 'Thread ID')
     temporaryChatId = validateEntityId(temporaryChatId, 'Temporary chat ID', 256)
@@ -795,6 +857,7 @@ export class ChatEngineTemporaryChats {
       settings: safeSettings,
       featureSlug: parent?.featureSlug,
       workingDirectory: temporary.projectPath,
+      ...(mode === 'attached' ? { coordinatorThreadId: threadId } : {}),
       ...assistantOwnership
     })
 
@@ -807,7 +870,14 @@ export class ChatEngineTemporaryChats {
     }
 
     await this.host.closeTemporaryChat(temporaryChatId)
-    return thread
+    if (mode !== 'attached') return thread
+    // Settled on arrival: the copy is a finished conversation, so it never holds
+    // its parent's read state and never looks like a child left mid-run.
+    return this.host.threadManager.setStatus(projectId, thread.id, 'completed', {
+      read: true,
+      notify: false,
+      touchActivity: false
+    })
   }
 
   async loadTemporaryChatMessages(temporaryChatId: string): Promise<AgentMessage[]> {

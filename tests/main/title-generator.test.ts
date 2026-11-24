@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   buildTitlePrompt,
   deriveTitleFromText,
+  MODEL_TITLE_MIN_WORDS,
   sanitizeGeneratedTitle,
+  shouldRequestModelTitle,
   TITLE_INPUT_MAX
 } from '../../src/main/chat/title-generator'
 
@@ -36,6 +38,17 @@ describe('thread title helpers', () => {
   it('rejects an empty reply and a paragraph of chatter', () => {
     expect(sanitizeGeneratedTitle('   \n\n  ')).toBeNull()
     expect(sanitizeGeneratedTitle('word '.repeat(120))).toBeNull()
+  })
+
+  it('does not spend a title request on a message that is already a title', () => {
+    // Six words or fewer already read as a title, so the deterministic fallback
+    // stands alone and the thread makes no model title request.
+    expect(shouldRequestModelTitle('fix the login bug')).toBe(false)
+    expect(shouldRequestModelTitle('add a dark mode toggle')).toBe(false)
+    expect(shouldRequestModelTitle('   spaces   around   six   words   here   now  ')).toBe(false)
+
+    expect(shouldRequestModelTitle('add a dark mode toggle to settings')).toBe(true)
+    expect(MODEL_TITLE_MIN_WORDS).toBe(7)
   })
 
   it('derives a fallback from the first non-empty line with markdown stripped', () => {
