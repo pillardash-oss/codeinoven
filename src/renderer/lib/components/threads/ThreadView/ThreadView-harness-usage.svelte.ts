@@ -8,7 +8,11 @@ import {
   publishDraftActivity,
   type StartAfterThreadReference
 } from '$lib/stores/renderer-recovery.svelte'
-import { threadContextPrompt, type ThreadContextReference } from '$lib/thread-context'
+import {
+  threadContextPrompt,
+  threadReferenceAttachment,
+  type ThreadContextReference
+} from '$lib/thread-context'
 import type {
   ThreadSettings,
   AgentHarnessUsage,
@@ -351,7 +355,13 @@ export class ThreadViewHarnessUsage extends BoardUnit<ThreadView> {
     ]
       .filter(Boolean)
       .join('\n\n')
-    const promptReferences = [...this.root.steerQueuedMessage.responseReferences]
+    const promptReferences = [
+      ...this.root.steerQueuedMessage.responseReferences,
+      // An attached conversation survives as a chip on this message: the
+      // composer hands its attachments over with the send, so the thread a turn
+      // was given is only still visible here (and the chip opens it).
+      ...threadReferences.map(threadReferenceAttachment)
+    ]
     this.root.steerQueuedMessage.clearResponseReferences()
     // The centered head start must never return for this thread once a real
     // message was sent   even if the messages are deleted right after.

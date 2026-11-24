@@ -835,6 +835,7 @@
               if (tab?.kind === 'coordinator') board.openThreadFromSwitcher.closeContextTab(tab.id)
             }}
             onContinueInThread={board.switcherPanelTabs.handleContinueInThread}
+            onAttachToParent={board.switcherPanelTabs.handleAttachToParentChat}
             onOpenSubagent={board.openThreadFromSwitcher.openNestedSubagent}
             navigate={board.props.navigate}
             onOpenAssistantTask={board.markThreadReadAndApply.openAssistantTask}

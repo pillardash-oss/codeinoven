@@ -9,6 +9,9 @@ import {
   type TemporaryChatContextTab
 } from '$lib/stores/context-sidebar.svelte'
 import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
+import { rendererRecovery } from '$lib/stores/renderer-recovery.svelte'
+import { composerAttachmentRequests } from '$lib/stores/composer-attachment-request.svelte'
+import { uniqueThreadContextReferences } from '$lib/thread-context'
 import { browserTabVisitKey, recentVisits } from '$lib/stores/recent-visits.svelte'
 import { scopeState } from '$lib/stores/scope.svelte'
 import { threadVisitKey, workspaceState } from '$lib/stores/workspace.svelte'
@@ -607,5 +610,35 @@ export class WorkspaceSwitcherPanelTabs extends BoardUnit<Workspace> {
     )
     contextSidebarState.close(tab.id)
     this.openCreatedThread(converted)
+  }
+
+  /**
+   * Attach a side chat to the chat it was opened from.
+   *
+   * The conversation becomes a durable worker thread of that chat (`parent`,
+   * which the agent reads back by id) and is handed to the chat's composer as an
+   * attached conversation, so the next message can point at it. The side chat
+   * itself is done: its transcript now lives in the worker thread, and leaving the
+   * panel open would be a second copy of the same words.
+   */
+  async handleAttachToParentChat(tab: TemporaryChatContextTab): Promise<void> {
+    const attached = await invoke(
+      'temporary-chat:attachToThread',
+      tab.projectId,
+      tab.threadId,
+      tab.temporaryChatId,
+      tab.settings,
+      tab.title
+    )
+    contextSidebarState.close(tab.id)
+    const references = uniqueThreadContextReferences([
+      ...rendererRecovery.threadReferencesFor(tab.projectId, tab.threadId),
+      { projectId: attached.projectId, threadId: attached.id, title: attached.title }
+    ])
+    rendererRecovery.setThreadReferences(tab.projectId, tab.threadId, references)
+    // A composer that is already mounted seeds its attachments once, so the
+    // view has to re-read them for the new chip to appear beside the draft the
+    // user is writing.
+    composerAttachmentRequests.request(tab.projectId, tab.threadId)
   }
 }

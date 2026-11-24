@@ -546,6 +546,18 @@ export class ChatEngineLifecycleBoot {
           title
         )
     )
+    ipcMain.handle(
+      'temporary-chat:attachToThread',
+      (
+        _,
+        projectId: string,
+        threadId: string,
+        temporaryChatId: string,
+        settings: ThreadSettings,
+        title?: string
+      ) =>
+        this.host.attachTemporaryChatToThread(projectId, threadId, temporaryChatId, settings, title)
+    )
     ipcMain.handle('agent:abort', (_, projectId: string, threadId: string) =>
       this.host.abort(projectId, threadId)
     )

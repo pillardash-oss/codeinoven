@@ -62,6 +62,8 @@
      *  for it so the panel can never trap the user on a blank body. */
     onDismissCoordinator: () => void
     onContinueInThread: (tab: TemporaryChatContextTab) => Promise<void>
+    /** Make a side chat durable and attach it to the chat it was opened from. */
+    onAttachToParent: (tab: TemporaryChatContextTab) => Promise<void>
     onOpenSubagent: (part: Extract<AgentPart, { type: 'subagent' }>) => void
     /** Navigate to another top-level view (e.g. the Utilities page). */
     navigate: (view: MainView) => void
@@ -87,6 +89,7 @@
     browser,
     onDismissCoordinator,
     onContinueInThread,
+    onAttachToParent,
     onOpenSubagent,
     navigate,
     onOpenAssistantTask,
@@ -596,7 +599,11 @@
           {#await loadCachedPanelModule(PANEL_KEYS.temporaryChat, () => import('../chats/TemporaryChatView.svelte'))}
             {@render panelLoading('Chat')}
           {:then { default: TemporaryChatView }}
-            <TemporaryChatView tabId={activeContextTab.id} {onContinueInThread} />
+            <TemporaryChatView
+              tabId={activeContextTab.id}
+              {onContinueInThread}
+              {onAttachToParent}
+            />
           {:catch error}
             {@render panelLoadFailed(PANEL_KEYS.temporaryChat, 'Chat', error)}
           {/await}
