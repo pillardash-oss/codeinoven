@@ -91,8 +91,7 @@
     hasContent={board.steerQueuedMessage.queuedHasContent}
     attachments={board.steerQueuedMessage.queuedAttachments}
     previewUrls={board.studioTemporaryChatContext.attachmentPreview.urls}
-    count={board.unmirroredTraceStartTime.queuedCount}
-    next={board.unmirroredTraceStartTime.queuedNextMessages}
+    queue={board.unmirroredTraceStartTime.queuedRows}
     promptReferences={board.steerQueuedMessage.queuedPromptReferences}
     presentation={board.steerQueuedMessage.queuedPresentation}
     startAfterThreads={board.steerQueuedMessage.queuedStartAfterThreads}
@@ -113,6 +112,7 @@
     onEdit={board.steerQueuedMessage.editQueuedMessage}
     onDelete={board.unmirroredTraceStartTime.deleteQueuedMessage}
     onDeleteAll={board.steerQueuedMessage.deleteAllQueuedMessages}
+    onReorder={board.steerQueuedMessage.moveQueuedMessage}
     onAddStartAfter={() => (board.state.queuedStartAfterPickerOpen = true)}
     onRemoveStartAfter={(dependency) =>
       (board.steerQueuedMessage.queuedStartAfterPendingRemoval = dependency)}

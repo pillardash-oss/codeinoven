@@ -831,6 +831,24 @@ export class ThreadViewSteerQueuedMessage extends BoardUnit<ThreadView> {
     )
   }
 
+  /**
+   * Move one queued message to another place in the thread's queue.
+   *
+   * The queue is a FIFO the dispatcher sends from its head, so this is how the
+   * reader decides which message goes next. A new head is a different message,
+   * so the card's in-memory copy follows the store, the hold that described the
+   * old head is re-checked, and idle attention re-reads the queue: the message
+   * that just moved to the front may be free to go right now.
+   */
+  moveQueuedMessage(entryId: string, targetIndex: number): void {
+    const { projectId, id } = this.root.handleAgentEvent.thread
+    if (!rendererRecovery.moveQueuedMessage(projectId, id, entryId, targetIndex)) return
+    this.syncQueuedFromStore()
+    queuedResourceWait.clear(projectId, id)
+    this.idleAttentionHandled = false
+    void this.handleIdleAttention()
+  }
+
   persistQueuedStartAfterThreads(): void {
     rendererRecovery.updateQueuedHead(
       this.root.handleAgentEvent.thread.projectId,
