@@ -16,6 +16,7 @@
     type CloseHandler
   } from '$lib/overlay-close.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
+  import { dockStack, type DockLayer } from '$lib/dock-stack.svelte'
   import {
     registerModalPrimaryAction,
     findPanelPrimaryAction,
@@ -58,13 +59,18 @@
      */
     storageKey?: string
     /**
-     * Stacking layer. `surface` sits with the app's other floating panels at
+     * Stacking band. `surface` sits with the app's other floating panels at
      * `z-50`. `top` lifts the panel above the full screen surfaces (terminal,
      * browser, file editor and the pull request reader all render through
      * `ui/Modal.svelte` at `z-60`), which the pull request sheet needs because
      * it can be opened from the full screen reader. Portaled menus and confirms
      * inside a `top` panel belong at `z-90` so they still clear the panel
      * itself.
+     *
+     * Inside a band the panel takes its `z-index` from the shared dock stack
+     * (`$lib/dock-stack.svelte`), so the panel (or the chip row it minimised
+     * into) that the user last worked in is the one in front. A dock snippet
+     * rendered from a `top` panel passes the same band to its `DockRow`.
      */
     layer?: 'surface' | 'top'
     /**
@@ -449,8 +455,30 @@
   // to know whether this panel is the one that owns the key.
   let closeHandler: CloseHandler | null = null
 
+  /**
+   * This panel's place among the floating dock surfaces.
+   *
+   * Several dockable panels can be open at once, and the minimized chip rows
+   * share the same band, so a fixed `z-index` left the front-most panel to the
+   * DOM order. The panel joins the shared stack while it is expanded and
+   * promotes itself whenever the user works in it, which is what keeps the
+   * panel (or the chip row just dragged) above every other dock in the band.
+   */
+  const stackId = `dockable-modal-${crypto.randomUUID()}`
+  const stackLayer = $derived<DockLayer>(layer === 'top' ? 'top' : 'surface')
+  const zIndex = $derived(dockStack.zIndex(stackLayer, stackId))
+
+  $effect(() => {
+    // A minimized panel is not on view: its chip row carries the stack place
+    // instead, so the pair never competes for the front of the band.
+    if (!open || minimized) return
+    dockStack.promote(stackLayer, stackId)
+    return () => dockStack.leave(stackLayer, stackId)
+  })
+
   function promote(): void {
     if (closeHandler) promoteOverlay(closeHandler)
+    if (open && !minimized) dockStack.promote(stackLayer, stackId)
   }
 
   $effect(() => {
@@ -622,12 +650,10 @@
     completely dead to the mouse. That is the whole reason `layer="top"` exists.
   -->
     <div
-      class="fixed {layer === 'top'
-        ? 'z-80'
-        : 'z-50'} flex flex-col overflow-hidden border bg-surface shadow-xl outline-none {minimized
+      class="fixed flex flex-col overflow-hidden border bg-surface shadow-xl outline-none {minimized
         ? 'invisible pointer-events-none'
         : 'pointer-events-auto'}"
-      style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px;{nativeArmed &&
+      style="left: {position.x}px; top: {position.y}px; width: {width}px; height: {height}px; z-index: {zIndex};{nativeArmed &&
       !native.live
         ? ' opacity: 0;'
         : ''}"
@@ -761,7 +787,14 @@
     </div>
 
     {#if minimized}
-      <div class="pointer-events-auto fixed right-4 bottom-4 {layer === 'top' ? 'z-80' : 'z-50'}">
+      <!--
+        No `z-index` here: the chip row inside is fixed and takes its own place in
+        the shared dock stack, so the row itself is the thing that comes to the
+        front when it is dragged. A `z-index` on this wrapper would make it a
+        stacking context and trap the row's place, leaving the wrapper's fixed
+        value to decide which dock covers which.
+      -->
+      <div class="pointer-events-auto fixed right-4 bottom-4">
         {@render dock()}
       </div>
     {/if}

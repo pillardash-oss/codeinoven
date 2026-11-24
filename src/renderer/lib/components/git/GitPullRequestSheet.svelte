@@ -863,7 +863,7 @@
   {#snippet dock()}
     {#if !draftId}
       <!-- When the host drives the dock, PrDockHost renders the unified chip row. -->
-      <DockRow storageKey={effectiveStorageKey} label="Move docked pull request draft">
+      <DockRow storageKey={effectiveStorageKey} layer="top" label="Move docked pull request draft">
         <button
           class="flex cursor-pointer items-center gap-1.5 border bg-surface px-3 py-2 shadow-xl transition-colors hover:bg-elevated"
           title="Show pull request creation"
