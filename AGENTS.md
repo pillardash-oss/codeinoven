@@ -33,17 +33,6 @@ After completing the code, ask the user if they want a playground link. Only cal
 - Same shape in every layer: pure logic in a plain `.ts` module, reactive state plus its operations in a `.svelte.ts` controller, cohesive markup in a child `.svelte` component with typed props.
 - Validate a split with scoped `bun run check`, `bun run lint` and `bun run format` on the files you touched plus their importers, and `bun run test` for the matching tests. A split that cannot be verified is not finished.
 
-## Scratch And Temp Paths (hard rule, no exceptions)
-
-- Every disposable file a model writes goes inside the project's own `.cio/tmp/`: harness scratch, caches, downloads, staged attachments, generated media, logs, probe output, test fixtures and intermediate files alike. In code build it with `join(root, '.cio', 'tmp', name)`; in a shell use `.cio/tmp/<feature>/` relative to the workspace root. Non-source work artifacts belong in `.cio/work/<feature>/` (chats) or `.cio/specs/<slug>/` (Engineering).
-- The OS temp directory is banned, unconditionally and for every model. Never call `os.tmpdir()`, never import `tmpdir` from `node:os` to reach it, never rely on `$TMPDIR`, `$TMP`, `$TEMP`, `%TEMP%`, `%TMP%`, `$XDG_RUNTIME_DIR`, and never name `/tmp`, `/private/tmp`, `/var/tmp` or `/var/folders/...`, in a command as much as in code.
-- Never create a temporary file with `mktemp`, `mktemp -d`, `tempfile`, `TemporaryDirectory` or a similar API. A scratch path is `.cio/tmp/<name>`, made with `mkdir -p`, and removed when the step ends.
-- Banned in a shell command exactly as in code: no `> /tmp/out.txt`, no `-o /tmp/x`, no `curl … > /tmp/…` probe loop, no `mktemp` inside a one-liner, no heredoc into the OS temp directory. Write to `.cio/tmp/…` instead.
-- A tool or child process that insists on a temp directory gets one you own: point `TMPDIR`, `TEMP` and `TMP` at `.cio/tmp/<name>` for that child instead of letting it default.
-- Keeping it out of the OS temp directory is not enough on its own: no scratch files at the repository root, at the `.cio/` root, or beside the source being edited.
-- The only exception is the test suite: `tests/setup/hermetic-temp-root.ts` deliberately maps `os.tmpdir()` to the platform temp root for a run, so a test may `mkdtemp(tmpdir())`. Nothing under `src/` may use that path for agent-visible work.
-- If a step truly cannot write inside the project (a read-only checkout, a missing mount), stop and report the blocker. Falling back to the OS temp directory is never the answer.
-
 ## Rules You Must Follow
 
 - CodeInOven stores all threads, sessions, and app data in `~/.config/pillardash/codeinoven/`. When asked to inspect a thread, session, logs, or any stored app data, look there. NEVER use `~/Library/Application Support/CodeInOven` for app data — it contains only Electron/Chromium runtime junk (caches, cookies, an empty db) and inspecting it is always wrong.
@@ -65,7 +54,6 @@ After completing the code, ask the user if they want a playground link. Only cal
 - Filesystem paths MUST be OS agnostic and built with `node:path` ONLY: `join`, `resolve`, `dirname`, `basename`, `relative`, `extname`, `normalize`, `parse`, `sep`, `delimiter`. Never concatenate a filesystem path by hand, never append `'/' + name` or `path + '/' + name`, and never hardcode a separator, because a Windows runner turns `join(a, 'chunks')` into `a\chunks` and a POSIX literal in the same expression breaks the job.
 - Tests, guards and assertions are held to the same rule: build the expected path with the same `node:path` helper as the implementation (`expect(list()).toEqual([root, join(root, 'chunks')])`), never with a literal `/app/out/main/chunks`. Simulating a foreign platform is done with `path.win32` or `path.posix` explicitly, never assumed.
 - Forward slashes belong to URLs, import specifiers, glob patterns and Vite/Rollup chunk ids, never to filesystem paths. When a path must leave the filesystem and become a URL or a log/UI string, convert it deliberately (`pathToFileURL`, `path.posix.join` on an already POSIX path) instead of reusing a platform path.
-- Every scratch, cache, download, log and intermediate file goes in `.cio/tmp/` and NEVER in the OS temp directory: no `os.tmpdir()`, no `$TMPDIR`, no `mktemp`, no `/tmp`, `/private/tmp`, `/var/tmp` or `/var/folders/...`, in code or in a shell command. See "Scratch And Temp Paths" above; this one has no exceptions.
 - It is forbidden in this app to use console.\* we use the logger class for logging! Any console.log that should show up on the dev env only should be done with the Logger.dev method.
 - Always commit your work (the files you worked on regardless of any untracked changes or other git conflicts), so that I can easily audit your work.
 - DO NOT USE untrack in this project for svelte!!! If you are using untrack then you are writing your code wrongly!!
