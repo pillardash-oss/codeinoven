@@ -14,6 +14,7 @@ import {
 import { CREATE_ASSIGNMENT_TOOL_NAME } from '../../../../lib/engineering-tools'
 import { PAWN_AGENT_TOOL_NAME } from '../../../../lib/pawn-tools'
 import {
+  unmanagedBrowserShellReason,
   unmanagedCuaShellReason,
   unmanagedProcessKillReason
 } from '../../../../lib/agent-control-policy'
@@ -254,6 +255,11 @@ function bundledPiSensitiveFileGate(toolName, input, cwd) {
 }
 
 const unmanagedCuaShellReason = ${unmanagedCuaShellReason.toString()}
+
+// A browser the agent launches itself proves nothing about the page the app is
+// serving, so this is the same kind of block: never a card, so no tier approves
+// it. It is a parser, not a keyword search, so reading about browsers still works.
+const unmanagedBrowserShellReason = ${unmanagedBrowserShellReason.toString()}
 
 // Process lifecycle belongs to whoever started the process. A server the user
 // started is unreachable by any rule this session could justify, so this check

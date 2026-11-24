@@ -920,6 +920,10 @@ export function piCoreToolsSubagentSource(): string {
       // is never a permission card: Full Access would auto-approve it.
       const processKillBypass = unmanagedProcessKillReason(toolName, recordValue(params) ?? {})
       if (processKillBypass) return processKillBypass
+      // And for browsers: a worker that launches its own proves nothing about the
+      // page the app is serving, so the same block applies inside a sub-agent.
+      const browserBypass = unmanagedBrowserShellReason(toolName, recordValue(params) ?? {})
+      if (browserBypass) return browserBypass
       if (['bash', 'powershell', 'cmd'].includes(toolName) && recordValue(params) && typeof params['command'] === 'string') {
         const workspaceWide = params['command']
           .split(/&&|;|\\|\\||\\|/u)

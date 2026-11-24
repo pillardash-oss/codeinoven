@@ -21,7 +21,10 @@ import {
   chatThreadWorkspaceDirectory
 } from '../../../lib/project-artifacts'
 import { messageId as createMessageId } from '../../../lib/id'
-import { unmanagedProcessKillReason } from '../../../lib/agent-control-policy'
+import {
+  unmanagedBrowserShellReason,
+  unmanagedProcessKillReason
+} from '../../../lib/agent-control-policy'
 import type { PendingPermissionInfo, SessionInfo } from './chat-engine-types'
 import { rawErrorMessage } from './chat-engine-errors'
 import { permissionCommands } from './chat-engine-generated-artifacts'
@@ -925,15 +928,18 @@ export class ChatEnginePermissions {
 
     // The refusal is answered before any tier logic below can approve it.
     const refusedCommand = commands.find(
-      (command) => unmanagedProcessKillReason('bash', { command }) !== null
+      (command) =>
+        unmanagedProcessKillReason('bash', { command }) !== null ||
+        unmanagedBrowserShellReason('bash', { command }) !== null
     )
     if (refusedCommand !== undefined) {
-      const reason = unmanagedProcessKillReason('bash', { command: refusedCommand })
+      const processReason = unmanagedProcessKillReason('bash', { command: refusedCommand })
+      const browserReason = unmanagedBrowserShellReason('bash', { command: refusedCommand })
       await this.replyPermissionRaw(
         pending,
         'reject',
-        'policy:process-lifecycle',
-        reason ?? undefined
+        processReason ? 'policy:process-lifecycle' : 'policy:browser-ownership',
+        processReason ?? browserReason ?? undefined
       )
       return
     }
