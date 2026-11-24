@@ -71,7 +71,7 @@ describe('browser launch rule', () => {
 
   it('points a refused agent at the in-app browser instead of leaving it stuck', () => {
     const reason = shell('chromium --headless http://localhost:3000') ?? ''
-    expect(reason).toContain('cio_util_find')
+    expect(reason).toContain('cio:browser')
     expect(reason).toContain('cio_util_init')
     expect(reason).toContain('in-app browser')
   })
@@ -113,6 +113,18 @@ describe('browser launch rule', () => {
   it('marks an Oven thread unavailable in the run environment it starts with', async () => {
     const source = await readFile(join(projectRoot, 'src/main/ovens/oven-pi-runtime.ts'), 'utf8')
     expect(source).toContain("CIO_THREAD_BROWSER: 'unavailable'")
+  })
+
+  it('makes a page question name the browser, so no model can claim there is none', async () => {
+    const source = await readFile(
+      join(
+        projectRoot,
+        'src/main/utilities/utility-orchestration-service/utility-orchestration-service-capability-invoke.ts'
+      ),
+      'utf8'
+    )
+    expect(source).toContain('matchesBrowserSearchIntent')
+    expect(source).toContain('browserSearchEntry')
   })
 
   it('is wired at every gate, including the worker gate', async () => {

@@ -89,7 +89,7 @@ describe('browser launch guard', () => {
 
   it('points at the in-app browser instead', () => {
     const reason = shell('chromium --headless --dump-dom http://localhost:3000')
-    expect(reason).toContain('cio_util_find')
+    expect(reason).toContain('cio:browser')
     expect(reason).toContain('cio_util_init')
     expect(reason).toContain('in-app browser')
   })
