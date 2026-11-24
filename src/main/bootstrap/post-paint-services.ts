@@ -39,6 +39,7 @@ import type { ThreadClickedPayload } from '../../lib/ipc-contract'
 import type { Database } from '../database/database'
 import { StorageEngine } from '../storage/storage-engine'
 import {
+  backfillChangeProvenanceOnLaunch,
   prepareCheckpointIndexes,
   prepareBackgroundCheckpointIndexes,
   runOneTimeCheckpointRepairs,
@@ -1829,6 +1830,14 @@ export async function bootPostPaintServices(context: PostPaintBootContext): Prom
         // Legacy checkpoint repairs, in order on the database worker. A pass that
         // has already finished is skipped instead of rescanning every checkpoint.
         await runOneTimeCheckpointRepairs(database)
+        // A turn's tool calls are often mirrored after its checkpoint settled,
+        // so its card read `Detected` on every file. These bounded passes fill in
+        // the sources its own transcript proves, and the interval below keeps
+        // doing it for turns that finish while the app stays open.
+        await backfillChangeProvenanceOnLaunch(database).catch((error: unknown) => {
+          Logger.dev('Change provenance backfill failed (non-fatal):', error)
+          return 0
+        })
         // The trim's candidate index is built here, as background work: it holds
         // the worker for seconds on a large install, so it waits for a quiet
         // queue and then runs behind everything a person is waiting on. The trim
@@ -1904,6 +1913,15 @@ function scheduleCheckpointTrim(database: Database): void {
         Logger.dev('Checkpoint trim failed (non-fatal):', error)
         return 0
       })
+      .then(() =>
+        // The same tick reads the provenance of the turns that finished since the
+        // last one: their tool calls are mirrored after the checkpoint settles,
+        // which is why their cards read `Detected` on every file.
+        backfillChangeProvenanceOnLaunch(database).catch((error: unknown) => {
+          Logger.dev('Change provenance backfill failed (non-fatal):', error)
+          return 0
+        })
+      )
       .finally(() => scheduleCheckpointTrim(database))
   }, CHECKPOINT_TRIM_INTERVAL_MS)
   timer.unref?.()

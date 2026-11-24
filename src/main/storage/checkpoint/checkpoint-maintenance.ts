@@ -732,3 +732,115 @@ export async function trimHistoricalCheckpointMaps(
   }
   return trimmed
 }
+
+/** Cards one provenance pass reads, so a launch or a half-hour tick stays cheap. */
+const PROVENANCE_MAX_CHECKPOINTS = 40
+/** How long a card is left alone after a pass has read its transcript. */
+const PROVENANCE_RECHECK_MS = 6 * 60 * 60 * 1000
+
+/**
+ * Record which tool wrote each file on cards that only hold a detected diff.
+ *
+ * A card says `Edited` only when every file it lists was proven by a tool, so a
+ * turn whose tool calls arrive after its checkpoint settled read as `Detected` on
+ * every file: the live parts never reached the session, and the durable
+ * transcript was read before the mirror had written the turn. Nothing about the
+ * change list is decided here, and no path is added or removed; the pass only
+ * re-reads the turn's own transcript, bounded to the turn's window, and fills in
+ * the sources the row is missing. A file the transcript never proves stays
+ * unsourced, so a generated or hand-edited file still leaves the card honest.
+ *
+ * Returns how many cards it read, so a caller can pass until the backlog is
+ * drained. A card it read is not re-read for a few hours either way.
+ */
+export async function backfillChangeProvenance(host: CheckpointMaintenanceHost): Promise<number> {
+  let rows: Record<string, unknown>[]
+  try {
+    rows = await host.queryRows(
+      `SELECT tc.turn_id AS turn_id, tc.project_id AS project_id, tc.thread_id AS thread_id
+         FROM turn_checkpoints tc
+        WHERE json_extract(tc.data, '$.status') = 'completed'
+          AND json_array_length(json_extract(tc.data, '$.changes')) > 0
+          AND (SELECT COUNT(*) FROM json_each(json_extract(tc.data, '$.changeSourceRefs')) je
+                WHERE json_array_length(je.value) > 0)
+              < json_array_length(json_extract(tc.data, '$.changes'))
+          AND (json_extract(tc.data, '$.provenanceCheckedAt') IS NULL
+               OR json_extract(tc.data, '$.provenanceCheckedAt') < ?)
+        ORDER BY tc.created_at DESC
+        LIMIT ?`,
+      [Date.now() - PROVENANCE_RECHECK_MS, PROVENANCE_MAX_CHECKPOINTS],
+      PROVENANCE_MAX_CHECKPOINTS
+    )
+  } catch (error) {
+    Logger.info('Change provenance could not be listed (non-fatal):', error)
+    return 0
+  }
+  let scanned = 0
+  for (const row of rows) {
+    const turnId = row['turn_id']
+    const projectId = row['project_id']
+    const threadId = row['thread_id']
+    if (typeof turnId !== 'string' || typeof projectId !== 'string' || typeof threadId !== 'string')
+      continue
+    try {
+      const checkpoint = await host.get(projectId, threadId, turnId)
+      if (!checkpoint || checkpoint.changes.length === 0) continue
+      const missing = checkpoint.changes.filter(
+        (change) => (checkpoint.changeSourceRefs?.[change.path]?.length ?? 0) === 0
+      )
+      if (missing.length === 0) continue
+      const transcript = await host.queryRows(
+        `SELECT parts FROM agent_messages
+          WHERE thread_id = ? AND role = 'assistant' AND created_at >= ? AND created_at <= ?
+          ORDER BY created_at DESC, id DESC`,
+        [
+          threadId,
+          checkpoint.before.createdAt,
+          checkpoint.completedAt ?? checkpoint.before.createdAt
+        ],
+        TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT
+      )
+      const evidence = transcriptWriteEvidence(
+        checkpoint.before.projectRoot,
+        transcript.map((entry) => ({ parts: entry['parts'] }))
+      )
+      const aligned = alignEvidencePaths(
+        evidence.keys(),
+        new Set(checkpoint.changes.map((change) => change.path))
+      )
+      const found = new Map<string, FileChangeSource[]>()
+      for (const [path, sources] of evidence) {
+        const target = aligned.get(path)
+        if (!target) continue
+        found.set(target, [...(found.get(target) ?? []), ...sources])
+      }
+      const changeSourceRefs = { ...checkpoint.changeSourceRefs }
+      const toolSources = { ...checkpoint.toolSources }
+      for (const change of missing) {
+        const sources = found.get(change.path)
+        if (!sources || sources.length === 0) continue
+        changeSourceRefs[change.path] = sources.map((source) => ({
+          toolPartId: source.toolPartId,
+          verification: source.verification,
+          ...(source.window ? { window: source.window } : {})
+        }))
+        for (const source of sources) toolSources[source.toolPartId] = source
+      }
+      await host.save({
+        ...checkpoint,
+        changeSourceRefs,
+        toolSources,
+        provenanceCheckedAt: Date.now()
+      })
+      scanned += 1
+      // Yield between rows so one pass never holds the database worker.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+    } catch (error) {
+      Logger.info('Change provenance could not be filled in (non-fatal):', {
+        turnId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+  return scanned
+}

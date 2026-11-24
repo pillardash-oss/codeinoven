@@ -194,6 +194,34 @@ export async function runOneTimeCheckpointRepairs(database: Database): Promise<v
   }
 }
 
+/** Passes and wall clock one launch may spend filling in change provenance. */
+const PROVENANCE_MAX_PASSES = 25
+const PROVENANCE_LAUNCH_BUDGET_MS = 20_000
+
+/**
+ * Record the tool that wrote each file on cards that only hold a detected diff.
+ *
+ * A turn's tool calls are routinely mirrored after its checkpoint settled, so
+ * the card said `Detected` on every file even though the turn had edited them.
+ * Each pass rewrites a bounded batch on the worker's background lane and yields
+ * between batches, so a large backlog drains over a launch or two without ever
+ * holding the window.
+ */
+export async function backfillChangeProvenanceOnLaunch(database: Database): Promise<number> {
+  const manager = new CheckpointManager(database)
+  let total = 0
+  const startedAt = Date.now()
+  for (let pass = 0; pass < PROVENANCE_MAX_PASSES; pass += 1) {
+    const scanned = await manager.backfillChangeProvenance()
+    total += scanned
+    if (scanned === 0) break
+    if (Date.now() - startedAt >= PROVENANCE_LAUNCH_BUDGET_MS) break
+    await new Promise((resolve) => setTimeout(resolve, 150))
+  }
+  if (total > 0) Logger.info('Read change provenance for file-change cards', { cards: total })
+  return total
+}
+
 /** Wall-clock ceiling for one launch's trimming, so a large backlog drains in
  *  the background without ever holding the app. */
 const HISTORICAL_MAP_LAUNCH_BUDGET_MS = 60_000
