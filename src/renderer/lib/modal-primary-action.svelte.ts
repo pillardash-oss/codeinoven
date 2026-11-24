@@ -139,6 +139,25 @@ export function findPanelPrimaryAction(panel: HTMLElement): HTMLElement | undefi
 }
 
 /**
+ * True when the keyboard is working inside `panel` right now.
+ *
+ * A floating dockable panel is not a modal that owns the window: the user can
+ * keep typing in the chat composer, a file buffer or another panel with one
+ * open, and the primary-action chord belongs to whatever they are typing in. A
+ * panel therefore answers it only while focus is inside it, and when nothing at
+ * all is focused the panel is the only candidate on screen.
+ *
+ * The canonical modal needs no such rule: it owns the window, so there is
+ * nowhere else for the keyboard to be.
+ */
+export function panelHoldsFocus(panel: HTMLElement): boolean {
+  const active = panel.ownerDocument.activeElement
+  if (!(active instanceof HTMLElement)) return true
+  if (active === panel.ownerDocument.body) return true
+  return active === panel || panel.contains(active)
+}
+
+/**
  * True when the current focus means Enter already activates the primary
  * action natively (a focused submit button inside a form), so the pipeline
  * must not double-fire it.

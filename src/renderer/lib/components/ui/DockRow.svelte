@@ -15,6 +15,7 @@
     type DockEdge,
     type DockPlacement
   } from '$lib/dock-placement'
+  import { dockStack, type DockLayer } from '$lib/dock-stack.svelte'
 
   interface Props {
     /**
@@ -24,11 +25,42 @@
     storageKey: string
     /** Action description for the drag head, e.g. "Move docked harness tasks". */
     label: string
+    /**
+     * Stacking band the row paints in, matching the panel that renders it.
+     *
+     * Every chip row in a band shares one stack, so only the row the user last
+     * touched sits in front. A row docked out of a `layer="top"` panel belongs
+     * to that panel's band, above the full screen surfaces; every other row
+     * stays in the surface band.
+     */
+    layer?: DockLayer
     /** The docked chips. Each dock surface renders its own row content. */
     children: Snippet
   }
 
-  let { storageKey, label, children }: Props = $props()
+  let { storageKey, label, layer = 'surface', children }: Props = $props()
+
+  /**
+   * This row's place in the floating stack.
+   *
+   * Several docks can be on screen at once (a pull request draft, a project's
+   * env secrets, an update run), all in the same band, so a fixed `z-index` let
+   * the row mounted last cover whichever one the user was actually working in.
+   * The row takes its `z-index` from the shared stack and promotes itself the
+   * moment it is pressed, dragged or focused, which keeps the row in the hand on
+   * top of every other dock.
+   */
+  const stackId = `dock-row-${crypto.randomUUID()}`
+  const zIndex = $derived(dockStack.zIndex(layer, stackId))
+
+  function promote(): void {
+    dockStack.promote(layer, stackId)
+  }
+
+  $effect(() => {
+    promote()
+    return () => dockStack.leave(layer, stackId)
+  })
 
   // A dock row's owner key is fixed for the life of the row, so the saved
   // placement is read once here and the row owns it from then on.
@@ -69,6 +101,7 @@
   const box = $derived(placementBox)
 
   function onNativeInteraction(report: NativeDockInteraction): void {
+    promote()
     if (report.kind === 'edge') {
       const edge = edgeForKey(report.key)
       if (edge) place(dockPlacementOnEdge(edge, box, viewport))
@@ -137,6 +170,7 @@
 
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return
+    promote()
     dragging = true
     dragStart = { x: event.clientX, y: event.clientY }
     dragOrigin = { x: box.x, y: box.y }
@@ -181,6 +215,7 @@
     const edge = edgeForKey(event.key)
     if (edge === null) return
     event.preventDefault()
+    promote()
     place(dockPlacementOnEdge(edge, box, viewport))
   }
 </script>
@@ -190,12 +225,14 @@
 <!-- `visibility` rather than `display`: the row has to be measurable before it
      knows where it goes, and hiding it from layout would keep it unmeasured. -->
 <div
-  class="fixed z-50 flex w-max max-w-[calc(100vw-2rem)] items-stretch gap-1.5 {dragging
+  class="fixed flex w-max max-w-[calc(100vw-2rem)] items-stretch gap-1.5 {dragging
     ? ''
     : 'transition-[left,top] duration-150 ease-out motion-reduce:transition-none'}"
-  style="left: {box.x}px; top: {box.y}px; visibility: {measured
+  style="left: {box.x}px; top: {box.y}px; z-index: {zIndex}; visibility: {measured
     ? 'visible'
     : 'hidden'}; opacity: {native.ready ? 0 : 1}; pointer-events: {native.ready ? 'none' : 'auto'};"
+  onpointerdowncapture={promote}
+  onfocusincapture={promote}
   {@attach measure}
 >
   <!--

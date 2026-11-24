@@ -131,6 +131,38 @@ cd /project && git status --porcelain`
     expect(changedPathsFromTool('/project', part)).toEqual(['tools/generator/out/schema.ts'])
   })
 
+  // Regression: an inline script that edits several places commonly wraps the
+  // write in a helper, `def edit(p, a, b)` plus `edit('app/attachments.ts', ...)`.
+  // Only the definition writes, and only the call names the file, so neither was
+  // read and the turn proved nothing it had just changed.
+  it('extracts the target of a helper that writes through its first parameter', () => {
+    const part: Extract<AgentPart, { type: 'tool' }> = {
+      type: 'tool',
+      id: 'part-helper-script',
+      messageID: 'message-helper-script',
+      callID: 'call-helper-script',
+      tool: 'bash',
+      state: {
+        status: 'completed',
+        input: {
+          command: `cd apps/application/src/lib/design/journal && python3 - <<'EOF'
+def edit(p,a,b):
+    s=open(p).read(); assert a in s,(p,a); open(p,'w').write(s.replace(a,b,1))
+edit('app/attachments.ts',"old","new")
+edit('viewer/carousel.ts',"one","two")
+open('attachments/mini.ts','w').write('audit')
+EOF`
+        }
+      }
+    }
+
+    expect(changedPathsFromTool('/project', part)).toEqual([
+      'apps/application/src/lib/design/journal/attachments/mini.ts',
+      'apps/application/src/lib/design/journal/app/attachments.ts',
+      'apps/application/src/lib/design/journal/viewer/carousel.ts'
+    ])
+  })
+
   it('extracts paths from Codex file-change items', () => {
     const part: Extract<AgentPart, { type: 'tool' }> = {
       type: 'tool',

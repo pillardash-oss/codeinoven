@@ -8,6 +8,7 @@
   import CioFolderOpen from '@pdslng/cio-icon/CioFolderOpen.svelte'
   import CioForward from '@pdslng/cio-icon/CioForward.svelte'
   import CioSpinner from '@pdslng/cio-icon/CioSpinner.svelte'
+  import { ContextMenu } from 'bits-ui'
   import type {
     GitCommitInfo,
     GitDiff,
@@ -126,21 +127,53 @@
 {#snippet commitTreeNode(node: CommitTreeNode, depth: number)}
   {#each sortCommitDirs(node.dirs) as dir (dir.path)}
     {@const dirCollapsed = commitTreeCollapsedDirs[dir.path] ?? false}
-    <button
-      type="button"
-      class="flex h-7 w-full cursor-pointer items-center gap-1.5 pr-2 text-left transition-colors hover:bg-elevated/50"
-      style={`padding-left: ${8 + depth * 14}px`}
-      onclick={() => toggleCommitDir(dir.path)}
-    >
-      {#if dirCollapsed}
-        <CioForward size={12} class="shrink-0 text-dimmed" />
-        <CioFolder size={13} class="shrink-0 text-dimmed" />
-      {:else}
-        <CioChevronDown size={12} class="shrink-0 text-dimmed" />
-        <CioFolderOpen size={13} class="shrink-0 text-dimmed" />
-      {/if}
-      <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted">{dir.name}</span>
-    </button>
+    <!--
+      A directory of the open commit can be revealed in the files tree, the
+      same as a directory of the working tree: seeing which files a commit
+      touched is only half the question, the other half is looking at them.
+    -->
+    <ContextMenu.Root>
+      <ContextMenu.Trigger
+        class="block w-full"
+        aria-label={`Actions for directory ${dir.path} in this commit`}
+      >
+        <button
+          type="button"
+          class="flex h-7 w-full cursor-pointer items-center gap-1.5 pr-2 text-left transition-colors hover:bg-elevated/50"
+          style={`padding-left: ${8 + depth * 14}px`}
+          title={dirCollapsed ? `Expand ${dir.path}` : `Collapse ${dir.path}`}
+          onclick={() => toggleCommitDir(dir.path)}
+        >
+          {#if dirCollapsed}
+            <CioForward size={12} class="shrink-0 text-dimmed" />
+            <CioFolder size={13} class="shrink-0 text-dimmed" />
+          {:else}
+            <CioChevronDown size={12} class="shrink-0 text-dimmed" />
+            <CioFolderOpen size={13} class="shrink-0 text-dimmed" />
+          {/if}
+          <span class="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted"
+            >{dir.name}</span
+          >
+        </button>
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content
+          class="z-50 min-w-44 overflow-hidden border border-border bg-surface p-1 shadow-xl"
+          side="bottom"
+          align="start"
+          sideOffset={4}
+          collisionPadding={8}
+        >
+          <ContextMenu.Item
+            class="flex cursor-pointer items-center gap-2 px-2 py-1.5 text-[0.6875rem] text-foreground outline-none data-highlighted:bg-elevated"
+            onSelect={() => openDirectory(dir.path)}
+          >
+            <CioFolderOpen size={12} class="text-warning" />
+            Open directory
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu.Root>
     {#if !dirCollapsed}
       {@render commitTreeNode(dir, depth + 1)}
     {/if}
@@ -157,9 +190,11 @@
         selected={Boolean(selectedPaths[change.path])}
         selectable
         readonly
+        openLabel="Open working copy"
         onToggleDiff={() => toggleCommitDiff(change)}
         onToggleStage={() => {}}
         onToggleSelect={(item, additive) => toggleSelection(item, additive)}
+        onOpenInEditor={(path) => openInEditor(path)}
         onRemoveFromCommit={(path) => requestRemoveCommitChanges([path])}
       />
     </div>
@@ -228,9 +263,11 @@
               selected={Boolean(selectedPaths[change.path])}
               selectable
               readonly
+              openLabel="Open working copy"
               onToggleDiff={() => toggleCommitDiff(change)}
               onToggleStage={() => {}}
               onToggleSelect={(item, additive) => toggleSelection(item, additive)}
+              onOpenInEditor={(path) => openInEditor(path)}
               onRemoveFromCommit={(path) => requestRemoveCommitChanges([path])}
               onRestore={(path, target) =>
                 restoreFromSource(selectedCommit?.hash ?? 'HEAD', path, target)}

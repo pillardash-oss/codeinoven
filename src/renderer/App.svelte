@@ -420,16 +420,14 @@
     {/await}
   {/if}
 
-  {#if projectEnvDock.projectId}
-    <!-- One env editor for the project tree and the file explorer, mounted at the
-         root so leaving a view never closes what the user is typing into. Keyed by
-         project so opening another project starts from that project's file. The
-         dock's module loads on the first open, because nothing on the first screen
-         edits a project's env file. -->
-    {#await loadCachedPanelModule('module:lib/components/secrets/ProjectEnvDock.svelte', () => import('$lib/components/secrets/ProjectEnvDock.svelte')) then { default: ProjectEnvDock }}
-      {#key projectEnvDock.projectId}
-        <ProjectEnvDock />
-      {/key}
+  {#if projectEnvDock.docks.length}
+    <!-- One env editor per project, mounted at the root so leaving a view never
+         closes what the user is typing into, and so opening another project's
+         secrets keeps the one already open instead of replacing it. The dock's
+         module loads on the first open, because nothing on the first screen edits
+         a project's env file. -->
+    {#await loadCachedPanelModule('module:lib/components/secrets/ProjectEnvDockHost.svelte', () => import('$lib/components/secrets/ProjectEnvDockHost.svelte')) then { default: ProjectEnvDockHost }}
+      <ProjectEnvDockHost />
     {/await}
   {/if}
 

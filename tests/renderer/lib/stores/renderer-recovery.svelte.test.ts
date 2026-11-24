@@ -403,6 +403,56 @@ describe('RendererRecoveryStore', () => {
     ])
   })
 
+  it('reorders queued messages without rewriting them, and persists the order', () => {
+    const storage = new MemoryStorage()
+    const store = new RendererRecoveryStore(storage)
+    for (const text of ['First', 'Second', 'Third']) {
+      store.setQueuedMessage('project-1', 'thread-1', {
+        text,
+        attachments: [],
+        promptReferences: [],
+        projectReferences: [],
+        taskReferences: [],
+        startAfterThreads: []
+      })
+    }
+    const ids = store.queuedMessagesFor('project-1', 'thread-1').map((entry) => entry.id)
+    expect(ids).toHaveLength(3)
+    const [first, second, third] = ids
+
+    // Drag the last message to the front: the queue is a FIFO the dispatcher
+    // sends from its head, so this is what decides the next message sent.
+    expect(store.moveQueuedMessage('project-1', 'thread-1', third, 0)).toBe(true)
+    expect(store.queuedMessageFor('project-1', 'thread-1')?.text).toBe('Third')
+    expect(store.queuedMessagesFor('project-1', 'thread-1').map((entry) => entry.id)).toEqual([
+      third,
+      first,
+      second
+    ])
+
+    // A slot past the end clamps to the end instead of dropping the message.
+    expect(store.moveQueuedMessage('project-1', 'thread-1', first, 99)).toBe(true)
+    expect(store.queuedMessagesFor('project-1', 'thread-1').map((entry) => entry.text)).toEqual([
+      'Third',
+      'Second',
+      'First'
+    ])
+
+    // The arrangement survives a restart, because the queue is what the
+    // dispatcher reads when the app comes back.
+    const reloaded = new RendererRecoveryStore(storage)
+    expect(reloaded.queuedMessagesFor('project-1', 'thread-1').map((entry) => entry.text)).toEqual([
+      'Third',
+      'Second',
+      'First'
+    ])
+
+    // Dropping a message on its own slot, or moving one that is no longer
+    // queued, reports that nothing moved so the card does not re-read its head.
+    expect(reloaded.moveQueuedMessage('project-1', 'thread-1', third, 0)).toBe(false)
+    expect(reloaded.moveQueuedMessage('project-1', 'thread-1', 'delivered-already', 0)).toBe(false)
+  })
+
   it('delete-all clears every queued message for a thread', () => {
     const storage = new MemoryStorage()
     const store = new RendererRecoveryStore(storage)

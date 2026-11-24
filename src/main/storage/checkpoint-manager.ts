@@ -52,6 +52,7 @@ import {
 import { repairCheckpointChanges, toTurnCheckpointSummary } from './checkpoint/checkpoint-summary'
 import {
   TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
+  alignEvidencePaths,
   transcriptWriteEvidence,
   type TranscriptEvidenceRow
 } from './checkpoint/checkpoint-transcript-evidence'
@@ -444,6 +445,29 @@ export class CheckpointManager {
         includeGitMetadata: checkpoint.before.git !== undefined
       })
       const allChanges = tracker.calculateChanges(checkpoint.before, after)
+      // Write evidence is parsed from a command that starts at the project root,
+      // while a long-lived harness shell sits wherever its last `cd` left it. A
+      // target that is not a change path is therefore mapped onto the single
+      // change path it ends, which is what keeps a contested diff from dropping
+      // the very files the turn wrote.
+      const alignedEvidence = alignEvidencePaths(
+        [
+          ...(options.changeSources?.keys() ?? []),
+          ...(options.evidencedPaths ?? []),
+          ...(options.precisePaths ?? [])
+        ],
+        new Set(allChanges.map((change) => change.path))
+      )
+      const remappedEvidencePaths = (paths: ReadonlySet<string> | undefined): Set<string> =>
+        new Set([...(paths ?? [])].flatMap((path) => alignedEvidence.get(path) ?? []))
+      const changeSources = options.changeSources
+        ? new Map(
+            [...options.changeSources].flatMap(([path, sources]) => {
+              const target = alignedEvidence.get(path)
+              return target ? [[target, sources] as const] : []
+            })
+          )
+        : undefined
       const foreign =
         allChanges.length > 0 ? await this.foreignClaimedPaths(checkpoint, options) : undefined
       // A turn another thread had in flight during this window makes the diff
@@ -463,12 +487,13 @@ export class CheckpointManager {
               options.ownThreadIds
             )
       const contestedDiff = options.contestedDiff === true || (overlapping?.length ?? 0) > 0
-      const precisePaths = options.precisePaths ?? new Set<string>()
+      const precisePaths = remappedEvidencePaths(options.precisePaths)
+      const alignedEvidencedPaths = remappedEvidencePaths(options.evidencedPaths)
       const excludedPaths = options.excludedPaths
       // A path this turn recorded write evidence for. Window evidence counts: a
       // shell command that measured the file changing is this turn's own work.
       const claimedByThisTurn = (path: string): boolean =>
-        (options.changeSources?.get(path)?.length ?? 0) > 0
+        (changeSources?.get(path)?.length ?? 0) > 0
       // Strongest first: another turn's file tool beats everything but this
       // turn's own precise claim. Then a foreign shell window, which only ever
       // proves the file moved while that command ran: it never outranks this
@@ -518,9 +543,8 @@ export class CheckpointManager {
       // while the command ran, which is exactly what another turn writing here
       // looks like. Counting the bare key as proof let a contested diff rescue a
       // room full of another thread's files back onto a read-only turn's card.
-      const evidencedPaths = new Set<string>(options.evidencedPaths ?? [])
-      for (const [path, sources] of options.changeSources ??
-        new Map<string, FileChangeSource[]>()) {
+      const evidencedPaths = alignedEvidencedPaths
+      for (const [path, sources] of changeSources ?? new Map<string, FileChangeSource[]>()) {
         if (sources.length > 0) evidencedPaths.add(path)
       }
       if (Object.keys(checkpoint.before.files).length > 0) {
@@ -609,12 +633,12 @@ export class CheckpointManager {
         status,
         after,
         changes,
-        ...(options.changeSources
+        ...(changeSources
           ? {
               // Store each command once, even when it changed thousands of files.
               toolSources: Object.fromEntries(
                 changes.flatMap((change) =>
-                  (options.changeSources?.get(change.path) ?? []).map((source) => [
+                  (changeSources.get(change.path) ?? []).map((source) => [
                     source.toolPartId,
                     source
                   ])
@@ -623,7 +647,7 @@ export class CheckpointManager {
               changeSourceRefs: Object.fromEntries(
                 changes.map((change) => [
                   change.path,
-                  (options.changeSources?.get(change.path) ?? []).map((source) => ({
+                  (changeSources.get(change.path) ?? []).map((source) => ({
                     toolPartId: source.toolPartId,
                     verification: source.verification,
                     window: source.window

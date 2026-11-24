@@ -98,3 +98,54 @@ function toolPart(value: unknown): Extract<AgentPart, { type: 'tool' }> | null {
     }
   }
 }
+
+/**
+ * How much of a path may be missing from the front of a write target.
+ *
+ * A harness keeps its shell in the directory its last `cd` left it in, and a
+ * whole session shares that shell, while a write target is read from one
+ * command that starts at the project root. The two differ by the directories
+ * the agent walked into: `viewer/carousel.ts` for
+ * `apps/application/src/lib/design/journal/viewer/carousel.ts`. This is only
+ * ever used to line evidence up with paths the content diff already holds, so
+ * the bound is about effort, not about trust.
+ */
+const EVIDENCE_SUFFIX_MAX_CANDIDATES = 40_000
+
+/**
+ * Map write-evidence paths onto the paths the workspace diff actually reports.
+ *
+ * A path that is already a change path is left alone. Otherwise a single
+ * change path that ends with the evidence path claims it, which is exactly the
+ * directory-skew case above. An ambiguous suffix is dropped: two files can end
+ * the same way (`index.ts`), and guessing one would credit this turn with the
+ * other's work. No path is ever invented, because only real change paths can
+ * be a target.
+ */
+export function alignEvidencePaths(
+  paths: Iterable<string>,
+  changePaths: ReadonlySet<string>
+): Map<string, string> {
+  const aligned = new Map<string, string>()
+  if (changePaths.size > EVIDENCE_SUFFIX_MAX_CANDIDATES) return aligned
+  const candidates = [...changePaths]
+  for (const path of new Set(paths)) {
+    if (!path || path.includes('\0')) continue
+    if (changePaths.has(path)) {
+      aligned.set(path, path)
+      continue
+    }
+    const suffix = `/${path}`
+    let match: string | undefined
+    for (const candidate of candidates) {
+      if (!candidate.endsWith(suffix)) continue
+      if (match !== undefined) {
+        match = undefined
+        break
+      }
+      match = candidate
+    }
+    if (match !== undefined) aligned.set(path, match)
+  }
+  return aligned
+}

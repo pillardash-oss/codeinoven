@@ -907,6 +907,36 @@ export class RendererRecoveryStore {
     this.persist()
   }
 
+  /**
+   * Move one queued message to another place in its thread's queue.
+   *
+   * The queue is a FIFO the dispatcher reads from its head, so this is the only
+   * way a reader can change which message goes next: the entries themselves are
+   * untouched, only their order changes. Returns true when the queue moved, so
+   * a caller knows whether it has to re-read the head.
+   */
+  moveQueuedMessage(
+    projectId: string,
+    threadId: string,
+    entryId: string,
+    targetIndex: number
+  ): boolean {
+    if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return false
+    const key = recoveryDraftKey(projectId, threadId)
+    const queue = this.queuedMessages[key]
+    if (!queue || queue.length < 2 || !Number.isFinite(targetIndex)) return false
+    const from = queue.findIndex((entry) => entry.id === entryId)
+    if (from === -1) return false
+    const to = Math.max(0, Math.min(queue.length - 1, Math.trunc(targetIndex)))
+    if (from === to) return false
+    const next = [...queue]
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    this.queuedMessages = { ...this.queuedMessages, [key]: next }
+    this.persistQueuedNow()
+    return true
+  }
+
   /** Drop the oldest queued message once it has been consumed or discarded. */
   clearQueuedMessage(projectId: string, threadId: string): void {
     if (!isRecoveryIdentifier(projectId) || !isRecoveryIdentifier(threadId)) return

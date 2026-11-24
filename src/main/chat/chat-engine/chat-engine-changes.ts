@@ -205,6 +205,35 @@ function shellWords(command: string): ShellWord[] {
   return words
 }
 
+/**
+ * Names of inline-script helpers that write through their first parameter.
+ *
+ * `def edit(p, a, b): s = open(p).read(); open(p, 'w').write(s)` puts the only
+ * mention of the target file in each call, so the definition has to be read
+ * before the calls can be. The body is the indented block under the `def`, and
+ * a helper counts only when it really opens or writes that parameter.
+ */
+function pathWritingHelpers(command: string): string[] {
+  const helpers: string[] = []
+  const definitions = /^def\s+([A-Za-z_][\w]*)\s*\(\s*([A-Za-z_][\w]*)/gmu
+  for (const match of command.matchAll(definitions)) {
+    const name = match[1]
+    const parameter = match[2]
+    if (!name || !parameter) continue
+    const lineEnd = command.indexOf('\n', (match.index ?? 0) + match[0].length)
+    if (lineEnd < 0) continue
+    const rest = command.slice(lineEnd + 1)
+    const blockEnd = rest.search(/^(?![ \t])/mu)
+    const body = blockEnd < 0 ? rest : rest.slice(0, blockEnd)
+    const writesParameter = new RegExp(
+      String.raw`\bopen\s*\(\s*${parameter}\s*,\s*["'][^"']*[awx+][^"']*["']|\bPath\s*\(\s*${parameter}\s*\)\s*\.\s*(?:touch|unlink|write_bytes|write_text)\s*\(|\b${parameter}\s*\.\s*(?:write_text|write_bytes)\s*\(`,
+      'u'
+    ).test(body)
+    if (writesParameter) helpers.push(name)
+  }
+  return helpers
+}
+
 function scriptWritePaths(command: string): string[] {
   const code = scriptCodePositions(command)
   const variables = shellVariableValues(command)
@@ -236,6 +265,17 @@ function scriptWritePaths(command: string): string[] {
   )
   for (const pattern of [firstArgumentWriters, pythonOpenMode, pythonOpenWrite, pythonPathWriter]) {
     for (const match of command.matchAll(pattern)) {
+      if (code[match.index]) addExpression(match[1])
+    }
+  }
+  // A harness that edits several places in one heredoc often wraps the write in
+  // a helper: `def edit(p, a, b): ... open(p,'w') ...` and then
+  // `edit('app/attachments.ts', ...)`. The only place that path appears is the
+  // call's first argument, so without following the helper the whole edit
+  // proved nothing and the turn's card came up empty.
+  for (const helper of pathWritingHelpers(command)) {
+    const call = new RegExp(String.raw`\b${helper}\s*\(\s*(${STATIC_PATH_EXPRESSION})`, 'gmu')
+    for (const match of command.matchAll(call)) {
       if (code[match.index]) addExpression(match[1])
     }
   }
