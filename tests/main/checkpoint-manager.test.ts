@@ -867,6 +867,54 @@ describe('CheckpointManager', () => {
     expect((await manager.get('projectZ', 'threadZ', active.id))?.status).toBe('interrupted')
   })
 
+  // Regression: a long-lived harness shell sits wherever its last `cd` left it,
+  // while write evidence is parsed from commands that start at the project root.
+  // A contested diff then kept only evidence paths, and none of them matched the
+  // real change paths, so a turn that committed three files recorded none.
+  it('lines up a write target parsed from a deeper shell directory', async () => {
+    const projectRoot = await temporaryDirectory('codeinoven-project-')
+    const database = await createTestDb()
+    testDatabases.push(database)
+    const manager = new CheckpointManager(database)
+    const journal = join('apps', 'application', 'src', 'journal')
+    const viewer = join(journal, 'viewer')
+    await mkdir(join(projectRoot, viewer), { recursive: true })
+    await writeFile(join(projectRoot, viewer, 'carousel.ts'), 'before', 'utf-8')
+    await writeFile(join(projectRoot, journal, 'foreign.ts'), 'untouched', 'utf-8')
+
+    const turn = await manager.beginTurn(
+      'project-shelldir',
+      'thread-shelldir',
+      projectRoot,
+      'Drawer turn',
+      false
+    )
+    await writeFile(join(projectRoot, viewer, 'carousel.ts'), 'after', 'utf-8')
+    // Another thread is writing here at the same time, which is what makes the
+    // diff claimable only through this turn's own evidence.
+    await writeFile(join(projectRoot, journal, 'foreign.ts'), 'their edit', 'utf-8')
+    const completed = await manager.completeTurn(
+      'project-shelldir',
+      'thread-shelldir',
+      turn.id,
+      projectRoot,
+      'completed',
+      undefined,
+      undefined,
+      {
+        contestedDiff: true,
+        changeSources: new Map([['viewer/carousel.ts', [claimedSource('viewer/carousel.ts')]]])
+      }
+    )
+
+    expect(completed.changes.map((change) => change.path)).toEqual([
+      'apps/application/src/journal/viewer/carousel.ts'
+    ])
+    expect(
+      completed.changeSourceRefs?.['apps/application/src/journal/viewer/carousel.ts']
+    ).toHaveLength(1)
+  })
+
   it('repairs an empty card from the scope worktree its snapshots were taken in', async () => {
     const database = await createTestDb()
     testDatabases.push(database)

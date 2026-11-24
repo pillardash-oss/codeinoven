@@ -13,8 +13,10 @@ import { EXCLUDED_DIRECTORY_NAMES, isExcludedRelativePath } from '../../git/chan
 import { snapshotChangeBreakdown } from './checkpoint-breakdown'
 import { calculateLineStats, type CheckpointLineStats } from './checkpoint-diff'
 import { diffCheckpointFiles } from './checkpoint-summary'
+import type { FileChangeSource } from '../../../lib/types'
 import {
   TRANSCRIPT_EVIDENCE_MESSAGE_LIMIT,
+  alignEvidencePaths,
   transcriptWriteEvidence
 } from './checkpoint-transcript-evidence'
 import type { TurnCheckpoint } from '../checkpoint-manager'
@@ -289,7 +291,20 @@ export async function repairEvidenceDroppedCheckpoints(
         evidenceRoot,
         transcript.map((row) => ({ parts: row['parts'] }))
       )
-      const kept = diff.filter((change) => (evidence.get(change.path)?.length ?? 0) > 0)
+      // The evidence paths were parsed from commands that start at the project
+      // root, while the harness shell sat wherever its last `cd` left it. Line
+      // each one up with the change path it ends before deciding what it proves.
+      const aligned = alignEvidencePaths(
+        evidence.keys(),
+        new Set(diff.map((change) => change.path))
+      )
+      const alignedEvidence = new Map<string, FileChangeSource[]>()
+      for (const [path, sources] of evidence) {
+        const target = aligned.get(path)
+        if (!target) continue
+        alignedEvidence.set(target, [...(alignedEvidence.get(target) ?? []), ...sources])
+      }
+      const kept = diff.filter((change) => (alignedEvidence.get(change.path)?.length ?? 0) > 0)
       if (kept.length === 0) continue
       const lineStats = await calculateLineStats(host.tracker(projectId), kept)
       const breakdown = await snapshotChangeBreakdown(
@@ -304,13 +319,13 @@ export async function repairEvidenceDroppedCheckpoints(
         changes: kept,
         toolSources: Object.fromEntries(
           kept.flatMap((change) =>
-            (evidence.get(change.path) ?? []).map((source) => [source.toolPartId, source])
+            (alignedEvidence.get(change.path) ?? []).map((source) => [source.toolPartId, source])
           )
         ),
         changeSourceRefs: Object.fromEntries(
           kept.map((change) => [
             change.path,
-            (evidence.get(change.path) ?? []).map((source) => ({
+            (alignedEvidence.get(change.path) ?? []).map((source) => ({
               toolPartId: source.toolPartId,
               verification: source.verification,
               window: source.window
