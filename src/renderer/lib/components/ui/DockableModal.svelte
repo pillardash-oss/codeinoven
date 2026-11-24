@@ -20,7 +20,8 @@
     registerModalPrimaryAction,
     findPanelPrimaryAction,
     findFirstTextField,
-    focusOwnsEnter
+    focusOwnsEnter,
+    panelHoldsFocus
   } from '$lib/modal-primary-action.svelte'
 
   interface Props {
@@ -565,10 +566,16 @@
   // focus, so its resolver yields). The owner hook runs first so a panel can
   // claim the chord deterministically; otherwise the shared selector chain
   // finds the panel's own primary action.
+  //
+  // A floating panel does not own the window, so it answers the chord only while
+  // the keyboard is working in it. Without that, a panel left open beside the
+  // chat composer ran its own primary action when the user pressed the chord to
+  // send a message.
   $effect(() => {
     if (!open || minimized) return
     return registerModalPrimaryAction(() => {
       if (!panelEl || focusOwnsEnter(panelEl)) return false
+      if (!panelHoldsFocus(panelEl)) return false
       if (onPrimaryAction?.()) return true
       const action = findPanelPrimaryAction(panelEl)
       if (!action) return false
