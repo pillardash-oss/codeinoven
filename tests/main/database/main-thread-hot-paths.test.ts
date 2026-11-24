@@ -12,13 +12,16 @@ import { describe, expect, it } from 'vitest'
  * back fails here instead of in the user's hands.
  */
 function source(...parts: string[]): string {
-  return readFileSync(join(process.cwd(), 'src', ...parts), 'utf8')
+  // Windows checkouts (autocrlf) hand back CRLF, which would break every
+  // newline-anchored search below, so read source as LF on every platform.
+  return readFileSync(join(process.cwd(), 'src', ...parts), 'utf8').replace(/\r\n/gu, '\n')
 }
 
 function body(text: string, signature: string): string {
   const start = text.indexOf(signature)
   expect(start).toBeGreaterThan(-1)
   const end = text.indexOf('\n  }\n', start)
+  expect(end).toBeGreaterThan(start)
   return text.slice(start, end)
 }
 
