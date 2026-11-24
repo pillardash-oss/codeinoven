@@ -33,6 +33,7 @@ import { agentCreationTargets } from '../../permissions/agent-created-files'
 import { posixDirname } from '../../../lib/paths'
 import type { AgentPart } from '../../../lib/types'
 import { isOvenMode, isUnrestrictedLevel } from '../../../lib/permission-level'
+import { isRemoteOvenId } from '../../../lib/ovens'
 
 /**
  * The permission kinds that mean "an operation on a file". Every other kind is
@@ -927,14 +928,19 @@ export class ChatEnginePermissions {
     this.host.units['turns'].markHarnessActive(info.projectId, info.driverId)
 
     // The refusal is answered before any tier logic below can approve it.
+    const threadBrowserAvailable = !isRemoteOvenId(thread?.settings?.ovenId)
     const refusedCommand = commands.find(
       (command) =>
         unmanagedProcessKillReason('bash', { command }) !== null ||
-        unmanagedBrowserShellReason('bash', { command }) !== null
+        unmanagedBrowserShellReason('bash', { command }, { threadBrowserAvailable }) !== null
     )
     if (refusedCommand !== undefined) {
       const processReason = unmanagedProcessKillReason('bash', { command: refusedCommand })
-      const browserReason = unmanagedBrowserShellReason('bash', { command: refusedCommand })
+      const browserReason = unmanagedBrowserShellReason(
+        'bash',
+        { command: refusedCommand },
+        { threadBrowserAvailable }
+      )
       await this.replyPermissionRaw(
         pending,
         'reject',

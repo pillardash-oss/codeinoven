@@ -82,6 +82,39 @@ describe('browser launch rule', () => {
     expect(unmanagedBrowserShellReason('bash', {})).toBeNull()
   })
 
+  it('allows the headless fallback on a thread the app marked unavailable', () => {
+    const command = 'chromium --headless --dump-dom http://localhost:3000'
+    expect(
+      unmanagedBrowserShellReason('bash', { command }, { threadBrowserAvailable: true })
+    ).not.toBeNull()
+    expect(
+      unmanagedBrowserShellReason('bash', { command }, { threadBrowserAvailable: false })
+    ).toBeNull()
+  })
+
+  it('reads the session flag the app sets for an Oven thread', () => {
+    const command = 'chromium --headless --dump-dom http://localhost:3000'
+    const previous = process.env['CIO_THREAD_BROWSER']
+    try {
+      process.env['CIO_THREAD_BROWSER'] = 'unavailable'
+      expect(unmanagedBrowserShellReason('bash', { command })).toBeNull()
+      // An explicit decision from the app still outranks the environment.
+      expect(
+        unmanagedBrowserShellReason('bash', { command }, { threadBrowserAvailable: true })
+      ).not.toBeNull()
+      process.env['CIO_THREAD_BROWSER'] = 'available'
+      expect(unmanagedBrowserShellReason('bash', { command })).not.toBeNull()
+    } finally {
+      if (previous === undefined) delete process.env['CIO_THREAD_BROWSER']
+      else process.env['CIO_THREAD_BROWSER'] = previous
+    }
+  })
+
+  it('marks an Oven thread unavailable in the run environment it starts with', async () => {
+    const source = await readFile(join(projectRoot, 'src/main/ovens/oven-pi-runtime.ts'), 'utf8')
+    expect(source).toContain("CIO_THREAD_BROWSER: 'unavailable'")
+  })
+
   it('is wired at every gate, including the worker gate', async () => {
     for (const site of WIRING_SITES) {
       const source = await readFile(join(projectRoot, site), 'utf8')

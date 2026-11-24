@@ -10,6 +10,17 @@ export const BACKGROUND_AGENT_CONTROL_INSTRUCTION = [
   'Keep activity visible through the existing agent cursor, PiP, and thread indicators without activating the target solely to show activity.'
 ].join(' ')
 
+/**
+ * The session flag that says this thread's in-app browser cannot serve it.
+ *
+ * Set by the app, never by the agent: an Oven thread is always marked, because
+ * the browser tab in front of the user shows this machine while the work runs
+ * on the Oven, so a headless browser over there is the only way to see the page.
+ */
+export const THREAD_BROWSER_ENV = 'CIO_THREAD_BROWSER'
+/** The value of {@link THREAD_BROWSER_ENV} for a thread without a usable browser. */
+export const THREAD_BROWSER_UNAVAILABLE = 'unavailable'
+
 /** A routing guard, independent of permission tier. Kept self-contained so Pi
  * can embed the same implementation in its generated extension. */
 export function unmanagedCuaShellReason(
@@ -420,17 +431,33 @@ export function unmanagedProcessKillReason(
  *
  * Kept self-contained so Pi embeds the same implementation in its generated
  * extension.
+ *
+ * The rule is not absolute, and the one exception is the app's call, not the
+ * agent's: a thread whose browser cannot serve it may use a headless browser.
+ * That is an Oven thread (the browser tab shows this machine, never the Oven's
+ * checkout) and any thread the app marks unavailable. The app decides before
+ * the command runs, through `options.threadBrowserAvailable` or the
+ * `CIO_THREAD_BROWSER=unavailable` flag it sets for the session, so an agent can
+ * never grant itself the exception by arguing for it.
  */
 export function unmanagedBrowserShellReason(
   toolName: string,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  options?: { threadBrowserAvailable?: boolean }
 ): string | null {
   if (!['bash', 'powershell', 'cmd'].includes(toolName)) return null
   const command = typeof input['command'] === 'string' ? input['command'] : ''
   if (!command.trim()) return null
+  // The app decides whether the thread browser can serve this thread. An Oven
+  // thread is always unavailable, because the tab in front of the user is this
+  // machine's, and a headless browser over there is the only option left.
+  const marked = (globalThis as { process?: { env?: Record<string, string | undefined> } }).process
+    ?.env?.['CIO_THREAD_BROWSER']
+  const threadBrowserAvailable = options?.threadBrowserAvailable ?? marked !== 'unavailable'
+  if (!threadBrowserAvailable) return null
 
   const refused =
-    'Not executed: launching your own browser is refused in every form (a chrome, chromium, chrome-headless-shell, firefox or WebKit binary, Playwright or Puppeteer through npx/bunx, a headless flag, a dump-dom or screenshot flag, a remote-debugging port or pipe, or a script that calls chromium.launch itself). The in-app browser is the only browser you have and it is the only one that shows the page the app is serving, in the tab the user can watch: find it with cio_util_find (query "browser"), activate it with cio_util_init, and drive the page with its operations   open a tab, navigate, read the console, click, type, and take a screenshot. A binary that happens to be on disk is not permission to use it. When the in-app browser cannot do what the step needs, say what it could not do and report the check you could not run instead of substituting another browser (or curl).'
+    'Not executed: launching your own browser is refused while this thread has its in-app browser, which is the only browser that shows the page the app is serving, in the tab the user can watch. Use it first: find it with cio_util_find (query "browser"), activate it with cio_util_init, and drive the page with its operations   open a tab, navigate, read the console, click, type, and take a screenshot. Only when that browser genuinely cannot serve this thread may you fall back to a headless browser, and the app allows the fallback itself (an Oven thread, where the browser tab belongs to this machine, is already allowed). When you are refused here, that means the app has not marked this thread unavailable: use the in-app browser, or say what it could not do and report the check you could not run. A binary that happens to be on disk is not permission to use it.'
 
   /** Programs that are a browser, or a launcher that drives one. */
   const browserPrograms = new Set([
