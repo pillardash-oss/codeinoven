@@ -516,51 +516,59 @@ export class ThreadViewHandleAgentEvent extends BoardUnit<ThreadView> {
       // change it   identical to the thread path, so mid-turn composer edits
       // never re-label the running trace.
       this.root.currentWorkingTraceAttribution.captureLiveWorkingSelection()
-      // A controller-driven conversation backed by a real thread (a browser
-      // tab's assistant) queues exactly like the primary surface: while the
-      // agent is busy a plain send parks behind the running turn instead of
-      // steering it, and a direct send still reaches the live turn. A temporary
-      // side chat owns no durable thread to park in, so it always dispatches
-      // straight through its controller.
-      if (this.root.props.controller.kind === 'thread') {
-        const dependencyThreads = startAfterThreads.filter(
-          (reference) => reference.id !== this.thread.id && reference.id.length > 0
-        )
-        if (dependencyThreads.length > 0 || (this.root.switchProject.busy && !direct)) {
-          this.root.steerQueuedMessage.parkComposerSend({
-            text: normalizeComposerMessage(text, projectReferences),
-            attachments,
-            promptContext,
-            promptReferences,
-            projectReferences,
-            presentation,
-            taskReferences,
-            startAfterThreads: dependencyThreads
-          })
-          return
-        }
-        // The device can hold a turn the thread is ready to start. Parking it
-        // puts the message behind the queue card, whose gate says why the turn
-        // has not started and re-runs this send once the machine has room.
-        if (
-          !direct &&
-          (await readThreadHold(
-            this.root.handleAgentEvent.thread.projectId,
-            this.root.handleAgentEvent.thread.id
-          )) !== null
-        ) {
-          this.root.steerQueuedMessage.parkComposerSend({
-            text: normalizeComposerMessage(text, projectReferences),
-            attachments,
-            promptContext,
-            promptReferences,
-            projectReferences,
-            presentation,
-            taskReferences,
-            startAfterThreads: dependencyThreads
-          })
-          return
-        }
+      // A controller-driven conversation queues exactly like the primary
+      // surface: while the agent is busy a plain send parks behind the running
+      // turn instead of opening a second one, and a direct send steers the live
+      // turn. A temporary side chat is keyed by its own id in the same FIFO
+      // queue (its synthetic thread id IS the side chat's id), so the queue card
+      // and the mounted drain below work unchanged. Dispatching a second
+      // `sendTemporaryPrompt` instead would run two turns on one session and
+      // leave the first reply unanswered.
+      const controllerKind = this.root.props.controller.kind
+      const dependencyThreads =
+        controllerKind === 'thread'
+          ? startAfterThreads.filter(
+              (reference) => reference.id !== this.thread.id && reference.id.length > 0
+            )
+          : []
+      if (dependencyThreads.length > 0 || (this.root.switchProject.busy && !direct)) {
+        this.root.steerQueuedMessage.parkComposerSend({
+          text: normalizeComposerMessage(text, projectReferences),
+          attachments,
+          promptContext,
+          promptReferences,
+          projectReferences,
+          presentation,
+          taskReferences,
+          startAfterThreads: dependencyThreads
+        })
+        return
+      }
+      // The device can hold a turn the thread is ready to start. Parking it
+      // puts the message behind the queue card, whose gate says why the turn
+      // has not started and re-runs this send once the machine has room. A side
+      // chat asks the gate through its parent thread, which is what owns the
+      // machine reading.
+      if (
+        !direct &&
+        (await readThreadHold(
+          this.root.handleAgentEvent.thread.projectId,
+          controllerKind === 'thread'
+            ? this.root.handleAgentEvent.thread.id
+            : (this.root.props.controller.parentThreadId ?? this.root.handleAgentEvent.thread.id)
+        )) !== null
+      ) {
+        this.root.steerQueuedMessage.parkComposerSend({
+          text: normalizeComposerMessage(text, projectReferences),
+          attachments,
+          promptContext,
+          promptReferences,
+          projectReferences,
+          presentation,
+          taskReferences,
+          startAfterThreads: dependencyThreads
+        })
+        return
       }
       const payload: SendPayload = {
         text,

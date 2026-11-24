@@ -246,6 +246,17 @@ export class ChatEngineTemporaryChats {
       await this.retireForRebind(temporary)
       temporary = undefined
     }
+    // One turn at a time per side chat. A second send into a session that is
+    // already running would register a second completion waiter over the first
+    // one, orphaning the first turn's reply forever (the renderer reports that
+    // as `reply was never sent`). The renderer queues while busy, so reaching
+    // this is a caller that bypassed that queue, and it is told to steer
+    // instead of being allowed to wedge the session.
+    if (temporary && this.host.state.completionWaiters.has(temporary.sessionId)) {
+      throw new Error(
+        'This quick chat is still answering. Wait for the turn to finish, or send the message as a steer.'
+      )
+    }
     if (!temporary) {
       const thread = await this.host.threadManager.getThread(projectId, threadId)
       if (!thread) throw new Error(`Thread not found: ${threadId}`)
