@@ -1034,6 +1034,8 @@
                 saving={board.switchProject.assistantSaving}
                 onSave={() => void board.switchProject.confirmAssistantSave()}
                 onKeepEditing={board.unmirroredTraceStartTime.keepEditingAssistant}
+                canDiscard={board.switchProject.canDiscardAssistantDraft}
+                onDiscard={() => void board.switchProject.discardAssistantDraft()}
                 threadId={board.handleAgentEvent.thread.id}
               />
             {:else if board.switchProject.assistantComposerCovered}
