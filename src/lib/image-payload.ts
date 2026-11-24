@@ -390,7 +390,10 @@ function payloadUnitParts(payload: unknown): GatewayTextPart[] | null {
     const parts: GatewayTextPart[] = []
     for (const entry of results) {
       const settled = payloadUnitParts(entry['result'])
-      if (settled) parts.push(...settled)
+      // An opened entry still says which call it was and whether it failed: the
+      // parts that follow are its payload, and two capabilities can offer an
+      // operation of the same name.
+      if (settled) parts.push(unitPart(callIdentity(entry)), ...settled)
       else parts.push(unitPart(entry))
     }
     // Each entry is one call, so a batch whose entries stayed whole says how many
@@ -407,12 +410,31 @@ function payloadUnitParts(payload: unknown): GatewayTextPart[] | null {
   const tools = capability['tools']
   if (!Array.isArray(tools) || tools.length === 0 || !tools.every(isRecord)) return null
   const instructions = capability['instructions']
+  // The id is what the agent calls the capability with, so it leads the parts.
+  const utility = payload['utility']
   return [
+    ...(isRecord(utility) ? [unitPart({ utility })] : []),
     ...(typeof instructions === 'string' && instructions.trim() !== ''
       ? [{ type: 'text' as const, text: instructions }]
       : []),
     ...tools.map(unitPart)
   ]
+}
+
+/**
+ * What a settled batch entry targeted and how it ended, without its payload.
+ *
+ * Every field but `result` is kept, because the batch operations tag an entry in
+ * their own way (`utility_id` and `operation`, a gateway `tool`, or `ok` for the
+ * `inputs` form) and a lead part that dropped the tag would leave the parts after
+ * it unattributed.
+ */
+function callIdentity(entry: Record<string, unknown>): Record<string, unknown> {
+  const identity: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(entry)) {
+    if (key !== 'result') identity[key] = value
+  }
+  return identity
 }
 
 export function gatewayStructuredResult(result: unknown): GatewayStructuredResult {
