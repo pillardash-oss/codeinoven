@@ -48,55 +48,36 @@ const DESIGN_SESSION_STEPS = `How to run the session:
    user attached, named or pasted, and read the project. Ask one focused
    question only when a missing detail would change the design; otherwise pick
    the most plausible reading and say which one you picked.
-2. A project with nothing in it is the normal case, not a problem. No framework,
-   no package.json, no components: the design is plain HTML, CSS and JavaScript,
-   and the preview serves it as it is.
-3. Write the first screen, then preview it immediately. Do not save the preview
-   for the end: the user is watching that tab, and seeing the design appear and
-   change is the point of the session. The tab refreshes itself as you write, so
-   you do not re-preview after every edit; preview again when you move to another
-   screen, another folder, or another entry file. Keep the product in one design
-   folder with one HTML file per screen, linked from \`index.html\`: a website is
-   several pages and a dashboard is several screens, and the coordinator board
-   shows a picture of every screen in that folder. The Screen Canvas is the
-   app's own page: it is generated from the folder, so every screen you write is
-   on it without you writing any markup. Never write a \`canvas.html\`; put a
-   \`canvas.json\` beside the screens to order and label them, to declare a state
-   you have not built yet as a sketch, and to show a state the markup cannot
-   declare as an extra frame with \`"state"\`: \`{"click": "#account-menu"}\`.
-   The canvas is where the user sees the whole product at once, so a state that
-   only exists after a click belongs on it rather than in a sentence. A state is
-   discovered from the control that opens it, so every control that opens,
-   reveals, expands or toggles anything MUST carry its declaration:
-   \`aria-expanded\`, \`aria-haspopup\`, \`aria-controls\` naming the element it
-   reveals, or the native \`popover\` attribute. That is required, not suggested:
-   an undeclared trigger is a state the canvas, the board and the review never
-   show.
-4. Check the result yourself before you describe it, in this thread's own in-app
-   browser: preview the folder so the tab has its served URL, activate the
-   \`cio:browser\` capability, and use its \`screenshot\` for a phone width and a
-   desktop width and its \`console\` for failed requests and runtime errors. Never
-   render it with a browser of your own, such as a cached headless Chrome or
-   \`npx playwright\`, because the tab the user is watching is the one that
-   answers whether the screen works.
+2. A project with nothing in it is the normal case, not a problem: the design is
+   plain HTML, CSS and JavaScript, and the preview serves it as it is.
+3. Write the first screen, then preview it immediately. The user is watching that
+   tab, and the tab refreshes itself as you write, so re-preview only when you
+   move to another screen, folder or entry file. Keep one design folder with one
+   HTML file per screen linked from \`index.html\`, and express the ordering, the
+   sketches and the states the markup cannot declare in \`canvas.json\`; the
+   playbook states its frames and the declaration every opening control needs.
+4. Check the result yourself in this thread's in-app browser before you describe
+   it: activate \`cio:browser\`, preview so the tab has its served URL, and use
+   \`screenshot\` at a phone and a desktop width and \`console\` for failed requests
+   and runtime errors. Never render it with a browser of your own, such as a
+   cached headless Chrome or \`npx playwright\`: the tab the user is watching is
+   the one that answers whether the screen works.
 5. Reuse what the project already has when it has anything: its components,
    tokens, fonts and copy. A second visual language invented beside an existing
    one is a defect, not a design.
-6. The work that is not markup is staffed, not improvised. The user puts a
-   model on each craft in Settings, Design, and the playbook names them: the
-   copy goes to the model you pick with \`delegate\`, which runs the exact one
-   they assigned. A picture, a clip or a track is a file rather than an answer,
-   so it comes from a generation capability in the app's utilities bank, and
-   \`save-media\` writes what it returns beside the design so the markup can
-   reference a file of its own. When neither an assignment nor a capability
-   exists, say which work needs one and ask; never choose a model yourself.
-   Never leave a placeholder where the user asked for real content, and never
-   present generated or placeholder content as the real thing.
+6. The work that is not markup is staffed, not improvised: copy goes to the model
+   the user assigned through \`delegate\`, and a picture, clip or track comes from
+   \`generate\` with \`save-media\` writing it beside the design. When neither
+   exists, say which work needs one and ask; never choose a model yourself, and
+   never present placeholder content as the real thing.
 7. Report in the user's terms: what a viewer sees, what they can try, the folder
-   the design lives in, and the URL that shows it. If a decision was a guess,
-   say which one and what would settle it.
+   it lives in and the URL that shows it. If a decision was a guess, say which
+   one and what would settle it.
 
-Checkpoint the screen scaffold or the existing screen before editing. After every major section, title, image, navbar or scene change, call the active authored-work capability's \`checkpoint\` operation with directory, entry and a short label describing the completed step, before moving on. Do not wait for the end of the turn.`
+Checkpoint the screen scaffold, and any existing screen before you edit it, then
+call \`checkpoint\` with directory, entry and a short completed-step label after
+each major section, title, image or navbar change. Do not wait for the turn to
+end.`
 
 /**
  * The briefing that opens a design session.
@@ -127,7 +108,7 @@ export function designSessionBriefing(
 
 ${lead} The app-owned design capability is active: its playbook is in your context and its preview operation is callable now. Design is the work of this turn, not a preliminary to it.
 
-Where the design goes: \`${root}\`. Write it as \`${root}/<name>/\`, and if any of it already sits somewhere else (a scratch folder such as \`.cio/work\`, \`.cio/tmp\`, or the repository root), move it into \`${root}/<name>/\` now and continue there. The board lists the folders under \`${root}\` and nothing else, so a design left in another folder is one the user never sees. This is the folder for the rest of the session: it is the project's live record, a save-path change moves it, and it outranks any path named in an older message.
+Where the design goes: \`${root}\`. Write it as \`${root}/<name>/\`, and if any of it already sits somewhere else (a scratch folder such as \`.cio/work\`, \`.cio/tmp\`, or the repository root), move it there now and continue: the board lists the folders under \`${root}\` and nothing else. This folder holds for the rest of the session: it is the project's live record, a save-path change moves it, and it outranks any path named in an older message.
 ${grouping === '' ? '' : `\n${grouping}\n`}
 ${DESIGN_SESSION_STEPS}`
 }
@@ -142,7 +123,7 @@ ${DESIGN_SESSION_STEPS}`
  * project's live record, and a turn that reads it cannot move the work by accident.
  */
 export function designSessionContinuation(root: string, grouping = ''): string {
-  return `This thread is in a design session, and the design capability stays active. The design folder is \`${root}\`, and the work belongs there: move anything of this design that sits elsewhere into it, then keep working in the folder the product already lives in and add a screen as its own HTML file beside \`index.html\`, linked from the rest; the folder keeps refreshing in its own preview tab as you write, and the coordinator board pictures every screen it holds, and the Screen Canvas shows them all at once without being written. A state that only exists after a click belongs on that canvas rather than in a sentence: declare the control that opens it with \`aria-expanded\`, \`aria-haspopup\`, \`aria-controls\` or \`popover\`, because discovery finds a state only through that declaration, and reach for \`canvas.json\` when a state needs a click the markup cannot express (see the design session). Report what changed and what a viewer can now try.
+  return `This thread is in a design session, and the design capability stays active. The design folder is \`${root}\`, and the work belongs there: move anything of this design that sits elsewhere into it, then keep working in the folder the product already lives in, adding each screen as its own HTML file beside \`index.html\` and linking it from the rest. The folder keeps refreshing in its own preview tab as you write, the board pictures every screen it holds, and the Screen Canvas shows them all at once without being written. A state that only exists after a click belongs on that canvas rather than in a sentence: declare the control that opens it with \`aria-expanded\`, \`aria-haspopup\`, \`aria-controls\` or \`popover\`, because discovery finds a state only through that declaration, and reach for \`canvas.json\` when a state needs a click the markup cannot express. Report what changed and what a viewer can now try.
 
 Save a baseline checkpoint before editing an existing screen, then call this capability's \`checkpoint\` with directory, entry and a short completed-step label after each major section, title, image or navbar change, before starting the next step.${grouping === '' ? '' : `\n\n${grouping}`}`
 }

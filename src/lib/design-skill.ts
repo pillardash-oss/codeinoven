@@ -115,188 +115,133 @@ export function designCapabilityDocs(
   const designRoot = designOutputRoot(roots)
   return `# Design studio
 
-Design interfaces as plain HTML, then look at them in this app while the turn is still running. A landing page, a marketing site, a dashboard, an app screen, a wireframe, a pitch: anything that is a screen rather than a program.
+Design interfaces as plain HTML, then look at them in this app while the turn runs. A landing page, a marketing site, a dashboard, an app screen, a wireframe: anything that is a screen rather than a program.
 
 ${authoredWorkCheckpointGuidance('design')}
 
 ## Going back
 
-The folder keeps its own timeline. Operation \`history\` reads the points it holds: what each one changed, which point the folder sits at now, the number to pass back, every screen the folder has touched with the points that changed it, and, when you name a \`page\`, that screen's own line through the history. A screen's line is real work of its own: one screen can be rewound without moving the rest. Operation \`restore\` moves the folder to one of those points, and \`restore\` with \`page\` rewrites only that screen and leaves every other screen where it is.
+The folder keeps its own timeline. \`history\` reads the points it holds and where the folder sits now, with the number to pass back; naming a \`page\` reads that screen's own line, because one screen can be rewound without moving the rest. \`restore\` moves the folder to a point, and \`restore\` with \`page\` rewrites only that screen.
 
-Reach for it when your own work went wrong: an edit that broke a layout, a file you removed and meant to keep, a direction the user rejected. Read \`history\` first, restore the point that worked, then continue from there. Restoring captures the state you are leaving before it writes, so the rewind is a step of its own and the board's Undo shows it.
-
-Say which point you restored and what it brought back. Never rebuild an old screen from memory while the timeline holds the state that worked, and never rewind over a change the user made themselves without telling them. When Git already tracks the folder the app keeps no timeline of its own, and both operations say so: the work is in Git, and Git is where you go back.
+Reach for it when your own work went wrong: an edit that broke a layout, a file you meant to keep, a direction the user rejected. Read the history, restore the point that worked, continue from there. Restoring captures the state it leaves, so the rewind is its own step on the board's Undo. Say which point you restored and what it brought back, never rebuild an old screen from memory while the timeline holds the state that worked, and never rewind over the user's own change without telling them. When Git tracks the folder the app keeps no timeline, and both operations say so.
 
 ## Starting from nothing
 
-First call \`read-contract\`. It reads DESIGN.md or DESIGNS.md case-insensitively at the project root, apps and src, without searching the rest of the tree. Root takes precedence. Read every returned contract and use the applicable one as the design's contract. Read the project's CSS for its actual tokens, fonts and spacing, and components.json when present for the existing component conventions. Reuse those components and tokens.
+Call \`read-contract\` first: DESIGN.md or DESIGNS.md, case-insensitive, at the project root, apps and src, root first. Follow the applicable one it returns, and read the project's CSS for its real tokens, fonts and spacing and components.json for its component conventions. Reuse them.
 
-If no contract exists, design from the brief and actual project. When the user requests one, generate a lightweight root DESIGN.md from the finished design, or from the agreed direction before starting. Call \`write-contract\` with \`markdown\`; it preserves existing matching contracts as \`<original-path>-old-<date-and-time>\` before publishing DESIGN.md. Report the new file and the backup paths. Never silently overwrite a contract or create a package catalogue.
-
-A project may hold no framework at all, sometimes not even a package.json. That is the normal case here, not an edge case. The design does not need the project to have a stack: write the HTML, the CSS and the JavaScript, and the preview serves it. When the project does have a stack, its components and tokens come first, and the design speaks their language.
+When no contract exists and the user asks for one, generate a lightweight root DESIGN.md with \`write-contract\`, which preserves existing contracts as \`<path>-old-<date-and-time>\` and reports the new file and the backups. Never silently overwrite a contract or create a package catalogue. A project with no framework, sometimes not even a package.json, is the normal case: write the HTML, CSS and JavaScript and the preview serves it. When the project does have a stack, its components and tokens come first.
 
 ## Where a design lives
 
-Write one design per folder under \`${designRoot}/<name>/\`, with \`index.html\` as the entry file. The folder is served as a static site, so \`styles.css\`, \`app.js\`, SVGs and images can sit beside the entry file, and both relative paths (\`./styles.css\`) and root-absolute paths (\`/styles.css\`) resolve inside the folder. ${workRootGuidance(designRoot)}
+One design per folder: \`${designRoot}/<name>/\`, entry \`index.html\`. The folder is served as a static site, so stylesheets, scripts, SVGs and images sit beside the entry file and both relative and root-absolute paths resolve inside it. ${workRootGuidance(designRoot)}
 
-That folder is the design's home, not scratch space. \`.cio/work\` holds a task's own notes and \`.cio/tmp\` its throwaways, and a design written there is one the user cannot find, because the board lists the folders under \`${designRoot}\` and nothing else. A design belongs here even when the general instructions about non-source output say to put work under \`.cio/work\`: those describe notes and reports, and a design is neither. If part of this design already sits somewhere else, move it under \`${designRoot}/<name>/\` before you continue, because work left in another folder is work the user cannot find.
-
-Do not write into \`.cio/specs/<feature>/prototypes/\`. That folder belongs to the engineering prototype phase, which finalizes and registers whatever it finds there.
+That folder is the design's home, not scratch space: the board lists the folders under \`${designRoot}\` and nothing else, so a design written under \`.cio/work\` or \`.cio/tmp\` is one the user cannot find. This outranks the general instruction about non-source output, which describes notes and reports, and a design is neither. Move any part of this design that sits elsewhere into the folder before continuing. Never write into \`.cio/specs/<feature>/prototypes/\`, which the engineering prototype phase owns.
 
 ## One design, many screens
 
-A design is a product, not a page. A website is several pages, a dashboard is several screens, and a design system is a set of them: write one HTML file per screen in the design's folder, sharing one stylesheet, and link them from each other so the design reads as one product rather than as loose files. \`index.html\` is the entry file and belongs to the screen a visitor lands on.
+A design is a product, not a page: one HTML file per screen sharing one stylesheet, linked from each other, \`index.html\` as the landing screen. Keep one product in one folder, because the board pictures the screens of the design a thread is working in, so screens split across two folders are never shown together. A genuinely separate product, a pitch deck beside a site, is the one reason for a second design: its own folder, and \`preview\` with that \`directory\` turns the tab to it.
 
-Keep one product in one folder. A website and its dashboard split across two folders is a defect the user sees: the coordinator board pictures the screens of the design a thread is working in, so screens written into two folders are never shown together. A genuinely separate product, a pitch deck beside a product site, is the one reason to start a second design, and a thread may hold as many as the work needs: each is its own folder, the board lists them all, and \`preview\` with that folder's \`directory\` turns the tab to it.
-
-The board reads a screen as an \`.html\` file in the design's folder or one folder below it, so \`dashboard.html\` and \`pages/pricing.html\` are both screens and a page two levels down is not one it shows. A file whose name starts with \`_\` is read as a partial (\`_nav.html\`), and a folder or file whose name starts with \`.\` is skipped, so keep fragments, scratch pages and notes under those names and they stay out of the way.
+A screen is an \`.html\` file in the folder or one folder below it; deeper is not shown. A name starting with \`_\` is a partial, and anything starting with \`.\` is skipped, so keep fragments, notes and scratch pages under those names.
 
 ## Every state declares itself
 
-The Screen Canvas frames every screen of the folder, and it also frames the states of those screens: a dialog that is up, a menu that is open, a popover, a tooltip. It finds those states by reading the markup, so a state reaches the canvas only when the control that opens it says what it does. This is a hard requirement, not a style preference: every element that opens, reveals, expands, closes or toggles anything must carry the declaration that names it, or that state is invisible to the canvas, to the board and to the review that follows.
-
-Declare it on the control a person actually presses, with the attribute that matches what it does: \`aria-expanded\` on anything that opens or collapses, \`aria-haspopup\` together with \`aria-expanded\` on a menu, \`aria-controls\` naming the id of the element it reveals, and the native \`popover\` attribute on a popover. Keep \`aria-expanded\` in step with reality as the state changes, and give the control an accessible name so its canvas frame is labelled. A \`<dialog>\` with no declared trigger is a state nobody can find: wire the button that opens it and declare that button.
-
-So write the declaration as you write the control, in the same edit. An interface whose panels open only through a hand-wired \`onclick\` on a bare \`div\` renders as one static page: no canvas state, no board frame, nothing for the user to compare side by side.
+The canvas frames each screen and its states, a dialog up, a menu open, a tooltip, and it finds them by reading the markup. So this is a hard requirement: every element that opens, reveals, expands, closes or toggles anything must declare it, or that state is invisible to the canvas, the board and the review. Declare it on the control a person presses: \`aria-expanded\` on anything that opens or collapses, \`aria-haspopup\` with \`aria-expanded\` on a menu, \`aria-controls\` naming the id it reveals, the native \`popover\` attribute on a popover. Keep \`aria-expanded\` truthful as the state changes and give the control an accessible name so its frame is labelled. A dialog with no declared trigger is a state nobody can find, and a hand-wired \`onclick\` on a bare \`div\` renders as one static page.
 
 ## Groups on the board
 
-The user decides how their designs are grouped, and the group is the board's own record rather than a folder. It never moves anything: every design stays in \`<root>/<name>/\`, and a group only decides which heading the board draws it under and whether that heading is folded. That is why grouping is safe to do whenever the user asks for it, and why it is never a reason to rename or move a folder.
-
-Read the arrangement with \`groups\` before you speak about it, and change it with \`organize-designs\` when the user asks you to group, ungroup, rename, reorder or fold their designs. Name the group the user names; when they do not name one, propose one that reads as their own work rather than as a filing system. A design you write arrives ungrouped on the board, which is a normal place for it: grouping it is the user's call unless they asked for it.
-
-The board draws the designs either as pictures of them or as a folded list, and \`view\` switches between the two when the user asks for one. Neither reading changes the work, and the one the user picked is remembered.
+Grouping is the board's own record, not a folder: it moves nothing, so it is always safe and never a reason to rename a folder. Read the arrangement with \`groups\` before you speak about it and change it with \`organize-designs\` when the user asks to group, ungroup, rename, reorder or fold. Name the group the user names, or propose one in their own terms rather than as a filing system. A design you write arrives ungrouped, which is normal: grouping is the user's call unless asked. \`view\` switches the board between pictures and a folded list and remembers the choice.
 
 ## The Screen Canvas
 
-The canvas is the app's page, not yours. The board opens it at its own reserved path on the design's own origin and the app builds it from the folder every time it is asked for, so it frames every screen you write without a line of markup from you and it can never fall behind the design. Do not write a \`canvas.html\`: a file by that name is not read as a screen, and the app ignores it.
+The canvas is the app's page, built from the folder on every request, so it frames every screen you write without markup from you. Never write a \`canvas.html\`; that name is not read as a screen.
 
-What the app cannot read off the folder is intent, so a design may say so in an optional \`canvas.json\` beside its screens:
+An optional \`canvas.json\` beside the screens says what the folder cannot:
 
 \`\`\`json
-{
-  "columns": 2,
-  "frames": [
-    { "entry": "index.html", "title": "Landing page" },
-    { "entry": "dashboard.html", "title": "Dashboard, empty", "caption": "No projects yet" },
-    { "entry": "dashboard.html", "title": "Dashboard, menu closed", "width": 390 },
-    { "entry": "dashboard.html", "title": "Dashboard, menu open", "width": 390, "state": { "click": "#account-menu" } },
-    { "title": "Invite modal", "note": "Dialog over the dashboard, not built yet" }
-  ]
-}
+{ "frames": [
+  { "entry": "index.html", "title": "Landing page" },
+  { "entry": "dashboard.html", "title": "Dashboard, menu open", "width": 390, "state": { "click": "#account-menu" } },
+  { "title": "Invite modal", "note": "Dialog over the dashboard, not built yet" } ] }
 \`\`\`
 
-- \`frames\` orders and labels the canvas. The frames it lists come first, in its order, and every screen it does not mention follows in listing order, so a screen you write a minute from now is on the canvas without anyone editing this file.
-- A frame with an \`entry\` names a screen file exactly as the screen is spelled. \`width\` and \`height\` size it (1440 by default; 390 for a phone state), \`title\` labels it and \`caption\` adds a line under the label, both in the user's words. Name the same file twice to frame the same screen twice.
-- A state that lives inside a page is not a second file: it is a second frame of the same file with a \`state\`. \`{"click": "#account-menu"}\` opens the menu in that frame, \`focus\` focuses an input, \`scroll\` is a px offset, \`search\` and \`hash\` load the frame with that query or fragment, and \`wait\` is the delay in ms before the interaction. The canvas runs the interaction inside the frame, so the design's own handler draws the open dropdown and no picture is captured or kept. Frame the state that is worth reviewing: a dropdown open is a state, its animation mid-flight is not, and a control with no visual difference once opened does not need a frame.
-- A frame with no \`entry\` is a sketch: a state the design needs and no file holds yet. The board offers to build every one of them, so write its \`note\` as the state it should become.
-- A frame naming a file that no longer exists is dropped from the canvas, and the board says which. Fix the entry instead of leaving it.
+\`frames\` orders and labels the canvas: listed frames come first, and screens it does not mention follow in listing order, so a new screen appears without editing the file. \`entry\` names a screen exactly, \`width\` and \`height\` size it (1440 by default, 390 for a phone), \`title\` and \`caption\` label it in the user's words. A state inside a page is a second frame of the same file with a \`state\`: \`{"click": "#account-menu"}\` opens the menu in that frame, \`focus\`, \`scroll\` in px, \`search\`, \`hash\` and \`wait\` in ms do theirs, and the design's own handler draws it, so no picture is kept. Frame what is worth reviewing: a dropdown open is a state, its animation mid-flight is not. A frame with no \`entry\` is a sketch of a state no file holds, and the board offers to build them, so write \`note\` as the state it should become. A frame naming a missing file is dropped and the board says which.
 
-Cover the product, not the happy path: every screen, and for each one the states that matter (empty, loading, error, a menu open, a dialog up, filled). A state that is a page is a screen file; a state that is one interaction inside a page is a frame with a \`state\`; a state you have not built is a sketch. A canvas of one screen per file shows the folder, not the product, and it is the reader clicking through the design the canvas exists to spare them.
+Cover the product, not the happy path: every screen, and for each the states that matter. A state that is a page is a screen file, one that is an interaction is a frame, one you have not built is a sketch.
 
 ## Showing the design
 
-Invoke this capability with operation \`preview\`:
+Invoke \`preview\` with the folder \`directory\` (default \`${designRoot}\`) and, when you want one screen rather than the whole design as one long page, its \`entry\`. \`attention: "focus"\` brings the tab to the user when foreground interaction is needed; the default leaves them where they are.
 
-- \`directory\`, project-relative, defaults to \`${designRoot}\`.
-- \`entry\`, a file inside that folder, defaults to \`index.html\` when that file exists. Name a screen here to show that screen: \`entry: 'dashboard.html'\` turns the preview to the dashboard, so a design of several screens is previewed a screen at a time rather than as one long page. With no entry file the app opens its own file listing.
-- \`attention\`, \`background\` (the default) to leave the user where they are, \`focus\` to bring the tab to the user when foreground interaction is needed.
-
-The reply carries the URL, so you can also put it in your final message. The tab keeps itself current: the app watches the served folder and refreshes the preview shortly after a file changes, so an edit shows up without you re-previewing. Preview again when you move to a different folder or a different entry file.
-
-That URL is the address the thread's in-app browser opens, and it is the only one a screen you just wrote has: until \`preview\` has served the folder, there is nothing for a browser to render. So preview first, then look.
+The reply carries the URL, so put it in your final message. The tab watches the served folder and refreshes shortly after a change, so do not re-preview after every edit; preview again when you move to another folder or entry. That URL is the only address a new screen has, so preview first and then look.
 
 ## Checking your own work
 
-The app's in-app browser is yours in this thread, and looking at your own screens in it is part of the design work rather than an extra. Activate the \`cio:browser\` capability with the utility tools (search for "browser"), point it at the tab this preview opened, and use \`snapshot\` for the visible text and controls, \`screenshot\` for the render, \`viewport\` to move between phone, tablet and desktop widths, and \`console\` for runtime errors and failed requests. Read \`snapshot\` for exact copy, because a capture is delivered at a reduced size; a page that has not changed since the previous capture is reported as unchanged rather than captured again, so pass \`force\` when you need the same page twice. A page nobody rendered is a page nobody tested.
+The in-app browser is yours in this thread: activate \`cio:browser\`, point it at the preview tab, and read \`snapshot\` for exact copy and controls, \`screenshot\` for the render, \`viewport\` for phone and desktop widths, and \`console\` for errors and failed requests. An unchanged page is reported unchanged, so pass \`force\` to look twice. Never render your own work with a browser of your own: no cached headless Chrome, no \`npx playwright\` or \`puppeteer\`, no \`curl\`, no screenshot script. That browser shows a page the app never served and tells you nothing about the tab the user is watching.
 
-Never render your own work with a browser of your own: no cached headless Chrome or Chromium binary, no \`npx playwright\` or \`puppeteer\`, no \`curl\` and no screenshot script. That browser shows a page the app never served and tells you nothing about the tab the user is watching.
-
-Before calling a screen finished, render the current screen at phone and desktop widths, exercise its main action and states, then call \`lint\` with directory and entry. Fix objective craft failures. After that, call \`critique\` once for each changed screen. Supply five \`dimensions\`: philosophy, hierarchy, detail, functionality and innovation, each with a 0–10 score and concrete evidence. They are weighted equally. Supply \`fixes\` and \`criticalIssues\`, listing unresolved brand, accessibility, copy or functionality failures. Use the project's contract when judging the brand and actual measured contrast and keyboard behavior when judging accessibility.
-
-A screen passes only at 8/10 or above, with no craft findings or critical issues. Report the scores, evidence and fixes in the thread. If it fails, report that it is unfinished and the corrections it needs; do not silently run converging critique rounds or describe a failing screen as finished. These are agent-assessed scores, attributed to the thread's model in Usage, rather than independent benchmarks.
+Before calling a screen finished, render it at phone and desktop widths, exercise its main action and states, then \`lint\` it and fix objective craft failures. Then \`critique\` each changed screen once with five equally weighted dimensions from 0 to 10 (philosophy, hierarchy, detail, functionality, innovation) and concrete evidence, plus \`fixes\` and \`criticalIssues\` for unresolved brand, accessibility, copy or functionality failures, judging brand by the project's contract and accessibility by measured contrast and keyboard behaviour. A screen passes only at 8 or above with no craft findings and no critical issues: report the scores and the evidence, and report a failing screen as unfinished rather than running converging rounds. These scores are agent-assessed and attributed to the thread's model in Usage.
 
 ## Measuring a reference
 
-For "make it look like this site", call \`extract-reference\` with the user's HTTP(S) URL. It measures a bounded visible sample in an isolated renderer and returns source URL, viewport, typography, area-weighted colours, component geometry and logo references. Treat it as observed evidence, not the reference's complete brand system. Compare it with the project's existing contract and CSS tokens. Generate a lightweight contract with \`write-contract\` only when the user requests generation, preserving the old contract; distinguish observed values from inferred design rules. Ask for a source URL when the user has not supplied one.
+For "make it look like this site", call \`extract-reference\` with the user's HTTP(S) URL. It measures a bounded visible sample in an isolated renderer and returns typography, area-weighted colours, component geometry, logo references and the source URL. Treat it as observed evidence, not a complete brand system: compare it with the project's contract and tokens, and only \`write-contract\` when the user asked for one, separating observed values from inferred rules. Ask for the URL when they have not supplied one.
 
 ## Motion tools
 
-Use motion for feedback, continuity or attention. Repeated interactions must stay immediate and interruptible. Reuse project timing and components; respect reduced motion. Do not import stock effects or assets. The workstation and an authored film have different timing needs.
-
-Select an element using the browser inspector and use its source id. If it has none, add a unique stable id in the source first. Call \`motion-read\` with directory, entry and targetId. Call \`motion-preview\` with that revision and motion: purpose feedback|continuity|attention, trigger enter|hover|press|focus, frequency frequent|occasional, duration immediate|feedback|control|reveal, easing ease-out|ease-in-out|linear, from and to objects with opacity, x/y in rem, scale and rotate in degrees. Defaults inside each state are opacity/scale 1, x/y/rotate 0. Individual translate/scale/rotate properties compose with an existing transform, but inspect any existing individual transforms before changing them.
-
-Preview changes are temporary. Exercise the interaction using browser tools, then call \`motion-inspect\` with directory, entry and optional sampleMs 0–2000. It samples bounded Web Animations API effects, not FPS or canvas loops. It reports the current reduced-motion setting, not proof of both settings. The linter also returns advisory motionWarnings separately from blocking craft findings. Check each warning in context.
-
-Call \`motion-apply\` with the same inputs to persist the reviewed change. It rejects stale revisions and ambiguous source ids, preserves unrelated markup, and captures checkpoints. Existing history restores the previous screen. Read again after any source edit. No extra effect library is needed.
+Use motion for feedback, continuity or attention. Repeated interactions stay immediate and interruptible; reuse project timing and components, respect reduced motion, import no stock effects. \`motion-read\` the element's source id (add a stable id first when it has none), \`motion-preview\` a change against that revision, then \`motion-inspect\` to sample it and \`motion-apply\` to persist the one you reviewed, which rejects stale revisions and captures a checkpoint. A preview is temporary, individual transform properties compose with an existing transform, and the inspector reports advisory motionWarnings separately from blocking craft findings. Read again after any source edit.
 
 ## Live design controls
 
-When adjustable accent, density, theme or sample data helps the review, declare an opt-in manifest and load the app runtime in that screen, after its content:
+When adjustable accent, density, theme or sample data helps the review, declare an opt-in manifest and load the app runtime after the content:
 
 \`\`\`html
 <script type="application/json" data-cio-tweaks>
-[{"id":"accent","label":"Accent","type":"color","variable":"--color-primary","value":"#D4AF37"},
- {"id":"density","label":"Spacing","type":"range","variable":"--space","min":0.5,"max":2,"step":0.25,"value":1,"unit":"rem"},
- {"id":"theme","label":"Theme","type":"select","options":["light","dark"],"value":"light"}]
+[{"id":"accent","label":"Accent","type":"color","variable":"--color-primary","value":"#D4AF37"}]
 </script>
 <script src="/__cio/tweaks.js" defer></script>
 \`\`\`
 
-Use the actual project token names and values. Up to 12 controls of type color, range, select or text are supported. A variable changes that CSS custom property immediately. For theme or sample data, listen for \`document\` event \`cio:tweaks\` and apply \`event.detail\` to the existing DOM. Changes never reload the page. Keep this review control strip out of production code when implementing the product in another thread.
+Use the project's real token names and values; up to 12 controls of type color, range, select or text, and a \`variable\` sets that CSS custom property immediately. For theme or sample data listen for \`cio:tweaks\` on \`document\` and apply \`event.detail\`. Changes never reload. Keep this review strip out of production code.
 
 ## Delegating to the models the user assigned
 
-Some design work is a craft rather than markup: the copy that sounds like the product, an SEO pass, a script, a storyboard. The user puts a model on each craft in Settings, Design, and operation \`delegate\` runs the one they chose for the work you name:
-
-- \`assignment\`, the work to delegate, by its handle or by its title.
-- \`prompt\`, the complete brief. The assigned model sees nothing of this conversation, so the prompt carries the subject, the tone, the format, every constraint, and the exact deliverable you want back.
+Some design work is a craft rather than markup: the copy that sounds like the product, an SEO pass, a script, a storyboard. The user puts a model on each craft in Settings, Design, and \`delegate\` runs the one they chose for the work you name, whether you name the assignment or its title. Its \`prompt\` is the complete brief, because the assigned model sees nothing of this conversation: the subject, the tone, the format, every constraint and the deliverable you want back.
 
 ${delegationGuidance(experts)}
 
-\`delegate\` is the copywriting lane and answers with text only. A craft that produces a picture, a clip or a track is made with \`generate\` instead, so never accept prose as though it were the asset.
-
-Say which assignment produced a piece of work when you report, so the user can see where their own model choice was used.
+\`delegate\` answers with text only. A craft that produces a picture, a clip or a track is made with \`generate\`, so never accept prose as though it were the asset, and say which assignment produced a piece when you report.
 
 ## Pictures, video and sound
 
-Media is generated by the app, with the model the user assigned to that craft. Call \`generate\` with the kind the design needs:
-
-1. \`kind\`, one of \`image\`, \`video\` or \`audio\`. It chooses the craft, and so the model the user put on that craft.
-2. \`prompt\`, the complete brief: the subject, the style, the mood, the framing, and anything the asset must not contain. A generation model has seen nothing of this work, so the prompt carries all of it.
-3. \`name\` and \`directory\` when the asset belongs beside a particular design, so the file lands in that design's folder under a name that says what it is. The default folder is the design root.
-4. \`options\` only for a provider-specific field the model documents, such as an aspect ratio or a duration.
-
-The reply carries the project-relative path. Reference the file from the markup with a relative path, preview the folder to check it renders at the size and in the position the design needs, and look at the asset before you describe it.
+\`generate\` makes media with the model the user assigned to that craft, chosen by \`kind\`: \`image\`, \`video\` or \`audio\`. Its \`prompt\` is the complete brief, since the model has seen nothing of this work, and \`name\` with \`directory\` lands the file beside the design it belongs to. Pass \`options\` only for a provider-specific field the model documents, such as an aspect ratio or a duration. The reply carries the project-relative path: reference it relatively, preview the folder to check size and position, and look at the asset before describing it.
 
 ${EXPERT_FALLBACK_GUIDANCE}
 
 ## External assets
 
-The design preview sets no content security policy, so Google Fonts, a CSS or JS CDN and inline scripts all load.
+The preview sets no content security policy, so Google Fonts, a CDN and inline scripts all load.
 
 ${externalAssetGuidance(policy)}
 
-When a design has to stand on its own outside the app, inline the styles, the scripts and the fonts and reference no external host.
+For a design that must stand alone outside the app, inline the styles, scripts and fonts and reference no external host.
 
 ## The design pass
 
-The aim is a page someone would recognise as designed rather than generated. Work in this order.
+Aim for a page someone would recognise as designed rather than generated.
 
-1. Read the brief and the project first. If the project already has tokens, components or a stylesheet, the design starts from those. Invent a second visual language only when the work is deliberately separate from the product.
-2. Choose a direction and hold it: one accent colour, at most two type families, one spacing unit. Contrast, density and tone should read as one decision.
-3. Type: set a scale with clearly distinct steps, for example 1rem for body, 1.5rem for a section heading, 2.5rem for the page heading, and use \`rem\` only. A page with browser default headings carries no type decision.
-4. Space: pick 4px or 8px as the unit and use its multiples. Slightly uneven gaps between siblings are the first thing the eye catches.
-5. Contrast: body text at least 4.5:1 against its background, large text at least 3:1. Muted greys are where this fails most often.
-6. Layout: build on a grid, then let one element break it, a wide card, an offset image, a heading that overhangs its column. Even blocks all the way down look unmade.
-7. States: every interactive element needs hover, focus-visible, active and disabled where it applies, plus a loading and an empty variant for anything that fetches.
-8. Real content: write the real labels, names, prices and numbers. Placeholder text hides exactly the layout problems it pretends to expose.
-9. Themes: define colour as custom properties on \`:root\` so the design can flip between light and dark. A hardcoded background is acceptable only in a study that will not be kept.
+1. Read the brief and the project first: existing tokens, components or a stylesheet are the starting point. Invent a second visual language only for work deliberately separate from the product.
+2. Hold one direction: one accent colour, at most two type families, one spacing unit.
+3. Type: a scale with clearly distinct steps, in \`rem\` only, for example 1rem body, 1.5rem section heading, 2.5rem page heading. Browser-default headings carry no decision.
+4. Space: 4px or 8px as the unit, always its multiples; uneven gaps between siblings are the first thing the eye catches.
+5. Contrast: body text at least 4.5:1 against its background, large text at least 3:1. Muted greys fail most often.
+6. Layout: build on a grid, then let one element break it. Even blocks all the way down look unmade.
+7. States: hover, focus-visible, active and disabled where they apply, plus loading and empty variants for anything that fetches.
+8. Real content: the real labels, names, prices and numbers. Placeholder text hides exactly the problems it pretends to expose.
+9. Themes: colour as custom properties on \`:root\`, so the design flips between light and dark.
 10. Accessibility: semantic elements, labelled controls, \`alt\` text, a visible focus ring, and a keyboard order that follows the visual order.
 11. Motion: one deliberate transition per interaction, 120ms to 240ms. Nothing moves on load unless the design is about motion.
-12. Skip the generated-page tells: a purple gradient on white, emoji standing in for icons, three equal cards with one-line bodies, everything centred, and a section heading that restates the page heading underneath it.
+12. Skip the generated-page tells: a purple gradient on white, emoji standing in for icons, three equal cards with one-line bodies, everything centred, a heading that restates the page heading below it.
 
 ## Reporting the work
 
-Say what the design does and what a viewer can try, in the user's terms: the screens it now holds, the sections, the interaction states. Name the folder it lives in and the URL that shows it. If a decision was a guess, say which one and what would settle it.`
+Say what the design does and what a viewer can try in the user's terms, name the folder it lives in and the URL that shows it, and say which decision was a guess and what would settle it.
+`
 }

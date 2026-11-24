@@ -15,7 +15,10 @@
  * leaves the whole value in `structuredContent`, which is what code mode reads.
  */
 import type { OvenUtilityJson } from '../../../../lib/oven-utility-host'
-import { GATEWAY_TEXT_CHARACTER_LIMIT } from '../../../utilities/utility-orchestration/utility-gateway-output'
+import {
+  GATEWAY_TEXT_CHARACTER_LIMIT,
+  sectionParts
+} from '../../../utilities/utility-orchestration/utility-gateway-output'
 import { isRecord } from './oven-utility-local-context'
 
 /** Shorten every oversized text part of one gateway-shaped answer. */
@@ -25,13 +28,29 @@ export function boundOvenUtilityOutput(value: OvenUtilityJson): OvenUtilityJson 
   if (!Array.isArray(content)) return value
   const structuredRetained = value['structuredContent'] !== undefined
   let changed = false
-  const bounded = content.map((part) => {
-    if (!isRecord(part) || part['type'] !== 'text') return part
+  const bounded: OvenUtilityJson[] = []
+  for (const part of content) {
+    if (!isRecord(part) || part['type'] !== 'text') {
+      bounded.push(part as OvenUtilityJson)
+      continue
+    }
     const text = part['text']
-    if (typeof text !== 'string' || text.length <= GATEWAY_TEXT_CHARACTER_LIMIT) return part
+    if (typeof text !== 'string' || text.length <= GATEWAY_TEXT_CHARACTER_LIMIT) {
+      bounded.push(part as OvenUtilityJson)
+      continue
+    }
+    // A document written in sections is delivered whole, one part per group of
+    // sections that fits, so a capability's contract reaches the model instead of
+    // being cut here where there is no file to point it at.
+    const sections = sectionParts(text)
+    if (sections) {
+      for (const section of sections) bounded.push({ ...part, text: section })
+      changed = true
+      continue
+    }
     changed = true
-    return { ...part, text: shortenOvenUtilityText(text, structuredRetained) }
-  })
+    bounded.push({ ...part, text: shortenOvenUtilityText(text, structuredRetained) })
+  }
   return changed ? { ...value, content: bounded } : value
 }
 
