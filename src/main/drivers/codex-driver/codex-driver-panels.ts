@@ -7,6 +7,9 @@ import {
 } from '../codex/codex-computer-use'
 import { CodexDriver } from '../codex-driver'
 
+/** The last computer-use answer this process logged, shared by every Codex driver. */
+let lastComputerUseNote: string | null = null
+
 /** CodexDriver panels: one concern, moved verbatim from the composition root. */
 export class CodexDriverPanels {
   constructor(
@@ -44,10 +47,18 @@ export class CodexDriverPanels {
     })
   }
 
-  /** Report the device answer once per driver, so a support report can read it. */
+  /**
+   * Report the device answer once, so a support report can read it.
+   *
+   * The answer is the device's, not the driver's: every account and every
+   * launch builds its own driver, and a per-driver note wrote the same line
+   * seven times in one minute. One line per process per distinct answer.
+   */
   noteComputerUse(readiness: CodexComputerUseReadiness): void {
-    if (this.host.computerUseLogged !== readiness.available) {
-      this.host.computerUseLogged = readiness.available
+    this.host.computerUseLogged = readiness.available
+    const note = `${readiness.available}:${readiness.reason}`
+    if (lastComputerUseNote !== note) {
+      lastComputerUseNote = note
       Logger.info(
         `Codex computer use ${readiness.available ? 'enabled' : 'unavailable'}: ${readiness.reason}`
       )
