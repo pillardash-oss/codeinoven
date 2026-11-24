@@ -13,11 +13,10 @@
   import { contextSidebarState } from '$lib/stores/context-sidebar.svelte'
   import { noticeDismissals } from '$lib/stores/notice-dismissals.svelte'
   import { projectFilesWorkspace } from '$lib/stores/project-files.svelte'
-  import { projectEnvDock } from '$lib/stores/project-env-dock.svelte'
+  import { projectEnvDock, type ProjectEnvDockEntry } from '$lib/stores/project-env-dock.svelte'
   import { projectSecretsPresence } from '$lib/stores/project-secrets.svelte'
   import { scopeState } from '$lib/stores/scope.svelte'
   import { workspaceState } from '$lib/stores/workspace.svelte'
-  import { APP_SLUG } from '$shared/brand'
   import { isOrchestrationChildThread, type Thread } from '$shared/types'
   import {
     DEFAULT_ENV_FILE_NAME,
@@ -31,7 +30,6 @@
   import ConfirmDialog from '../ui/ConfirmDialog.svelte'
   import DockableModal from '../ui/DockableModal.svelte'
   import FindInBar from '../files/FindInBar.svelte'
-  import DockRow from '../ui/DockRow.svelte'
   import NoticeDismissButton from '../ui/NoticeDismissButton.svelte'
 
   /**
@@ -47,8 +45,41 @@
    * variable is something its owner looks at and edits whenever they want. That read
    * is the one channel excluded from everything an agent can call or list.
    */
-  const storageKey = `${APP_SLUG}.projectEnvDock.v1`
+  interface Props {
+    /** The one dock this panel renders; the host owns the list of them. */
+    entry: ProjectEnvDockEntry
+    /** The dock's place among the open panels, so a fresh panel does not land on another. */
+    index: number
+    /** Where this panel remembers its rectangle and its chip's edge. */
+    storageKey: string
+    onMinimize: () => void
+    onClose: () => void
+  }
+
+  let { entry, index, storageKey, onMinimize, onClose }: Props = $props()
+
+  /**
+   * The project this panel edits.
+   *
+   * One dock per project, so this never changes for the life of the panel: a
+   * second open of the same project re-targets this instance instead of mounting
+   * a new one.
+   */
+  const projectId = $derived(entry.projectId)
   const HISTORY_LIMIT = 200
+
+  /**
+   * DOM ids are namespaced per dock.
+   *
+   * Two env panels of two projects are on screen at once, and both number their
+   * key rows from one, so an unscoped id would make one panel focus, scroll to,
+   * and highlight the row of the other.
+   */
+  const domPrefix = $derived(`env-${entry.id}`)
+
+  function domId(suffix: string): string {
+    return `${domPrefix}-${suffix}`
+  }
 
   type Surface = 'editor' | 'keys'
 
@@ -110,7 +141,7 @@
   /** The row a `cio://` link pointed at, outlined until the reader moves on. */
   let highlightRowId = $state<number | null>(null)
 
-  const group = $derived(projectEnvDock.group)
+  const group = $derived(entry.group)
   const groupLabel = $derived(group || '/')
   /** The directory as a prefix, so a label built from it reads as one path. */
   const groupPrefix = $derived(group ? `${group}/` : '')
@@ -160,7 +191,7 @@
     // The name is updated here as well, so the picker shows the chosen location
     // right away instead of waiting for the file's values to load.
     fileName = targetFileName
-    projectEnvDock.select({ group: targetGroup, fileName: targetFileName })
+    projectEnvDock.select(projectId, { group: targetGroup, fileName: targetFileName })
   }
 
   /** Whether a target holds edits that were never saved. */
@@ -173,7 +204,7 @@
 
   /** A draft is keyed by the project and the location it belongs to. */
   function targetKey(targetGroup: string, targetFileName: string): string {
-    return `${projectEnvDock.projectId ?? ''}\u0000${targetGroup}\u0000${targetFileName}`
+    return `${projectId}\u0000${targetGroup}\u0000${targetFileName}`
   }
 
   /** Remember a target for as long as this dock is open. */
@@ -206,7 +237,7 @@
     surface === 'keys' && rows.some((row) => row.name.trim().length === 0)
   )
 
-  const skipNoticeId = $derived(`secrets.envSkip.${projectEnvDock.projectId}.${group}.${fileName}`)
+  const skipNoticeId = $derived(`secrets.envSkip.${projectId}.${group}.${fileName}`)
   const skipCondition = $derived(skipped.map((entry) => `${entry.line}:${entry.reason}`).join('|'))
   const skipDismissed = $derived(
     skipCondition.length > 0 && noticeDismissals.isDismissed(skipNoticeId, skipCondition)
@@ -263,7 +294,6 @@
   }
 
   async function readFiles(): Promise<void> {
-    const projectId = projectEnvDock.projectId
     if (!projectId) return
     if (projectId !== loadedProjectId) {
       loadedProjectId = projectId
@@ -281,7 +311,7 @@
       const available = files.filter((file) => file.group === group)
       // A link named the file it came from, so open exactly that one even when it
       // does not exist yet; anything else falls back to the usual default.
-      const preferred = projectEnvDock.fileName
+      const preferred = entry.fileName
       const matched = preferred
         ? (available.find((file) => file.fileName === preferred) ?? null)
         : null
@@ -312,18 +342,18 @@
    * leaving the reader to find it in a long file.
    */
   async function focusPendingKey(): Promise<void> {
-    const name = projectEnvDock.takeFocusName()
+    const name = projectEnvDock.takeFocusName(projectId)
     if (!name) return
     // A minimized dock has no rows in the document, so it has to come back before
     // there is anything to reveal; and a filtered list may hide the row the link
     // names, so the bar steps out of the way.
-    if (projectEnvDock.minimized) projectEnvDock.expand()
+    if (entry.minimized) projectEnvDock.expand(projectId)
     if (findOpen) closeFind()
     if (surface !== 'keys') switchSurface('keys')
     await tick()
     const row = rows.find((candidate) => candidate.name === name)
     if (!row) return
-    const field = document.getElementById(`env-key-value-${row.id}`)
+    const field = document.getElementById(domId(`key-value-${row.id}`))
     if (field instanceof HTMLInputElement) {
       // Focusing first would let the browser pick the scroll offset itself, so the
       // caret lands in the field and the row is then centred in its scroller.
@@ -335,7 +365,7 @@
     // the row is measured on the next frame instead of scrolling to a stale offset.
     requestAnimationFrame(() => {
       document
-        .getElementById(`env-key-row-${row.id}`)
+        .getElementById(domId(`key-row-${row.id}`))
         ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
     })
     window.setTimeout(() => {
@@ -355,7 +385,6 @@
   }
 
   async function readBody(file: ProjectEnvFile | null): Promise<string> {
-    const projectId = projectEnvDock.projectId
     if (!projectId || !file) return ''
     const values = await invoke('secrets:envValues', {
       projectId,
@@ -475,7 +504,7 @@
       markVisited(loadedGroup, next)
       return
     }
-    const sequence = projectEnvDock.sequence
+    const sequence = entry.sequence
     const file =
       files.find((candidate) => candidate.group === loadedGroup && candidate.fileName === next) ??
       null
@@ -488,7 +517,7 @@
       await resetDocument(file)
     }
     // The picker moved on while this read ran, so its target owns the panel now.
-    if (projectEnvDock.sequence !== sequence) return
+    if (entry.sequence !== sequence) return
     fileName = next
     loadedFileName = next
     markVisited(loadedGroup, next)
@@ -591,11 +620,11 @@
     if (surface === 'keys') {
       const row = findRows[findActiveIndex]
       if (!row) return
-      document.getElementById(`env-key-row-${row.id}`)?.scrollIntoView({ block: 'nearest' })
+      document.getElementById(domId(`key-row-${row.id}`))?.scrollIntoView({ block: 'nearest' })
       return
     }
     const range = findTextRanges[findActiveIndex]
-    const editor = document.getElementById('env-editor')
+    const editor = document.getElementById(domId('editor'))
     if (!range || !(editor instanceof HTMLTextAreaElement)) return
     editor.focus({ preventScroll: true })
     editor.setSelectionRange(range.start, range.end)
@@ -626,7 +655,6 @@
   /** Take the reader to the project's latest thread, picked the way creating a
    *  pull request picks it: newest activity first, archived rows out. */
   async function openLatestProjectThread(): Promise<void> {
-    const projectId = projectEnvDock.projectId
     if (!projectId) return
     try {
       const threads: Thread[] = await invoke('thread:listAll')
@@ -654,7 +682,6 @@
    * navigates to before it reveals the path.
    */
   async function revealFileInProjectTree(): Promise<void> {
-    const projectId = projectEnvDock.projectId
     if (!projectId || !loadedFileName) return
     const path = loadedGroup ? `${loadedGroup}/${loadedFileName}` : loadedFileName
     const thread = workspaceState.selectedThread
@@ -676,7 +703,7 @@
     const row: KeyRow = { id: nextRowId++, name: '', value: '' }
     commit({ rows: [...rows, row] })
     await tick()
-    const field = document.getElementById(`env-key-name-${row.id}`)
+    const field = document.getElementById(domId(`key-name-${row.id}`))
     field?.scrollIntoView({ block: 'nearest' })
     if (field instanceof HTMLInputElement) field.focus()
   }
@@ -710,7 +737,6 @@
   }
 
   async function save(): Promise<void> {
-    const projectId = projectEnvDock.projectId
     if (!projectId) return
     // In the editor the body is the file, comments included; in Keys the rows are.
     const text = surface === 'keys' ? serializeRows(rows) : body
@@ -769,7 +795,6 @@
   }
 
   async function writeToProject(): Promise<void> {
-    const projectId = projectEnvDock.projectId
     if (!projectId) return
     writing = true
     error = ''
@@ -814,7 +839,7 @@
   function loseAndClose(): void {
     drafts.clear()
     confirmDiscard = false
-    projectEnvDock.close()
+    onClose()
   }
 
   function handleEditKeydown(event: KeyboardEvent): void {
@@ -838,9 +863,14 @@
 
   // The dock stays mounted while the same project is open, so a second reference
   // link re-targets the file and key here instead of remounting the panel.
-  let appliedSequence = projectEnvDock.sequence
+  let appliedSequence = $state<number | null>(null)
   $effect(() => {
-    const sequence = projectEnvDock.sequence
+    const sequence = entry.sequence
+    // The first run only records the sequence the mount already read from.
+    if (appliedSequence === null) {
+      appliedSequence = sequence
+      return
+    }
     if (sequence === appliedSequence) return
     appliedSequence = sequence
     void readFiles()
@@ -848,13 +878,14 @@
 </script>
 
 <DockableModal
-  open={true}
-  title={fileName}
-  minimized={projectEnvDock.minimized}
+  open
+  title={`${fileName} in ${entry.projectName}`}
+  minimized={entry.minimized}
   closable
-  onMinimize={() => projectEnvDock.minimize()}
+  {onMinimize}
   onClose={requestClose}
   {storageKey}
+  cascadeIndex={index}
   closesOnNavigation={false}
   dragLabel="Drag to move the env file panel"
   defaultHeight={640}
@@ -867,7 +898,7 @@
 >
   {#snippet headerTitle()}
     <input
-      id="env-file-name"
+      id={domId('file-name')}
       class="h-6 w-40 min-w-0 truncate border border-transparent bg-transparent px-1 font-mono text-xs font-semibold text-foreground outline-none transition-colors hover:border-border focus:border-primary"
       type="text"
       autocomplete="off"
@@ -893,44 +924,28 @@
       <button
         type="button"
         class="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden border bg-raised text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-        style:border-color={projectEnvDock.color ?? undefined}
-        title="Open {projectEnvDock.projectName}'s latest thread"
-        aria-label="Open {projectEnvDock.projectName}'s latest thread"
+        style:border-color={entry.color ?? undefined}
+        title="Open {entry.projectName}'s latest thread"
+        aria-label="Open {entry.projectName}'s latest thread"
         onclick={() => void openLatestProjectThread()}
       >
-        {#if projectEnvDock.iconUrl}
-          <img src={projectEnvDock.iconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
+        {#if entry.iconUrl}
+          <img src={entry.iconUrl} alt="" class="h-3.5 w-3.5 object-contain" />
         {:else}
           <CioKey size={12} />
         {/if}
       </button>
-      <span
-        class="min-w-0 truncate text-xs font-medium text-muted"
-        title={projectEnvDock.projectName}
-      >
-        {projectEnvDock.projectName}
+      <span class="min-w-0 truncate text-xs font-medium text-muted" title={entry.projectName}>
+        {entry.projectName}
       </span>
       <span class="shrink-0 font-mono text-[0.6875rem] text-dimmed">{groupLabel}</span>
     </span>
   {/snippet}
 
-  {#snippet dock()}
-    <DockRow {storageKey} label="Move docked env file">
-      <button
-        type="button"
-        class="flex items-center gap-2 border bg-surface px-2.5 py-1.5 text-left shadow-xl transition-colors hover:bg-elevated"
-        title="Show env file for {projectEnvDock.projectName}"
-        aria-label="Show env file for {projectEnvDock.projectName}"
-        onclick={() => projectEnvDock.expand()}
-      >
-        <CioKey size={13} class="shrink-0 text-dimmed" />
-        <span class="text-[0.625rem] font-medium text-foreground">{fileName}</span>
-        <span class="max-w-40 truncate text-[0.5625rem] text-muted"
-          >{projectEnvDock.projectName}</span
-        >
-      </button>
-    </DockRow>
-  {/snippet}
+  <!-- The minimized chips belong to the shared dock row in
+       `ProjectEnvDockHost.svelte`, so every docked env file sits side by side
+       instead of stacking on the same corner of the screen. -->
+  {#snippet dock()}{/snippet}
 
   <!-- The panel is a group around its own focused controls, and the handler is
        only here to keep the app-level save chord from editing the surface behind
@@ -939,7 +954,7 @@
   <div
     class="flex h-full min-h-0 flex-col"
     role="group"
-    aria-label="Env file editor"
+    aria-label="Env file editor for {entry.projectName}"
     onkeydown={handleDockKeydown}
   >
     <div class="flex shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
@@ -953,9 +968,9 @@
         >
           <CioTarget size={12} />
         </button>
-        <label class="min-w-0" for="env-file-picker">
+        <label class="min-w-0" for={domId('file-picker')}>
           <select
-            id="env-file-picker"
+            id={domId('file-picker')}
             class="h-7 max-w-64 min-w-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none transition-colors hover:bg-overlay focus:border-primary disabled:opacity-50"
             value={selectedTarget}
             disabled={loading || pickerTargets.length === 0}
@@ -1090,11 +1105,12 @@
         </div>
       {:else if surface === 'editor'}
         <textarea
-          id="env-editor"
-          class="h-full min-h-64 w-full resize-none bg-app p-3 font-mono text-xs leading-relaxed text-foreground outline-none placeholder:text-dimmed"
+          id={domId('editor')}
+          class="h-full min-h-64 w-full resize-none overflow-auto bg-app p-3 font-mono text-xs leading-relaxed whitespace-pre text-foreground outline-none placeholder:text-dimmed"
           spellcheck="false"
           autocomplete="off"
-          aria-label="{fileName} for {projectEnvDock.projectName}"
+          wrap="off"
+          aria-label="{fileName} for {entry.projectName}"
           placeholder="KEY=value"
           value={body}
           oninput={(event) => commit({ body: event.currentTarget.value })}
@@ -1105,14 +1121,14 @@
             {@const stored =
               currentFile?.entries.some((entry) => entry.name === row.name.trim()) ?? false}
             <div
-              id="env-key-row-{row.id}"
+              id={domId(`key-row-${row.id}`)}
               class="flex items-center gap-2 px-3 py-1.5 {highlightRowId === row.id ||
               (findFiltersRows && findRows[findActiveIndex]?.id === row.id)
                 ? 'bg-primary/10'
                 : ''}"
             >
               <input
-                id="env-key-name-{row.id}"
+                id={domId(`key-name-${row.id}`)}
                 class="h-7 w-52 shrink-0 border bg-elevated px-2 font-mono text-xs text-foreground outline-none focus:border-primary"
                 type="text"
                 autocomplete="off"
@@ -1124,7 +1140,7 @@
               />
               <div class="flex min-w-0 flex-1 items-center gap-1">
                 <input
-                  id="env-key-value-{row.id}"
+                  id={domId(`key-value-${row.id}`)}
                   class="h-7 min-w-0 flex-1 border bg-elevated px-2 font-mono text-xs text-foreground outline-none focus:border-primary"
                   type={revealed.has(String(row.id)) ? 'text' : 'password'}
                   autocomplete="off"

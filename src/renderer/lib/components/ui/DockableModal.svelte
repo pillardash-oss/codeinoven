@@ -9,7 +9,12 @@
   import { sidebarState } from '$lib/stores/sidebar.svelte'
   import { browserVisibility } from '$lib/stores/browser-visibility.svelte'
   import { NativeFloatingPanel } from '$lib/native-floating-panel.svelte'
-  import { registerOverlayClose } from '$lib/overlay-close.svelte'
+  import {
+    registerOverlayClose,
+    isTopOverlay,
+    promoteOverlay,
+    type CloseHandler
+  } from '$lib/overlay-close.svelte'
   import { keymapState } from '$lib/keymap/keymap-state.svelte'
   import {
     registerModalPrimaryAction,
@@ -84,6 +89,17 @@
     closesOnNavigation?: boolean
     /** Initial panel height before viewport clamping. */
     defaultHeight?: number
+    /**
+     * The panel's place among the panels opened before it.
+     *
+     * A panel with no remembered rectangle opens at the top right, which is the
+     * only spot it can be sure is empty when it is the only one. Several panels of
+     * the same kind can be open at once (one env editor per project, for
+     * instance), and stacking them exactly would leave only the last one visible,
+     * so each one steps down and in from the previous. It never moves a panel the
+     * user already placed, because the saved rectangle wins.
+     */
+    cascadeIndex?: number
     /** Tooltip/aria label shown on the draggable header. */
     dragLabel?: string
     /**
@@ -145,6 +161,7 @@
     recordingTargets,
     closesOnNavigation = true,
     defaultHeight = 560,
+    cascadeIndex = 0,
     dragLabel = 'Drag to move the task panel',
     headerActions,
     headerTitle,
@@ -155,6 +172,8 @@
   }: Props = $props()
 
   const PANEL_MARGIN = 12
+  /** How far a cascade step moves a panel down and in from the previous one. */
+  const CASCADE_STEP = 28
   const MIN_PANEL_WIDTH = 360
   const MAX_PANEL_WIDTH = 640
   const MIN_PANEL_HEIGHT = 240
@@ -179,6 +198,12 @@
 
   function preferredHeight(): number {
     return Math.max(MIN_PANEL_HEIGHT, defaultHeight)
+  }
+
+  /** How far a panel with no remembered rectangle steps from the first one. */
+  function cascadeOffset(): number {
+    if (saved) return 0
+    return Math.max(0, cascadeIndex) * CASCADE_STEP
   }
 
   /**
@@ -247,11 +272,14 @@
 
   let width = $state(initialWidth)
   let height = $state(initialHeight)
+  const initialOffset = cascadeOffset()
   let position = $state({
     x: saved
       ? clampX(saved.x, initialWidth)
-      : Math.max(PANEL_MARGIN, window.innerWidth - initialWidth - PANEL_MARGIN),
-    y: saved ? clampY(saved.y, initialHeight) : PANEL_MARGIN * 2
+      : clampX(window.innerWidth - initialWidth - PANEL_MARGIN - initialOffset, initialWidth),
+    y: saved
+      ? clampY(saved.y, initialHeight)
+      : clampY(PANEL_MARGIN * 2 + initialOffset, initialHeight)
   })
 
   let dragging = $state(false)
@@ -414,16 +442,31 @@
   // not an overlay on view, so the shortcut belongs to the surface actually in
   // front of the user, and `isOverlayOpen()` must not keep reporting an overlay
   // for an off-screen chip.
+  //
+  // Several panels of the same kind can be open at once, so the handler is kept
+  // here too: the Escape listener below and a click inside the panel both have
+  // to know whether this panel is the one that owns the key.
+  let closeHandler: CloseHandler | null = null
+
+  function promote(): void {
+    if (closeHandler) promoteOverlay(closeHandler)
+  }
+
   $effect(() => {
-    if (!open || minimized) return
+    if (!open || minimized) {
+      closeHandler = null
+      return
+    }
+    const handler = (): void => {
+      if (closable) {
+        onClose()
+      } else {
+        onMinimize()
+      }
+    }
+    closeHandler = handler
     return registerOverlayClose(
-      () => {
-        if (closable) {
-          onClose()
-        } else {
-          onMinimize()
-        }
-      },
+      handler,
       closesOnNavigation,
       // A recording in this panel keeps Escape for itself (see the prop).
       () => recordingTargets?.() ?? []
@@ -542,6 +585,9 @@
     // user restores the panel from it, and the key stays free for everything
     // else that owns Escape behind the chip.
     if (!open || minimized || !keymapState.matches('ui-close-modal', e)) return
+    // Every open panel hears this key, so only the one the user last worked in
+    // answers it; otherwise one Escape would close every panel on screen.
+    if (closeHandler && !isTopOverlay(closeHandler)) return
     // A recording in this panel owns the key and consumes the event in its own
     // capture-phase listener, so reaching this point means nothing is being
     // recorded here and the panel closes (or minimizes) as usual.
@@ -580,6 +626,8 @@
         : ''}"
       bind:this={panelEl}
       {@attach nativeMount}
+      onpointerdowncapture={promote}
+      onfocusincapture={promote}
       role="dialog"
       tabindex="-1"
       aria-label={title}

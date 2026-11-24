@@ -18,7 +18,7 @@
 
 import { SvelteSet } from 'svelte/reactivity'
 
-type CloseHandler = () => void
+export type CloseHandler = () => void
 
 /** Register a menu for the lifetime of its open state and dismiss it before
  * window-level composer handlers run. Capture-phase recording handlers see
@@ -102,6 +102,32 @@ export function requestCloseTopOverlay(): boolean {
   if (!handler) return false
   handler()
   return true
+}
+
+/**
+ * Whether `handler` is the overlay the window hands Escape to right now.
+ *
+ * Several dockable panels of the same kind can be open at once (one env editor
+ * per project), and every one of them listens for the close key. Only the panel
+ * the user last worked in may answer it, so one Escape closes one panel instead
+ * of every panel on screen.
+ */
+export function isTopOverlay(handler: CloseHandler): boolean {
+  return closeHandlers[closeHandlers.length - 1] === handler
+}
+
+/**
+ * Make `handler` the overlay the close key answers to, without registering it.
+ *
+ * A panel promotes itself when the user works in it, so Escape and the close
+ * shortcut close the panel the user is actually in rather than whichever panel
+ * happened to be mounted last.
+ */
+export function promoteOverlay(handler: CloseHandler): void {
+  const index = closeHandlers.indexOf(handler)
+  if (index < 0 || index === closeHandlers.length - 1) return
+  closeHandlers.splice(index, 1)
+  closeHandlers.push(handler)
 }
 
 /**
