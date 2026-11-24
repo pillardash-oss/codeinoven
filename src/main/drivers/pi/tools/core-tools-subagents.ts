@@ -922,7 +922,9 @@ export function piCoreToolsSubagentSource(): string {
       if (processKillBypass) return processKillBypass
       // And for browsers: a worker that launches its own proves nothing about the
       // page the app is serving, so the same block applies inside a sub-agent.
-      const browserBypass = unmanagedBrowserShellReason(toolName, recordValue(params) ?? {})
+      const browserBypass = unmanagedBrowserShellReason(toolName, recordValue(params) ?? {}, {
+        cwd: parentCtx.cwd
+      })
       if (browserBypass) return browserBypass
       if (['bash', 'powershell', 'cmd'].includes(toolName) && recordValue(params) && typeof params['command'] === 'string') {
         const workspaceWide = params['command']

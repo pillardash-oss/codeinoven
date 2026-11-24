@@ -285,7 +285,7 @@ export function piCoreToolsEventsSource(): string {
     // A browser the agent launches itself is refused in every form, for the same
     // reason: the in-app browser is the only one that shows the page the app is
     // serving in the tab the user can watch. Never a card, so no tier approves it.
-    const browserBypass = unmanagedBrowserShellReason(event.toolName, input)
+    const browserBypass = unmanagedBrowserShellReason(event.toolName, input, { cwd: ctx.cwd })
     if (browserBypass) return { block: true, reason: browserBypass }
     // Same invariant for processes, in every form: no shell command may stop a
     // process by pid, port, name, pattern, signal, interpreter or script, since

@@ -18,6 +18,7 @@ import {
   APP_VIDEO_UTILITY_ID
 } from '../../../lib/utility-ids'
 import { FOLLOW_UP_OPERATIONS } from '../../../lib/follow-up'
+import { processDirectToolsForQuery } from '../../../lib/gateway-tools'
 import type { ThreadSearchOptions } from '../../database/repositories/thread-repo'
 import {
   APP_BROWSER_UTILITY_ID,
@@ -395,7 +396,9 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
     // Lexical mismatch is not proof of semantic irrelevance. Candidate results
     // are intentionally left for the calling agent to evaluate against the
     // user's task; only an empty eligible set is an unambiguous absence verdict.
-    const notFound = ranked.length === 0
+    const directTools = processDirectToolsForQuery(query ?? '')
+    // A process question is never "not found": the app owns those tools itself.
+    const notFound = ranked.length === 0 && directTools.length === 0
     const matchType = notFound ? 'none' : fallback ? 'candidates' : 'direct'
     state.searched = true
     await this.host.units['orchestration'].audit(state, 'utility.searched', {
@@ -403,11 +406,12 @@ export class UtilityOrchestrationServiceCapabilityInvoke {
       fallback,
       notFound,
       matchType,
-      resultIds: utilities.map(({ id }) => id)
+      resultIds: [...utilities.map(({ id }) => id), ...directTools.map(({ id }) => id)]
     })
     return {
       utilities,
-      fallback,
+      ...(directTools.length > 0 ? { directTools } : {}),
+      fallback: directTools.length > 0 ? false : fallback,
       notFound,
       matchType,
       ...(fallback

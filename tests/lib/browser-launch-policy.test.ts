@@ -94,3 +94,53 @@ describe('browser launch guard', () => {
     expect(reason).toContain('in-app browser')
   })
 })
+
+/**
+ * The launch a command hides: a model that cannot get `npx playwright` past the
+ * gate writes a script and runs it with node.
+ */
+describe('a script an executor was handed', () => {
+  it('is refused when it launches a browser itself', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = await mkdtemp(join(tmpdir(), 'cio-browser-script-'))
+    try {
+      const script = join(root, 'boot.mjs')
+      await writeFile(
+        script,
+        "import { chromium } from 'playwright'\n" +
+          "await chromium.launchPersistentContext('./profile', { headless: true })\n",
+        'utf8'
+      )
+      const reason = unmanagedBrowserShellReason(
+        'bash',
+        { command: `node ${script}` },
+        { cwd: root }
+      )
+      expect(reason).not.toBeNull()
+      // A relative path in the session workspace is the same launch.
+      expect(
+        unmanagedBrowserShellReason('bash', { command: 'node boot.mjs' }, { cwd: root })
+      ).not.toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+
+  it('is allowed when the script is ordinary work', async () => {
+    const { mkdtemp, writeFile, rm } = await import('node:fs/promises')
+    const { tmpdir } = await import('node:os')
+    const { join } = await import('node:path')
+    const root = await mkdtemp(join(tmpdir(), 'cio-browser-script-'))
+    try {
+      const script = join(root, 'seed.mjs')
+      await writeFile(script, "console.log('seeding')\n", 'utf8')
+      expect(
+        unmanagedBrowserShellReason('bash', { command: `node ${script}` }, { cwd: root })
+      ).toBeNull()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  })
+})

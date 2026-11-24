@@ -932,14 +932,17 @@ export class ChatEnginePermissions {
     const refusedCommand = commands.find(
       (command) =>
         unmanagedProcessKillReason('bash', { command }) !== null ||
-        unmanagedBrowserShellReason('bash', { command }, { threadBrowserAvailable }) !== null
+        unmanagedBrowserShellReason('bash', { command }, {
+          threadBrowserAvailable,
+          cwd: info.projectPath
+        }) !== null
     )
     if (refusedCommand !== undefined) {
       const processReason = unmanagedProcessKillReason('bash', { command: refusedCommand })
       const browserReason = unmanagedBrowserShellReason(
         'bash',
         { command: refusedCommand },
-        { threadBrowserAvailable }
+        { threadBrowserAvailable, cwd: info.projectPath }
       )
       await this.replyPermissionRaw(
         pending,
