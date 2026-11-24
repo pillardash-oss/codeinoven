@@ -476,11 +476,6 @@ export class ChatEngine {
   async removeHarnessAccount(accountId: string): Promise<boolean> {
     return this.units['providers-accounts'].removeHarnessAccount(accountId)
   }
-  async requestBrowserActionApproval(
-    request: import('../browser/browser-service').BrowserAgentActionApproval
-  ): Promise<import('../browser/browser-service').BrowserAgentActionDecision> {
-    return this.units['misc'].requestBrowserActionApproval(request)
-  }
   setBrowserUtilityExecutor(executor: BrowserUtilityExecutor | null): void {
     return this.units['utilities'].setBrowserUtilityExecutor(executor)
   }

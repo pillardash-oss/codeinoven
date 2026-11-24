@@ -72,11 +72,6 @@ export class ChatEngineLifecycleShutdown {
   async dispose(): Promise<void> {
     this.host.state.stopRemoteRetryReconciliation?.()
     this.host.state.stopRemoteRetryReconciliation = null
-    for (const [requestId, pending] of this.host.state.pendingPermissions) {
-      if (!pending.settleBrowserAction) continue
-      this.host.state.pendingPermissions.delete(requestId)
-      pending.settleBrowserAction(false)
-    }
     this.host.state.ovenChat.dispose()
     // Before the Oven channels close: a live relay would otherwise leave the
     // Oven's host holding a capability for a client that is already gone.

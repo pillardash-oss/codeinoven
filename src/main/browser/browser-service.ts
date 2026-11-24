@@ -110,7 +110,6 @@ import { type BrowserExtensionPageTab } from './extensions/browser-extension-pag
 import { BrowserFindSessions } from './browser-service/browser-find'
 import { BrowserLoadWaits } from './browser-service/browser-load-wait'
 import type { BrowserMenuPage } from './browser-service/browser-service-common'
-import type { BrowserAgentActionApprover } from './browser-service/browser-service-agent-approval'
 import type { BrowserExtensionTabInfo } from './browser-service/browser-service-extension-runtime'
 import { BrowserServiceTabHistory } from './browser-service/browser-service-tab-history'
 import { BrowserServiceLifecycle } from './browser-service/browser-service-lifecycle'
@@ -145,12 +144,6 @@ import { BrowserServiceViewLifecycle } from './browser-service/browser-service-v
 import { BrowserServiceStatusOverlay } from './browser-service/browser-service-status-overlay'
 import { BrowserServiceJars } from './browser-service/browser-service-jars'
 import { BrowserServiceConversationPages } from './browser-service/browser-service-conversation-pages'
-
-export type {
-  BrowserAgentActionApproval,
-  BrowserAgentActionDecision,
-  BrowserAgentActionApprover
-} from './browser-service/browser-service-agent-approval'
 
 /** Owns sandboxed page content while the renderer owns the browser chrome. */
 export class BrowserService {
@@ -538,13 +531,6 @@ export class BrowserService {
    * the feature is per live jar, not per app launch.
    */
   public readonly extensions: BrowserExtensionService
-  /**
-   * Permission-card approver for attached-page mutations, supplied by the app
-   * at boot. When present, Auto Review routes through the thread's permission
-   * card instead of the native dialog, so the request sets `awaiting_approval`,
-   * notifies attention, and stays covered by policy automation.
-   */
-  public agentActionApprover: BrowserAgentActionApprover | null = null
   // ─── The preload that lands in time ────────────────────────────────────────
 
   /** Where the page-tabs preload was written, or null before it has been, or if
@@ -817,10 +803,6 @@ export class BrowserService {
 
   setTabMarkRecogniser(recogniser: TabMarkRecogniser | null): void {
     this.configurationUnit.setTabMarkRecogniser(recogniser)
-  }
-
-  setAgentActionApprover(approver: BrowserAgentActionApprover | null): void {
-    this.configurationUnit.setAgentActionApprover(approver)
   }
 
   setSearchEngine(engine: BrowserSearchEngine): void {

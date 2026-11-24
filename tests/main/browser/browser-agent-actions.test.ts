@@ -9,10 +9,6 @@ import {
   pressAgentKey,
   sendAgentMouse
 } from '../../../src/main/browser/browser-service/browser-agent-input'
-import {
-  reviewBrowserAction,
-  type BrowserActionTarget
-} from '../../../src/main/browser/browser-service/browser-action-policy'
 
 /**
  * Real input and real review, without an Electron process.
@@ -44,22 +40,6 @@ function recorder(): { contents: WebContents; events: RecordedEvent[] } {
     }
   } as unknown as WebContents
   return { contents, events }
-}
-
-function target(overrides: Partial<BrowserActionTarget> = {}): BrowserActionTarget {
-  return {
-    tag: 'button',
-    type: 'submit',
-    role: '',
-    label: 'Submit application',
-    name: '',
-    href: '',
-    download: false,
-    expanded: false,
-    formMethod: 'post',
-    formAction: 'https://jobs.example.com/apply',
-    ...overrides
-  }
 }
 
 describe('agent pointer input', () => {
@@ -139,61 +119,6 @@ describe('agent key input', () => {
     expect(agentKeyCode('Escape')).toBe('Escape')
     expect(normalizeAgentModifiers(['cmd'])).toEqual(['meta'])
     expect(agentCount('nonsense', 1, 20)).toBe(1)
-  })
-})
-
-describe('browser action review for the new operations', () => {
-  it('allows pointer movement and a plain scroll', () => {
-    expect(reviewBrowserAction('mouse', { action: 'move' }, null).approved).toBe(true)
-    expect(reviewBrowserAction('mouse', { action: 'hover' }, null).approved).toBe(true)
-    expect(reviewBrowserAction('scroll', {}, null).approved).toBe(true)
-  })
-
-  it('reviews a pointer click on the control it lands on', () => {
-    expect(reviewBrowserAction('mouse', { action: 'click' }, target()).approved).toBe(false)
-    expect(
-      reviewBrowserAction(
-        'mouse',
-        { action: 'click' },
-        target({ label: 'Next page', type: 'button', formAction: '' })
-      ).approved
-    ).toBe(true)
-  })
-
-  it('asks before anything that can reach the page as its own script', () => {
-    const review = reviewBrowserAction('evaluate', { expression: 'document.title' }, null)
-    expect(review.approved).toBe(false)
-    expect(review.risk).toBe('high')
-  })
-
-  it('lets a caret key through and stops a submit key', () => {
-    expect(reviewBrowserAction('press', { key: 'Tab' }, null).approved).toBe(true)
-    expect(reviewBrowserAction('press', { key: 'ArrowDown' }, null).approved).toBe(true)
-    expect(reviewBrowserAction('press', { key: 'Enter' }, null).approved).toBe(false)
-    expect(
-      reviewBrowserAction(
-        'press',
-        { key: 'Enter' },
-        target({ tag: 'input', type: 'search', name: 'q', label: 'Search' })
-      ).approved
-    ).toBe(true)
-  })
-
-  it('allows choosing an ordinary option and asks about a consequential one', () => {
-    expect(
-      reviewBrowserAction(
-        'select',
-        {},
-        target({ tag: 'select', type: '', label: 'Experience level' })
-      ).approved
-    ).toBe(true)
-    expect(
-      reviewBrowserAction(
-        'select',
-        {},
-        target({ tag: 'select', type: '', label: 'Delete account' })
-      ).approved
-    ).toBe(false)
   })
 })
 

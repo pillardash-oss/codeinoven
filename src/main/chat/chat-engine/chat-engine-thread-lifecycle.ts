@@ -665,7 +665,6 @@ export class ChatEngineThreadLifecycle {
     for (const [requestId, pending] of this.host.state.pendingPermissions) {
       if (pending.session.projectId !== projectId || pending.session.threadId !== threadId) continue
       this.host.state.pendingPermissions.delete(requestId)
-      pending.settleBrowserAction?.(false)
       this.host.broadcast({
         type: 'permission.replied',
         sessionId: pending.request.sessionId,

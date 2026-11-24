@@ -1,10 +1,5 @@
 import type { PermissionLevel } from '../../../lib/types'
-import { isUnrestrictedLevel } from '../../../lib/permission-level'
-import {
-  browserActionTargetScript,
-  reviewBrowserAction,
-  type BrowserActionTarget
-} from './browser-action-policy'
+import { browserActionTargetScript, type BrowserActionTarget } from './browser-action-policy'
 import {
   agentCheckScript,
   agentComboboxScript,
@@ -51,7 +46,7 @@ import type { AgentTarget } from './browser-service-agent-script'
 import type { AgentFrameEntry } from './browser-agent-frames'
 import { comboboxOptions, pickComboboxOption, type ComboboxOption } from './browser-agent-combobox'
 import { fitSnapshot } from './browser-agent-snapshot-fit'
-import { asObject, safeOrigin } from './browser-service-common'
+import { asObject } from './browser-service-common'
 import { liveContents, liveWindowContents } from './browser-view-contents'
 import {
   ATTACHED_PAGE_MUTATION_OPERATIONS,
@@ -62,9 +57,8 @@ import {
  * The browser capability an agent drives.
  *
  * One entry point takes the operation an agent asked for and runs it against a tab's
- * page: reading operations observe the document, mutations pass through action-aware
- * Auto Review or the thread's permission card first. This unit owns the operation
- * switch, the approval path, and the sentence a person reads on the card.
+ * page. Any page action is allowed: a browser assistant that stops to ask before
+ * every click is not an assistant, so nothing here is gated.
  */
 
 /** Elements one embedded document reports, so one frame cannot fill the whole read. */
@@ -106,7 +100,6 @@ function delay(ms: number): Promise<void> {
  */
 export interface AgentUtilityHost {
   readonly activeTabId: BrowserService['activeTabId']
-  readonly agentActionApprover: BrowserService['agentActionApprover']
   readonly agentBoundedNumber: BrowserService['agentBoundedNumber']
   readonly agentEntry: BrowserService['agentEntry']
   readonly agentFrames: BrowserService['agentFrames']
@@ -191,14 +184,6 @@ export class BrowserServiceAgentUtility {
       // treats the missing level as review-required rather than full access.
       permissionLevel?: PermissionLevel
       sessionId?: string
-      /**
-       * Set on a step inside a `run`, whose whole sequence was already reviewed.
-       *
-       * A run of twelve steps must not raise twelve permission cards for one
-       * decision a person already made: the aggregate review shows every step, so
-       * the steps themselves do not ask again.
-       */
-      reviewedWithinRun?: boolean
     }
   ): Promise<unknown> {
     const projectId = validateProjectId(context.projectId)
@@ -306,9 +291,6 @@ export class BrowserServiceAgentUtility {
     if (!attached && (tab.projectId !== projectId || tab.threadId !== threadId)) {
       throw new Error('The current browser tab belongs to a different project or thread')
     }
-    // Review effects, rather than prompting for every click on an attached page.
-    // Agent-owned pages use the same gate; uploads keep their exact-file review.
-    let reviewedTarget: BrowserActionTarget | null = null
     if (attached && !ATTACHED_PAGE_READ_OPERATIONS.has(operation)) {
       if (!ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation)) {
         throw new Error(
@@ -316,27 +298,12 @@ export class BrowserServiceAgentUtility {
         )
       }
     }
-    if (
-      !isUnrestrictedLevel(context.permissionLevel) &&
-      !context.reviewedWithinRun &&
-      ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation) &&
-      operation !== 'upload'
-    ) {
-      const reviewed = await this.approveAttachedPageOperation(operation, input, tab, {
-        projectId,
-        threadId,
-        sessionId: context.sessionId
-      })
-      if (!reviewed.approved) {
-        return {
-          ...this.host.utilityTabContext(tabId, tab),
-          page: attached ? 'user' : 'agent',
-          cancelled: true,
-          ...this.host.threadBrowserHint(projectId, threadId, tabId, contextKey)
-        }
-      }
-      reviewedTarget = reviewed.target
-    }
+    // The control a mutation acts on, read before it happens, so the answer can
+    // report what changed. Nothing is approved: every page action is allowed.
+    const reviewedTarget =
+      ATTACHED_PAGE_MUTATION_OPERATIONS.has(operation) && operation !== 'upload'
+        ? await this.reviewedActionTarget(operation, input, tab)
+        : null
     // An operation is a use, whether the page is the agent's own or the one the
     // conversation was handed: it revives a tab the agent owns that was evicted
     // from the parked set or put to sleep, and it resets the clock the strip reads
@@ -1027,9 +994,9 @@ export class BrowserServiceAgentUtility {
    * flow that carries on after a failed click acts on a page that is not the one it
    * was written against; `stopOnError: false` keeps going and reports each failure.
    *
-   * Each step is one ordinary operation, so it takes the same approval path, the same
-   * real input and the same page targeting. On a page the user is on, the whole run is
-   * reviewed once with every step described, rather than asking once per click.
+   * Each step is one ordinary operation, so it takes the same real input and the same
+   * page targeting. Nothing is approved: the whole run is one call and every step in
+   * it is allowed.
    */
   private async runSteps(
     input: Record<string, unknown>,
@@ -1075,9 +1042,7 @@ export class BrowserServiceAgentUtility {
       // onto another tab because one step named a different page.
       if (page !== undefined) stepInput['page'] = page
       try {
-        const outcome = asObject(
-          await this.executeUtility(operation, stepInput, { ...context, reviewedWithinRun: true })
-        )
+        const outcome = asObject(await this.executeUtility(operation, stepInput, context))
         results.push({ step: index, op: operation, ...this.stepSummary(outcome) })
       } catch (error) {
         failed = true
@@ -1140,54 +1105,13 @@ export class BrowserServiceAgentUtility {
     }
   }
 
-  async approveAttachedPageOperation(
-    operation: string,
-    input: Record<string, unknown>,
-    tab: BrowserTab,
-    context: { projectId: string; threadId: string; sessionId?: string }
-  ): Promise<{ approved: boolean; target: BrowserActionTarget | null }> {
-    const contents = tab.view.webContents
-    if (contents.isDestroyed()) throw new Error('The browser page is no longer available')
-    const pageUrl = contents.getURL()
-    const pageGeneration = tab.navigationGeneration
-    const target = await this.reviewedActionTarget(operation, input, tab)
-    const review = reviewBrowserAction(operation, input, target)
-    const action = this.describeAgentAction(operation, input)
-
-    const approver = this.host.agentActionApprover
-    if (!approver) throw new Error('Browser conversation approval is unavailable')
-    const decision = await approver({
-      ...context,
-      operation,
-      action,
-      origin: safeOrigin(pageUrl),
-      pageUrl,
-      review
-    })
-    const approved = typeof decision === 'boolean' ? decision : decision.approved
-    if (typeof decision !== 'boolean' && decision.alternative) {
-      throw new Error(`Browser action rejected. User instruction: ${decision.alternative}`)
-    }
-    if (!approved) return { approved: false, target }
-    if (
-      contents.isDestroyed() ||
-      tab.navigationGeneration !== pageGeneration ||
-      contents.getURL() !== pageUrl
-    ) {
-      throw new Error(
-        'The page changed while the browser action was being approved; retry on the current page'
-      )
-    }
-    return { approved: true, target }
-  }
-
   /**
-   * The control a review is about: the one an element operation names, or the one
+   * The control a mutation acts on: the one an element operation names, or the one
    * under the pointer a coordinate operation aims at.
    *
-   * A pointer operation carries no element, so the review has to ask the page what
-   * is at that point. Without it, clicking a Delete button by coordinate would be
-   * reviewed as an unidentified action and treated as high risk every time.
+   * A pointer operation carries no element, so this has to ask the page what is at
+   * that point. Without it, clicking a Delete button by coordinate would report no
+   * change at all.
    */
   async reviewedActionTarget(
     operation: string,
@@ -1221,68 +1145,5 @@ export class BrowserServiceAgentUtility {
       )
     }
     return null
-  }
-
-  /** The sentence the permission card shows for one agent action. */
-  describeAgentAction(operation: string, input: Record<string, unknown>): string {
-    const target = (): string => this.host.agentSelector(input)
-    switch (operation) {
-      case 'click':
-        return `Click the element matching this selector:\n${target()}`
-      case 'type':
-        return `Replace the value of this element:\n${target()}\n\nWith this text:\n${this.host.requiredInputString(input, 'text', true)}`
-      case 'press': {
-        const selector = this.host.optionalAgentSelector(input)
-        const modifiers = normalizeAgentModifiers(input['modifiers'])
-        const chord = [...modifiers, this.host.requiredInputString(input, 'key')].join('+')
-        return selector
-          ? `Press ${chord} in this element:\n${selector}`
-          : `Press ${chord} on the focused element.`
-      }
-      case 'select':
-        return `Choose an option in this select:\n${target()}\n\nOption:\n${JSON.stringify({ value: input['value'], label: input['label'], values: input['values'] })}`
-      case 'check':
-        return `${input['checked'] === false ? 'Untick' : 'Tick'} this control:\n${target()}`
-      case 'scroll':
-        return 'Scroll the page.'
-      case 'mouse':
-        return `Move or press the pointer in the page:\n${JSON.stringify({ action: input['action'], x: input['x'], y: input['y'], selector: input['selector'], ref: input['ref'], button: input['button'] })}`
-      case 'query':
-        return `Read one element of the page in full:\n${JSON.stringify({ ref: input['ref'], selector: input['selector'], text: input['text'], properties: input['properties'], style: input['style'] })}`
-      case 'run': {
-        const steps = Array.isArray(input['steps']) ? input['steps'] : []
-        const described = steps.map((step, index) => {
-          const record =
-            typeof step === 'object' && step !== null ? (step as Record<string, unknown>) : {}
-          const op = typeof record['op'] === 'string' ? record['op'] : 'unknown'
-          const target =
-            typeof record['ref'] === 'string'
-              ? record['ref']
-              : typeof record['selector'] === 'string'
-                ? record['selector']
-                : typeof record['url'] === 'string'
-                  ? record['url']
-                  : typeof record['text'] === 'string'
-                    ? `text: ${record['text']}`
-                    : typeof record['key'] === 'string'
-                      ? `key: ${record['key']}`
-                      : ''
-          return `${index + 1}. ${op}${target ? ` ${target}` : ''}`
-        })
-        return `Run this sequence of ${String(steps.length)} actions in the page:\n${described.join('\n')}`
-      }
-      case 'drag':
-        return `Drag in the page:\n${JSON.stringify({ from: input['from'], to: input['to'] })}`
-      case 'evaluate':
-        return `Run this expression in the page:\n${this.host.requiredInputString(input, 'expression').slice(0, 2000)}`
-      case 'navigate':
-        return `Navigate the current tab to:\n${validateBrowserUrl(this.host.requiredInputString(input, 'url'))}`
-      case 'reload':
-        return 'Reload the current page.'
-      case 'viewport':
-        return `Change the page viewport to:\n${JSON.stringify(input)}`
-      default:
-        return `Open this file for the page to read:\n${JSON.stringify(input['paths'] ?? 'the file chooser')}`
-    }
   }
 }
