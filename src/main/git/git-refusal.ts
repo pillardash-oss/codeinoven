@@ -25,6 +25,22 @@ export function isGitRefusal(value: unknown): value is GitRefusal {
 }
 
 /**
+ * A push the user stopped from the panel.
+ *
+ * The git process was killed, so what it would have reported is either a signal
+ * message or nothing at all; neither is a failure the user has to read, because
+ * they asked for exactly this. It travels as a refusal so the renderer's invoke
+ * settles without Electron logging a cause chain for a click the user made on
+ * purpose.
+ */
+export class GitPushStopped extends GitRefusal {
+  constructor() {
+    super('Push stopped')
+    this.name = 'GitPushStopped'
+  }
+}
+
+/**
  * git refusing to touch local uncommitted changes. A rebase refuses any tracked
  * change outright; a checkout and a merge refuse only when a local change would
  * be overwritten, which only git can decide, so the wording is what identifies

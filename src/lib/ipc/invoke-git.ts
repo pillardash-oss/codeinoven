@@ -267,6 +267,13 @@ export const invokeGitContract = {
     ],
     GitInvocation<GitStatus>
   >,
+  /**
+   * Stop the push running in this checkout, the way the panel's Stop asks it
+   * to. Resolves to whether one was still in flight: a push that already
+   * finished is not an error, so the caller can settle its own control either
+   * way without treating a late click as a failure.
+   */
+  'git:cancelPush': {} as Contract<[projectId: string, scopeBucketId?: string], boolean>,
   'git:getCredentialStatus': {} as Contract<[projectId: string], GitCredentialStatus>,
   'git:setCredential': {} as Contract<[projectId: string, token: string], GitCredentialStatus>,
   'git:removeCredential': {} as Contract<[projectId: string], GitCredentialStatus>,

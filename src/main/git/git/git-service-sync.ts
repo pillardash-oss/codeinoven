@@ -9,10 +9,11 @@ import type {
   GitSyncSummary
 } from '../../../lib/types'
 import { Logger } from '../../system/logger'
-import { GitRefusal, isUncommittedChangesRefusal } from '../git-refusal'
+import { GitPushStopped, GitRefusal, isUncommittedChangesRefusal } from '../git-refusal'
 import type { GitServiceCore } from './git-service-core'
 import { isAncestor } from './git-service-diffs'
 import { withIndexLockRetry } from './git-service-runtime'
+import type { GitRoundTripHooks } from './git-service-runtime'
 
 /**
  * Tracked, not-yet-committed files in a checkout: what a rebase refuses and a
@@ -100,7 +101,8 @@ export class GitServiceSync {
     projectPath: string,
     options: { setUpstream: boolean; remote?: string; branch?: string; token?: string } = {
       setUpstream: false
-    }
+    },
+    hooks: GitRoundTripHooks = {}
   ): Promise<GitStatus> {
     return this.core.enqueue(projectPath, async () => {
       const directory = await this.core.repo(projectPath)
@@ -108,18 +110,26 @@ export class GitServiceSync {
       // and whether there is anything to send at all, so it takes the remote
       // lane: a fetch in flight finishes first, and one asked for now waits for
       // this push. This is the one local operation the panel blocks on a fetch.
-      await this.core.enqueueRemote(projectPath, () =>
-        this.core.wrapError(projectPath, 'mutation', async () => {
-          const args: string[] = []
-          if (options.setUpstream) args.push('--set-upstream')
-          if (options.remote) args.push(options.remote)
-          if (options.branch) args.push(options.branch)
-          const git = options.token
-            ? this.core.withAuthHeader(directory, options.token)
-            : this.core.client(directory)
-          await git.push(args)
-        })
-      )
+      try {
+        await this.core.enqueueRemote(projectPath, () =>
+          this.core.wrapError(projectPath, 'mutation', async () => {
+            const args: string[] = []
+            if (options.setUpstream) args.push('--set-upstream')
+            if (options.remote) args.push(options.remote)
+            if (options.branch) args.push(options.branch)
+            const git = options.token
+              ? this.core.withAuthHeader(directory, options.token, hooks)
+              : this.core.client(directory, [], hooks)
+            await git.push(args)
+          })
+        )
+      } catch (failure) {
+        // The user stopped it: the process was killed, so git's own wording is a
+        // signal message and means nothing about the push itself. Report the
+        // state the push is in, which is "stopped", not "failed".
+        if (hooks.signal?.aborted) throw new GitPushStopped()
+        throw failure
+      }
       return this.core.readStatus(directory)
     })
   }

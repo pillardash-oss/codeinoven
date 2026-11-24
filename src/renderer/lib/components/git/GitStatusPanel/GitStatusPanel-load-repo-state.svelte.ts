@@ -615,6 +615,20 @@ export class GitStatusPanelLoadRepoState extends BoardUnit<GitStatusPanel> {
     await this.performPush(remote)
   }
 
+  /** Stop the push in flight, from the stop control beside the Push button. */
+  async stopPush(): Promise<void> {
+    await gitState.stopPush(this.root.props.projectId)
+  }
+
+  /**
+   * The last stage git reported for the push in flight, or null before it says
+   * anything. Read from the store, which hears every stage from main.
+   */
+  pushStage = $derived(gitState.pushStageFor(this.root.props.projectId))
+
+  /** Whether this checkout's push is one the stop control can call off. */
+  pushStoppable = $derived(gitState.canStopPush(this.root.props.projectId))
+
   async confirmPushUpstream(): Promise<void> {
     this.pushConfirm = false
     if (!this.primaryRemote || !this.status?.branch) return

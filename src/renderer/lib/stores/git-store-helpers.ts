@@ -154,6 +154,8 @@ export type GitPushResult =
   | { status: 'pushed' }
   | { status: 'rejected'; message: string }
   | { status: 'failed'; message: string }
+  /** The user stopped the push from the panel before it reached the remote. */
+  | { status: 'stopped' }
 
 export type DeleteBranchResult = 'deleted' | 'requires-force' | 'failed'
 

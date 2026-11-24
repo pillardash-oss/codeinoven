@@ -326,6 +326,27 @@ export interface GitSyncResult {
 }
 
 /**
+ * One live stage of a push in flight, as git itself reports it.
+ *
+ * A push spends most of its life in one unbroken round trip, so this is the only
+ * thing that can tell the user a large push is moving rather than hung. It is keyed
+ * by the checkout it belongs to: two projects push independently, and a panel
+ * showing one must never read the other's percentage.
+ */
+export interface GitPushProgress {
+  projectId: string
+  /** The managed worktree the push ran in, absent for a project root checkout. */
+  scopeBucketId?: string
+  /** The stage git is in, as git names it (`writing`, `counting`, `compressing`…). */
+  stage: string
+  /** Percentage git reported for this stage, 0-100. */
+  percent: number
+  /** Objects git has handled so far, and how many it means to handle. */
+  processed: number
+  total: number
+}
+
+/**
  * A git operation git refused in a state the user can resolve by acting: an
  * uncommitted working tree, a detached HEAD, an integration still open, a peer
  * that cannot receive commits.

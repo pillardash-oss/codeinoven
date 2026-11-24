@@ -6,6 +6,11 @@ import {
   validateSyncWithOptions
 } from '../validation/pr'
 import { gitInvocation } from '../../git/git-refusal'
+import {
+  broadcastGitPushProgress,
+  cancelGitPushJob,
+  startGitPushJob
+} from '../../git/git-push-jobs'
 
 import type { IpcHandlerContext } from './context'
 
@@ -197,22 +202,51 @@ export function registerGitRemoteOperations(
     'git:push',
     async (_, projectId: unknown, options: unknown, scopeBucketId?: unknown) => {
       const safeProjectId = validateEntityId(projectId, 'Project ID')
+      const safeScopeBucketId =
+        scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
       const safeOptions = validatePushOptions(options)
       // Resolve the vaulted PAT in main only; the token never crosses IPC.
       const tokenRef = gitCredentialRef(safeProjectId)
       const token = (await vault.exists(tokenRef)) ? await vault.resolve(tokenRef) : undefined
-      return gitInvocation(async () =>
-        gitService.push(
-          await resolveProjectPath(
-            safeProjectId,
-            scopeBucketId === undefined
-              ? undefined
-              : validateEntityId(scopeBucketId, 'Scope bucket ID')
-          ),
-          { ...safeOptions, token }
+      // The push owns this checkout's stop control for exactly as long as it
+      // runs, so the panel can call it off and a click that arrives afterwards
+      // finds nothing to stop instead of stopping the next push.
+      const job = startGitPushJob(safeProjectId, safeScopeBucketId)
+      try {
+        const directory = await resolveProjectPath(safeProjectId, safeScopeBucketId)
+        return gitInvocation(() =>
+          gitService.push(
+            directory,
+            { ...safeOptions, token },
+            {
+              signal: job.signal,
+              onProgress: (event) =>
+                broadcastGitPushProgress({
+                  projectId: safeProjectId,
+                  scopeBucketId: safeScopeBucketId,
+                  stage: event.stage,
+                  percent: event.progress,
+                  processed: event.processed,
+                  total: event.total
+                })
+            }
+          )
         )
-      )
+      } finally {
+        job.release()
+      }
     }
+  )
+  /**
+   * Stop the push running in this checkout. Resolves to whether one was still in
+   * flight: the panel's second click has to settle its own control either way,
+   * and a push that already finished is not a failure.
+   */
+  ipcMain.handle('git:cancelPush', (_, projectId: unknown, scopeBucketId?: unknown) =>
+    cancelGitPushJob(
+      validateEntityId(projectId, 'Project ID'),
+      scopeBucketId === undefined ? undefined : validateEntityId(scopeBucketId, 'Scope bucket ID')
+    )
   )
   ipcMain.handle('git:getCredentialStatus', async (_, projectId: unknown) =>
     gitCredentialStatus(validateEntityId(projectId, 'Project ID'))

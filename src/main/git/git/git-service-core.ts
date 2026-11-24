@@ -6,7 +6,7 @@ import {
   refExists as gitRefExists,
   workingFileContent as readWorkingFileContent
 } from './git-service-diffs'
-import type { CommandKind } from './git-service-runtime'
+import type { CommandKind, GitRoundTripHooks } from './git-service-runtime'
 import {
   createAuthenticatedGitClient,
   createGitClient,
@@ -88,16 +88,16 @@ export class GitServiceCore {
     return next
   }
 
-  client(directory: string, extraConfig: string[] = []): SimpleGit {
-    return createGitClient(directory, extraConfig)
+  client(directory: string, extraConfig: string[] = [], hooks: GitRoundTripHooks = {}): SimpleGit {
+    return createGitClient(directory, extraConfig, hooks)
   }
 
   clientWithoutEditor(directory: string): SimpleGit {
     return createGitClientWithoutEditor(directory)
   }
 
-  withAuthHeader(directory: string, token: string): SimpleGit {
-    return createAuthenticatedGitClient(directory, token)
+  withAuthHeader(directory: string, token: string, hooks: GitRoundTripHooks = {}): SimpleGit {
+    return createAuthenticatedGitClient(directory, token, hooks)
   }
 
   async wrapError<T>(projectId: string, kind: CommandKind, task: () => Promise<T>): Promise<T> {
