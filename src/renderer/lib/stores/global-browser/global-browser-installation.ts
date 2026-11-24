@@ -87,7 +87,7 @@ export class GlobalBrowserStateInstallation {
       hibernated: false,
       pinned: false,
       pinnedAt: null,
-      assistantThreadId: null,
+      assistantThreadIds: [],
       color: null,
       iconType: null,
       customSvg: null,

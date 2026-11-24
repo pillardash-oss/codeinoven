@@ -77,31 +77,24 @@
   )
   const agentChat = $derived(activeTab ? globalBrowser.agentChatFor(activeTab.id) : null)
   /**
-   * Every assistant conversation the browser holds, one rail tab per browser tab
-   * that has one.
+   * Every assistant conversation the page on screen owns, as rail tabs.
    *
-   * A conversation belongs to the tab that opened it, so the strip is the
-   * browser's own tabs in the browser's own order, each row a page the agent is
-   * working on. That is what makes the strip work like the thread browser's: the
-   * conversations sit as tabs on the left of one row, the "+" that opens another
-   * stays at its right, and a strip of conversations can never hide the way to
-   * add one.
+   * A page can be asked more than one thing, and each answer is a conversation of
+   * its own, so the strip lists the conversations of the tab in the order they were
+   * opened: they sit at the left of one row, the "+" that starts another stays at
+   * its right, and a strip of conversations can never hide the way to add one.
+   * Switching the browser tab switches the strip with it, because a conversation
+   * answers about the page it was opened on.
    */
-  const agentTabs = $derived(
-    globalBrowser.tabs.flatMap((tab): BrowserAgentContextTab[] => {
-      const chat = globalBrowser.agentChatFor(tab.id)
-      if (!chat) return []
-      return [
-        {
-          id: `browser-agent:${tab.id}`,
-          kind: 'browser-agent',
-          title: chat.thread.title,
-          projectId: chat.thread.projectId,
-          threadId: chat.thread.id,
-          browserTabId: tab.id
-        }
-      ]
-    })
+  const agentTabs = $derived<BrowserAgentContextTab[]>(
+    (activeTab ? browserAssistant.chatsForTab(activeTab.id) : []).map((chat) => ({
+      id: `browser-agent:${chat.threadId}`,
+      kind: 'browser-agent',
+      title: chat.thread.title,
+      projectId: chat.thread.projectId,
+      threadId: chat.threadId,
+      browserTabId: chat.browserTabId
+    }))
   )
   const artifactTab = $derived<FilesContextTab | null>(
     agentChat && browserAssistant.hasArtifacts(agentChat.threadId)
@@ -135,16 +128,16 @@
   )
 
   /**
-   * The assistant conversation of the tab on screen, as its rail tab.
+   * The assistant conversation the page on screen is showing, as its rail tab.
    *
-   * The strip lists every conversation (see `agentTabs`), while the conversation
-   * on screen is always the one the page on screen owns: switching to another
-   * page switches the conversation with it, so the rail never talks about a page
-   * the user cannot see.
+   * The strip lists every conversation of the page (see `agentTabs`), and the one
+   * on screen is the tab's selected conversation, so opening the rail lands on the
+   * conversation the user left there.
    */
   const agentTab: BrowserAgentContextTab | null = $derived(
-    activeTab ? (agentTabs.find((tab) => tab.browserTabId === activeTab.id) ?? null) : null
+    agentChat ? (agentTabs.find((tab) => tab.threadId === agentChat.threadId) ?? null) : null
   )
+
   /**
    * The downloads panel. It belongs to the shared browser profile, not to a tab,
    * so it is a constant here and is the rail tool that survives with no tab.
@@ -298,9 +291,9 @@
   function selectTool(tabId: string): void {
     const pickedAgentTab = agentTabs.find((tab) => tab.id === tabId)
     if (pickedAgentTab) {
-      // A conversation is a page, so picking its tab brings that page on screen
-      // and the rail follows it: the two never talk about different pages.
-      globalBrowser.activate(pickedAgentTab.browserTabId)
+      // Picking a conversation's tab puts that conversation on screen. The page
+      // does not move: every conversation in this strip answers about it.
+      browserAssistant.selectChat(pickedAgentTab.browserTabId, pickedAgentTab.threadId)
       globalBrowser.showAgentSidebar()
       return
     }
@@ -397,18 +390,15 @@
   }
 
   /**
-   * Open another browser assistant tab: a new browser tab with a conversation of
-   * its own, which is what the strip's "+" adds.
+   * Start another assistant conversation for the page on screen, which is what the
+   * strip's "+" does and the only thing it does.
    *
-   * A conversation is bound to the tab that owns it, so a second conversation
-   * means a second tab. Showing the agent on it is what creates it, exactly as it
-   * does for the first one, and the page it answers about is whatever the user
-   * opens next.
+   * The page stays where it is: a second conversation is a second chat about the
+   * same page, listed as its own tab beside the first, and the browser's own
+   * new-tab button is what opens a new page.
    */
-  function openNewAssistantTab(): void {
-    const tabId = globalBrowser.createTab('')
-    globalBrowser.activate(tabId)
-    globalBrowser.showAgentSidebar()
+  function openNewAssistantChat(): void {
+    globalBrowser.newAssistantChat()
   }
 
   /**
@@ -501,10 +491,18 @@
       const chat = browserAssistant.chatForThread(tab.threadId)
       if (chat) await browserAssistant.closeChat(chat)
       closing = null
-      // Only the conversation on screen leaves the rail with it: the strip lists
-      // every conversation, and closing one that belongs to another page must not
-      // close the panel the user is reading.
-      if (globalBrowser.activeTab?.id === tab.browserTabId) globalBrowser.closeAgentSidebar()
+      // The tab's own durable row holds the conversation list, so it has to learn
+      // that one of them is gone before the app is quit or the tab is restored.
+      globalBrowser.syncAssistantChatsForTab(tab.browserTabId)
+      // The rail stays while the page still has a conversation to show: the next
+      // one takes the strip slot the closed one held, and only a page with none
+      // left closes the panel.
+      if (
+        globalBrowser.activeTab?.id === tab.browserTabId &&
+        browserAssistant.threadIdsForTab(tab.browserTabId).length === 0
+      ) {
+        globalBrowser.closeAgentSidebar()
+      }
     } catch (error) {
       reportError(error, 'The conversation could not be closed.')
     } finally {
@@ -629,7 +627,7 @@
     onRenameCommit={() => void commitRename()}
     onRenameCancel={cancelRename}
     onClosePopups={closePopups}
-    onNewBrowser={openNewAssistantTab}
+    onNewBrowser={openNewAssistantChat}
     {onWidthChange}
     onHeightChange={(height) => contextSidebarState.setTerminalHeight(height)}
     onTerminalPlacementChange={() => {}}

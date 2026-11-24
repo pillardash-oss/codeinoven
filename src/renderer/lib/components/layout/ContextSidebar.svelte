@@ -890,8 +890,8 @@
               <button
                 type="button"
                 class="flex h-7 w-7 items-center justify-center text-dimmed transition-colors hover:bg-elevated hover:text-foreground"
-                aria-label="Open another browser assistant tab"
-                title="New browser assistant tab"
+                aria-label="Start another assistant chat"
+                title="New assistant chat"
                 onclick={() => onNewBrowser?.()}
               >
                 <CioPlus size={13} />

@@ -157,10 +157,10 @@ export interface BrowserContextTab {
  * so the tab is a view of that thread rather than a conversation of its own: the
  * title is the thread's title, the panel renders the thread's own transcript and
  * settings, and closing the tab deletes the thread. One of these exists per
- * browser tab that has a conversation, so the rail's strip lists the browser's
- * conversations the way a tab bar lists its pages, and the browser tab it answers
- * about is carried here because selecting the tab brings that page on screen with
- * it.
+ * conversation the page on screen owns, so the rail's strip lists a page's
+ * conversations as its own tabs: a page can be asked more than one thing, and
+ * each answer keeps its own transcript. The browser tab they answer about is
+ * carried here because every one of them is about the same page.
  */
 export interface BrowserAgentContextTab {
   id: string

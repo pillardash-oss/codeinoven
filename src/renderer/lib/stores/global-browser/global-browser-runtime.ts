@@ -717,7 +717,7 @@ export class GlobalBrowserStateRuntime {
       hibernated: false,
       pinned: false,
       pinnedAt: null,
-      assistantThreadId: null,
+      assistantThreadIds: [],
       color: null,
       iconType: null,
       customSvg: null,
@@ -834,7 +834,7 @@ export class GlobalBrowserStateRuntime {
     // The tab can never be switched to again, so its Ctrl+Tab visit goes with it
     // instead of holding a slot in the recency list.
     recentVisits.forgetBrowserTab(tabId)
-    const closedThreadId = closing.assistantThreadId
+    const closedThreadIds = [...closing.assistantThreadIds]
     const remaining = this.host.tabs.filter((tab) => tab.id !== tabId)
     this.host.tabs = remaining
     this.host.runtime.delete(tabId)
@@ -879,10 +879,10 @@ export class GlobalBrowserStateRuntime {
     if (threadNotesState.has(tabId)) {
       void invoke('note:delete', GLOBAL_BROWSER_PROJECT_ID, tabId).catch(() => {})
     }
-    // The tab's agent conversation is the same kind of subject-scoped state:
-    // closing the tab closes the conversation it owns, because the conversation
+    // The tab's agent conversations are the same kind of subject-scoped state:
+    // closing the tab closes every conversation it owns, because a conversation
     // exists for that page and is unreachable without it.
-    this.host.units['queries'].closeAssistantChatFor(tabId, closedThreadId)
+    this.host.units['queries'].closeAssistantChatsFor(tabId, closedThreadIds)
   }
 
   /**
@@ -924,7 +924,7 @@ export class GlobalBrowserStateRuntime {
       boxId: this.storedTabBoxId(entry.tab.boxId),
       // The tab's conversation was deleted with it, so a reopened tab starts
       // with none and asks the agent again if it wants one.
-      assistantThreadId: null,
+      assistantThreadIds: [],
       // It is being put back on screen, so any hibernation the close found it in
       // no longer applies: the page is created fresh as the surface shows it.
       hibernated: false,

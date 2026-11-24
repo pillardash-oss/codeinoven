@@ -49,7 +49,7 @@ export function persistedTabFromRuntime(tab: GlobalBrowserTab): PersistedBrowser
     hibernated: tab.hibernated,
     pinned: tab.pinned,
     pinnedAt: tab.pinnedAt,
-    assistantThreadId: tab.assistantThreadId,
+    assistantThreadIds: tab.assistantThreadIds,
     color: tab.color,
     iconType: tab.iconType,
     customSvg: tab.customSvg,

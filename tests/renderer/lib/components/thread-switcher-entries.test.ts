@@ -40,7 +40,7 @@ function makeTab(id: string, lastUsedAt = 0): GlobalBrowserTab {
     hibernated: false,
     pinned: false,
     pinnedAt: null,
-    assistantThreadId: null,
+    assistantThreadIds: [],
     color: null,
     iconType: null,
     customSvg: null,

@@ -195,13 +195,17 @@ export interface GlobalBrowserTab extends BrowserAppearance {
   /** When the tab was pinned, so the pinned block keeps a stable order. */
   pinnedAt: number | null
   /**
-   * The assistant conversation bound to this tab (a real thread in the reserved
-   * hidden browser project), or null while the tab has never asked the agent
-   * anything. The link is focused on the tab because the conversation's lifetime
-   * is the tab's: it is kept until the tab or the conversation is closed, and a
-   * restart restores both.
+   * The assistant conversations this tab owns (real threads in the reserved
+   * hidden browser project), oldest first, empty while the tab has never asked
+   * the agent anything.
+   *
+   * One page can be asked more than one thing, so a tab holds a list rather than
+   * a single conversation: the rail lists them as tabs of their own. The link
+   * lives on the tab because the conversations' lifetime is the tab's: they are
+   * kept until the tab or each conversation is closed, and a restart restores
+   * them all.
    */
-  assistantThreadId: string | null
+  assistantThreadIds: string[]
 }
 
 /**
